@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL_PREFIX__.agentdashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__INSTALL_DIR__/server.py</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>__INSTALL_DIR__/dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>__INSTALL_DIR__/dashboard.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>AGENTSTACK_PORT</key>
+    <string>__PORT__</string>
+    <key>AGENTSTACK_LABEL_PREFIX</key>
+    <string>__LABEL_PREFIX__</string>
+    <key>AGENTSTACK_MAIL_DB</key>
+    <string>__MAIL_DB__</string>
+    <key>AGENTSTACK_MAIL_ENV</key>
+    <string>__MAIL_ENV__</string>
+    <key>AGENTSTACK_MAIL_HOME</key>
+    <string>__MAIL_HOME__</string>
+    <key>AGENTSTACK_SIGNALS_DIR</key>
+    <string>__SIGNALS_DIR__</string>
+    <key>AGENTSTACK_MCP_URL</key>
+    <string>__MCP_URL__</string>
+    <key>AGENTSTACK_TERMINAL</key>
+    <string>__TERMINAL__</string>
+    <key>AGENTSTACK_PROJECT_KEY</key>
+    <string>__PROJECT_KEY__</string>
+    <key>AGENTSTACK_PROTECTED_ROOTS</key>
+    <string>__PROTECTED_ROOTS__</string>
+    <key>AGENTSTACK_HOOKS_DIR</key>
+    <string>__HOOKS_DIR__</string>
+    <key>AGENTSTACK_RUNTIME_DIR</key>
+    <string>__RUNTIME_DIR__</string>
+    <key>AGENTSTACK_MANAGED_AGENTS_FILE</key>
+    <string>__MANAGED_AGENTS_FILE__</string>
+    <key>AGENTSTACK_VAULT</key>
+    <string>__VAULT__</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,147 @@
+{
+  "Pascal": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Blaise_Pascal_Versailles.JPG/330px-Blaise_Pascal_Versailles.JPG?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/98/Blaise_Pascal_Versailles.JPG?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Blaise Pascal"
+  },
+  "Hooke": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Portrait_of_a_Mathematician_1680c.jpg/330px-Portrait_of_a_Mathematician_1680c.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/c/cc/Portrait_of_a_Mathematician_1680c.jpg",
+    "title": "Robert Hooke"
+  },
+  "Einstein": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Albert_Einstein_Head_cleaned.jpg/330px-Albert_Einstein_Head_cleaned.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Albert_Einstein_Head_cleaned.jpg/3840px-Albert_Einstein_Head_cleaned.jpg",
+    "title": "Albert Einstein"
+  },
+  "Feynman": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/en/thumb/4/42/Richard_Feynman_Nobel.jpg/330px-Richard_Feynman_Nobel.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/en/4/42/Richard_Feynman_Nobel.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Richard Feynman"
+  },
+  "Darwin": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/Charles_Darwin_seated_crop.jpg/330px-Charles_Darwin_seated_crop.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/2/2e/Charles_Darwin_seated_crop.jpg",
+    "title": "Charles Darwin"
+  },
+  "Tesla": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/79/Tesla_circa_1890.jpeg/330px-Tesla_circa_1890.jpeg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/79/Tesla_circa_1890.jpeg",
+    "title": "Nikola Tesla"
+  },
+  "Gauss": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Carl_Friedrich_Gauss_1840_by_Jensen.jpg/330px-Carl_Friedrich_Gauss_1840_by_Jensen.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/e/ec/Carl_Friedrich_Gauss_1840_by_Jensen.jpg",
+    "title": "Carl Friedrich Gauss"
+  },
+  "Euler": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Leonhard_Euler_-_Jakob_Emanuel_Handmann_%28Kunstmuseum_Basel%29.jpg/330px-Leonhard_Euler_-_Jakob_Emanuel_Handmann_%28Kunstmuseum_Basel%29.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Leonhard_Euler_-_Jakob_Emanuel_Handmann_%28Kunstmuseum_Basel%29.jpg/3840px-Leonhard_Euler_-_Jakob_Emanuel_Handmann_%28Kunstmuseum_Basel%29.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "title": "Leonhard Euler"
+  },
+  "Bohr": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Niels_Bohr.jpg/330px-Niels_Bohr.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/6d/Niels_Bohr.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Niels Bohr"
+  },
+  "Curie": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Marie_Curie_c._1920s.jpg/330px-Marie_Curie_c._1920s.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Marie_Curie_c._1920s.jpg",
+    "title": "Marie Curie"
+  },
+  "Faraday": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Michael_Faraday_sitting_crop.jpg/330px-Michael_Faraday_sitting_crop.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Michael_Faraday_sitting_crop.jpg",
+    "title": "Michael Faraday"
+  },
+  "Planck": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Max_Planck_by_Hugo_Erfurth_1938cr_-_restoration1.jpg/330px-Max_Planck_by_Hugo_Erfurth_1938cr_-_restoration1.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Max_Planck_by_Hugo_Erfurth_1938cr_-_restoration1.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Max Planck"
+  },
+  "Newton": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Portrait_of_Sir_Isaac_Newton%2C_1689_%28brightened%29.jpg/330px-Portrait_of_Sir_Isaac_Newton%2C_1689_%28brightened%29.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/f7/Portrait_of_Sir_Isaac_Newton%2C_1689_%28brightened%29.jpg",
+    "title": "Isaac Newton"
+  },
+  "Pasteur": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Louis_Pasteur%2C_foto_av_Paul_Nadar%2C_Crisco_edit.jpg/330px-Louis_Pasteur%2C_foto_av_Paul_Nadar%2C_Crisco_edit.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/a/a6/Louis_Pasteur%2C_foto_av_Paul_Nadar%2C_Crisco_edit.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Louis Pasteur"
+  },
+  "Linnaeus": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Carl_von_Linn%C3%A9%2C_1707-1778%2C_botanist%2C_professor_%28Alexander_Roslin%29_-_Nationalmuseum_-_15723_%28cropped%29.tif/lossy-page1-330px-Carl_von_Linn%C3%A9%2C_1707-1778%2C_botanist%2C_professor_%28Alexander_Roslin%29_-_Nationalmuseum_-_15723_%28cropped%29.tif.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Carl_von_Linn%C3%A9%2C_1707-1778%2C_botanist%2C_professor_%28Alexander_Roslin%29_-_Nationalmuseum_-_15723_%28cropped%29.tif/lossy-page1-1920px-Carl_von_Linn%C3%A9%2C_1707-1778%2C_botanist%2C_professor_%28Alexander_Roslin%29_-_Nationalmuseum_-_15723_%28cropped%29.tif.jpg",
+    "title": "Carl Linnaeus"
+  },
+  "Arrhenius": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Arrhenius2.jpg/330px-Arrhenius2.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/6c/Arrhenius2.jpg",
+    "title": "Svante Arrhenius"
+  },
+  "Langmuir": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Irving_Langmuir.jpg/330px-Irving_Langmuir.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/f0/Irving_Langmuir.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Irving Langmuir"
+  },
+  "Boltzmann": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ad/Boltzmann2.jpg/330px-Boltzmann2.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/a/ad/Boltzmann2.jpg",
+    "title": "Ludwig Boltzmann"
+  },
+  "Ostwald": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5d/Wilhelm_Ostwald_by_Nicola_Perscheid.jpg/330px-Wilhelm_Ostwald_by_Nicola_Perscheid.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/5d/Wilhelm_Ostwald_by_Nicola_Perscheid.jpg",
+    "title": "Wilhelm Ostwald"
+  },
+  "Vesalius": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Man_dressed_in_Black_by_Calcar_%28Hermitage%29.jpg/330px-Man_dressed_in_Black_by_Calcar_%28Hermitage%29.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/f7/Man_dressed_in_Black_by_Calcar_%28Hermitage%29.jpg",
+    "title": "Andreas Vesalius"
+  },
+  "Guericke": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Anselmus-van-Hulle-Hommes-illustres_MG_0539.tif/lossy-page1-330px-Anselmus-van-Hulle-Hommes-illustres_MG_0539.tif.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Anselmus-van-Hulle-Hommes-illustres_MG_0539.tif/lossy-page1-1920px-Anselmus-van-Hulle-Hommes-illustres_MG_0539.tif.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "title": "Otto von Guericke"
+  },
+  "Fabre": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/Jean-henri_fabre.jpg/330px-Jean-henri_fabre.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/ff/Jean-henri_fabre.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Jean-Henri Fabre"
+  },
+  "Leeuwenhoek": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Anthonie_van_Leeuwenhoek_%281632-1723%29._Natuurkundige_te_Delft_Rijksmuseum_SK-A-957.jpeg/330px-Anthonie_van_Leeuwenhoek_%281632-1723%29._Natuurkundige_te_Delft_Rijksmuseum_SK-A-957.jpeg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/1/1f/Anthonie_van_Leeuwenhoek_%281632-1723%29._Natuurkundige_te_Delft_Rijksmuseum_SK-A-957.jpeg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Antonie van Leeuwenhoek"
+  },
+  "Turing": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Alan_turing_header.jpg/330px-Alan_turing_header.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/c/ce/Alan_turing_header.jpg",
+    "title": "Alan Turing"
+  },
+  "Mendel": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Gregor_Mendel_2.jpg/330px-Gregor_Mendel_2.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/b/ba/Gregor_Mendel_2.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail_unscaled",
+    "title": "Gregor Mendel"
+  },
+  "Kepler": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/JKepler.jpg/330px-JKepler.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/74/JKepler.jpg",
+    "title": "Johannes Kepler"
+  },
+  "Maxwell": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/James-Clerk-Maxwell-1831-1879.jpg/330px-James-Clerk-Maxwell-1831-1879.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/b/b0/James-Clerk-Maxwell-1831-1879.jpg",
+    "title": "James Clerk Maxwell"
+  },
+  "Ramanujan": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg/330px-Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg",
+    "title": "Srinivasa Ramanujan"
+  },
+  "Hubble": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG/330px-Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/1/15/Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG",
+    "title": "Edwin Hubble"
+  }
+}

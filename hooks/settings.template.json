@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/set-ghostty-title.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/check-file-reservation.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/check-agent-registered.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/mark-agent-registered.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

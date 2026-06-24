@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "tool": "claude-agent-stack",
+  "created_at": "2026-01-01T00:00:00Z",
+  "install_dir": "/home/alice/.agentstack",
+  "repo_root": "/home/alice/src/claude-agent-stack",
+  "tier": "tier1",
+  "safe_merge_performed": true,
+  "settings_merge": {
+    "operation": "merge",
+    "settings_path": "/home/alice/.claude/settings.json",
+    "hooks_dir": "/home/alice/.agentstack/hooks",
+    "skills_dir": "/home/alice/.agentstack/skills",
+    "changed": true,
+    "backup": {
+      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
+      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
+      "target_was_missing": false
+    },
+    "before_sha256": "example-before-sha256",
+    "after_sha256": "example-after-sha256",
+    "added_entries": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
+      }
+    ],
+    "skipped_existing": [],
+    "skills_dirs": {
+      "added": [
+        "/home/alice/.agentstack/skills"
+      ],
+      "skipped_existing": []
+    },
+    "entries": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
+      }
+    ]
+  },
+  "env": {
+    "AGENTSTACK_PORT": "${AGENTSTACK_PORT:-8770}",
+    "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
+    "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
+    "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
+    "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
+    "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
+    "AGENTSTACK_MAIL_DB": "/home/alice/mcp_agent_mail/storage.sqlite3",
+    "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env"
+  },
+  "owned_files": [
+    "/home/alice/.agentstack/env.sh",
+    "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
+  ],
+  "owned_dirs": [
+    "/home/alice/.agentstack/hooks",
+    "/home/alice/.agentstack/skills",
+    "/home/alice/.agentstack/dashboard",
+    "/home/alice/.agentstack/bin",
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/backups",
+    "/home/alice/.agentstack"
+  ],
+  "services": [
+    {
+      "kind": "systemd-user",
+      "unit": "org.agentstack.agentdashboard.service",
+      "path": "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
+    }
+  ],
+  "backups": [
+    {
+      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
+      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
+      "target_was_missing": false
+    }
+  ],
+  "settings_backups": [
+    {
+      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
+      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
+      "target_was_missing": false
+    }
+  ],
+  "retained_paths": [
+    "/home/alice/mcp_agent_mail",
+    "/home/alice/.mcp_agent_mail"
+  ],
+  "purge_paths": [
+    "/home/alice/mcp_agent_mail",
+    "/home/alice/.mcp_agent_mail",
+    "/home/alice/.agentstack/runtime"
+  ],
+  "notes": [
+    "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
+    "Tier1 user-settings merge records both hook entries and skillsDirectories additions.",
+    "Installer does not modify Claude MCP user config."
+  ]
+}
