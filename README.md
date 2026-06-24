@@ -172,13 +172,43 @@ graph connections; otherwise it falls back to a local `logs/` directory.
 
 ### Codex and skills
 
-These are **Claude Code skills** (slash commands registered via
-`skillsDirectories`); Codex does not read them, so a Codex session has no
-`/delegate` or `/log` command. Codex still participates fully — `/delegate
---codex` and `agent-start-codex` spawn and register Codex agents over the same
-`spawn_child.sh` + agent-mail machinery — it is just a delegation *target*, not
-a holder of these commands. To expose equivalent commands inside Codex, port the
-`SKILL.md` into Codex's own prompt/instruction format.
+The slash commands above are a Claude Code feature; Codex has no skill registry.
+Instead, Codex discovers the same skills through its global `~/.codex/AGENTS.md`.
+After install, run:
+
+```bash
+~/.agentstack/bin/agentstack-codex-setup     # writes a managed block in ~/.codex/AGENTS.md
+```
+
+This registers a small managed block (idempotent; re-run to update,
+`--uninstall` to remove) that points Codex at the bundled skills
+(`~/.agentstack/skills/<name>/SKILL.md`, which it opens on demand) and — because
+Codex is **not** guarded by the file-reservation hook — instructs it to reserve
+files before editing. The skill bodies are shared with Claude, so a Codex agent
+follows the same delegate/log workflow. `agent-start-codex` registers the agent
+with agent-mail; `agentstack-codex-setup` teaches it the rules.
+
+## Collision prevention (file reservations)
+
+Agents on one machine share a **file-reservation registry** (provided by
+`mcp_agent_mail`): before editing a file an agent reserves its path, so two
+agents don't clobber the same file. Reservations are taken, renewed, and
+released over agent-mail and are visible in the dashboard.
+
+Enforcement differs by agent type:
+
+- **Claude Code agents are hard-enforced.** The `check-file-reservation.sh`
+  PreToolUse hook blocks `Edit`/`Write` under the protected roots
+  (`AGENTSTACK_PROTECTED_ROOTS`, default the project key) unless a current
+  reservation exists.
+- **Codex agents are not auto-blocked** — Codex has no hook system, so it must
+  reserve voluntarily. `agentstack-codex-setup` writes that discipline into
+  `~/.codex/AGENTS.md` (reserve before editing, renew long edits, release when
+  done). Run it so Codex-heavy setups stay collision-safe.
+
+Either way the underlying registry is shared, so a Claude reservation is visible
+to Codex and vice versa — the difference is only whether editing is *blocked*
+or *expected* without one.
 
 ## Windows / WSL2
 

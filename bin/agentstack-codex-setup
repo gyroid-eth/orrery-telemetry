@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# agentstack-codex-setup — register the claude-agent-stack instructions (skills +
+# file-reservation discipline) into Codex's global AGENTS.md, so Codex agents
+# discover the bundled skills and reserve files before editing.
+#
+# Codex (verified on 0.142) reads $CODEX_HOME/AGENTS.md globally. This script
+# inserts an idempotent managed block there, substituting real paths from the
+# install. Re-running updates the block in place; nothing else in the file is
+# touched. A timestamped backup is written before any change.
+#
+#   agentstack-codex-setup            install / update the managed block
+#   agentstack-codex-setup --print    print the resolved block, change nothing
+#   agentstack-codex-setup --uninstall remove the managed block
+#
+# Env:
+#   AGENTSTACK_HOME         install dir (default ~/.agentstack); sources env.sh
+#   AGENTSTACK_PROJECT_KEY  shared agent-mail project key (substituted in)
+#   CODEX_HOME              Codex config dir (default ~/.codex)
+set -euo pipefail
+
+PROG="agentstack-codex-setup"
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+[[ -f "$AGENTSTACK_HOME/env.sh" ]] && . "$AGENTSTACK_HOME/env.sh"
+# the line above may reset AGENTSTACK_HOME from env.sh; re-default if blank
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+TARGET="$CODEX_HOME/AGENTS.md"
+TEMPLATE="$AGENTSTACK_HOME/codex/AGENTS.md"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+
+BEGIN="<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->"
+END="<!-- <<< claude-agent-stack -->"
+
+mode="install"
+case "${1:-}" in
+  --print) mode="print" ;;
+  --uninstall) mode="uninstall" ;;
+  "" ) ;;
+  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+esac
+
+# Build the managed block (markers + template with placeholders substituted).
+render_block() {
+  [[ -f "$TEMPLATE" ]] || die "template not found: $TEMPLATE (is claude-agent-stack installed?)"
+  printf '%s\n' "$BEGIN"
+  sed -e "s|__AGENTSTACK_HOME__|$AGENTSTACK_HOME|g" \
+      -e "s|__AGENTSTACK_PROJECT_KEY__|${PROJECT_KEY:-<set AGENTSTACK_PROJECT_KEY>}|g" \
+      "$TEMPLATE"
+  printf '%s\n' "$END"
+}
+
+if [[ "$mode" == "print" ]]; then
+  render_block
+  exit 0
+fi
+
+# Read current target (may not exist yet), strip any existing managed block.
+current=""
+[[ -f "$TARGET" ]] && current="$(cat "$TARGET")"
+stripped="$(printf '%s' "$current" | awk -v b="$BEGIN" -v e="$END" '
+  $0==b {skip=1; next} $0==e {skip=0; next} !skip {print}
+')"
+
+if [[ "$mode" == "uninstall" ]]; then
+  if [[ -z "$current" ]]; then echo "$PROG: $TARGET does not exist; nothing to do"; exit 0; fi
+  if [[ "$current" == "$stripped" ]]; then echo "$PROG: no managed block in $TARGET"; exit 0; fi
+  cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || cp "$TARGET" "$TARGET.bak"
+  # collapse trailing blank lines left behind
+  printf '%s\n' "$stripped" | awk 'NF{blank=0} !NF{blank++} blank<2 || NF' > "$TARGET"
+  echo "$PROG: removed managed block from $TARGET"
+  exit 0
+fi
+
+# install/update: backup, then write stripped content + fresh block.
+mkdir -p "$CODEX_HOME"
+[[ -f "$TARGET" ]] && { cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || cp "$TARGET" "$TARGET.bak"; }
+{
+  if [[ -n "$stripped" ]]; then
+    printf '%s\n' "$stripped"
+    # ensure a blank line before our block
+    [[ "$(printf '%s' "$stripped" | tail -c1)" == "" ]] || printf '\n'
+    printf '\n'
+  fi
+  render_block
+} > "$TARGET"
+
+echo "$PROG: installed managed block into $TARGET"
+[[ -z "$PROJECT_KEY" ]] && echo "$PROG: note — AGENTSTACK_PROJECT_KEY was empty; re-run after setting it for reservations to work" >&2
+exit 0

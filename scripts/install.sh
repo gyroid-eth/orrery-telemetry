@@ -220,6 +220,7 @@ install_payload() {
   if [[ "$TIER" != "tier0" ]]; then
     copy_tree "$REPO_ROOT/hooks" "$HOOKS_DIR"
     copy_tree "$REPO_ROOT/skills" "$SKILLS_DIR"
+    copy_tree "$REPO_ROOT/codex" "$INSTALL_DIR/codex"
   else
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"
@@ -235,8 +236,10 @@ install_payload() {
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
+    cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
     chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" "$BIN_DIR/agentstack-merge-settings" \
-      "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-codex-bootstrap"
+      "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-codex-bootstrap" \
+      "$BIN_DIR/agentstack-codex-setup"
   fi
 }
 
@@ -534,7 +537,7 @@ service_kind = sys.argv[2]
 service_path = sys.argv[3]
 install_dir = pathlib.Path("$INSTALL_DIR")
 owned_files = []
-for rel in ("hooks", "skills", "dashboard", "bin"):
+for rel in ("hooks", "skills", "dashboard", "bin", "codex"):
     base = install_dir / rel
     if base.exists():
         for path in base.rglob("*"):
@@ -650,6 +653,10 @@ main() {
     say "Install complete: $URL"
     say "Manifest: $MANIFEST"
     say "Run doctor: $BIN_DIR/agentstack-doctor"
+    if [[ "$TIER" != "tier0" ]]; then
+      say "Codex users: register skills + reservation rules with"
+      say "  $BIN_DIR/agentstack-codex-setup   (writes a managed block in ~/.codex/AGENTS.md)"
+    fi
   fi
 }
 
