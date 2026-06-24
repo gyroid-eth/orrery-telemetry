@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# agent-start — launch a Claude Code agent inside a named tmux session and a
+# terminal window, so it shows up in the dashboard and is click-to-jump-able.
+#
+# Directory selection (where `claude` runs):
+#   agent-start [DIR]    use DIR explicitly
+#   agent-start          if fzf is installed, browse under $AGENTSTACK_BASE_DIR
+#                        (default: $HOME); otherwise fall back to the current dir
+#
+# Env:
+#   AGENTSTACK_BASE_DIR  root the interactive picker browses (default: $HOME).
+#                        Point this at your Obsidian vault to pick a subdir:
+#                          export AGENTSTACK_BASE_DIR="$HOME/Obsidian/MyVault"
+#   AGENTSTACK_TERMINAL  ghostty | iterm | terminal | auto (default: auto).
+#                        Which terminal to open the new window in (macOS).
+#   AGENTSTACK_CLAUDE_BIN  claude binary (default: `claude` on PATH).
+#
+# Registration, the scientist name, and the window/tab title are handled by the
+# shipped hooks (mark-agent-registered -> set-ghostty-title) once the agent
+# registers with agent-mail. This launcher only needs to start `claude` in a
+# named tmux session.
+set -euo pipefail
+
+CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
+
+die() { printf 'agent-start: %s\n' "$*" >&2; exit 1; }
+
+# ---- resolve tmux -----------------------------------------------------------
+TMUX_BIN=""
+for c in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+  [[ -x "$c" ]] && { TMUX_BIN="$c"; break; }
+done
+[[ -z "$TMUX_BIN" ]] && TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
+[[ -z "$TMUX_BIN" ]] && die "tmux not found (install tmux first)"
+
+command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "claude not found on PATH (set AGENTSTACK_CLAUDE_BIN)"
+
+abspath() { (cd "$1" 2>/dev/null && pwd) || return 1; }
+
+# ---- fzf-based directory picker (optional) ----------------------------------
+# Browse one level at a time under $AGENTSTACK_BASE_DIR.
+#   Right: descend into the highlighted dir   Left: go to parent
+#   Enter: select the highlighted dir         Esc: cancel
+pick_dir() {
+  local base current pick key sel children parent
+  base="${AGENTSTACK_BASE_DIR:-$HOME}"
+  base="$(abspath "$base")" || die "AGENTSTACK_BASE_DIR is not a directory: ${AGENTSTACK_BASE_DIR:-$HOME}"
+  current="$base"
+  while true; do
+    pick="$(find "$current" -maxdepth 1 -type d -not -name '.*' | sort \
+      | fzf --height 50% --reverse \
+            --prompt="${current/#$HOME/\~}/ > " \
+            --header="<-:parent  ->:enter  Enter:select  Esc:cancel" \
+            --expect="right,left" --no-multi)" || true
+    key="$(printf '%s\n' "$pick" | sed -n '1p')"
+    sel="$(printf '%s\n' "$pick" | sed -n '2p')"
+    [[ -z "$key" && -z "$sel" ]] && return 1   # Esc / empty -> cancel
+    case "$key" in
+      right)
+        if [[ -n "$sel" && -d "$sel" ]]; then
+          children="$(find "$sel" -maxdepth 1 -type d -not -name '.*' -not -path "$sel" 2>/dev/null | head -1)"
+          [[ -n "$children" ]] && current="$sel"   # only descend if it has subdirs
+        fi ;;
+      left)
+        parent="$(dirname "$current")"
+        # don't climb above the configured base
+        [[ "$current" != "$base" ]] && current="$parent" ;;
+      *)
+        [[ -n "$sel" ]] && { printf '%s\n' "$sel"; return 0; } ;;
+    esac
+  done
+}
+
+# ---- pick the working directory --------------------------------------------
+DIR=""
+if [[ $# -gt 0 ]]; then
+  [[ -d "$1" ]] || die "directory not found: $1"
+  DIR="$(abspath "$1")"
+elif command -v fzf >/dev/null 2>&1; then
+  DIR="$(pick_dir)" || { echo "agent-start: cancelled" >&2; exit 0; }
+else
+  DIR="$PWD"
+  echo "agent-start: fzf not installed; using current directory ($DIR)" >&2
+  echo "             pass a path (agent-start DIR) or install fzf to browse a vault" >&2
+fi
+[[ -n "$DIR" ]] || exit 0
+
+# Prevent AGENT_NAME hijack: a stale/inherited value would make the new agent
+# register under another agent's name. The hooks re-export it after register.
+unset AGENT_NAME PARENT_AGENT 2>/dev/null || true
+
+SESSION="pending-$$"
+
+# ---- already inside a real tmux pane: run in place --------------------------
+# set-ghostty-title renames the current session to the scientist name on
+# register, so an existing pane works without spawning a new window.
+if [[ -n "${TMUX:-}" ]]; then
+  cd "$DIR"
+  exec "$CLAUDE_BIN"
+fi
+
+# ---- otherwise spawn a new terminal window with a fresh tmux session --------
+# The temp script keeps the window alive after claude exits (drops to a shell),
+# matching the interactive-launcher behaviour, then self-deletes.
+INNER="$(mktemp -t agent-start.XXXXXX)"
+cat > "$INNER" <<EOF
+#!/usr/bin/env bash
+cd $(printf '%q' "$DIR") || exit 1
+$(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  "$(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+rm -f -- "\$0"
+exec "\$SHELL" -l
+EOF
+chmod +x "$INNER"
+
+mac_app() { [[ -d "/Applications/$1" || -d "$HOME/Applications/$1" ]]; }
+
+term="${AGENTSTACK_TERMINAL:-auto}"
+if [[ "$term" == "auto" ]]; then
+  if [[ "$(uname)" == "Darwin" ]]; then
+    if mac_app Ghostty.app || command -v ghostty >/dev/null 2>&1; then term=ghostty
+    elif mac_app iTerm.app; then term=iterm
+    elif mac_app Terminal.app || [[ -d /System/Applications/Utilities/Terminal.app ]]; then term=terminal
+    else term=none; fi
+  else
+    term=ghostty   # non-macOS: try ghostty/x-terminal-emulator below
+  fi
+fi
+
+spawn_failed() {
+  cat >&2 <<MSG
+agent-start: could not open a terminal automatically.
+Run this yourself to launch the agent:
+  $TMUX_BIN new-session -s $SESSION -c $DIR $CLAUDE_BIN
+MSG
+  rm -f -- "$INNER"
+  exit 1
+}
+
+case "$term" in
+  ghostty)
+    if [[ "$(uname)" == "Darwin" ]] && mac_app Ghostty.app; then
+      open -na Ghostty.app --args --title="$SESSION" -e "$INNER"
+    elif command -v ghostty >/dev/null 2>&1; then
+      setsid ghostty -e "$INNER" >/dev/null 2>&1 &
+    elif command -v x-terminal-emulator >/dev/null 2>&1; then
+      setsid x-terminal-emulator -e "$INNER" >/dev/null 2>&1 &
+    else
+      spawn_failed
+    fi ;;
+  iterm)
+    osascript -e 'on run argv
+      tell application "iTerm2"
+        activate
+        create window with default profile command (item 1 of argv)
+      end tell
+    end run' "$INNER" >/dev/null || spawn_failed ;;
+  terminal)
+    osascript -e 'on run argv
+      tell application "Terminal"
+        activate
+        do script (item 1 of argv)
+      end tell
+    end run' "$INNER" >/dev/null || spawn_failed ;;
+  *)
+    spawn_failed ;;
+esac
+
+echo "agent-start: launching Claude agent in tmux session '$SESSION' ($DIR)"

@@ -45,6 +45,7 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/obsidi
 - macOS or Linux (see [Windows / WSL2](#windows--wsl2) below)
 - [Obsidian](https://obsidian.md/) *(recommended — unlocks full log integration)*
 - [Ghostty](https://ghostty.org/) *(recommended — enables click-to-jump and auto window titles; falls back to iTerm2 → macOS Terminal → none automatically)*
+- [`fzf`](https://github.com/junegunn/fzf) *(optional — lets `agent-start` browse a vault for the working directory; without it, pass a path explicitly)*
 
 ## Quick start
 
@@ -57,6 +58,54 @@ git clone <this-repo> && cd claude-agent-stack
 The dashboard binds to `127.0.0.1` by default. For access from a trusted LAN or
 VPN, set `AGENTSTACK_BIND_HOST=0.0.0.0`; this exposes control endpoints and the
 terminal bridge to that network.
+
+## Launching agents
+
+For the dashboard to list an agent and let you click-to-jump to it, the agent
+must run **inside a named tmux session in its own terminal window**. The
+installed `agent-start` launcher (in `~/.agentstack/bin`) does exactly that —
+it opens a terminal window, starts a fresh tmux session, and runs `claude`
+inside it. Registration, the auto-assigned scientist name, and the window/tab
+title are then handled by the shipped hooks once the agent registers with
+agent-mail.
+
+```bash
+# add the launcher to your PATH (e.g. in ~/.zshrc or ~/.bashrc)
+export PATH="$HOME/.agentstack/bin:$PATH"
+
+agent-start ~/code/my-project   # run claude in that directory
+agent-start                     # pick a directory interactively (needs fzf)
+```
+
+### Pick a working directory from your vault
+
+Set `AGENTSTACK_BASE_DIR` to the root you want the interactive picker to browse
+(defaults to `$HOME`). Point it at your Obsidian vault to drill into a subfolder
+without typing the path:
+
+```bash
+export AGENTSTACK_BASE_DIR="$HOME/Obsidian/MyVault"
+```
+
+Then `agent-start` (no argument) opens an `fzf` browser rooted there:
+
+- **→** descend into the highlighted directory · **←** go to parent (stops at the base)
+- **Enter** select the highlighted directory · **Esc** cancel
+
+Without `fzf`, `agent-start` falls back to the current directory; pass a path
+explicitly (`agent-start PATH`) to be precise.
+
+### Other launcher options
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AGENTSTACK_BASE_DIR` | `$HOME` | Root the interactive picker browses |
+| `AGENTSTACK_TERMINAL` | `auto` | Terminal to open: `ghostty`, `iterm`, `terminal`, or `auto` (macOS) |
+| `AGENTSTACK_CLAUDE_BIN` | `claude` | Path to the `claude` binary |
+
+If you launch `agent-start` from **inside** an existing tmux session, it runs
+`claude` in place (the title hook renames that session on register) instead of
+opening a new window.
 
 ## Windows / WSL2
 

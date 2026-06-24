@@ -935,8 +935,23 @@ def _terminal_unsupported() -> dict:
     }
 
 
+def _zsh_safe_quote(a: str) -> str:
+    """shlex.quote + zsh の先頭展開対策。
+
+    shlex.quote は `=` と `~` を「安全」扱いして裸で返すが、zsh は
+    先頭 `=` を EQUALS 展開(`=cmd` → コマンドのパス)、先頭 `~` を
+    チルダ展開する。tmux の完全一致ターゲット `=cx-001` をそのまま
+    `do script`(Terminal/iTerm は zsh で実行)へ渡すと
+    `zsh: cx-001 not found` になる。先頭がこれらの文字なら強制クオート。
+    """
+    s = shlex.quote(a)
+    if s == a and a[:1] in ("=", "~"):
+        s = "'" + a.replace("'", "'\\''") + "'"
+    return s
+
+
 def _shell_join(argv: list[str]) -> str:
-    return " ".join(shlex.quote(a) for a in argv)
+    return " ".join(_zsh_safe_quote(a) for a in argv)
 
 
 def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
