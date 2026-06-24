@@ -14,6 +14,9 @@ It sits **on top of** [`mcp_agent_mail`](https://github.com/Dicklesworthstone/mc
 - **Coordination hooks** for Claude Code — file-reservation guard, agent
   registration gate, child-agent spawning, and a mail watcher that injects
   inbox signals back into each agent's terminal.
+- **Bundled skills** — `/delegate` (spawn and supervise a child agent) and
+  `/log` (write a structured session log), registered with Claude Code at
+  install time. See [Skills](#skills).
 - **One-command install** — `./install.sh` clones agent-mail, wires up the
   config, and starts the dashboard (macOS launchd / Linux systemd / plain nohup).
   The default Tier1 path shows a Claude Code user-settings diff and waits for
@@ -131,6 +134,51 @@ Registration needs a running agent-mail (the install sets this up) and
 `AGENTSTACK_PROJECT_KEY`; without them Codex still launches, just without
 coordination. `OPENAI_API_KEY` is stripped at launch so Codex uses its ChatGPT
 OAuth login.
+
+## Skills
+
+The installer copies the bundled skills to `~/.agentstack/skills` and registers
+that directory in Claude Code's `skillsDirectories`, so the slash commands below
+are available in any Claude Code session (no manual symlinking). Both are
+env-driven — they read `AGENTSTACK_*` from the install, not hard-coded paths.
+
+### `/delegate` — spawn and supervise a child agent
+
+Hands a bounded task to a child Claude (or Codex) agent and keeps the parent
+responsible for the outcome: it writes a risk profile, reserves files to avoid
+collisions, spawns the child via `spawn_child.sh`, annotates it in the
+dashboard, monitors progress, and reports a verified result.
+
+```bash
+/delegate "<task>"                       # child Claude agent in the current project
+/delegate "<task>" --dir <directory>     # run the child elsewhere
+/delegate "<task>" --codex               # use a Codex child instead
+/delegate "<task>" --model <model-name>  # pick the child's model
+/delegate "<task>" --worktree            # isolate the child in a git worktree
+```
+
+The child appears in the dashboard with its spawn lineage, and completion is
+delivered back to the parent over agent-mail.
+
+### `/log` — structured session log
+
+Writes a structured log of the current session. If `AGENTSTACK_PROJECT_KEY`
+points at an Obsidian vault, the log lands there with daily-note backlinks and
+graph connections; otherwise it falls back to a local `logs/` directory.
+
+```bash
+/log <theme> [project]
+```
+
+### Codex and skills
+
+These are **Claude Code skills** (slash commands registered via
+`skillsDirectories`); Codex does not read them, so a Codex session has no
+`/delegate` or `/log` command. Codex still participates fully — `/delegate
+--codex` and `agent-start-codex` spawn and register Codex agents over the same
+`spawn_child.sh` + agent-mail machinery — it is just a delegation *target*, not
+a holder of these commands. To expose equivalent commands inside Codex, port the
+`SKILL.md` into Codex's own prompt/instruction format.
 
 ## Windows / WSL2
 
