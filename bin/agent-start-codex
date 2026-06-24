@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# agent-start-codex — launch a Codex CLI agent inside a named tmux session and a
+# terminal window, registered with agent-mail so it shows up in the dashboard
+# and is click-to-jump-able. The Codex counterpart of `agent-start`.
+#
+# Unlike Claude Code, Codex has no hook system, so this launcher runs
+# `agentstack-codex-bootstrap` inside the session to register the agent and
+# assign a scientist name before exec'ing codex.
+#
+# Directory selection (where codex runs):
+#   agent-start-codex [DIR]   use DIR explicitly
+#   agent-start-codex         fzf-pick under $AGENTSTACK_BASE_DIR (default $HOME)
+#
+# Env:
+#   AGENTSTACK_BASE_DIR     root the interactive picker browses (default $HOME)
+#   AGENTSTACK_TERMINAL     ghostty | iterm | terminal | auto (default auto)
+#   AGENTSTACK_CODEX_BIN    codex binary (default `codex` on PATH)
+#   AGENTSTACK_VAULT        extra writable dir for codex --add-dir (optional)
+#   AGENTSTACK_CODEX_SANDBOX   codex --sandbox value (default workspace-write)
+#   AGENTSTACK_CODEX_APPROVAL  codex --ask-for-approval value (default on-request)
+set -euo pipefail
+
+AGS_PROG="agent-start-codex"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/agentstack-launch.sh
+. "$BIN_DIR/lib/agentstack-launch.sh"
+ags_load_env
+
+CODEX_BIN="${AGENTSTACK_CODEX_BIN:-codex}"
+BOOTSTRAP="$BIN_DIR/agentstack-codex-bootstrap"
+SANDBOX="${AGENTSTACK_CODEX_SANDBOX:-workspace-write}"
+APPROVAL="${AGENTSTACK_CODEX_APPROVAL:-on-request}"
+
+TMUX_BIN="$(ags_resolve_tmux)"
+[[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
+command -v "$CODEX_BIN" >/dev/null 2>&1 || ags_die "codex not found on PATH (set AGENTSTACK_CODEX_BIN)"
+[[ -f "$BOOTSTRAP" ]] || ags_die "missing $BOOTSTRAP"
+
+DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+[[ -n "$DIR" ]] || exit 0
+
+# Prevent AGENT_NAME hijack; the bootstrap re-exports it after registering.
+unset AGENT_NAME PARENT_AGENT 2>/dev/null || true
+
+SESSION="codex-pending-$$"
+
+# Assemble codex flags. OPENAI_API_KEY is stripped because Codex uses ChatGPT
+# OAuth; an API key present in the environment overrides and breaks it.
+# --add-dir AGENTSTACK_VAULT only when set, so non-Obsidian users aren't forced.
+build_codex_cmd() {
+  local d="$1" out
+  out="env -u OPENAI_API_KEY $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$d")"
+  out+=" --sandbox $(printf '%q' "$SANDBOX") --ask-for-approval $(printf '%q' "$APPROVAL")"
+  [[ -n "${AGENTSTACK_VAULT:-}" && -d "${AGENTSTACK_VAULT:-/nonexistent}" ]] \
+    && out+=" --add-dir $(printf '%q' "$AGENTSTACK_VAULT")"
+  printf '%s' "$out"
+}
+
+# Already inside a real tmux pane: register + run codex in place.
+if [[ -n "${TMUX:-}" ]]; then
+  cd "$DIR"
+  # shellcheck disable=SC1090
+  source "$BOOTSTRAP" "$DIR"
+  eval "exec $(build_codex_cmd "$DIR")"
+fi
+
+# Otherwise spawn a new terminal window with a fresh tmux session that runs the
+# bootstrap (registration + scientist name) and then codex. The temp script
+# keeps the window alive after codex exits, then self-deletes.
+CODEX_CMD="$(build_codex_cmd "$DIR")"
+INNER="$(mktemp -t agent-start-codex.XXXXXX)"
+cat > "$INNER" <<EOF
+#!/usr/bin/env bash
+cd $(printf '%q' "$DIR") || exit 1
+$(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR"); $CODEX_CMD; exec \"\$SHELL\" -l"
+rm -f -- "\$0"
+exec "\$SHELL" -l
+EOF
+chmod +x "$INNER"
+
+if ! ags_spawn_terminal "$SESSION" "$INNER"; then
+  rm -f -- "$INNER"
+  cat >&2 <<MSG
+$AGS_PROG: could not open a terminal automatically.
+Run this yourself to launch the agent:
+  $TMUX_BIN new-session -s $SESSION -c $DIR
+  # then inside it:  source $BOOTSTRAP "$DIR"; $CODEX_CMD
+MSG
+  exit 1
+fi
+
+echo "$AGS_PROG: launching Codex agent in tmux session '$SESSION' ($DIR)"

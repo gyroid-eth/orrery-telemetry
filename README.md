@@ -107,6 +107,31 @@ If you launch `agent-start` from **inside** an existing tmux session, it runs
 `claude` in place (the title hook renames that session on register) instead of
 opening a new window.
 
+### Codex agents
+
+`agent-start-codex` is the [Codex CLI](https://github.com/openai/codex)
+counterpart. It takes the same directory selection (`AGENTSTACK_BASE_DIR`,
+explicit path, or fzf) and terminal options. Because Codex has no hook system,
+the launcher runs `agentstack-codex-bootstrap` inside the session to register
+the agent with agent-mail and assign a scientist name before starting Codex.
+
+```bash
+agent-start-codex ~/code/my-project
+agent-start-codex                     # pick a directory (needs fzf)
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AGENTSTACK_CODEX_BIN` | `codex` | Path to the `codex` binary |
+| `AGENTSTACK_VAULT` | *(unset)* | Extra writable dir passed as `codex --add-dir` |
+| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | `codex --sandbox` value |
+| `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `codex --ask-for-approval` value |
+
+Registration needs a running agent-mail (the install sets this up) and
+`AGENTSTACK_PROJECT_KEY`; without them Codex still launches, just without
+coordination. `OPENAI_API_KEY` is stripped at launch so Codex uses its ChatGPT
+OAuth login.
+
 ## Windows / WSL2
 
 Native Windows is not supported. On Windows, run everything inside

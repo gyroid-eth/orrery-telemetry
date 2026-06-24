@@ -230,8 +230,13 @@ install_payload() {
     cp "$SCRIPT_DIR/uninstall.sh" "$BIN_DIR/agentstack-uninstall"
     cp "$SCRIPT_DIR/doctor.sh" "$BIN_DIR/agentstack-doctor"
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
+    mkdir -p "$BIN_DIR/lib"
+    cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
-    chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" "$BIN_DIR/agentstack-merge-settings" "$BIN_DIR/agent-start"
+    cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
+    cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
+    chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" "$BIN_DIR/agentstack-merge-settings" \
+      "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-codex-bootstrap"
   fi
 }
 
