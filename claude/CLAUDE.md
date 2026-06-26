@@ -11,13 +11,14 @@ rules before doing project work.
   `AGENT_NAME` exported and your tmux session should be named after it. At
   session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
   then call `register_agent` with `program="claude-code"` and
-  `name="$AGENT_NAME"` when `AGENT_NAME` is set. This registration is idempotent
-  and safe even if the launcher already registered you. If `AGENT_NAME` is not
-  set, omit `name`.
+  `name="$AGENT_NAME"` when `AGENT_NAME` is set. If
+  `CHILD_REGISTRATION_TOKEN` is set, pass it as `registration_token`; with that
+  token, re-registration of the launcher-created identity is idempotent. If
+  `AGENT_NAME` is not set, omit `name`.
 - If `register_agent(name="$AGENT_NAME")` reports that the name is already
-  taken, retry with a short disambiguator before the scientist suffix, such as
-  `cc-a1-Curie`, so the final name still ends with a bundled scientist key.
-  Export and use the registered name returned by agent-mail.
+  taken and `CHILD_REGISTRATION_TOKEN` is not available, do not assume the
+  retry is safe. For child/reserved sessions, stop and report the missing token
+  instead of registering under another name.
 - Always call `fetch_inbox(agent_name="$AGENT_NAME")` after registration. If
   `PARENT_AGENT` is set, treat the inbox request as the canonical task and
   report completion to that parent with `send_message`.

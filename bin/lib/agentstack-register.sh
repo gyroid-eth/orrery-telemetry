@@ -110,6 +110,58 @@ print("")
 '
 }
 
+ags_extract_registration_token() {
+  python3 -c '
+import json, sys
+
+def candidate_tokens(obj):
+    if isinstance(obj, dict):
+        value = obj.get("registration_token")
+        if isinstance(value, str) and value:
+            yield value
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+
+for token in candidate_tokens(data):
+    print(token)
+    sys.exit(0)
+
+result = data.get("result") if isinstance(data, dict) else None
+for token in candidate_tokens(result):
+    print(token)
+    sys.exit(0)
+if isinstance(result, dict):
+    structured = result.get("structuredContent")
+    for token in candidate_tokens(structured):
+        print(token)
+        sys.exit(0)
+    content = result.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                obj = json.loads(text)
+            except Exception:
+                continue
+            for token in candidate_tokens(obj):
+                print(token)
+                sys.exit(0)
+print("")
+'
+}
+
+ags_generate_registration_token() {
+  python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+}
+
 ags_agent_exists() {
   local project_key="$1" agent_name="$2" response
   response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$agent_name" 2>/dev/null || true)"
@@ -159,11 +211,19 @@ ags_pick_available_agent_name() {
 
 ags_register_session() {
   local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}" requested_mode="${7:-reserved}"
+  AGS_REGISTERED_AGENT_NAME=""
+  AGS_REGISTERED_REGISTRATION_TOKEN=""
+
   local task_description="Agent session in $work_dir"
   case "$program" in
     claude-code) task_description="Claude session in $work_dir" ;;
     codex) task_description="Codex session in $work_dir" ;;
   esac
+
+  local registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+  if [[ -z "$registration_token" ]]; then
+    registration_token="$(ags_generate_registration_token)" || return 1
+  fi
 
   local agent_name="$requested_name"
   if [[ -z "$agent_name" ]]; then
@@ -181,15 +241,23 @@ ags_register_session() {
     "name=$agent_name"
     "task_description=$task_description"
   )
-  [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]] && register_args+=("registration_token=$CHILD_REGISTRATION_TOKEN")
+  [[ -n "$registration_token" ]] && register_args+=("registration_token=$registration_token")
 
-  local result registered
+  local result registered registered_token
   result="$(ags_mcp_call "register_agent" "${register_args[@]}")" || return 1
   if printf '%s' "$result" | ags_mcp_has_error; then
     return 1
   fi
   registered="$(printf '%s' "$result" | ags_extract_agent_name)"
   [[ -n "$registered" ]] || return 1
+  registered_token="$(printf '%s' "$result" | ags_extract_registration_token)"
+  [[ -n "$registered_token" ]] || registered_token="$registration_token"
+  if [[ -n "$registered_token" ]]; then
+    CHILD_REGISTRATION_TOKEN="$registered_token"
+    AGS_REGISTERED_REGISTRATION_TOKEN="$registered_token"
+    export CHILD_REGISTRATION_TOKEN
+  fi
+  AGS_REGISTERED_AGENT_NAME="$registered"
   printf '%s\n' "$registered"
 }
 

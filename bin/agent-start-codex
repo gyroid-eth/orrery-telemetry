@@ -40,7 +40,7 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
 # Prevent AGENT_NAME hijack; the bootstrap re-exports it after registering.
-unset AGENT_NAME PARENT_AGENT 2>/dev/null || true
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN 2>/dev/null || true
 
 SESSION="codex-pending-$$"
 

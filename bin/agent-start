@@ -42,8 +42,8 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
 # Prevent AGENT_NAME hijack: a stale/inherited value would make the new agent
-# register under another agent's name.
-unset AGENT_NAME PARENT_AGENT 2>/dev/null || true
+# register under another agent's name/token.
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN 2>/dev/null || true
 
 SESSION="pending-$$"
 CANDIDATE_AGENT_NAME="$(ags_pick_scientist_name "cc" 2>/dev/null || true)"
@@ -57,7 +57,10 @@ if [[ -n "$PROJECT_KEY" ]]; then
   ags_mail_load_token
   if ags_mcp_call "health_check" >/dev/null 2>&1; then
     ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
-    REGISTERED_AGENT_NAME="$(ags_register_session "$PROJECT_KEY" "claude-code" "$CLAUDE_MODEL" "cc" "$DIR" "$CANDIDATE_AGENT_NAME" "candidate" 2>/dev/null || true)"
+    REGISTERED_AGENT_NAME=""
+    if ags_register_session "$PROJECT_KEY" "claude-code" "$CLAUDE_MODEL" "cc" "$DIR" "$CANDIDATE_AGENT_NAME" "candidate" >/dev/null 2>&1; then
+      REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
+    fi
     if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
       AGENT_NAME="$REGISTERED_AGENT_NAME"
       SESSION="$AGENT_NAME"
@@ -95,8 +98,9 @@ cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
 export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}")
+export CHILD_REGISTRATION_TOKEN=$(printf '%q' "${CHILD_REGISTRATION_TOKEN:-}")
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
-  "export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}"); $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  "export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}"); export CHILD_REGISTRATION_TOKEN=$(printf '%q' "${CHILD_REGISTRATION_TOKEN:-}"); $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF
