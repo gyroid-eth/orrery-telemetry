@@ -13,19 +13,26 @@
 #                           export AGENTSTACK_BASE_DIR="$HOME/Obsidian/MyVault"
 #   AGENTSTACK_TERMINAL   ghostty | iterm | terminal | auto (default: auto).
 #   AGENTSTACK_CLAUDE_BIN claude binary (default: `claude` on PATH).
+#   AGENTSTACK_CLAUDE_MODEL model label to register (default "claude-code").
 #
-# Registration, the scientist name, and the window/tab title are handled by the
-# shipped hooks (mark-agent-registered -> set-ghostty-title) once the agent
-# registers with agent-mail. This launcher only starts `claude` in a named
-# tmux session.
+# Registration, the scientist name, and the window/tab title are established
+# before `claude` starts. Hooks still record later in-session registrations.
 set -euo pipefail
 
 AGS_PROG="agent-start"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agentstack-launch.sh"
+. "$BIN_DIR/lib/agentstack-launch.sh"
+# shellcheck source=lib/agentstack-register.sh
+. "$BIN_DIR/lib/agentstack-register.sh"
 ags_load_env
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
+CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
+MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
+HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
 
 TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
@@ -35,14 +42,47 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
 # Prevent AGENT_NAME hijack: a stale/inherited value would make the new agent
-# register under another agent's name. The hooks re-export it after register.
+# register under another agent's name.
 unset AGENT_NAME PARENT_AGENT 2>/dev/null || true
 
 SESSION="pending-$$"
+CANDIDATE_AGENT_NAME="$(ags_pick_scientist_name "cc" 2>/dev/null || true)"
+if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
+  AGENT_NAME="$CANDIDATE_AGENT_NAME"
+  SESSION="$AGENT_NAME"
+  export AGENT_NAME
+fi
 
-# Already inside a real tmux pane: run in place. set-ghostty-title renames the
-# current session to the scientist name on register, so no new window is needed.
+if [[ -n "$PROJECT_KEY" ]]; then
+  ags_mail_load_token
+  if ags_mcp_call "health_check" >/dev/null 2>&1; then
+    ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
+    REGISTERED_AGENT_NAME="$(ags_register_session "$PROJECT_KEY" "claude-code" "$CLAUDE_MODEL" "cc" "$DIR" "$CANDIDATE_AGENT_NAME" "candidate" 2>/dev/null || true)"
+    if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+      AGENT_NAME="$REGISTERED_AGENT_NAME"
+      SESSION="$AGENT_NAME"
+      export AGENT_NAME
+    else
+      echo "warning: agent registration failed; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
+    fi
+  else
+    echo "warning: agent-mail unreachable at $MCP_URL; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
+  fi
+else
+  echo "warning: AGENTSTACK_PROJECT_KEY unset; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
+fi
+
+if [[ -n "${AGENT_NAME:-}" ]]; then
+  SESSION="$AGENT_NAME"
+  ags_record_managed_agent "$MANAGED_FILE" "$AGENT_NAME"
+  command -v pbcopy >/dev/null 2>&1 && printf '%s' "$AGENT_NAME" | pbcopy 2>/dev/null || true
+fi
+
+# Already inside a real tmux pane: register + run in place.
 if [[ -n "${TMUX:-}" ]]; then
+  if [[ -n "${AGENT_NAME:-}" ]]; then
+    "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+  fi
   cd "$DIR"
   exec "$CLAUDE_BIN"
 fi
@@ -54,8 +94,9 @@ INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
+export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}")
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
-  "$(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  "export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}"); $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

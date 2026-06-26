@@ -8,10 +8,16 @@ participant. Follow the rules below.
 - The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
   `ensure_project`, `register_agent`, `fetch_inbox`, and reservations — do not
   infer a different project from your current directory.
-- If you were launched with `agent-start-codex`, you are already registered and
-  your tmux session is named after you. If you started plain `codex` and intend
-  to coordinate, register yourself with agent-mail first
-  (`ensure_project` → `register_agent` with `program="codex"`).
+- If you were launched with `agent-start-codex`, `AGENT_NAME` should already be
+  exported and your tmux session should be named after you. At session start,
+  call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
+  `register_agent` with `program="codex"` and `name="$AGENT_NAME"` when
+  `AGENT_NAME` is set. This is idempotent and safe even if the launcher already
+  registered you. If `AGENT_NAME` is not set, omit `name`.
+- If `register_agent(name="$AGENT_NAME")` reports that the name is already
+  taken, retry with a short disambiguator before the scientist suffix, such as
+  `cx-a1-Curie`, so the final name still ends with a bundled scientist key.
+  Export and use the registered name returned by agent-mail.
 - If `PARENT_AGENT` is set, you are a child agent: read your task from
   `fetch_inbox` before doing anything, and report completion with `send_message`
   to the parent. Do not invent a task from context.

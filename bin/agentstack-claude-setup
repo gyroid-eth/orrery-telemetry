@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# agentstack-claude-setup — register the claude-agent-stack instructions into
+# Claude's CLAUDE.md using the same managed-block behavior as Codex setup.
+#
+#   agentstack-claude-setup             install / update the managed block
+#   agentstack-claude-setup --print     print the resolved block, change nothing
+#   agentstack-claude-setup --uninstall remove the managed block
+#
+# Env:
+#   AGENTSTACK_HOME             install dir (default ~/.agentstack); sources env.sh
+#   AGENTSTACK_TEMPLATE_HOME    template source dir (default AGENTSTACK_HOME)
+#   AGENTSTACK_PROJECT_KEY      project root for project-scope CLAUDE.md
+#   AGENTSTACK_CLAUDE_MD_SCOPE  project | global | both (default project)
+#   CLAUDE_HOME                 Claude config dir for global scope (default ~/.claude)
+set -euo pipefail
+
+PROG="agentstack-claude-setup"
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+[[ -f "$AGENTSTACK_HOME/env.sh" ]] && . "$AGENTSTACK_HOME/env.sh"
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+AGENTSTACK_TEMPLATE_HOME="${AGENTSTACK_TEMPLATE_HOME:-$AGENTSTACK_HOME}"
+TEMPLATE="$AGENTSTACK_TEMPLATE_HOME/claude/CLAUDE.md"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+SCOPE="${AGENTSTACK_CLAUDE_MD_SCOPE:-project}"
+
+BEGIN="<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->"
+END="<!-- <<< claude-agent-stack -->"
+
+mode="install"
+case "${1:-}" in
+  --print) mode="print" ;;
+  --uninstall) mode="uninstall" ;;
+  "" ) ;;
+  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+esac
+
+render_block() {
+  [[ -f "$TEMPLATE" ]] || die "template not found: $TEMPLATE (is claude-agent-stack installed?)"
+  printf '%s\n' "$BEGIN"
+  sed -e "s|__AGENTSTACK_HOME__|$AGENTSTACK_HOME|g" \
+      -e "s|__AGENTSTACK_PROJECT_KEY__|${PROJECT_KEY:-<set AGENTSTACK_PROJECT_KEY>}|g" \
+      "$TEMPLATE"
+  printf '%s\n' "$END"
+}
+
+resolve_targets() {
+  case "$SCOPE" in
+    project)
+      [[ -n "$PROJECT_KEY" ]] || die "AGENTSTACK_PROJECT_KEY is required for project CLAUDE.md scope"
+      printf '%s\n' "$PROJECT_KEY/CLAUDE.md"
+      ;;
+    global)
+      printf '%s\n' "$CLAUDE_HOME/CLAUDE.md"
+      ;;
+    both)
+      [[ -n "$PROJECT_KEY" ]] || die "AGENTSTACK_PROJECT_KEY is required for both CLAUDE.md scope"
+      printf '%s\n' "$PROJECT_KEY/CLAUDE.md"
+      printf '%s\n' "$CLAUDE_HOME/CLAUDE.md"
+      ;;
+    *)
+      die "invalid AGENTSTACK_CLAUDE_MD_SCOPE: $SCOPE (use project, global, or both)"
+      ;;
+  esac
+}
+
+apply_target() {
+  local target="$1"
+  local current="" stripped
+  [[ -f "$target" ]] && current="$(cat "$target")"
+  stripped="$(printf '%s' "$current" | awk -v b="$BEGIN" -v e="$END" '
+    $0==b {skip=1; next} $0==e {skip=0; next} !skip {print}
+  ')"
+
+  if [[ "$mode" == "uninstall" ]]; then
+    if [[ -z "$current" ]]; then echo "$PROG: $target does not exist; nothing to do"; return 0; fi
+    if [[ "$current" == "$stripped" ]]; then echo "$PROG: no managed block in $target"; return 0; fi
+    cp "$target" "$target.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || cp "$target" "$target.bak"
+    printf '%s\n' "$stripped" | awk 'NF{blank=0} !NF{blank++} blank<2 || NF' > "$target"
+    echo "$PROG: removed managed block from $target"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target")"
+  [[ -f "$target" ]] && { cp "$target" "$target.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || cp "$target" "$target.bak"; }
+  {
+    if [[ -n "$stripped" ]]; then
+      printf '%s\n' "$stripped"
+      [[ "$(printf '%s' "$stripped" | tail -c1)" == "" ]] || printf '\n'
+      printf '\n'
+    fi
+    render_block
+  } > "$target"
+  echo "$PROG: installed managed block into $target"
+}
+
+TARGETS=()
+while IFS= read -r target; do
+  TARGETS+=("$target")
+done < <(resolve_targets)
+
+if [[ "$mode" == "print" ]]; then
+  for target in "${TARGETS[@]}"; do
+    echo "$PROG: target $target" >&2
+    render_block
+  done
+  exit 0
+fi
+
+for target in "${TARGETS[@]}"; do
+  apply_target "$target"
+done
+
+[[ -z "$PROJECT_KEY" && "$SCOPE" != "global" ]] && echo "$PROG: note: AGENTSTACK_PROJECT_KEY was empty" >&2
+exit 0
