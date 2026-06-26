@@ -3,7 +3,7 @@
 #
 # Codex has no Claude Code hook system, so unlike `claude` it does not register
 # itself. This script does what the Claude hooks do: health-check agent-mail,
-# ensure the project, register the agent (auto-assigning a scientist name),
+# ensure the project, register the agent (with a cx-<Scientist> name),
 # rename the tmux session to that name, and export AGENT_NAME for the Codex
 # process that runs next.
 #
@@ -27,8 +27,11 @@ MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
 CODEX_MODEL="${AGENTSTACK_CODEX_MODEL:-codex}"
-WATCHER_SESSION="mail-watcher"
 REQUESTED_AGENT_NAME="${AGENT_NAME:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/agentstack-register.sh
+. "$SCRIPT_DIR/lib/agentstack-register.sh"
 
 # Resolve a tmux binary (best effort; rename/watcher are skipped without one).
 TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
@@ -45,75 +48,20 @@ if [[ -z "$PROJECT_KEY" ]]; then
 fi
 
 # Ensure the MCP token is available for the Codex MCP client and our curl calls.
-if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -n "$MAIL_ENV" && -f "$MAIL_ENV" ]]; then
-  _tok="$(grep HTTP_BEARER_TOKEN "$MAIL_ENV" 2>/dev/null | cut -d= -f2)"
-  [[ -n "$_tok" ]] && export MCP_AGENT_MAIL_TOKEN="$_tok"
-fi
-
-# JSON-RPC tools/call helper. Args are key=value pairs -> JSON string values.
-mcp_call() {
-  local tool="$1"; shift
-  local args="{" first=true kv key val
-  while [[ $# -gt 0 ]]; do
-    kv="$1"; shift
-    key="${kv%%=*}"; val="${kv#*=}"
-    $first || args+=","
-    args+="\"$key\":\"$val\""
-    first=false
-  done
-  args+="}"
-  local auth=()
-  [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $MCP_AGENT_MAIL_TOKEN")
-  curl -sf --max-time 30 -X POST "$MCP_URL" \
-    -H "Content-Type: application/json" -H "Accept: application/json" -H "Connection: close" \
-    "${auth[@]}" \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}" 2>/dev/null
-}
+ags_mail_load_token
 
 # 1. health check — degrade gracefully if agent-mail is down.
-if ! mcp_call "health_check" >/dev/null 2>&1; then
+if ! ags_mcp_call "health_check" >/dev/null 2>&1; then
   echo "⚠️  agent-mail unreachable at $MCP_URL; launching Codex without it." >&2
   export AGENT_NAME=""
   return 0 2>/dev/null || exit 0
 fi
 
 # 2. ensure the mail-watcher (delivers inbox signals into this tmux session).
-if [[ -n "$TMUX_BIN" && -n "$HOOKS_DIR" && -f "$HOOKS_DIR/watch_agent_mail_signals.sh" ]]; then
-  if ! "$TMUX_BIN" has-session -t "$WATCHER_SESSION" 2>/dev/null; then
-    "$TMUX_BIN" new-session -d -s "$WATCHER_SESSION" \
-      "bash '$HOOKS_DIR/watch_agent_mail_signals.sh'" >/dev/null 2>&1 \
-      && echo "ℹ️  started mail-watcher" >&2 || true
-  fi
-fi
+ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
 
 # 3. ensure_project + register_agent (reuse a child's reserved name if present).
-mcp_call "ensure_project" "human_key=$PROJECT_KEY" >/dev/null
-REGISTER_ARGS=(
-  "project_key=$PROJECT_KEY"
-  "program=codex"
-  "model=$CODEX_MODEL"
-  "task_description=Codex session in $WORK_DIR"
-)
-[[ -n "$REQUESTED_AGENT_NAME" ]] && REGISTER_ARGS+=("name=$REQUESTED_AGENT_NAME")
-REGISTER_RESULT="$(mcp_call "register_agent" "${REGISTER_ARGS[@]}")"
-
-AGENT_NAME="$(printf '%s' "$REGISTER_RESULT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print(''); sys.exit(0)
-res = data.get('result', {})
-sc = res.get('structuredContent') or {}
-if sc.get('name'):
-    print(sc['name'])
-else:
-    try:
-        text = res.get('content', [{}])[0].get('text', '{}')
-        print(json.loads(text).get('name', ''))
-    except Exception:
-        print('')
-" 2>/dev/null)"
+AGENT_NAME="$(ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$REQUESTED_AGENT_NAME" 2>/dev/null || true)"
 
 if [[ -z "$AGENT_NAME" ]]; then
   echo "⚠️  agent registration failed; launching Codex without agent-mail." >&2
@@ -127,10 +75,7 @@ if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" ]]; then
 fi
 
 # 5. add to the monitored list, and copy the name (for the Ghostty tab title).
-if [[ -n "$MANAGED_FILE" ]]; then
-  mkdir -p "$(dirname "$MANAGED_FILE")" 2>/dev/null || true
-  grep -qxF "$AGENT_NAME" "$MANAGED_FILE" 2>/dev/null || echo "$AGENT_NAME" >> "$MANAGED_FILE"
-fi
+ags_record_managed_agent "$MANAGED_FILE" "$AGENT_NAME"
 command -v pbcopy >/dev/null 2>&1 && printf '%s' "$AGENT_NAME" | pbcopy 2>/dev/null || true
 
 export AGENT_NAME

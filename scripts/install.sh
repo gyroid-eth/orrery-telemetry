@@ -157,6 +157,7 @@ validate_repo_assets() {
     [[ -f "$REPO_ROOT/hooks/check-file-reservation.sh" ]] || die "missing hooks/check-file-reservation.sh"
     [[ -f "$REPO_ROOT/hooks/settings.template.json" ]] || die "missing hooks/settings.template.json"
     [[ -d "$REPO_ROOT/skills" ]] || die "missing skills directory"
+    [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
 }
@@ -221,6 +222,7 @@ install_payload() {
     copy_tree "$REPO_ROOT/hooks" "$HOOKS_DIR"
     copy_tree "$REPO_ROOT/skills" "$SKILLS_DIR"
     copy_tree "$REPO_ROOT/codex" "$INSTALL_DIR/codex"
+    copy_tree "$REPO_ROOT/claude" "$INSTALL_DIR/claude"
   else
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"
@@ -233,13 +235,16 @@ install_payload() {
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
     mkdir -p "$BIN_DIR/lib"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
+    cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
+    cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
     cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
+    cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
     chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-codex-bootstrap" \
-      "$BIN_DIR/agentstack-codex-setup"
+      "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup"
   fi
 }
 
@@ -302,6 +307,50 @@ safe_merge_settings() {
   else
     say "Skipped Tier1 user-settings merge."
   fi
+}
+
+confirm_managed_setup() {
+  local label="$1"
+  if [[ ! -t 0 ]]; then
+    warn "non-interactive shell; skipping $label managed setup"
+    return 1
+  fi
+  printf 'Apply this claude-agent-stack %s managed setup? Type yes to continue: ' "$label" >&2
+  local reply
+  read -r reply
+  [[ "$reply" == "yes" ]]
+}
+
+run_managed_setup() {
+  local label="$1" script_name="$2"
+  local script_path setup_home
+  if [[ "$DRY_RUN" == true ]]; then
+    script_path="$REPO_ROOT/bin/$script_name"
+    setup_home="$INSTALL_DIR"
+  else
+    script_path="$BIN_DIR/$script_name"
+    setup_home="$INSTALL_DIR"
+  fi
+
+  say "$label managed setup dry-run:"
+  AGENTSTACK_HOME="$setup_home" AGENTSTACK_TEMPLATE_HOME="$REPO_ROOT" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path" --print
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+
+  if confirm_managed_setup "$label"; then
+    AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path"
+  else
+    say "Skipped $label managed setup."
+  fi
+}
+
+safe_managed_doc_setups() {
+  if [[ "$TIER" != "tier1" ]]; then
+    return
+  fi
+  run_managed_setup "Codex AGENTS.md" "agentstack-codex-setup"
+  run_managed_setup "Claude CLAUDE.md" "agentstack-claude-setup"
 }
 
 write_env_file() {
@@ -537,7 +586,7 @@ service_kind = sys.argv[2]
 service_path = sys.argv[3]
 install_dir = pathlib.Path("$INSTALL_DIR")
 owned_files = []
-for rel in ("hooks", "skills", "dashboard", "bin", "codex"):
+for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude"):
     base = install_dir / rel
     if base.exists():
         for path in base.rglob("*"):
@@ -593,6 +642,7 @@ manifest = {
         "$SKILLS_DIR",
         "$DASHBOARD_DIR",
         "$BIN_DIR",
+        "$INSTALL_DIR/claude",
         "$RUNTIME_DIR",
         "$BACKUPS_DIR",
         "$INSTALL_DIR",
@@ -646,6 +696,7 @@ main() {
   ensure_agent_mail
   start_service "$service_kind"
   safe_merge_settings
+  safe_managed_doc_setups
   write_manifest "$service_kind" "${SERVICE_PATH:-}"
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
@@ -654,8 +705,10 @@ main() {
     say "Manifest: $MANIFEST"
     say "Run doctor: $BIN_DIR/agentstack-doctor"
     if [[ "$TIER" != "tier0" ]]; then
-      say "Codex users: register skills + reservation rules with"
-      say "  $BIN_DIR/agentstack-codex-setup   (writes a managed block in ~/.codex/AGENTS.md)"
+      say "Recommended managed setup:"
+      say "  hooks/settings.json via Tier1 settings merge"
+      say "  $BIN_DIR/agentstack-codex-setup    (managed block in ~/.codex/AGENTS.md)"
+      say "  $BIN_DIR/agentstack-claude-setup   (managed block in project/global CLAUDE.md)"
     fi
   fi
 }

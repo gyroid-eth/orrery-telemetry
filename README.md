@@ -19,8 +19,9 @@ It sits **on top of** [`mcp_agent_mail`](https://github.com/Dicklesworthstone/mc
   install time. See [Skills](#skills).
 - **One-command install** — `./install.sh` clones agent-mail, wires up the
   config, and starts the dashboard (macOS launchd / Linux systemd / plain nohup).
-  The default Tier1 path shows a Claude Code user-settings diff and waits for
-  an explicit `yes` before adding the small managed hook entries.
+  The default Tier1 path shows dry-run diffs/previews and waits for an explicit
+  `yes` before adding the recommended managed hook, Codex `AGENTS.md`, and
+  Claude `CLAUDE.md` entries.
 
 
 ## Works best with Obsidian
@@ -58,6 +59,12 @@ git clone <this-repo> && cd claude-agent-stack
 # open http://127.0.0.1:8770/
 ```
 
+The default Tier1 install recommends all three coordination surfaces:
+Claude Code hooks in `~/.claude/settings.json`, Codex instructions in
+`~/.codex/AGENTS.md`, and Claude instructions in `CLAUDE.md`. Each write is
+shown as a dry-run/preview first and only applied after typing `yes`; existing
+files are preserved with timestamped backups and idempotent managed blocks.
+
 The dashboard binds to `127.0.0.1` by default. For access from a trusted LAN or
 VPN, set `AGENTSTACK_BIND_HOST=0.0.0.0`; this exposes control endpoints and the
 terminal bridge to that network.
@@ -68,9 +75,9 @@ For the dashboard to list an agent and let you click-to-jump to it, the agent
 must run **inside a named tmux session in its own terminal window**. The
 installed `agent-start` launcher (in `~/.agentstack/bin`) does exactly that —
 it opens a terminal window, starts a fresh tmux session, and runs `claude`
-inside it. Registration, the auto-assigned scientist name, and the window/tab
-title are then handled by the shipped hooks once the agent registers with
-agent-mail.
+inside it. Before Claude starts, the launcher registers the session with
+agent-mail using an explicit `cc-<Scientist>` name such as `cc-Curie`; the
+dashboard matches the scientist suffix to show the bundled portrait.
 
 ```bash
 # add the launcher to your PATH (e.g. in ~/.zshrc or ~/.bashrc)
@@ -107,7 +114,7 @@ explicitly (`agent-start PATH`) to be precise.
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Path to the `claude` binary |
 
 If you launch `agent-start` from **inside** an existing tmux session, it runs
-`claude` in place (the title hook renames that session on register) instead of
+`claude` in place and renames the current session after registration instead of
 opening a new window.
 
 ### Codex agents
@@ -116,7 +123,8 @@ opening a new window.
 counterpart. It takes the same directory selection (`AGENTSTACK_BASE_DIR`,
 explicit path, or fzf) and terminal options. Because Codex has no hook system,
 the launcher runs `agentstack-codex-bootstrap` inside the session to register
-the agent with agent-mail and assign a scientist name before starting Codex.
+the agent with agent-mail using an explicit `cx-<Scientist>` name before
+starting Codex. The same suffix matching drives dashboard portraits.
 
 ```bash
 agent-start-codex ~/code/my-project
@@ -170,23 +178,28 @@ graph connections; otherwise it falls back to a local `logs/` directory.
 /log <theme> [project]
 ```
 
-### Codex and skills
+### Managed agent instructions
 
-The slash commands above are a Claude Code feature; Codex has no skill registry.
-Instead, Codex discovers the same skills through its global `~/.codex/AGENTS.md`.
-After install, run:
+The slash commands above are a Claude Code feature. Claude gets the shared
+coordination rules from hooks plus `CLAUDE.md`; Codex gets equivalent rules from
+its global `~/.codex/AGENTS.md`. The default installer offers both managed
+blocks. Re-run them any time after upgrading the stack:
 
 ```bash
-~/.agentstack/bin/agentstack-codex-setup     # writes a managed block in ~/.codex/AGENTS.md
+~/.agentstack/bin/agentstack-codex-setup      # managed block in ~/.codex/AGENTS.md
+~/.agentstack/bin/agentstack-claude-setup     # managed block in project CLAUDE.md
 ```
 
-This registers a small managed block (idempotent; re-run to update,
-`--uninstall` to remove) that points Codex at the bundled skills
-(`~/.agentstack/skills/<name>/SKILL.md`, which it opens on demand) and — because
-Codex is **not** guarded by the file-reservation hook — instructs it to reserve
-files before editing. The skill bodies are shared with Claude, so a Codex agent
-follows the same delegate/log workflow. `agent-start-codex` registers the agent
-with agent-mail; `agentstack-codex-setup` teaches it the rules.
+Both setup commands are idempotent, preserve existing content, write a
+timestamped backup before changing a file, support `--print`, and support
+`--uninstall`. `agentstack-claude-setup` writes the project `CLAUDE.md` by
+default, where the project root is `AGENTSTACK_PROJECT_KEY`; set
+`AGENTSTACK_CLAUDE_MD_SCOPE=global` for `~/.claude/CLAUDE.md` or `both` for both
+targets.
+
+The managed blocks point agents at `~/.agentstack/skills/<name>/SKILL.md` and
+spell out the startup discipline: use the shared project key, register/fetch
+inbox, obey parent task messages, and reserve files before editing.
 
 ## Collision prevention (file reservations)
 
@@ -205,6 +218,9 @@ Enforcement differs by agent type:
   reserve voluntarily. `agentstack-codex-setup` writes that discipline into
   `~/.codex/AGENTS.md` (reserve before editing, renew long edits, release when
   done). Run it so Codex-heavy setups stay collision-safe.
+- **Claude instructions are mirrored in CLAUDE.md.** `agentstack-claude-setup`
+  writes the same startup and reservation discipline into the selected
+  `CLAUDE.md` target without overwriting existing content.
 
 Either way the underlying registry is shared, so a Claude reservation is visible
 to Codex and vice versa — the difference is only whether editing is *blocked*

@@ -14,6 +14,7 @@
 #
 # Env:
 #   AGENTSTACK_HOME         install dir (default ~/.agentstack); sources env.sh
+#   AGENTSTACK_TEMPLATE_HOME template source dir (default AGENTSTACK_HOME)
 #   AGENTSTACK_PROJECT_KEY  shared agent-mail project key (substituted in)
 #   CODEX_HOME              Codex config dir (default ~/.codex)
 set -euo pipefail
@@ -28,7 +29,8 @@ AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 TARGET="$CODEX_HOME/AGENTS.md"
-TEMPLATE="$AGENTSTACK_HOME/codex/AGENTS.md"
+AGENTSTACK_TEMPLATE_HOME="${AGENTSTACK_TEMPLATE_HOME:-$AGENTSTACK_HOME}"
+TEMPLATE="$AGENTSTACK_TEMPLATE_HOME/codex/AGENTS.md"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 
 BEGIN="<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->"
