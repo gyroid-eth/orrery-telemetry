@@ -382,7 +382,11 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     fi
 
     # Create tmux session and optionally open a terminal window.
-    TMUX_ENV_ARGS=(-e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+    # CLAUDECODE=1 guards the child session's interactive shell against destructive
+    # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
+    # kill-session`): without it, exiting this session can cascade-kill the whole
+    # tmux server. Requires tmux >= 3.0.
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
     if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
         TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$CHILD_REGISTRATION_TOKEN")
     fi
@@ -843,7 +847,11 @@ if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then
 fi
 
 # --- 5. 新しいtmuxセッションで子エージェントを起動 ---
-TMUX_ENV_ARGS=(-e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+# CLAUDECODE=1 guards the child session's interactive shell against destructive
+# shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
+# kill-session`): without it, exiting this session can cascade-kill the tmux
+# server. Requires tmux >= 3.0.
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
 if [[ -n "$RESOURCES" ]]; then
     TMUX_ENV_ARGS+=(-e "CHILD_RESOURCES=$RESOURCES")
 fi
