@@ -15,10 +15,14 @@ rules before doing project work.
   `CHILD_REGISTRATION_TOKEN` is set, pass it as `registration_token`; with that
   token, re-registration of the launcher-created identity is idempotent. If
   `AGENT_NAME` is not set, omit `name`.
-- If `register_agent(name="$AGENT_NAME")` reports that the name is already
-  taken and `CHILD_REGISTRATION_TOKEN` is not available, do not assume the
-  retry is safe. For child/reserved sessions, stop and report the missing token
-  instead of registering under another name.
+- Identity registration is lenient on current agent-mail: re-registering the
+  same agent name without a token succeeds and preserves the existing token;
+  only supplying a different token for that agent is rejected. If you see an
+  identity split, your `~/mcp_agent_mail` clone is likely outdated; update it
+  with `git -C ~/mcp_agent_mail pull`, then restart agent-mail.
+- If registration still fails with a name-conflict or token-mismatch error in a
+  child/reserved session, do not register under another name; report the
+  missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.
 - Always call `fetch_inbox(agent_name="$AGENT_NAME")` after registration. If
   `PARENT_AGENT` is set, treat the inbox request as the canonical task and
   report completion to that parent with `send_message`.

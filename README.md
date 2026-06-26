@@ -185,6 +185,21 @@ Registration needs a running agent-mail (the install sets this up) and
 scientist `AGENT_NAME`, just without shell-side registration. `OPENAI_API_KEY`
 is stripped at launch so Codex uses its ChatGPT OAuth login.
 
+#### Identity registration is lenient
+
+Current agent-mail accepts re-registering the same agent name without a
+`registration_token`; it preserves the existing token. It rejects only a
+different token for an existing agent, which acts as a rotation guard. Normal
+session startup therefore does not split identities. The launchers also forward
+the token they use during first registration as `CHILD_REGISTRATION_TOKEN`, so
+sessions re-register idempotently even with an older agent-mail that enforced
+tokens more strictly.
+
+If you see an identity split, such as `cc-Curie` active in telemetry while a
+`cc-a1-Curie` alias is shown as gone, your `~/mcp_agent_mail` clone is likely
+from an older stricter agent-mail build. Update it with
+`git -C ~/mcp_agent_mail pull`, then restart agent-mail.
+
 ## Skills
 
 The installer copies the bundled skills to `~/.agentstack/skills` and registers
