@@ -143,5 +143,110 @@
     "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG/330px-Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG",
     "original": "https://upload.wikimedia.org/wikipedia/commons/1/15/Studio_portrait_photograph_of_Edwin_Powell_Hubble_%28cropped%29.JPG",
     "title": "Edwin Hubble"
+  },
+  "Galileo": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fc/Galileo_Galilei_%281564-1642%29_RMG_BHC2700.tiff/lossy-page1-330px-Galileo_Galilei_%281564-1642%29_RMG_BHC2700.tiff.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/fc/Galileo_Galilei_%281564-1642%29_RMG_BHC2700.tiff",
+    "title": "Galileo Galilei"
+  },
+  "Copernicus": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Nikolaus_Kopernikus_MOT.jpg/330px-Nikolaus_Kopernikus_MOT.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Nikolaus_Kopernikus_MOT.jpg",
+    "title": "Nicolaus Copernicus"
+  },
+  "Archimedes": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Domenico-Fetti_Archimedes_1620.jpg/330px-Domenico-Fetti_Archimedes_1620.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Domenico-Fetti_Archimedes_1620.jpg",
+    "title": "Archimedes"
+  },
+  "Mendeleev": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/af/Dmitri_Mendeleev.jpg/330px-Dmitri_Mendeleev.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/a/af/Dmitri_Mendeleev.jpg",
+    "title": "Dmitri Mendeleev"
+  },
+  "Fermi": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/Enrico_Fermi_1943-49.jpg/330px-Enrico_Fermi_1943-49.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/d/d4/Enrico_Fermi_1943-49.jpg",
+    "title": "Enrico Fermi"
+  },
+  "Dirac": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/50/Paul_Dirac%2C_1933.jpg/330px-Paul_Dirac%2C_1933.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/50/Paul_Dirac%2C_1933.jpg",
+    "title": "Paul Dirac"
+  },
+  "Franklin": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Rosalind_Franklin_%28retouched%29.jpg/330px-Rosalind_Franklin_%28retouched%29.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Rosalind_Franklin_%28retouched%29.jpg",
+    "title": "Rosalind Franklin"
+  },
+  "Edison": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Thomas_Edison2.jpg/330px-Thomas_Edison2.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Thomas_Edison2.jpg",
+    "title": "Thomas Edison"
+  },
+  "Koch": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/RobertKoch_cropped.jpg/330px-RobertKoch_cropped.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/8/8d/RobertKoch_cropped.jpg",
+    "title": "Robert Koch"
+  },
+  "Bell": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Alexander_Graham_Bell_1895_NPG_77_363.jpg/330px-Alexander_Graham_Bell_1895_NPG_77_363.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/9c/Alexander_Graham_Bell_1895_NPG_77_363.jpg",
+    "title": "Alexander Graham Bell"
+  },
+  "Yukawa": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Yukawa.jpg/330px-Yukawa.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/7b/Yukawa.jpg",
+    "title": "Hideki Yukawa"
+  },
+  "Lovelace": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png/330px-Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/4/4c/Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png",
+    "title": "Ada Lovelace"
+  },
+  "Noether": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Emmy_Noether_%283x4_cropped%29.jpg/330px-Emmy_Noether_%283x4_cropped%29.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/b/b5/Emmy_Noether_%283x4_cropped%29.jpg",
+    "title": "Emmy Noether"
+  },
+  "Somerville": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/Thomas_Phillips_-_Mary_Fairfax%2C_Mrs_William_Somerville%2C_1780_-_1872._Writer_on_science_-_Google_Art_Project.jpg/330px-Thomas_Phillips_-_Mary_Fairfax%2C_Mrs_William_Somerville%2C_1780_-_1872._Writer_on_science_-_Google_Art_Project.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/0/06/Thomas_Phillips_-_Mary_Fairfax%2C_Mrs_William_Somerville%2C_1780_-_1872._Writer_on_science_-_Google_Art_Project.jpg",
+    "title": "Mary Somerville"
+  },
+  "Pauling": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Linus_Pauling_in_the_1940s.jpg/330px-Linus_Pauling_in_the_1940s.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/53/Linus_Pauling_in_the_1940s.jpg",
+    "title": "Linus Pauling"
+  },
+  "Watt": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Watt_James_von_Breda.jpg/330px-Watt_James_von_Breda.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/1/15/Watt_James_von_Breda.jpg",
+    "title": "James Watt"
+  },
+  "Hopper": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Commodore_Grace_M._Hopper%2C_USN_%28covered%29_head_and_shoulders_crop.jpg/330px-Commodore_Grace_M._Hopper%2C_USN_%28covered%29_head_and_shoulders_crop.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/98/Commodore_Grace_M._Hopper%2C_USN_%28covered%29_head_and_shoulders_crop.jpg",
+    "title": "Grace Hopper"
+  },
+  "Lavoisier": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d8/David_-_Portrait_of_Monsieur_Lavoisier_%28cropped%292.jpg/330px-David_-_Portrait_of_Monsieur_Lavoisier_%28cropped%292.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/d/d8/David_-_Portrait_of_Monsieur_Lavoisier_%28cropped%292.jpg",
+    "title": "Antoine Lavoisier"
+  },
+  "Bose": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/J.C.Bose.JPG/330px-J.C.Bose.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/56/J.C.Bose.JPG",
+    "title": "Jagadish Chandra Bose"
+  },
+  "Lamarr": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Hedy_Lamarr_Publicity_Photo_for_The_Heavenly_Body_1944.jpg/330px-Hedy_Lamarr_Publicity_Photo_for_The_Heavenly_Body_1944.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/8/83/Hedy_Lamarr_Publicity_Photo_for_The_Heavenly_Body_1944.jpg",
+    "title": "Hedy Lamarr"
+  },
+  "Goodall": {
+    "thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Deputy_Secretary_Higginbottom_Poses_for_a_Photo_With_Dr._Jane_Goodall_and_the_State_Department%27s_Global_Health_Diplomacy_Director_Jordan_in_Washington_%2822365513310%29_%282%29_%28cropped_2%29.jpg/330px-thumbnail.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/98/Deputy_Secretary_Higginbottom_Poses_for_a_Photo_With_Dr._Jane_Goodall_and_the_State_Department%27s_Global_Health_Diplomacy_Director_Jordan_in_Washington_%2822365513310%29_%282%29_%28cropped_2%29.jpg",
+    "title": "Jane Goodall"
   }
 }
