@@ -291,6 +291,29 @@ agent name to that portrait key:
 See `examples/custom_portraits.example.json` for a neutral template. When these
 environment variables are unset, the dashboard uses only the bundled portraits.
 
+## Troubleshooting
+
+### Mouse wheel scrolls the terminal, not tmux scrollback
+
+Every agent runs **inside a tmux session**, so to scroll back through an
+agent's output you need tmux's mouse mode enabled. Without it the wheel
+scrolls Ghostty's (or iTerm2 / Terminal's) own buffer instead — which looks
+broken because tmux owns the screen and you can't reach the agent's history.
+
+Add this to `~/.tmux.conf` (create the file if it doesn't exist):
+
+```tmux
+set -g mouse on            # wheel scrolls tmux scrollback
+set -g history-limit 50000 # keep more scrollback
+setw -g mode-keys vi       # vi-style copy-mode keys
+```
+
+Reload it without restarting: `tmux source-file ~/.tmux.conf` (or just launch
+a new agent). Keyboard alternative that needs no config: `Ctrl+b [` enters
+copy-mode — scroll with the arrow keys / PageUp / PageDown, then `q` to exit.
+
+`scripts/doctor.sh` prints a hint when mouse mode looks off.
+
 ## License
 
 Copyright (c) 2026 gyroid. All rights reserved.

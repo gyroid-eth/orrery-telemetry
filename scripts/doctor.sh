@@ -75,4 +75,19 @@ else
   status=1
 fi
 
+# Non-fatal hint: agents run inside tmux, so wheel-scroll only reaches an
+# agent's scrollback when tmux mouse mode is on. Check the live server first,
+# then fall back to ~/.tmux.conf.
+mouse_on=""
+if tmux info >/dev/null 2>&1; then
+  mouse_on="$(tmux show -gv mouse 2>/dev/null || true)"
+elif [[ -f "$HOME/.tmux.conf" ]] && \
+  grep -Eq '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+mouse[[:space:]]+on' "$HOME/.tmux.conf"; then
+  mouse_on="on"
+fi
+if [[ "$mouse_on" != "on" ]]; then
+  echo "hint: tmux mouse mode is off — wheel-scroll won't reach agent scrollback."
+  echo "      add 'set -g mouse on' to ~/.tmux.conf (see README Troubleshooting)."
+fi
+
 exit "$status"
