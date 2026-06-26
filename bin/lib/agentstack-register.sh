@@ -120,10 +120,21 @@ ags_agent_exists() {
   [[ -n "$(printf '%s' "$response" | ags_extract_agent_name)" ]]
 }
 
+ags_pick_scientist_name() {
+  local prefix="$1" scientist
+  scientist="$(ags_pick_scientist)" || return 1
+  printf '%s-%s\n' "$prefix" "$scientist"
+}
+
 ags_pick_available_agent_name() {
-  local project_key="$1" prefix="$2"
+  local project_key="$1" prefix="$2" preferred_name="${3:-}"
   local attempts="${AGENTSTACK_AGENT_NAME_ATTEMPTS:-75}"
   local scientist candidate i
+
+  if [[ -n "$preferred_name" ]] && ! ags_agent_exists "$project_key" "$preferred_name"; then
+    printf '%s\n' "$preferred_name"
+    return 0
+  fi
 
   for ((i = 0; i < attempts; i++)); do
     scientist="$(ags_pick_scientist)" || return 1
@@ -147,7 +158,7 @@ ags_pick_available_agent_name() {
 }
 
 ags_register_session() {
-  local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}"
+  local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}" requested_mode="${7:-reserved}"
   local task_description="Agent session in $work_dir"
   case "$program" in
     claude-code) task_description="Claude session in $work_dir" ;;
@@ -157,6 +168,8 @@ ags_register_session() {
   local agent_name="$requested_name"
   if [[ -z "$agent_name" ]]; then
     agent_name="$(ags_pick_available_agent_name "$project_key" "$prefix")" || return 1
+  elif [[ "$requested_mode" == "candidate" ]]; then
+    agent_name="$(ags_pick_available_agent_name "$project_key" "$prefix" "$agent_name")" || return 1
   fi
 
   ags_mcp_call "ensure_project" "human_key=$project_key" >/dev/null

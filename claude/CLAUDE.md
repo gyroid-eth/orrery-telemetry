@@ -8,11 +8,16 @@ rules before doing project work.
   `ensure_project`, `register_agent`, `fetch_inbox`, and reservations. Do not
   infer a different project from your current directory.
 - If you were launched with `agent-start`, you should already have
-  `AGENT_NAME` exported and your tmux session should be named after it. If
-  `AGENT_NAME` is missing or you are not registered, call
-  `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
-  `register_agent` with `program="claude-code"` and `name="$AGENT_NAME"` when
-  a name is present.
+  `AGENT_NAME` exported and your tmux session should be named after it. At
+  session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
+  then call `register_agent` with `program="claude-code"` and
+  `name="$AGENT_NAME"` when `AGENT_NAME` is set. This registration is idempotent
+  and safe even if the launcher already registered you. If `AGENT_NAME` is not
+  set, omit `name`.
+- If `register_agent(name="$AGENT_NAME")` reports that the name is already
+  taken, retry with a short disambiguator before the scientist suffix, such as
+  `cc-a1-Curie`, so the final name still ends with a bundled scientist key.
+  Export and use the registered name returned by agent-mail.
 - Always call `fetch_inbox(agent_name="$AGENT_NAME")` after registration. If
   `PARENT_AGENT` is set, treat the inbox request as the canonical task and
   report completion to that parent with `send_message`.

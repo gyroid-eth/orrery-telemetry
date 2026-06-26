@@ -9,8 +9,9 @@
 #
 # USAGE: source this script inside the target tmux session, before exec'ing
 # codex:  source agentstack-codex-bootstrap [WORK_DIR]
-# It exports AGENT_NAME (empty string if agent-mail is unavailable, so the
-# caller can still launch Codex without coordination).
+# It preselects and exports AGENT_NAME as cx-<Scientist> before any network call
+# when possible, so Codex can still launch and later register that name through
+# its MCP client if shell registration is unavailable.
 #
 # Env (normally provided by ~/.agentstack/env.sh):
 #   AGENTSTACK_PROJECT_KEY          agent-mail project key (REQUIRED)
@@ -41,9 +42,29 @@ if [[ -z "$TMUX_BIN" ]]; then
   done
 fi
 
+CANDIDATE_AGENT_NAME="$REQUESTED_AGENT_NAME"
+REGISTER_MODE="reserved"
+if [[ -z "$CANDIDATE_AGENT_NAME" ]]; then
+  CANDIDATE_AGENT_NAME="$(ags_pick_scientist_name "cx" 2>/dev/null || true)"
+  REGISTER_MODE="candidate"
+fi
+if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
+  AGENT_NAME="$CANDIDATE_AGENT_NAME"
+  export AGENT_NAME
+fi
+
+finalize_agent_name() {
+  if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
+    "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+  fi
+  ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
+  command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
+  export AGENT_NAME="${AGENT_NAME:-}"
+}
+
 if [[ -z "$PROJECT_KEY" ]]; then
-  echo "⚠️  AGENTSTACK_PROJECT_KEY unset; launching Codex without agent-mail." >&2
-  export AGENT_NAME=""
+  echo "⚠️  AGENTSTACK_PROJECT_KEY unset; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
+  finalize_agent_name
   return 0 2>/dev/null || exit 0
 fi
 
@@ -52,8 +73,8 @@ ags_mail_load_token
 
 # 1. health check — degrade gracefully if agent-mail is down.
 if ! ags_mcp_call "health_check" >/dev/null 2>&1; then
-  echo "⚠️  agent-mail unreachable at $MCP_URL; launching Codex without it." >&2
-  export AGENT_NAME=""
+  echo "⚠️  agent-mail unreachable at $MCP_URL; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
+  finalize_agent_name
   return 0 2>/dev/null || exit 0
 fi
 
@@ -61,22 +82,17 @@ fi
 ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
 
 # 3. ensure_project + register_agent (reuse a child's reserved name if present).
-AGENT_NAME="$(ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$REQUESTED_AGENT_NAME" 2>/dev/null || true)"
+REGISTERED_AGENT_NAME="$(ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" 2>/dev/null || true)"
 
-if [[ -z "$AGENT_NAME" ]]; then
-  echo "⚠️  agent registration failed; launching Codex without agent-mail." >&2
-  export AGENT_NAME=""
-  return 0 2>/dev/null || exit 0
+if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  AGENT_NAME="$REGISTERED_AGENT_NAME"
+else
+  echo "⚠️  agent registration failed; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
 fi
 
-# 4. rename the tmux session to the agent name (so the dashboard/jump match it).
-if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" ]]; then
-  "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+finalize_agent_name
+if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  echo "✅ agent-mail registered: $AGENT_NAME"
+else
+  echo "ℹ️  agent-mail not registered; AGENT_NAME preselected: ${AGENT_NAME:-}"
 fi
-
-# 5. add to the monitored list, and copy the name (for the Ghostty tab title).
-ags_record_managed_agent "$MANAGED_FILE" "$AGENT_NAME"
-command -v pbcopy >/dev/null 2>&1 && printf '%s' "$AGENT_NAME" | pbcopy 2>/dev/null || true
-
-export AGENT_NAME
-echo "✅ agent-mail registered: $AGENT_NAME"
