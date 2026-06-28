@@ -109,10 +109,10 @@ files, so no stale-file cleanup is needed.
 ## Launching agents
 
 For the dashboard to list an agent and let you click-to-jump to it, the agent
-must run **inside a named tmux session in its own terminal window**. The
-installed `agent-start` launcher (in `~/.agentstack/bin`) does exactly that —
-it opens a terminal window, starts a fresh tmux session, and runs `claude`
-inside it. Before Claude starts, the launcher registers the session with
+must run **inside a named tmux session**. The installed `agent-start` launcher
+(in `~/.agentstack/bin`) does exactly that: from outside tmux it replaces the
+current terminal tab with a fresh tmux session and runs `claude` inside it.
+Before Claude starts, the launcher registers the session with
 agent-mail using an explicit `cc-<Scientist>` name such as `cc-Curie`; the
 dashboard matches the scientist suffix to show the bundled portrait. If the
 launcher cannot reach agent-mail, it still exports that scientist name as
@@ -149,24 +149,22 @@ explicitly (`agent-start PATH`) to be precise.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENTSTACK_BASE_DIR` | `$HOME` | Root the interactive picker browses |
-| `AGENTSTACK_TERMINAL` | `auto` | Terminal to open: `ghostty`, `iterm`, `terminal`, or `auto` (macOS) |
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Path to the `claude` binary |
 
 If you launch `agent-start` from **inside** an existing tmux session, it runs
 `claude` in place and renames the current session after registration instead of
-opening a new window.
+starting a new tmux session.
 
 ### Codex agents
 
 `agent-start-codex` is the [Codex CLI](https://github.com/openai/codex)
 counterpart. It takes the same directory selection (`AGENTSTACK_BASE_DIR`,
-explicit path, or fzf) and terminal options. Because Codex has no hook system,
-the launcher runs `agentstack-codex-bootstrap` inside the session to register
-the agent with agent-mail using an explicit `cx-<Scientist>` name before
-starting Codex. The same suffix matching drives dashboard portraits. If the
-shell registration path is unavailable, the bootstrap still exports the
-preselected scientist name as `AGENT_NAME`; Codex can then register it through
-its MCP client.
+explicit path, or fzf). Because Codex has no hook system, the launcher runs
+`agentstack-codex-bootstrap` inside the session to register the agent with
+agent-mail using an explicit `cx-<Scientist>` name before starting Codex. The
+same suffix matching drives dashboard portraits. If the shell registration path
+is unavailable, the bootstrap still exports the preselected scientist name as
+`AGENT_NAME`; Codex can then register it through its MCP client.
 
 ```bash
 agent-start-codex ~/code/my-project

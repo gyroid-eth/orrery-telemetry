@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# agent-start-codex — launch a Codex CLI agent inside a named tmux session and a
-# terminal window, registered with agent-mail so it shows up in the dashboard
+# agent-start-codex — launch a Codex CLI agent inside a named tmux session in the
+# current terminal tab, registered with agent-mail so it shows up in the dashboard
 # and is click-to-jump-able. The Codex counterpart of `agent-start`.
 #
 # Unlike Claude Code, Codex has no hook system, so this launcher runs
@@ -13,7 +13,6 @@
 #
 # Env:
 #   AGENTSTACK_BASE_DIR     root the interactive picker browses (default $HOME)
-#   AGENTSTACK_TERMINAL     ghostty | iterm | terminal | auto (default auto)
 #   AGENTSTACK_CODEX_BIN    codex binary (default `codex` on PATH)
 #   AGENTSTACK_VAULT        extra writable dir for codex --add-dir (optional)
 #   AGENTSTACK_CODEX_SANDBOX   codex --sandbox value (default workspace-write)
@@ -64,9 +63,9 @@ if [[ -n "${TMUX:-}" ]]; then
   eval "exec $(build_codex_cmd "$DIR")"
 fi
 
-# Otherwise spawn a new terminal window with a fresh tmux session that runs the
-# bootstrap (registration + scientist name) and then codex. The temp script
-# keeps the window alive after codex exits, then self-deletes.
+# Otherwise replace the current terminal tab with a fresh tmux session that runs
+# the bootstrap (registration + scientist name) and then codex. The temp script
+# keeps the tab alive after codex exits, then self-deletes.
 CODEX_CMD="$(build_codex_cmd "$DIR")"
 INNER="$(mktemp -t agent-start-codex.XXXXXX)"
 cat > "$INNER" <<EOF
@@ -79,15 +78,5 @@ exec "\$SHELL" -l
 EOF
 chmod +x "$INNER"
 
-if ! ags_spawn_terminal "$SESSION" "$INNER"; then
-  rm -f -- "$INNER"
-  cat >&2 <<MSG
-$AGS_PROG: could not open a terminal automatically.
-Run this yourself to launch the agent:
-  $TMUX_BIN new-session -s $SESSION -c $DIR
-  # then inside it:  source $BOOTSTRAP "$DIR"; $CODEX_CMD
-MSG
-  exit 1
-fi
-
 echo "$AGS_PROG: launching Codex agent in tmux session '$SESSION' ($DIR)"
+exec "$INNER"

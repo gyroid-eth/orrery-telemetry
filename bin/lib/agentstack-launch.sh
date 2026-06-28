@@ -8,13 +8,10 @@
 #   ags_resolve_tmux        print the tmux binary path (or empty)
 #   ags_abspath DIR         print the absolute path of DIR
 #   ags_choose_dir [DIR]    resolve the working dir (arg / fzf picker / cwd)
-#   ags_spawn_terminal S F  open terminal window running executable script F
-#                           (S = tmux session name, for the window title)
 #
 # Env it honours:
 #   AGENTSTACK_HOME       install dir (default ~/.agentstack); env.sh lives here
 #   AGENTSTACK_BASE_DIR   root the fzf picker browses (default $HOME)
-#   AGENTSTACK_TERMINAL   ghostty | iterm | terminal | auto (default auto)
 
 AGS_PROG="${AGS_PROG:-agentstack}"
 
@@ -84,55 +81,5 @@ ags_choose_dir() {
   printf '%s\n' "$PWD"
   echo "$AGS_PROG: fzf not installed; using current directory ($PWD)" >&2
   echo "          pass a path ($AGS_PROG DIR) or install fzf to browse a vault" >&2
-  return 0
-}
-
-ags__mac_app() { [[ -d "/Applications/$1" || -d "$HOME/Applications/$1" ]]; }
-
-# Open a terminal window that runs the executable script $2. $1 is the tmux
-# session name (used as the window title where supported).
-ags_spawn_terminal() {
-  local session="$1" inner="$2"
-  local term="${AGENTSTACK_TERMINAL:-auto}"
-
-  if [[ "$term" == "auto" ]]; then
-    if [[ "$(uname)" == "Darwin" ]]; then
-      if ags__mac_app Ghostty.app || command -v ghostty >/dev/null 2>&1; then term=ghostty
-      elif ags__mac_app iTerm.app; then term=iterm
-      elif ags__mac_app Terminal.app || [[ -d /System/Applications/Utilities/Terminal.app ]]; then term=terminal
-      else term=none; fi
-    else
-      term=ghostty   # non-macOS: try ghostty / x-terminal-emulator below
-    fi
-  fi
-
-  case "$term" in
-    ghostty)
-      if [[ "$(uname)" == "Darwin" ]] && ags__mac_app Ghostty.app; then
-        open -na Ghostty.app --args --title="$session" -e "$inner"
-      elif command -v ghostty >/dev/null 2>&1; then
-        setsid ghostty -e "$inner" >/dev/null 2>&1 &
-      elif command -v x-terminal-emulator >/dev/null 2>&1; then
-        setsid x-terminal-emulator -e "$inner" >/dev/null 2>&1 &
-      else
-        return 1
-      fi ;;
-    iterm)
-      osascript -e 'on run argv
-        tell application "iTerm2"
-          activate
-          create window with default profile command (item 1 of argv)
-        end tell
-      end run' "$inner" >/dev/null || return 1 ;;
-    terminal)
-      osascript -e 'on run argv
-        tell application "Terminal"
-          activate
-          do script (item 1 of argv)
-        end tell
-      end run' "$inner" >/dev/null || return 1 ;;
-    *)
-      return 1 ;;
-  esac
   return 0
 }

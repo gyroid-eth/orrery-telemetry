@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# agent-start — launch a Claude Code agent inside a named tmux session and a
-# terminal window, so it shows up in the dashboard and is click-to-jump-able.
+# agent-start — launch a Claude Code agent inside a named tmux session in the
+# current terminal tab, so it shows up in the dashboard and is click-to-jump-able.
 #
 # Directory selection (where `claude` runs):
 #   agent-start [DIR]    use DIR explicitly
@@ -11,7 +11,6 @@
 #   AGENTSTACK_BASE_DIR   root the interactive picker browses (default: $HOME).
 #                         Point this at your Obsidian vault to pick a subdir:
 #                           export AGENTSTACK_BASE_DIR="$HOME/Obsidian/MyVault"
-#   AGENTSTACK_TERMINAL   ghostty | iterm | terminal | auto (default: auto).
 #   AGENTSTACK_CLAUDE_BIN claude binary (default: `claude` on PATH).
 #   AGENTSTACK_CLAUDE_MODEL model label to register (default "claude-code").
 #
@@ -90,8 +89,8 @@ if [[ -n "${TMUX:-}" ]]; then
   exec "$CLAUDE_BIN"
 fi
 
-# Otherwise spawn a new terminal window with a fresh tmux session. The temp
-# script keeps the window alive after claude exits (drops to a shell), then
+# Otherwise replace the current terminal tab with a fresh tmux session. The temp
+# script keeps the tab alive after claude exits (drops to a shell), then
 # self-deletes.
 INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
@@ -106,14 +105,5 @@ exec "\$SHELL" -l
 EOF
 chmod +x "$INNER"
 
-if ! ags_spawn_terminal "$SESSION" "$INNER"; then
-  rm -f -- "$INNER"
-  cat >&2 <<MSG
-$AGS_PROG: could not open a terminal automatically.
-Run this yourself to launch the agent:
-  $TMUX_BIN new-session -s $SESSION -c $DIR $CLAUDE_BIN
-MSG
-  exit 1
-fi
-
 echo "$AGS_PROG: launching Claude agent in tmux session '$SESSION' ($DIR)"
+exec "$INNER"
