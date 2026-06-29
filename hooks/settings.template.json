@@ -6,6 +6,10 @@
           {
             "type": "command",
             "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/set-ghostty-title.sh"
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/session-start-reminder.sh"
           }
         ]
       }

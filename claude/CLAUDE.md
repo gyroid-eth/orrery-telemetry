@@ -7,6 +7,12 @@ rules before doing project work.
 - The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
   `ensure_project`, `register_agent`, `fetch_inbox`, and reservations. Do not
   infer a different project from your current directory.
+- On SessionStart, `session-start-reminder.sh` resolves an existing identity
+  before registration (`AGENT_NAME` -> per-pane metadata -> tmux session name)
+  and reminds you to re-register with the same `name`. For cc/cx sessions that
+  do not carry `AGENT_NAME`, the tmux session name is the decisive source across
+  `/clear`, resume, and compact; when the reminder prints a name, do not
+  generate a new one.
 - If you were launched with `agent-start`, you should already have
   `AGENT_NAME` exported and your tmux session should be named after it. At
   session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
