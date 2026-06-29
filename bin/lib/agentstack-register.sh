@@ -173,15 +173,14 @@ ags_agent_exists() {
 }
 
 ags_pick_scientist_name() {
-  local prefix="$1" scientist
-  scientist="$(ags_pick_scientist)" || return 1
-  printf '%s-%s\n' "$prefix" "$scientist"
+  local _prefix="${1:-}"
+  ags_pick_adjective_scientist_name
 }
 
 ags_pick_available_agent_name() {
-  local project_key="$1" prefix="$2" preferred_name="${3:-}"
+  local project_key="$1" _prefix="$2" preferred_name="${3:-}"
   local attempts="${AGENTSTACK_AGENT_NAME_ATTEMPTS:-75}"
-  local scientist candidate i
+  local adjective scientist candidate i
 
   if [[ -n "$preferred_name" ]] && ! ags_agent_exists "$project_key" "$preferred_name"; then
     printf '%s\n' "$preferred_name"
@@ -189,8 +188,7 @@ ags_pick_available_agent_name() {
   fi
 
   for ((i = 0; i < attempts; i++)); do
-    scientist="$(ags_pick_scientist)" || return 1
-    candidate="${prefix}-${scientist}"
+    candidate="$(ags_pick_adjective_scientist_name)" || return 1
     if ! ags_agent_exists "$project_key" "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
@@ -198,8 +196,9 @@ ags_pick_available_agent_name() {
   done
 
   for ((i = 2; i < attempts + 200; i++)); do
+    adjective="$(ags_pick_adjective)" || return 1
     scientist="$(ags_pick_scientist)" || return 1
-    candidate="${prefix}-${i}-${scientist}"
+    candidate="${adjective}${i}${scientist}"
     if ! ags_agent_exists "$project_key" "$candidate"; then
       printf '%s\n' "$candidate"
       return 0

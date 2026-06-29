@@ -606,6 +606,127 @@ conn.close()
 PYEOF
 }
 
+load_agent_name_helpers() {
+    if declare -F ags_pick_adjective_scientist_name >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local lib_path="${AGENTSTACK_SCIENTISTS_LIB:-}"
+    if [[ -z "$lib_path" ]]; then
+        lib_path="$HOOKS_DIR/../bin/lib/agentstack-scientists.sh"
+    fi
+    if [[ ! -f "$lib_path" ]]; then
+        echo "Error: missing agent name helper: $lib_path" >&2
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$lib_path"
+}
+
+mcp_response_has_error() {
+    python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(data, dict) and data.get("error") else 1)
+'
+}
+
+mcp_extract_agent_name() {
+    python3 -c '
+import json
+import sys
+
+def candidate_names(obj):
+    if isinstance(obj, dict):
+        for key in ("name", "agent_name"):
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                yield value
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+
+for name in candidate_names(data):
+    print(name)
+    sys.exit(0)
+
+result = data.get("result") if isinstance(data, dict) else None
+for name in candidate_names(result):
+    print(name)
+    sys.exit(0)
+if isinstance(result, dict):
+    structured = result.get("structuredContent")
+    for name in candidate_names(structured):
+        print(name)
+        sys.exit(0)
+    content = result.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                obj = json.loads(text)
+            except Exception:
+                continue
+            for name in candidate_names(obj):
+                print(name)
+                sys.exit(0)
+print("")
+'
+}
+
+child_agent_exists() {
+    local agent_name="$1" args_json response
+    args_json=$(python3 -c "
+import json, sys
+print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
+" "$PROJECT_KEY" "$agent_name")
+    response="$(call_mcp "whois" "$args_json" 2>/dev/null || true)"
+    [[ -n "$response" ]] || return 1
+    if printf '%s' "$response" | mcp_response_has_error; then
+        return 1
+    fi
+    [[ -n "$(printf '%s' "$response" | mcp_extract_agent_name)" ]]
+}
+
+pick_available_child_agent_name() {
+    local attempts="${AGENTSTACK_AGENT_NAME_ATTEMPTS:-75}"
+    local candidate adjective scientist i
+
+    load_agent_name_helpers || return 1
+
+    for ((i = 0; i < attempts; i++)); do
+        candidate="$(ags_pick_adjective_scientist_name)" || return 1
+        if ! child_agent_exists "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    for ((i = 2; i < attempts + 200; i++)); do
+        adjective="$(ags_pick_adjective)" || return 1
+        scientist="$(ags_pick_scientist)" || return 1
+        candidate="${adjective}${i}${scientist}"
+        if ! child_agent_exists "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 retire_agent_with_registration_token() {
     local agent_name="$1"
     local registration_token="$2"
@@ -647,6 +768,12 @@ else
     CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
 fi
 
+CHILD_REGISTRATION_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+if ! CHILD_NAME_CANDIDATE="$(pick_available_child_agent_name)"; then
+    echo "Error: failed to generate an available child agent name" >&2
+    exit 1
+fi
+
 REGISTER_ARGS=$(python3 -c "
 import json, sys
 args = {
@@ -655,14 +782,10 @@ args = {
     'model': sys.argv[3],
     'task_description': sys.argv[4],
     'registration_token': sys.argv[5],
+    'name': sys.argv[6],
 }
 print(json.dumps(args))
-" "$PROJECT_KEY" "$CHILD_PROGRAM" "$CHILD_MODEL" "$TASK_SHORT" "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')")
-
-CHILD_REGISTRATION_TOKEN=$(python3 -c "
-import json, sys
-print(json.loads(sys.argv[1])['registration_token'])
-" "$REGISTER_ARGS")
+" "$PROJECT_KEY" "$CHILD_PROGRAM" "$CHILD_MODEL" "$TASK_SHORT" "$CHILD_REGISTRATION_TOKEN" "$CHILD_NAME_CANDIDATE")
 
 REGISTER_RESULT=$(call_mcp "register_agent" "$REGISTER_ARGS")
 CHILD_NAME=$(python3 -c "

@@ -121,31 +121,55 @@ case "$CLAUDE_SCOPE" in
     ;;
 esac
 
-SCIENTISTS_JSON="$INSTALL_DIR/dashboard/scientist_portraits.json"
-MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$INSTALL_DIR/runtime/managed_agents.txt}"
-if [[ -f "$SCIENTISTS_JSON" && -f "$MANAGED_AGENTS_FILE" ]]; then
-  python3 - "$SCIENTISTS_JSON" "$MANAGED_AGENTS_FILE" <<'PY'
+SCIENTISTS_LIB="$INSTALL_DIR/bin/lib/agentstack-scientists.sh"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}"
+MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
+CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
+
+collect_managed_agent_names() {
+  if [[ -f "$MANAGED_AGENTS_FILE" ]]; then
+    sed '/^[[:space:]]*$/d' "$MANAGED_AGENTS_FILE"
+  fi
+  if [[ -d "$CHILD_STATE_DIR" ]]; then
+    local state
+    for state in "$CHILD_STATE_DIR"/*.json; do
+      [[ -e "$state" ]] || continue
+      python3 - "$state" <<'PY' 2>/dev/null || true
 import json
 import pathlib
 import sys
 
-scientists = [
-    name for name in json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-    if name.isascii() and name.isalpha()
-]
-names = [
-    line.strip()
-    for line in pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
-    if line.strip()
-]
-bad = [name for name in names if not any(name.endswith(scientist) for scientist in scientists)]
-if bad:
-    print("warn: managed agent names without scientist suffix: " + ", ".join(bad[:10]))
-else:
-    print("ok: managed agent names end with bundled scientist keys")
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+name = data.get("agent_name")
+if isinstance(name, str) and name:
+    print(name)
 PY
+    done
+  fi
+}
+
+if [[ -f "$SCIENTISTS_LIB" ]]; then
+  # shellcheck disable=SC1090
+  . "$SCIENTISTS_LIB"
+  MANAGED_AGENT_NAMES="$(collect_managed_agent_names | sort -u || true)"
+  if [[ -z "$MANAGED_AGENT_NAMES" ]]; then
+    echo "warn: no managed agent records found for scientist suffix check"
+  else
+    BAD_MANAGED_NAMES=()
+    while IFS= read -r agent_name; do
+      [[ -n "$agent_name" ]] || continue
+      if ! ags_has_scientist_suffix "$agent_name"; then
+        BAD_MANAGED_NAMES+=("$agent_name")
+      fi
+    done <<< "$MANAGED_AGENT_NAMES"
+    if [[ ${#BAD_MANAGED_NAMES[@]} -gt 0 ]]; then
+      echo "warn: managed agent names without scientist suffix: ${BAD_MANAGED_NAMES[*]:0:10}"
+    else
+      echo "ok: managed agent names end with bundled scientist keys"
+    fi
+  fi
 else
-  echo "warn: cannot check scientist suffixes; missing $SCIENTISTS_JSON or $MANAGED_AGENTS_FILE"
+  echo "warn: cannot check scientist suffixes; missing $SCIENTISTS_LIB"
 fi
 
 # Non-fatal hint: agents run inside tmux, so wheel-scroll only reaches an

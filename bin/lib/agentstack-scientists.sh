@@ -1,6 +1,40 @@
 #!/usr/bin/env bash
-# Shared scientist-name helpers for agent launchers.
+# Shared adjective+scientist name helpers for agent launchers.
 # SOURCE this file; callers are expected to run with set -euo pipefail.
+
+AGS_SIMPLE_ADJECTIVES=(
+  Red
+  Orange
+  Pink
+  Black
+  Purple
+  Blue
+  Brown
+  White
+  Green
+  Gold
+  Gray
+  Navy
+  Silver
+  Sunny
+  Foggy
+  Stormy
+  Windy
+  Frosty
+  Cloudy
+  Rainy
+  Swift
+  Quiet
+  Bold
+  Calm
+  Bright
+  Dark
+  Wild
+  Brave
+  Noble
+  Curious
+  Sharp
+)
 
 ags_scientists_json() {
   if [[ -n "${AGENTSTACK_SCIENTISTS_JSON:-}" ]]; then
@@ -12,6 +46,22 @@ ags_scientists_json() {
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   root="$(cd "$lib_dir/../.." && pwd)"
   printf '%s\n' "$root/dashboard/scientist_portraits.json"
+}
+
+ags_adjective_list() {
+  printf '%s\n' "${AGS_SIMPLE_ADJECTIVES[@]}"
+}
+
+ags_pick_adjective() {
+  python3 - "${AGS_SIMPLE_ADJECTIVES[@]}" <<'PY'
+import secrets
+import sys
+
+names = sys.argv[1:]
+if not names:
+    sys.exit(1)
+print(secrets.choice(names))
+PY
 }
 
 ags_scientist_list() {
@@ -44,6 +94,14 @@ if not names:
     sys.exit(1)
 print(secrets.choice(names))
 PY
+}
+
+ags_pick_adjective_scientist_name() {
+  local json_path="${1:-$(ags_scientists_json)}"
+  local adjective scientist
+  adjective="$(ags_pick_adjective)" || return 1
+  scientist="$(ags_pick_scientist "$json_path")" || return 1
+  printf '%s%s\n' "$adjective" "$scientist"
 }
 
 ags_has_scientist_suffix() {

@@ -940,9 +940,9 @@ def _zsh_safe_quote(a: str) -> str:
 
     shlex.quote は `=` と `~` を「安全」扱いして裸で返すが、zsh は
     先頭 `=` を EQUALS 展開(`=cmd` → コマンドのパス)、先頭 `~` を
-    チルダ展開する。tmux の完全一致ターゲット `=cx-001` をそのまま
+    チルダ展開する。tmux の完全一致ターゲット `=SwiftBohr` をそのまま
     `do script`(Terminal/iTerm は zsh で実行)へ渡すと
-    `zsh: cx-001 not found` になる。先頭がこれらの文字なら強制クオート。
+    `zsh: SwiftBohr not found` になる。先頭がこれらの文字なら強制クオート。
     """
     s = shlex.quote(a)
     if s == a and a[:1] in ("=", "~"):

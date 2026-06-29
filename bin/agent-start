@@ -14,7 +14,7 @@
 #   AGENTSTACK_CLAUDE_BIN claude binary (default: `claude` on PATH).
 #   AGENTSTACK_CLAUDE_MODEL model label to register (default "claude-code").
 #
-# Registration, the scientist name, and the window/tab title are established
+# Registration, the adjective+scientist name, and the window/tab title are established
 # before `claude` starts. Hooks still record later in-session registrations.
 set -euo pipefail
 
@@ -45,7 +45,7 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN 2>/dev/null || true
 
 SESSION="pending-$$"
-CANDIDATE_AGENT_NAME="$(ags_pick_scientist_name "cc" 2>/dev/null || true)"
+CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
 if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
   AGENT_NAME="$CANDIDATE_AGENT_NAME"
   SESSION="$AGENT_NAME"
