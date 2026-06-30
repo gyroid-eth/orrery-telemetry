@@ -18,14 +18,10 @@ rules before doing project work.
   session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
   then call `register_agent` with `program="claude-code"` and
   `name="$AGENT_NAME"` when `AGENT_NAME` is set. If
-  `CHILD_REGISTRATION_TOKEN` is set, pass it as `registration_token`; with that
-  token, re-registration of the launcher-created identity is idempotent. If
-  `AGENT_NAME` is not set, omit `name`.
-- Identity registration is lenient on current agent-mail: re-registering the
-  same agent name without a token succeeds and preserves the existing token;
-  only supplying a different token for that agent is rejected. If you see an
-  identity split, your `~/mcp_agent_mail` clone is likely outdated; update it
-  with `git -C ~/mcp_agent_mail pull`, then restart agent-mail.
+  `CHILD_REGISTRATION_TOKEN` is set, pass it as `registration_token`; stock
+  agent-mail is token-strict for existing names, so same-name re-registration
+  requires the original token. If `CHILD_REGISTRATION_TOKEN` is not set, omit
+  `registration_token` rather than inventing one.
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the
   missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Re-register an existing agent-mail identity without exposing its owner token.
+#
+# Usage: agentstack-reregister <agent-name> [program] [model]
+#
+# The token is restored internally from CHILD_REGISTRATION_TOKEN, the persisted
+# runtime token file, or child-agent runtime state. Nothing secret is printed.
+set -euo pipefail
+set +x 2>/dev/null || true
+
+PROG="agentstack-reregister"
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+load_env_file() {
+  local envf="$1"
+  # shellcheck disable=SC1090
+  [[ -n "$envf" && -f "$envf" ]] && . "$envf"
+  return 0
+}
+
+load_env_file "${AGENTSTACK_ENV_FILE:-}"
+load_env_file "${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
+load_env_file "$SCRIPT_DIR/../env.sh"
+
+REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}"
+[[ -f "$REGISTER_LIB" ]] || die "missing register library: $REGISTER_LIB"
+# shellcheck disable=SC1090
+. "$REGISTER_LIB"
+
+load_child_state_token() {
+  local agent_name="$1" state_file runtime_dir
+  runtime_dir="$(ags_registration_runtime_dir)"
+  state_file="$runtime_dir/child-agents/$agent_name.json"
+  [[ -f "$state_file" ]] || return 1
+  python3 - "$state_file" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+token = data.get("registration_token")
+if not isinstance(token, str) or not token:
+    sys.exit(1)
+print(token)
+PY
+}
+
+agent_name="${1:-${AGENT_NAME:-}}"
+[[ -n "$agent_name" ]] || die "agent name required"
+
+program="${2:-${AGENTSTACK_REREGISTER_PROGRAM:-codex}}"
+case "$program" in
+  codex)
+    default_model="${AGENTSTACK_CODEX_MODEL:-codex}"
+    prefix="cx"
+    ;;
+  claude-code)
+    default_model="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
+    prefix="cc"
+    ;;
+  *)
+    default_model="$program"
+    prefix="agent"
+    ;;
+esac
+model="${3:-${AGENTSTACK_REREGISTER_MODEL:-$default_model}}"
+
+project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+[[ -n "$project_key" ]] || die "AGENTSTACK_PROJECT_KEY is required"
+
+ags_mail_load_token
+
+registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+if [[ -z "$registration_token" ]]; then
+  registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
+fi
+if [[ -z "$registration_token" ]]; then
+  registration_token="$(load_child_state_token "$agent_name" 2>/dev/null || true)"
+fi
+[[ -n "$registration_token" ]] || die "registration token not available for $agent_name"
+
+CHILD_REGISTRATION_TOKEN="$registration_token"
+export CHILD_REGISTRATION_TOKEN
+
+if ags_register_session "$project_key" "$program" "$model" "$prefix" "${PWD:-$project_key}" "$agent_name" "reserved" >/dev/null 2>&1; then
+  printf 'agentstack-reregister: registered %s\n' "${AGS_REGISTERED_AGENT_NAME:-$agent_name}"
+else
+  die "register_agent failed for $agent_name"
+fi

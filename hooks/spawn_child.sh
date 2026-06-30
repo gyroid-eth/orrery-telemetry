@@ -62,6 +62,11 @@ MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
 PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
+AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
+if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
+    AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
+fi
+REREGISTER_HELPER="${AGENTSTACK_HOME_DIR:+$AGENTSTACK_HOME_DIR/bin/agentstack-reregister}"
 
 get_agentstack_token() {
     if [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]]; then
@@ -387,6 +392,9 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
     TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+    if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
+    fi
     if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
         TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$CHILD_REGISTRATION_TOKEN")
     fi
@@ -395,7 +403,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         # Codex startup (--pre-registered mode).
         CHILD_MODEL="gpt-5.5"
         TOKEN=$(get_agentstack_token 2>/dev/null || true)
-        CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME}, then fetch_inbox for ${CHILD_NAME}. Do not infer the task from this prompt; treat the inbox request as authoritative."
+        CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
@@ -975,6 +983,9 @@ fi
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
 TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
+fi
 if [[ -n "$RESOURCES" ]]; then
     TMUX_ENV_ARGS+=(-e "CHILD_RESOURCES=$RESOURCES")
 fi
@@ -984,7 +995,7 @@ fi
 
 if [[ "$USE_CODEX" == true ]]; then
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
-    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME}, then fetch_inbox for ${CHILD_NAME}. Do not infer the task from this prompt; treat the inbox request as authoritative."
+    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

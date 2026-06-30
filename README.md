@@ -189,20 +189,26 @@ Registration needs a running agent-mail (the install sets this up) and
 `Adjective-Scientist` `AGENT_NAME`, just without shell-side registration.
 `OPENAI_API_KEY` is stripped at launch so Codex uses its ChatGPT OAuth login.
 
-#### Identity registration is lenient
+#### Identity registration is token-strict
 
-Current agent-mail accepts re-registering the same agent name without a
-`registration_token`; it preserves the existing token. It rejects only a
-different token for an existing agent, which acts as a rotation guard. Normal
-session startup therefore does not split identities. The launchers also forward
-the token they use during first registration as `CHILD_REGISTRATION_TOKEN`, so
-sessions re-register idempotently even with an older agent-mail that enforced
-tokens more strictly.
+Stock agent-mail requires the original `registration_token` when re-registering
+an existing agent name. The launchers keep that token in
+`CHILD_REGISTRATION_TOKEN` and persist it under the runtime directory as
+`agent_token_<name>`. If `CHILD_REGISTRATION_TOKEN` is available, pass it as
+`registration_token`; if it is missing, omit `registration_token` rather than
+inventing a new one for an existing name.
 
-If you see an identity split, such as `SwiftBohr` active in telemetry while a
-different alias is shown as gone, your `~/mcp_agent_mail` clone is likely from
-an older stricter agent-mail build. Update it with
-`git -C ~/mcp_agent_mail pull`, then restart agent-mail.
+Claude sessions also have a SessionStart hook that can re-register an existing
+identity from the persisted token before the model starts work. Codex sessions
+do not have that hook, so the managed Codex instructions start with:
+
+```bash
+AGENTSTACK_PROJECT_KEY="/path/to/project" ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
+```
+
+That helper reads the token from runtime state and calls agent-mail without
+printing the token to the transcript. After it succeeds, continue with
+`fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent` again.
 
 ## Skills
 
