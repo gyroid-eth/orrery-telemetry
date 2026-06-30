@@ -5,7 +5,7 @@
 #
 # Unlike Claude Code, Codex has no hook system, so this launcher runs
 # `agentstack-codex-bootstrap` inside the session to register the agent and
-# assign an AdjectiveScientist name before exec'ing codex.
+# assign an Adjective-Scientist name before exec'ing codex.
 #
 # Directory selection (where codex runs):
 #   agent-start-codex [DIR]   use DIR explicitly
@@ -64,7 +64,7 @@ if [[ -n "${TMUX:-}" ]]; then
 fi
 
 # Otherwise replace the current terminal tab with a fresh tmux session that runs
-# the bootstrap (registration + AdjectiveScientist name) and then codex. The temp script
+# the bootstrap (registration + Adjective-Scientist name) and then codex. The temp script
 # keeps the tab alive after codex exits, then self-deletes.
 CODEX_CMD="$(build_codex_cmd "$DIR")"
 INNER="$(mktemp -t agent-start-codex.XXXXXX)"

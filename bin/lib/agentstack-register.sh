@@ -199,7 +199,7 @@ ags_pick_available_agent_name() {
   for ((i = 2; i < attempts + 200; i++)); do
     adjective="$(ags_pick_adjective)" || return 1
     scientist="$(ags_pick_scientist)" || return 1
-    candidate="${adjective}${i}${scientist}"
+    candidate="${adjective}-${i}-${scientist}"
     if ! ags_agent_exists "$project_key" "$candidate"; then
       printf '%s\n' "$candidate"
       return 0

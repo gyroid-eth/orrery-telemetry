@@ -27,7 +27,7 @@ If the child runs outside the project directory, explicitly tell it to use `$PRO
 ## Naming Rules
 
 - Do not use `create_agent_identity` for delegate children.
-- Delegate children must be explicitly registered with `register_agent(name=<AdjectiveScientist>, program=...)`. The name has no `cc-` or `cx-` prefix; the program type is recorded in `program`.
+- Delegate children must be explicitly registered with `register_agent(name=<Adjective-Scientist>, program=...)`. The name has no `cc-` or `cx-` prefix; the program type is recorded in `program`.
 - Generate names through the stack picker (`bin/lib/agentstack-register.sh` or `spawn_child.sh`) so the suffix matches a bundled dashboard scientist portrait.
 - After spawning, verify the tmux session name, dashboard entry, and inbox-read startup all refer to the registered child name.
 
@@ -96,7 +96,7 @@ Use generic task examples such as code review, API migration, test-suite repair,
 Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
 
 1. `ensure_project(project_key or human_key)` using `$AGENTSTACK_PROJECT_KEY`, not a random cwd.
-2. Pick an available `AdjectiveScientist` name and call `register_agent(project_key, program, model, name, task_description)`.
+2. Pick an available `Adjective-Scientist` name and call `register_agent(project_key, program, model, name, task_description)`.
 3. Reserve file paths if the task edits shared resources.
 4. `send_message(project_key, sender_name=<parent>, to=[<child>], subject=..., body_md=..., importance="high")`.
 

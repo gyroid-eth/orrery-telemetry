@@ -104,7 +104,7 @@ ags_pick_adjective_scientist_name() {
   local adjective scientist
   adjective="$(ags_pick_adjective)" || return 1
   scientist="$(ags_pick_scientist "$json_path")" || return 1
-  printf '%s%s\n' "$adjective" "$scientist"
+  printf '%s-%s\n' "$adjective" "$scientist"
 }
 
 ags_has_scientist_suffix() {

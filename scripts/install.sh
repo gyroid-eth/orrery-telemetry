@@ -412,22 +412,8 @@ ensure_agent_mail() {
 
   if [[ -f "$MAIL_ENV" ]]; then
     plan "reuse existing agent-mail .env at $MAIL_ENV"
-    if grep -q '^AGENT_NAME_ENFORCEMENT_MODE=' "$MAIL_ENV"; then
-      local name_enforcement
-      name_enforcement="$(grep -m 1 '^AGENT_NAME_ENFORCEMENT_MODE=' "$MAIL_ENV" | cut -d= -f2-)"
-      if [[ "$name_enforcement" == "passthrough" ]]; then
-        plan "reuse existing AGENT_NAME_ENFORCEMENT_MODE=passthrough in $MAIL_ENV"
-      else
-        warn "existing agent-mail .env sets AGENT_NAME_ENFORCEMENT_MODE=$name_enforcement; leaving it untouched"
-      fi
-    else
-      plan "append AGENT_NAME_ENFORCEMENT_MODE=passthrough to existing agent-mail .env at $MAIL_ENV"
-      if [[ "$DRY_RUN" != true ]]; then
-        printf '\nAGENT_NAME_ENFORCEMENT_MODE=passthrough\n' >> "$MAIL_ENV"
-      fi
-    fi
   else
-    plan "create agent-mail .env at $MAIL_ENV with AGENT_NAME_ENFORCEMENT_MODE=passthrough (mode 600; token hidden)"
+    plan "create agent-mail .env at $MAIL_ENV (mode 600; token hidden)"
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$(dirname "$MAIL_ENV")"
       umask 077
@@ -437,11 +423,7 @@ import secrets
 import sys
 path = pathlib.Path(sys.argv[1])
 token = secrets.token_urlsafe(32)
-path.write_text(
-    f"HTTP_BEARER_TOKEN={token}\n"
-    "AGENT_NAME_ENFORCEMENT_MODE=passthrough\n",
-    encoding="utf-8",
-)
+path.write_text(f"HTTP_BEARER_TOKEN={token}\n", encoding="utf-8")
 path.chmod(0o600)
 PY
     fi

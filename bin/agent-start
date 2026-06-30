@@ -14,8 +14,9 @@
 #   AGENTSTACK_CLAUDE_BIN claude binary (default: `claude` on PATH).
 #   AGENTSTACK_CLAUDE_MODEL model label to register (default "claude-code").
 #
-# Registration, the adjective+scientist name, and the window/tab title are established
-# before `claude` starts. Hooks still record later in-session registrations.
+# Registration, the adjective-scientist name, and the window/tab title are
+# established before `claude` starts. Hooks still record later in-session
+# registrations.
 set -euo pipefail
 
 AGS_PROG="agent-start"
