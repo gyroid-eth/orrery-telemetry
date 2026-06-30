@@ -234,8 +234,10 @@ When completion is detected:
 2. Fetch the child's completion message.
 3. Read or inspect the changed artifacts yourself.
 4. Run focused verification when feasible.
-5. Release file reservations.
-6. Report the verified outcome to the user.
+5. For implementation changes, run a doc-sync pass and update README or
+   managed docs (`claude/CLAUDE.md`, `codex/AGENTS.md`) when behavior changed.
+6. Release file reservations.
+7. Report the verified outcome to the user.
 
 If the child reports uncertainty, partial completion, or skipped tests, preserve that information in your report.
 

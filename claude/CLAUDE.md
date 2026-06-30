@@ -4,6 +4,15 @@ rules before doing project work.
 
 ## Session Startup
 
+First calls:
+
+1. `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`.
+2. If SessionStart says the shell hook already registered your resolved name,
+   do not call `register_agent` again. Otherwise call `register_agent` with the
+   resolved `name` and pass `CHILD_REGISTRATION_TOKEN` as `registration_token`
+   when it is available.
+3. `fetch_inbox(agent_name="$AGENT_NAME")`.
+
 - The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
   `ensure_project`, `register_agent`, `fetch_inbox`, and reservations. Do not
   infer a different project from your current directory.
@@ -25,6 +34,9 @@ rules before doing project work.
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the
   missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.
+- Do not read agent-mail's `storage.sqlite3` directly to recover tokens or
+  inbox state. Use MCP tools or the stack helper; ad hoc DB reads risk stale
+  paths, token leakage, and identity splits.
 - Always call `fetch_inbox(agent_name="$AGENT_NAME")` after registration. If
   `PARENT_AGENT` is set, treat the inbox request as the canonical task and
   report completion to that parent with `send_message`.

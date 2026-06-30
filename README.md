@@ -376,6 +376,37 @@ environment variables are unset, the dashboard uses only the bundled portraits.
 
 ## Troubleshooting
 
+### Agent registration or inbox read fails
+
+Symptoms:
+
+- The agent cannot register or `fetch_inbox` returns nothing useful.
+- The inbox appears empty even though the parent or operator sent a task.
+- Agent-mail reports `requires registration_token` for an existing name.
+- The dashboard or telemetry shows an identity split: the terminal title and
+  active agent disagree, or a new alias appears instead of the expected name.
+
+Cause:
+
+- Stock agent-mail is token-strict for existing names. Re-registering an
+  existing identity requires the original `registration_token`.
+- If `CHILD_REGISTRATION_TOKEN` is missing, the persisted runtime token is
+  missing, or either token is stale, same-name registration is rejected.
+
+Fix:
+
+- Do not register under a different name to get unstuck; that creates a split
+  identity and loses the existing inbox/thread continuity.
+- Claude sessions normally recover through the SessionStart hook, which
+  restores the persisted token and re-registers before the model starts work.
+- Codex sessions normally recover by running
+  `agentstack-reregister "$AGENT_NAME"`, which reads runtime state and calls
+  agent-mail without printing the token.
+- If recovery still fails, check that the runtime directory contains
+  `agent_token_<name>` for the expected agent and restart agent-mail. If the
+  token file is missing or stale, report that condition to the parent/operator
+  instead of inventing a new token or alias.
+
 ### Mouse wheel scrolls the terminal, not tmux scrollback
 
 Every agent runs **inside a tmux session**, so to scroll back through an

@@ -5,6 +5,13 @@ participant. Follow the rules below.
 
 ## Coordination (agent-mail)
 
+First calls:
+
+1. Run
+   `AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"`.
+2. If that succeeds, do not call `register_agent` again.
+3. `fetch_inbox(agent_name="$AGENT_NAME")`.
+
 - The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
   `ensure_project`, `register_agent`, `fetch_inbox`, and reservations — do not
   infer a different project from your current directory.
@@ -25,6 +32,11 @@ participant. Follow the rules below.
   It restores the owner token from runtime state and re-registers without
   printing the token. If that succeeds, do not call `register_agent` again;
   continue with `fetch_inbox(agent_name="$AGENT_NAME")`.
+- Codex workspace-write sandboxes can hide launcher-exported environment
+  variables from shell commands: `printenv CHILD_REGISTRATION_TOKEN` may be
+  empty even though the launcher created a valid token. Prefer
+  `agentstack-reregister`, which restores the token from runtime state instead
+  of relying on sandbox-visible env.
 - If `agentstack-reregister` is unavailable or fails before registration, call
   `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
   `register_agent` with `program="codex"` and `name="$AGENT_NAME"` when
@@ -36,6 +48,9 @@ participant. Follow the rules below.
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the
   missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.
+- Do not read agent-mail's `storage.sqlite3` directly to recover tokens or
+  inbox state. Use MCP tools or `agentstack-reregister`; ad hoc DB reads risk
+  stale paths, token leakage, and identity splits.
 - If `PARENT_AGENT` is set, you are a child agent: read your task from
   `fetch_inbox` before doing anything, and report completion with `send_message`
   to the parent. Do not invent a task from context.
