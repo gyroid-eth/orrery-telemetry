@@ -163,6 +163,42 @@ ags_generate_registration_token() {
   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 }
 
+ags_registration_runtime_dir() {
+  printf '%s\n' "${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+}
+
+ags_agent_token_key() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_'
+}
+
+ags_registration_token_file() {
+  local agent_name="$1" runtime_dir key
+  [[ -n "$agent_name" ]] || return 1
+  runtime_dir="$(ags_registration_runtime_dir)"
+  key="$(ags_agent_token_key "$agent_name")"
+  [[ -n "$key" ]] || return 1
+  printf '%s/agent_token_%s\n' "$runtime_dir" "$key"
+}
+
+ags_load_registration_token() {
+  local agent_name="$1" token_file token
+  token_file="$(ags_registration_token_file "$agent_name")" || return 1
+  [[ -f "$token_file" ]] || return 1
+  IFS= read -r token < "$token_file" || true
+  [[ -n "$token" ]] || return 1
+  printf '%s\n' "$token"
+}
+
+ags_store_registration_token() {
+  local agent_name="$1" registration_token="$2" runtime_dir token_file
+  [[ -n "$agent_name" && -n "$registration_token" ]] || return 0
+  runtime_dir="$(ags_registration_runtime_dir)"
+  token_file="$(ags_registration_token_file "$agent_name")" || return 1
+  mkdir -p "$runtime_dir" || return 1
+  ( umask 077 && printf '%s' "$registration_token" > "$token_file" ) || return 1
+  chmod 600 "$token_file" 2>/dev/null || true
+}
+
 ags_agent_exists() {
   local project_key="$1" agent_name="$2" response
   response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$agent_name" 2>/dev/null || true)"
@@ -220,11 +256,6 @@ ags_register_session() {
     codex) task_description="Codex session in $work_dir" ;;
   esac
 
-  local registration_token="${CHILD_REGISTRATION_TOKEN:-}"
-  if [[ -z "$registration_token" ]]; then
-    registration_token="$(ags_generate_registration_token)" || return 1
-  fi
-
   local agent_name="$requested_name"
   if [[ -z "$agent_name" ]]; then
     agent_name="$(ags_pick_available_agent_name "$project_key" "$prefix")" || return 1
@@ -233,6 +264,14 @@ ags_register_session() {
   fi
 
   ags_mcp_call "ensure_project" "human_key=$project_key" >/dev/null
+
+  local registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+  if [[ -z "$registration_token" ]]; then
+    registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
+  fi
+  if [[ -z "$registration_token" ]] && ! ags_agent_exists "$project_key" "$agent_name"; then
+    registration_token="$(ags_generate_registration_token)" || return 1
+  fi
 
   local register_args=(
     "project_key=$project_key"
@@ -256,6 +295,7 @@ ags_register_session() {
     CHILD_REGISTRATION_TOKEN="$registered_token"
     AGS_REGISTERED_REGISTRATION_TOKEN="$registered_token"
     export CHILD_REGISTRATION_TOKEN
+    ags_store_registration_token "$registered" "$registered_token" || true
   fi
   AGS_REGISTERED_AGENT_NAME="$registered"
   printf '%s\n' "$registered"
