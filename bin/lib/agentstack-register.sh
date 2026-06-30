@@ -2,7 +2,8 @@
 # Shared agent-mail registration helpers for agent launchers.
 # SOURCE this file; callers are expected to run with set -euo pipefail.
 
-AGS_REGISTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE:-}" ]; then _ags_register_src="${BASH_SOURCE[0]}"; else _ags_register_src="$0"; fi
+AGS_REGISTER_LIB_DIR="$(cd "$(dirname "$_ags_register_src")" && pwd)"
 # shellcheck source=agentstack-scientists.sh
 . "$AGS_REGISTER_LIB_DIR/agentstack-scientists.sh"
 

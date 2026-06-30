@@ -22,6 +22,10 @@
 #   AGENTSTACK_CODEX_MODEL          model label to register (default "codex")
 
 WORK_DIR="${1:-.}"
+if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
+SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
+if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
+
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
@@ -29,8 +33,6 @@ MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
 CODEX_MODEL="${AGENTSTACK_CODEX_MODEL:-codex}"
 REQUESTED_AGENT_NAME="${AGENT_NAME:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-register.sh
 . "$SCRIPT_DIR/lib/agentstack-register.sh"
 

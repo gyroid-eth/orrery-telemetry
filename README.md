@@ -119,6 +119,12 @@ the dashboard matches the scientist suffix to show the bundled portrait. If
 the launcher cannot reach agent-mail, it still exports that name as
 `AGENT_NAME` so Claude can register the same name through its MCP client.
 
+AdjectiveScientist names and bundled dashboard portraits require agent-mail to
+run with `AGENT_NAME_ENFORCEMENT_MODE=passthrough`; the installer writes that
+setting to the agent-mail `.env` automatically. Without passthrough, stock
+agent-mail may coerce names such as `SwiftBohr` and the portrait suffix will no
+longer match.
+
 ```bash
 # add the launcher to your PATH (e.g. in ~/.zshrc or ~/.bashrc)
 export PATH="$HOME/.agentstack/bin:$PATH"

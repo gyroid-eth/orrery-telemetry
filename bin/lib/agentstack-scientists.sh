@@ -2,6 +2,9 @@
 # Shared adjective+scientist name helpers for agent launchers.
 # SOURCE this file; callers are expected to run with set -euo pipefail.
 
+if [ -n "${BASH_SOURCE:-}" ]; then _ags_scientists_src="${BASH_SOURCE[0]}"; else _ags_scientists_src="$0"; fi
+AGS_SCIENTISTS_LIB_DIR="$(cd "$(dirname "$_ags_scientists_src")" && pwd)"
+
 AGS_SIMPLE_ADJECTIVES=(
   Red
   Orange
@@ -43,7 +46,7 @@ ags_scientists_json() {
   fi
 
   local lib_dir root
-  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  lib_dir="$AGS_SCIENTISTS_LIB_DIR"
   root="$(cd "$lib_dir/../.." && pwd)"
   printf '%s\n' "$root/dashboard/scientist_portraits.json"
 }
