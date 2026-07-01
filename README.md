@@ -192,11 +192,21 @@ Registration needs a running agent-mail (the install sets this up) and
 #### Identity registration is token-strict
 
 Stock agent-mail requires the original `registration_token` when re-registering
-an existing agent name. The launchers keep that token in
+an existing agent name. Read-only calls such as `fetch_inbox` and `whois` are
+also token-gated for an existing identity unless the same MCP session has
+already authenticated as that agent. The launchers keep that token in
 `CHILD_REGISTRATION_TOKEN` and persist it under the runtime directory as
-`agent_token_<name>`. If `CHILD_REGISTRATION_TOKEN` is available, pass it as
-`registration_token`; if it is missing, omit `registration_token` rather than
-inventing a new one for an existing name.
+`agent_token_<name>`:
+
+```bash
+${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>
+```
+
+The `CHILD_` prefix is historical: this is the re-authentication token for
+continuing an existing identity, not only a child-agent token. If
+`CHILD_REGISTRATION_TOKEN` is available, pass it as `registration_token`; if it
+is missing, omit `registration_token` rather than inventing a new one for an
+existing name.
 
 Claude sessions also have a SessionStart hook that can re-register an existing
 identity from the persisted token before the model starts work. Codex sessions
@@ -207,8 +217,10 @@ AGENTSTACK_PROJECT_KEY="/path/to/project" ~/.agentstack/bin/agentstack-reregiste
 ```
 
 That helper reads the token from runtime state and calls agent-mail without
-printing the token to the transcript. After it succeeds, continue with
-`fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent` again.
+printing the token to the transcript. It also supports Claude recovery with
+`agentstack-reregister "$AGENT_NAME" claude-code`. After it succeeds, continue
+with `fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent`
+again.
 
 ## Skills
 
@@ -380,7 +392,8 @@ environment variables are unset, the dashboard uses only the bundled portraits.
 
 Symptoms:
 
-- The agent cannot register or `fetch_inbox` returns nothing useful.
+- The agent cannot register.
+- `fetch_inbox` or `whois` returns an authentication error.
 - The inbox appears empty even though the parent or operator sent a task.
 - Agent-mail reports `requires registration_token` for an existing name.
 - The dashboard or telemetry shows an identity split: the terminal title and
@@ -392,6 +405,8 @@ Cause:
   existing identity requires the original `registration_token`.
 - If `CHILD_REGISTRATION_TOKEN` is missing, the persisted runtime token is
   missing, or either token is stale, same-name registration is rejected.
+- Read-only calls are also token-gated for existing identities, so trying
+  `fetch_inbox` before recovery can fail with the same token error.
 
 Fix:
 
@@ -406,6 +421,9 @@ Fix:
   `agent_token_<name>` for the expected agent and restart agent-mail. If the
   token file is missing or stale, report that condition to the parent/operator
   instead of inventing a new token or alias.
+- Interpret the inbox result carefully: an empty inbox after successful
+  authentication is normal; an auth error means registration recovery is still
+  needed; a response under a different name means identity split risk.
 
 ### Mouse wheel scrolls the terminal, not tmux scrollback
 
