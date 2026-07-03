@@ -76,11 +76,17 @@ Details and exceptions for the first calls:
   read-only tools such as `fetch_inbox` or `whois` require the original
   registration token unless this MCP session has already authenticated as that
   agent. Reading only is not token-free.
-- The runtime token file is
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`. It is
-  acceptable for stack helpers to use this token file. Do not read agent-mail's
-  `storage.sqlite3` directly; the DB is outside the recovery boundary and ad
-  hoc DB reads risk stale paths, token leakage, and identity splits.
+- Stack registration helpers set your own `contact_policy` to `open` by default
+  after token-backed registration. Set `AGENTSTACK_CONTACT_POLICY=auto`,
+  `contacts_only`, `block_all`, or an empty value to override that behavior.
+- Top-level sessions store their runtime token at
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`.
+  Delegated children also use
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json`.
+  `agentstack-reregister` reads both locations. It is acceptable for stack
+  helpers to use these token files. Do not read agent-mail's `storage.sqlite3`
+  directly; the DB is outside the recovery boundary and ad hoc DB reads risk
+  stale paths, token leakage, and identity splits.
 
 Failure handling:
 
@@ -88,7 +94,7 @@ Failure handling:
 | --- | --- | --- |
 | helper missing or not executable | helper did not run | Use MCP fallback: `ensure_project` -> `register_agent` with visible token only -> `fetch_inbox`. |
 | `agent name required` or empty `AGENT_NAME` | identity was not resolved | Use the SessionStart reminder or tmux session name; do not pass an empty name. |
-| `register_agent failed for <name>`, `requires registration_token`, or token mismatch | persisted token is missing or stale, or this name belongs to another token | Stop recovery. Do not create a new alias or token; report stale/missing token to the operator or parent. |
+| `register_agent failed for <name>`, `requires registration_token`, or token mismatch | persisted token is missing or stale, a wrong token such as a parent token is visible, or this name belongs to another token | Retry `agentstack-reregister`; if it still fails, stop recovery. Do not create a new alias or token; report stale/missing/wrong token to the operator or parent. |
 
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the

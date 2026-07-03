@@ -195,12 +195,23 @@ Stock agent-mail requires the original `registration_token` when re-registering
 an existing agent name. Read-only calls such as `fetch_inbox` and `whois` are
 also token-gated for an existing identity unless the same MCP session has
 already authenticated as that agent. The launchers keep that token in
-`CHILD_REGISTRATION_TOKEN` and persist it under the runtime directory as
-`agent_token_<name>`:
+`CHILD_REGISTRATION_TOKEN` and persist it under the runtime directory. Top-level
+sessions use `agent_token_<name>`:
 
 ```bash
 ${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>
 ```
+
+Delegated children also have child runtime state:
+
+```bash
+${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json
+```
+
+`agentstack-reregister` reads both locations. In pre-registered delegate flows,
+`spawn_child.sh --pre-registered` requires a child-owned token file or existing
+`child-agents/<name>.json` state; it does not forward the parent's ambient
+`CHILD_REGISTRATION_TOKEN`.
 
 The `CHILD_` prefix is historical: this is the re-authentication token for
 continuing an existing identity, not only a child-agent token. If
@@ -222,12 +233,17 @@ printing the token to the transcript. It also supports Claude recovery with
 with `fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent`
 again.
 
+Registration also sets the agent's `contact_policy` to `open` by default so
+single-operator meshes can send first messages without an idle approval gate.
+Override with `AGENTSTACK_CONTACT_POLICY=auto`, `contacts_only`, `block_all`, or
+`closed`; set it to an empty value or `skip` to leave the server default alone.
+
 ## Skills
 
 The installer copies the bundled skills to `~/.agentstack/skills` and registers
 that directory in Claude Code's `skillsDirectories`, so the slash commands below
 are available in any Claude Code session (no manual symlinking). Both are
-env-driven — they read `AGENTSTACK_*` from the install, not hard-coded paths.
+env-driven - they read `AGENTSTACK_*` from the install, not hard-coded paths.
 
 ### `/delegate` — spawn and supervise a child agent
 
@@ -235,6 +251,10 @@ Hands a bounded task to a child Claude (or Codex) agent and keeps the parent
 responsible for the outcome: it writes a risk profile, reserves files to avoid
 collisions, spawns the child via `spawn_child.sh`, annotates it in the
 dashboard, monitors progress, and reports a verified result.
+Pre-registered children should be created through
+`bin/agentstack-preregister-child`, then launched with
+`spawn_child.sh --pre-registered --child-token-file <file>` so the parent LLM
+does not handle the child token and the parent's token is not forwarded.
 
 ```bash
 /delegate "<task>"                       # child Claude agent in the current project
@@ -417,13 +437,29 @@ Fix:
 - Codex sessions normally recover by running
   `agentstack-reregister "$AGENT_NAME"`, which reads runtime state and calls
   agent-mail without printing the token.
-- If recovery still fails, check that the runtime directory contains
-  `agent_token_<name>` for the expected agent and restart agent-mail. If the
-  token file is missing or stale, report that condition to the parent/operator
-  instead of inventing a new token or alias.
+- If recovery still fails, check runtime state for the expected agent:
+  top-level sessions use `agent_token_<name>`, while delegated children use
+  `child-agents/<name>.json`. If the token file is missing or stale, report
+  that condition to the parent/operator instead of inventing a new token or
+  alias.
+- If the visible `CHILD_REGISTRATION_TOKEN` exists but still fails, suspect a
+  wrong token, such as a parent token that leaked into a pre-registered child.
+  Re-run `agentstack-reregister`; if that cannot restore from runtime state,
+  restart with the correct child-owned token file/state and report the mismatch.
+- If the name itself belongs to another token, treat it as a name conflict. Do
+  not hard-delete or claim the name unless the operator explicitly approves it.
 - Interpret the inbox result carefully: an empty inbox after successful
   authentication is normal; an auth error means registration recovery is still
   needed; a response under a different name means identity split risk.
+
+Token diagnosis quick flow:
+
+| Symptom | Check | Recovery |
+| --- | --- | --- |
+| No visible token | Run `agentstack-reregister "$AGENT_NAME"`; check `agent_token_<name>` or `child-agents/<name>.json` exists | Restore from runtime state, or report missing token to the parent/operator |
+| Wrong token | Env token exists but strict registration still fails; for children, compare against `child-agents/<name>.json` state | Restart or re-run with the correct child-owned token file/state; do not forward a parent token |
+| Stale token | Runtime token exists but no longer matches the server identity | Report stale token and restart/re-register from the operator-approved token source |
+| Name conflict | The expected name belongs to another token or agent | Stop; do not create a new alias or hard-delete without explicit operator approval |
 
 ### Mouse wheel scrolls the terminal, not tmux scrollback
 

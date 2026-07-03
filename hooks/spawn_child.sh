@@ -7,6 +7,7 @@
 #   spawn_child.sh --unsafe-no-resources "<task>"
 #   spawn_child.sh --model opus --resources "path" "<task>"
 #   spawn_child.sh --worktree --resources "path" "<task>"
+#   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
 #
 # モデル指定（--model, Claude 子のみ。Codex は常に gpt-5.5）:
 #   --model 省略         → claude-opus-4-8[1m]（Opus 4.8 1M。保存既定と一致・プラン同梱で無料）
@@ -168,6 +169,7 @@ RESOURCES=""
 RESOURCE_TTL=14400
 UNSAFE_NO_RESOURCES=false
 PRE_REGISTERED=""
+CHILD_TOKEN_FILE=""
 USE_WORKTREE=false
 WORKTREE_BASE="/tmp/cc-worktrees"
 WORKTREE_BASE_REV=""   # --worktree-base で指定された起点 rev (空=HEAD)
@@ -200,6 +202,10 @@ while [[ "${1:-}" == --* ]]; do
             PRE_REGISTERED="$2"
             shift 2
             ;;
+        --child-token-file|--token-file)
+            CHILD_TOKEN_FILE="$2"
+            shift 2
+            ;;
         --worktree)
             USE_WORKTREE=true
             shift
@@ -220,6 +226,57 @@ if [[ -n "$WORKTREE_BASE_REV" && "$USE_WORKTREE" != true ]]; then
     echo "Error: --worktree-base requires --worktree" >&2
     exit 1
 fi
+
+load_child_state_token() {
+    local agent_name="$1" state_file="$CHILD_STATE_DIR/$agent_name.json"
+    [[ -f "$state_file" ]] || return 1
+    python3 - "$state_file" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+token = data.get("registration_token")
+if not isinstance(token, str) or not token:
+    sys.exit(1)
+print(token)
+PY
+}
+
+read_token_file() {
+    local token_file="$1" token
+    [[ -n "$token_file" && -f "$token_file" ]] || return 1
+    IFS= read -r token < "$token_file" || true
+    [[ -n "$token" ]] || return 1
+    printf '%s\n' "$token"
+}
+
+write_child_state() {
+    local agent_name="$1" project_key="$2" registration_token="$3" state_file="$CHILD_STATE_DIR/$agent_name.json"
+    mkdir -p "$CHILD_STATE_DIR"
+    python3 - "$agent_name" "$project_key" "$registration_token" "$state_file" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+agent_name, project_key, registration_token, state_file = sys.argv[1:5]
+path = pathlib.Path(state_file)
+path.parent.mkdir(parents=True, exist_ok=True)
+tmp = path.with_name(path.name + ".tmp")
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump({
+        "agent_name": agent_name,
+        "project_key": project_key,
+        "registration_token": registration_token,
+    }, f)
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+os.chmod(path, 0o600)
+PY
+}
 
 # --- Claude モデル名の正規化 ---
 # friendly エイリアス / 略記を `claude --model` が受け付ける正式 model string に変換する。
@@ -347,13 +404,15 @@ CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
 
 if [[ -z "$PROJECT_KEY" ]]; then
     echo "Error: AGENTSTACK_PROJECT_KEY or PROJECT_KEY is required" >&2
+    echo "  Set it to the shared mcp-agent-mail project key before spawning a child." >&2
+    echo "  For delegated children this may differ from the child workdir or git repo cwd." >&2
     exit 1
 fi
 
 # --- Pre-registered mode ---
 # 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths / send_message
 # を済ませてから呼ぶモード。spawn_child.sh は tmux セッション作成のみ行う。
-# Usage: spawn_child.sh --pre-registered <CHILD_NAME> "<タスク>" [<作業ディレクトリ>]
+# Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> "<タスク>" [<作業ディレクトリ>]
 if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
     TASK="${1:-}"
@@ -367,9 +426,29 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     PARENT_NAME="${PARENT_AGENT:-$(tmux display-message -p '#S' 2>/dev/null || echo unknown)}"
 
     if [[ -z "$TASK" ]]; then
-        echo "Usage: spawn_child.sh --pre-registered <CHILD_NAME> \"<task>\" [workdir]" >&2
+        echo "Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> \"<task>\" [workdir]" >&2
         exit 1
     fi
+
+    # Pre-registered children must use their own token. Never inherit the
+    # caller's ambient CHILD_REGISTRATION_TOKEN here; that may be the parent's
+    # owner token and would both fail strict auth and leak a secret to the child.
+    PRE_REGISTERED_CHILD_TOKEN=""
+    if [[ -n "$CHILD_TOKEN_FILE" ]]; then
+        if ! PRE_REGISTERED_CHILD_TOKEN="$(read_token_file "$CHILD_TOKEN_FILE")"; then
+            echo "Error: --child-token-file is unreadable or empty: $CHILD_TOKEN_FILE" >&2
+            exit 1
+        fi
+    else
+        PRE_REGISTERED_CHILD_TOKEN="$(load_child_state_token "$CHILD_NAME" 2>/dev/null || true)"
+    fi
+    if [[ -z "$PRE_REGISTERED_CHILD_TOKEN" ]]; then
+        echo "Error: pre-registered child token is required for $CHILD_NAME" >&2
+        echo "  Generate/register the child with a child-owned token, then pass --child-token-file <path>." >&2
+        echo "  Existing state fallback: $CHILD_STATE_DIR/$CHILD_NAME.json" >&2
+        exit 1
+    fi
+    write_child_state "$CHILD_NAME" "$PROJECT_KEY" "$PRE_REGISTERED_CHILD_TOKEN"
 
     # --worktree が指定されていれば worktree を作って WORK_DIR を上書き
     if [[ "$USE_WORKTREE" == true ]]; then
@@ -395,9 +474,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
     fi
-    if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
-        TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$CHILD_REGISTRATION_TOKEN")
-    fi
+    TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$PRE_REGISTERED_CHILD_TOKEN")
 
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).

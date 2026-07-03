@@ -45,10 +45,10 @@ PY
 )"
   local auth=()
   [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $MCP_AGENT_MAIL_TOKEN")
-  curl -sf --max-time 30 -X POST "$mcp_url" \
+  printf '%s' "$payload" | curl -sf --max-time 30 -X POST "$mcp_url" \
     -H "Content-Type: application/json" -H "Accept: application/json" -H "Connection: close" \
     "${auth[@]}" \
-    -d "$payload" 2>/dev/null
+    --data-binary @- 2>/dev/null
 }
 
 ags_mcp_has_error() {
@@ -199,6 +199,30 @@ ags_store_registration_token() {
   chmod 600 "$token_file" 2>/dev/null || true
 }
 
+ags_apply_contact_policy() {
+  local project_key="$1" agent_name="$2" registration_token="${3:-}" policy
+  [[ -n "$project_key" && -n "$agent_name" && -n "$registration_token" ]] || return 0
+  if [[ ${AGENTSTACK_CONTACT_POLICY+x} ]]; then
+    policy="$AGENTSTACK_CONTACT_POLICY"
+  else
+    policy="open"
+  fi
+  [[ -n "$policy" ]] || return 0
+  policy="$(printf '%s' "$policy" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "$policy" in
+    closed)
+      policy="contacts_only"
+      ;;
+    skip|none|off|disabled)
+      return 0
+      ;;
+  esac
+  ags_mcp_call "set_contact_policy" \
+    "project_key=$project_key" \
+    "agent_name=$agent_name" \
+    "policy=$policy" >/dev/null 2>&1 || true
+}
+
 ags_agent_exists() {
   local project_key="$1" agent_name="$2" response
   response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$agent_name" 2>/dev/null || true)"
@@ -296,6 +320,7 @@ ags_register_session() {
     AGS_REGISTERED_REGISTRATION_TOKEN="$registered_token"
     export CHILD_REGISTRATION_TOKEN
     ags_store_registration_token "$registered" "$registered_token" || true
+    ags_apply_contact_policy "$project_key" "$registered" "$registered_token"
   fi
   AGS_REGISTERED_AGENT_NAME="$registered"
   printf '%s\n' "$registered"

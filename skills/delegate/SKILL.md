@@ -1,7 +1,7 @@
 ---
 name: delegate
 description: Delegate a bounded task to a child Claude or Codex agent, prepare risk-aware instructions, spawn the child, annotate it in the dashboard, monitor progress, and verify completion.
-allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__mcp-agent-mail__send_message, mcp__mcp-agent-mail__fetch_inbox, mcp__mcp-agent-mail__register_agent, mcp__mcp-agent-mail__ensure_project, mcp__mcp-agent-mail__file_reservation_paths, mcp__mcp-agent-mail__release_file_reservations, mcp__mcp-agent-mail__renew_file_reservations
+allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__mcp-agent-mail__send_message, mcp__mcp-agent-mail__fetch_inbox, mcp__mcp-agent-mail__register_agent, mcp__mcp-agent-mail__ensure_project, mcp__mcp-agent-mail__set_contact_policy, mcp__mcp-agent-mail__macro_contact_handshake, mcp__mcp-agent-mail__respond_contact, mcp__mcp-agent-mail__file_reservation_paths, mcp__mcp-agent-mail__release_file_reservations, mcp__mcp-agent-mail__renew_file_reservations
 user-invocable: true
 ---
 
@@ -19,10 +19,12 @@ Use these variables instead of hard-coded personal paths:
 - `AGENTSTACK_PROJECT_KEY`, the project or vault path shared by all cooperating agents
 - `PROJECT_KEY`, usually injected by `spawn_child.sh` and expected to match `AGENTSTACK_PROJECT_KEY`
 - `AGENTSTACK_PORT`, used by the dashboard annotation API
+- `AGENTSTACK_PREREGISTER_CHILD`, defaulting to `${AGENTSTACK_HOME}/bin/agentstack-preregister-child`
 - `AGENTSTACK_SPAWN_SCRIPT`, defaulting to `${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}`
 - `AGENTSTACK_RUNTIME_DIR`, used by monitor state
 
 If the child runs outside the project directory, explicitly tell it to use `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY` for `ensure_project`, `register_agent`, `fetch_inbox`, and completion messages. Do not let the child infer the project from its current working directory.
+`AGENTSTACK_PROJECT_KEY` must be set before spawning. It is the agent-mail project identity and may be different from the code worktree or the child's current working directory.
 
 ## Naming Rules
 
@@ -91,20 +93,40 @@ Task message template:
 
 Use generic task examples such as code review, API migration, test-suite repair, documentation cleanup, or data import validation. Avoid embedding organization-specific project lore in the delegated task unless the current user request requires it.
 
-## 3. Register, Reserve, And Send
+## 3. Register, Open Contact, Reserve, And Send
 
 Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
 
-1. `ensure_project(project_key or human_key)` using `$AGENTSTACK_PROJECT_KEY`, not a random cwd.
-2. Pick an available `Adjective-Scientist` name and call `register_agent(project_key, program, model, name, task_description)`.
-3. Reserve file paths if the task edits shared resources.
-4. `send_message(project_key, sender_name=<parent>, to=[<child>], subject=..., body_md=..., importance="high")`.
+1. Verify `AGENTSTACK_PROJECT_KEY` is set to the shared project key, not a random cwd.
+2. Pick an available `Adjective-Scientist` child name.
+3. Pre-register the child with a child-owned token and write that token to a temporary 0600 file. Prefer the helper so the parent LLM never sees the token:
+
+   ```bash
+   CHILD_TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/agentstack-child-token.XXXXXX")"
+   chmod 600 "$CHILD_TOKEN_FILE"
+   trap 'rm -f "$CHILD_TOKEN_FILE"' EXIT
+
+   CHILD_NAME="$("${AGENTSTACK_PREREGISTER_CHILD:-$AGENTSTACK_HOME/bin/agentstack-preregister-child}" \
+     --project-key "$AGENTSTACK_PROJECT_KEY" \
+     --name "<child-name>" \
+     --program "claude-code" \
+     --model "<model-name>" \
+     --task-description "<task summary>" \
+     --token-file-out "$CHILD_TOKEN_FILE")"
+   ```
+
+   For a Codex child, pass `--program "codex" --model "gpt-5.5"`.
+   Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
+4. Ensure the child can receive the first task message. The stack registration helper sets the child's `contact_policy` to `open` by default. If `AGENTSTACK_CONTACT_POLICY` disables that default, complete a contact handshake or approval before `send_message`.
+5. Reserve file paths if the task edits shared resources.
+6. `send_message(project_key, sender_name=<parent>, to=[<child>], subject=..., body_md=..., importance="high")`.
 
 Then spawn the pre-registered child:
 
 ```bash
 PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
   --pre-registered "<child-name>" \
+  --child-token-file "$CHILD_TOKEN_FILE" \
   "<task summary>" "<working-directory>"
 ```
 
@@ -113,8 +135,11 @@ For a Codex child:
 ```bash
 PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
   --pre-registered "<child-name>" --codex \
+  --child-token-file "$CHILD_TOKEN_FILE" \
   "<task summary>" "<working-directory>"
 ```
+
+`spawn_child.sh --pre-registered` will refuse to start without a child-owned token file or existing `AGENTSTACK_RUNTIME_DIR/child-agents/<child-name>.json` state. It intentionally ignores any ambient `CHILD_REGISTRATION_TOKEN` from the parent so the parent's owner token is not forwarded to the child.
 
 For fallback direct mode when MCP tools are unavailable:
 

@@ -52,6 +52,9 @@ Details and exceptions for the first calls:
   read-only tools such as `fetch_inbox` or `whois` require the original
   registration token unless this MCP session has already authenticated as that
   agent. Reading only is not token-free.
+- Stack registration helpers set your own `contact_policy` to `open` by default
+  after token-backed registration. Set `AGENTSTACK_CONTACT_POLICY=auto`,
+  `contacts_only`, `block_all`, or an empty value to override that behavior.
 - If a token error such as `requires registration_token` occurs, try manual
   recovery before reporting failure:
 
@@ -61,11 +64,19 @@ Details and exceptions for the first calls:
 
   Success prints `agentstack-reregister: registered <name>` and exits 0. If it
   succeeds, skip `register_agent` and call `fetch_inbox`.
-- The runtime token file is
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`. It is
-  acceptable for stack helpers to use this token file. Do not read agent-mail's
-  `storage.sqlite3` directly; the DB is outside the recovery boundary and ad
-  hoc DB reads risk stale paths, token leakage, and identity splits.
+- Top-level sessions store their runtime token at
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`.
+  Delegated children also use
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json`.
+  `agentstack-reregister` reads both locations. It is acceptable for stack
+  helpers to use these token files. Do not read agent-mail's `storage.sqlite3`
+  directly; the DB is outside the recovery boundary and ad hoc DB reads risk
+  stale paths, token leakage, and identity splits.
+- If `CHILD_REGISTRATION_TOKEN` is present but re-registration still fails,
+  suspect a wrong token, including a parent token accidentally mixed into a
+  pre-registered child. Retry with `agentstack-reregister`; if it cannot restore
+  the correct token from runtime state, report the mismatch instead of creating
+  a new alias.
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the
   missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.

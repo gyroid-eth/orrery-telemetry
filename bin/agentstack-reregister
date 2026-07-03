@@ -3,8 +3,9 @@
 #
 # Usage: agentstack-reregister <agent-name> [program] [model]
 #
-# The token is restored internally from CHILD_REGISTRATION_TOKEN, the persisted
-# runtime token file, or child-agent runtime state. Nothing secret is printed.
+# The token is restored internally from child-agent runtime state for delegated
+# children, otherwise from CHILD_REGISTRATION_TOKEN or the persisted runtime
+# token file. Nothing secret is printed.
 set -euo pipefail
 set +x 2>/dev/null || true
 
@@ -74,12 +75,19 @@ project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 
 ags_mail_load_token
 
-registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+child_state_token="$(load_child_state_token "$agent_name" 2>/dev/null || true)"
+registration_token=""
+if [[ -n "${PARENT_AGENT:-}" && -n "$child_state_token" ]]; then
+  registration_token="$child_state_token"
+fi
+if [[ -z "$registration_token" ]]; then
+  registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+fi
 if [[ -z "$registration_token" ]]; then
   registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
 fi
-if [[ -z "$registration_token" ]]; then
-  registration_token="$(load_child_state_token "$agent_name" 2>/dev/null || true)"
+if [[ -z "$registration_token" && -n "$child_state_token" ]]; then
+  registration_token="$child_state_token"
 fi
 [[ -n "$registration_token" ]] || die "registration token not available for $agent_name"
 
