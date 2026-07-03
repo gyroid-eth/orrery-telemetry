@@ -375,3 +375,53 @@ ags_record_managed_agent() {
   mkdir -p "$(dirname "$managed_file")" 2>/dev/null || true
   grep -qxF "$agent_name" "$managed_file" 2>/dev/null || echo "$agent_name" >> "$managed_file"
 }
+
+# --- macOS TCC (privacy-protected folder) access guard ------------------------
+# When an agent's working directory sits inside a macOS privacy-protected folder
+# (~/Desktop, ~/Downloads, ~/Documents by default) AND the agent cannot read
+# files there, macOS is denying access based on the *terminal identity* this
+# process inherited — not on file permissions. On a delegate chain that identity
+# propagates from the ancestor that launched the ROOT agent: if that ancestor ran
+# in a terminal WITHOUT Full Disk Access (e.g. Terminal.app), every descendant
+# inherits it (via the env carried into `tmux new-session`) and hits a bare
+# `EPERM` ("Operation not permitted") that is almost impossible to diagnose,
+# because the tmux server may be owned by an FDA terminal (e.g. Ghostty) while an
+# individual pane still carries the non-FDA identity.
+#
+# This is a DETECT-AND-WARN guard only: it never blocks a spawn and it fires only
+# on an actual read failure inside a protected folder (a functional probe → zero
+# false positives when access works). Override the protected-dir list with
+# AGENTSTACK_TCC_DIRS (space-separated) or disable with AGENTSTACK_TCC_GUARD=0.
+ags_tcc_dir_is_protected() {
+  local dir="$1" p
+  local dirs="${AGENTSTACK_TCC_DIRS:-$HOME/Desktop $HOME/Downloads $HOME/Documents}"
+  for p in $dirs; do
+    [[ -n "$p" ]] || continue
+    [[ "$dir" == "$p" || "$dir" == "$p"/* ]] && return 0
+  done
+  return 1
+}
+
+ags_warn_tcc_access() {
+  local dir="$1" probe
+  [[ "${AGENTSTACK_TCC_GUARD:-1}" != "0" ]] || return 0
+  [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] || return 0
+  [[ -n "$dir" && -d "$dir" ]] || return 0
+  ags_tcc_dir_is_protected "$dir" || return 0
+  # Functional probe: read one byte from the first regular file in the dir.
+  probe="$(find "$dir" -maxdepth 1 -type f 2>/dev/null | head -1)"
+  [[ -n "$probe" ]] || return 0
+  head -c 1 "$probe" >/dev/null 2>&1 && return 0   # readable → no TCC problem
+  {
+    printf '\n⚠️  agentstack: cannot read files under a macOS privacy-protected folder:\n'
+    printf '      %s\n' "$dir"
+    printf '    This agent inherited a terminal identity WITHOUT access to that folder\n'
+    printf '    (typically a non-Full-Disk-Access terminal such as Terminal.app somewhere up\n'
+    printf '    the launch chain). Files here will fail with "Operation not permitted" (EPERM).\n'
+    printf '    Fix (either one):\n'
+    printf '      • Relaunch the ROOT agent from a Full-Disk-Access terminal (e.g. Ghostty), or\n'
+    printf '      • Move the project outside ~/Desktop, ~/Downloads, ~/Documents.\n'
+    printf "    A running agent's access context cannot be changed in place — recreate the session.\n\n"
+  } >&2
+  return 0
+}

@@ -87,6 +87,9 @@ if [[ -n "${TMUX:-}" ]]; then
     "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
   fi
   cd "$DIR"
+  # Warn (do not block) if this pane can't read a macOS privacy-protected project
+  # dir — the child claude will inherit the same EPERM otherwise-undiagnosable.
+  declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$DIR"
   exec "$CLAUDE_BIN"
 fi
 

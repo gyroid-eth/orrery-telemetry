@@ -461,6 +461,39 @@ Token diagnosis quick flow:
 | Stale token | Runtime token exists but no longer matches the server identity | Report stale token and restart/re-register from the operator-approved token source |
 | Name conflict | The expected name belongs to another token or agent | Stop; do not create a new alias or hard-delete without explicit operator approval |
 
+### Files in the project fail with `EPERM` / "Operation not permitted" (macOS)
+
+Symptoms:
+
+- An agent — often a delegated child, while its siblings work fine — cannot read
+  existing files under the project directory. Reads fail with a bare
+  `EPERM: operation not permitted`, but only for a project located under
+  `~/Desktop`, `~/Documents`, or `~/Downloads`. Files elsewhere (`~/`, other
+  paths) read normally, and the same file is readable from a plain shell.
+
+Cause:
+
+- Those folders are macOS **privacy-protected (TCC)** locations. Access is decided
+  by the *terminal identity* of the process, not by file permissions. `agent-start`
+  and `spawn_child.sh` launch agents with `tmux new-session`, which carries the
+  caller's environment (including `__CFBundleIdentifier` / `TERM_PROGRAM`) into the
+  child. If the **root** agent was launched from a terminal *without* Full Disk
+  Access (e.g. Terminal.app), that identity propagates down the entire delegate
+  chain, so descendants are judged as that non-FDA app and denied — even when the
+  tmux server itself is owned by an FDA terminal such as Ghostty.
+
+Fix (either one):
+
+- Launch the **root** agent from a Full-Disk-Access terminal (e.g. Ghostty) so the
+  whole chain inherits an FDA identity, **or**
+- Move the project outside `~/Desktop`, `~/Downloads`, `~/Documents`.
+
+A running agent's access context cannot be changed in place; recreate the session
+(`tmux kill-server`, then relaunch from the FDA terminal). The launchers print a
+one-time warning when they detect this condition; set `AGENTSTACK_TCC_GUARD=0` to
+silence it, or `AGENTSTACK_TCC_DIRS` to override which folders are treated as
+protected.
+
 ### Mouse wheel scrolls the terminal, not tmux scrollback
 
 Every agent runs **inside a tmux session**, so to scroll back through an

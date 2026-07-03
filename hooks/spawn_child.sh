@@ -69,6 +69,14 @@ if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
 fi
 REREGISTER_HELPER="${AGENTSTACK_HOME_DIR:+$AGENTSTACK_HOME_DIR/bin/agentstack-reregister}"
 
+# Source the shared register lib early (function definitions only — no side
+# effects) so the macOS TCC access guard is available in every launch path,
+# including pre-registered mode which returns before the rest of the script.
+if ! declare -F ags_warn_tcc_access >/dev/null 2>&1; then
+    _ags_reglib="${AGENTSTACK_REGISTER_LIB:-$AGENTSTACK_HOME_DIR/bin/lib/agentstack-register.sh}"
+    [[ -f "$_ags_reglib" ]] && . "$_ags_reglib" 2>/dev/null || true
+fi
+
 get_agentstack_token() {
     if [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]]; then
         printf '%s' "$MCP_AGENT_MAIL_TOKEN"
@@ -464,6 +472,10 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         mkdir -p "$(dirname "$MANAGED_FILE")"
         echo "$CHILD_NAME" >> "$MANAGED_FILE"
     fi
+
+    # Warn (do not block) if the child's workdir is a macOS privacy-protected
+    # folder this process can't read — turns an undiagnosable EPERM into advice.
+    declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR"
 
     # Create tmux session and optionally open a terminal window.
     # CLAUDECODE=1 guards the child session's interactive shell against destructive
@@ -1053,6 +1065,10 @@ if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then
     mkdir -p "$(dirname "$MANAGED_FILE")"
     echo "$CHILD_NAME" >> "$MANAGED_FILE"
 fi
+
+# Warn (do not block) if the child's workdir is a macOS privacy-protected folder
+# this process can't read — turns an undiagnosable EPERM into actionable advice.
+declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR"
 
 # --- 5. 新しいtmuxセッションで子エージェントを起動 ---
 # CLAUDECODE=1 guards the child session's interactive shell against destructive
