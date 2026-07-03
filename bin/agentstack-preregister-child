@@ -118,14 +118,25 @@ fi
 registered="$(printf '%s' "$register_result" | ags_extract_agent_name)"
 [[ -n "$registered" ]] || die "could not read registered child name"
 
+# The token the child must present is the one the SERVER persisted, not the one
+# we sent. Stock mcp-agent-mail ignores the client-supplied registration_token
+# and mints its own, returning it in the response; saving our sent token would
+# leave the child holding a token the server never stored (auth fails on every
+# register/fetch/whois). Prefer the server-returned token, falling back to our
+# sent token only when the server does not echo one (e.g. lenient variants that
+# adopt the supplied token but omit it from the response). This matches the
+# mainline ags_register_session behavior.
+effective_token="$(printf '%s' "$register_result" | ags_extract_registration_token)"
+[[ -n "$effective_token" ]] || effective_token="$child_token"
+
 token_dir="$(dirname "$token_file_out")"
 mkdir -p "$token_dir" || die "could not create token file directory: $token_dir"
 tmp_file="${token_file_out}.$$"
-( umask 077 && printf '%s' "$child_token" > "$tmp_file" ) || die "could not write token file"
+( umask 077 && printf '%s' "$effective_token" > "$tmp_file" ) || die "could not write token file"
 mv "$tmp_file" "$token_file_out" || die "could not install token file"
 chmod 600 "$token_file_out" 2>/dev/null || true
 
-ags_store_registration_token "$registered" "$child_token" || true
-ags_apply_contact_policy "$project_key" "$registered" "$child_token"
+ags_store_registration_token "$registered" "$effective_token" || true
+ags_apply_contact_policy "$project_key" "$registered" "$effective_token"
 
 printf '%s\n' "$registered"

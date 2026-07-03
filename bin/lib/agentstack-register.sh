@@ -52,13 +52,31 @@ PY
 }
 
 ags_mcp_has_error() {
+  # Exit 0 (== "has error") when the MCP response signals failure at EITHER the
+  # JSON-RPC layer (top-level "error") OR the tool layer. A tool failure comes
+  # back as a normal JSON-RPC result with result.isError == true and a
+  # content[].text like "Error calling tool '...': ...", which a top-level
+  # "error" check alone silently passes through.
   python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-sys.exit(0 if data.get("error") else 1)
+if data.get("error"):
+    sys.exit(0)
+result = data.get("result") if isinstance(data, dict) else None
+if isinstance(result, dict):
+    if result.get("isError") is True:
+        sys.exit(0)
+    content = result.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text.startswith("Error calling tool"):
+                    sys.exit(0)
+sys.exit(1)
 '
 }
 
@@ -217,10 +235,24 @@ ags_apply_contact_policy() {
       return 0
       ;;
   esac
-  ags_mcp_call "set_contact_policy" \
+  # Try WITH the owner token first: stock mcp-agent-mail gates set_contact_policy
+  # on the agent's registration_token, so omitting it makes the call fail and
+  # (previously with a bare || true) silently leave the policy at the server
+  # default instead of 'open'. But older/lenient servers whose set_contact_policy
+  # signature has no registration_token param reject the extra kwarg — so if the
+  # token-bearing call errors, retry without it. Both paths are best-effort.
+  local resp
+  resp="$(ags_mcp_call "set_contact_policy" \
     "project_key=$project_key" \
     "agent_name=$agent_name" \
-    "policy=$policy" >/dev/null 2>&1 || true
+    "policy=$policy" \
+    "registration_token=$registration_token" 2>/dev/null)"
+  if [[ -z "$resp" ]] || printf '%s' "$resp" | ags_mcp_has_error; then
+    ags_mcp_call "set_contact_policy" \
+      "project_key=$project_key" \
+      "agent_name=$agent_name" \
+      "policy=$policy" >/dev/null 2>&1 || true
+  fi
 }
 
 ags_agent_exists() {
