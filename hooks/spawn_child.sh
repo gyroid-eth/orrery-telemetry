@@ -236,7 +236,11 @@ if [[ -n "$WORKTREE_BASE_REV" && "$USE_WORKTREE" != true ]]; then
 fi
 
 load_child_state_token() {
-    local agent_name="$1" state_file="$CHILD_STATE_DIR/$agent_name.json"
+    # Split declaration: bash 3.2 (macOS system bash) does not make an
+    # earlier name in the same `local` statement visible to a later
+    # initializer, so a combined line trips `set -u` (agent_name: unbound).
+    local agent_name="$1"
+    local state_file="$CHILD_STATE_DIR/$agent_name.json"
     [[ -f "$state_file" ]] || return 1
     python3 - "$state_file" <<'PY'
 import json
@@ -262,7 +266,10 @@ read_token_file() {
 }
 
 write_child_state() {
-    local agent_name="$1" project_key="$2" registration_token="$3" state_file="$CHILD_STATE_DIR/$agent_name.json"
+    # Split declaration (see load_child_state_token): bash 3.2 can't reference
+    # agent_name from a later initializer in the same `local` statement.
+    local agent_name="$1" project_key="$2" registration_token="$3"
+    local state_file="$CHILD_STATE_DIR/$agent_name.json"
     mkdir -p "$CHILD_STATE_DIR"
     python3 - "$agent_name" "$project_key" "$registration_token" "$state_file" <<'PY'
 import json
