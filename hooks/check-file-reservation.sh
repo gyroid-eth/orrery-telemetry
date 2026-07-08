@@ -70,6 +70,40 @@ get_agentstack_token() {
     return 1
 }
 
+# The bearer above is the server-wide HTTP_BEARER_TOKEN, which authorizes the
+# HTTP transport but does NOT prove ownership of a specific agent. Stock
+# mcp-agent-mail is token-strict for existing names: renew_file_reservations /
+# file_reservation_paths require the agent's own registration_token as a *tool
+# argument* (the short-lived HTTP session this hook opens is never authenticated
+# as the agent). Without it, renew returns renewed=0 and this hook blocks a
+# Write/Edit even though the agent holds a valid reservation. Resolve the
+# per-agent token from the same runtime files the launchers write.
+get_agent_registration_token() {
+    local name="$1" key state_file token_file
+    [[ -n "$name" ]] || return 0
+    # Delegated children store their token in child-agents/<name>.json.
+    state_file="$RUNTIME_DIR/child-agents/$name.json"
+    if [[ -f "$state_file" ]]; then
+        python3 - "$state_file" <<'PY' 2>/dev/null && return 0
+import json, sys
+try:
+    t = json.load(open(sys.argv[1], encoding="utf-8")).get("registration_token")
+except Exception:
+    t = None
+if isinstance(t, str) and t:
+    print(t)
+PY
+    fi
+    # Top-level sessions store it in agent_token_<sanitized-name>.
+    key="$(printf '%s' "$name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+    token_file="$RUNTIME_DIR/agent_token_$key"
+    if [[ -f "$token_file" ]]; then
+        tr -d '[:space:]' < "$token_file" 2>/dev/null
+        return 0
+    fi
+    return 0
+}
+
 # Read tool input JSON from stdin
 TOOL_INPUT=$(cat)
 
@@ -145,11 +179,16 @@ esac
 TOKEN=$(get_agentstack_token 2>/dev/null || true)
 [ -z "$TOKEN" ] && exit 0
 
+# Resolve this agent's own registration_token (tool argument) so token-strict
+# servers accept the renew/acquire calls below. Empty on lenient servers or when
+# no runtime token exists — the calls then behave exactly as before.
+REG_TOKEN="$(get_agent_registration_token "$AGENT" 2>/dev/null || true)"
+
 # Check existing reservation via renew_file_reservations (read-only: only extends existing ones)
 # If renewed=0, the agent has no pre-existing reservation for this path → block
 # Pass both relative and absolute paths to handle reservations stored in either format
 ABS_PATH="$FILE_PATH"
-RESPONSE=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" \
+RESPONSE=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" QUERY_REG_TOKEN="$REG_TOKEN" \
     QUERY_ABS_PATH="$ABS_PATH" QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
     QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
     python3 -c "
@@ -160,6 +199,7 @@ agent    = os.environ['QUERY_AGENT']
 rel_path = unicodedata.normalize('NFC', os.environ['QUERY_REL_PATH'])
 abs_path = unicodedata.normalize('NFC', os.environ['QUERY_ABS_PATH'])
 token    = os.environ.get('QUERY_TOKEN', '')
+reg_token = os.environ.get('QUERY_REG_TOKEN', '')
 url      = os.environ.get('QUERY_URL', 'http://127.0.0.1:8765/mcp')
 extend_seconds = int(os.environ.get('QUERY_EXTEND_SECONDS', '900'))
 
@@ -169,18 +209,21 @@ if abs_path != rel_path:
     paths.append(abs_path)
 
 # Use renew_file_reservations: only renews existing reservations, never creates new ones
+args = {
+    'project_key': project_key,
+    'agent_name': agent,
+    'paths': paths,
+    'extend_seconds': extend_seconds
+}
+if reg_token:
+    args['registration_token'] = reg_token
 payload = json.dumps({
     'jsonrpc': '2.0',
     'id': '1',
     'method': 'tools/call',
     'params': {
         'name': 'renew_file_reservations',
-        'arguments': {
-            'project_key': project_key,
-            'agent_name': agent,
-            'paths': paths,
-            'extend_seconds': extend_seconds
-        }
+        'arguments': args
     }
 }).encode()
 
@@ -212,7 +255,7 @@ if [ "$RENEWED" = "0" ]; then
     # Retry once after 500ms — intermittent failures observed where renewed=0
     # despite active reservation (possible async commit timing issue)
     sleep 0.5
-    RESPONSE2=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" \
+    RESPONSE2=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" QUERY_REG_TOKEN="$REG_TOKEN" \
         QUERY_ABS_PATH="$ABS_PATH" QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
         QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
         python3 -c "
@@ -223,6 +266,7 @@ agent    = os.environ['QUERY_AGENT']
 rel_path = unicodedata.normalize('NFC', os.environ['QUERY_REL_PATH'])
 abs_path = unicodedata.normalize('NFC', os.environ['QUERY_ABS_PATH'])
 token    = os.environ.get('QUERY_TOKEN', '')
+reg_token = os.environ.get('QUERY_REG_TOKEN', '')
 url      = os.environ.get('QUERY_URL', 'http://127.0.0.1:8765/mcp')
 extend_seconds = int(os.environ.get('QUERY_EXTEND_SECONDS', '900'))
 
@@ -230,18 +274,21 @@ paths = [rel_path]
 if abs_path != rel_path:
     paths.append(abs_path)
 
+args = {
+    'project_key': project_key,
+    'agent_name': agent,
+    'paths': paths,
+    'extend_seconds': extend_seconds
+}
+if reg_token:
+    args['registration_token'] = reg_token
 payload = json.dumps({
     'jsonrpc': '2.0',
     'id': '1',
     'method': 'tools/call',
     'params': {
         'name': 'renew_file_reservations',
-        'arguments': {
-            'project_key': project_key,
-            'agent_name': agent,
-            'paths': paths,
-            'extend_seconds': extend_seconds
-        }
+        'arguments': args
     }
 }).encode()
 
@@ -276,7 +323,7 @@ except:
     # file_reservation_paths will fail if another agent holds a conflicting reservation.
     _FR_LOG="$RUNTIME_DIR/logs/file_reservation_failures.log"
     mkdir -p "$(dirname "$_FR_LOG")" 2>/dev/null || true
-    ACQUIRE_RESPONSE=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" \
+    ACQUIRE_RESPONSE=$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" QUERY_REG_TOKEN="$REG_TOKEN" \
         QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
         python3 -c "
 import os, json, urllib.request, unicodedata
@@ -285,22 +332,26 @@ project_key = os.environ['QUERY_PROJECT_KEY']
 agent    = os.environ['QUERY_AGENT']
 rel_path = unicodedata.normalize('NFC', os.environ['QUERY_REL_PATH'])
 token    = os.environ.get('QUERY_TOKEN', '')
+reg_token = os.environ.get('QUERY_REG_TOKEN', '')
 url      = os.environ.get('QUERY_URL', 'http://127.0.0.1:8765/mcp')
 extend_seconds = int(os.environ.get('QUERY_EXTEND_SECONDS', '900'))
 
+args = {
+    'project_key': project_key,
+    'agent_name': agent,
+    'paths': [rel_path],
+    'ttl_seconds': extend_seconds,
+    'reason': 'auto-acquired by check-file-reservation hook'
+}
+if reg_token:
+    args['registration_token'] = reg_token
 payload = json.dumps({
     'jsonrpc': '2.0',
     'id': '1',
     'method': 'tools/call',
     'params': {
         'name': 'file_reservation_paths',
-        'arguments': {
-            'project_key': project_key,
-            'agent_name': agent,
-            'paths': [rel_path],
-            'ttl_seconds': extend_seconds,
-            'reason': 'auto-acquired by check-file-reservation hook'
-        }
+        'arguments': args
     }
 }).encode()
 
