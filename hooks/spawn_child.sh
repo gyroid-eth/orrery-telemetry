@@ -905,6 +905,20 @@ if [[ -z "$CHILD_NAME" ]]; then
     exit 1
 fi
 
+# Adopt the token the SERVER persisted, not the one we sent. Stock
+# mcp-agent-mail ignores the client-supplied registration_token and mints its
+# own, returning it in the response; keeping our sent token would leave the
+# child holding a token the server never stored, so its reregister/fetch_inbox
+# all fail with "Invalid registration_token". Fall back to the sent token only
+# when the server omits one (lenient variants). Every downstream use — state
+# file, cleanup retire, and the child's env — reads $CHILD_REGISTRATION_TOKEN,
+# so reassigning it here fixes them all. Mirrors agentstack-preregister-child
+# and ags_register_session.
+if declare -F ags_extract_registration_token >/dev/null 2>&1; then
+    _registered_token="$(printf '%s' "$REGISTER_RESULT" | ags_extract_registration_token)"
+    [[ -n "$_registered_token" ]] && CHILD_REGISTRATION_TOKEN="$_registered_token"
+fi
+
 mkdir -p "$CHILD_STATE_DIR"
 python3 -c "
 import json, pathlib, sys
