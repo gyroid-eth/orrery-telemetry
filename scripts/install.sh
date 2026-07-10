@@ -431,6 +431,28 @@ path.chmod(0o600)
 PY
     fi
   fi
+
+  apply_agent_mail_patches
+}
+
+# Apply bundled hardening patches to the freshly cloned/reused upstream agent-mail.
+# Each patcher is idempotent (a no-op once applied) and fails soft: if upstream has
+# drifted so an anchor no longer matches, it leaves the file untouched and we warn
+# instead of aborting the install.
+apply_agent_mail_patches() {
+  local patch_dir="$REPO_ROOT/scripts/patches"
+  [[ -d "$patch_dir" ]] || return 0
+  local patcher
+  for patcher in "$patch_dir"/agent-mail-*.py; do
+    [[ -e "$patcher" ]] || continue
+    plan "apply agent-mail patch $(basename "$patcher") to $MAIL_DIR"
+    if [[ "$DRY_RUN" == true ]]; then
+      continue
+    fi
+    if ! python3 "$patcher" "$MAIL_DIR"; then
+      warn "agent-mail patch $(basename "$patcher") did not apply (upstream may have changed); continuing"
+    fi
+  done
 }
 
 render_launchd_plist() {

@@ -107,6 +107,24 @@ with; restart those Claude/Codex sessions to pick up new launcher behavior.
 This upgrade does not rely on removed payload files, so no stale-file cleanup
 is needed.
 
+### Bundled agent-mail patches
+
+`install.sh` clones stock upstream agent-mail and then applies the small
+hardening patches under `scripts/patches/agent-mail-*.py` to that clone. Each
+patcher is idempotent (a no-op once applied, so reinstalls are safe) and fails
+soft — if upstream drifts so an anchor no longer matches, the file is left
+untouched and the install prints a warning instead of aborting.
+
+Currently bundled:
+
+- `agent-mail-git-walk-hang.py` — bounds file-reservation staleness evaluation
+  so a broad reservation (e.g. `runs/*refine*/**`) on a large repo can no longer
+  freeze the server. It caps glob expansion, skips git-history probing above a
+  match threshold (falling back to filesystem mtime + mail activity), batches the
+  remaining git lookup into a single `git log`, and runs the whole probe off the
+  event loop with a hard timeout. Restart the agent-mail service after install to
+  pick it up.
+
 ## Launching agents
 
 For the dashboard to list an agent and let you click-to-jump to it, the agent
