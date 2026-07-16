@@ -1,0 +1,26 @@
+# Paths are relative to the repository root. Directories are expanded recursively.
+dashboard/providers/__init__.py
+dashboard/providers/base.py
+dashboard/providers/codex_app.py
+integrations/codex_app/README.md
+integrations/codex_app/env.sh.sample
+integrations/codex_app/export-manifest.txt
+integrations/codex_app/fixtures
+integrations/codex_app/launchd
+integrations/codex_app/plugin
+integrations/codex_app/pyproject.toml
+integrations/codex_app/schemas
+integrations/codex_app/src
+integrations/codex_app/tests
+schemas
+scripts/build-codex-app-marketplace.py
+scripts/doctor-codex-app-integration.sh
+scripts/export-component.sh
+scripts/install-codex-app-integration.sh
+scripts/run-codex-app-bridge.sh
+scripts/uninstall-codex-app-integration.sh
+tests/fixtures/codex-app-snapshot.json
+tests/test_codex_app_packaging.py
+tests/test_codex_app_plugin_hooks.py
+tests/test_codex_app_runtime_provider.py
+tests/test_codex_app_schemas.py

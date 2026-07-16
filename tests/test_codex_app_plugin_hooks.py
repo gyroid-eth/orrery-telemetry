@@ -26,7 +26,7 @@ def test_plugin_hooks_wire_every_p1_telemetry_event():
         assert handler["type"] == "command"
         assert handler["async"] is False
         assert handler["timeoutSec"] == 1
-        assert "$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py" in handler["command"]
+        assert handler["command"] == '"$PLUGIN_ROOT/scripts/run-hook.sh"'
 
 
 def test_plugin_hooks_do_not_wire_cold_wake():
@@ -45,9 +45,13 @@ def test_plugin_manifest_wires_relative_stdio_mcp_server():
     assert set(config["mcpServers"]) == {"agentstack"}
     server = config["mcpServers"]["agentstack"]
     assert server == {
-        "command": "python3",
-        "args": ["../src/agentstack_codex_app/mcp_server.py"],
+        "command": "/bin/bash",
+        "args": ["scripts/run-mcp.sh"],
         "cwd": ".",
     }
     assert "PLUGIN_ROOT" not in json.dumps(config)
     assert "PLUGIN_DATA" not in json.dumps(config)
+    for runner in ("run-hook.sh", "run-mcp.sh"):
+        path = PLUGIN / "scripts" / runner
+        assert path.is_file()
+        assert path.stat().st_mode & 0o111

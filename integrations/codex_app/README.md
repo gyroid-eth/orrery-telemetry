@@ -48,3 +48,38 @@ AGENTSTACK_CODEX_WAKE_SESSION_ID=<session-id> \
 python -m pytest -q -m integration \
   integrations/codex_app/tests/test_wake.py
 ```
+
+## Packaging
+
+The installer keeps source and generated state separate:
+
+- source is copied to `~/.agentstack/integrations/codex_app/`;
+- runtime state stays under `~/.agentstack/runtime/codex-app/`;
+- `env.sh` is generated with mode `0600` and contains references, not bearer
+  tokens;
+- the local marketplace snapshot contains a self-contained plugin cache bundle
+  with its Python source and schemas;
+- launchd uses `RunAtLoad` and `KeepAlive`, with logs in the runtime directory.
+
+Preview an install without touching Codex or launchd:
+
+```sh
+scripts/install-codex-app-integration.sh \
+  --dry-run --no-service --no-plugin \
+  --project-key /absolute/project \
+  --agent-mail-url http://127.0.0.1:8765/api/
+```
+
+After an approved install, diagnose it with:
+
+```sh
+~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration
+```
+
+Uninstall retains delivery/binding runtime state unless `--purge-data` is
+explicitly supplied. To build a public-review artifact through the mechanical
+allowlist and privacy gate:
+
+```sh
+scripts/export-component.sh codex-app /absolute/export/destination
+```
