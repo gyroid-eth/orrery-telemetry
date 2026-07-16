@@ -11,21 +11,31 @@ from pathlib import Path
 
 from agentstack_codex_app.agent_mail_client import AgentMailError, Registration
 from agentstack_codex_app.daemon import BridgeConfig, BridgeDaemon
+from agentstack_codex_app.delivery import DeliveryManager
 from agentstack_codex_app.hook_entry import forward_event
-from agentstack_codex_app.identity_store import external_id_for
-from agentstack_codex_app.snapshot import read_snapshot
+from agentstack_codex_app.identity_store import (
+    IdentityStore,
+    build_binding,
+    external_id_for,
+)
+from agentstack_codex_app.snapshot import SnapshotStore, read_snapshot, runtime_record
+from agentstack_codex_app.wake import WakeCoordinator, WakePolicy
 
 
 class FakeAgentMail:
-    def __init__(self):
+    def __init__(self, *, normalize_names=False):
         self.calls = []
         self.fail = False
+        self.normalize_names = normalize_names
 
     def register_agent(self, **kwargs):
         self.calls.append(kwargs)
         if self.fail:
             raise AgentMailError("offline")
-        return Registration(kwargs.get("agent_name") or "Calm-Noether", kwargs["registration_token"])
+        agent_name = kwargs.get("agent_name") or "Calm-Noether"
+        if self.normalize_names:
+            agent_name = "".join(character for character in agent_name if character.isalnum())
+        return Registration(agent_name, kwargs["registration_token"])
 
 
 class FakeWakeCoordinator:
@@ -34,6 +44,20 @@ class FakeWakeCoordinator:
 
     def tick(self, bindings):
         self.ticks.append(list(bindings))
+
+
+class FakeResumeProcess:
+    def poll(self):
+        return None
+
+
+class FakeResumeAdapter:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, session_id, messages, *, cwd=None):
+        self.calls.append((session_id, tuple(messages), cwd))
+        return FakeResumeProcess()
 
 
 def _config(tmp_path: Path) -> BridgeConfig:
@@ -103,6 +127,122 @@ def test_process_event_registers_once_and_reuses_stable_binding(tmp_path):
     assert token and token not in json.dumps(snapshot)
     assert len(mail.calls) == 1
     assert snapshot["state"] == "working"
+
+
+def test_registration_response_name_drives_binding_signal_and_delivery(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        signals_dir=tmp_path / "signals",
+        project_slug="example-project",
+    )
+    mail = FakeAgentMail(normalize_names=True)
+    daemon = BridgeDaemon(
+        config,
+        mail,
+        name_factory=lambda: "Wild-McClintock",
+    )
+
+    external_id = daemon.process_event(_event())
+    binding = daemon.identities.resolve(external_id)
+    assert binding["agent_name"] == "WildMcClintock"
+    assert read_snapshot(config.snapshot_path)["runtimes"][0]["agent_name"] == (
+        "WildMcClintock"
+    )
+
+    signal_dir = (
+        config.signals_dir
+        / "projects"
+        / "example-project"
+        / "agents"
+        / "WildMcClintock"
+    )
+    signal_dir.mkdir(parents=True)
+    (signal_dir / "7.signal").write_text(
+        json.dumps(
+            {
+                "project": "example-project",
+                "agent": "WildMcClintock",
+                "message": {
+                    "id": 7,
+                    "from": "SteelBoltzmann",
+                    "subject": "Canonical delivery",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert len(daemon._pending_signal_fingerprint(binding)) == 1
+
+    delivery = DeliveryManager(tmp_path / "delivery.sqlite3")
+    adapter = FakeResumeAdapter()
+    coordinator = WakeCoordinator(
+        delivery,
+        daemon.identities,
+        daemon.snapshots,
+        adapter,
+        signals_dir=config.signals_dir,
+        project_slug=lambda _: "example-project",
+        policy=WakePolicy(coalesce_seconds=0),
+    )
+    coordinator.tick([binding])
+
+    assert len(adapter.calls) == 1
+    assert delivery.rows()[0]["agent_name"] == "WildMcClintock"
+    assert delivery.rows()[0]["status"] == "leased"
+
+
+def test_worker_startup_reconciles_existing_binding_and_snapshot(tmp_path):
+    config = _config(tmp_path)
+    identities = IdentityStore(config.runtime_dir / "identity")
+    binding = identities.save(
+        build_binding(
+            session_id="session-existing",
+            agent_id=None,
+            agent_name="White-Meitner",
+            project_key="/workspace/example",
+            now="2026-01-01T00:00:00Z",
+        )
+    )
+    identities.store_owner_token(binding["external_id"], "owner-token")
+    snapshots = SnapshotStore(config.snapshot_path)
+    snapshots.upsert(
+        runtime_record(
+            binding,
+            {"cwd": "/workspace/example", "model": "gpt-example"},
+            state="waiting",
+            last_seen_at="2026-01-01T00:00:00Z",
+        )
+    )
+    daemon = BridgeDaemon(
+        config,
+        FakeAgentMail(normalize_names=True),
+        identity_store=identities,
+        snapshot_store=snapshots,
+    )
+    daemon._start_worker()
+    deadline = time.time() + 2
+    while (
+        identities.resolve(binding["external_id"])["agent_name"]
+        != "WhiteMeitner"
+        and time.time() < deadline
+    ):
+        time.sleep(0.01)
+    daemon.stop()
+
+    assert identities.resolve(binding["external_id"])["agent_name"] == "WhiteMeitner"
+    runtime = read_snapshot(config.snapshot_path)["runtimes"][0]
+    assert runtime["agent_name"] == "WhiteMeitner"
+    assert runtime["external_id"] == binding["external_id"]
+    assert runtime["last_seen_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_fresh_name_generator_matches_server_canonical_form(tmp_path):
+    daemon = BridgeDaemon(_config(tmp_path), FakeAgentMail())
+    external_id = daemon.process_event(_event())
+    agent_name = daemon.identities.resolve(external_id)["agent_name"]
+
+    assert "-" not in agent_name
+    assert agent_name.isalnum()
 
 
 def test_subagent_binding_records_root_parent(tmp_path):

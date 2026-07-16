@@ -209,6 +209,33 @@ class IdentityStore:
         record["last_seen_at"] = now or utc_now()
         return self.save(record)
 
+    def reconcile_agent_name(
+        self,
+        external_id: str,
+        agent_name: str,
+    ) -> dict[str, Any]:
+        """Adopt a server-confirmed name without opening general reassignment."""
+
+        record = self.resolve(external_id)
+        if record is None:
+            raise IdentityStoreError(f"unknown external_id: {external_id}")
+        candidate = validate_binding(dict(record, agent_name=agent_name))
+        if candidate["agent_name"] == record["agent_name"]:
+            return record
+        for other in self.list_bindings():
+            if (
+                other["external_id"] != external_id
+                and other["agent_name"] == candidate["agent_name"]
+            ):
+                raise IdentityStoreError(
+                    "server-confirmed agent_name is already bound locally"
+                )
+        _atomic_write(
+            self._binding_path(external_id),
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")) + "\n",
+        )
+        return candidate
+
     def store_owner_token(self, external_id: str, token: str) -> None:
         """Write an owner token separately from public binding metadata."""
 

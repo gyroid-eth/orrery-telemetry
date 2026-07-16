@@ -66,6 +66,54 @@ def test_existing_external_id_cannot_be_reassigned(tmp_path):
         store.save(hijack)
 
 
+def test_server_confirmed_name_can_be_reconciled_without_general_reassignment(
+    tmp_path,
+):
+    store = IdentityStore(tmp_path)
+    binding = store.save(
+        build_binding(
+            session_id="session-example",
+            agent_id=None,
+            agent_name="Wild-McClintock",
+            project_key="/workspace/example",
+        )
+    )
+
+    reconciled = store.reconcile_agent_name(
+        binding["external_id"],
+        "WildMcClintock",
+    )
+
+    assert reconciled["agent_name"] == "WildMcClintock"
+    assert reconciled["external_id"] == binding["external_id"]
+    assert reconciled["created_at"] == binding["created_at"]
+    with pytest.raises(IdentityStoreError, match="immutable"):
+        store.save(dict(reconciled, agent_name="QuietCurie"))
+
+
+def test_server_confirmed_name_cannot_alias_another_local_binding(tmp_path):
+    store = IdentityStore(tmp_path)
+    first = store.save(
+        build_binding(
+            session_id="session-one",
+            agent_id=None,
+            agent_name="Wild-McClintock",
+            project_key="/workspace/example",
+        )
+    )
+    store.save(
+        build_binding(
+            session_id="session-two",
+            agent_id=None,
+            agent_name="WildMcClintock",
+            project_key="/workspace/example",
+        )
+    )
+
+    with pytest.raises(IdentityStoreError, match="already bound"):
+        store.reconcile_agent_name(first["external_id"], "WildMcClintock")
+
+
 def test_list_bindings_skips_corrupt_files_and_never_reads_tokens(tmp_path):
     store = IdentityStore(tmp_path / "identity")
     binding = store.save(

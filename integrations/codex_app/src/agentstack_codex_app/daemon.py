@@ -28,7 +28,13 @@ from .hook_entry import (
     runtime_dir_from_env,
     validate_event,
 )
-from .identity_store import IdentityStore, build_binding, external_id_for, utc_now
+from .identity_store import (
+    IdentityStore,
+    IdentityStoreError,
+    build_binding,
+    external_id_for,
+    utc_now,
+)
 from .snapshot import SnapshotStore, runtime_record
 from .wake import (
     ExecResumeAdapter,
@@ -366,8 +372,10 @@ class BridgeDaemon:
                         else "Codex App root task"
                     ),
                 )
-                if registration.agent_name != binding["agent_name"]:
-                    raise AgentMailError("registered identity name changed")
+                binding = self._adopt_registered_name(
+                    binding,
+                    registration.agent_name,
+                )
             except AgentMailError:
                 self._update_snapshot(binding, normalized, state="degraded")
                 if enqueue_on_failure:
@@ -376,6 +384,67 @@ class BridgeDaemon:
 
         self._update_snapshot(binding, normalized, state=_state_for_event(normalized))
         return external_id
+
+    def reconcile_bindings(self) -> int:
+        """Refresh persisted identities from authoritative register responses."""
+
+        reconciled = 0
+        for binding in self.identities.list_bindings():
+            try:
+                owner_token = self.identities.load_owner_token(
+                    binding["external_id"]
+                )
+                if owner_token is None:
+                    continue
+                previous = self.snapshots.get(binding["external_id"])
+                registration = self.agent_mail.register_agent(
+                    project_key=binding["project_key"],
+                    model=(
+                        str(previous.get("model") or "unknown")
+                        if previous is not None
+                        else "unknown"
+                    ),
+                    registration_token=owner_token,
+                    agent_name=binding["agent_name"],
+                    task_description=(
+                        "Codex App subagent"
+                        if binding["agent_id"] is not None
+                        else "Codex App root task"
+                    ),
+                )
+                updated = self._adopt_registered_name(
+                    binding,
+                    registration.agent_name,
+                )
+            except (AgentMailError, IdentityStoreError, OSError, ValueError):
+                continue
+            if previous is not None and updated["agent_name"] != binding["agent_name"]:
+                self.snapshots.upsert(
+                    runtime_record(
+                        updated,
+                        previous,
+                        state=previous["state"],
+                        last_seen_at=previous["last_seen_at"],
+                        delivery=previous["delivery"],
+                    )
+                )
+            reconciled += 1
+        return reconciled
+
+    def _adopt_registered_name(
+        self,
+        binding: Mapping[str, Any],
+        registered_name: str,
+    ) -> dict[str, Any]:
+        try:
+            return self.identities.reconcile_agent_name(
+                binding["external_id"],
+                registered_name,
+            )
+        except IdentityStoreError as exc:
+            raise AgentMailError(
+                "register_agent returned an invalid or conflicting agent name"
+            ) from exc
 
     def replay_spool(self, path: Path, *, enqueue_on_failure: bool) -> int:
         """Move a JSONL spool aside, replay valid entries, then remove it."""
@@ -557,6 +626,12 @@ class BridgeDaemon:
         self._worker.start()
 
     def _worker_loop(self) -> None:
+        try:
+            self.reconcile_bindings()
+        except (OSError, ValueError):
+            # Startup reconciliation repairs old names but must not make the
+            # lifecycle socket unavailable when local state is corrupt.
+            pass
         next_retry = time.monotonic()
         next_wake = time.monotonic()
         while True:
@@ -658,7 +733,7 @@ def _state_for_event(event: Mapping[str, Any]) -> str:
 def _fresh_agent_name() -> str:
     """Create one non-descriptive adjective+scientist identity candidate."""
 
-    return f"{secrets.choice(_ADJECTIVES)}-{secrets.choice(_SCIENTISTS)}"
+    return f"{secrets.choice(_ADJECTIVES)}{secrets.choice(_SCIENTISTS)}"
 
 
 def _project_slug(project_key: str) -> str:
