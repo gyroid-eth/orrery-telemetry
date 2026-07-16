@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "external_id": "codex:session-example-001",
+  "surface": "codex-app",
+  "session_id": "session-example-001",
+  "agent_id": null,
+  "parent_external_id": null,
+  "agent_name": "Calm-Noether",
+  "project_key": "/workspace/example-project",
+  "program": "codex-app",
+  "created_at": "2026-01-01T00:00:00Z",
+  "last_seen_at": "2026-01-01T00:00:05Z"
+}

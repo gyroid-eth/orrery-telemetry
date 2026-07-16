@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "session_id": "session-example-001",
+  "agent_id": "agent-example-002",
+  "cwd": "/workspace/example-project",
+  "model": "gpt-example",
+  "hook_event_name": "SubagentStart",
+  "turn_id": "turn-example-003"
+}

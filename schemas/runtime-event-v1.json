@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentstack.example/schemas/runtime-event-v1.json",
+  "title": "Codex App runtime hook event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session_id",
+    "agent_id",
+    "cwd",
+    "model",
+    "hook_event_name",
+    "turn_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "cwd": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "model": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "hook_event_name": {
+      "type": "string",
+      "enum": [
+        "SessionStart",
+        "SubagentStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "SubagentStop"
+      ]
+    },
+    "turn_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentstack.example/schemas/binding-record-v1.json",
+  "title": "Codex App to agent-mail binding record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "external_id",
+    "surface",
+    "session_id",
+    "agent_id",
+    "parent_external_id",
+    "agent_name",
+    "project_key",
+    "program",
+    "created_at",
+    "last_seen_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "external_id": {
+      "type": "string",
+      "pattern": "^codex:[^:]+(?::sub:[^:]+)?$"
+    },
+    "surface": {
+      "const": "codex-app"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "parent_external_id": {
+      "type": ["string", "null"],
+      "pattern": "^codex:[^:]+(?::sub:[^:]+)?$"
+    },
+    "agent_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9-]*$"
+    },
+    "project_key": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "program": {
+      "const": "codex-app"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

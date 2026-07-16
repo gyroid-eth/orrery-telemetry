@@ -1,0 +1,20 @@
+{
+  "sample-agent": {
+    "name": "sample-agent",
+    "created": 1700000000,
+    "activity": 1700000123,
+    "attached": true,
+    "client_tty": "/dev/ttys001",
+    "cmd": "python",
+    "title": "Working on sample task"
+  },
+  "waiting-agent": {
+    "name": "waiting-agent",
+    "created": 1700000200,
+    "activity": 1700000220,
+    "attached": false,
+    "client_tty": null,
+    "cmd": "zsh",
+    "title": "zsh"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "agentstack-codex-app",
+  "version": "0.1.0",
+  "description": "Coordinate Codex App tasks through AgentStack",
+  "author": {
+    "name": "AgentStack contributors"
+  },
+  "license": "MIT",
+  "keywords": ["codex", "agents", "coordination"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "AgentStack Codex App",
+    "shortDescription": "Coordinate Codex App tasks with AgentStack.",
+    "longDescription": "Adds coordination guidance and lifecycle scaffolding for connecting Codex App tasks to an AgentStack mesh.",
+    "developerName": "AgentStack contributors",
+    "category": "Productivity",
+    "capabilities": ["Coordination"],
+    "defaultPrompt": [
+      "Coordinate this task with my AgentStack agents."
+    ]
+  }
+}
