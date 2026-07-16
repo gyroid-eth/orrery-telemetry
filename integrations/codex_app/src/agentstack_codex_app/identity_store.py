@@ -256,6 +256,22 @@ class IdentityStore:
             raise IdentityStoreError("unable to read owner token") from exc
         return token or None
 
+    def delete(self, external_id: str) -> bool:
+        """Delete one binding and its owner token after remote retirement."""
+
+        binding_path = self._binding_path(external_id)
+        secret_path = self._secret_path(external_id)
+        existed = binding_path.exists()
+        try:
+            binding_path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            secret_path.unlink()
+        except FileNotFoundError:
+            pass
+        return existed
+
     def _binding_path(self, external_id: str) -> Path:
         return self.bindings_dir / f"{_key(external_id)}.json"
 

@@ -10,7 +10,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from agentstack_codex_app.agent_mail_client import AgentMailError, Registration
-from agentstack_codex_app.daemon import BridgeConfig, BridgeDaemon
+from agentstack_codex_app.daemon import (
+    BridgeConfig,
+    BridgeDaemon,
+    cleanup_orphan_bindings,
+)
 from agentstack_codex_app.delivery import DeliveryManager
 from agentstack_codex_app.hook_entry import forward_event
 from agentstack_codex_app.identity_store import (
@@ -36,6 +40,12 @@ class FakeAgentMail:
         if self.normalize_names:
             agent_name = "".join(character for character in agent_name if character.isalnum())
         return Registration(agent_name, kwargs["registration_token"])
+
+    def retire_agent(self, **kwargs):
+        self.calls.append({"retire_agent": kwargs})
+        if self.fail:
+            raise AgentMailError("offline")
+        return {"status": "retired"}
 
 
 class FakeWakeCoordinator:
@@ -110,12 +120,14 @@ def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
                 "agentstack-codex-app@private-market"
             ),
             "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": "1",
+            "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS": "7200",
         }
     )
 
     assert config.codex_binary == str(codex)
     assert config.plugin_id == "agentstack-codex-app@private-market"
     assert config.skip_git_repo_check is True
+    assert config.stale_after_seconds == 7200
 
 
 def test_process_event_registers_once_and_reuses_stable_binding(tmp_path):
@@ -323,6 +335,115 @@ def test_missing_owner_token_fails_closed_without_rotating_identity(tmp_path):
     assert snapshot["state"] == "degraded"
     assert daemon.identities.load_owner_token(external_id) is None
     assert len(mail.calls) == 1
+
+
+def test_cleanup_orphans_retires_with_owner_token_and_keeps_real_app(tmp_path):
+    config = _config(tmp_path)
+    identities = IdentityStore(config.runtime_dir / "identity")
+    snapshots = SnapshotStore(config.snapshot_path)
+    sessions_root = tmp_path / ".codex" / "sessions"
+    sessions_root.mkdir(parents=True)
+
+    orphan = identities.save(
+        build_binding(
+            session_id="session-orphan",
+            agent_id=None,
+            agent_name="CalmNoether",
+            project_key="/workspace/example",
+        )
+    )
+    identities.store_owner_token(orphan["external_id"], "orphan-token")
+    snapshots.upsert(runtime_record(orphan, {}, state="waiting"))
+
+    real = identities.save(
+        build_binding(
+            session_id="session-real",
+            agent_id=None,
+            agent_name="QuietCurie",
+            project_key="/workspace/example",
+        )
+    )
+    identities.store_owner_token(real["external_id"], "real-token")
+    snapshots.upsert(runtime_record(real, {}, state="waiting"))
+    transcript = (
+        sessions_root
+        / "2026"
+        / "07"
+        / "16"
+        / "rollout-2026-session-real.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-real",
+                    "originator": "Codex Desktop",
+                    "source": "vscode",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mail = FakeAgentMail()
+
+    cleaned = cleanup_orphan_bindings(
+        identities,
+        snapshots,
+        mail,
+        sessions_root=sessions_root,
+    )
+
+    assert [item["external_id"] for item in cleaned] == [orphan["external_id"]]
+    assert identities.resolve(orphan["external_id"]) is None
+    assert snapshots.get(orphan["external_id"]) is None
+    assert identities.resolve(real["external_id"]) == real
+    assert snapshots.get(real["external_id"]) is not None
+    assert mail.calls == [
+        {
+            "retire_agent": {
+                "project_key": "/workspace/example",
+                "agent_name": "CalmNoether",
+                "registration_token": "orphan-token",
+            }
+        }
+    ]
+
+
+def test_cleanup_orphans_keeps_local_state_when_remote_retire_fails(tmp_path):
+    config = _config(tmp_path)
+    identities = IdentityStore(config.runtime_dir / "identity")
+    snapshots = SnapshotStore(config.snapshot_path)
+    binding = identities.save(
+        build_binding(
+            session_id="session-orphan",
+            agent_id=None,
+            agent_name="CalmNoether",
+            project_key="/workspace/example",
+        )
+    )
+    identities.store_owner_token(binding["external_id"], "owner-token")
+    snapshots.upsert(runtime_record(binding, {}, state="waiting"))
+    mail = FakeAgentMail()
+    mail.fail = True
+
+    try:
+        cleanup_orphan_bindings(
+            identities,
+            snapshots,
+            mail,
+            sessions_root=tmp_path / "missing-sessions",
+        )
+    except AgentMailError:
+        pass
+    else:
+        raise AssertionError("cleanup must fail closed on remote retire failure")
+
+    assert identities.resolve(binding["external_id"]) == binding
+    assert identities.load_owner_token(binding["external_id"]) == "owner-token"
+    assert snapshots.get(binding["external_id"]) is not None
 
 
 def test_private_socket_accepts_event_and_worker_writes_snapshot():

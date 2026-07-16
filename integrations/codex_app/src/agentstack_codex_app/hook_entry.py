@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import os
 import socket
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Mapping
 
 
+CODEX_DESKTOP_ORIGINATOR = "Codex Desktop"
 EVENT_NAMES = frozenset(
     {
         "SessionStart",
@@ -38,6 +40,7 @@ EVENT_FIELDS = frozenset(
     }
 )
 MAX_EVENT_BYTES = 64 * 1024
+MAX_SESSION_META_BYTES = 256 * 1024
 
 
 class HookEventError(ValueError):
@@ -82,6 +85,103 @@ def normalize_event(payload: Mapping[str, Any]) -> dict[str, Any]:
         "turn_id": payload.get("turn_id"),
     }
     return validate_event(event)
+
+
+def is_codex_desktop_payload(
+    payload: Mapping[str, Any],
+    *,
+    codex_home: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Accept only hook payloads backed by a Codex Desktop transcript."""
+
+    session_id = payload.get("session_id")
+    transcript = payload.get("transcript_path")
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if not isinstance(transcript, str) or not transcript:
+        return False
+    sessions_root = (
+        Path(codex_home).expanduser()
+        if codex_home is not None
+        else Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
+    ) / "sessions"
+    return transcript_is_codex_desktop(
+        transcript,
+        session_id,
+        sessions_root=sessions_root,
+    )
+
+
+def transcript_is_codex_desktop(
+    transcript_path: str | os.PathLike[str],
+    session_id: str,
+    *,
+    sessions_root: str | os.PathLike[str],
+) -> bool:
+    """Verify one bounded rollout's immutable session metadata."""
+
+    try:
+        root = Path(sessions_root).expanduser().resolve(strict=True)
+        path = Path(transcript_path).expanduser()
+        if not path.is_absolute():
+            return False
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            return False
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        with resolved.open("rb") as handle:
+            raw = handle.readline(MAX_SESSION_META_BYTES + 1)
+        if len(raw) > MAX_SESSION_META_BYTES:
+            return False
+        envelope = json.loads(raw)
+    except (
+        FileNotFoundError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ):
+        return False
+    if not isinstance(envelope, dict) or envelope.get("type") != "session_meta":
+        return False
+    session_meta = envelope.get("payload")
+    if not isinstance(session_meta, dict):
+        return False
+    observed_id = session_meta.get("id") or session_meta.get("session_id")
+    return (
+        observed_id == session_id
+        and session_meta.get("originator") == CODEX_DESKTOP_ORIGINATOR
+    )
+
+
+def session_has_codex_desktop_transcript(
+    session_id: str,
+    *,
+    sessions_root: str | os.PathLike[str],
+) -> bool:
+    """Return whether a durable Codex Desktop rollout exists for a session."""
+
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    try:
+        root = Path(sessions_root).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return False
+    try:
+        candidates = root.rglob("rollout-*.jsonl")
+        for candidate in candidates:
+            if session_id not in candidate.name:
+                continue
+            if transcript_is_codex_desktop(
+                candidate,
+                session_id,
+                sessions_root=root,
+            ):
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def validate_event(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -242,6 +342,8 @@ def main() -> int:
             return 0
         payload = json.loads(raw)
         if not isinstance(payload, dict):
+            return 0
+        if not is_codex_desktop_payload(payload):
             return 0
         event = normalize_event(payload)
         response = handle_payload(

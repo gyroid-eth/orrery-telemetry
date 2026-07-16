@@ -26,6 +26,7 @@ from .hook_entry import (
     MAX_EVENT_BYTES,
     append_spool,
     runtime_dir_from_env,
+    session_has_codex_desktop_transcript,
     validate_event,
 )
 from .identity_store import (
@@ -139,6 +140,7 @@ class BridgeConfig:
     codex_binary: str = "codex"
     plugin_id: str = "agentstack-codex-app@agentstack-local"
     skip_git_repo_check: bool = False
+    stale_after_seconds: float = 3600.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BridgeConfig":
@@ -250,6 +252,13 @@ class BridgeConfig:
             env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID")
             or "agentstack-codex-app@agentstack-local"
         ).strip()
+        stale_after_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS",
+            3600,
+            minimum=300,
+            maximum=604800,
+        )
         return cls(
             runtime_dir=runtime_dir,
             socket_path=Path(socket_value).expanduser() if socket_value else runtime_dir / "bridge.sock",
@@ -283,6 +292,7 @@ class BridgeConfig:
             codex_binary=codex_binary,
             plugin_id=plugin_id,
             skip_git_repo_check=skip_git_repo_check,
+            stale_after_seconds=stale_after_seconds,
         )
 
 
@@ -648,6 +658,12 @@ class BridgeDaemon:
             # Startup reconciliation repairs old names but must not make the
             # lifecycle socket unavailable when local state is corrupt.
             pass
+        try:
+            self.snapshots.mark_waiting_dormant_older_than(
+                self.config.stale_after_seconds
+            )
+        except (OSError, ValueError):
+            pass
         next_retry = time.monotonic()
         next_wake = time.monotonic()
         while True:
@@ -665,6 +681,12 @@ class BridgeDaemon:
                         self.config.retry_path,
                         enqueue_on_failure=True,
                     )
+                    try:
+                        self.snapshots.mark_waiting_dormant_older_than(
+                            self.config.stale_after_seconds
+                        )
+                    except (OSError, ValueError):
+                        pass
                     next_retry = now + self.config.registration_retry_seconds
                 if self.wake_coordinator is not None and now >= next_wake:
                     try:
@@ -744,6 +766,38 @@ def _state_for_event(event: Mapping[str, Any]) -> str:
     if event["hook_event_name"] in {"UserPromptSubmit", "PostToolUse"}:
         return "working"
     return "waiting"
+
+
+def cleanup_orphan_bindings(
+    identities: IdentityStore,
+    snapshots: SnapshotStore,
+    agent_mail: AgentMailClient,
+    *,
+    sessions_root: str | os.PathLike[str],
+) -> list[dict[str, Any]]:
+    """Retire and purge bindings that have no matching Desktop rollout."""
+
+    cleaned: list[dict[str, Any]] = []
+    for binding in identities.list_bindings():
+        if session_has_codex_desktop_transcript(
+            binding["session_id"],
+            sessions_root=sessions_root,
+        ):
+            continue
+        owner_token = identities.load_owner_token(binding["external_id"])
+        if owner_token is None:
+            raise IdentityStoreError(
+                f"missing owner token for orphan binding {binding['external_id']}"
+            )
+        agent_mail.retire_agent(
+            project_key=binding["project_key"],
+            agent_name=binding["agent_name"],
+            registration_token=owner_token,
+        )
+        snapshots.remove(binding["external_id"])
+        identities.delete(binding["external_id"])
+        cleaned.append(binding)
+    return cleaned
 
 
 def _fresh_agent_name() -> str:

@@ -234,6 +234,53 @@ class SnapshotStore:
             record["state"] = state
         return self.upsert(record)
 
+    def mark_waiting_dormant_older_than(
+        self,
+        seconds: float,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Mark stale waiting runtimes dormant without touching active work."""
+
+        if seconds <= 0:
+            raise SnapshotError("staleness threshold must be positive")
+        reference = now or datetime.now(timezone.utc)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        current = read_snapshot(self.path)
+        changed = 0
+        for runtime in current.get("runtimes", []):
+            if runtime["state"] != "waiting":
+                continue
+            try:
+                last_seen = datetime.fromisoformat(
+                    runtime["last_seen_at"].replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            if (reference - last_seen).total_seconds() >= seconds:
+                runtime["state"] = "dormant"
+                changed += 1
+        if changed:
+            write_snapshot(self.path, current["runtimes"])
+        return changed
+
+    def remove(self, external_id: str) -> bool:
+        """Remove one runtime record, returning whether it existed."""
+
+        current = read_snapshot(self.path)
+        runtimes = [
+            item
+            for item in current.get("runtimes", [])
+            if item["external_id"] != external_id
+        ]
+        if len(runtimes) == len(current.get("runtimes", [])):
+            return False
+        write_snapshot(self.path, runtimes)
+        return True
+
 
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

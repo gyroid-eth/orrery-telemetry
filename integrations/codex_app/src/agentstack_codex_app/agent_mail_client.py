@@ -241,6 +241,28 @@ class AgentMailClient:
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("release_file_reservations", arguments)
 
+    def retire_agent(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        registration_token: str,
+    ) -> dict[str, Any]:
+        """Retire one Bridge-owned agent using its persisted owner token."""
+
+        if not project_key or not agent_name or not registration_token:
+            raise ValueError(
+                "project_key, agent_name, and registration_token are required"
+            )
+        return self._call_tool_object(
+            "retire_agent",
+            {
+                "project_key": project_key,
+                "agent_name": agent_name,
+                "registration_token": registration_token,
+            },
+        )
+
     def _call_tool_object(
         self, tool_name: str, arguments: Mapping[str, Any]
     ) -> dict[str, Any]:

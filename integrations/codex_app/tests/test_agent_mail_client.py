@@ -154,3 +154,33 @@ def test_p2_methods_use_only_explicit_agent_mail_tools():
     ]
     send_args = transport.payloads[1]["params"]["arguments"]
     assert send_args["sender_token"] == "owner-secret"
+
+
+def test_retire_agent_uses_bridge_owner_token():
+    transport = FakeTransport(
+        {
+            "result": {
+                "structuredContent": {
+                    "status": "retired",
+                    "agent_name": "CalmNoether",
+                    "project_key": "/workspace/example",
+                }
+            }
+        }
+    )
+    client = AgentMailClient(transport)
+
+    result = client.retire_agent(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token="owner-secret",
+    )
+
+    assert result["status"] == "retired"
+    call = transport.payloads[0]
+    assert call["params"]["name"] == "retire_agent"
+    assert call["params"]["arguments"] == {
+        "project_key": "/workspace/example",
+        "agent_name": "CalmNoether",
+        "registration_token": "owner-secret",
+    }

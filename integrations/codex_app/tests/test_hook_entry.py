@@ -13,13 +13,37 @@ from agentstack_codex_app.hook_entry import (
     append_spool,
     forward_event,
     hook_output,
+    is_codex_desktop_payload,
     normalize_event,
     runtime_dir_from_env,
+    session_has_codex_desktop_transcript,
 )
 
 
-def _raw_event():
-    return {
+def _transcript(tmp_path: Path, *, originator="Codex Desktop", session_id="session-example"):
+    path = tmp_path / ".codex" / "sessions" / "2026" / "07" / "16" / (
+        f"rollout-test-{session_id}.jsonl"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": session_id,
+                    "originator": originator,
+                    "source": "vscode" if originator == "Codex Desktop" else "cli",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _raw_event(transcript_path=None):
+    event = {
         "session_id": "session-example",
         "cwd": "/workspace/example",
         "model": "gpt-example",
@@ -28,6 +52,9 @@ def _raw_event():
         "prompt": "private prompt must be dropped",
         "tool_input": {"secret": "must be dropped"},
     }
+    if transcript_path is not None:
+        event["transcript_path"] = str(transcript_path)
+    return event
 
 
 def test_normalize_event_drops_prompt_and_tool_data():
@@ -84,6 +111,39 @@ def test_runtime_dir_does_not_depend_on_plugin_data():
     assert path == type(path)("/runtime/codex-app")
 
 
+def test_surface_filter_accepts_only_matching_codex_desktop_transcript(tmp_path):
+    desktop = _transcript(tmp_path)
+    cli = _transcript(
+        tmp_path / "cli",
+        originator="codex-tui",
+    )
+
+    assert is_codex_desktop_payload(
+        _raw_event(desktop),
+        codex_home=tmp_path / ".codex",
+    )
+    assert not is_codex_desktop_payload(
+        _raw_event(cli),
+        codex_home=tmp_path / "cli" / ".codex",
+    )
+    assert not is_codex_desktop_payload(
+        _raw_event(),
+        codex_home=tmp_path / ".codex",
+    )
+    assert not is_codex_desktop_payload(
+        dict(_raw_event(desktop), session_id="other-session"),
+        codex_home=tmp_path / ".codex",
+    )
+    assert session_has_codex_desktop_transcript(
+        "session-example",
+        sessions_root=tmp_path / ".codex" / "sessions",
+    )
+    assert not session_has_codex_desktop_transcript(
+        "other-session",
+        sessions_root=tmp_path / ".codex" / "sessions",
+    )
+
+
 def test_hook_entry_script_fails_open_and_spools_without_bridge(tmp_path):
     script = (
         Path(__file__).resolve().parents[1]
@@ -92,11 +152,13 @@ def test_hook_entry_script_fails_open_and_spools_without_bridge(tmp_path):
         / "hook_entry.py"
     )
     runtime = tmp_path / "runtime"
+    transcript = _transcript(tmp_path)
     environment = os.environ.copy()
     environment["AGENTSTACK_CODEX_APP_RUNTIME_DIR"] = str(runtime)
+    environment["CODEX_HOME"] = str(tmp_path / ".codex")
     result = subprocess.run(
         [sys.executable, str(script)],
-        input=json.dumps(_raw_event()),
+        input=json.dumps(_raw_event(transcript)),
         text=True,
         capture_output=True,
         env=environment,
@@ -107,6 +169,33 @@ def test_hook_entry_script_fails_open_and_spools_without_bridge(tmp_path):
     spool = runtime / "hook-events.jsonl"
     assert spool.exists()
     assert "private prompt" not in spool.read_text(encoding="utf-8")
+
+
+def test_hook_entry_skips_cli_and_ephemeral_payloads_without_spooling(tmp_path):
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agentstack_codex_app"
+        / "hook_entry.py"
+    )
+    runtime = tmp_path / "runtime"
+    cli_transcript = _transcript(tmp_path, originator="codex-tui")
+    environment = os.environ.copy()
+    environment["AGENTSTACK_CODEX_APP_RUNTIME_DIR"] = str(runtime)
+    environment["CODEX_HOME"] = str(tmp_path / ".codex")
+
+    for payload in (_raw_event(cli_transcript), _raw_event()):
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=2,
+        )
+        assert result.returncode == 0
+        assert result.stdout == ""
+    assert not (runtime / "hook-events.jsonl").exists()
 
 
 def test_post_tool_use_pending_response_becomes_short_system_message():

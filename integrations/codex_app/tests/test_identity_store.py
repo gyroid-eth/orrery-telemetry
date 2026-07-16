@@ -130,3 +130,21 @@ def test_list_bindings_skips_corrupt_files_and_never_reads_tokens(tmp_path):
     records = store.list_bindings()
     assert records == [binding]
     assert "owner-secret" not in json.dumps(records)
+
+
+def test_delete_removes_binding_and_owner_token(tmp_path):
+    store = IdentityStore(tmp_path / "identity")
+    binding = store.save(
+        build_binding(
+            session_id="session-example",
+            agent_id=None,
+            agent_name="CalmNoether",
+            project_key="/workspace/example",
+        )
+    )
+    store.store_owner_token(binding["external_id"], "owner-secret")
+
+    assert store.delete(binding["external_id"]) is True
+    assert store.delete(binding["external_id"]) is False
+    assert store.resolve(binding["external_id"]) is None
+    assert store.load_owner_token(binding["external_id"]) is None

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 
 import pytest
 
 from agentstack_codex_app.identity_store import build_binding
 from agentstack_codex_app.snapshot import (
     SnapshotError,
+    SnapshotStore,
     read_snapshot,
     runtime_record,
     write_snapshot,
@@ -81,3 +83,68 @@ def test_snapshot_exposes_only_sanitized_delivery_failure_codes(tmp_path):
     record["delivery"]["last_error"] = "private stderr: approval details"
     with pytest.raises(SnapshotError):
         write_snapshot(path, [record])
+
+
+def test_stale_waiting_runtime_becomes_dormant_but_active_runtime_does_not(
+    tmp_path,
+):
+    path = tmp_path / "snapshot.json"
+    stale = build_binding(
+        session_id="session-stale",
+        agent_id=None,
+        agent_name="CalmNoether",
+        project_key="/workspace/example",
+        now="2026-01-01T00:00:00Z",
+    )
+    active = build_binding(
+        session_id="session-active",
+        agent_id=None,
+        agent_name="QuietCurie",
+        project_key="/workspace/example",
+        now="2026-01-01T00:00:00Z",
+    )
+    write_snapshot(
+        path,
+        [
+            runtime_record(
+                stale,
+                {},
+                state="waiting",
+                last_seen_at="2026-01-01T00:00:00Z",
+            ),
+            runtime_record(
+                active,
+                {},
+                state="working",
+                last_seen_at="2026-01-01T00:00:00Z",
+            ),
+        ],
+    )
+
+    changed = SnapshotStore(path).mark_waiting_dormant_older_than(
+        3600,
+        now=datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+    )
+    runtimes = {
+        item["session_id"]: item
+        for item in read_snapshot(path)["runtimes"]
+    }
+
+    assert changed == 1
+    assert runtimes["session-stale"]["state"] == "dormant"
+    assert runtimes["session-active"]["state"] == "working"
+
+
+def test_snapshot_remove_is_idempotent(tmp_path):
+    binding = build_binding(
+        session_id="session-example",
+        agent_id=None,
+        agent_name="CalmNoether",
+        project_key="/workspace/example",
+    )
+    store = SnapshotStore(tmp_path / "snapshot.json")
+    store.upsert(runtime_record(binding, {}, state="waiting"))
+
+    assert store.remove(binding["external_id"]) is True
+    assert store.remove(binding["external_id"]) is False
+    assert read_snapshot(store.path)["runtimes"] == []

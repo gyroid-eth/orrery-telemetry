@@ -10,6 +10,7 @@ INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 ALLOW_STOPPED=false
 REQUEUE_MESSAGE=""
 REQUEUE_AGENT=""
+CLEANUP_ORPHANS=false
 
 usage() {
   cat <<'EOF'
@@ -19,6 +20,8 @@ Options:
   --allow-stopped     Report a missing Bridge socket as a warning
   --requeue-message ID  Explicitly reset one failed/dead-letter delivery
   --agent-name NAME     Agent binding for --requeue-message
+  --cleanup-orphan-bindings
+                       Retire/purge bindings without a Desktop rollout
   --install-dir PATH  Default: ~/.agentstack/integrations/codex_app
   -h, --help          Show this help
 EOF
@@ -29,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --allow-stopped) ALLOW_STOPPED=true; shift ;;
     --requeue-message) REQUEUE_MESSAGE="$2"; shift 2 ;;
     --agent-name) REQUEUE_AGENT="$2"; shift 2 ;;
+    --cleanup-orphan-bindings) CLEANUP_ORPHANS=true; shift ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -140,6 +144,68 @@ fi
 DELIVERY_DB="${AGENTSTACK_CODEX_APP_DELIVERY_DB:-}"
 SNAPSHOT_PATH="${AGENTSTACK_CODEX_APP_SNAPSHOT:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
+if [[ "$CLEANUP_ORPHANS" == true ]]; then
+  if [[ -z "${AGENTSTACK_MCP_URL:-}" || -z "$RUNTIME_DIR" || -z "$SNAPSHOT_PATH" ]]; then
+    fail "cleanup requires agent-mail URL, runtime dir, and snapshot path"
+  else
+    if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
+      export MCP_AGENT_MAIL_TOKEN
+      IFS= read -r MCP_AGENT_MAIL_TOKEN < <(
+        "$PYTHON_BIN" - "${AGENTSTACK_MAIL_ENV}" <<'PY'
+import pathlib
+import sys
+
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    key, separator, value = line.partition("=")
+    if separator and key.strip() == "HTTP_BEARER_TOKEN":
+        print(value.strip().strip("\"'"))
+        break
+PY
+      )
+    fi
+    if PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INSTALL_DIR/src" \
+      "$PYTHON_BIN" - "$RUNTIME_DIR" "$SNAPSHOT_PATH" \
+        "${CODEX_HOME:-$HOME/.codex}/sessions" <<'PY'
+import os
+import pathlib
+import sys
+
+from agentstack_codex_app.agent_mail_client import (
+    AgentMailClient,
+    HttpJsonRpcTransport,
+)
+from agentstack_codex_app.daemon import cleanup_orphan_bindings
+from agentstack_codex_app.identity_store import IdentityStore
+from agentstack_codex_app.snapshot import SnapshotStore
+
+runtime_dir, snapshot_path, sessions_root = sys.argv[1:]
+client = AgentMailClient(
+    HttpJsonRpcTransport(
+        os.environ["AGENTSTACK_MCP_URL"],
+        bearer_token=os.environ.get("MCP_AGENT_MAIL_TOKEN"),
+    )
+)
+cleaned = cleanup_orphan_bindings(
+    IdentityStore(pathlib.Path(runtime_dir) / "identity"),
+    SnapshotStore(snapshot_path),
+    client,
+    sessions_root=sessions_root,
+)
+for binding in cleaned:
+    print(
+        "cleaned orphan binding "
+        f"{binding['agent_name']} ({binding['external_id']})"
+    )
+print(f"cleanup complete: {len(cleaned)} orphan binding(s)")
+PY
+    then
+      ok "orphan binding cleanup"
+    else
+      fail "orphan binding cleanup"
+    fi
+  fi
+fi
+
 if [[ -n "$DELIVERY_DB" && -f "$DELIVERY_DB" ]]; then
   while IFS=$'\t' read -r DELIVERY_AGENT DELIVERY_MESSAGE DELIVERY_STATUS \
     DELIVERY_ATTEMPTS DELIVERY_ERROR; do

@@ -7,7 +7,9 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -35,7 +37,12 @@ def _environment(home: Path) -> dict[str, str]:
     return environment
 
 
-def _install_args(home: Path, *, runtime_dir: Path | None = None) -> list[str]:
+def _install_args(
+    home: Path,
+    *,
+    runtime_dir: Path | None = None,
+    agent_mail_url: str = "http://127.0.0.1:8765/api/",
+) -> list[str]:
     codex_binary = shutil.which("codex")
     assert codex_binary is not None
     args = [
@@ -44,7 +51,7 @@ def _install_args(home: Path, *, runtime_dir: Path | None = None) -> list[str]:
         "--project-key",
         str(home / "project"),
         "--agent-mail-url",
-        "http://127.0.0.1:8765/api/",
+        agent_mail_url,
         "--agent-mail-env",
         str(home / ".mcp_agent_mail" / ".env"),
         "--signals-dir",
@@ -156,6 +163,7 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
         "agentstack-codex-app@agentstack-local"
     )
     assert generated_env["AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"] == "0"
+    assert generated_env["AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS"] == "3600"
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -414,6 +422,131 @@ print(json.dumps(DeliveryManager(sys.argv[1]).rows()))
     assert not install_dir.exists()
     assert not runtime_dir.exists()
     assert _plugin_list(home)["installed"] == []
+
+
+def test_doctor_cleanup_retires_orphan_before_local_purge(tmp_path):
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            calls.append(payload)
+            response = {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "structuredContent": {
+                        "status": "retired",
+                        "agent_name": "CalmNoether",
+                        "project_key": str(home / "project"),
+                    }
+                },
+            }
+            body = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    home = _prepare_home(tmp_path)
+    environment = _environment(home)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    runtime_dir = home / ".agentstack" / "runtime" / "codex-app"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}/api/"
+    try:
+        subprocess.run(
+            [
+                *_install_args(
+                    home,
+                    runtime_dir=runtime_dir,
+                    agent_mail_url=endpoint,
+                ),
+                "--no-service",
+                "--no-plugin",
+            ],
+            env=environment,
+            check=True,
+        )
+        diagnostic_environment = dict(
+            environment,
+            PYTHONPATH=str(install_dir / "src"),
+        )
+        subprocess.run(
+            [
+                str(Path(_read_generated_env(install_dir / "env.sh")["AGENTSTACK_PYTHON"])),
+                "-c",
+                """
+from agentstack_codex_app.identity_store import IdentityStore, build_binding
+from agentstack_codex_app.snapshot import SnapshotStore, runtime_record
+import pathlib
+import sys
+
+runtime = pathlib.Path(sys.argv[1])
+project_key = sys.argv[2]
+store = IdentityStore(runtime / "identity")
+binding = store.save(
+    build_binding(
+        session_id="session-orphan",
+        agent_id=None,
+        agent_name="CalmNoether",
+        project_key=project_key,
+    )
+)
+store.store_owner_token(binding["external_id"], "owner-token")
+SnapshotStore(runtime / "snapshot.json").upsert(
+    runtime_record(binding, {}, state="waiting")
+)
+""",
+                str(runtime_dir),
+                str(home / "project"),
+            ],
+            env=diagnostic_environment,
+            check=True,
+        )
+
+        doctor = subprocess.run(
+            [
+                str(install_dir / "bin" / "doctor-codex-app-integration"),
+                "--allow-stopped",
+                "--cleanup-orphan-bindings",
+            ],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert "cleanup complete: 1 orphan binding(s)" in doctor.stdout
+        assert len(calls) == 1
+        assert calls[0]["params"]["name"] == "retire_agent"
+        assert calls[0]["params"]["arguments"]["registration_token"] == "owner-token"
+        assert not list((runtime_dir / "identity" / "bindings").glob("*.json"))
+        assert not list((runtime_dir / "identity" / "secrets").glob("*.token"))
+        snapshot = json.loads(
+            (runtime_dir / "snapshot.json").read_text(encoding="utf-8")
+        )
+        assert snapshot["runtimes"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        if install_dir.exists():
+            subprocess.run(
+                [
+                    str(install_dir / "bin" / "uninstall-codex-app-integration"),
+                    "--purge-data",
+                ],
+                env=environment,
+                check=True,
+            )
 
 
 def test_export_gate_builds_allowlisted_token_free_artifact(tmp_path):

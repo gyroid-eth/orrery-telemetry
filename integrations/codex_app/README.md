@@ -10,6 +10,9 @@ The current P3 implementation provides:
 - versioned runtime-event and binding schemas plus delivery-state migration;
 - a private Bridge socket, fail-open hook spool, durable identity bindings,
   separately protected owner tokens, and sanitized dashboard snapshots;
+- a fail-closed App-surface filter backed by matching `Codex Desktop` rollout
+  metadata; transcript-less sessions are skipped because cold wake requires a
+  resumable rollout and such identities would be unusable;
 - a session-bound, allowlisted MCP proxy for inbox, messaging, acknowledgement,
   reservations, and sanitized runtime/lineage status;
 - PostToolUse pending-mail notices for active turns;
@@ -83,6 +86,18 @@ After an approved install, diagnose it with:
 
 ```sh
 ~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration
+```
+
+Waiting runtimes become `dormant` after one hour without a lifecycle event by
+default. The installer accepts `--stale-after SECONDS` (minimum five minutes)
+for environments with a different observed idle cadence.
+
+To explicitly retire Bridge-owned identities whose matching Codex Desktop
+rollout no longer exists, then purge their local binding and snapshot:
+
+```sh
+~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration \
+  --allow-stopped --cleanup-orphan-bindings
 ```
 
 Codex repository trust is enforced by default. For a deliberately reviewed
