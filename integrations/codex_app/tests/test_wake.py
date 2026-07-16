@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,9 +37,10 @@ class MutableTime:
 
 
 class FakeProcess:
-    def __init__(self, return_code=None):
+    def __init__(self, return_code=None, diagnostic=""):
         self.return_code = return_code
         self.terminated = False
+        self.diagnostic = diagnostic
 
     def poll(self):
         return self.return_code
@@ -48,6 +51,9 @@ class FakeProcess:
 
     def wait(self, timeout=None):
         return self.return_code
+
+    def diagnostic_tail(self):
+        return self.diagnostic
 
 
 class FakeAdapter:
@@ -209,7 +215,74 @@ def test_exec_resume_adapter_uses_argv_and_metadata_only_prompt():
     forbidden_flag = "--dangerously-" + "bypass-approvals-and-sandbox"
     assert forbidden_flag not in captured["argv"]
     assert captured["kwargs"]["cwd"] == "/workspace/example"
+    assert captured["kwargs"]["stdout"] is not subprocess.DEVNULL
+    assert captured["kwargs"]["stderr"] == subprocess.STDOUT
     assert "shell" not in captured["kwargs"]
+
+
+def test_exec_resume_adapter_skip_git_check_requires_explicit_opt_in():
+    captured = {}
+
+    def factory(argv, **kwargs):
+        captured["argv"] = argv
+        return FakeProcess()
+
+    ExecResumeAdapter(
+        skip_git_repo_check=True,
+        process_factory=factory,
+    ).start(
+        "session-example",
+        [WakeMessage(7, "Steel-Boltzmann", "Task")],
+    )
+
+    assert captured["argv"][:4] == [
+        "codex",
+        "exec",
+        "resume",
+        "--skip-git-repo-check",
+    ]
+    assert "--dangerously-bypass-approvals-and-sandbox" not in captured["argv"]
+
+
+def test_exec_resume_adapter_captures_bounded_redacted_tail():
+    class RawProcess:
+        def __init__(self):
+            output = "\n".join(
+                [
+                    "first line",
+                    "token=owner-secret-value",
+                    "Bear" + "er abcdefghijklmnopqrstuvwxyz123456",
+                    (
+                        "Not inside a trusted directory and "
+                        "--skip-git-repo-check was not specified."
+                    ),
+                ]
+            )
+            self.stdout = io.BytesIO(
+                (output + "\n").encode()
+            )
+
+        def poll(self):
+            return 0
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    process = ExecResumeAdapter(process_factory=lambda *args, **kwargs: RawProcess()).start(
+        "session-example",
+        [WakeMessage(7, "Steel-Boltzmann", "Task")],
+    )
+    diagnostic = process.diagnostic_tail()
+
+    assert "owner-secret-value" not in diagnostic
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in diagnostic
+    assert "<redacted>" in diagnostic
+    assert "Not inside a trusted directory" in diagnostic
+    assert diagnostic.count("|") <= 1
+    assert len(diagnostic) <= 256
 
 
 def test_exec_resume_adapter_accepts_verified_absolute_binary(tmp_path):
@@ -331,6 +404,43 @@ def test_resume_failure_backs_off_then_dead_letters(tmp_path):
         "last_error": "resume_failed",
         "parent_external_id": None,
     }
+
+
+def test_untrusted_workspace_exit_zero_blocks_once_with_diagnostic(tmp_path):
+    timing, _, binding, snapshots, delivery, adapter, coordinator = _coordinator(
+        tmp_path,
+        policy=WakePolicy(coalesce_seconds=0),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = snapshots.get(binding["external_id"])
+    runtime["cwd"] = str(workspace)
+    snapshots.upsert(runtime)
+    _signal(tmp_path, 19)
+
+    coordinator.tick([binding])
+    assert adapter.calls[0][2] == str(workspace)
+    adapter.processes[0].return_code = 0
+    adapter.processes[0].diagnostic = (
+        "token=owner-secret-value\n"
+        "Not inside a trusted directory and "
+        "--skip-git-repo-check was not specified."
+    )
+    coordinator.tick([binding])
+
+    row = delivery.rows()[0]
+    assert row["status"] == "dead_letter"
+    assert row["attempt_count"] == 1
+    assert row["last_error"].startswith("untrusted_workspace exit=0 output=")
+    assert "owner-secret-value" not in row["last_error"]
+    runtime = snapshots.get(binding["external_id"])
+    assert runtime["state"] == "blocked"
+    assert runtime["delivery"]["wake_status"] == "blocked"
+    assert runtime["delivery"]["last_error"] == "untrusted_workspace"
+
+    timing.advance(60)
+    coordinator.tick([binding])
+    assert len(adapter.calls) == 1
 
 
 def test_timeout_is_blocked_terminal_and_does_not_auto_approve(tmp_path):

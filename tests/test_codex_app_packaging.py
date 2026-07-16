@@ -99,6 +99,29 @@ def test_installer_dry_run_does_not_write_clean_home(tmp_path):
     assert _plugin_list(home)["installed"] == []
 
 
+def test_installer_skip_git_check_is_explicit_and_persisted(tmp_path):
+    home = _prepare_home(tmp_path)
+    environment = _environment(home)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    subprocess.run(
+        [*_install_args(home), "--no-plugin", "--skip-git-check"],
+        env=environment,
+        check=True,
+    )
+
+    generated_env = _read_generated_env(install_dir / "env.sh")
+    assert generated_env["AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"] == "1"
+
+    subprocess.run(
+        [
+            str(install_dir / "bin" / "uninstall-codex-app-integration"),
+            "--purge-data",
+        ],
+        env=environment,
+        check=True,
+    )
+
+
 def test_clean_home_install_uninstall_reinstall(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
@@ -119,6 +142,7 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     codex_binary = generated_env["AGENTSTACK_CODEX_BINARY"]
     assert Path(codex_binary).is_absolute()
     assert Path(codex_binary).samefile(shutil.which("codex"))
+    assert generated_env["AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"] == "0"
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -204,6 +228,107 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
         bridge.terminate()
         bridge.wait(timeout=5)
         socket_path.unlink(missing_ok=True)
+
+    diagnostic_environment = dict(
+        environment,
+        PYTHONPATH=str(install_dir / "src"),
+    )
+    subprocess.run(
+        [
+            generated_env["AGENTSTACK_PYTHON"],
+            "-c",
+            """
+from pathlib import Path
+import sys
+from agentstack_codex_app.delivery import DeliveryManager
+from agentstack_codex_app.identity_store import build_binding
+from agentstack_codex_app.snapshot import SnapshotStore, runtime_record
+
+runtime = Path(sys.argv[1])
+binding = build_binding(
+    session_id="session-requeue",
+    agent_id=None,
+    agent_name="ExampleAgent",
+    project_key=sys.argv[2],
+)
+SnapshotStore(runtime / "snapshot.json").upsert(
+    runtime_record(
+        binding,
+        {"cwd": sys.argv[2], "model": "gpt-example"},
+        state="blocked",
+    )
+)
+delivery = DeliveryManager(runtime / "delivery.sqlite3")
+delivery.observe(sys.argv[2], "ExampleAgent", [77])
+delivery.acquire(
+    sys.argv[2],
+    "ExampleAgent",
+    [77],
+    lease_owner="wake-test",
+    lease_seconds=30,
+)
+delivery.mark_failed(
+    sys.argv[2],
+    "ExampleAgent",
+    [77],
+    lease_owner="wake-test",
+    error_code=(
+        "untrusted_workspace exit=0 output="
+        "Not inside a trusted directory"
+    ),
+    max_attempts=5,
+    terminal=True,
+)
+""",
+            str(runtime_dir),
+            str(home / "project"),
+        ],
+        env=diagnostic_environment,
+        check=True,
+    )
+    requeue = subprocess.run(
+        [
+            str(install_dir / "bin" / "doctor-codex-app-integration"),
+            "--allow-stopped",
+            "--requeue-message",
+            "77",
+            "--agent-name",
+            "ExampleAgent",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "requeued delivery message 77 for ExampleAgent" in requeue.stdout
+    assert "untrusted_workspace exit=0" in requeue.stderr
+    snapshot = json.loads((runtime_dir / "snapshot.json").read_text(encoding="utf-8"))
+    runtime = next(
+        item for item in snapshot["runtimes"] if item["agent_name"] == "ExampleAgent"
+    )
+    assert runtime["state"] == "waiting"
+    assert runtime["delivery"]["wake_status"] == "pending"
+    delivery_state = subprocess.run(
+        [
+            generated_env["AGENTSTACK_PYTHON"],
+            "-c",
+            """
+import json
+import sys
+from agentstack_codex_app.delivery import DeliveryManager
+print(json.dumps(DeliveryManager(sys.argv[1]).rows()))
+""",
+            str(runtime_dir / "delivery.sqlite3"),
+        ],
+        env=diagnostic_environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    row = json.loads(delivery_state.stdout)[0]
+    assert row["status"] == "pending"
+    assert row["attempt_count"] == 0
+    assert row["last_error"] is None
 
     subprocess.run(
         [str(install_dir / "bin" / "uninstall-codex-app-integration")],

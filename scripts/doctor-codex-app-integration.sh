@@ -8,6 +8,8 @@ if [[ -f "$SCRIPT_DIR/../install-state.json" ]]; then
 fi
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 ALLOW_STOPPED=false
+REQUEUE_MESSAGE=""
+REQUEUE_AGENT=""
 
 usage() {
   cat <<'EOF'
@@ -15,6 +17,8 @@ Usage: doctor-codex-app-integration.sh [options]
 
 Options:
   --allow-stopped     Report a missing Bridge socket as a warning
+  --requeue-message ID  Explicitly reset one failed/dead-letter delivery
+  --agent-name NAME     Agent binding for --requeue-message
   --install-dir PATH  Default: ~/.agentstack/integrations/codex_app
   -h, --help          Show this help
 EOF
@@ -23,6 +27,8 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --allow-stopped) ALLOW_STOPPED=true; shift ;;
+    --requeue-message) REQUEUE_MESSAGE="$2"; shift 2 ;;
+    --agent-name) REQUEUE_AGENT="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -55,6 +61,12 @@ if [[ -f "$ENV_FILE" ]]; then
   . "$ENV_FILE"
 else
   fail "env missing"
+fi
+
+if [[ -n "$REQUEUE_MESSAGE" || -n "$REQUEUE_AGENT" ]]; then
+  [[ "$REQUEUE_MESSAGE" =~ ^[1-9][0-9]*$ ]] \
+    || fail "--requeue-message must be a positive integer"
+  [[ -n "$REQUEUE_AGENT" ]] || fail "--agent-name is required with --requeue-message"
 fi
 
 for required in \
@@ -122,6 +134,83 @@ PY
     ok "binding store integrity"
   else
     fail "binding store integrity"
+  fi
+fi
+
+DELIVERY_DB="${AGENTSTACK_CODEX_APP_DELIVERY_DB:-}"
+SNAPSHOT_PATH="${AGENTSTACK_CODEX_APP_SNAPSHOT:-}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
+if [[ -n "$DELIVERY_DB" && -f "$DELIVERY_DB" ]]; then
+  while IFS=$'\t' read -r DELIVERY_AGENT DELIVERY_MESSAGE DELIVERY_STATUS \
+    DELIVERY_ATTEMPTS DELIVERY_ERROR; do
+    [[ -n "$DELIVERY_AGENT" ]] || continue
+    warn "delivery agent=$DELIVERY_AGENT message=$DELIVERY_MESSAGE status=$DELIVERY_STATUS attempts=$DELIVERY_ATTEMPTS error=$DELIVERY_ERROR"
+  done < <(
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INSTALL_DIR/src" \
+      "$PYTHON_BIN" - "$DELIVERY_DB" <<'PY'
+import pathlib
+import sys
+from agentstack_codex_app.delivery import DeliveryManager
+
+manager = DeliveryManager(pathlib.Path(sys.argv[1]))
+for row in manager.rows():
+    if row["last_error"]:
+        print(
+            row["agent_name"],
+            row["message_id"],
+            row["status"],
+            row["attempt_count"],
+            row["last_error"],
+            sep="\t",
+        )
+PY
+  )
+fi
+
+if [[ -n "$REQUEUE_MESSAGE" && -n "$REQUEUE_AGENT" ]]; then
+  if [[ -z "$DELIVERY_DB" || -z "$SNAPSHOT_PATH" ]]; then
+    fail "delivery DB or snapshot path is not configured"
+  elif PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INSTALL_DIR/src" \
+    "$PYTHON_BIN" - "$DELIVERY_DB" "$SNAPSHOT_PATH" \
+      "${AGENTSTACK_PROJECT_KEY:-}" "$REQUEUE_AGENT" "$REQUEUE_MESSAGE" <<'PY'
+import pathlib
+import sys
+from agentstack_codex_app.delivery import DeliveryManager
+from agentstack_codex_app.snapshot import SnapshotStore, read_snapshot
+
+database, snapshot_path, project_key, agent_name, raw_message_id = sys.argv[1:]
+message_id = int(raw_message_id)
+snapshot = read_snapshot(snapshot_path)
+runtime = next(
+    (
+        item for item in snapshot["runtimes"]
+        if item["project_key"] == project_key and item["agent_name"] == agent_name
+    ),
+    None,
+)
+if runtime is None:
+    raise SystemExit("matching runtime snapshot not found")
+if runtime["agent_id"] is not None:
+    raise SystemExit("cold-wake requeue is supported only for root runtimes")
+manager = DeliveryManager(pathlib.Path(database))
+if not manager.requeue(project_key, agent_name, message_id):
+    raise SystemExit("delivery is not failed/dead-letter or does not exist")
+status = manager.status(project_key, agent_name)
+runtime["state"] = "waiting"
+runtime["delivery"] = {
+    "pending_count": status.pending_count,
+    "wake_status": "pending",
+    "failed_count": status.failed_count,
+    "dead_letter_count": status.dead_letter_count,
+    "last_error": None,
+    "parent_external_id": None,
+}
+SnapshotStore(snapshot_path).upsert(runtime)
+PY
+  then
+    ok "requeued delivery message $REQUEUE_MESSAGE for $REQUEUE_AGENT"
+  else
+    fail "unable to requeue delivery message $REQUEUE_MESSAGE for $REQUEUE_AGENT"
   fi
 fi
 

@@ -137,6 +137,7 @@ class BridgeConfig:
     wake_limit_per_hour: int = 12
     wake_timeout_seconds: float = 900.0
     codex_binary: str = "codex"
+    skip_git_repo_check: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BridgeConfig":
@@ -240,6 +241,10 @@ class BridgeConfig:
             env.get("AGENTSTACK_CODEX_BINARY") or "codex",
             setting_name="AGENTSTACK_CODEX_BINARY",
         )
+        skip_git_repo_check = _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"),
+            "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK",
+        )
         return cls(
             runtime_dir=runtime_dir,
             socket_path=Path(socket_value).expanduser() if socket_value else runtime_dir / "bridge.sock",
@@ -271,6 +276,7 @@ class BridgeConfig:
             wake_limit_per_hour=wake_limit_per_hour,
             wake_timeout_seconds=wake_timeout_seconds,
             codex_binary=codex_binary,
+            skip_git_repo_check=skip_git_repo_check,
         )
 
 
@@ -307,7 +313,10 @@ class BridgeDaemon:
                 DeliveryManager(delivery_path),
                 self.identities,
                 self.snapshots,
-                ExecResumeAdapter(codex_binary=config.codex_binary),
+                ExecResumeAdapter(
+                    codex_binary=config.codex_binary,
+                    skip_git_repo_check=config.skip_git_repo_check,
+                ),
                 signals_dir=config.signals_dir,
                 project_slug=lambda project_key: (
                     config.project_slug or _project_slug(project_key)

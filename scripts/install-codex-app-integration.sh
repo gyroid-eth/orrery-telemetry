@@ -16,6 +16,7 @@ SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$HOME/.mcp_agent_mail/signals}"
 LABEL="${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}"
 MARKETPLACE_NAME="${AGENTSTACK_CODEX_APP_MARKETPLACE:-agentstack-local}"
 WAKE_LIMIT="${AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR:-12}"
+SKIP_GIT_CHECK="${AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK:-0}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
 CODEX_BIN="${AGENTSTACK_CODEX_BINARY:-$(command -v codex 2>/dev/null || true)}"
 
@@ -39,6 +40,7 @@ Options:
   --label LABEL             launchd label
   --marketplace-name NAME   Default: agentstack-local
   --wake-limit COUNT        Default: 12 per hour
+  --skip-git-check          Explicitly allow resume outside a trusted git repo
   --python-bin PATH         Python executable
   --codex-bin PATH          Codex executable
   -h, --help                Show this help
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --label) LABEL="$2"; shift 2 ;;
     --marketplace-name) MARKETPLACE_NAME="$2"; shift 2 ;;
     --wake-limit) WAKE_LIMIT="$2"; shift 2 ;;
+    --skip-git-check) SKIP_GIT_CHECK=1; shift ;;
     --python-bin) PYTHON_BIN="$2"; shift 2 ;;
     --codex-bin) CODEX_BIN="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -105,6 +108,8 @@ validate() {
   [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
   [[ "$WAKE_LIMIT" =~ ^[0-9]+$ ]] || die "--wake-limit must be an integer"
   (( WAKE_LIMIT >= 1 && WAKE_LIMIT <= 120 )) || die "--wake-limit must be 1..120"
+  [[ "$SKIP_GIT_CHECK" == "0" || "$SKIP_GIT_CHECK" == "1" ]] \
+    || die "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK must be 0 or 1"
   if [[ "$NO_PLUGIN" != true ]]; then
     [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
   fi
@@ -161,7 +166,7 @@ write_env() {
   umask 077
   "$PYTHON_BIN" - "$ENV_FILE" "$INSTALL_DIR" "$RUNTIME_DIR" "$PROJECT_KEY" \
     "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$WAKE_LIMIT" \
-    "$CODEX_BIN" "$PYTHON_BIN" <<'PY'
+    "$SKIP_GIT_CHECK" "$CODEX_BIN" "$PYTHON_BIN" <<'PY'
 import pathlib
 import shlex
 import sys
@@ -176,6 +181,7 @@ import sys
     signals_dir,
     label,
     wake_limit,
+    skip_git_check,
     codex_bin,
     python_bin,
 ) = sys.argv[1:]
@@ -191,6 +197,7 @@ values = {
     "AGENTSTACK_SIGNALS_DIR": signals_dir,
     "AGENTSTACK_CODEX_APP_LAUNCHD_LABEL": label,
     "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR": wake_limit,
+    "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": skip_git_check,
     "AGENTSTACK_CODEX_BINARY": codex_bin,
     "AGENTSTACK_PYTHON": python_bin,
 }

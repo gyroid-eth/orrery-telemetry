@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -317,7 +318,7 @@ class DeliveryManager:
                     """,
                     (
                         status,
-                        _error_code(error_code),
+                        _error_detail(error_code),
                         now,
                         project_key,
                         agent_name,
@@ -325,6 +326,52 @@ class DeliveryManager:
                         lease_owner,
                     ),
                 )
+
+    def requeue(
+        self,
+        project_key: str,
+        agent_name: str,
+        message_id: int,
+    ) -> bool:
+        """Explicitly reset one failed or terminal delivery for operator replay."""
+
+        if not project_key or not agent_name or not _positive_int(message_id):
+            raise ValueError("project_key, agent_name, and positive message_id required")
+        now = _timestamp(self.clock())
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT status, created_at
+                FROM codex_app_delivery_state
+                WHERE project_key = ? AND agent_name = ? AND message_id = ?
+                """,
+                (project_key, agent_name, message_id),
+            ).fetchone()
+            if row is None or row["status"] not in {"failed", "dead_letter"}:
+                return False
+            connection.execute(
+                """
+                DELETE FROM codex_app_delivery_state
+                WHERE project_key = ? AND agent_name = ? AND message_id = ?
+                """,
+                (project_key, agent_name, message_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO codex_app_delivery_state
+                    (project_key, agent_name, message_id, status, attempt_count,
+                     last_error, created_at, updated_at)
+                VALUES (?, ?, ?, 'pending', 0, NULL, ?, ?)
+                """,
+                (
+                    project_key,
+                    agent_name,
+                    message_id,
+                    row["created_at"],
+                    now,
+                ),
+            )
+        return True
 
     def status(self, project_key: str, agent_name: str) -> DeliveryStatus:
         with self._connect() as connection:
@@ -419,10 +466,20 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _error_code(value: str) -> str:
+def _error_detail(value: str) -> str:
     safe = "".join(
-        character
-        for character in str(value).lower()
-        if character.isascii() and (character.isalnum() or character in "_-")
+        character if character.isprintable() else " " for character in str(value)
     )
-    return (safe or "wake_failed")[:64]
+    safe = re.sub(
+        r"(?i)\b(token|secret|password|api[_-]?key)\b(\s*[:=]\s*)(\S+)",
+        r"\1\2<redacted>",
+        safe,
+    )
+    safe = re.sub(r"(?i)\b(bearer\s+)(\S+)", r"\1<redacted>", safe)
+    safe = re.sub(
+        r"(?<![A-Za-z0-9])[A-Za-z0-9_~+/=-]{32,}",
+        "<redacted>",
+        safe,
+    )
+    safe = " ".join(safe.split())
+    return (safe or "resume_failed")[:256]

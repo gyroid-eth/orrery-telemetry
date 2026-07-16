@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import subprocess
+import threading
 import time
 import uuid
 from collections import deque
@@ -23,6 +24,19 @@ from .snapshot import SnapshotStore
 _SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
 _SYSTEM_SUBJECT_PREFIX = "[agentstack:system]"
 _DEFAULT_SYSTEM_SENDERS = frozenset({"AgentStackBridge", "agentstack-bridge"})
+_UNTRUSTED_WORKSPACE = re.compile(
+    r"(?:not inside|not in) a trusted directory|"
+    r"--skip-git-repo-check was not specified",
+    re.IGNORECASE,
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(token|secret|password|api[_-]?key)\b(\s*[:=]\s*)(\S+)"
+)
+_BEARER_VALUE = re.compile(r"(?i)\b(bearer\s+)(\S+)")
+_HIGH_ENTROPY_VALUE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_~+/=-]{32,}")
+_CAPTURE_BYTES = 4096
+_DIAGNOSTIC_CHARACTERS = 256
+_DIAGNOSTIC_LINES = 2
 
 
 class ResumeProcess(Protocol):
@@ -31,6 +45,8 @@ class ResumeProcess(Protocol):
     def terminate(self) -> None: ...
 
     def wait(self, timeout: float | None = None) -> int: ...
+
+    def diagnostic_tail(self) -> str: ...
 
 
 ProcessFactory = Callable[..., ResumeProcess]
@@ -63,6 +79,70 @@ class WakeAttempt:
     started_at: float
     prior_state: str
     prior_last_seen_at: str
+
+
+class CapturedResumeProcess:
+    """Drain merged child output while retaining only a bounded diagnostic tail."""
+
+    def __init__(self, process: Any) -> None:
+        self._process = process
+        self._tail = bytearray()
+        self._lock = threading.Lock()
+        stream = getattr(process, "stdout", None)
+        self._reader = (
+            threading.Thread(
+                target=self._drain,
+                args=(stream,),
+                name="agentstack-codex-resume-output",
+                daemon=True,
+            )
+            if stream is not None
+            else None
+        )
+        if self._reader is not None:
+            self._reader.start()
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def terminate(self) -> None:
+        self._process.terminate()
+
+    def wait(self, timeout: float | None = None) -> int:
+        result = self._process.wait(timeout=timeout)
+        self._join_reader()
+        return result
+
+    def diagnostic_tail(self) -> str:
+        if self.poll() is not None:
+            self._join_reader()
+        with self._lock:
+            payload = bytes(self._tail)
+        return sanitize_resume_output(payload.decode("utf-8", errors="replace"))
+
+    def _drain(self, stream: Any) -> None:
+        try:
+            while True:
+                block = stream.read(1024)
+                if not block:
+                    break
+                if isinstance(block, str):
+                    block = block.encode("utf-8", errors="replace")
+                with self._lock:
+                    self._tail.extend(block)
+                    if len(self._tail) > _CAPTURE_BYTES:
+                        del self._tail[:-_CAPTURE_BYTES]
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except (OSError, AttributeError):
+                pass
+
+    def _join_reader(self) -> None:
+        if self._reader is not None:
+            self._reader.join(timeout=1)
 
 
 def validate_codex_binary(
@@ -99,9 +179,11 @@ class ExecResumeAdapter:
         self,
         *,
         codex_binary: str = "codex",
+        skip_git_repo_check: bool = False,
         process_factory: ProcessFactory = subprocess.Popen,
     ) -> None:
         self.codex_binary = validate_codex_binary(codex_binary)
+        self.skip_git_repo_check = bool(skip_git_repo_check)
         self.process_factory = process_factory
 
     def start(
@@ -119,18 +201,22 @@ class ExecResumeAdapter:
             self.codex_binary,
             "exec",
             "resume",
-            session_id,
-            build_wake_prompt(messages),
         ]
-        return self.process_factory(
+        if self.skip_git_repo_check:
+            argv.append("--skip-git-repo-check")
+        argv.extend((session_id, build_wake_prompt(messages)))
+        process = self.process_factory(
             argv,
             cwd=os.fspath(cwd) if cwd is not None else None,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             close_fds=True,
             start_new_session=True,
         )
+        if callable(getattr(process, "diagnostic_tail", None)):
+            return process
+        return CapturedResumeProcess(process)
 
 
 class WakeCoordinator:
@@ -268,15 +354,20 @@ class WakeCoordinator:
                 process = self.adapter.start(
                     binding["session_id"],
                     selected,
-                    cwd=binding["project_key"],
+                    cwd=_resume_cwd(snapshot, binding),
                 )
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                detail = _failure_detail(
+                    "resume_start_failed",
+                    None,
+                    str(exc),
+                )
                 self.delivery.mark_failed(
                     binding["project_key"],
                     binding["agent_name"],
                     acquired,
                     lease_owner=lease_owner,
-                    error_code="resume_start_failed",
+                    error_code=detail,
                     max_attempts=self.policy.max_attempts,
                 )
                 failed = self.delivery.status(
@@ -321,10 +412,12 @@ class WakeCoordinator:
                 except (OSError, subprocess.TimeoutExpired):
                     pass
                 return_code = None
+            diagnostic = _process_diagnostic(attempt.process)
+            failure = _resume_failure(return_code, diagnostic, timed_out=timed_out)
             message_ids = [item.message_id for item in attempt.messages]
             project_key = attempt.binding["project_key"]
             agent_name = attempt.binding["agent_name"]
-            if return_code == 0:
+            if failure is None:
                 self.delivery.mark_delivered(
                     project_key,
                     agent_name,
@@ -332,16 +425,15 @@ class WakeCoordinator:
                     lease_owner=attempt.lease_owner,
                 )
             else:
+                _, detail, terminal = failure
                 self.delivery.mark_failed(
                     project_key,
                     agent_name,
                     message_ids,
                     lease_owner=attempt.lease_owner,
-                    error_code=(
-                        "resume_blocked" if timed_out else "resume_failed"
-                    ),
+                    error_code=detail,
                     max_attempts=self.policy.max_attempts,
-                    terminal=timed_out,
+                    terminal=terminal,
                 )
             snapshot = self.snapshots.get(external_id)
             status = self.delivery.status(project_key, agent_name)
@@ -349,10 +441,14 @@ class WakeCoordinator:
                 state: str | None = None
                 if snapshot["last_seen_at"] == attempt.prior_last_seen_at:
                     state = "blocked" if timed_out else attempt.prior_state
-                if timed_out:
+                if failure is not None and failure[0] == "untrusted_workspace":
+                    wake_status = "blocked"
+                    error = "untrusted_workspace"
+                    state = "blocked"
+                elif timed_out:
                     wake_status = "blocked"
                     error = "resume_blocked"
-                elif return_code == 0:
+                elif failure is None:
                     wake_status = (
                         "pending" if status.pending_count else "idle"
                     )
@@ -406,7 +502,7 @@ class WakeCoordinator:
             "wake_status": wake_status,
             "failed_count": status.failed_count,
             "dead_letter_count": status.dead_letter_count,
-            "last_error": error or status.last_error,
+            "last_error": error or _snapshot_error(status.last_error),
             "parent_external_id": (
                 snapshot["parent_external_id"]
                 if wake_status == "blocked"
@@ -446,6 +542,102 @@ def build_wake_prompt(messages: Sequence[WakeMessage]) -> str:
         "as appropriate. Pending message metadata: "
         + json.dumps(metadata, ensure_ascii=True, separators=(",", ":"))
     )
+
+
+def sanitize_resume_output(value: str) -> str:
+    """Return a token-redacted, bounded two-line diagnostic tail."""
+
+    normalized = "".join(
+        character if character.isprintable() or character in "\r\n\t" else " "
+        for character in str(value)
+    )
+    normalized = _SECRET_ASSIGNMENT.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}<redacted>",
+        normalized,
+    )
+    normalized = _BEARER_VALUE.sub(
+        lambda match: f"{match.group(1)}<redacted>",
+        normalized,
+    )
+    normalized = _HIGH_ENTROPY_VALUE.sub("<redacted>", normalized)
+    lines = [" ".join(line.split()) for line in normalized.splitlines()]
+    nonempty = [line for line in lines if line]
+    tail = " | ".join(nonempty[-_DIAGNOSTIC_LINES:])
+    return tail[-_DIAGNOSTIC_CHARACTERS:]
+
+
+def _process_diagnostic(process: ResumeProcess) -> str:
+    reader = getattr(process, "diagnostic_tail", None)
+    if not callable(reader):
+        return ""
+    try:
+        return sanitize_resume_output(reader())
+    except (OSError, ValueError):
+        return ""
+
+
+def _resume_failure(
+    return_code: int | None,
+    diagnostic: str,
+    *,
+    timed_out: bool,
+) -> tuple[str, str, bool] | None:
+    if timed_out:
+        return (
+            "resume_blocked",
+            _failure_detail("resume_blocked", return_code, diagnostic),
+            True,
+        )
+    if _UNTRUSTED_WORKSPACE.search(diagnostic):
+        return (
+            "untrusted_workspace",
+            _failure_detail("untrusted_workspace", return_code, diagnostic),
+            True,
+        )
+    if return_code == 0:
+        return None
+    return (
+        "resume_failed",
+        _failure_detail("resume_failed", return_code, diagnostic),
+        False,
+    )
+
+
+def _failure_detail(
+    code: str,
+    return_code: int | None,
+    diagnostic: str,
+) -> str:
+    exit_value = "timeout" if return_code is None else str(return_code)
+    detail = f"{code} exit={exit_value}"
+    safe_output = sanitize_resume_output(diagnostic)
+    if safe_output:
+        detail += f" output={safe_output}"
+    return detail[:_DIAGNOSTIC_CHARACTERS]
+
+
+def _snapshot_error(detail: str | None) -> str | None:
+    if detail is None:
+        return None
+    if detail.startswith("untrusted_workspace"):
+        return "untrusted_workspace"
+    if detail.startswith("resume_start_failed"):
+        return "resume_start_failed"
+    if detail.startswith("resume_blocked"):
+        return "resume_blocked"
+    return "resume_failed"
+
+
+def _resume_cwd(
+    snapshot: Mapping[str, Any],
+    binding: Mapping[str, Any],
+) -> str:
+    workspace = snapshot.get("cwd")
+    if isinstance(workspace, str):
+        path = Path(workspace).expanduser()
+        if path.is_absolute() and path.is_dir():
+            return os.fspath(path)
+    return str(binding["project_key"])
 
 
 def read_signal_messages(

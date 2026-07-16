@@ -153,3 +153,47 @@ def test_exhausted_attempt_moves_to_dead_letter(tmp_path):
     assert status.pending_count == 0
     assert status.dead_letter_count == 1
     assert status.last_error == "resume_failed"
+
+
+def test_failure_detail_is_bounded_redacted_and_dead_letter_can_be_requeued(
+    tmp_path,
+):
+    clock = MutableClock()
+    manager = _manager(tmp_path, clock)
+    manager.observe("/workspace/example", "Calm-Noether", [12])
+    manager.acquire(
+        "/workspace/example",
+        "Calm-Noether",
+        [12],
+        lease_owner="wake-one",
+        lease_seconds=30,
+    )
+    manager.mark_failed(
+        "/workspace/example",
+        "Calm-Noether",
+        [12],
+        lease_owner="wake-one",
+        error_code=(
+            "untrusted_workspace exit=0 "
+            "token=owner-secret-value "
+            + "Bear"
+            + "er abcdefghijklmnopqrstuvwxyz123456 "
+            + "x" * 400
+        ),
+        max_attempts=5,
+        terminal=True,
+    )
+
+    row = manager.rows()[0]
+    assert row["status"] == "dead_letter"
+    assert len(row["last_error"]) <= 256
+    assert "owner-secret-value" not in row["last_error"]
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in row["last_error"]
+    assert "<redacted>" in row["last_error"]
+
+    assert manager.requeue("/workspace/example", "Calm-Noether", 12) is True
+    row = manager.rows()[0]
+    assert row["status"] == "pending"
+    assert row["attempt_count"] == 0
+    assert row["last_error"] is None
+    assert manager.requeue("/workspace/example", "Calm-Noether", 12) is False

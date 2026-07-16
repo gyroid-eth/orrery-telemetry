@@ -17,7 +17,10 @@ The current P3 implementation provides:
   coalescing, bounded exponential retry, an hourly wake limit, and
   dead-letter state;
 - metadata-only cold wake through an argv-safe `codex exec resume` adapter,
-  without message bodies or dangerous bypass flags;
+  using the hook-reported workspace cwd, without message bodies or dangerous
+  bypass flags;
+- bounded, token-redacted resume diagnostics; untrusted workspaces fail once
+  as `blocked / untrusted_workspace` instead of silently exhausting retries;
 - sanitized `wake_failed`, blocked, pending, and dead-letter telemetry for the
   Dashboard provider;
 - fail-closed stopped-subagent handling: durable cold wake targets root tasks;
@@ -74,6 +77,19 @@ After an approved install, diagnose it with:
 
 ```sh
 ~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration
+```
+
+Codex repository trust is enforced by default. For a deliberately reviewed
+non-git workspace only, the installer accepts the explicit
+`--skip-git-check` opt-in, which writes
+`AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK=1`; it is never enabled implicitly.
+
+To explicitly replay one failed or dead-lettered root delivery after fixing
+its cause:
+
+```sh
+~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration \
+  --allow-stopped --requeue-message 123 --agent-name ExampleAgent
 ```
 
 Uninstall retains delivery/binding runtime state unless `--purge-data` is
