@@ -215,6 +215,7 @@ def test_exec_resume_adapter_uses_argv_and_metadata_only_prompt():
     forbidden_flag = "--dangerously-" + "bypass-approvals-and-sandbox"
     assert forbidden_flag not in captured["argv"]
     assert captured["kwargs"]["cwd"] == "/workspace/example"
+    assert captured["kwargs"]["env"]["PATH"] == os.environ.get("PATH", "")
     assert captured["kwargs"]["stdout"] is not subprocess.DEVNULL
     assert captured["kwargs"]["stderr"] == subprocess.STDOUT
     assert "shell" not in captured["kwargs"]
@@ -294,6 +295,7 @@ def test_exec_resume_adapter_accepts_verified_absolute_binary(tmp_path):
 
     def factory(argv, **kwargs):
         captured["argv"] = argv
+        captured["env"] = kwargs["env"]
         return FakeProcess()
 
     adapter = ExecResumeAdapter(
@@ -306,6 +308,38 @@ def test_exec_resume_adapter_accepts_verified_absolute_binary(tmp_path):
     )
 
     assert captured["argv"][0] == str(codex)
+    assert captured["env"]["PATH"].split(os.pathsep)[0] == str(codex.parent)
+    assert captured["env"]["PATH"].split(os.pathsep).count(str(codex.parent)) == 1
+
+
+def test_exec_resume_adapter_resolves_sibling_shebang_dependency_with_minimal_path(
+    tmp_path,
+    monkeypatch,
+):
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    interpreter = binary_dir / "agentstack-test-node"
+    interpreter.write_text(
+        "#!/bin/sh\nprintf 'sibling interpreter ok\\n'\n",
+        encoding="utf-8",
+    )
+    interpreter.chmod(0o755)
+    codex = binary_dir / "codex"
+    codex.write_text(
+        "#!/usr/bin/env agentstack-test-node\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    process = ExecResumeAdapter(codex_binary=str(codex)).start(
+        "session-example",
+        [WakeMessage(7, "Steel-Boltzmann", "Task")],
+        cwd=tmp_path,
+    )
+
+    assert process.wait(timeout=5) == 0
+    assert process.diagnostic_tail() == "sibling interpreter ok"
 
 
 @pytest.mark.parametrize(
@@ -437,6 +471,35 @@ def test_untrusted_workspace_exit_zero_blocks_once_with_diagnostic(tmp_path):
     assert runtime["state"] == "blocked"
     assert runtime["delivery"]["wake_status"] == "blocked"
     assert runtime["delivery"]["last_error"] == "untrusted_workspace"
+
+    timing.advance(60)
+    coordinator.tick([binding])
+    assert len(adapter.calls) == 1
+
+
+def test_missing_resume_interpreter_blocks_without_retry(tmp_path):
+    timing, _, binding, snapshots, delivery, adapter, coordinator = _coordinator(
+        tmp_path,
+        policy=WakePolicy(coalesce_seconds=0),
+    )
+    _signal(tmp_path, 20)
+
+    coordinator.tick([binding])
+    adapter.processes[0].return_code = 127
+    adapter.processes[0].diagnostic = "env: node: No such file or directory"
+    coordinator.tick([binding])
+
+    row = delivery.rows()[0]
+    assert row["status"] == "dead_letter"
+    assert row["attempt_count"] == 1
+    assert row["last_error"] == (
+        "resume_environment exit=127 output="
+        "env: node: No such file or directory"
+    )
+    runtime = snapshots.get(binding["external_id"])
+    assert runtime["state"] == "blocked"
+    assert runtime["delivery"]["wake_status"] == "blocked"
+    assert runtime["delivery"]["last_error"] == "resume_environment"
 
     timing.advance(60)
     coordinator.tick([binding])

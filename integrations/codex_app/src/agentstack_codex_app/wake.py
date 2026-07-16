@@ -29,6 +29,11 @@ _UNTRUSTED_WORKSPACE = re.compile(
     r"--skip-git-repo-check was not specified",
     re.IGNORECASE,
 )
+_ENVIRONMENT_FAILURE = re.compile(
+    r"\benv:\s*[^:\n]+:\s*no such file or directory|"
+    r"\bcommand not found\b",
+    re.IGNORECASE,
+)
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(token|secret|password|api[_-]?key)\b(\s*[:=]\s*)(\S+)"
 )
@@ -208,6 +213,7 @@ class ExecResumeAdapter:
         process = self.process_factory(
             argv,
             cwd=os.fspath(cwd) if cwd is not None else None,
+            env=_resume_environment(self.codex_binary),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -441,9 +447,12 @@ class WakeCoordinator:
                 state: str | None = None
                 if snapshot["last_seen_at"] == attempt.prior_last_seen_at:
                     state = "blocked" if timed_out else attempt.prior_state
-                if failure is not None and failure[0] == "untrusted_workspace":
+                if failure is not None and failure[0] in {
+                    "untrusted_workspace",
+                    "resume_environment",
+                }:
                     wake_status = "blocked"
-                    error = "untrusted_workspace"
+                    error = failure[0]
                     state = "blocked"
                 elif timed_out:
                     wake_status = "blocked"
@@ -594,6 +603,12 @@ def _resume_failure(
             _failure_detail("untrusted_workspace", return_code, diagnostic),
             True,
         )
+    if return_code in {126, 127} or _ENVIRONMENT_FAILURE.search(diagnostic):
+        return (
+            "resume_environment",
+            _failure_detail("resume_environment", return_code, diagnostic),
+            True,
+        )
     if return_code == 0:
         return None
     return (
@@ -621,6 +636,8 @@ def _snapshot_error(detail: str | None) -> str | None:
         return None
     if detail.startswith("untrusted_workspace"):
         return "untrusted_workspace"
+    if detail.startswith("resume_environment"):
+        return "resume_environment"
     if detail.startswith("resume_start_failed"):
         return "resume_start_failed"
     if detail.startswith("resume_blocked"):
@@ -638,6 +655,27 @@ def _resume_cwd(
         if path.is_absolute() and path.is_dir():
             return os.fspath(path)
     return str(binding["project_key"])
+
+
+def _resume_environment(
+    codex_binary: str,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Give shebang dependencies beside an absolute Codex binary precedence."""
+
+    environment = dict(os.environ if environ is None else environ)
+    binary = Path(codex_binary)
+    if not binary.is_absolute():
+        return environment
+    binary_dir = os.fspath(binary.parent)
+    current = environment.get("PATH", "")
+    remaining = [
+        item
+        for item in current.split(os.pathsep)
+        if item and item != binary_dir
+    ]
+    environment["PATH"] = os.pathsep.join([binary_dir, *remaining])
+    return environment
 
 
 def read_signal_messages(
