@@ -116,6 +116,18 @@ def forward_event(
 ) -> bool:
     """Forward one event and return whether the Bridge accepted it."""
 
+    response = forward_event_response(event, socket_path, timeout=timeout)
+    return response is not None and response.get("ok") is True
+
+
+def forward_event_response(
+    event: Mapping[str, Any],
+    socket_path: str | os.PathLike[str],
+    *,
+    timeout: float = 0.15,
+) -> dict[str, Any] | None:
+    """Forward one event and return the Bridge's sanitized response."""
+
     payload = json.dumps(validate_event(event), separators=(",", ":")).encode("utf-8") + b"\n"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -124,12 +136,12 @@ def forward_event(
             connection.sendall(payload)
             response = _recv_line(connection, MAX_EVENT_BYTES)
     except (OSError, TimeoutError):
-        return False
+        return None
     try:
         decoded = json.loads(response)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    return isinstance(decoded, dict) and decoded.get("ok") is True
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def append_spool(event: Mapping[str, Any], path: str | os.PathLike[str]) -> None:
@@ -156,16 +168,69 @@ def handle_payload(
     *,
     socket_path: str | os.PathLike[str] | None = None,
     spool_path: str | os.PathLike[str] | None = None,
-) -> bool:
+) -> dict[str, Any] | None:
     """Sanitize and deliver a hook payload, spooling on Bridge failure."""
 
     event = normalize_event(payload)
     target_socket = Path(socket_path) if socket_path is not None else socket_path_from_env()
-    if forward_event(event, target_socket):
-        return True
+    response = forward_event_response(event, target_socket)
+    if response is not None and response.get("ok") is True:
+        return response
     target_spool = Path(spool_path) if spool_path is not None else spool_path_from_env()
     append_spool(event, target_spool)
-    return False
+    return None
+
+
+def hook_output(
+    event: Mapping[str, Any], response: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """Build sanitized model context for bootstrap or pending mail."""
+
+    hook_name = event.get("hook_event_name")
+    if hook_name in {"SessionStart", "SubagentStart"} and response is not None:
+        if response.get("ok") is not True:
+            return None
+        session_id = json.dumps(event.get("session_id"), ensure_ascii=True)
+        agent_id = json.dumps(event.get("agent_id"), ensure_ascii=True)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": hook_name,
+                "additionalContext": (
+                    "AgentStack coordination bootstrap: call "
+                    f"agentstack.bootstrap with session_id={session_id} and "
+                    f"agent_id={agent_id} before other agentstack tools. Use "
+                    "exactly this runtime identity for the life of the task."
+                ),
+            }
+        }
+    if hook_name != "PostToolUse" or response is None:
+        return None
+    pending = response.get("pending")
+    if not isinstance(pending, dict):
+        return None
+    count = pending.get("count")
+    agent_name = pending.get("agent_name")
+    project_key = pending.get("project_key")
+    if (
+        not isinstance(count, int)
+        or count < 1
+        or not isinstance(agent_name, str)
+        or not isinstance(project_key, str)
+    ):
+        return None
+    noun = "message" if count == 1 else "messages"
+    context = (
+        f"AgentStack has {count} pending {noun} for {agent_name} in "
+        f"{project_key}. Call agentstack.fetch_inbox with this task's "
+        "session_id before continuing coordination work."
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": context,
+        },
+        "systemMessage": f"AgentStack: {count} pending {noun} for {agent_name}.",
+    }
 
 
 def main() -> int:
@@ -178,7 +243,16 @@ def main() -> int:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             return 0
-        handle_payload(payload)
+        event = normalize_event(payload)
+        response = handle_payload(
+            event,
+            socket_path=socket_path_from_env(),
+            spool_path=spool_path_from_env(),
+        )
+        output = hook_output(event, response)
+        if output is not None:
+            sys.stdout.write(json.dumps(output, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
     except (HookEventError, OSError, json.JSONDecodeError):
         # Lifecycle telemetry must never prevent the user's Codex turn.
         return 0

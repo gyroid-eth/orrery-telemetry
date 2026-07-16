@@ -89,3 +89,68 @@ def test_register_agent_rejects_conflicting_returned_token():
             model="gpt-example",
             registration_token="owner-secret",
         )
+
+
+def test_p2_methods_use_only_explicit_agent_mail_tools():
+    responses = [
+        {"result": {"structuredContent": {"result": [{"id": 7}]}}},
+        {"result": {"structuredContent": {"count": 1}}},
+        {"result": {"structuredContent": {"message_id": 7}}},
+        {"result": {"structuredContent": {"granted": [], "conflicts": []}}},
+        {"result": {"structuredContent": {"renewed": 1}}},
+        {"result": {"structuredContent": {"released": 1}}},
+    ]
+
+    class SequenceTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def __call__(self, payload):
+            self.payloads.append(payload)
+            return responses[len(self.payloads) - 1]
+
+    transport = SequenceTransport()
+    client = AgentMailClient(transport)
+    assert client.fetch_inbox(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+    ) == [{"id": 7}]
+    client.send_message(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+        registration_token="owner-secret",
+        to=["Quiet-Curie"],
+        subject="Result",
+        body_md="Done",
+    )
+    client.acknowledge_message(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+        message_id=7,
+    )
+    client.reserve_files(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+        paths=["src/*.py"],
+    )
+    client.renew_reservations(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+        file_reservation_ids=[11],
+    )
+    client.release_reservations(
+        project_key="/workspace/example",
+        agent_name="Calm-Noether",
+        file_reservation_ids=[11],
+    )
+
+    assert [call["params"]["name"] for call in transport.payloads] == [
+        "fetch_inbox",
+        "send_message",
+        "acknowledge_message",
+        "file_reservation_paths",
+        "renew_file_reservations",
+        "release_file_reservations",
+    ]
+    send_args = transport.payloads[1]["params"]["arguments"]
+    assert send_args["sender_token"] == "owner-secret"

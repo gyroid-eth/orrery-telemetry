@@ -8,6 +8,7 @@
   "license": "MIT",
   "keywords": ["codex", "agents", "coordination"],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AgentStack Codex App",
     "shortDescription": "Coordinate Codex App tasks with AgentStack.",

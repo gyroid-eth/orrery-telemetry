@@ -1,7 +1,8 @@
-"""Minimal, injectable agent-mail registration client.
+"""Injectable agent-mail client used by the Bridge and P2 MCP proxy.
 
-Only ``register_agent`` is exposed in P1. Inbox and message operations remain
-outside this client until the allowlisted P2 MCP proxy is implemented.
+The client exposes only the operations explicitly allowlisted by the Codex App
+integration. Identity, project, and owner credentials are supplied by the
+server-side binding; callers never provide them through the proxy tool surface.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ class HttpJsonRpcTransport:
 
 
 class AgentMailClient:
-    """Register and refresh Codex App identities through agent-mail."""
+    """Perform the allowlisted Codex App operations through agent-mail."""
 
     def __init__(self, transport: JsonRpcTransport) -> None:
         self.transport = transport
@@ -98,7 +99,7 @@ class AgentMailClient:
         }
         if agent_name is not None:
             arguments["name"] = agent_name
-        result = self._call_tool("register_agent", arguments)
+        result = self._call_tool_object("register_agent", arguments)
         returned_name = result.get("name") or result.get("agent_name")
         if not isinstance(returned_name, str) or not returned_name:
             raise AgentMailError("register_agent response did not include an agent name")
@@ -107,9 +108,150 @@ class AgentMailClient:
             raise AgentMailError("register_agent returned a conflicting owner token")
         return Registration(returned_name, registration_token)
 
-    def _call_tool(
+    def fetch_inbox(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        limit: int = 20,
+        urgent_only: bool = False,
+        include_bodies: bool = False,
+        since_ts: str | None = None,
+        topic: str | None = None,
+    ) -> list[dict[str, Any]]:
+        arguments: dict[str, Any] = {
+            "project_key": project_key,
+            "agent_name": agent_name,
+            "limit": limit,
+            "urgent_only": urgent_only,
+            "include_bodies": include_bodies,
+        }
+        _put_optional(arguments, "since_ts", since_ts)
+        _put_optional(arguments, "topic", topic)
+        value = self._call_tool("fetch_inbox", arguments)
+        if isinstance(value, dict) and set(value) == {"result"}:
+            value = value["result"]
+        if not isinstance(value, list) or not all(
+            isinstance(item, dict) for item in value
+        ):
+            raise AgentMailError("fetch_inbox returned an unexpected result")
+        return [dict(item) for item in value]
+
+    def send_message(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        registration_token: str,
+        to: list[str],
+        subject: str,
+        body_md: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        importance: str = "normal",
+        ack_required: bool = False,
+        thread_id: str | None = None,
+        topic: str | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "project_key": project_key,
+            "sender_name": agent_name,
+            "sender_token": registration_token,
+            "to": to,
+            "subject": subject,
+            "body_md": body_md,
+            "importance": importance,
+            "ack_required": ack_required,
+        }
+        _put_optional(arguments, "cc", cc)
+        _put_optional(arguments, "bcc", bcc)
+        _put_optional(arguments, "thread_id", thread_id)
+        _put_optional(arguments, "topic", topic)
+        return self._call_tool_object("send_message", arguments)
+
+    def acknowledge_message(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        message_id: int,
+    ) -> dict[str, Any]:
+        return self._call_tool_object(
+            "acknowledge_message",
+            {
+                "project_key": project_key,
+                "agent_name": agent_name,
+                "message_id": message_id,
+            },
+        )
+
+    def reserve_files(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        paths: list[str],
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        return self._call_tool_object(
+            "file_reservation_paths",
+            {
+                "project_key": project_key,
+                "agent_name": agent_name,
+                "paths": paths,
+                "ttl_seconds": ttl_seconds,
+                "exclusive": exclusive,
+                "reason": reason,
+            },
+        )
+
+    def renew_reservations(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        extend_seconds: int = 1800,
+        paths: list[str] | None = None,
+        file_reservation_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "project_key": project_key,
+            "agent_name": agent_name,
+            "extend_seconds": extend_seconds,
+        }
+        _put_optional(arguments, "paths", paths)
+        _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
+        return self._call_tool_object("renew_file_reservations", arguments)
+
+    def release_reservations(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+        paths: list[str] | None = None,
+        file_reservation_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "project_key": project_key,
+            "agent_name": agent_name,
+        }
+        _put_optional(arguments, "paths", paths)
+        _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
+        return self._call_tool_object("release_file_reservations", arguments)
+
+    def _call_tool_object(
         self, tool_name: str, arguments: Mapping[str, Any]
     ) -> dict[str, Any]:
+        value = self._call_tool(tool_name, arguments)
+        if not isinstance(value, dict):
+            raise AgentMailError(f"{tool_name} returned a non-object result")
+        return dict(value)
+
+    def _call_tool(
+        self, tool_name: str, arguments: Mapping[str, Any]
+    ) -> Any:
         self._request_id += 1
         response = self.transport(
             {
@@ -128,7 +270,7 @@ class AgentMailClient:
             raise AgentMailError("agent-mail tool call failed")
 
         structured = rpc_result.get("structuredContent")
-        if isinstance(structured, dict):
+        if isinstance(structured, (dict, list)):
             return structured
         content = rpc_result.get("content")
         if isinstance(content, list):
@@ -142,6 +284,11 @@ class AgentMailClient:
                     decoded = json.loads(text)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(decoded, dict):
+                if isinstance(decoded, (dict, list)):
                     return decoded
         raise AgentMailError("agent-mail tool result has an unexpected shape")
+
+
+def _put_optional(arguments: dict[str, Any], key: str, value: Any) -> None:
+    if value is not None:
+        arguments[key] = value

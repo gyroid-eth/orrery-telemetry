@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from agentstack_codex_app.agent_mail_client import AgentMailError, Registration
@@ -172,6 +173,72 @@ def test_private_socket_accepts_event_and_worker_writes_snapshot():
         daemon.stop()
         thread.join(timeout=2)
         assert config.snapshot_path.exists()
+
+
+def test_post_tool_use_coalesces_pending_agent_mail_signals(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        signals_dir=tmp_path / "signals",
+        project_slug="example-project",
+    )
+    daemon = BridgeDaemon(
+        config,
+        FakeAgentMail(),
+        name_factory=lambda: "Calm-Noether",
+    )
+    daemon.process_event(_event())
+    signal_dir = (
+        config.signals_dir
+        / "projects"
+        / "example-project"
+        / "agents"
+        / "Calm-Noether"
+    )
+    signal_dir.mkdir(parents=True)
+    (signal_dir / "7.signal").write_text(
+        json.dumps(
+            {
+                "project": "example-project",
+                "agent": "Calm-Noether",
+                "message": {"id": 7, "subject": "private subject"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    server_side, hook_side = socket.socketpair()
+    thread = threading.Thread(
+        target=daemon._handle_connection,
+        args=(server_side,),
+    )
+    thread.start()
+    hook_side.sendall(
+        json.dumps(_event("PostToolUse"), separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    response = json.loads(hook_side.recv(65536))
+    hook_side.close()
+    server_side.close()
+    thread.join(timeout=1)
+    assert response["pending"] == {
+        "count": 1,
+        "agent_name": "Calm-Noether",
+        "project_key": "/workspace/example",
+    }
+    assert "private subject" not in json.dumps(response)
+    assert daemon._pending_notice(_event("PostToolUse")) is None
+
+    (signal_dir / "8.signal").write_text(
+        json.dumps(
+            {
+                "project": "example-project",
+                "agent": "Calm-Noether",
+                "message": {"id": 8},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert daemon._pending_notice(_event("PostToolUse"))["count"] == 2
 
 
 def stat_mode(path: Path) -> int:

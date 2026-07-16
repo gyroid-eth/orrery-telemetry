@@ -10,7 +10,10 @@ The current P1 implementation provides:
 - versioned runtime-event and binding schemas plus delivery-state migration;
 - a private Bridge socket, fail-open hook spool, durable identity bindings,
   separately protected owner tokens, and sanitized dashboard snapshots;
-- minimal, injectable agent-mail registration and a Codex App runtime provider;
+- a session-bound, allowlisted MCP proxy for inbox, messaging, acknowledgement,
+  reservations, and sanitized runtime/lineage status;
+- PostToolUse pending-mail notices without automatic resume or parallel turns;
+- injectable agent-mail transport and a Codex App runtime provider;
 - fake-server protocol tests that do not start Codex or require tmux.
 
 `wake.py` deliberately raises `NotImplementedError`. P1 performs no inbox

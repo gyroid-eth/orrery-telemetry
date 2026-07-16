@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agentstack": {
+      "command": "python3",
+      "args": ["../src/agentstack_codex_app/mcp_server.py"],
+      "cwd": "."
+    }
+  }
+}

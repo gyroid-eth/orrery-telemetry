@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import secrets
 import socket
 import stat
@@ -110,6 +111,8 @@ class BridgeConfig:
     agent_mail_endpoint: str
     agent_mail_bearer: str | None = None
     registration_retry_seconds: float = 5.0
+    signals_dir: Path | None = None
+    project_slug: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BridgeConfig":
@@ -123,6 +126,13 @@ class BridgeConfig:
             raise ValueError("AGENTSTACK_MCP_URL must be configured")
         socket_value = (env.get("AGENTSTACK_CODEX_APP_SOCKET") or "").strip()
         spool_value = (env.get("AGENTSTACK_CODEX_APP_SPOOL") or "").strip()
+        signals_value = (env.get("AGENTSTACK_SIGNALS_DIR") or "").strip()
+        mail_home = (env.get("AGENTSTACK_MAIL_HOME") or "").strip()
+        project_slug = (env.get("AGENTSTACK_PROJECT_SLUG") or "").strip() or None
+        if project_slug is not None and re.fullmatch(
+            r"[a-z0-9][a-z0-9-]*", project_slug
+        ) is None:
+            raise ValueError("AGENTSTACK_PROJECT_SLUG has an invalid format")
         retry_value = (env.get("AGENTSTACK_CODEX_APP_RETRY_SECONDS") or "5").strip()
         try:
             retry_seconds = float(retry_value)
@@ -144,6 +154,12 @@ class BridgeConfig:
             agent_mail_endpoint=endpoint,
             agent_mail_bearer=(env.get("MCP_AGENT_MAIL_TOKEN") or None),
             registration_retry_seconds=retry_seconds,
+            signals_dir=(
+                Path(signals_value).expanduser()
+                if signals_value
+                else Path(mail_home or "~/.mcp_agent_mail").expanduser() / "signals"
+            ),
+            project_slug=project_slug,
         )
 
 
@@ -167,6 +183,7 @@ class BridgeDaemon:
         self._events: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
+        self._pending_fingerprints: dict[str, tuple[tuple[str, int, int], ...]] = {}
 
     def process_event(
         self, event: Mapping[str, Any], *, enqueue_on_failure: bool = True
@@ -322,6 +339,9 @@ class BridgeDaemon:
                 "ok": True,
                 "external_id": external_id_for(event["session_id"], event["agent_id"]),
             }
+            pending = self._pending_notice(event)
+            if pending is not None:
+                response["pending"] = pending
         except (ValueError, OSError, json.JSONDecodeError):
             response = {"ok": False, "error": "invalid runtime event"}
         try:
@@ -330,6 +350,65 @@ class BridgeDaemon:
             )
         except OSError:
             pass
+
+    def _pending_notice(
+        self, event: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return one coalesced PostToolUse notice for new signal files."""
+
+        if event["hook_event_name"] != "PostToolUse":
+            return None
+        external_id = external_id_for(event["session_id"], event["agent_id"])
+        binding = self.identities.resolve(external_id)
+        if binding is None:
+            return None
+        fingerprint = self._pending_signal_fingerprint(binding)
+        if not fingerprint:
+            self._pending_fingerprints.pop(external_id, None)
+            return None
+        if self._pending_fingerprints.get(external_id) == fingerprint:
+            return None
+        self._pending_fingerprints[external_id] = fingerprint
+        return {
+            "count": len(fingerprint),
+            "agent_name": binding["agent_name"],
+            "project_key": binding["project_key"],
+        }
+
+    def _pending_signal_fingerprint(
+        self, binding: Mapping[str, Any]
+    ) -> tuple[tuple[str, int, int], ...]:
+        signals_dir = self.config.signals_dir
+        if signals_dir is None:
+            return ()
+        project_slug = self.config.project_slug or _project_slug(
+            binding["project_key"]
+        )
+        agents_dir = signals_dir / "projects" / project_slug / "agents"
+        legacy = agents_dir / f"{binding['agent_name']}.signal"
+        per_message = agents_dir / binding["agent_name"]
+        candidates = [legacy]
+        if per_message.is_dir():
+            candidates.extend(sorted(per_message.glob("*.signal")))
+        observed: list[tuple[str, int, int]] = []
+        for path in candidates:
+            try:
+                metadata = path.lstat()
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                    continue
+                if metadata.st_size > 16 * 1024:
+                    continue
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("agent") != binding["agent_name"]:
+                    continue
+                if payload.get("project") != project_slug:
+                    continue
+                observed.append((path.name, metadata.st_mtime_ns, metadata.st_size))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                continue
+        return tuple(observed)
 
     def _start_worker(self) -> None:
         if self._worker is not None and self._worker.is_alive():
@@ -416,6 +495,11 @@ def _fresh_agent_name() -> str:
     """Create one non-descriptive adjective+scientist identity candidate."""
 
     return f"{secrets.choice(_ADJECTIVES)}-{secrets.choice(_SCIENTISTS)}"
+
+
+def _project_slug(project_key: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", project_key.strip().lower()).strip("-")
+    return slug or "project"
 
 
 def _recv_payload(connection: socket.socket) -> dict[str, Any]:

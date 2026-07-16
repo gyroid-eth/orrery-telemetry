@@ -12,6 +12,7 @@ from pathlib import Path
 from agentstack_codex_app.hook_entry import (
     append_spool,
     forward_event,
+    hook_output,
     normalize_event,
     runtime_dir_from_env,
 )
@@ -106,3 +107,33 @@ def test_hook_entry_script_fails_open_and_spools_without_bridge(tmp_path):
     spool = runtime / "hook-events.jsonl"
     assert spool.exists()
     assert "private prompt" not in spool.read_text(encoding="utf-8")
+
+
+def test_post_tool_use_pending_response_becomes_short_system_message():
+    event = normalize_event(dict(_raw_event(), hook_event_name="PostToolUse"))
+    output = hook_output(
+        event,
+        {
+            "ok": True,
+            "pending": {
+                "count": 2,
+                "agent_name": "Calm-Noether",
+                "project_key": "/workspace/example",
+                "subject": "must not be copied",
+            },
+        },
+    )
+    assert output["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+    assert "agentstack.fetch_inbox" in output["hookSpecificOutput"]["additionalContext"]
+    assert output["systemMessage"] == "AgentStack: 2 pending messages for Calm-Noether."
+    assert "must not be copied" not in json.dumps(output)
+
+
+def test_session_start_response_supplies_exact_proxy_bootstrap_identity():
+    event = normalize_event(dict(_raw_event(), hook_event_name="SessionStart"))
+    output = hook_output(event, {"ok": True})
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert 'session_id="session-example"' in context
+    assert "agent_id=null" in context
+    assert "agentstack.bootstrap" in context
