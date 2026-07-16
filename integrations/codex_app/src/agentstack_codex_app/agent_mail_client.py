@@ -263,6 +263,29 @@ class AgentMailClient:
             },
         )
 
+    def whois(
+        self,
+        *,
+        project_key: str,
+        agent_name: str,
+    ) -> dict[str, Any]:
+        """Read one agent profile without archive commit history."""
+
+        if not project_key or not agent_name:
+            raise ValueError("project_key and agent_name are required")
+        profile = self._call_tool_object(
+            "whois",
+            {
+                "project_key": project_key,
+                "agent_name": agent_name,
+                "include_recent_commits": False,
+            },
+        )
+        returned_name = profile.get("name")
+        if returned_name != agent_name:
+            raise AgentMailError("whois returned a mismatched agent identity")
+        return profile
+
     def _call_tool_object(
         self, tool_name: str, arguments: Mapping[str, Any]
     ) -> dict[str, Any]:

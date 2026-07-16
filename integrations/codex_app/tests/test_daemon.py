@@ -31,6 +31,8 @@ class FakeAgentMail:
         self.calls = []
         self.fail = False
         self.normalize_names = normalize_names
+        self.retired_agents = set()
+        self.retire_failures = set()
 
     def register_agent(self, **kwargs):
         self.calls.append(kwargs)
@@ -43,9 +45,17 @@ class FakeAgentMail:
 
     def retire_agent(self, **kwargs):
         self.calls.append({"retire_agent": kwargs})
-        if self.fail:
+        if self.fail or kwargs["agent_name"] in self.retire_failures:
             raise AgentMailError("offline")
+        self.retired_agents.add(kwargs["agent_name"])
         return {"status": "retired"}
+
+    def whois(self, **kwargs):
+        self.calls.append({"whois": kwargs})
+        profile = {"name": kwargs["agent_name"], "program": "codex-app"}
+        if kwargs["agent_name"] in self.retired_agents:
+            profile["retired_at"] = "2026-07-16T12:00:00Z"
+        return profile
 
 
 class FakeWakeCoordinator:
@@ -389,19 +399,28 @@ def test_cleanup_orphans_retires_with_owner_token_and_keeps_real_app(tmp_path):
     )
     mail = FakeAgentMail()
 
-    cleaned = cleanup_orphan_bindings(
+    report = cleanup_orphan_bindings(
         identities,
         snapshots,
         mail,
         sessions_root=sessions_root,
     )
 
-    assert [item["external_id"] for item in cleaned] == [orphan["external_id"]]
+    assert [item["external_id"] for item in report.cleaned] == [
+        orphan["external_id"]
+    ]
+    assert report.failures == ()
     assert identities.resolve(orphan["external_id"]) is None
     assert snapshots.get(orphan["external_id"]) is None
     assert identities.resolve(real["external_id"]) == real
     assert snapshots.get(real["external_id"]) is not None
     assert mail.calls == [
+        {
+            "whois": {
+                "project_key": "/workspace/example",
+                "agent_name": "CalmNoether",
+            }
+        },
         {
             "retire_agent": {
                 "project_key": "/workspace/example",
@@ -412,38 +431,89 @@ def test_cleanup_orphans_retires_with_owner_token_and_keeps_real_app(tmp_path):
     ]
 
 
-def test_cleanup_orphans_keeps_local_state_when_remote_retire_fails(tmp_path):
+def test_cleanup_orphans_isolates_failure_and_continues_with_later_binding(
+    tmp_path,
+):
     config = _config(tmp_path)
     identities = IdentityStore(config.runtime_dir / "identity")
     snapshots = SnapshotStore(config.snapshot_path)
-    binding = identities.save(
+    failed = identities.save(
         build_binding(
-            session_id="session-orphan",
+            session_id="session-failed",
             agent_id=None,
             agent_name="CalmNoether",
             project_key="/workspace/example",
         )
     )
-    identities.store_owner_token(binding["external_id"], "owner-token")
+    identities.store_owner_token(failed["external_id"], "wrong-owner-token")
+    snapshots.upsert(runtime_record(failed, {}, state="waiting"))
+    cleaned = identities.save(
+        build_binding(
+            session_id="session-cleaned",
+            agent_id=None,
+            agent_name="QuietCurie",
+            project_key="/workspace/example",
+        )
+    )
+    identities.store_owner_token(cleaned["external_id"], "valid-owner-token")
+    snapshots.upsert(runtime_record(cleaned, {}, state="waiting"))
+    mail = FakeAgentMail()
+    mail.retire_failures.add("CalmNoether")
+
+    report = cleanup_orphan_bindings(
+        identities,
+        snapshots,
+        mail,
+        sessions_root=tmp_path / "missing-sessions",
+    )
+
+    assert [item["external_id"] for item in report.cleaned] == [
+        cleaned["external_id"]
+    ]
+    assert [
+        (failure.external_id, failure.error_code)
+        for failure in report.failures
+    ] == [(failed["external_id"], "retire_failed")]
+    assert identities.resolve(failed["external_id"]) == failed
+    assert identities.load_owner_token(failed["external_id"]) == (
+        "wrong-owner-token"
+    )
+    assert snapshots.get(failed["external_id"]) is not None
+    assert identities.resolve(cleaned["external_id"]) is None
+    assert snapshots.get(cleaned["external_id"]) is None
+
+
+def test_cleanup_orphans_purges_already_retired_legacy_token_binding(tmp_path):
+    config = _config(tmp_path)
+    identities = IdentityStore(config.runtime_dir / "identity")
+    snapshots = SnapshotStore(config.snapshot_path)
+    binding = identities.save(
+        build_binding(
+            session_id="session-legacy",
+            agent_id=None,
+            agent_name="GoldMaxwell",
+            project_key="/workspace/example",
+        )
+    )
+    identities.store_owner_token(binding["external_id"], "legacy-wrong-token")
     snapshots.upsert(runtime_record(binding, {}, state="waiting"))
     mail = FakeAgentMail()
-    mail.fail = True
+    mail.retired_agents.add("GoldMaxwell")
 
-    try:
-        cleanup_orphan_bindings(
-            identities,
-            snapshots,
-            mail,
-            sessions_root=tmp_path / "missing-sessions",
-        )
-    except AgentMailError:
-        pass
-    else:
-        raise AssertionError("cleanup must fail closed on remote retire failure")
+    report = cleanup_orphan_bindings(
+        identities,
+        snapshots,
+        mail,
+        sessions_root=tmp_path / "missing-sessions",
+    )
 
-    assert identities.resolve(binding["external_id"]) == binding
-    assert identities.load_owner_token(binding["external_id"]) == "owner-token"
-    assert snapshots.get(binding["external_id"]) is not None
+    assert [item["external_id"] for item in report.cleaned] == [
+        binding["external_id"]
+    ]
+    assert report.failures == ()
+    assert identities.resolve(binding["external_id"]) is None
+    assert snapshots.get(binding["external_id"]) is None
+    assert [next(iter(call)) for call in mail.calls] == ["whois"]
 
 
 def test_private_socket_accepts_event_and_worker_writes_snapshot():

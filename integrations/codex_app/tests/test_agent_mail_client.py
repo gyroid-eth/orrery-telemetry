@@ -184,3 +184,32 @@ def test_retire_agent_uses_bridge_owner_token():
         "agent_name": "CalmNoether",
         "registration_token": "owner-secret",
     }
+
+
+def test_whois_reads_profile_without_commit_history():
+    transport = FakeTransport(
+        {
+            "result": {
+                "structuredContent": {
+                    "name": "CalmNoether",
+                    "program": "codex-app",
+                    "retired_at": "2026-07-16T12:00:00Z",
+                }
+            }
+        }
+    )
+    client = AgentMailClient(transport)
+
+    profile = client.whois(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+    )
+
+    assert profile["retired_at"] == "2026-07-16T12:00:00Z"
+    call = transport.payloads[0]
+    assert call["params"]["name"] == "whois"
+    assert call["params"]["arguments"] == {
+        "project_key": "/workspace/example",
+        "agent_name": "CalmNoether",
+        "include_recent_commits": False,
+    }

@@ -432,15 +432,23 @@ def test_doctor_cleanup_retires_orphan_before_local_purge(tmp_path):
             length = int(self.headers["Content-Length"])
             payload = json.loads(self.rfile.read(length))
             calls.append(payload)
+            tool_name = payload["params"]["name"]
+            if tool_name == "whois":
+                structured = {
+                    "name": "CalmNoether",
+                    "program": "codex-app",
+                }
+            else:
+                structured = {
+                    "status": "retired",
+                    "agent_name": "CalmNoether",
+                    "project_key": str(home / "project"),
+                }
             response = {
                 "jsonrpc": "2.0",
                 "id": payload["id"],
                 "result": {
-                    "structuredContent": {
-                        "status": "retired",
-                        "agent_name": "CalmNoether",
-                        "project_key": str(home / "project"),
-                    }
+                    "structuredContent": structured,
                 },
             }
             body = json.dumps(response).encode()
@@ -524,10 +532,13 @@ SnapshotStore(runtime / "snapshot.json").upsert(
             check=True,
         )
 
-        assert "cleanup complete: 1 orphan binding(s)" in doctor.stdout
-        assert len(calls) == 1
-        assert calls[0]["params"]["name"] == "retire_agent"
-        assert calls[0]["params"]["arguments"]["registration_token"] == "owner-token"
+        assert "cleanup complete: 1 cleaned, 0 failed" in doctor.stdout
+        assert len(calls) == 2
+        assert [call["params"]["name"] for call in calls] == [
+            "whois",
+            "retire_agent",
+        ]
+        assert calls[1]["params"]["arguments"]["registration_token"] == "owner-token"
         assert not list((runtime_dir / "identity" / "bindings").glob("*.json"))
         assert not list((runtime_dir / "identity" / "secrets").glob("*.token"))
         snapshot = json.loads(

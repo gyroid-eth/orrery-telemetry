@@ -768,36 +768,93 @@ def _state_for_event(event: Mapping[str, Any]) -> str:
     return "waiting"
 
 
+@dataclass(frozen=True, slots=True)
+class CleanupFailure:
+    external_id: str
+    agent_name: str
+    error_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupReport:
+    cleaned: tuple[dict[str, Any], ...]
+    failures: tuple[CleanupFailure, ...]
+
+
 def cleanup_orphan_bindings(
     identities: IdentityStore,
     snapshots: SnapshotStore,
     agent_mail: AgentMailClient,
     *,
     sessions_root: str | os.PathLike[str],
-) -> list[dict[str, Any]]:
-    """Retire and purge bindings that have no matching Desktop rollout."""
+) -> CleanupReport:
+    """Retire/purge orphan bindings while isolating per-binding failures."""
 
     cleaned: list[dict[str, Any]] = []
+    failures: list[CleanupFailure] = []
     for binding in identities.list_bindings():
         if session_has_codex_desktop_transcript(
             binding["session_id"],
             sessions_root=sessions_root,
         ):
             continue
-        owner_token = identities.load_owner_token(binding["external_id"])
-        if owner_token is None:
-            raise IdentityStoreError(
-                f"missing owner token for orphan binding {binding['external_id']}"
-            )
-        agent_mail.retire_agent(
+        retired = _remote_agent_is_retired(agent_mail, binding)
+        if not retired:
+            try:
+                owner_token = identities.load_owner_token(binding["external_id"])
+            except (IdentityStoreError, OSError):
+                failures.append(_cleanup_failure(binding, "owner_token_unreadable"))
+                continue
+            if owner_token is None:
+                failures.append(_cleanup_failure(binding, "owner_token_missing"))
+                continue
+            try:
+                agent_mail.retire_agent(
+                    project_key=binding["project_key"],
+                    agent_name=binding["agent_name"],
+                    registration_token=owner_token,
+                )
+                retired = True
+            except (AgentMailError, OSError, ValueError):
+                # Re-read after failure to handle an administrative/racing retire.
+                retired = _remote_agent_is_retired(agent_mail, binding)
+                if not retired:
+                    failures.append(_cleanup_failure(binding, "retire_failed"))
+                    continue
+        try:
+            snapshots.remove(binding["external_id"])
+            identities.delete(binding["external_id"])
+        except (IdentityStoreError, OSError, ValueError):
+            failures.append(_cleanup_failure(binding, "local_purge_failed"))
+            continue
+        cleaned.append(binding)
+    return CleanupReport(tuple(cleaned), tuple(failures))
+
+
+def _remote_agent_is_retired(
+    agent_mail: AgentMailClient,
+    binding: Mapping[str, Any],
+) -> bool:
+    try:
+        profile = agent_mail.whois(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
-            registration_token=owner_token,
         )
-        snapshots.remove(binding["external_id"])
-        identities.delete(binding["external_id"])
-        cleaned.append(binding)
-    return cleaned
+    except (AgentMailError, OSError, ValueError):
+        return False
+    retired_at = profile.get("retired_at")
+    return isinstance(retired_at, str) and bool(retired_at.strip())
+
+
+def _cleanup_failure(
+    binding: Mapping[str, Any],
+    error_code: str,
+) -> CleanupFailure:
+    return CleanupFailure(
+        external_id=binding["external_id"],
+        agent_name=binding["agent_name"],
+        error_code=error_code,
+    )
 
 
 def _fresh_agent_name() -> str:

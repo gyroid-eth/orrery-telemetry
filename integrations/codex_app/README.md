@@ -100,6 +100,11 @@ rollout no longer exists, then purge their local binding and snapshot:
   --allow-stopped --cleanup-orphan-bindings
 ```
 
+Cleanup is isolated per binding. Already-retired remote identities are purged
+locally even when a legacy owner token no longer matches; active identities
+whose retirement fails remain local and are reported after the remaining
+bindings have been processed.
+
 Codex repository trust is enforced by default. For a deliberately reviewed
 non-git workspace only, the installer accepts the explicit
 `--skip-git-check` opt-in, which writes

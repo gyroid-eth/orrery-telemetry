@@ -185,18 +185,30 @@ client = AgentMailClient(
         bearer_token=os.environ.get("MCP_AGENT_MAIL_TOKEN"),
     )
 )
-cleaned = cleanup_orphan_bindings(
+report = cleanup_orphan_bindings(
     IdentityStore(pathlib.Path(runtime_dir) / "identity"),
     SnapshotStore(snapshot_path),
     client,
     sessions_root=sessions_root,
 )
-for binding in cleaned:
+for binding in report.cleaned:
     print(
         "cleaned orphan binding "
         f"{binding['agent_name']} ({binding['external_id']})"
     )
-print(f"cleanup complete: {len(cleaned)} orphan binding(s)")
+for failure in report.failures:
+    print(
+        "orphan cleanup failed "
+        f"{failure.agent_name} ({failure.external_id}): "
+        f"{failure.error_code}",
+        file=sys.stderr,
+    )
+print(
+    "cleanup complete: "
+    f"{len(report.cleaned)} cleaned, {len(report.failures)} failed"
+)
+if report.failures:
+    raise SystemExit(1)
 PY
     then
       ok "orphan binding cleanup"
