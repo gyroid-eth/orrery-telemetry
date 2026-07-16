@@ -17,6 +17,7 @@ def test_provider_reads_sanitized_bridge_snapshot():
     assert runtimes[0].provider == "codex-app"
     assert runtimes[0].state == "waiting"
     assert runtimes[0].capabilities == frozenset({"open"})
+    assert runtimes[0].metadata["delivery"]["wake_status"] == "idle"
 
 
 def test_provider_open_activates_app_without_deep_link():
@@ -46,3 +47,21 @@ def test_provider_rejects_snapshot_records_with_non_allowlisted_fields(tmp_path)
 
     provider = CodexAppRuntimeProvider(path, open_adapter=lambda: {"ok": True})
     assert provider.list_runtimes() == []
+
+
+def test_provider_exposes_sanitized_wake_failure_and_dead_letter_counts(tmp_path):
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload["runtimes"][0]["delivery"] = {
+        "pending_count": 1,
+        "wake_status": "wake_failed",
+        "failed_count": 0,
+        "dead_letter_count": 1,
+        "last_error": "resume_failed",
+        "parent_external_id": None,
+    }
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    runtime = CodexAppRuntimeProvider(path).list_runtimes()[0]
+    assert runtime.metadata["delivery"]["wake_status"] == "wake_failed"
+    assert runtime.metadata["delivery"]["dead_letter_count"] == 1

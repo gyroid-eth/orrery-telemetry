@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,10 +27,32 @@ RUNTIME_FIELDS = frozenset(
         "state",
         "last_seen_at",
         "capabilities",
+        "delivery",
+    }
+)
+DELIVERY_FIELDS = frozenset(
+    {
+        "pending_count",
+        "wake_status",
+        "failed_count",
+        "dead_letter_count",
+        "last_error",
+        "parent_external_id",
     }
 )
 ALLOWED_STATES = frozenset(
     {"registering", "working", "waiting", "blocked", "dormant", "degraded"}
+)
+ALLOWED_WAKE_STATES = frozenset(
+    {
+        "idle",
+        "pending",
+        "waking",
+        "wake_failed",
+        "blocked",
+        "dead_letter",
+        "identity_auth_required",
+    }
 )
 
 
@@ -47,6 +70,7 @@ def runtime_record(
     *,
     state: str,
     last_seen_at: str | None = None,
+    delivery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an allowlisted dashboard record from binding and hook metadata."""
 
@@ -66,6 +90,7 @@ def runtime_record(
         "state": state,
         "last_seen_at": last_seen_at or binding["last_seen_at"],
         "capabilities": ["open"],
+        "delivery": dict(delivery) if delivery is not None else empty_delivery(),
     }
     return validate_runtime(record)
 
@@ -81,6 +106,7 @@ def validate_runtime(record: Mapping[str, Any]) -> dict[str, Any]:
     capabilities = normalized["capabilities"]
     if capabilities != ["open"]:
         raise SnapshotError("P1 Codex App runtimes may advertise only open")
+    normalized["delivery"] = validate_delivery(normalized["delivery"])
     for key in ("external_id", "session_id", "agent_name", "project_key", "last_seen_at"):
         if not isinstance(normalized[key], str) or not normalized[key]:
             raise SnapshotError(f"runtime field {key} must be non-empty")
@@ -90,6 +116,42 @@ def validate_runtime(record: Mapping[str, Any]) -> dict[str, Any]:
         raise SnapshotError("runtime cwd must be a string or null")
     if normalized["model"] is not None and not isinstance(normalized["model"], str):
         raise SnapshotError("runtime model must be a string or null")
+    return normalized
+
+
+def empty_delivery() -> dict[str, Any]:
+    return {
+        "pending_count": 0,
+        "wake_status": "idle",
+        "failed_count": 0,
+        "dead_letter_count": 0,
+        "last_error": None,
+        "parent_external_id": None,
+    }
+
+
+def validate_delivery(delivery: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(delivery, Mapping) or set(delivery) != DELIVERY_FIELDS:
+        raise SnapshotError("delivery snapshot fields do not match the allowlist")
+    normalized = dict(delivery)
+    for field in ("pending_count", "failed_count", "dead_letter_count"):
+        value = normalized[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SnapshotError(f"delivery field {field} must be non-negative")
+    if normalized["wake_status"] not in ALLOWED_WAKE_STATES:
+        raise SnapshotError("invalid delivery wake_status")
+    error = normalized["last_error"]
+    if error is not None and (
+        not isinstance(error, str)
+        or len(error) > 64
+        or re.fullmatch(r"[a-z0-9_-]+", error) is None
+    ):
+        raise SnapshotError("delivery last_error must be a sanitized code or null")
+    parent = normalized["parent_external_id"]
+    if parent is not None and (
+        not isinstance(parent, str) or not parent.startswith("codex:")
+    ):
+        raise SnapshotError("delivery parent_external_id must be a Codex ID or null")
     return normalized
 
 
@@ -154,6 +216,23 @@ class SnapshotStore:
         validated = validate_runtime(record)
         runtimes[validated["external_id"]] = validated
         return write_snapshot(self.path, list(runtimes.values()))
+
+    def set_delivery(
+        self,
+        external_id: str,
+        delivery: Mapping[str, Any],
+        *,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        record = self.get(external_id)
+        if record is None:
+            raise SnapshotError(f"unknown runtime: {external_id}")
+        record["delivery"] = validate_delivery(delivery)
+        if state is not None:
+            if state not in ALLOWED_STATES:
+                raise SnapshotError("invalid runtime state")
+            record["state"] = state
+        return self.upsert(record)
 
 
 def _atomic_write(path: Path, content: str) -> None:

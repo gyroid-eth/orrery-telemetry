@@ -29,6 +29,17 @@ _RUNTIME_FIELDS = frozenset(
         "state",
         "last_seen_at",
         "capabilities",
+        "delivery",
+    }
+)
+_DELIVERY_FIELDS = frozenset(
+    {
+        "pending_count",
+        "wake_status",
+        "failed_count",
+        "dead_letter_count",
+        "last_error",
+        "parent_external_id",
     }
 )
 
@@ -136,9 +147,44 @@ def _read_runtimes(path: Path) -> list[dict[str, Any]]:
             and record.get("program") == "codex-app"
             and isinstance(record.get("state"), str)
             and record.get("capabilities") == ["open"]
+            and _valid_delivery(record.get("delivery"))
         ):
             safe.append(dict(record))
     return safe
+
+
+def _valid_delivery(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != _DELIVERY_FIELDS:
+        return False
+    if value.get("wake_status") not in {
+        "idle",
+        "pending",
+        "waking",
+        "wake_failed",
+        "blocked",
+        "dead_letter",
+        "identity_auth_required",
+    }:
+        return False
+    for field in ("pending_count", "failed_count", "dead_letter_count"):
+        count = value.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return False
+    error = value.get("last_error")
+    valid_error = error is None or (
+        isinstance(error, str)
+        and 0 < len(error) <= 64
+        and all(
+            character.isascii()
+            and (character.isalnum() or character in "_-")
+            for character in error
+        )
+    )
+    parent = value.get("parent_external_id")
+    valid_parent = parent is None or (
+        isinstance(parent, str) and parent.startswith("codex:")
+    )
+    return valid_error and valid_parent
 
 
 def _open_chatgpt() -> dict[str, Any]:

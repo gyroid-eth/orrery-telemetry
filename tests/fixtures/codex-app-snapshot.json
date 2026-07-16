@@ -15,7 +15,15 @@
       "cwd": "/workspace/example",
       "state": "waiting",
       "last_seen_at": "2026-01-01T00:00:00Z",
-      "capabilities": ["open"]
+      "capabilities": ["open"],
+      "delivery": {
+        "pending_count": 0,
+        "wake_status": "idle",
+        "failed_count": 0,
+        "dead_letter_count": 0,
+        "last_error": null,
+        "parent_external_id": null
+      }
     }
   ]
 }

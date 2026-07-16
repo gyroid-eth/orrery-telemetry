@@ -4,7 +4,7 @@ This directory is the source of truth for the optional Codex App bridge. It
 keeps experimental app-server control isolated from agent-mail identities and
 from the dashboard's tmux runtime path.
 
-The current P1 implementation provides:
+The current P3 implementation provides:
 
 - a synchronous JSON-RPC client for `codex app-server` over stdio;
 - versioned runtime-event and binding schemas plus delivery-state migration;
@@ -12,12 +12,19 @@ The current P1 implementation provides:
   separately protected owner tokens, and sanitized dashboard snapshots;
 - a session-bound, allowlisted MCP proxy for inbox, messaging, acknowledgement,
   reservations, and sanitized runtime/lineage status;
-- PostToolUse pending-mail notices without automatic resume or parallel turns;
+- PostToolUse pending-mail notices for active turns;
+- SQLite delivery leases with message-level idempotency, two-second
+  coalescing, bounded exponential retry, an hourly wake limit, and
+  dead-letter state;
+- metadata-only cold wake through an argv-safe `codex exec resume` adapter,
+  without message bodies or dangerous bypass flags;
+- sanitized `wake_failed`, blocked, pending, and dead-letter telemetry for the
+  Dashboard provider;
+- fail-closed stopped-subagent handling: durable cold wake targets root tasks;
+  blocked child delivery exposes only its parent root external ID for a future
+  count-only escalation path;
 - injectable agent-mail transport and a Codex App runtime provider;
 - fake-server protocol tests that do not start Codex or require tmux.
-
-`wake.py` deliberately raises `NotImplementedError`. P1 performs no inbox
-polling, prompt injection, automatic resume, or cold wake.
 
 ## Development
 
@@ -30,4 +37,14 @@ To opt into the read-only real app-server smoke test:
 ```sh
 AGENTSTACK_RUN_CODEX_INTEGRATION=1 python -m pytest -q -m integration \
   integrations/codex_app/tests/test_protocol_integration.py
+```
+
+The real `codex exec resume` smoke test is separately opt-in and requires an
+explicit disposable session ID:
+
+```sh
+AGENTSTACK_RUN_CODEX_WAKE_INTEGRATION=1 \
+AGENTSTACK_CODEX_WAKE_SESSION_ID=<session-id> \
+python -m pytest -q -m integration \
+  integrations/codex_app/tests/test_wake.py
 ```

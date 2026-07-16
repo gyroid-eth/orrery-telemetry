@@ -28,6 +28,14 @@ class FakeAgentMail:
         return Registration(kwargs.get("agent_name") or "Calm-Noether", kwargs["registration_token"])
 
 
+class FakeWakeCoordinator:
+    def __init__(self):
+        self.ticks = []
+
+    def tick(self, bindings):
+        self.ticks.append(list(bindings))
+
+
 def _config(tmp_path: Path) -> BridgeConfig:
     runtime = tmp_path / "runtime"
     return BridgeConfig(
@@ -173,6 +181,36 @@ def test_private_socket_accepts_event_and_worker_writes_snapshot():
         daemon.stop()
         thread.join(timeout=2)
         assert config.snapshot_path.exists()
+
+
+def test_bridge_worker_ticks_cold_wake_coordinator():
+    with tempfile.TemporaryDirectory(prefix="cas-wake-", dir="/private/tmp") as directory:
+        config = replace(_config(Path(directory)), wake_poll_seconds=0.05)
+        wake = FakeWakeCoordinator()
+        daemon = BridgeDaemon(
+            config,
+            FakeAgentMail(),
+            name_factory=lambda: "Calm-Noether",
+            wake_coordinator=wake,
+        )
+        thread = threading.Thread(target=daemon.serve_forever)
+        thread.start()
+        deadline = time.time() + 2
+        while not config.socket_path.exists() and time.time() < deadline:
+            time.sleep(0.01)
+        assert forward_event(_event(), config.socket_path, timeout=1) is True
+        while (
+            not any(tick for tick in wake.ticks)
+            and time.time() < deadline
+        ):
+            time.sleep(0.01)
+        daemon.stop()
+        thread.join(timeout=2)
+        assert any(
+            tick[0]["external_id"] == external_id_for("session-example")
+            for tick in wake.ticks
+            if tick
+        )
 
 
 def test_post_tool_use_coalesces_pending_agent_mail_signals(tmp_path):

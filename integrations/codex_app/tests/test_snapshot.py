@@ -36,6 +36,7 @@ def test_snapshot_is_sanitized_atomic_and_private(tmp_path):
     assert "token" not in text.lower()
     assert os.stat(path).st_mode & 0o777 == 0o600
     assert read_snapshot(path)["runtimes"][0]["state"] == "working"
+    assert read_snapshot(path)["runtimes"][0]["delivery"]["wake_status"] == "idle"
 
 
 def test_snapshot_rejects_non_allowlisted_fields(tmp_path):
@@ -52,3 +53,31 @@ def test_snapshot_rejects_non_allowlisted_fields(tmp_path):
     )
     with pytest.raises(SnapshotError):
         read_snapshot(path)
+
+
+def test_snapshot_exposes_only_sanitized_delivery_failure_codes(tmp_path):
+    binding = build_binding(
+        session_id="session-example",
+        agent_id=None,
+        agent_name="Calm-Noether",
+        project_key="/workspace/example",
+    )
+    record = runtime_record(binding, {}, state="waiting")
+    record["delivery"] = {
+        "pending_count": 1,
+        "wake_status": "wake_failed",
+        "failed_count": 1,
+        "dead_letter_count": 0,
+        "last_error": "resume_failed",
+        "parent_external_id": None,
+    }
+    path = tmp_path / "snapshot.json"
+    write_snapshot(path, [record])
+    assert (
+        read_snapshot(path)["runtimes"][0]["delivery"]["last_error"]
+        == "resume_failed"
+    )
+
+    record["delivery"]["last_error"] = "private stderr: approval details"
+    with pytest.raises(SnapshotError):
+        write_snapshot(path, [record])

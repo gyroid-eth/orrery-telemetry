@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .agent_mail_client import AgentMailClient, AgentMailError, HttpJsonRpcTransport
+from .delivery import DeliveryManager
 from .hook_entry import (
     MAX_EVENT_BYTES,
     append_spool,
@@ -29,6 +30,7 @@ from .hook_entry import (
 )
 from .identity_store import IdentityStore, build_binding, external_id_for, utc_now
 from .snapshot import SnapshotStore, runtime_record
+from .wake import ExecResumeAdapter, WakeCoordinator, WakePolicy
 
 
 _ADJECTIVES = (
@@ -113,6 +115,17 @@ class BridgeConfig:
     registration_retry_seconds: float = 5.0
     signals_dir: Path | None = None
     project_slug: str | None = None
+    delivery_db_path: Path | None = None
+    cold_wake_enabled: bool = True
+    wake_poll_seconds: float = 0.25
+    wake_coalesce_seconds: float = 2.0
+    wake_lease_seconds: float = 900.0
+    wake_base_backoff_seconds: float = 2.0
+    wake_max_backoff_seconds: float = 300.0
+    wake_max_attempts: int = 5
+    wake_limit_per_hour: int = 12
+    wake_timeout_seconds: float = 900.0
+    codex_binary: str = "codex"
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BridgeConfig":
@@ -144,6 +157,77 @@ class BridgeConfig:
             raise ValueError(
                 "AGENTSTACK_CODEX_APP_RETRY_SECONDS must be between 1 and 300"
             )
+        cold_wake_enabled = _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"),
+            "AGENTSTACK_CODEX_APP_COLD_WAKE",
+        )
+        wake_poll_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
+            0.25,
+            minimum=0.05,
+            maximum=5,
+        )
+        wake_coalesce_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS",
+            2,
+            minimum=0,
+            maximum=10,
+        )
+        wake_timeout_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS",
+            900,
+            minimum=30,
+            maximum=7200,
+        )
+        wake_lease_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS",
+            900,
+            minimum=30,
+            maximum=7200,
+        )
+        wake_base_backoff_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS",
+            2,
+            minimum=0.1,
+            maximum=300,
+        )
+        wake_max_backoff_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS",
+            300,
+            minimum=1,
+            maximum=3600,
+        )
+        if wake_max_backoff_seconds < wake_base_backoff_seconds:
+            raise ValueError(
+                "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS must not be "
+                "less than the base backoff"
+            )
+        wake_limit_per_hour = _env_int(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR",
+            12,
+            minimum=1,
+            maximum=120,
+        )
+        wake_max_attempts = _env_int(
+            env,
+            "AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS",
+            5,
+            minimum=1,
+            maximum=20,
+        )
+        delivery_value = (
+            env.get("AGENTSTACK_CODEX_APP_DELIVERY_DB") or ""
+        ).strip()
+        codex_binary = (env.get("AGENTSTACK_CODEX_BINARY") or "codex").strip()
+        if not codex_binary or os.path.sep in codex_binary:
+            raise ValueError("AGENTSTACK_CODEX_BINARY must be a command name")
         return cls(
             runtime_dir=runtime_dir,
             socket_path=Path(socket_value).expanduser() if socket_value else runtime_dir / "bridge.sock",
@@ -160,6 +244,21 @@ class BridgeConfig:
                 else Path(mail_home or "~/.mcp_agent_mail").expanduser() / "signals"
             ),
             project_slug=project_slug,
+            delivery_db_path=(
+                Path(delivery_value).expanduser()
+                if delivery_value
+                else runtime_dir / "delivery.sqlite3"
+            ),
+            cold_wake_enabled=cold_wake_enabled,
+            wake_poll_seconds=wake_poll_seconds,
+            wake_coalesce_seconds=wake_coalesce_seconds,
+            wake_lease_seconds=wake_lease_seconds,
+            wake_base_backoff_seconds=wake_base_backoff_seconds,
+            wake_max_backoff_seconds=wake_max_backoff_seconds,
+            wake_max_attempts=wake_max_attempts,
+            wake_limit_per_hour=wake_limit_per_hour,
+            wake_timeout_seconds=wake_timeout_seconds,
+            codex_binary=codex_binary,
         )
 
 
@@ -174,12 +273,43 @@ class BridgeDaemon:
         identity_store: IdentityStore | None = None,
         snapshot_store: SnapshotStore | None = None,
         name_factory: Callable[[], str] | None = None,
+        wake_coordinator: WakeCoordinator | None = None,
     ) -> None:
         self.config = config
         self.agent_mail = agent_mail
         self.identities = identity_store or IdentityStore(config.runtime_dir / "identity")
         self.snapshots = snapshot_store or SnapshotStore(config.snapshot_path)
         self.name_factory = name_factory or _fresh_agent_name
+        self.wake_coordinator = wake_coordinator
+        if (
+            self.wake_coordinator is None
+            and config.cold_wake_enabled
+            and config.signals_dir is not None
+        ):
+            delivery_path = (
+                config.delivery_db_path
+                if config.delivery_db_path is not None
+                else config.runtime_dir / "delivery.sqlite3"
+            )
+            self.wake_coordinator = WakeCoordinator(
+                DeliveryManager(delivery_path),
+                self.identities,
+                self.snapshots,
+                ExecResumeAdapter(codex_binary=config.codex_binary),
+                signals_dir=config.signals_dir,
+                project_slug=lambda project_key: (
+                    config.project_slug or _project_slug(project_key)
+                ),
+                policy=WakePolicy(
+                    coalesce_seconds=config.wake_coalesce_seconds,
+                    lease_seconds=config.wake_lease_seconds,
+                    base_backoff_seconds=config.wake_base_backoff_seconds,
+                    max_backoff_seconds=config.wake_max_backoff_seconds,
+                    max_attempts=config.wake_max_attempts,
+                    wakes_per_hour=config.wake_limit_per_hour,
+                    process_timeout_seconds=config.wake_timeout_seconds,
+                ),
+            )
         self._events: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
@@ -422,16 +552,31 @@ class BridgeDaemon:
 
     def _worker_loop(self) -> None:
         next_retry = time.monotonic()
+        next_wake = time.monotonic()
         while True:
-            timeout = max(0.0, next_retry - time.monotonic())
+            now = time.monotonic()
+            deadlines = [next_retry]
+            if self.wake_coordinator is not None:
+                deadlines.append(next_wake)
+            timeout = max(0.0, min(deadlines) - now)
             try:
                 event = self._events.get(timeout=timeout)
             except queue.Empty:
-                self.replay_spool(
-                    self.config.retry_path,
-                    enqueue_on_failure=True,
-                )
-                next_retry = time.monotonic() + self.config.registration_retry_seconds
+                now = time.monotonic()
+                if now >= next_retry:
+                    self.replay_spool(
+                        self.config.retry_path,
+                        enqueue_on_failure=True,
+                    )
+                    next_retry = now + self.config.registration_retry_seconds
+                if self.wake_coordinator is not None and now >= next_wake:
+                    try:
+                        self.wake_coordinator.tick(self.identities.list_bindings())
+                    except Exception:
+                        # Cold wake is an optional delivery boundary. A broken
+                        # adapter or state DB must not stop lifecycle telemetry.
+                        pass
+                    next_wake = now + self.config.wake_poll_seconds
                 continue
             if event is None:
                 break
@@ -442,6 +587,14 @@ class BridgeDaemon:
                     append_spool(event, self.config.retry_path)
                 except OSError:
                     pass
+            now = time.monotonic()
+            if self.wake_coordinator is not None and now >= next_wake:
+                try:
+                    self.wake_coordinator.tick(self.identities.list_bindings())
+                except Exception:
+                    # Keep the Bridge alive even when cold wake is degraded.
+                    pass
+                next_wake = now + self.config.wake_poll_seconds
 
     def _update_snapshot(
         self,
@@ -461,6 +614,11 @@ class BridgeDaemon:
                 snapshot_event,
                 state=state,
                 last_seen_at=utc_now(),
+                delivery=(
+                    previous.get("delivery")
+                    if previous is not None
+                    else None
+                ),
             )
         )
 
@@ -500,6 +658,51 @@ def _fresh_agent_name() -> str:
 def _project_slug(project_key: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", project_key.strip().lower()).strip("-")
     return slug or "project"
+
+
+def _env_bool(value: str, name: str) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _env_float(
+    env: Mapping[str, str],
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw = (env.get(name) or str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _env_int(
+    env: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = (env.get(name) or str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
 
 
 def _recv_payload(connection: socket.socket) -> dict[str, Any]:

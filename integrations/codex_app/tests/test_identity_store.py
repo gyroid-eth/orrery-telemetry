@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -63,3 +64,21 @@ def test_existing_external_id_cannot_be_reassigned(tmp_path):
     hijack = dict(binding, agent_name="Quiet-Curie")
     with pytest.raises(IdentityStoreError, match="immutable"):
         store.save(hijack)
+
+
+def test_list_bindings_skips_corrupt_files_and_never_reads_tokens(tmp_path):
+    store = IdentityStore(tmp_path / "identity")
+    binding = store.save(
+        build_binding(
+            session_id="session-example",
+            agent_id=None,
+            agent_name="Calm-Noether",
+            project_key="/workspace/example",
+        )
+    )
+    store.store_owner_token(binding["external_id"], "owner-secret")
+    (store.bindings_dir / "corrupt.json").write_text("{", encoding="utf-8")
+
+    records = store.list_bindings()
+    assert records == [binding]
+    assert "owner-secret" not in json.dumps(records)

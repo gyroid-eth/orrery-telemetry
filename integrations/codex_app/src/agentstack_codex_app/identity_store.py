@@ -160,6 +160,23 @@ class IdentityStore:
     ) -> dict[str, Any] | None:
         return self.resolve(external_id_for(session_id, agent_id))
 
+    def list_bindings(self) -> list[dict[str, Any]]:
+        """Return every valid binding without reading the separate secret store."""
+
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.bindings_dir.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    continue
+                record = validate_binding(raw)
+                if path != self._binding_path(record["external_id"]):
+                    continue
+                records.append(record)
+            except (OSError, json.JSONDecodeError, IdentityStoreError):
+                continue
+        return records
+
     def save(self, record: Mapping[str, Any]) -> dict[str, Any]:
         """Create or refresh a binding without allowing identity reassignment."""
 
