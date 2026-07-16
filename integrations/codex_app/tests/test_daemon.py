@@ -69,6 +69,25 @@ def _daemon(tmp_path: Path, mail: FakeAgentMail) -> BridgeDaemon:
     )
 
 
+def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
+    codex = tmp_path / "bin" / "codex"
+    codex.parent.mkdir()
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+    runtime = tmp_path / "runtime"
+
+    config = BridgeConfig.from_env(
+        {
+            "AGENTSTACK_CODEX_APP_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_PROJECT_KEY": "/workspace/example",
+            "AGENTSTACK_MCP_URL": "http://agent-mail.invalid/api/",
+            "AGENTSTACK_CODEX_BINARY": str(codex),
+        }
+    )
+
+    assert config.codex_binary == str(codex)
+
+
 def test_process_event_registers_once_and_reuses_stable_binding(tmp_path):
     mail = FakeAgentMail()
     daemon = _daemon(tmp_path, mail)

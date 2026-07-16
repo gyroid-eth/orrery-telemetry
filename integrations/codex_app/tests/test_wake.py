@@ -212,6 +212,50 @@ def test_exec_resume_adapter_uses_argv_and_metadata_only_prompt():
     assert "shell" not in captured["kwargs"]
 
 
+def test_exec_resume_adapter_accepts_verified_absolute_binary(tmp_path):
+    codex = tmp_path / "bin" / "codex"
+    codex.parent.mkdir()
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+    captured = {}
+
+    def factory(argv, **kwargs):
+        captured["argv"] = argv
+        return FakeProcess()
+
+    adapter = ExecResumeAdapter(
+        codex_binary=str(codex),
+        process_factory=factory,
+    )
+    adapter.start(
+        "session-example",
+        [WakeMessage(7, "Steel-Boltzmann", "Task")],
+    )
+
+    assert captured["argv"][0] == str(codex)
+
+
+@pytest.mark.parametrize(
+    "candidate, expected",
+    [
+        ("relative/codex", "command name or an absolute executable path"),
+        ("/missing/codex", "absolute path must be an executable file"),
+    ],
+)
+def test_exec_resume_adapter_rejects_unsafe_binary_path(candidate, expected):
+    with pytest.raises(ValueError, match=expected):
+        ExecResumeAdapter(codex_binary=candidate)
+
+
+def test_exec_resume_adapter_rejects_non_executable_absolute_file(tmp_path):
+    codex = tmp_path / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o644)
+
+    with pytest.raises(ValueError, match="absolute path must be an executable file"):
+        ExecResumeAdapter(codex_binary=str(codex))
+
+
 def test_waiting_messages_coalesce_once_and_complete_idempotently(tmp_path):
     timing, _, binding, snapshots, delivery, adapter, coordinator = _coordinator(
         tmp_path

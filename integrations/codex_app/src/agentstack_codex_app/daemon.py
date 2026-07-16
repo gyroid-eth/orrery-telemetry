@@ -30,7 +30,12 @@ from .hook_entry import (
 )
 from .identity_store import IdentityStore, build_binding, external_id_for, utc_now
 from .snapshot import SnapshotStore, runtime_record
-from .wake import ExecResumeAdapter, WakeCoordinator, WakePolicy
+from .wake import (
+    ExecResumeAdapter,
+    WakeCoordinator,
+    WakePolicy,
+    validate_codex_binary,
+)
 
 
 _ADJECTIVES = (
@@ -225,9 +230,10 @@ class BridgeConfig:
         delivery_value = (
             env.get("AGENTSTACK_CODEX_APP_DELIVERY_DB") or ""
         ).strip()
-        codex_binary = (env.get("AGENTSTACK_CODEX_BINARY") or "codex").strip()
-        if not codex_binary or os.path.sep in codex_binary:
-            raise ValueError("AGENTSTACK_CODEX_BINARY must be a command name")
+        codex_binary = validate_codex_binary(
+            env.get("AGENTSTACK_CODEX_BINARY") or "codex",
+            setting_name="AGENTSTACK_CODEX_BINARY",
+        )
         return cls(
             runtime_dir=runtime_dir,
             socket_path=Path(socket_value).expanduser() if socket_value else runtime_dir / "bridge.sock",

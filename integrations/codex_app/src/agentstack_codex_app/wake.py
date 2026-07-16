@@ -65,6 +65,33 @@ class WakeAttempt:
     prior_last_seen_at: str
 
 
+def validate_codex_binary(
+    codex_binary: str,
+    *,
+    setting_name: str = "codex_binary",
+) -> str:
+    """Accept a PATH command or a verified absolute executable path."""
+
+    value = codex_binary.strip()
+    if not value:
+        raise ValueError(f"{setting_name} must not be empty")
+    separators = tuple(
+        separator for separator in (os.path.sep, os.path.altsep) if separator
+    )
+    if not any(separator in value for separator in separators):
+        return value
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError(
+            f"{setting_name} must be a command name or an absolute executable path"
+        )
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError(
+            f"{setting_name} absolute path must be an executable file"
+        )
+    return value
+
+
 class ExecResumeAdapter:
     """Launch ``codex exec resume`` with a fixed, metadata-only prompt."""
 
@@ -74,9 +101,7 @@ class ExecResumeAdapter:
         codex_binary: str = "codex",
         process_factory: ProcessFactory = subprocess.Popen,
     ) -> None:
-        if not codex_binary or os.path.sep in codex_binary:
-            raise ValueError("codex_binary must be a command name")
-        self.codex_binary = codex_binary
+        self.codex_binary = validate_codex_binary(codex_binary)
         self.process_factory = process_factory
 
     def start(

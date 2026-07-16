@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 
@@ -22,8 +25,10 @@ def _environment(home: Path) -> dict[str, str]:
     return environment
 
 
-def _install_args(home: Path) -> list[str]:
-    return [
+def _install_args(home: Path, *, runtime_dir: Path | None = None) -> list[str]:
+    codex_binary = shutil.which("codex")
+    assert codex_binary is not None
+    args = [
         str(INSTALLER),
         "--no-service",
         "--project-key",
@@ -34,7 +39,12 @@ def _install_args(home: Path) -> list[str]:
         str(home / ".mcp_agent_mail" / ".env"),
         "--signals-dir",
         str(home / ".mcp_agent_mail" / "signals"),
+        "--codex-bin",
+        codex_binary,
     ]
+    if runtime_dir is not None:
+        args.extend(["--runtime-dir", str(runtime_dir)])
+    return args
 
 
 def _prepare_home(tmp_path: Path) -> Path:
@@ -61,6 +71,18 @@ def _plugin_list(home: Path) -> dict:
     return json.loads(result.stdout)
 
 
+def _read_generated_env(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("export "):
+            continue
+        assignment = shlex.split(line)[1]
+        key, separator, value = assignment.partition("=")
+        assert separator == "="
+        values[key] = value
+    return values
+
+
 def test_installer_dry_run_does_not_write_clean_home(tmp_path):
     home = _prepare_home(tmp_path)
     install_dir = home / ".agentstack" / "integrations" / "codex_app"
@@ -81,14 +103,22 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
     install_dir = home / ".agentstack" / "integrations" / "codex_app"
-    runtime_dir = home / ".agentstack" / "runtime" / "codex-app"
+    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir="/private/tmp"))
 
-    subprocess.run(_install_args(home), env=environment, check=True)
+    subprocess.run(
+        _install_args(home, runtime_dir=runtime_dir),
+        env=environment,
+        check=True,
+    )
 
     env_file = install_dir / "env.sh"
     assert env_file.is_file()
     assert env_file.stat().st_mode & 0o777 == 0o600
     assert "example-secret-value" not in env_file.read_text(encoding="utf-8")
+    generated_env = _read_generated_env(env_file)
+    codex_binary = generated_env["AGENTSTACK_CODEX_BINARY"]
+    assert Path(codex_binary).is_absolute()
+    assert Path(codex_binary).samefile(shutil.which("codex"))
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -152,6 +182,29 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     assert "example-secret-value" not in doctor.stdout + doctor.stderr
     assert not list((install_dir / "src").rglob("__pycache__"))
 
+    bridge = subprocess.Popen(
+        [str(install_dir / "bin" / "run-bridge")],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    socket_path = runtime_dir / "bridge.sock"
+    deadline = time.monotonic() + 5
+    while (
+        bridge.poll() is None
+        and not socket_path.exists()
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.02)
+    try:
+        assert bridge.poll() is None, bridge.stderr.read()
+        assert socket_path.is_socket()
+    finally:
+        bridge.terminate()
+        bridge.wait(timeout=5)
+        socket_path.unlink(missing_ok=True)
+
     subprocess.run(
         [str(install_dir / "bin" / "uninstall-codex-app-integration")],
         env=environment,
@@ -161,7 +214,11 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     assert runtime_dir.is_dir()
     assert _plugin_list(home)["installed"] == []
 
-    subprocess.run(_install_args(home), env=environment, check=True)
+    subprocess.run(
+        _install_args(home, runtime_dir=runtime_dir),
+        env=environment,
+        check=True,
+    )
     assert install_dir.is_dir()
     assert len(_plugin_list(home)["installed"]) == 1
     subprocess.run(
