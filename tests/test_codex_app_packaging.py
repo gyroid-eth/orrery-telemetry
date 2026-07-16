@@ -175,13 +175,26 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     assert [item["pluginId"] for item in installed] == [
         "agentstack-codex-app@agentstack-local"
     ]
-    approval_args = []
+    proxy_script = install_dir / "plugin" / "scripts" / "run-mcp.sh"
+    approval_args = [
+        "-c",
+        (
+            "plugins.agentstack-codex-app@agentstack-local."
+            "mcp_servers.agentstack.enabled=false"
+        ),
+        "-c",
+        'mcp_servers.agentstack.command="/bin/bash"',
+        "-c",
+        (
+            "mcp_servers.agentstack.args="
+            f"[{json.dumps(str(proxy_script))}]"
+        ),
+    ]
     for tool_name in PROXY_TOOLS:
         approval_args.extend(
             [
                 "-c",
                 (
-                    'plugins."agentstack-codex-app@agentstack-local".'
                     f"mcp_servers.agentstack.tools.{tool_name}."
                     'approval_mode="approve"'
                 ),

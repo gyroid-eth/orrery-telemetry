@@ -52,7 +52,7 @@ AGENTSTACK_PROXY_TOOLS = (
     "release_reservations",
     "runtime_status",
 )
-_PLUGIN_ID = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9._-]+")
+_PLUGIN_ID = re.compile(r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+")
 
 
 class ResumeProcess(Protocol):
@@ -196,6 +196,7 @@ class ExecResumeAdapter:
         *,
         codex_binary: str = "codex",
         plugin_id: str = "agentstack-codex-app@agentstack-local",
+        proxy_mcp_script: str | os.PathLike[str] | None = None,
         skip_git_repo_check: bool = False,
         process_factory: ProcessFactory = subprocess.Popen,
     ) -> None:
@@ -203,6 +204,16 @@ class ExecResumeAdapter:
         if _PLUGIN_ID.fullmatch(plugin_id) is None:
             raise ValueError("plugin_id has an invalid format")
         self.plugin_id = plugin_id
+        self.proxy_mcp_script = validate_proxy_mcp_script(
+            proxy_mcp_script
+            if proxy_mcp_script is not None
+            else (
+                Path(__file__).resolve().parents[2]
+                / "plugin"
+                / "scripts"
+                / "run-mcp.sh"
+            )
+        )
         self.skip_git_repo_check = bool(skip_git_repo_check)
         self.process_factory = process_factory
 
@@ -222,7 +233,12 @@ class ExecResumeAdapter:
             "exec",
             "resume",
         ]
-        argv.extend(proxy_tool_approval_args(self.plugin_id))
+        argv.extend(
+            proxy_tool_approval_args(
+                self.plugin_id,
+                self.proxy_mcp_script,
+            )
+        )
         if self.skip_git_repo_check:
             argv.append("--skip-git-repo-check")
         argv.extend((session_id, build_wake_prompt(messages)))
@@ -694,20 +710,48 @@ def _resume_environment(
     return environment
 
 
-def proxy_tool_approval_args(plugin_id: str) -> list[str]:
-    """Build single-run approval overrides for only the proxy allowlist."""
+def validate_proxy_mcp_script(
+    value: str | os.PathLike[str],
+) -> Path:
+    """Require the installed, local proxy launcher used by a wake turn."""
+
+    path = Path(value).expanduser()
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("proxy_mcp_script must be an absolute file path")
+    return path
+
+
+def proxy_tool_approval_args(
+    plugin_id: str,
+    proxy_mcp_script: str | os.PathLike[str],
+) -> list[str]:
+    """Build a single-run, eight-tool-only headless proxy configuration."""
 
     if _PLUGIN_ID.fullmatch(plugin_id) is None:
         raise ValueError("plugin_id has an invalid format")
-    prefix = (
-        f'plugins."{plugin_id}".mcp_servers.agentstack.tools'
-    )
-    arguments: list[str] = []
+    script = validate_proxy_mcp_script(proxy_mcp_script)
+    arguments = [
+        "-c",
+        (
+            f"plugins.{plugin_id}.mcp_servers.agentstack."
+            "enabled=false"
+        ),
+        "-c",
+        'mcp_servers.agentstack.command="/bin/bash"',
+        "-c",
+        (
+            "mcp_servers.agentstack.args="
+            f"[{json.dumps(os.fspath(script))}]"
+        ),
+    ]
     for tool_name in AGENTSTACK_PROXY_TOOLS:
         arguments.extend(
             (
                 "-c",
-                f'{prefix}.{tool_name}.approval_mode="approve"',
+                (
+                    "mcp_servers.agentstack.tools."
+                    f'{tool_name}.approval_mode="approve"'
+                ),
             )
         )
     return arguments

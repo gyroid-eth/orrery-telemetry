@@ -22,8 +22,11 @@ The current P3 implementation provides:
 - bounded, token-redacted resume diagnostics; untrusted workspaces fail once
   as `blocked / untrusted_workspace` instead of silently exhausting retries;
 - single-run approval policy for only the eight session-bound `agentstack`
-  proxy tools, allowing headless cold-wake turns to coordinate without
-  changing shell, sandbox, other MCP, or global approval policy;
+  proxy tools; the wake invocation disables only the plugin-bundled proxy
+  server and re-registers the same local launcher under the same server name
+  because the deployed Codex CLI 0.144.4 does not apply plugin-provided MCP
+  tool policy during headless execution. This does not change shell, sandbox,
+  other MCP, or global approval policy;
 - sanitized `wake_failed`, blocked, pending, and dead-letter telemetry for the
   Dashboard provider;
 - fail-closed stopped-subagent handling: durable cold wake targets root tasks;
