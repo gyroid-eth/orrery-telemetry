@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFERRED_INSTALL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$INFERRED_INSTALL_DIR}"
 ENV_FILE="$INSTALL_DIR/env.sh"
+printf '{"event":"bridge_launcher_start","pid":%d,"timestamp":"%s"}\n' \
+  "$$" "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2
 [[ -f "$ENV_FILE" ]] || {
   echo "missing Codex App integration env: $ENV_FILE" >&2
   exit 1

@@ -17,6 +17,9 @@ LABEL="${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}"
 MARKETPLACE_NAME="${AGENTSTACK_CODEX_APP_MARKETPLACE:-agentstack-local}"
 WAKE_LIMIT="${AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR:-12}"
 STALE_AFTER="${AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS:-3600}"
+RETRY_MAX_ATTEMPTS="${AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS:-12}"
+RETRY_MAX_AGE="${AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS:-3600}"
+RETRY_MAX_BACKOFF="${AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS:-300}"
 SKIP_GIT_CHECK="${AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK:-0}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
 CODEX_BIN="${AGENTSTACK_CODEX_BINARY:-$(command -v codex 2>/dev/null || true)}"
@@ -42,6 +45,10 @@ Options:
   --marketplace-name NAME   Default: agentstack-local
   --wake-limit COUNT        Default: 12 per hour
   --stale-after SECONDS     Waiting runtime dormancy threshold; default: 3600
+  --retry-max-attempts N    Registration retry call limit; default: 12
+  --retry-max-age SECONDS   Registration retry lifetime; default: 3600
+  --retry-max-backoff SECONDS
+                            Registration retry backoff cap; default: 300
   --skip-git-check          Explicitly allow resume outside a trusted git repo
   --python-bin PATH         Python executable
   --codex-bin PATH          Codex executable
@@ -64,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     --marketplace-name) MARKETPLACE_NAME="$2"; shift 2 ;;
     --wake-limit) WAKE_LIMIT="$2"; shift 2 ;;
     --stale-after) STALE_AFTER="$2"; shift 2 ;;
+    --retry-max-attempts) RETRY_MAX_ATTEMPTS="$2"; shift 2 ;;
+    --retry-max-age) RETRY_MAX_AGE="$2"; shift 2 ;;
+    --retry-max-backoff) RETRY_MAX_BACKOFF="$2"; shift 2 ;;
     --skip-git-check) SKIP_GIT_CHECK=1; shift ;;
     --python-bin) PYTHON_BIN="$2"; shift 2 ;;
     --codex-bin) CODEX_BIN="$2"; shift 2 ;;
@@ -114,6 +124,18 @@ validate() {
   [[ "$STALE_AFTER" =~ ^[0-9]+$ ]] || die "--stale-after must be an integer"
   (( STALE_AFTER >= 300 && STALE_AFTER <= 604800 )) \
     || die "--stale-after must be 300..604800"
+  [[ "$RETRY_MAX_ATTEMPTS" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-attempts must be an integer"
+  (( RETRY_MAX_ATTEMPTS >= 1 && RETRY_MAX_ATTEMPTS <= 100 )) \
+    || die "--retry-max-attempts must be 1..100"
+  [[ "$RETRY_MAX_AGE" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-age must be an integer"
+  (( RETRY_MAX_AGE >= 60 && RETRY_MAX_AGE <= 604800 )) \
+    || die "--retry-max-age must be 60..604800"
+  [[ "$RETRY_MAX_BACKOFF" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-backoff must be an integer"
+  (( RETRY_MAX_BACKOFF >= 1 && RETRY_MAX_BACKOFF <= 3600 )) \
+    || die "--retry-max-backoff must be 1..3600"
   [[ "$SKIP_GIT_CHECK" == "0" || "$SKIP_GIT_CHECK" == "1" ]] \
     || die "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK must be 0 or 1"
   if [[ "$NO_PLUGIN" != true ]]; then
@@ -172,8 +194,9 @@ write_env() {
   umask 077
   "$PYTHON_BIN" - "$ENV_FILE" "$INSTALL_DIR" "$RUNTIME_DIR" "$PROJECT_KEY" \
     "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$WAKE_LIMIT" \
-    "$STALE_AFTER" "$MARKETPLACE_NAME" "$SKIP_GIT_CHECK" "$CODEX_BIN" \
-    "$PYTHON_BIN" <<'PY'
+    "$STALE_AFTER" "$RETRY_MAX_ATTEMPTS" "$RETRY_MAX_AGE" \
+    "$RETRY_MAX_BACKOFF" "$MARKETPLACE_NAME" "$SKIP_GIT_CHECK" \
+    "$CODEX_BIN" "$PYTHON_BIN" <<'PY'
 import pathlib
 import shlex
 import sys
@@ -189,6 +212,9 @@ import sys
     label,
     wake_limit,
     stale_after,
+    retry_max_attempts,
+    retry_max_age,
+    retry_max_backoff,
     marketplace_name,
     skip_git_check,
     codex_bin,
@@ -207,6 +233,9 @@ values = {
     "AGENTSTACK_CODEX_APP_LAUNCHD_LABEL": label,
     "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR": wake_limit,
     "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS": stale_after,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS": retry_max_attempts,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS": retry_max_age,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS": retry_max_backoff,
     "AGENTSTACK_CODEX_APP_PLUGIN_ID": f"agentstack-codex-app@{marketplace_name}",
     "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": skip_git_check,
     "AGENTSTACK_CODEX_BINARY": codex_bin,

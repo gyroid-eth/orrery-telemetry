@@ -90,6 +90,60 @@ else
   fail "runtime directory missing"
 fi
 
+STDOUT_LOG="$RUNTIME_DIR/bridge.stdout.log"
+STDERR_LOG="$RUNTIME_DIR/bridge.stderr.log"
+PLIST_PATH="$INSTALL_DIR/launchd/${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}.plist"
+if [[ -f "$PLIST_PATH" ]] && python3 - "$PLIST_PATH" "$STDOUT_LOG" "$STDERR_LOG" <<'PY'
+import pathlib
+import plistlib
+import sys
+
+plist_path, expected_stdout, expected_stderr = sys.argv[1:]
+with pathlib.Path(plist_path).open("rb") as handle:
+    payload = plistlib.load(handle)
+if payload.get("StandardOutPath") != expected_stdout:
+    raise SystemExit("launchd stdout path mismatch")
+if payload.get("StandardErrorPath") != expected_stderr:
+    raise SystemExit("launchd stderr path mismatch")
+PY
+then
+  ok "launchd log paths"
+else
+  fail "launchd log paths missing or mismatched"
+fi
+
+for log_path in "$STDOUT_LOG" "$STDERR_LOG"; do
+  if [[ -L "$log_path" ]]; then
+    fail "launchd log must not be a symlink: $log_path"
+  elif [[ -e "$log_path" && ! -f "$log_path" ]]; then
+    fail "launchd log is not a regular file: $log_path"
+  elif [[ -e "$log_path" && ! -w "$log_path" ]]; then
+    fail "launchd log is not writable: $log_path"
+  fi
+done
+
+if [[ -f "$STDERR_LOG" && "$STDERR_LOG" -nt "$PLIST_PATH" ]] \
+  && grep -q '"event":"bridge_launcher_start"' "$STDERR_LOG" \
+  && grep -q '"event":"bridge_start"' "$STDERR_LOG"; then
+  ok "Bridge startup diagnostic"
+elif [[ "$ALLOW_STOPPED" == true ]]; then
+  warn "Bridge startup diagnostic absent (allowed while stopped)"
+else
+  fail "Bridge startup diagnostic absent or older than installed plist"
+fi
+
+shopt -s nullglob
+STALE_DRAINS=(
+  "$RUNTIME_DIR"/.registration-retry.jsonl.drain-*
+  "$RUNTIME_DIR"/.hook-events.jsonl.drain-*
+)
+shopt -u nullglob
+if (( ${#STALE_DRAINS[@]} == 0 )); then
+  ok "no stale spool drains"
+else
+  fail "${#STALE_DRAINS[@]} stale spool drain(s) remain"
+fi
+
 if [[ -n "$SOCKET_PATH" && -S "$SOCKET_PATH" ]]; then
   mode="$(stat -f '%Lp' "$SOCKET_PATH" 2>/dev/null || stat -c '%a' "$SOCKET_PATH" 2>/dev/null || true)"
   [[ "$mode" == "600" ]] && ok "Bridge socket mode 0600" || fail "Bridge socket mode is ${mode:-unknown}"

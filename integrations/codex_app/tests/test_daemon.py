@@ -90,6 +90,8 @@ def _config(tmp_path: Path) -> BridgeConfig:
         snapshot_path=runtime / "snapshot.json",
         project_key="/workspace/example",
         agent_mail_endpoint="http://agent-mail.invalid/api/",
+        registration_retry_seconds=0,
+        enforce_surface_eligibility=False,
     )
 
 
@@ -131,6 +133,10 @@ def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
             ),
             "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": "1",
             "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS": "7200",
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS": "9",
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS": "1800",
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS": "120",
+            "CODEX_HOME": str(tmp_path / ".codex"),
         }
     )
 
@@ -138,6 +144,10 @@ def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
     assert config.plugin_id == "agentstack-codex-app@private-market"
     assert config.skip_git_repo_check is True
     assert config.stale_after_seconds == 7200
+    assert config.registration_retry_max_attempts == 9
+    assert config.registration_retry_max_age_seconds == 1800
+    assert config.registration_retry_max_backoff_seconds == 120
+    assert config.codex_sessions_root == tmp_path / ".codex" / "sessions"
 
 
 def test_process_event_registers_once_and_reuses_stable_binding(tmp_path):
@@ -305,14 +315,15 @@ def test_fresh_registration_failure_queues_only_sanitized_event(tmp_path):
     assert binding["agent_name"] == "Calm-Noether"
     assert snapshot["state"] == "degraded"
     assert set(stored) == {
-        "schema_version",
-        "session_id",
-        "agent_id",
-        "cwd",
-        "model",
-        "hook_event_name",
-        "turn_id",
+        "retry_schema_version",
+        "event",
+        "attempt_count",
+        "first_failed_at",
+        "next_attempt_at",
     }
+    assert stored["retry_schema_version"] == 1
+    assert stored["attempt_count"] == 1
+    assert stored["event"] == _event()
 
 
 def test_retry_reuses_fresh_binding_name_and_owner_token(tmp_path):
@@ -328,11 +339,167 @@ def test_retry_reuses_fresh_binding_name_and_owner_token(tmp_path):
         enqueue_on_failure=True,
     ) == 1
 
-    assert mail.calls[1]["agent_name"] == first_call["agent_name"]
-    assert mail.calls[1]["registration_token"] == first_call["registration_token"]
+    retry_call = next(call for call in mail.calls[1:] if "agent_name" in call)
+    assert retry_call["agent_name"] == first_call["agent_name"]
+    assert retry_call["registration_token"] == first_call["registration_token"]
     assert daemon.identities.resolve(external_id)["agent_name"] == "Calm-Noether"
     assert read_snapshot(daemon.config.snapshot_path)["runtimes"][0]["state"] == "working"
     assert not daemon.config.retry_path.exists()
+
+
+def test_daemon_ingress_drops_non_desktop_event_before_binding(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        enforce_surface_eligibility=True,
+        codex_sessions_root=tmp_path / ".codex" / "sessions",
+    )
+    mail = FakeAgentMail()
+    daemon = BridgeDaemon(config, mail)
+
+    external_id = daemon.process_event(_event())
+
+    assert daemon.identities.resolve(external_id) is None
+    assert daemon.snapshots.get(external_id) is None
+    assert mail.calls == []
+    assert not config.retry_path.exists()
+
+
+def test_legacy_cli_retry_is_dropped_and_cannot_reappear_after_restart(tmp_path):
+    sessions_root = tmp_path / ".codex" / "sessions"
+    transcript = (
+        sessions_root / "2026" / "07" / "17" / "rollout-session-example.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-example",
+                    "originator": "codex-tui",
+                    "source": "cli",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = replace(
+        _config(tmp_path),
+        enforce_surface_eligibility=True,
+        codex_sessions_root=sessions_root,
+    )
+    stale_drain = config.retry_path.with_name(
+        f".{config.retry_path.name}.drain-12345"
+    )
+    stale_drain.parent.mkdir(parents=True)
+    stale_drain.write_text(json.dumps(_event()) + "\n", encoding="utf-8")
+
+    first = BridgeDaemon(config, FakeAgentMail())
+    assert first.recover_stale_drains() == (0, 0)
+    second = BridgeDaemon(config, FakeAgentMail())
+    assert second.recover_stale_drains() == (0, 0)
+
+    external_id = external_id_for("session-example")
+    assert first.identities.resolve(external_id) is None
+    assert first.snapshots.get(external_id) is None
+    assert not stale_drain.exists()
+    assert not config.retry_path.exists()
+    assert not list(config.runtime_dir.glob(".*.drain-*"))
+
+
+def test_transient_retry_is_bounded_by_attempt_limit(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        registration_retry_max_attempts=2,
+    )
+    mail = FakeAgentMail()
+    mail.fail = True
+    daemon = BridgeDaemon(
+        config,
+        mail,
+        name_factory=lambda: "CalmNoether",
+    )
+
+    daemon.process_event(_event())
+    assert config.retry_path.exists()
+    assert daemon.replay_spool(config.retry_path) == 1
+
+    assert len([call for call in mail.calls if "agent_name" in call]) == 2
+    assert not config.retry_path.exists()
+    assert not list(config.runtime_dir.glob(".*.drain-*"))
+
+
+def test_retry_older_than_lifetime_is_dropped_without_agent_mail_call(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        registration_retry_max_age_seconds=60,
+    )
+    config.retry_path.parent.mkdir(parents=True)
+    config.retry_path.write_text(
+        json.dumps(
+            {
+                "retry_schema_version": 1,
+                "event": _event(),
+                "attempt_count": 1,
+                "first_failed_at": "2000-01-01T00:00:00Z",
+                "next_attempt_at": "2000-01-01T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mail = FakeAgentMail()
+    daemon = BridgeDaemon(config, mail)
+
+    assert daemon.replay_spool(config.retry_path) == 0
+    assert mail.calls == []
+    assert not config.retry_path.exists()
+
+
+def test_retry_backoff_does_not_call_agent_mail_before_due_time(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        registration_retry_seconds=30,
+    )
+    mail = FakeAgentMail()
+    mail.fail = True
+    daemon = BridgeDaemon(
+        config,
+        mail,
+        name_factory=lambda: "CalmNoether",
+    )
+    daemon.process_event(_event())
+    mail.calls.clear()
+
+    assert daemon.replay_spool(config.retry_path) == 0
+
+    assert mail.calls == []
+    assert config.retry_path.exists()
+    stored = json.loads(config.retry_path.read_text(encoding="utf-8"))
+    assert stored["attempt_count"] == 1
+
+
+def test_retry_for_already_retired_binding_is_dropped_without_registration(
+    tmp_path,
+):
+    config = _config(tmp_path)
+    mail = FakeAgentMail()
+    daemon = BridgeDaemon(
+        config,
+        mail,
+        name_factory=lambda: "CalmNoether",
+    )
+    external_id = daemon.process_event(_event())
+    mail.calls.clear()
+    mail.retired_agents.add("CalmNoether")
+    daemon._append_retry(_event(), attempt_count=1)
+
+    assert daemon.replay_spool(config.retry_path) == 0
+
+    assert [next(iter(call)) for call in mail.calls] == ["whois"]
+    assert daemon.identities.resolve(external_id) is not None
+    assert not config.retry_path.exists()
 
 
 def test_missing_owner_token_fails_closed_without_rotating_identity(tmp_path):

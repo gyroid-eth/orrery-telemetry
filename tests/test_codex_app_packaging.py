@@ -164,6 +164,9 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     )
     assert generated_env["AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"] == "0"
     assert generated_env["AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS"] == "3600"
+    assert generated_env["AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS"] == "12"
+    assert generated_env["AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS"] == "3600"
+    assert generated_env["AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS"] == "300"
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -178,6 +181,8 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
         "/bin/bash",
         str(install_dir / "bin" / "run-bridge"),
     ]
+    assert plist["StandardOutPath"] == str(runtime_dir / "bridge.stdout.log")
+    assert plist["StandardErrorPath"] == str(runtime_dir / "bridge.stderr.log")
 
     installed = _plugin_list(home)["installed"]
     assert [item["pluginId"] for item in installed] == [
@@ -271,28 +276,45 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     assert "example-secret-value" not in doctor.stdout + doctor.stderr
     assert not list((install_dir / "src").rglob("__pycache__"))
 
-    bridge = subprocess.Popen(
-        [str(install_dir / "bin" / "run-bridge")],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    socket_path = runtime_dir / "bridge.sock"
-    deadline = time.monotonic() + 5
-    while (
-        bridge.poll() is None
-        and not socket_path.exists()
-        and time.monotonic() < deadline
-    ):
-        time.sleep(0.02)
-    try:
-        assert bridge.poll() is None, bridge.stderr.read()
-        assert socket_path.is_socket()
-    finally:
-        bridge.terminate()
-        bridge.wait(timeout=5)
-        socket_path.unlink(missing_ok=True)
+    stdout_log = runtime_dir / "bridge.stdout.log"
+    stderr_log = runtime_dir / "bridge.stderr.log"
+    with stdout_log.open("w", encoding="utf-8") as stdout_handle, stderr_log.open(
+        "w", encoding="utf-8"
+    ) as stderr_handle:
+        bridge = subprocess.Popen(
+            [str(install_dir / "bin" / "run-bridge")],
+            env=environment,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+        )
+        socket_path = runtime_dir / "bridge.sock"
+        deadline = time.monotonic() + 5
+        while (
+            bridge.poll() is None
+            and not socket_path.exists()
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        try:
+            assert bridge.poll() is None, stderr_log.read_text(encoding="utf-8")
+            assert socket_path.is_socket()
+            live_doctor = subprocess.run(
+                [str(install_dir / "bin" / "doctor-codex-app-integration")],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert "ok: Bridge startup diagnostic" in live_doctor.stdout
+            assert "ok: no stale spool drains" in live_doctor.stdout
+        finally:
+            bridge.terminate()
+            bridge.wait(timeout=5)
+            socket_path.unlink(missing_ok=True)
+    bridge_stderr = stderr_log.read_text(encoding="utf-8")
+    assert '"event":"bridge_launcher_start"' in bridge_stderr
+    assert '"event":"bridge_start"' in bridge_stderr
 
     diagnostic_environment = dict(
         environment,

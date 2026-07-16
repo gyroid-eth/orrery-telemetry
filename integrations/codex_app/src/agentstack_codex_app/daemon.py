@@ -14,9 +14,11 @@ import re
 import secrets
 import socket
 import stat
+import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -24,7 +26,6 @@ from .agent_mail_client import AgentMailClient, AgentMailError, HttpJsonRpcTrans
 from .delivery import DeliveryManager
 from .hook_entry import (
     MAX_EVENT_BYTES,
-    append_spool,
     runtime_dir_from_env,
     session_has_codex_desktop_transcript,
     validate_event,
@@ -112,6 +113,20 @@ _SCIENTISTS = (
     "Turing",
     "Yukawa",
 )
+RETRY_SCHEMA_VERSION = 1
+RETRY_FIELDS = frozenset(
+    {
+        "retry_schema_version",
+        "event",
+        "attempt_count",
+        "first_failed_at",
+        "next_attempt_at",
+    }
+)
+PROCESS_OK = "ok"
+PROCESS_INELIGIBLE = "ineligible"
+PROCESS_TRANSIENT_FAILURE = "transient_failure"
+PROCESS_PERMANENT_FAILURE = "permanent_failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +140,11 @@ class BridgeConfig:
     agent_mail_endpoint: str
     agent_mail_bearer: str | None = None
     registration_retry_seconds: float = 5.0
+    registration_retry_max_attempts: int = 12
+    registration_retry_max_age_seconds: float = 3600.0
+    registration_retry_max_backoff_seconds: float = 300.0
+    codex_sessions_root: Path = Path("~/.codex/sessions").expanduser()
+    enforce_surface_eligibility: bool = True
     signals_dir: Path | None = None
     project_slug: str | None = None
     delivery_db_path: Path | None = None
@@ -172,6 +192,35 @@ class BridgeConfig:
             raise ValueError(
                 "AGENTSTACK_CODEX_APP_RETRY_SECONDS must be between 1 and 300"
             )
+        retry_max_attempts = _env_int(
+            env,
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS",
+            12,
+            minimum=1,
+            maximum=100,
+        )
+        retry_max_age_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS",
+            3600,
+            minimum=60,
+            maximum=604800,
+        )
+        retry_max_backoff_seconds = _env_float(
+            env,
+            "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS",
+            300,
+            minimum=1,
+            maximum=3600,
+        )
+        if retry_max_backoff_seconds < retry_seconds:
+            raise ValueError(
+                "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS must not be "
+                "less than AGENTSTACK_CODEX_APP_RETRY_SECONDS"
+            )
+        codex_home = Path(
+            (env.get("CODEX_HOME") or "~/.codex").strip()
+        ).expanduser()
         cold_wake_enabled = _env_bool(
             env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"),
             "AGENTSTACK_CODEX_APP_COLD_WAKE",
@@ -269,6 +318,10 @@ class BridgeConfig:
             agent_mail_endpoint=endpoint,
             agent_mail_bearer=(env.get("MCP_AGENT_MAIL_TOKEN") or None),
             registration_retry_seconds=retry_seconds,
+            registration_retry_max_attempts=retry_max_attempts,
+            registration_retry_max_age_seconds=retry_max_age_seconds,
+            registration_retry_max_backoff_seconds=retry_max_backoff_seconds,
+            codex_sessions_root=codex_home / "sessions",
             signals_dir=(
                 Path(signals_value).expanduser()
                 if signals_value
@@ -362,6 +415,24 @@ class BridgeDaemon:
         external_id = external_id_for(
             normalized["session_id"], normalized["agent_id"]
         )
+        outcome = self._process_normalized_event(normalized)
+        if outcome == PROCESS_TRANSIENT_FAILURE and enqueue_on_failure:
+            self._append_retry(normalized, attempt_count=1)
+        return external_id
+
+    def _process_normalized_event(self, normalized: Mapping[str, Any]) -> str:
+        """Process one validated event and classify its retry disposition."""
+
+        if not self._event_is_eligible(normalized):
+            _diagnostic(
+                "event_dropped",
+                reason="ineligible_surface",
+                session_id=normalized["session_id"],
+            )
+            return PROCESS_INELIGIBLE
+        external_id = external_id_for(
+            normalized["session_id"], normalized["agent_id"]
+        )
         binding = self.identities.resolve(external_id)
         previous = self.snapshots.get(external_id)
         should_register = binding is None or normalized["hook_event_name"] in {
@@ -383,7 +454,7 @@ class BridgeDaemon:
             owner_token = self.identities.load_owner_token(external_id)
             if owner_token is None:
                 self._update_snapshot(binding, normalized, state="degraded")
-                return external_id
+                return PROCESS_PERMANENT_FAILURE
 
         if should_register:
             try:
@@ -404,18 +475,31 @@ class BridgeDaemon:
                 )
             except AgentMailError:
                 self._update_snapshot(binding, normalized, state="degraded")
-                if enqueue_on_failure:
-                    append_spool(normalized, self.config.retry_path)
-                return external_id
+                return PROCESS_TRANSIENT_FAILURE
 
         self._update_snapshot(binding, normalized, state=_state_for_event(normalized))
-        return external_id
+        return PROCESS_OK
+
+    def _event_is_eligible(self, event: Mapping[str, Any]) -> bool:
+        if not self.config.enforce_surface_eligibility:
+            return True
+        return session_has_codex_desktop_transcript(
+            event["session_id"],
+            sessions_root=self.config.codex_sessions_root,
+        )
 
     def reconcile_bindings(self) -> int:
         """Refresh persisted identities from authoritative register responses."""
 
         reconciled = 0
         for binding in self.identities.list_bindings():
+            if self.config.enforce_surface_eligibility and not (
+                session_has_codex_desktop_transcript(
+                    binding["session_id"],
+                    sessions_root=self.config.codex_sessions_root,
+                )
+            ):
+                continue
             try:
                 owner_token = self.identities.load_owner_token(
                     binding["external_id"]
@@ -472,50 +556,189 @@ class BridgeDaemon:
                 "register_agent returned an invalid or conflicting agent name"
             ) from exc
 
-    def replay_spool(self, path: Path, *, enqueue_on_failure: bool) -> int:
-        """Move a JSONL spool aside, replay valid entries, then remove it."""
+    def replay_spool(
+        self,
+        path: Path,
+        *,
+        enqueue_on_failure: bool | None = None,
+    ) -> int:
+        """Replay bounded retry records, accepting legacy raw event rows."""
 
         if not path.exists():
             return 0
-        drain = path.with_name(f".{path.name}.drain-{os.getpid()}")
+        drain = path.with_name(
+            f".{path.name}.drain-{os.getpid()}-{time.time_ns()}"
+        )
         try:
             os.replace(path, drain)
         except FileNotFoundError:
             return 0
+        return self._replay_retry_file(drain)
+
+    def _replay_retry_file(self, path: Path) -> int:
         processed = 0
+        dropped = 0
+        retained = 0
+        completed = False
         try:
-            with drain.open(encoding="utf-8") as handle:
+            with path.open(encoding="utf-8") as handle:
                 for line in handle:
                     try:
-                        event = json.loads(line)
-                        if not isinstance(event, dict):
-                            continue
-                        self.process_event(
-                            event, enqueue_on_failure=enqueue_on_failure
-                        )
-                        processed += 1
-                    except (ValueError, OSError, json.JSONDecodeError):
+                        record = self._normalize_retry_record(json.loads(line))
+                    except (ValueError, json.JSONDecodeError):
+                        dropped += 1
                         continue
+                    event = record["event"]
+                    if not self._event_is_eligible(event):
+                        dropped += 1
+                        continue
+                    if self._retry_expired(record):
+                        dropped += 1
+                        continue
+                    if _parse_timestamp(record["next_attempt_at"]) > _utc_datetime():
+                        _append_jsonl(record, self.config.retry_path)
+                        retained += 1
+                        continue
+                    if self._retry_binding_is_retired(event):
+                        dropped += 1
+                        continue
+                    outcome = self._process_normalized_event(event)
+                    processed += 1
+                    if outcome == PROCESS_TRANSIENT_FAILURE:
+                        next_attempt = record["attempt_count"] + 1
+                        if next_attempt >= self.config.registration_retry_max_attempts:
+                            dropped += 1
+                            continue
+                        self._append_retry(
+                            event,
+                            attempt_count=next_attempt,
+                            first_failed_at=record["first_failed_at"],
+                        )
+                        retained += 1
+                    elif outcome != PROCESS_OK:
+                        dropped += 1
+            completed = True
         finally:
-            try:
-                drain.unlink()
-            except FileNotFoundError:
-                pass
+            if completed:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+        _diagnostic(
+            "retry_replay",
+            processed=processed,
+            retained=retained,
+            dropped=dropped,
+        )
         return processed
+
+    def _normalize_retry_record(self, payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("retry row must be an object")
+        if set(payload) == RETRY_FIELDS:
+            if payload.get("retry_schema_version") != RETRY_SCHEMA_VERSION:
+                raise ValueError("unsupported retry schema")
+            event = validate_event(payload.get("event"))
+            attempt_count = payload.get("attempt_count")
+            if (
+                not isinstance(attempt_count, int)
+                or isinstance(attempt_count, bool)
+                or attempt_count < 1
+            ):
+                raise ValueError("invalid retry attempt count")
+            first_failed_at = _parse_timestamp(payload.get("first_failed_at"))
+            next_attempt_at = _parse_timestamp(payload.get("next_attempt_at"))
+            return {
+                "retry_schema_version": RETRY_SCHEMA_VERSION,
+                "event": event,
+                "attempt_count": attempt_count,
+                "first_failed_at": _format_timestamp(first_failed_at),
+                "next_attempt_at": _format_timestamp(next_attempt_at),
+            }
+        event = validate_event(payload)
+        now = _utc_datetime()
+        return {
+            "retry_schema_version": RETRY_SCHEMA_VERSION,
+            "event": event,
+            "attempt_count": 1,
+            "first_failed_at": _format_timestamp(now),
+            "next_attempt_at": _format_timestamp(now),
+        }
+
+    def _retry_expired(self, record: Mapping[str, Any]) -> bool:
+        if record["attempt_count"] >= self.config.registration_retry_max_attempts:
+            return True
+        age = _utc_datetime() - _parse_timestamp(record["first_failed_at"])
+        return age.total_seconds() >= self.config.registration_retry_max_age_seconds
+
+    def _append_retry(
+        self,
+        event: Mapping[str, Any],
+        *,
+        attempt_count: int,
+        first_failed_at: str | None = None,
+    ) -> None:
+        now = _utc_datetime()
+        first = (
+            _parse_timestamp(first_failed_at)
+            if first_failed_at is not None
+            else now
+        )
+        exponent = min(20, max(0, attempt_count - 1))
+        delay = min(
+            self.config.registration_retry_seconds * (2**exponent),
+            self.config.registration_retry_max_backoff_seconds,
+        )
+        record = {
+            "retry_schema_version": RETRY_SCHEMA_VERSION,
+            "event": validate_event(event),
+            "attempt_count": attempt_count,
+            "first_failed_at": _format_timestamp(first),
+            "next_attempt_at": _format_timestamp(now + timedelta(seconds=delay)),
+        }
+        if self._retry_expired(record):
+            _diagnostic(
+                "retry_dropped",
+                reason="limit_reached",
+                session_id=record["event"]["session_id"],
+            )
+            return
+        _append_jsonl(record, self.config.retry_path)
+
+    def _retry_binding_is_retired(self, event: Mapping[str, Any]) -> bool:
+        external_id = external_id_for(event["session_id"], event["agent_id"])
+        binding = self.identities.resolve(external_id)
+        if binding is None:
+            return False
+        try:
+            profile = self.agent_mail.whois(
+                project_key=binding["project_key"],
+                agent_name=binding["agent_name"],
+            )
+        except (AgentMailError, OSError, ValueError):
+            return False
+        retired_at = profile.get("retired_at")
+        return isinstance(retired_at, str) and bool(retired_at.strip())
 
     def queue_spool(self, path: Path) -> int:
         """Move a spool aside and queue valid events without blocking the socket."""
 
         if not path.exists():
             return 0
-        drain = path.with_name(f".{path.name}.drain-{os.getpid()}")
+        drain = path.with_name(
+            f".{path.name}.drain-{os.getpid()}-{time.time_ns()}"
+        )
         try:
             os.replace(path, drain)
         except FileNotFoundError:
             return 0
+        return self._queue_event_file(drain)
+
+    def _queue_event_file(self, path: Path) -> int:
         queued = 0
+        completed = False
         try:
-            with drain.open(encoding="utf-8") as handle:
+            with path.open(encoding="utf-8") as handle:
                 for line in handle:
                     try:
                         event = json.loads(line)
@@ -525,17 +748,44 @@ class BridgeDaemon:
                         queued += 1
                     except (ValueError, json.JSONDecodeError):
                         continue
+            completed = True
         finally:
-            try:
-                drain.unlink()
-            except FileNotFoundError:
-                pass
+            if completed:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
         return queued
+
+    def recover_stale_drains(self) -> tuple[int, int]:
+        """Recover files left when a previous daemon stopped during replay."""
+
+        retry_rows = 0
+        hook_rows = 0
+        retry_pattern = f".{self.config.retry_path.name}.drain-*"
+        hook_pattern = f".{self.config.spool_path.name}.drain-*"
+        for path in sorted(self.config.retry_path.parent.glob(retry_pattern)):
+            try:
+                retry_rows += self._replay_retry_file(path)
+            except OSError:
+                _diagnostic("drain_file_failed", kind="retry")
+        for path in sorted(self.config.spool_path.parent.glob(hook_pattern)):
+            try:
+                hook_rows += self._queue_event_file(path)
+            except OSError:
+                _diagnostic("drain_file_failed", kind="hook")
+        _diagnostic(
+            "drain_recovery",
+            retry_rows=retry_rows,
+            hook_rows=hook_rows,
+        )
+        return retry_rows, hook_rows
 
     def serve_forever(self) -> None:
         """Run the private Unix socket until :meth:`stop` is called."""
 
         self._prepare_runtime()
+        _diagnostic("bridge_start", pid=os.getpid())
         self._start_worker()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(os.fspath(self.config.socket_path))
@@ -554,6 +804,7 @@ class BridgeDaemon:
             finally:
                 self.stop()
                 self._remove_socket()
+                _diagnostic("bridge_stop", pid=os.getpid())
 
     def stop(self) -> None:
         self._stop.set()
@@ -653,6 +904,10 @@ class BridgeDaemon:
 
     def _worker_loop(self) -> None:
         try:
+            self.recover_stale_drains()
+        except (OSError, ValueError):
+            _diagnostic("drain_recovery_failed", reason="local_io")
+        try:
             self.reconcile_bindings()
         except (OSError, ValueError):
             # Startup reconciliation repairs old names but must not make the
@@ -677,10 +932,7 @@ class BridgeDaemon:
             except queue.Empty:
                 now = time.monotonic()
                 if now >= next_retry:
-                    self.replay_spool(
-                        self.config.retry_path,
-                        enqueue_on_failure=True,
-                    )
+                    self.replay_spool(self.config.retry_path)
                     try:
                         self.snapshots.mark_waiting_dormant_older_than(
                             self.config.stale_after_seconds
@@ -702,10 +954,11 @@ class BridgeDaemon:
             try:
                 self.process_event(event)
             except (ValueError, OSError):
-                try:
-                    append_spool(event, self.config.retry_path)
-                except OSError:
-                    pass
+                _diagnostic(
+                    "event_dropped",
+                    reason="local_processing_error",
+                    session_id=str(event.get("session_id") or "unknown"),
+                )
             now = time.monotonic()
             if self.wake_coordinator is not None and now >= next_wake:
                 try:
@@ -911,6 +1164,57 @@ def _env_int(
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}")
     return value
+
+
+def _utc_datetime() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("timestamp must be a non-empty string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("invalid timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _append_jsonl(payload: Mapping[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        encoded = (
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        os.write(descriptor, encoded)
+    finally:
+        os.close(descriptor)
+
+
+def _diagnostic(event: str, **fields: Any) -> None:
+    payload = {
+        "schema_version": 1,
+        "event": event,
+        "timestamp": _format_timestamp(_utc_datetime()),
+        **fields,
+    }
+    try:
+        print(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            file=sys.stderr,
+            flush=True,
+        )
+    except OSError:
+        pass
 
 
 def _recv_payload(connection: socket.socket) -> dict[str, Any]:

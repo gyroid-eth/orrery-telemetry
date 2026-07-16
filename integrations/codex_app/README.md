@@ -13,6 +13,11 @@ The current P3 implementation provides:
 - a fail-closed App-surface filter backed by matching `Codex Desktop` rollout
   metadata; transcript-less sessions are skipped because cold wake requires a
   resumable rollout and such identities would be unusable;
+- the same rollout eligibility check at daemon ingress and retry replay, plus
+  bounded registration retries with exponential backoff and legacy-row
+  migration, so pre-filter CLI spool rows cannot recreate identities;
+- startup recovery for interrupted hook/retry drain files and sanitized
+  launcher/daemon lifecycle diagnostics on launchd stderr;
 - a session-bound, allowlisted MCP proxy for inbox, messaging, acknowledgement,
   reservations, and sanitized runtime/lineage status;
 - PostToolUse pending-mail notices for active turns;
@@ -91,6 +96,12 @@ After an approved install, diagnose it with:
 Waiting runtimes become `dormant` after one hour without a lifecycle event by
 default. The installer accepts `--stale-after SECONDS` (minimum five minutes)
 for environments with a different observed idle cadence.
+
+Transient agent-mail registration failures retry at most 12 calls over a
+maximum one-hour lifetime, with a five-minute backoff cap. The corresponding
+installer options are `--retry-max-attempts`, `--retry-max-age`, and
+`--retry-max-backoff`. Non-Desktop or transcript-less rows are deterministic
+drops and are never re-spooled.
 
 To explicitly retire Bridge-owned identities whose matching Codex Desktop
 rollout no longer exists, then purge their local binding and snapshot:
