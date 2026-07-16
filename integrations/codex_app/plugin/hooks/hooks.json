@@ -1,4 +1,77 @@
 {
-  "description": "Lifecycle hooks remain disabled until the in-App P0 is complete.",
-  "hooks": {}
+  "description": "Forward sanitized Codex App lifecycle telemetry to AgentStack Bridge.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/../src/agentstack_codex_app/hook_entry.py\"",
+            "async": false,
+            "timeoutSec": 1
+          }
+        ]
+      }
+    ]
+  }
 }

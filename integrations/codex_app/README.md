@@ -4,15 +4,17 @@ This directory is the source of truth for the optional Codex App bridge. It
 keeps experimental app-server control isolated from agent-mail identities and
 from the dashboard's tmux runtime path.
 
-The current P1 scaffold provides:
+The current P1 implementation provides:
 
 - a synchronous JSON-RPC client for `codex app-server` over stdio;
 - versioned runtime-event and binding schemas plus delivery-state migration;
-- plugin, bridge, MCP proxy, identity, and snapshot module boundaries;
+- a private Bridge socket, fail-open hook spool, durable identity bindings,
+  separately protected owner tokens, and sanitized dashboard snapshots;
+- minimal, injectable agent-mail registration and a Codex App runtime provider;
 - fake-server protocol tests that do not start Codex or require tmux.
 
-`hook_entry.py` and `wake.py` deliberately raise `NotImplementedError`. App-side
-lifecycle hook behavior and cold wake remain gated on the in-App P0 checks.
+`wake.py` deliberately raises `NotImplementedError`. P1 performs no inbox
+polling, prompt injection, automatic resume, or cold wake.
 
 ## Development
 
