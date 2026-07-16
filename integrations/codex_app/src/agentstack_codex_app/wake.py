@@ -42,6 +42,17 @@ _HIGH_ENTROPY_VALUE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_~+/=-]{32,}")
 _CAPTURE_BYTES = 4096
 _DIAGNOSTIC_CHARACTERS = 256
 _DIAGNOSTIC_LINES = 2
+AGENTSTACK_PROXY_TOOLS = (
+    "bootstrap",
+    "fetch_inbox",
+    "send_message",
+    "acknowledge_message",
+    "reserve_files",
+    "renew_reservations",
+    "release_reservations",
+    "runtime_status",
+)
+_PLUGIN_ID = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9._-]+")
 
 
 class ResumeProcess(Protocol):
@@ -184,10 +195,14 @@ class ExecResumeAdapter:
         self,
         *,
         codex_binary: str = "codex",
+        plugin_id: str = "agentstack-codex-app@agentstack-local",
         skip_git_repo_check: bool = False,
         process_factory: ProcessFactory = subprocess.Popen,
     ) -> None:
         self.codex_binary = validate_codex_binary(codex_binary)
+        if _PLUGIN_ID.fullmatch(plugin_id) is None:
+            raise ValueError("plugin_id has an invalid format")
+        self.plugin_id = plugin_id
         self.skip_git_repo_check = bool(skip_git_repo_check)
         self.process_factory = process_factory
 
@@ -207,6 +222,7 @@ class ExecResumeAdapter:
             "exec",
             "resume",
         ]
+        argv.extend(proxy_tool_approval_args(self.plugin_id))
         if self.skip_git_repo_check:
             argv.append("--skip-git-repo-check")
         argv.extend((session_id, build_wake_prompt(messages)))
@@ -676,6 +692,25 @@ def _resume_environment(
     ]
     environment["PATH"] = os.pathsep.join([binary_dir, *remaining])
     return environment
+
+
+def proxy_tool_approval_args(plugin_id: str) -> list[str]:
+    """Build single-run approval overrides for only the proxy allowlist."""
+
+    if _PLUGIN_ID.fullmatch(plugin_id) is None:
+        raise ValueError("plugin_id has an invalid format")
+    prefix = (
+        f'plugins."{plugin_id}".mcp_servers.agentstack.tools'
+    )
+    arguments: list[str] = []
+    for tool_name in AGENTSTACK_PROXY_TOOLS:
+        arguments.extend(
+            (
+                "-c",
+                f'{prefix}.{tool_name}.approval_mode="approve"',
+            )
+        )
+    return arguments
 
 
 def read_signal_messages(

@@ -166,7 +166,7 @@ write_env() {
   umask 077
   "$PYTHON_BIN" - "$ENV_FILE" "$INSTALL_DIR" "$RUNTIME_DIR" "$PROJECT_KEY" \
     "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$WAKE_LIMIT" \
-    "$SKIP_GIT_CHECK" "$CODEX_BIN" "$PYTHON_BIN" <<'PY'
+    "$MARKETPLACE_NAME" "$SKIP_GIT_CHECK" "$CODEX_BIN" "$PYTHON_BIN" <<'PY'
 import pathlib
 import shlex
 import sys
@@ -181,6 +181,7 @@ import sys
     signals_dir,
     label,
     wake_limit,
+    marketplace_name,
     skip_git_check,
     codex_bin,
     python_bin,
@@ -197,6 +198,7 @@ values = {
     "AGENTSTACK_SIGNALS_DIR": signals_dir,
     "AGENTSTACK_CODEX_APP_LAUNCHD_LABEL": label,
     "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR": wake_limit,
+    "AGENTSTACK_CODEX_APP_PLUGIN_ID": f"agentstack-codex-app@{marketplace_name}",
     "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": skip_git_check,
     "AGENTSTACK_CODEX_BINARY": codex_bin,
     "AGENTSTACK_PYTHON": python_bin,

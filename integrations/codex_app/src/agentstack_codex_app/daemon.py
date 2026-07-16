@@ -137,6 +137,7 @@ class BridgeConfig:
     wake_limit_per_hour: int = 12
     wake_timeout_seconds: float = 900.0
     codex_binary: str = "codex"
+    plugin_id: str = "agentstack-codex-app@agentstack-local"
     skip_git_repo_check: bool = False
 
     @classmethod
@@ -245,6 +246,10 @@ class BridgeConfig:
             env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"),
             "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK",
         )
+        plugin_id = (
+            env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID")
+            or "agentstack-codex-app@agentstack-local"
+        ).strip()
         return cls(
             runtime_dir=runtime_dir,
             socket_path=Path(socket_value).expanduser() if socket_value else runtime_dir / "bridge.sock",
@@ -276,6 +281,7 @@ class BridgeConfig:
             wake_limit_per_hour=wake_limit_per_hour,
             wake_timeout_seconds=wake_timeout_seconds,
             codex_binary=codex_binary,
+            plugin_id=plugin_id,
             skip_git_repo_check=skip_git_repo_check,
         )
 
@@ -315,6 +321,7 @@ class BridgeDaemon:
                 self.snapshots,
                 ExecResumeAdapter(
                     codex_binary=config.codex_binary,
+                    plugin_id=config.plugin_id,
                     skip_git_repo_check=config.skip_git_repo_check,
                 ),
                 signals_dir=config.signals_dir,

@@ -21,6 +21,9 @@ The current P3 implementation provides:
   bypass flags;
 - bounded, token-redacted resume diagnostics; untrusted workspaces fail once
   as `blocked / untrusted_workspace` instead of silently exhausting retries;
+- single-run approval policy for only the eight session-bound `agentstack`
+  proxy tools, allowing headless cold-wake turns to coordinate without
+  changing shell, sandbox, other MCP, or global approval policy;
 - sanitized `wake_failed`, blocked, pending, and dead-letter telemetry for the
   Dashboard provider;
 - fail-closed stopped-subagent handling: durable cold wake targets root tasks;

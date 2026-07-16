@@ -106,11 +106,15 @@ def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
             "AGENTSTACK_PROJECT_KEY": "/workspace/example",
             "AGENTSTACK_MCP_URL": "http://agent-mail.invalid/api/",
             "AGENTSTACK_CODEX_BINARY": str(codex),
+            "AGENTSTACK_CODEX_APP_PLUGIN_ID": (
+                "agentstack-codex-app@private-market"
+            ),
             "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": "1",
         }
     )
 
     assert config.codex_binary == str(codex)
+    assert config.plugin_id == "agentstack-codex-app@private-market"
     assert config.skip_git_repo_check is True
 
 

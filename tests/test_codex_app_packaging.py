@@ -14,6 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install-codex-app-integration.sh"
 EXPORTER = ROOT / "scripts" / "export-component.sh"
+PROXY_TOOLS = (
+    "bootstrap",
+    "fetch_inbox",
+    "send_message",
+    "acknowledge_message",
+    "reserve_files",
+    "renew_reservations",
+    "release_reservations",
+    "runtime_status",
+)
 
 
 def _environment(home: Path) -> dict[str, str]:
@@ -142,6 +152,9 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     codex_binary = generated_env["AGENTSTACK_CODEX_BINARY"]
     assert Path(codex_binary).is_absolute()
     assert Path(codex_binary).samefile(shutil.which("codex"))
+    assert generated_env["AGENTSTACK_CODEX_APP_PLUGIN_ID"] == (
+        "agentstack-codex-app@agentstack-local"
+    )
     assert generated_env["AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"] == "0"
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
@@ -162,6 +175,37 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     assert [item["pluginId"] for item in installed] == [
         "agentstack-codex-app@agentstack-local"
     ]
+    approval_args = []
+    for tool_name in PROXY_TOOLS:
+        approval_args.extend(
+            [
+                "-c",
+                (
+                    'plugins."agentstack-codex-app@agentstack-local".'
+                    f"mcp_servers.agentstack.tools.{tool_name}."
+                    'approval_mode="approve"'
+                ),
+            ]
+        )
+    strict_config = subprocess.run(
+        [
+            codex_binary,
+            "exec",
+            "resume",
+            "--strict-config",
+            *approval_args,
+            "--skip-git-repo-check",
+            "00000000-0000-0000-0000-000000000000",
+            "configuration probe",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert strict_config.returncode != 0
+    assert "no rollout found" in strict_config.stderr
+    assert "configuration" not in strict_config.stderr.lower()
     cached = (
         home
         / ".codex"
