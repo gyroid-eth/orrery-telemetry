@@ -320,6 +320,76 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
         environment,
         PYTHONPATH=str(install_dir / "src"),
     )
+    identity_probe = subprocess.run(
+        [
+            generated_env["AGENTSTACK_PYTHON"],
+            "-c",
+            """
+import json
+from pathlib import Path
+import sys
+from agentstack_codex_app.agent_mail_client import Registration
+from agentstack_codex_app.daemon import BridgeConfig, BridgeDaemon
+
+class FakeAgentMail:
+    def __init__(self):
+        self.calls = []
+
+    def register_agent(self, **kwargs):
+        self.calls.append(kwargs)
+        names = ["BlueLake", "GreenCastle"]
+        return Registration(names[len(self.calls) - 1], kwargs["registration_token"])
+
+runtime = Path(sys.argv[1])
+project_key = sys.argv[2]
+config = BridgeConfig(
+    runtime_dir=runtime,
+    socket_path=runtime / "bridge.sock",
+    spool_path=runtime / "hook-events.jsonl",
+    retry_path=runtime / "registration-retry.jsonl",
+    snapshot_path=runtime / "snapshot.json",
+    project_key=project_key,
+    agent_mail_endpoint="http://agent-mail.invalid/api/",
+    enforce_surface_eligibility=False,
+    cold_wake_enabled=False,
+)
+mail = FakeAgentMail()
+daemon = BridgeDaemon(config, mail)
+root = daemon.process_event({
+    "schema_version": 1,
+    "session_id": "packaging-session",
+    "agent_id": None,
+    "cwd": project_key,
+    "model": "gpt-example",
+    "hook_event_name": "SessionStart",
+    "turn_id": None,
+})
+child = daemon.process_event({
+    "schema_version": 1,
+    "session_id": "packaging-session",
+    "agent_id": "child-1",
+    "cwd": project_key,
+    "model": "gpt-example",
+    "hook_event_name": "SubagentStart",
+    "turn_id": None,
+})
+assert all("agent_name" not in call for call in mail.calls)
+assert daemon.identities.resolve(root)["agent_name"] == "BlueLake"
+assert daemon.identities.resolve(child)["agent_name"] == "GreenCastle"
+print(json.dumps({"root": "BlueLake", "child": "GreenCastle"}))
+""",
+            str(runtime_dir / "packaging-identity-probe"),
+            str(home / "project"),
+        ],
+        env=diagnostic_environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(identity_probe.stdout) == {
+        "root": "BlueLake",
+        "child": "GreenCastle",
+    }
     subprocess.run(
         [
             generated_env["AGENTSTACK_PYTHON"],

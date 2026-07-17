@@ -46,6 +46,7 @@ def test_register_agent_uses_injected_transport_and_caller_owner_token():
     assert call["params"]["name"] == "register_agent"
     assert call["params"]["arguments"]["program"] == "codex-app"
     assert call["params"]["arguments"]["registration_token"] == "owner-secret"
+    assert "name" not in call["params"]["arguments"]
 
 
 def test_register_agent_accepts_structured_content():
@@ -68,6 +69,9 @@ def test_register_agent_accepts_structured_content():
         agent_name="Quiet-Curie",
     )
     assert result.agent_name == "Quiet-Curie"
+    assert client.transport.payloads[0]["params"]["arguments"]["name"] == (
+        "Quiet-Curie"
+    )
 
 
 def test_register_agent_rejects_conflicting_returned_token():

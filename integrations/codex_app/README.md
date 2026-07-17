@@ -10,6 +10,8 @@ The current P3 implementation provides:
 - versioned runtime-event and binding schemas plus delivery-state migration;
 - a private Bridge socket, fail-open hook spool, durable identity bindings,
   separately protected owner tokens, and sanitized dashboard snapshots;
+- server-assigned root and subagent names: fresh registrations omit `name`,
+  then atomically adopt the canonical agent-mail response into the binding;
 - a fail-closed App-surface filter backed by matching `Codex Desktop` rollout
   metadata; transcript-less sessions are skipped because cold wake requires a
   resumable rollout and such identities would be unusable;
@@ -42,6 +44,21 @@ The current P3 implementation provides:
   count-only escalation path;
 - injectable agent-mail transport and a Codex App runtime provider;
 - fake-server protocol tests that do not start Codex or require tmux.
+
+## Identity lifecycle
+
+The Bridge does not maintain an agent-name pool. A fresh root or subagent
+binding starts with a local-only `Pending-<external-id-hash>` label and calls
+`register_agent` without `name`, allowing agent-mail to choose from its
+canonical name and portrait namespace. The response name is immediately
+adopted by the durable binding and its runtime snapshot. The provisional label
+is also withheld during registration retries, so it cannot become a remote
+identity.
+
+Once a binding has a server-confirmed name, startup reconciliation and later
+SessionStart/SubagentStart re-authentication send that persisted name together
+with its existing owner token. This preserves inbox and delivery continuity
+without allocating a replacement identity.
 
 ## Development
 

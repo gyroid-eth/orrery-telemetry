@@ -7,6 +7,7 @@ registration, credential persistence, retry spooling, and atomic snapshots.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -20,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 from .agent_mail_client import AgentMailClient, AgentMailError, HttpJsonRpcTransport
 from .delivery import DeliveryManager
@@ -46,73 +47,6 @@ from .wake import (
 )
 
 
-_ADJECTIVES = (
-    "Black",
-    "Blue",
-    "Bold",
-    "Brave",
-    "Bright",
-    "Brown",
-    "Calm",
-    "Cloudy",
-    "Curious",
-    "Dark",
-    "Foggy",
-    "Frosty",
-    "Gold",
-    "Gray",
-    "Green",
-    "Navy",
-    "Noble",
-    "Orange",
-    "Pink",
-    "Purple",
-    "Quiet",
-    "Rainy",
-    "Red",
-    "Sharp",
-    "Silver",
-    "Stormy",
-    "Sunny",
-    "Swift",
-    "Wild",
-    "Windy",
-    "White",
-)
-_SCIENTISTS = (
-    "Bohr",
-    "Boltzmann",
-    "Carson",
-    "Chandrasekhar",
-    "Curie",
-    "Darwin",
-    "Einstein",
-    "Euler",
-    "Faraday",
-    "Fermi",
-    "Franklin",
-    "Galilei",
-    "Gauss",
-    "Goodall",
-    "Hopper",
-    "Hubble",
-    "Jemison",
-    "Kepler",
-    "Lavoisier",
-    "Lovelace",
-    "Maxwell",
-    "McClintock",
-    "Meitner",
-    "Mendel",
-    "Newton",
-    "Noether",
-    "Pasteur",
-    "Raman",
-    "Sagan",
-    "Somerville",
-    "Turing",
-    "Yukawa",
-)
 RETRY_SCHEMA_VERSION = 1
 RETRY_FIELDS = frozenset(
     {
@@ -359,14 +293,12 @@ class BridgeDaemon:
         *,
         identity_store: IdentityStore | None = None,
         snapshot_store: SnapshotStore | None = None,
-        name_factory: Callable[[], str] | None = None,
         wake_coordinator: WakeCoordinator | None = None,
     ) -> None:
         self.config = config
         self.agent_mail = agent_mail
         self.identities = identity_store or IdentityStore(config.runtime_dir / "identity")
         self.snapshots = snapshot_store or SnapshotStore(config.snapshot_path)
-        self.name_factory = name_factory or _fresh_agent_name
         self.wake_coordinator = wake_coordinator
         if (
             self.wake_coordinator is None
@@ -444,7 +376,7 @@ class BridgeDaemon:
             binding = build_binding(
                 session_id=normalized["session_id"],
                 agent_id=normalized["agent_id"],
-                agent_name=self.name_factory(),
+                agent_name=_provisional_agent_name(external_id),
                 project_key=self.config.project_key,
             )
             binding = self.identities.save(binding)
@@ -459,15 +391,11 @@ class BridgeDaemon:
         if should_register:
             try:
                 registration = self.agent_mail.register_agent(
-                    project_key=binding["project_key"],
-                    model=normalized.get("model") or "unknown",
-                    registration_token=owner_token,
-                    agent_name=binding["agent_name"],
-                    task_description=(
-                        "Codex App subagent"
-                        if binding["agent_id"] is not None
-                        else "Codex App root task"
-                    ),
+                    **self._registration_arguments(
+                        binding,
+                        model=normalized.get("model") or "unknown",
+                        owner_token=owner_token,
+                    )
                 )
                 binding = self._adopt_registered_name(
                     binding,
@@ -508,19 +436,15 @@ class BridgeDaemon:
                     continue
                 previous = self.snapshots.get(binding["external_id"])
                 registration = self.agent_mail.register_agent(
-                    project_key=binding["project_key"],
-                    model=(
-                        str(previous.get("model") or "unknown")
-                        if previous is not None
-                        else "unknown"
-                    ),
-                    registration_token=owner_token,
-                    agent_name=binding["agent_name"],
-                    task_description=(
-                        "Codex App subagent"
-                        if binding["agent_id"] is not None
-                        else "Codex App root task"
-                    ),
+                    **self._registration_arguments(
+                        binding,
+                        model=(
+                            str(previous.get("model") or "unknown")
+                            if previous is not None
+                            else "unknown"
+                        ),
+                        owner_token=owner_token,
+                    )
                 )
                 updated = self._adopt_registered_name(
                     binding,
@@ -540,6 +464,29 @@ class BridgeDaemon:
                 )
             reconciled += 1
         return reconciled
+
+    @staticmethod
+    def _registration_arguments(
+        binding: Mapping[str, Any],
+        *,
+        model: str,
+        owner_token: str,
+    ) -> dict[str, Any]:
+        """Build registration arguments without exporting provisional names."""
+
+        arguments: dict[str, Any] = {
+            "project_key": binding["project_key"],
+            "model": model,
+            "registration_token": owner_token,
+            "task_description": (
+                "Codex App subagent"
+                if binding["agent_id"] is not None
+                else "Codex App root task"
+            ),
+        }
+        if not _is_provisional_agent_name(binding["agent_name"]):
+            arguments["agent_name"] = binding["agent_name"]
+        return arguments
 
     def _adopt_registered_name(
         self,
@@ -1110,10 +1057,15 @@ def _cleanup_failure(
     )
 
 
-def _fresh_agent_name() -> str:
-    """Create one non-descriptive adjective+scientist identity candidate."""
+def _provisional_agent_name(external_id: str) -> str:
+    """Create a local-only display name until agent-mail assigns the identity."""
 
-    return f"{secrets.choice(_ADJECTIVES)}{secrets.choice(_SCIENTISTS)}"
+    digest = hashlib.sha256(external_id.encode("utf-8")).hexdigest()[:12]
+    return f"Pending-{digest}"
+
+
+def _is_provisional_agent_name(agent_name: str) -> bool:
+    return re.fullmatch(r"Pending-[0-9a-f]{12}", agent_name) is not None
 
 
 def _project_slug(project_key: str) -> str:

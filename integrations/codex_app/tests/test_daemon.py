@@ -27,10 +27,11 @@ from agentstack_codex_app.wake import WakeCoordinator, WakePolicy
 
 
 class FakeAgentMail:
-    def __init__(self, *, normalize_names=False):
+    def __init__(self, *, normalize_names=False, server_name="Calm-Noether"):
         self.calls = []
         self.fail = False
         self.normalize_names = normalize_names
+        self.server_name = server_name
         self.retired_agents = set()
         self.retire_failures = set()
 
@@ -38,7 +39,7 @@ class FakeAgentMail:
         self.calls.append(kwargs)
         if self.fail:
             raise AgentMailError("offline")
-        agent_name = kwargs.get("agent_name") or "Calm-Noether"
+        agent_name = kwargs.get("agent_name") or self.server_name
         if self.normalize_names:
             agent_name = "".join(character for character in agent_name if character.isalnum())
         return Registration(agent_name, kwargs["registration_token"])
@@ -108,11 +109,7 @@ def _event(name="SessionStart", agent_id=None):
 
 
 def _daemon(tmp_path: Path, mail: FakeAgentMail) -> BridgeDaemon:
-    return BridgeDaemon(
-        _config(tmp_path),
-        mail,
-        name_factory=lambda: "Calm-Noether",
-    )
+    return BridgeDaemon(_config(tmp_path), mail)
 
 
 def test_config_accepts_installer_style_absolute_codex_binary(tmp_path):
@@ -164,6 +161,7 @@ def test_process_event_registers_once_and_reuses_stable_binding(tmp_path):
     assert first["agent_name"] == second["agent_name"] == "Calm-Noether"
     assert token and token not in json.dumps(snapshot)
     assert len(mail.calls) == 1
+    assert "agent_name" not in mail.calls[0]
     assert snapshot["state"] == "working"
 
 
@@ -173,16 +171,16 @@ def test_registration_response_name_drives_binding_signal_and_delivery(tmp_path)
         signals_dir=tmp_path / "signals",
         project_slug="example-project",
     )
-    mail = FakeAgentMail(normalize_names=True)
-    daemon = BridgeDaemon(
-        config,
-        mail,
-        name_factory=lambda: "Wild-McClintock",
+    mail = FakeAgentMail(
+        normalize_names=True,
+        server_name="Wild-McClintock",
     )
+    daemon = BridgeDaemon(config, mail)
 
     external_id = daemon.process_event(_event())
     binding = daemon.identities.resolve(external_id)
     assert binding["agent_name"] == "WildMcClintock"
+    assert "agent_name" not in mail.calls[0]
     assert read_snapshot(config.snapshot_path)["runtimes"][0]["agent_name"] == (
         "WildMcClintock"
     )
@@ -251,9 +249,10 @@ def test_worker_startup_reconciles_existing_binding_and_snapshot(tmp_path):
             last_seen_at="2026-01-01T00:00:00Z",
         )
     )
+    mail = FakeAgentMail(normalize_names=True)
     daemon = BridgeDaemon(
         config,
-        FakeAgentMail(normalize_names=True),
+        mail,
         identity_store=identities,
         snapshot_store=snapshots,
     )
@@ -272,22 +271,30 @@ def test_worker_startup_reconciles_existing_binding_and_snapshot(tmp_path):
     assert runtime["agent_name"] == "WhiteMeitner"
     assert runtime["external_id"] == binding["external_id"]
     assert runtime["last_seen_at"] == "2026-01-01T00:00:00Z"
+    assert mail.calls[0]["agent_name"] == "White-Meitner"
 
 
-def test_fresh_name_generator_matches_server_canonical_form(tmp_path):
-    daemon = BridgeDaemon(_config(tmp_path), FakeAgentMail())
+def test_fresh_registration_adopts_server_canonical_name(tmp_path):
+    daemon = BridgeDaemon(
+        _config(tmp_path),
+        FakeAgentMail(server_name="CalmNoether"),
+    )
     external_id = daemon.process_event(_event())
     agent_name = daemon.identities.resolve(external_id)["agent_name"]
 
     assert "-" not in agent_name
     assert agent_name.isalnum()
+    assert "agent_name" not in daemon.agent_mail.calls[0]
 
 
 def test_subagent_binding_records_root_parent(tmp_path):
-    daemon = _daemon(tmp_path, FakeAgentMail())
+    mail = FakeAgentMail(server_name="BlueLake")
+    daemon = _daemon(tmp_path, mail)
     external_id = daemon.process_event(_event("SubagentStart", "child-example"))
     binding = daemon.identities.resolve(external_id)
     assert binding["parent_external_id"] == external_id_for("session-example")
+    assert binding["agent_name"] == "BlueLake"
+    assert "agent_name" not in mail.calls[0]
 
 
 def test_registration_failure_preserves_binding_and_marks_degraded(tmp_path):
@@ -312,7 +319,8 @@ def test_fresh_registration_failure_queues_only_sanitized_event(tmp_path):
     stored = json.loads(text)
     binding = daemon.identities.resolve(external_id)
     snapshot = read_snapshot(daemon.config.snapshot_path)["runtimes"][0]
-    assert binding["agent_name"] == "Calm-Noether"
+    assert binding["agent_name"].startswith("Pending-")
+    assert "agent_name" not in mail.calls[0]
     assert snapshot["state"] == "degraded"
     assert set(stored) == {
         "retry_schema_version",
@@ -326,7 +334,7 @@ def test_fresh_registration_failure_queues_only_sanitized_event(tmp_path):
     assert stored["event"] == _event()
 
 
-def test_retry_reuses_fresh_binding_name_and_owner_token(tmp_path):
+def test_retry_keeps_provisional_name_local_and_reuses_owner_token(tmp_path):
     mail = FakeAgentMail()
     mail.fail = True
     daemon = _daemon(tmp_path, mail)
@@ -339,8 +347,11 @@ def test_retry_reuses_fresh_binding_name_and_owner_token(tmp_path):
         enqueue_on_failure=True,
     ) == 1
 
-    retry_call = next(call for call in mail.calls[1:] if "agent_name" in call)
-    assert retry_call["agent_name"] == first_call["agent_name"]
+    retry_call = next(
+        call for call in mail.calls[1:] if "registration_token" in call
+    )
+    assert "agent_name" not in first_call
+    assert "agent_name" not in retry_call
     assert retry_call["registration_token"] == first_call["registration_token"]
     assert daemon.identities.resolve(external_id)["agent_name"] == "Calm-Noether"
     assert read_snapshot(daemon.config.snapshot_path)["runtimes"][0]["state"] == "working"
@@ -415,17 +426,15 @@ def test_transient_retry_is_bounded_by_attempt_limit(tmp_path):
     )
     mail = FakeAgentMail()
     mail.fail = True
-    daemon = BridgeDaemon(
-        config,
-        mail,
-        name_factory=lambda: "CalmNoether",
-    )
+    daemon = BridgeDaemon(config, mail)
 
     daemon.process_event(_event())
     assert config.retry_path.exists()
     assert daemon.replay_spool(config.retry_path) == 1
 
-    assert len([call for call in mail.calls if "agent_name" in call]) == 2
+    register_calls = [call for call in mail.calls if "registration_token" in call]
+    assert len(register_calls) == 2
+    assert all("agent_name" not in call for call in register_calls)
     assert not config.retry_path.exists()
     assert not list(config.runtime_dir.glob(".*.drain-*"))
 
@@ -464,11 +473,7 @@ def test_retry_backoff_does_not_call_agent_mail_before_due_time(tmp_path):
     )
     mail = FakeAgentMail()
     mail.fail = True
-    daemon = BridgeDaemon(
-        config,
-        mail,
-        name_factory=lambda: "CalmNoether",
-    )
+    daemon = BridgeDaemon(config, mail)
     daemon.process_event(_event())
     mail.calls.clear()
 
@@ -485,14 +490,10 @@ def test_retry_for_already_retired_binding_is_dropped_without_registration(
 ):
     config = _config(tmp_path)
     mail = FakeAgentMail()
-    daemon = BridgeDaemon(
-        config,
-        mail,
-        name_factory=lambda: "CalmNoether",
-    )
+    daemon = BridgeDaemon(config, mail)
     external_id = daemon.process_event(_event())
     mail.calls.clear()
-    mail.retired_agents.add("CalmNoether")
+    mail.retired_agents.add("Calm-Noether")
     daemon._append_retry(_event(), attempt_count=1)
 
     assert daemon.replay_spool(config.retry_path) == 0
@@ -686,11 +687,7 @@ def test_cleanup_orphans_purges_already_retired_legacy_token_binding(tmp_path):
 def test_private_socket_accepts_event_and_worker_writes_snapshot():
     with tempfile.TemporaryDirectory(prefix="cas-daemon-", dir="/private/tmp") as directory:
         config = _config(Path(directory))
-        daemon = BridgeDaemon(
-            config,
-            FakeAgentMail(),
-            name_factory=lambda: "Calm-Noether",
-        )
+        daemon = BridgeDaemon(config, FakeAgentMail())
         thread = threading.Thread(target=daemon.serve_forever)
         thread.start()
         deadline = time.time() + 2
@@ -713,7 +710,6 @@ def test_bridge_worker_ticks_cold_wake_coordinator():
         daemon = BridgeDaemon(
             config,
             FakeAgentMail(),
-            name_factory=lambda: "Calm-Noether",
             wake_coordinator=wake,
         )
         thread = threading.Thread(target=daemon.serve_forever)
@@ -742,11 +738,7 @@ def test_post_tool_use_coalesces_pending_agent_mail_signals(tmp_path):
         signals_dir=tmp_path / "signals",
         project_slug="example-project",
     )
-    daemon = BridgeDaemon(
-        config,
-        FakeAgentMail(),
-        name_factory=lambda: "Calm-Noether",
-    )
+    daemon = BridgeDaemon(config, FakeAgentMail())
     daemon.process_event(_event())
     signal_dir = (
         config.signals_dir
