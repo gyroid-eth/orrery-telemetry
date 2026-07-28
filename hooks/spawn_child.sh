@@ -138,18 +138,27 @@ open_child_terminal() {
 
     printf -v shell_child '%q' "$child_name"
     shell_cmd="env -u TMUX -u TMUX_PANE tmux attach -t $shell_child"
+    # Spawning a child is a background event: the window is opened so the user
+    # CAN watch it, not so it steals what they are doing. `open -g` keeps it
+    # behind the current app. Set AGENTSTACK_FOCUS_CHILD=1 to bring it forward.
+    local open_bg=(-g)
+    [[ "${AGENTSTACK_FOCUS_CHILD:-}" == "1" ]] && open_bg=()
     case "$adapter" in
         ghostty)
-            if env -u TMUX -u TMUX_PANE open -na Ghostty.app --args --title="$child_name" -e tmux attach -t "$child_name" 2>/dev/null; then
+            if env -u TMUX -u TMUX_PANE open ${open_bg[@]+"${open_bg[@]}"} -na Ghostty.app --args --title="$child_name" -e tmux attach -t "$child_name" 2>/dev/null; then
                 echo "[spawn_child] Opened terminal window (${child_name}, adapter: ghostty)" >&2
             fi
             ;;
         iterm)
             if command -v osascript >/dev/null 2>&1; then
+                # `activate` is what pulls the app in front, so it is applied
+                # only when the user asked for the child to take focus.
+                local iterm_activate=""
+                [[ "${AGENTSTACK_FOCUS_CHILD:-}" == "1" ]] && iterm_activate="activate"
                 osascript -e 'on run argv
                   set cmd to item 1 of argv
                   tell application "iTerm2"
-                    activate
+                    '"$iterm_activate"'
                     create window with default profile command cmd
                   end tell
                 end run' "$shell_cmd" >/dev/null 2>&1 || true
@@ -157,10 +166,12 @@ open_child_terminal() {
             ;;
         terminal)
             if command -v osascript >/dev/null 2>&1; then
+                local terminal_activate=""
+                [[ "${AGENTSTACK_FOCUS_CHILD:-}" == "1" ]] && terminal_activate="activate"
                 osascript -e 'on run argv
                   set cmd to item 1 of argv
                   tell application "Terminal"
-                    activate
+                    '"$terminal_activate"'
                     do script cmd
                   end tell
                 end run' "$shell_cmd" >/dev/null 2>&1 || true
@@ -413,6 +424,55 @@ cleanup_worktree() {
     fi
 }
 
+# --- Codex launch helpers -------------------------------------------------
+# Kept here (before both launch paths) so the pre-registered and normal paths
+# share one definition of "which flags does this codex accept" and "is the
+# child actually ready".
+
+# Approval/sandbox flags for the installed Codex CLI.
+#
+# `--full-auto` was removed from the Codex CLI: 0.144.6 answers
+# "error: unexpected argument '--full-auto' found" and exits 2, so the child
+# died instantly and the launcher then sat through its full readiness timeout.
+# Probe --help instead of pinning a version, so both old and new CLIs work.
+# Printed as one line and handed to the child through the tmux environment, so
+# the inner zsh can word-split it with ${=AGENTSTACK_CODEX_APPROVAL}.
+codex_approval_flags() {
+    local help_text
+    help_text="$(codex --help 2>/dev/null || true)"
+    if printf '%s' "$help_text" | grep -q -- "--ask-for-approval"; then
+        printf '%s\n' "--ask-for-approval never"
+    elif printf '%s' "$help_text" | grep -q -- "--full-auto"; then
+        printf '%s\n' "--full-auto"
+    fi
+    # Neither flag: emit nothing and let codex use its own defaults rather than
+    # passing an argument this build will reject.
+}
+
+# True while the child's tmux session still exists. A child that died (bad
+# flag, crash, sign-in failure) must fail fast instead of burning the whole
+# readiness timeout.
+codex_session_alive() {
+    tmux has-session -t "=$1" 2>/dev/null
+}
+
+# Ready = the REPL is accepting input. Do not depend on a single footer string:
+# the footer varies with terminal width, model and configuration. The reported
+# 90s hang came from a pane showing "gpt-5.5 xhigh · ~/obsidian", which has no
+# "% left" segment at all.
+codex_pane_ready() {
+    local pane_text="$1" last_lines
+    printf '%s' "$pane_text" | grep -qF "Use existing model" && return 1
+    last_lines="$(printf '%s' "$pane_text" | tail -5)"
+    printf '%s' "$last_lines" | grep -qE '% (left|context)' && return 0
+    printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
+    # Footer form "<model> <effort> · <cwd>" (no context segment).
+    printf '%s' "$last_lines" | grep -qE '(gpt|codex|o[0-9])[^ ]* .*·' && return 0
+    # Bare input prompt.
+    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*[▌❯>][[:space:]]*$' && return 0
+    return 1
+}
+
 TASK="${1:-}"
 WORK_DIR="${2:-$(pwd)}"
 CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
@@ -489,7 +549,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
     if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
     fi
@@ -517,7 +577,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                     fi
                     [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
                     [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
-                    env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write --full-auto \
+                    env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
                         "${EXTRA_ARGS[@]}" --model gpt-5.5 -c model_reasoning_effort=xhigh
                 fi
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
@@ -527,6 +587,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         WAITED=0
         WAIT_MAX=90
         READY=false
+        DIED=false
         while [[ $WAITED -lt $WAIT_MAX ]]; do
             sleep 3
             WAITED=$((WAITED + 3))
@@ -550,16 +611,22 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 sleep 3
                 continue
             fi
-            LAST_LINES=$(echo "$PANE_TEXT" | tail -5)
-            if echo "$LAST_LINES" | grep -qE '% (left|context)'; then
-                if ! echo "$PANE_TEXT" | grep -qF "Use existing model"; then
-                    READY=true
-                    break
-                fi
+            if codex_pane_ready "$PANE_TEXT"; then
+                READY=true
+                break
+            fi
+            if ! codex_session_alive "$CHILD_NAME"; then
+                echo "[spawn_child/pre-reg] Codex session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
+                printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+                DIED=true
+                break
             fi
         done
 
-        if [[ "$READY" == true ]]; then
+        if [[ "$DIED" == true ]]; then
+            echo "[spawn_child/pre-reg] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
+            exit 1
+        elif [[ "$READY" == true ]]; then
             sleep 2
             echo "[spawn_child/pre-reg] Waited ${WAITED}s (+2s); injecting prompt" >&2
         else
@@ -1136,7 +1203,7 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
-TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING")
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi
@@ -1167,7 +1234,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 fi
                 [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
                 [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
-                env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write --full-auto \
+                env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
                     "${EXTRA_ARGS[@]}" --model gpt-5.5 -c model_reasoning_effort=xhigh
             fi
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
@@ -1181,6 +1248,7 @@ if [[ "$USE_CODEX" == true ]]; then
     WAITED=0
     WAIT_MAX=90
     READY=false
+    DIED=false
     while [[ $WAITED -lt $WAIT_MAX ]]; do
         sleep 3
         WAITED=$((WAITED + 3))
@@ -1210,19 +1278,22 @@ if [[ "$USE_CODEX" == true ]]; then
             continue
         fi
 
-        # Codex の入力待ち検知: "% left" が最終行付近にある = REPL ready
-        # "? for shortcuts" が表示されてかつモデル選択が終わっていれば ready
-        LAST_LINES=$(echo "$PANE_TEXT" | tail -5)
-        if echo "$LAST_LINES" | grep -qE '% (left|context)'; then
-            # モデル選択がまだ表示されていないことを確認
-            if ! echo "$PANE_TEXT" | grep -qF "Use existing model"; then
-                READY=true
-                break
-            fi
+        if codex_pane_ready "$PANE_TEXT"; then
+            READY=true
+            break
+        fi
+        if ! codex_session_alive "$CHILD_NAME"; then
+            echo "[spawn_child] Codex session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
+            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+            DIED=true
+            break
         fi
     done
 
-    if [[ "$READY" == true ]]; then
+    if [[ "$DIED" == true ]]; then
+        echo "[spawn_child] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
+        exit 1
+    elif [[ "$READY" == true ]]; then
         sleep 2
         echo "[spawn_child] Waited ${WAITED}s (+2s); injecting prompt" >&2
     else
