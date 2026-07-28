@@ -19,7 +19,9 @@ from typing import Any
 
 
 HOOKS_TOKEN = "__AGENTSTACK_HOOKS_DIR__"
+BIN_TOKEN = "__AGENTSTACK_BIN_DIR__"
 IRREVERSIBLE_SESSION_END_WORDS = ("retire", "kill", "hard_delete")
+PERMISSION_KINDS = ("allow", "deny")
 
 
 class MergeError(RuntimeError):
@@ -33,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settings", required=True, help="Claude settings.json path")
     parser.add_argument("--template", help="settings.template.json path")
     parser.add_argument("--hooks-dir", required=True, help="Installed hooks directory")
+    parser.add_argument("--bin-dir", help="Installed bin directory (for permission rules)")
     parser.add_argument("--skills-dir", help="Installed skills directory")
     parser.add_argument("--backup-dir", required=True, help="Backup root directory")
     parser.add_argument("--manifest", help="Manifest whose recorded entries constrain --remove")
@@ -77,20 +80,44 @@ def read_settings(path: pathlib.Path) -> tuple[dict[str, Any], bytes | None]:
     return data, raw
 
 
-def load_template(path: pathlib.Path, hooks_dir: pathlib.Path) -> dict[str, list[dict[str, Any]]]:
+def render_template(path: pathlib.Path, hooks_dir: pathlib.Path,
+                    bin_dir: pathlib.Path | None) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise MergeError(f"template not found: {path}") from exc
 
     rendered = text.replace(HOOKS_TOKEN, str(hooks_dir))
+    if BIN_TOKEN in rendered:
+        if bin_dir is None:
+            raise MergeError(f"template uses {BIN_TOKEN} but --bin-dir was not given")
+        rendered = rendered.replace(BIN_TOKEN, str(bin_dir))
     try:
         data = json.loads(rendered)
     except json.JSONDecodeError as exc:
         raise MergeError(f"template is not valid JSON after token replacement: {path}: {exc}") from exc
-
     if not isinstance(data, dict):
         raise MergeError(f"template top-level value must be an object: {path}")
+    return data
+
+
+def load_template_permissions(template: dict[str, Any], path: pathlib.Path) -> dict[str, list[str]]:
+    permissions = template.get("permissions", {})
+    if not isinstance(permissions, dict):
+        raise MergeError(f"template permissions must be an object: {path}")
+    checked: dict[str, list[str]] = {}
+    for kind in PERMISSION_KINDS:
+        rules = permissions.get(kind, [])
+        if not isinstance(rules, list):
+            raise MergeError(f"template permissions.{kind} must be an array: {path}")
+        for rule in rules:
+            if not isinstance(rule, str) or not rule:
+                raise MergeError(f"template permissions.{kind} entries must be non-empty strings: {path}")
+        checked[kind] = rules
+    return checked
+
+
+def load_template_hooks(data: dict[str, Any], path: pathlib.Path) -> dict[str, list[dict[str, Any]]]:
     hooks = data.get("hooks", {})
     if not isinstance(hooks, dict):
         raise MergeError(f"template hooks must be an object: {path}")
@@ -240,6 +267,98 @@ def merge_template_entries(
             entries.append(new_entry)
 
     return settings, {"added_entries": added, "skipped_existing": skipped_existing}
+
+
+def ensure_target_permissions(settings: dict[str, Any], kind: str) -> list[str]:
+    permissions = settings.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        raise MergeError("settings permissions must be an object; refusing to repair it")
+    rules = permissions.setdefault(kind, [])
+    if not isinstance(rules, list):
+        raise MergeError(f"settings permissions.{kind} must be an array; refusing to repair it")
+    for rule in rules:
+        if not isinstance(rule, str):
+            raise MergeError(f"settings permissions.{kind} entries must be strings")
+    return rules
+
+
+def merge_permissions(
+    settings: dict[str, Any],
+    template_permissions: dict[str, list[str]],
+) -> dict[str, dict[str, list[str]]]:
+    """Append missing rules; never reorder, rewrite or drop the user's own."""
+    added: dict[str, list[str]] = {kind: [] for kind in PERMISSION_KINDS}
+    skipped: dict[str, list[str]] = {kind: [] for kind in PERMISSION_KINDS}
+    for kind in PERMISSION_KINDS:
+        template_rules = template_permissions.get(kind, [])
+        if not template_rules:
+            continue
+        rules = ensure_target_permissions(settings, kind)
+        for rule in template_rules:
+            if rule in rules:
+                skipped[kind].append(rule)
+                continue
+            rules.append(rule)
+            added[kind].append(rule)
+    # Do not leave an empty permissions object behind if nothing was added.
+    permissions = settings.get("permissions")
+    if isinstance(permissions, dict):
+        for kind in list(permissions.keys()):
+            if permissions[kind] == [] and kind in PERMISSION_KINDS:
+                del permissions[kind]
+        if not permissions:
+            del settings["permissions"]
+    return {"added": added, "skipped_existing": skipped}
+
+
+def remove_permissions(
+    settings: dict[str, Any],
+    allowed: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Remove only the rules this installer recorded as its own."""
+    removed: dict[str, list[str]] = {kind: [] for kind in PERMISSION_KINDS}
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        return removed
+    for kind in PERMISSION_KINDS:
+        targets = set(allowed.get(kind, []))
+        if not targets:
+            continue
+        rules = permissions.get(kind)
+        if not isinstance(rules, list):
+            continue
+        kept = []
+        for rule in rules:
+            if isinstance(rule, str) and rule in targets:
+                removed[kind].append(rule)
+            else:
+                kept.append(rule)
+        if kept:
+            permissions[kind] = kept
+        else:
+            del permissions[kind]
+    if not permissions:
+        del settings["permissions"]
+    return removed
+
+
+def manifest_permissions(path: pathlib.Path | None) -> dict[str, list[str]]:
+    merge = manifest_settings_merge(path) if path is not None else None
+    if not merge:
+        return {kind: [] for kind in PERMISSION_KINDS}
+    raw = merge.get("permissions", {})
+    if not isinstance(raw, dict):
+        raise MergeError("manifest settings_merge.permissions must be an object")
+    added = raw.get("added", {})
+    if not isinstance(added, dict):
+        raise MergeError("manifest settings_merge.permissions.added must be an object")
+    result: dict[str, list[str]] = {}
+    for kind in PERMISSION_KINDS:
+        rules = added.get(kind, [])
+        if not isinstance(rules, list):
+            raise MergeError(f"manifest settings_merge.permissions.added.{kind} must be an array")
+        result[kind] = [rule for rule in rules if isinstance(rule, str)]
+    return result
 
 
 def skills_dir_key(skills_dir: pathlib.Path) -> str:
@@ -573,6 +692,7 @@ def run() -> int:
     args = parse_args()
     settings_path = pathlib.Path(args.settings).expanduser()
     hooks_dir = pathlib.Path(args.hooks_dir).expanduser()
+    bin_dir = pathlib.Path(args.bin_dir).expanduser() if args.bin_dir else None
     skills_dir = pathlib.Path(args.skills_dir).expanduser() if args.skills_dir else None
     backup_dir = pathlib.Path(args.backup_dir).expanduser()
     manifest_path = pathlib.Path(args.manifest).expanduser() if args.manifest else None
@@ -590,14 +710,22 @@ def run() -> int:
             allowed_skills_dirs = {skills_dir_key(skills_dir)} if skills_dir else set()
         merged, details = remove_agentstack_entries(original, hooks_dir, allowed_keys)
         details["skills_dirs"] = remove_skills_directories(merged, allowed_skills_dirs)
+        details["permissions"] = {
+            "removed": remove_permissions(merged, manifest_permissions(manifest_path))
+        }
         operation = "remove"
     else:
-        template_hooks = load_template(pathlib.Path(args.template).expanduser(), hooks_dir)
+        template_path = pathlib.Path(args.template).expanduser()
+        template = render_template(template_path, hooks_dir, bin_dir)
+        template_hooks = load_template_hooks(template, template_path)
         merged, details = merge_template_entries(original, template_hooks)
         details["skills_dirs"] = (
             merge_skills_directory(merged, skills_dir)
             if skills_dir
             else {"added": [], "skipped_existing": []}
+        )
+        details["permissions"] = merge_permissions(
+            merged, load_template_permissions(template, template_path)
         )
         operation = "merge"
 

@@ -294,6 +294,7 @@ safe_merge_settings() {
     --settings "$CLAUDE_SETTINGS"
     --template "$template"
     --hooks-dir "$HOOKS_DIR"
+    --bin-dir "$BIN_DIR"
     --skills-dir "$SKILLS_DIR"
     --backup-dir "$BACKUPS_DIR"
   )
