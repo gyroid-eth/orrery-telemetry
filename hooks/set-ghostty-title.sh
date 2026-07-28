@@ -60,16 +60,18 @@ if [[ -n "$TMUX" ]]; then
     current_name=$(tmux display-message -p '#S' 2>/dev/null)
     if [[ "$current_name" == pending-* ]]; then
         if ! tmux rename-session "$AGENT_NAME" 2>/dev/null; then
-            # 同名セッションが既に存在する → 古い方を kill してリトライ
-            if tmux has-session -t "$AGENT_NAME" 2>/dev/null; then
-                echo "[set-ghostty-title] WARNING: killing stale session '$AGENT_NAME' to free the name" >&2
-                tmux kill-session -t "$AGENT_NAME" 2>/dev/null
-                if ! tmux rename-session "$AGENT_NAME" 2>/dev/null; then
-                    echo "[set-ghostty-title] ERROR: failed to rename session from '$current_name' to '$AGENT_NAME'" >&2
-                fi
+            # Never kill the session holding the name. Sharing a name is not
+            # evidence of being stale: the other session may be a live, attached
+            # agent, and killing it destroyed real work. Fail closed instead —
+            # the identity is not finalized, so the caller must retry with a
+            # different name rather than present this session as '$AGENT_NAME'.
+            if tmux has-session -t "=$AGENT_NAME" 2>/dev/null; then
+                echo "[set-ghostty-title] ERROR: tmux session '$AGENT_NAME' already exists; refusing to rename '$current_name' over it." >&2
+                echo "[set-ghostty-title] This session keeps the name '$current_name'. Pick another agent name, or retire the other session explicitly (tmux kill-session -t '$AGENT_NAME') after confirming it is dead." >&2
             else
                 echo "[set-ghostty-title] ERROR: failed to rename session from '$current_name' to '$AGENT_NAME'" >&2
             fi
+            exit 1
         fi
     fi
 fi

@@ -255,14 +255,56 @@ ags_apply_contact_policy() {
   fi
 }
 
-ags_agent_exists() {
+# Three-valued name availability: a name we cannot check is NOT a free name.
+# Prints one of: available | occupied | unknown
+#
+# whois signals all three through an error channel, so the error TEXT decides:
+#   - "Agent '<name>' not found in project ..."   -> available (server answered)
+#   - "requires registration_token for agent ..." -> occupied (token-strict
+#     server confirming the agent exists but refusing an unauthenticated read)
+#   - empty response, transport failure, anything else -> unknown
+#
+# Previously every error mapped to "does not exist", so an auth error or a
+# timeout read as "this name is free" and a fresh session could register under
+# a live agent's identity. Availability decisions must be fail-closed.
+ags_agent_name_status() {
   local project_key="$1" agent_name="$2" response
   response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$agent_name" 2>/dev/null || true)"
-  [[ -n "$response" ]] || return 1
-  if printf '%s' "$response" | ags_mcp_has_error; then
-    return 1
+  if [[ -z "$response" ]]; then
+    printf 'unknown\n'
+    return 0
   fi
-  [[ -n "$(printf '%s' "$response" | ags_extract_agent_name)" ]]
+  if printf '%s' "$response" | ags_mcp_has_error; then
+    if printf '%s' "$response" | grep -qiE "requires[ _]registration_token|already authenticated"; then
+      printf 'occupied\n'
+    elif printf '%s' "$response" | grep -qiE "not found|does not exist|no such agent|unknown agent"; then
+      printf 'available\n'
+    else
+      printf 'unknown\n'
+    fi
+    return 0
+  fi
+  if [[ -n "$(printf '%s' "$response" | ags_extract_agent_name)" ]]; then
+    printf 'occupied\n'
+  else
+    printf 'available\n'
+  fi
+}
+
+# Back-compat wrapper: true only for a positively confirmed existing agent.
+# Callers deciding whether a name is FREE must use ags_agent_name_available
+# instead, so that 'unknown' is never mistaken for 'available'.
+ags_agent_exists() {
+  local name_status
+  name_status="$(ags_agent_name_status "$1" "$2")"
+  [[ "$name_status" == "occupied" ]]
+}
+
+# Fail-closed availability check: only an explicit 'available' passes.
+ags_agent_name_available() {
+  local name_status
+  name_status="$(ags_agent_name_status "$1" "$2")"
+  [[ "$name_status" == "available" ]]
 }
 
 ags_pick_scientist_name() {
@@ -270,32 +312,61 @@ ags_pick_scientist_name() {
   ags_pick_adjective_scientist_name
 }
 
+# Consecutive 'unknown' answers mean the availability check itself is broken
+# (server down mid-run, auth wall, timeouts). Handing out a name we could not
+# verify is exactly the failure mode this guard exists to prevent, so stop.
+AGS_NAME_UNKNOWN_LIMIT="${AGENTSTACK_NAME_UNKNOWN_LIMIT:-3}"
+
 ags_pick_available_agent_name() {
   local project_key="$1" _prefix="$2" preferred_name="${3:-}"
   local attempts="${AGENTSTACK_AGENT_NAME_ATTEMPTS:-75}"
-  local adjective scientist candidate i
+  local adjective scientist candidate i name_status
+  local unknowns=0
 
-  if [[ -n "$preferred_name" ]] && ! ags_agent_exists "$project_key" "$preferred_name"; then
-    printf '%s\n' "$preferred_name"
-    return 0
+  if [[ -n "$preferred_name" ]]; then
+    name_status="$(ags_agent_name_status "$project_key" "$preferred_name")"
+    if [[ "$name_status" == "available" ]]; then
+      printf '%s\n' "$preferred_name"
+      return 0
+    fi
+    if [[ "$name_status" == "unknown" ]]; then
+      echo "agentstack: cannot verify whether '$preferred_name' is free (agent-mail unreachable or refusing whois); refusing to claim it." >&2
+      return 1
+    fi
   fi
 
   for ((i = 0; i < attempts; i++)); do
     candidate="$(ags_pick_adjective_scientist_name)" || return 1
-    if ! ags_agent_exists "$project_key" "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
+    name_status="$(ags_agent_name_status "$project_key" "$candidate")"
+    case "$name_status" in
+      available) printf '%s\n' "$candidate"; return 0 ;;
+      occupied)  unknowns=0 ;;
+      *)
+        unknowns=$((unknowns + 1))
+        if (( unknowns >= AGS_NAME_UNKNOWN_LIMIT )); then
+          echo "agentstack: name availability checks failed $unknowns times in a row; refusing to pick a name that may already be in use." >&2
+          return 1
+        fi
+        ;;
+    esac
   done
 
   for ((i = 2; i < attempts + 200; i++)); do
     adjective="$(ags_pick_adjective)" || return 1
     scientist="$(ags_pick_scientist)" || return 1
     candidate="${adjective}-${i}-${scientist}"
-    if ! ags_agent_exists "$project_key" "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
+    name_status="$(ags_agent_name_status "$project_key" "$candidate")"
+    case "$name_status" in
+      available) printf '%s\n' "$candidate"; return 0 ;;
+      occupied)  unknowns=0 ;;
+      *)
+        unknowns=$((unknowns + 1))
+        if (( unknowns >= AGS_NAME_UNKNOWN_LIMIT )); then
+          echo "agentstack: name availability checks failed $unknowns times in a row; refusing to pick a name that may already be in use." >&2
+          return 1
+        fi
+        ;;
+    esac
   done
 
   return 1
@@ -331,7 +402,10 @@ ags_register_session() {
       registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
     fi
   fi
-  if [[ -z "$registration_token" ]] && ! ags_agent_exists "$project_key" "$agent_name"; then
+  # Mint a fresh owner token only for a name the server positively reports as
+  # free. An 'unknown' answer must not mint one: that is how an unverified name
+  # used to get claimed on top of a live agent.
+  if [[ -z "$registration_token" ]] && ags_agent_name_available "$project_key" "$agent_name"; then
     registration_token="$(ags_generate_registration_token)" || return 1
   fi
 

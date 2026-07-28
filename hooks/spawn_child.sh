@@ -790,42 +790,82 @@ print("")
 '
 }
 
-child_agent_exists() {
+# Three-valued: available | occupied | unknown. See ags_agent_name_status in
+# bin/lib/agentstack-register.sh — whois reports "not found" through the error
+# channel, so the error text decides, and anything we cannot classify is
+# 'unknown' (never treated as a free name).
+child_agent_name_status() {
     local agent_name="$1" args_json response
     args_json=$(python3 -c "
 import json, sys
 print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
 " "$PROJECT_KEY" "$agent_name")
     response="$(call_mcp "whois" "$args_json" 2>/dev/null || true)"
-    [[ -n "$response" ]] || return 1
-    if printf '%s' "$response" | mcp_response_has_error; then
-        return 1
+    if [[ -z "$response" ]]; then
+        printf 'unknown\n'
+        return 0
     fi
-    [[ -n "$(printf '%s' "$response" | mcp_extract_agent_name)" ]]
+    if printf '%s' "$response" | mcp_response_has_error; then
+        if printf '%s' "$response" | grep -qiE "requires[ _]registration_token|already authenticated"; then
+            printf 'occupied\n'
+        elif printf '%s' "$response" | grep -qiE "not found|does not exist|no such agent|unknown agent"; then
+            printf 'available\n'
+        else
+            printf 'unknown\n'
+        fi
+        return 0
+    fi
+    if [[ -n "$(printf '%s' "$response" | mcp_extract_agent_name)" ]]; then
+        printf 'occupied\n'
+    else
+        printf 'available\n'
+    fi
+}
+
+child_agent_exists() {
+    [[ "$(child_agent_name_status "$1")" == "occupied" ]]
 }
 
 pick_available_child_agent_name() {
     local attempts="${AGENTSTACK_AGENT_NAME_ATTEMPTS:-75}"
-    local candidate adjective scientist i
+    local unknown_limit="${AGENTSTACK_NAME_UNKNOWN_LIMIT:-3}"
+    local candidate adjective scientist i name_status
+    local unknowns=0
 
     load_agent_name_helpers || return 1
 
     for ((i = 0; i < attempts; i++)); do
         candidate="$(ags_pick_adjective_scientist_name)" || return 1
-        if ! child_agent_exists "$candidate"; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
+        name_status="$(child_agent_name_status "$candidate")"
+        case "$name_status" in
+            available) printf '%s\n' "$candidate"; return 0 ;;
+            occupied)  unknowns=0 ;;
+            *)
+                unknowns=$((unknowns + 1))
+                if (( unknowns >= unknown_limit )); then
+                    echo "[spawn_child] name availability checks failed $unknowns times in a row; refusing to pick a child name that may already be in use." >&2
+                    return 1
+                fi
+                ;;
+        esac
     done
 
     for ((i = 2; i < attempts + 200; i++)); do
         adjective="$(ags_pick_adjective)" || return 1
         scientist="$(ags_pick_scientist)" || return 1
         candidate="${adjective}-${i}-${scientist}"
-        if ! child_agent_exists "$candidate"; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
+        name_status="$(child_agent_name_status "$candidate")"
+        case "$name_status" in
+            available) printf '%s\n' "$candidate"; return 0 ;;
+            occupied)  unknowns=0 ;;
+            *)
+                unknowns=$((unknowns + 1))
+                if (( unknowns >= unknown_limit )); then
+                    echo "[spawn_child] name availability checks failed $unknowns times in a row; refusing to pick a child name that may already be in use." >&2
+                    return 1
+                fi
+                ;;
+        esac
     done
 
     return 1
