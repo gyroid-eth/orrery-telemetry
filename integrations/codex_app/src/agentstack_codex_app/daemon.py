@@ -661,6 +661,9 @@ class BridgeDaemon:
             profile = self.agent_mail.whois(
                 project_key=binding["project_key"],
                 agent_name=binding["agent_name"],
+                registration_token=self.identities.load_owner_token(
+                    binding["external_id"]
+                ),
             )
         except (AgentMailError, OSError, ValueError):
             return False
@@ -998,13 +1001,15 @@ def cleanup_orphan_bindings(
             sessions_root=sessions_root,
         ):
             continue
-        retired = _remote_agent_is_retired(agent_mail, binding)
+        # Load the owner token before the first whois: a token-strict server
+        # refuses an unauthenticated read of another agent's profile.
+        try:
+            owner_token = identities.load_owner_token(binding["external_id"])
+        except (IdentityStoreError, OSError):
+            failures.append(_cleanup_failure(binding, "owner_token_unreadable"))
+            continue
+        retired = _remote_agent_is_retired(agent_mail, binding, owner_token)
         if not retired:
-            try:
-                owner_token = identities.load_owner_token(binding["external_id"])
-            except (IdentityStoreError, OSError):
-                failures.append(_cleanup_failure(binding, "owner_token_unreadable"))
-                continue
             if owner_token is None:
                 failures.append(_cleanup_failure(binding, "owner_token_missing"))
                 continue
@@ -1017,7 +1022,7 @@ def cleanup_orphan_bindings(
                 retired = True
             except (AgentMailError, OSError, ValueError):
                 # Re-read after failure to handle an administrative/racing retire.
-                retired = _remote_agent_is_retired(agent_mail, binding)
+                retired = _remote_agent_is_retired(agent_mail, binding, owner_token)
                 if not retired:
                     failures.append(_cleanup_failure(binding, "retire_failed"))
                     continue
@@ -1034,11 +1039,13 @@ def cleanup_orphan_bindings(
 def _remote_agent_is_retired(
     agent_mail: AgentMailClient,
     binding: Mapping[str, Any],
+    owner_token: str | None = None,
 ) -> bool:
     try:
         profile = agent_mail.whois(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
         )
     except (AgentMailError, OSError, ValueError):
         return False

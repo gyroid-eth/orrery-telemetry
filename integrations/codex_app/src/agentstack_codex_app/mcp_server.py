@@ -150,7 +150,7 @@ class AgentStackProxy:
         since_ts: str | None = None,
         topic: str | None = None,
     ) -> list[dict[str, Any]]:
-        binding, _ = self._resolve(session_id, agent_id)
+        binding, owner_token = self._resolve(session_id, agent_id)
         if not _is_integer(limit) or not 1 <= limit <= 100:
             raise ProxyError("limit must be between 1 and 100")
         _optional_text(since_ts, "since_ts", 128)
@@ -158,6 +158,7 @@ class AgentStackProxy:
         return self.agent_mail.fetch_inbox(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
             limit=limit,
             urgent_only=_boolean(urgent_only, "urgent_only"),
             include_bodies=_boolean(include_bodies, "include_bodies"),
@@ -212,11 +213,12 @@ class AgentStackProxy:
         *,
         agent_id: str | None = None,
     ) -> dict[str, Any]:
-        binding, _ = self._resolve(session_id, agent_id)
+        binding, owner_token = self._resolve(session_id, agent_id)
         _positive_ids([message_id], "message_id")
         return self.agent_mail.acknowledge_message(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
             message_id=message_id,
         )
 
@@ -230,7 +232,7 @@ class AgentStackProxy:
         exclusive: bool = True,
         reason: str = "",
     ) -> dict[str, Any]:
-        binding, _ = self._resolve(session_id, agent_id)
+        binding, owner_token = self._resolve(session_id, agent_id)
         safe_paths = _reservation_paths(paths, required=True)
         if not _is_integer(ttl_seconds) or not 60 <= ttl_seconds <= 86_400:
             raise ProxyError("ttl_seconds must be between 60 and 86400")
@@ -238,6 +240,7 @@ class AgentStackProxy:
         return self.agent_mail.reserve_files(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
             paths=safe_paths,
             ttl_seconds=ttl_seconds,
             exclusive=_boolean(exclusive, "exclusive"),
@@ -253,7 +256,7 @@ class AgentStackProxy:
         paths: list[str] | None = None,
         file_reservation_ids: list[int] | None = None,
     ) -> dict[str, Any]:
-        binding, _ = self._resolve(session_id, agent_id)
+        binding, owner_token = self._resolve(session_id, agent_id)
         if not _is_integer(extend_seconds) or not 60 <= extend_seconds <= 86_400:
             raise ProxyError("extend_seconds must be between 60 and 86400")
         safe_paths = _reservation_paths(paths)
@@ -261,6 +264,7 @@ class AgentStackProxy:
         return self.agent_mail.renew_reservations(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
             extend_seconds=extend_seconds,
             paths=safe_paths or None,
             file_reservation_ids=ids or None,
@@ -274,12 +278,13 @@ class AgentStackProxy:
         paths: list[str] | None = None,
         file_reservation_ids: list[int] | None = None,
     ) -> dict[str, Any]:
-        binding, _ = self._resolve(session_id, agent_id)
+        binding, owner_token = self._resolve(session_id, agent_id)
         safe_paths = _reservation_paths(paths)
         ids = _positive_ids(file_reservation_ids, "file_reservation_ids")
         return self.agent_mail.release_reservations(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],
+            registration_token=owner_token,
             paths=safe_paths or None,
             file_reservation_ids=ids or None,
         )

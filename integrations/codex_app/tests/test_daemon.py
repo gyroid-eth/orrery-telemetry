@@ -582,11 +582,15 @@ def test_cleanup_orphans_retires_with_owner_token_and_keeps_real_app(tmp_path):
     assert snapshots.get(orphan["external_id"]) is None
     assert identities.resolve(real["external_id"]) == real
     assert snapshots.get(real["external_id"]) is not None
+    # whois carries the owner token too: a token-strict agent-mail refuses an
+    # unauthenticated profile read, which would make cleanup misread the
+    # binding as "not retired".
     assert mail.calls == [
         {
             "whois": {
                 "project_key": "/workspace/example",
                 "agent_name": "CalmNoether",
+                "registration_token": "orphan-token",
             }
         },
         {
