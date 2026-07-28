@@ -2,7 +2,7 @@
 # Pre-register a delegated child agent without exposing its registration token.
 #
 # Usage:
-#   agentstack-preregister-child --project-key <path> --name <agent> \
+#   agentstack-preregister-child --project-key <path> [--name <agent>] \
 #     --program <claude-code|codex> --model <model> \
 #     --task-description <text> --token-file-out <path>
 #
@@ -34,9 +34,14 @@ REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}
 
 usage() {
   cat >&2 <<'EOF'
-Usage: agentstack-preregister-child --project-key <path> --name <agent> \
+Usage: agentstack-preregister-child --project-key <path> [--name <agent>] \
   --program <claude-code|codex> --model <model> \
   --task-description <text> --token-file-out <path>
+
+--name is optional: omitted, a free Adjective-Scientist name is picked (same
+picker as top-level registration). A supplied name that does not end in a
+known scientist warns, because the dashboard shows no portrait for it; set
+AGENTSTACK_STRICT_AGENT_NAMES=1 to make that an error instead.
 EOF
 }
 
@@ -85,12 +90,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$project_key" ]] || die "AGENTSTACK_PROJECT_KEY or --project-key is required"
-[[ -n "$agent_name" ]] || die "--name is required"
 [[ -n "$program" ]] || die "--program is required"
 [[ -n "$model" ]] || die "--model is required"
 [[ -n "$token_file_out" ]] || die "--token-file-out is required"
 
 ags_mail_load_token
+
+# --name is optional. Top-level registration has always drawn names from the
+# picker, but this child helper used to REQUIRE a caller-supplied name and
+# accepted it unchecked — so a hand-written name such as "Curious-Flory" was
+# registered even though "Flory" is not in the bundled scientist list, and the
+# dashboard then had no portrait to show. Default to the same picker the
+# top-level path uses, and check anything supplied by hand.
+if [[ -z "$agent_name" ]]; then
+  agent_name="$(ags_pick_available_agent_name "$project_key" "")" \
+    || die "could not pick an available child name (agent-mail unreachable or refusing whois)"
+elif ! ags_has_scientist_suffix "$agent_name"; then
+  printf '%s: warning: "%s" does not end in a known scientist name, so the dashboard will not show a portrait for it. Omit --name to let the picker choose.\n' \
+    "$PROG" "$agent_name" >&2
+  if [[ "${AGENTSTACK_STRICT_AGENT_NAMES:-}" == "1" ]]; then
+    die "refusing off-list name '$agent_name' (AGENTSTACK_STRICT_AGENT_NAMES=1)"
+  fi
+fi
 
 # Ignore any parent/session token inherited from the caller. This helper always
 # creates a child-owned token and uses that exact value for registration.

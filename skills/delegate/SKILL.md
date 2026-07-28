@@ -98,7 +98,7 @@ Use generic task examples such as code review, API migration, test-suite repair,
 Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
 
 1. Verify `AGENTSTACK_PROJECT_KEY` is set to the shared project key, not a random cwd.
-2. Pick an available `Adjective-Scientist` child name.
+2. Let the helper name the child. Omit `--name` and it draws a free `Adjective-Scientist` name from the same picker top-level registration uses, so the name always has a dashboard portrait. Only pass `--name` when the caller needs a specific existing identity; an off-list name is accepted with a warning (no portrait), or rejected outright under `AGENTSTACK_STRICT_AGENT_NAMES=1`.
 3. Pre-register the child with a child-owned token and write that token to a temporary 0600 file. Prefer the helper so the parent LLM never sees the token:
 
    ```bash
@@ -108,13 +108,13 @@ Preferred flow: do the coordination through MCP tools first, then let `spawn_chi
 
    CHILD_NAME="$("${AGENTSTACK_PREREGISTER_CHILD:-$AGENTSTACK_HOME/bin/agentstack-preregister-child}" \
      --project-key "$AGENTSTACK_PROJECT_KEY" \
-     --name "<child-name>" \
      --program "claude-code" \
      --model "<model-name>" \
      --task-description "<task summary>" \
      --token-file-out "$CHILD_TOKEN_FILE")"
    ```
 
+   The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
    For a Codex child, pass `--program "codex" --model "gpt-5.5"`.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
 4. Ensure the child can receive the first task message. The stack registration helper sets the child's `contact_policy` to `open` by default. If `AGENTSTACK_CONTACT_POLICY` disables that default, complete a contact handshake or approval before `send_message`.
