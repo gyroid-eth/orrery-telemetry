@@ -58,6 +58,18 @@ class ProxyConfig:
     endpoint: str
     bearer_token: str | None = None
     bootstrap_wait_seconds: float = 1.0
+    # Direct binding (no Codex App Bridge). A launcher that already knows which
+    # agent this process serves names it here; this is what gives a
+    # tmux-spawned Claude Code child an authenticated connection of its own
+    # without the child ever seeing its token.
+    agent_name: str | None = None
+    project_key: str | None = None
+    token_file: Path | None = None
+    program: str = "claude-code"
+
+    @property
+    def is_direct(self) -> bool:
+        return bool(self.agent_name and self.project_key)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "ProxyConfig":
@@ -65,6 +77,17 @@ class ProxyConfig:
         endpoint = (env.get("AGENTSTACK_MCP_URL") or "").strip()
         if not endpoint:
             raise ValueError("AGENTSTACK_MCP_URL must be configured")
+        direct_agent = (env.get("AGENTSTACK_PROXY_AGENT_NAME") or "").strip() or None
+        direct_project = (env.get("AGENTSTACK_PROJECT_KEY") or "").strip() or None
+        token_file_value = (env.get("AGENTSTACK_PROXY_TOKEN_FILE") or "").strip()
+        direct_token_file = (
+            Path(token_file_value).expanduser() if token_file_value else None
+        )
+        direct_program = (env.get("AGENTSTACK_PROXY_PROGRAM") or "claude-code").strip()
+        if direct_agent and not direct_project:
+            raise ValueError(
+                "AGENTSTACK_PROXY_AGENT_NAME requires AGENTSTACK_PROJECT_KEY"
+            )
         wait_value = (env.get("AGENTSTACK_CODEX_APP_BOOTSTRAP_WAIT") or "1").strip()
         try:
             wait_seconds = float(wait_value)
@@ -81,6 +104,10 @@ class ProxyConfig:
             endpoint=endpoint,
             bearer_token=(env.get("MCP_AGENT_MAIL_TOKEN") or None),
             bootstrap_wait_seconds=wait_seconds,
+            agent_name=direct_agent,
+            project_key=direct_project,
+            token_file=direct_token_file,
+            program=direct_program,
         )
 
 
@@ -317,6 +344,45 @@ class AgentStackProxy:
             "lineage": lineage,
         }
 
+    def bind_direct(
+        self,
+        *,
+        agent_name: str,
+        project_key: str,
+        owner_token: str,
+        program: str = "claude-code",
+    ) -> dict[str, Any]:
+        """Bind this process to an agent the launcher already registered.
+
+        The Codex App path discovers its binding through the Bridge daemon's
+        identity store. A tmux-spawned child has no Bridge, but its parent
+        pre-registered it and holds its owner token, so the launcher can state
+        the binding outright. The token stays in this process; the agent on the
+        other end of stdio never sees it.
+        """
+
+        if not agent_name or not project_key or not owner_token:
+            raise ProxyError("direct binding needs agent_name, project_key and token")
+        # external_id_for rejects colons, so the synthetic id uses a dash.
+        session_id = f"direct-{agent_name}"
+        self._binding = {
+            "external_id": external_id_for(session_id),
+            "surface": "direct",
+            "session_id": session_id,
+            "agent_id": None,
+            "parent_external_id": None,
+            "agent_name": agent_name,
+            "project_key": project_key,
+            "program": program,
+            "last_seen_at": None,
+        }
+        self._owner_token = owner_token
+        return dict(self._binding)
+
+    @property
+    def bound_session_id(self) -> str | None:
+        return None if self._binding is None else self._binding["session_id"]
+
     def _resolve(
         self, session_id: str, agent_id: str | None
     ) -> tuple[dict[str, Any], str]:
@@ -443,7 +509,12 @@ def _dispatch(
     handler = handlers.get(name)
     if handler is None:
         raise ProxyError("tool is not allowlisted")
-    return handler(**dict(arguments))
+    call_arguments = dict(arguments)
+    # A directly bound process serves exactly one agent, so the caller does not
+    # have to know (or be able to spoof) a session id.
+    if "session_id" not in call_arguments and proxy.bound_session_id is not None:
+        call_arguments["session_id"] = proxy.bound_session_id
+    return handler(**call_arguments)
 
 
 def _required_text(value: Any, field: str, maximum: int) -> str:
@@ -696,7 +767,40 @@ def serve() -> None:
         AgentMailClient(transport),
         bootstrap_wait_seconds=config.bootstrap_wait_seconds,
     )
+    if config.is_direct:
+        proxy.bind_direct(
+            agent_name=config.agent_name or "",
+            project_key=config.project_key or "",
+            owner_token=load_direct_owner_token(config),
+            program=config.program,
+        )
     StdioMcpServer(proxy).serve_forever()
+
+
+def direct_token_path(config: ProxyConfig) -> Path:
+    """Where a directly bound proxy reads its agent's owner token."""
+
+    if config.token_file is not None:
+        return config.token_file
+    # Same layout the shell helpers write: ags_registration_token_file().
+    key = re.sub(r"[^A-Za-z0-9_.-]", "_", config.agent_name or "")
+    base = config.runtime_dir
+    if base.name == "codex-app":
+        base = base.parent
+    return base / f"agent_token_{key}"
+
+
+def load_direct_owner_token(config: ProxyConfig) -> str:
+    path = direct_token_path(config)
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ProxyError(
+            f"cannot read the owner token for {config.agent_name} at {path}"
+        ) from exc
+    if not token:
+        raise ProxyError(f"owner token file is empty: {path}")
+    return token
 
 
 if __name__ == "__main__":

@@ -456,6 +456,49 @@ codex_session_alive() {
     tmux has-session -t "=$1" 2>/dev/null
 }
 
+# --- Authenticated per-child MCP connection ------------------------------
+# Writes a child-scoped --mcp-config that points mcp-agent-mail at the local
+# stdio proxy instead of the shared HTTP endpoint. The proxy holds the child's
+# owner token and authenticates every call on its behalf, so the child can read
+# its OWN inbox (and nobody else's) without the token ever entering its context.
+#
+# Prints the config path, or nothing when the proxy is unavailable — callers
+# fall back to the shared endpoint rather than failing the spawn.
+write_child_mcp_config() {
+    local child_name="$1" token_file="$2"
+    local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
+    [[ -n "$token_file" && -f "$token_file" && -x "$runner" ]] || return 0
+
+    local config_dir="$RUNTIME_DIR/child-agents"
+    local config_path="$config_dir/${child_name}.mcp.json"
+    mkdir -p "$config_dir" || return 0
+    python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
+        "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" <<'PY' || return 0
+# NOTE: no line here may start with "}" in column 0 — the shell function is
+# extracted by "up to the first line that is just a closing brace".
+import json
+import os
+import sys
+
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir = sys.argv[1:9]
+server_env = dict(
+    AGENTSTACK_PROXY_AGENT_NAME=child,
+    AGENTSTACK_PROXY_TOKEN_FILE=token_file,
+    AGENTSTACK_PROXY_PROGRAM="claude-code",
+    AGENTSTACK_PROJECT_KEY=project_key,
+    AGENTSTACK_MCP_URL=mcp_url,
+    AGENTSTACK_MAIL_ENV=mail_env,
+    AGENTSTACK_RUNTIME_DIR=runtime_dir,
+)
+server = dict(command=runner, args=[], env=server_env)
+config = dict(mcpServers=dict([("mcp-agent-mail", server)]))
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=2)
+os.chmod(path, 0o600)
+PY
+    printf '%s\n' "$config_path"
+}
+
 # Ready = the REPL is accepting input. Do not depend on a single footer string:
 # the footer varies with terminal width, model and configuration. The reported
 # 90s hang came from a pane showing "gpt-5.5 xhigh · ~/obsidian", which has no
@@ -666,11 +709,18 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$WARM_CLAIMED" == false ]]; then
             # Cold start（フォールバック）
             echo "[spawn_child/pre-reg] Cold start..." >&2
+            CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+            if [[ -n "$CHILD_MCP_CONFIG" ]]; then
+                echo "[spawn_child/pre-reg] Child MCP proxy config: $CHILD_MCP_CONFIG" >&2
+            else
+                echo "[spawn_child/pre-reg] No MCP proxy available; child uses the shared agent-mail endpoint" >&2
+            fi
             tmux new-session -d -s "$CHILD_NAME" \
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
-                '/bin/zsh -lc '"'"'claude --model "$CLAUDE_CHILD_MODEL"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+                -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+                '/bin/zsh -lc '"'"'MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG"); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
 
             WAITED=0
             while [[ $WAITED -lt 60 ]]; do
