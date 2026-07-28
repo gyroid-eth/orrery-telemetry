@@ -516,6 +516,100 @@ codex_pane_ready() {
     return 1
 }
 
+# Codex has no per-session --mcp-config equivalent: `-c mcp_servers...` replaces
+# the whole table (dropping the transport keys, which fails config load) and its
+# effect cannot be inspected, so a child gets its own CODEX_HOME instead. Only
+# config.toml is rewritten; everything else (auth.json, sessions, plugins) is
+# symlinked to the real home, and `CODEX_HOME=<dir> codex mcp get agent-mail`
+# shows exactly what the child will use.
+#
+# Prints the directory, or nothing when the proxy or token is unavailable.
+write_child_codex_home() {
+    local child_name="$1" token_file="$2"
+    local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
+    local source_home="${CODEX_HOME:-$HOME/.codex}"
+    [[ -n "$token_file" && -f "$token_file" && -x "$runner" && -d "$source_home" ]] || return 0
+
+    local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
+    python3 - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
+        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" <<'PY' || return 0
+import os
+import pathlib
+import sys
+
+home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir = sys.argv[1:10]
+home_path = pathlib.Path(home)
+source_path = pathlib.Path(source)
+home_path.mkdir(parents=True, exist_ok=True)
+
+# Everything except config.toml stays shared with the real home, so the child
+# keeps its login and writes its session history where the user expects it.
+for entry in source_path.iterdir():
+    if entry.name == "config.toml":
+        continue
+    link = home_path / entry.name
+    if link.is_symlink() or link.exists():
+        if link.is_symlink():
+            link.unlink()
+        else:
+            continue
+    os.symlink(entry, link)
+
+lines = []
+skipping = False
+config_source = source_path / "config.toml"
+text = config_source.read_text(encoding="utf-8") if config_source.exists() else ""
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("["):
+        header = stripped.strip("[]").strip()
+        skipping = header.startswith("mcp_servers.agent-mail") or header.startswith('mcp_servers."agent-mail"')
+    if not skipping:
+        lines.append(line)
+
+def toml_string(value):
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped + '"'
+
+lines.append("")
+lines.append("# Written by spawn_child.sh: this child talks to agent-mail through the")
+lines.append("# local proxy, which authenticates every call with the child's own token.")
+lines.append("[mcp_servers.agent-mail]")
+lines.append("command = " + toml_string(runner))
+lines.append("args = []")
+lines.append("")
+lines.append("[mcp_servers.agent-mail.env]")
+lines.append("AGENTSTACK_PROXY_AGENT_NAME = " + toml_string(child))
+lines.append("AGENTSTACK_PROXY_TOKEN_FILE = " + toml_string(token_file))
+lines.append("AGENTSTACK_PROXY_PROGRAM = " + toml_string("codex"))
+lines.append("AGENTSTACK_PROJECT_KEY = " + toml_string(project_key))
+lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
+lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
+lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
+
+target = home_path / "config.toml"
+target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+os.chmod(target, 0o600)
+PY
+    printf '%s\n' "$home_dir"
+}
+
+# The proxy reads the child's token from a file so it never travels through an
+# argv or an environment variable the agent can print. Modes that hold the token
+# in a shell variable (direct/legacy spawn) materialise that file here, using the
+# same runtime layout as ags_registration_token_file().
+ensure_child_token_file() {
+    local child_name="$1" token="$2"
+    [[ -n "$child_name" && -n "$token" ]] || return 0
+    local key
+    key="$(printf '%s' "$child_name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+    local token_file="$RUNTIME_DIR/agent_token_$key"
+    mkdir -p "$RUNTIME_DIR" || return 0
+    ( umask 077 && printf '%s' "$token" > "$token_file" ) || return 0
+    chmod 600 "$token_file" 2>/dev/null || true
+    printf '%s\n' "$token_file"
+}
+
 TASK="${1:-}"
 WORK_DIR="${2:-$(pwd)}"
 CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
@@ -602,6 +696,13 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         # Codex startup (--pre-registered mode).
         CHILD_MODEL="gpt-5.5"
         TOKEN=$(get_agentstack_token 2>/dev/null || true)
+        CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+        if [[ -n "$CHILD_CODEX_HOME" ]]; then
+            echo "[spawn_child/pre-reg] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
+            TMUX_ENV_ARGS+=(-e "CODEX_HOME=$CHILD_CODEX_HOME")
+        else
+            echo "[spawn_child/pre-reg] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
+        fi
         CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
@@ -1265,6 +1366,14 @@ if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
 fi
 
 if [[ "$USE_CODEX" == true ]]; then
+    CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" \
+        "$(ensure_child_token_file "$CHILD_NAME" "$CHILD_REGISTRATION_TOKEN")")"
+    if [[ -n "$CHILD_CODEX_HOME" ]]; then
+        echo "[spawn_child] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
+        TMUX_ENV_ARGS+=(-e "CODEX_HOME=$CHILD_CODEX_HOME")
+    else
+        echo "[spawn_child] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
+    fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
     CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
     tmux new-session -d -s "$CHILD_NAME" \

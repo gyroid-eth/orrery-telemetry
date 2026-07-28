@@ -95,6 +95,113 @@ def test_missing_proxy_or_token_falls_back_instead_of_failing_the_spawn():
         assert path == "", "should print nothing when the token file is missing"
 
 
+def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
+                    runner_executable: bool = True,
+                    token: str | None = "child-owner-token") -> str:
+    runner = tmpdir / "run-mcp.sh"
+    runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    if runner_executable:
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+
+    token_file = tmpdir / "token"
+    if token is not None:
+        token_file.write_text(token, encoding="utf-8")
+
+    source_home = tmpdir / "codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text('{"token": "secret"}', encoding="utf-8")
+    (source_home / "sessions").mkdir()
+    if config_text is not None:
+        (source_home / "config.toml").write_text(config_text, encoding="utf-8")
+
+    script = (
+        'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
+        + _extract("write_child_codex_home")
+        + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
+    )
+    env = os.environ.copy()
+    env["AGENTSTACK_MCP_PROXY"] = str(runner)
+    env["CODEX_HOME"] = str(source_home)
+    proc = subprocess.run(
+        ["bash", "-c", script, "bash", str(tmpdir / "runtime"),
+         "/workspace/example", "http://127.0.0.1:8765/mcp",
+         str(tmpdir / "mail.env"), str(token_file)],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, check=False,
+    )
+    return proc.stdout.strip()
+
+
+_BASE_CODEX_CONFIG = """model = "gpt-5.5"
+
+[mcp_servers.agent-mail]
+url = "http://127.0.0.1:8765/api/"
+bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"
+
+[mcp_servers.agent-mail.tools.fetch_inbox]
+approval_mode = "approve"
+
+[mcp_servers.notion]
+url = "https://mcp.notion.com/mcp"
+enabled = false
+"""
+
+
+def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        home = _run_codex_home(tmpdir, config_text=_BASE_CODEX_CONFIG)
+        assert home, "helper produced no CODEX_HOME"
+        config = (pathlib.Path(home) / "config.toml").read_text(encoding="utf-8")
+
+        # The shared HTTP transport for agent-mail is gone, replaced by stdio.
+        assert 'url = "http://127.0.0.1:8765/api/"' not in config
+        assert "[mcp_servers.agent-mail]" in config
+        assert "command = " in config
+        assert 'AGENTSTACK_PROXY_AGENT_NAME = "Red-Euler"' in config
+        # Per-tool approval subtables of the replaced server must go too,
+        # otherwise they re-describe a server that no longer exists.
+        assert "[mcp_servers.agent-mail.tools.fetch_inbox]" not in config
+        # Unrelated config survives untouched.
+        assert 'model = "gpt-5.5"' in config
+        assert "[mcp_servers.notion]" in config
+        # The token itself is never written into the config.
+        assert "child-owner-token" not in config
+
+
+def test_codex_child_home_shares_login_and_history_but_owns_its_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        home = pathlib.Path(_run_codex_home(tmpdir, config_text=_BASE_CODEX_CONFIG))
+        assert (home / "auth.json").is_symlink(), "child must reuse the real login"
+        assert (home / "sessions").is_symlink()
+        assert not (home / "config.toml").is_symlink(), "config must be child-owned"
+        assert stat.S_IMODE((home / "config.toml").stat().st_mode) == 0o600
+
+
+def test_codex_child_home_works_when_the_user_has_no_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        home = _run_codex_home(tmpdir, config_text=None)
+        config = (pathlib.Path(home) / "config.toml").read_text(encoding="utf-8")
+        assert "[mcp_servers.agent-mail]" in config
+
+
+def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        assert _run_codex_home(tmpdir, config_text=_BASE_CODEX_CONFIG,
+                               runner_executable=False) == ""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        assert _run_codex_home(tmpdir, config_text=_BASE_CODEX_CONFIG, token=None) == ""
+
+
+def test_both_codex_launch_paths_use_the_child_home():
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert text.count('CHILD_CODEX_HOME="$(write_child_codex_home') == 2
+    assert text.count('-e "CODEX_HOME=$CHILD_CODEX_HOME"') == 2
+
+
 def test_launcher_passes_the_config_to_claude_only_when_present():
     text = _SPAWN.read_text(encoding="utf-8")
     assert 'CHILD_MCP_CONFIG="$(write_child_mcp_config' in text
