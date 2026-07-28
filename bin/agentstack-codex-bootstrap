@@ -32,7 +32,15 @@ MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
 CODEX_MODEL="${AGENTSTACK_CODEX_MODEL:-codex}"
-REQUESTED_AGENT_NAME="${AGENT_NAME:-}"
+RESERVED_IDENTITY="${AGENTSTACK_RESERVED_IDENTITY:-}"
+REQUESTED_AGENT_NAME=""
+if [[ "$RESERVED_IDENTITY" == "1" && -n "${AGENT_NAME:-}" ]]; then
+  REQUESTED_AGENT_NAME="$AGENT_NAME"
+else
+  # A bare inherited AGENT_NAME/token is not proof of an intentional child or
+  # resume. Ignore it unless the launcher supplied the dedicated marker.
+  unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+fi
 # shellcheck source=lib/agentstack-register.sh
 . "$SCRIPT_DIR/lib/agentstack-register.sh"
 
@@ -44,30 +52,64 @@ if [[ -z "$TMUX_BIN" ]]; then
   done
 fi
 
-CANDIDATE_AGENT_NAME="$REQUESTED_AGENT_NAME"
-REGISTER_MODE="reserved"
-if [[ -z "$CANDIDATE_AGENT_NAME" ]]; then
+CANDIDATE_AGENT_NAME=""
+REGISTER_MODE="candidate"
+if [[ -n "$REQUESTED_AGENT_NAME" ]]; then
+  CANDIDATE_AGENT_NAME="$REQUESTED_AGENT_NAME"
+  REGISTER_MODE="reserved"
+else
   CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
-  REGISTER_MODE="candidate"
 fi
 if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
   AGENT_NAME="$CANDIDATE_AGENT_NAME"
   export AGENT_NAME
 fi
 
-finalize_agent_name() {
-  if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
-    "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+TMUX_PREFLIGHT_CONFLICT=0
+if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
+  CURRENT_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if [[ "$CURRENT_TMUX_SESSION" != "$AGENT_NAME" ]] && \
+     "$TMUX_BIN" has-session -t "=$AGENT_NAME" 2>/dev/null; then
+    TMUX_PREFLIGHT_CONFLICT=1
+    echo "⚠️  refusing identity registration: current tmux session '${CURRENT_TMUX_SESSION:-unknown}', target '$AGENT_NAME' already exists." >&2
   fi
-  ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
-  command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
+fi
+
+TMUX_IDENTITY_MATCHED=0
+finalize_agent_name() {
+  local current_session="" renamed_session=""
+  if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
+    current_session="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+    if [[ "$current_session" == "$AGENT_NAME" ]]; then
+      TMUX_IDENTITY_MATCHED=1
+    elif "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null; then
+      renamed_session="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+      if [[ "$renamed_session" == "$AGENT_NAME" ]]; then
+        TMUX_IDENTITY_MATCHED=1
+      else
+        echo "⚠️  tmux rename-session reported success, but current session is '${renamed_session:-unknown}' instead of '$AGENT_NAME'." >&2
+      fi
+    else
+      echo "⚠️  tmux rename-session failed: current session '${current_session:-unknown}', target identity '$AGENT_NAME' (the target session may already exist)." >&2
+    fi
+  elif [[ -n "${AGENT_NAME:-}" ]]; then
+    echo "⚠️  cannot verify tmux session name for agent identity '$AGENT_NAME'." >&2
+  fi
+  if [[ "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
+    ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
+    command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
+  fi
   export AGENT_NAME="${AGENT_NAME:-}"
   [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]] && export CHILD_REGISTRATION_TOKEN
+  return 0
 }
 
 if [[ -z "$PROJECT_KEY" ]]; then
   echo "⚠️  AGENTSTACK_PROJECT_KEY unset; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
   finalize_agent_name
+  if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+    return 1 2>/dev/null || exit 1
+  fi
   return 0 2>/dev/null || exit 0
 fi
 
@@ -78,6 +120,9 @@ ags_mail_load_token
 if ! ags_mcp_call "health_check" >/dev/null 2>&1; then
   echo "⚠️  agent-mail unreachable at $MCP_URL; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
   finalize_agent_name
+  if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+    return 1 2>/dev/null || exit 1
+  fi
   return 0 2>/dev/null || exit 0
 fi
 
@@ -86,19 +131,27 @@ ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
 
 # 3. ensure_project + register_agent (reuse a child's reserved name if present).
 REGISTERED_AGENT_NAME=""
-if ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
+if [[ "$TMUX_PREFLIGHT_CONFLICT" != "1" ]] && \
+   ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
   REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
 fi
 
 if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
   AGENT_NAME="$REGISTERED_AGENT_NAME"
+elif [[ "$TMUX_PREFLIGHT_CONFLICT" == "1" ]]; then
+  echo "⚠️  agent registration skipped because the target tmux session name is already in use." >&2
 else
   echo "⚠️  agent registration failed; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
 fi
 
 finalize_agent_name
-if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+if [[ -n "$REGISTERED_AGENT_NAME" && "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
   echo "✅ agent-mail registered: $AGENT_NAME"
+elif [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  echo "⚠️  agent-mail registered as $AGENT_NAME, but the tmux session name is not synchronized." >&2
 else
   echo "ℹ️  agent-mail not registered; AGENT_NAME preselected: ${AGENT_NAME:-}"
+fi
+if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+  return 1 2>/dev/null || exit 1
 fi

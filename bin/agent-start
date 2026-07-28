@@ -41,16 +41,15 @@ command -v "$CLAUDE_BIN" >/dev/null 2>&1 || ags_die "claude not found on PATH (s
 DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
-# Prevent AGENT_NAME hijack: a stale/inherited value would make the new agent
-# register under another agent's name/token.
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN 2>/dev/null || true
+# Prevent identity hijack: stale/inherited values must not select another agent
+# or become part of a newly created tmux server's global environment.
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 
 SESSION="pending-$$"
 CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
 if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
   AGENT_NAME="$CANDIDATE_AGENT_NAME"
   SESSION="$AGENT_NAME"
-  export AGENT_NAME
 fi
 
 if [[ -n "$PROJECT_KEY" ]]; then
@@ -64,7 +63,6 @@ if [[ -n "$PROJECT_KEY" ]]; then
     if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
       AGENT_NAME="$REGISTERED_AGENT_NAME"
       SESSION="$AGENT_NAME"
-      export AGENT_NAME
     else
       echo "warning: agent registration failed; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
     fi
@@ -85,6 +83,7 @@ fi
 if [[ -n "${TMUX:-}" ]]; then
   if [[ -n "${AGENT_NAME:-}" ]]; then
     "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+    export AGENT_NAME
   fi
   cd "$DIR"
   # Warn (do not block) if this pane can't read a macOS privacy-protected project
@@ -93,17 +92,27 @@ if [[ -n "${TMUX:-}" ]]; then
   exec "$CLAUDE_BIN"
 fi
 
-# Otherwise replace the current terminal tab with a fresh tmux session. The temp
-# script keeps the tab alive after claude exits (drops to a shell), then
-# self-deletes.
+# Otherwise replace the current terminal tab with a fresh tmux session. Keep
+# agent-specific values out of the tmux client environment. The non-secret name
+# is session-scoped with `new-session -e`; the owner token is restored inside the
+# target process from its mode-0600 runtime file, so it is never embedded in this
+# temporary script or a process argument.
+SESSION_AGENT_NAME="${AGENT_NAME:-}"
+SESSION_TOKEN_FILE=""
+if [[ -n "$SESSION_AGENT_NAME" ]]; then
+  SESSION_TOKEN_FILE="$(ags_registration_token_file "$SESSION_AGENT_NAME" 2>/dev/null || true)"
+fi
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+
 INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
-export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}")
-export CHILD_REGISTRATION_TOKEN=$(printf '%q' "${CHILD_REGISTRATION_TOKEN:-}")
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
-  "export AGENT_NAME=$(printf '%q' "${AGENT_NAME:-}"); export CHILD_REGISTRATION_TOKEN=$(printf '%q' "${CHILD_REGISTRATION_TOKEN:-}"); $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
+  -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

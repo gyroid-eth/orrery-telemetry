@@ -14,7 +14,10 @@ First calls:
    `AGENT_NAME`:
    `AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"`.
 3. If that succeeds, do not call `register_agent` again.
-4. `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`.
+4. On the first `fetch_inbox`/`whois` call in this MCP session, read
+   `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
+   pass its value as `registration_token`. Later calls in the authenticated MCP
+   session may omit it.
 
 The SessionStart hook has already registered you when it prints:
 
@@ -25,7 +28,9 @@ mcp-agent-mail server is running. This session is already registered.
 ```
 
 When you see those lines, skip `register_agent` and go straight to
-`fetch_inbox`.
+`fetch_inbox`, passing the persisted owner token on that first MCP call. The
+hook's shell-side HTTP registration does not authenticate the model's separate
+MCP tool session.
 
 Details and exceptions for the first calls:
 

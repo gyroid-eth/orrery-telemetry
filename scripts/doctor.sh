@@ -187,4 +187,22 @@ if [[ "$mouse_on" != "on" ]]; then
   echo "      add 'set -g mouse on' to ~/.tmux.conf (see README Troubleshooting)."
 fi
 
+# A live tmux server created by an older launcher may retain another session's
+# identity in its global environment. Report variable names only; never print an
+# owner token value.
+if tmux info >/dev/null 2>&1; then
+  STALE_IDENTITY_VARS=()
+  for identity_var in AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY; do
+    if tmux show-environment -g "$identity_var" 2>/dev/null | grep -q "^${identity_var}="; then
+      STALE_IDENTITY_VARS+=("$identity_var")
+    fi
+  done
+  if [[ ${#STALE_IDENTITY_VARS[@]} -gt 0 ]]; then
+    echo "warn: tmux global environment contains session identity variables: ${STALE_IDENTITY_VARS[*]}"
+    echo "      restart the tmux server or remove those global variables before creating new sessions."
+  else
+    echo "ok: tmux global environment has no session identity variables"
+  fi
+fi
+
 exit "$status"

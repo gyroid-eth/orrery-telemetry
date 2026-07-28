@@ -38,8 +38,10 @@ command -v "$CODEX_BIN" >/dev/null 2>&1 || ags_die "codex not found on PATH (set
 DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
-# Prevent AGENT_NAME hijack; the bootstrap re-exports it after registering.
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN 2>/dev/null || true
+# Prevent identity hijack; the bootstrap re-exports the selected name after
+# registering. Clear the explicit reserved-identity marker as well: this is a
+# top-level launcher, never a delegated/resume path.
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 
 SESSION="codex-pending-$$"
 
@@ -71,8 +73,10 @@ INNER="$(mktemp -t agent-start-codex.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
-  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR"); $CODEX_CMD; exec \"\$SHELL\" -l"
+  -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

@@ -207,6 +207,16 @@ Registration needs a running agent-mail (the install sets this up) and
 `Adjective-Scientist` `AGENT_NAME`, just without shell-side registration.
 `OPENAI_API_KEY` is stripped at launch so Codex uses its ChatGPT OAuth login.
 
+The optional Codex App Bridge uses a separate identity path. For each fresh App
+root or subagent session it omits `name` from `register_agent`, adopts the name
+returned by agent-mail, and persists that server-confirmed name in the binding.
+This keeps Bridge identities in agent-mail's canonical name/portrait namespace.
+If registration is temporarily unavailable, diagnostics may show a local-only
+`Pending-<external-id-hash>` label; that provisional label is never sent to
+agent-mail and is replaced as soon as registration succeeds. Re-authentication
+of an already confirmed binding continues to send its persisted name and owner
+token.
+
 #### Identity registration is token-strict
 
 Stock agent-mail requires the original `registration_token` when re-registering
@@ -250,6 +260,13 @@ printing the token to the transcript. It also supports Claude recovery with
 `agentstack-reregister "$AGENT_NAME" claude-code`. After it succeeds, continue
 with `fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent`
 again.
+
+Shell-hook registration and the model's MCP tool session are separate
+authentication contexts. On the first `fetch_inbox` or `whois` call in a new
+MCP session, read
+`${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
+pass its value as `registration_token`. The authenticated MCP session can omit
+it on later calls.
 
 Registration also sets the agent's `contact_policy` to `open` by default so
 single-operator meshes can send first messages without an idle approval gate.

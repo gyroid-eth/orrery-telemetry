@@ -321,9 +321,15 @@ ags_register_session() {
 
   ags_mcp_call "ensure_project" "human_key=$project_key" >/dev/null
 
-  local registration_token="${CHILD_REGISTRATION_TOKEN:-}"
-  if [[ -z "$registration_token" ]]; then
-    registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
+  # Ambient owner credentials are valid only for an explicitly verified
+  # reserved identity. Candidate/top-level registration must not adopt a token
+  # inherited from another tmux session.
+  local registration_token=""
+  if [[ "$requested_mode" == "reserved" && -n "$requested_name" ]]; then
+    registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+    if [[ -z "$registration_token" ]]; then
+      registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
+    fi
   fi
   if [[ -z "$registration_token" ]] && ! ags_agent_exists "$project_key" "$agent_name"; then
     registration_token="$(ags_generate_registration_token)" || return 1

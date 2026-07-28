@@ -87,6 +87,7 @@ if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
         echo "新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。"
         echo "1. fetch_inbox (agent_name=\"$SHELL_REGISTERED_AGENT\")"
+        echo "初回の fetch_inbox/whois では、$RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
     elif [ -n "$RESOLVED_AGENT" ]; then
         echo "mcp-agent-mail server is running. Register this session before working."
         echo "あなたの名前は「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。新しい名前を生成せず、必ず name=\"${RESOLVED_AGENT}\" で register_agent してください。"
