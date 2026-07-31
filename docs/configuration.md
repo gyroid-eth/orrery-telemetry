@@ -101,6 +101,18 @@ mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す�
 
 `AGENTSTACK_RESERVED_IDENTITY`、proxy token path、child token などは spawner が session ごとに設定する内部値です。top-level launcher へ手動で設定しないでください。
 
+## Skill
+
+| 環境変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `AGENTSTACK_OBSIDIAN_APP` | 未設定 | `/log` の Obsidian モードを有効にする。Obsidian の launcher / CLI への path |
+
+`/log` は `AGENTSTACK_OBSIDIAN_APP` と `AGENTSTACK_PROJECT_KEY` の両方が揃ったときだけ vault へ書き、daily note へリンクします。**installer はこれを設定しません**。Obsidian が入っていても未設定なら fallback モード（`<git root>/logs/`）のままです。
+
+```bash
+export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidian"
+```
+
 ## MCP endpoint の注意
 
 `AGENTSTACK_MCP_URL` は launcher / hook の接続先です。

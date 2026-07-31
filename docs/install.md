@@ -18,10 +18,10 @@
 
 任意:
 
-- `fswatch`: mail watcher。なければ polling
-- `fzf`: 引数なし launcher の directory picker
-- Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback
-- Obsidian: `/log` と Output index の vault 統合
+- `fswatch`: mail watcher。なければ 2 秒間隔の polling に fallback します（通知は届きます）
+- `fzf`: 引数なし launcher の directory picker。なければカレントディレクトリを使います
+- Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback。ただし既存ウィンドウの前面化は Ghostty のみで、iTerm2 と Terminal.app では jump のたびに新しいウィンドウが開きます
+- Obsidian: `/log` と Output index の vault 統合。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard の Output index は一覧までは動いて `obsidian://` リンクだけが開けません
 
 Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。WSL2 でも localhost dashboard は使えますが、Ghostty の click-to-jump は使えません。Windows native は対象外です。
 
