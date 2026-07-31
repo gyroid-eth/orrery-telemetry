@@ -2782,9 +2782,45 @@ SPAWN_SCRIPT = _env_path(
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # UI radio と必ず一致させる。program はモデル文字列から決定。
 _SPAWN_MODELS = {
-    "claude-opus-4-7": ("claude-code", "claude-opus-4-7"),
-    "claude-sonnet-4-6": ("claude-code", "claude-sonnet-4-6"),
+    "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
+    "claude-opus-5": ("claude-code", "claude-opus-5"),
+    "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
 }
+SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
+
+
+def _spawn_name_status(name: str) -> str:
+    """Return available/occupied/unknown; database failures fail closed."""
+    if not name or not os.path.exists(DB_PATH):
+        return "unknown"
+    try:
+        with _db() as con:
+            row = con.execute("SELECT 1 FROM agents WHERE lower(name)=lower(?) LIMIT 1", (name,)).fetchone()
+        return "occupied" if row else "available"
+    except sqlite3.Error:
+        return "unknown"
+
+
+def spawn_names_payload() -> dict:
+    """Picker data; scientist vocabulary is emitted by the launcher source."""
+    try:
+        output = subprocess.run(
+            ["bash", "-c", 'source "$1" && ags_scientist_list', "spawn-names", SPAWN_SCIENTISTS_SCRIPT],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        raise ValueError(f"scientist vocabulary unavailable: {e}") from e
+    scientists = [line.strip() for line in output.splitlines() if line.strip()]
+    raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
+    # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
+    dirs = [value for value in raw_dirs if value] or ["~"]
+    return {
+        "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
+                   "status": _spawn_name_status(name)} for name in scientists],
+        "dirs": dirs,
+        "models": list(_SPAWN_MODELS),
+        "default_model": "claude-sonnet-5",
+    }
 
 
 def _mcp_bearer() -> str:
@@ -2845,16 +2881,17 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
-    payload: {parent, role, emoji, group, task, model, worktree, worktree_base}
+    payload: {parent, name?, dir?, role?, group?, task, model}; old fields remain tolerated.
     """
     parent = (payload.get("parent") or "").strip()
     task = (payload.get("task") or "").strip()
     role = (payload.get("role") or "").strip()[:40]
-    emoji = (payload.get("emoji") or "").strip()[:8]
     group = (payload.get("group") or "").strip()[:24]
-    model = (payload.get("model") or "claude-sonnet-4-6").strip()
+    model = (payload.get("model") or "claude-sonnet-5").strip()
     worktree = bool(payload.get("worktree"))
     worktree_base = (payload.get("worktree_base") or "").strip()
+    requested_name = (payload.get("name") or "").strip()
+    work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
 
     if not parent or _NAME_RE.fullmatch(parent) is None:
         return {"ok": False, "error": "parent name invalid"}
@@ -2862,6 +2899,12 @@ def do_spawn(payload: dict) -> dict:
         return {"ok": False, "error": "task description required"}
     if model not in _SPAWN_MODELS:
         return {"ok": False, "error": f"model not allowed: {model}"}
+    if requested_name and _NAME_RE.fullmatch(requested_name) is None:
+        return {"ok": False, "error": "name invalid"}
+    if requested_name and _spawn_name_status(requested_name) != "available":
+        return {"ok": False, "error": "name is occupied or cannot be verified"}
+    if not os.path.isdir(work_dir):
+        return {"ok": False, "error": f"dir does not exist: {work_dir}"}
     program, model_str = _SPAWN_MODELS[model]
     if not os.path.exists(SPAWN_SCRIPT):
         return {"ok": False, "error": f"spawn script missing: {SPAWN_SCRIPT}"}
@@ -2877,6 +2920,7 @@ def do_spawn(payload: dict) -> dict:
         "program": program,
         "model": model_str,
         "task_description": task_short,
+        **({"name": requested_name} if requested_name else {}),
     })
     if not reg["ok"]:
         return {"ok": False,
@@ -2888,9 +2932,9 @@ def do_spawn(payload: dict) -> dict:
 
     # 2) role/emoji/group annotation (best-effort, failure is non-fatal)
     annot_status = "skipped"
-    if role or emoji:
+    if role or group:
         try:
-            ar = _write_annotation(child_name, role, emoji, group)
+            ar = _write_annotation(child_name, role, "", group)
             annot_status = "ok" if ar.get("ok") else f"fail:{ar.get('error')}"
         except Exception as e:  # noqa: BLE001
             annot_status = f"err:{e}"
@@ -2942,7 +2986,7 @@ def do_spawn(payload: dict) -> dict:
         args.append("--worktree")
         if worktree_base:
             args.extend(["--worktree-base", worktree_base])
-    args.extend([task_short, SOURCE_REPO])
+    args.extend([task_short, work_dir])
     env = os.environ.copy()
     env["PARENT_AGENT"] = parent
     env["PROJECT_KEY"] = project_key
@@ -3194,6 +3238,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/version":
             version = _resolve_version()
             self._send(200, json.dumps({"name": "claude-agent-stack", "version": version, "api": 1}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/spawn-names":
+            try:
+                self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
+            except ValueError as e:
+                self._send(503, json.dumps({"ok": False, "error": str(e)}).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
             body = json.dumps(
                 {"ts": int(time.time()), "agents": build_agents()},

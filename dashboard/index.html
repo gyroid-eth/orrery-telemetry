@@ -166,18 +166,16 @@
   .bay:active{transform:translateY(0) scale(.997)}
   .bay.cat-idle,.bay.cat-infra,.bay.cat-warmup{opacity:.5}
   .bay.cat-idle:hover,.bay.cat-infra:hover,.bay.cat-warmup:hover{opacity:.85}
-  /* HP帯｜portrait 段と task 段の間の delimiter（残量を緑→黄→赤） */
-  .bay .hpbar{height:4px;background:rgba(80,84,88,.32);
+  /* Context remaining: quiet hairline, amber only as pressure rises. */
+  .bay .ctxline{height:2px;background:rgba(236,229,214,.08);
     overflow:hidden;pointer-events:none;border-radius:2px;
-    margin:-2px 0 -1px}
-  .bay .hpbar i{display:block;height:100%;width:0;
-    transition:width .6s ease;border-radius:2px}
-  .bay .hpbar.hp-hi  i{background:#3fd6a0;
-    box-shadow:0 0 6px rgba(63,214,160,.5)}
-  .bay .hpbar.hp-mid i{background:#ffb44a;
-    box-shadow:0 0 6px rgba(255,180,74,.55)}
-  .bay .hpbar.hp-lo  i{background:#ff5a4d;
-    box-shadow:0 0 6px rgba(255,90,77,.75)}
+    margin:-1px 0}
+  .bay .ctxline i{display:block;height:100%;width:0;
+    transition:width .6s ease;border-radius:2px;
+    background:linear-gradient(90deg,var(--bone-dim),var(--bone))}
+  .bay .ctxline.ctx-mid i{
+    background:linear-gradient(90deg,var(--bone-dim),var(--amber))}
+  .bay .ctxline.ctx-lo i{background:var(--amber)}
   /* KILL ボタン｜finished/gone カードのみ。2段クリック (arm → confirm) */
   .bay .killbtn{
     flex:none;height:17px;
@@ -672,30 +670,13 @@
     opacity:.78;letter-spacing:.3px}
   #net.focus .edge-count{opacity:.18}
   #net.focus .edge-count.hl{opacity:1;font-size:11px}
-  /* ── mail-comet: agent-mail 通信を edge 上で可視化 ────────
-     spawn=amber / 静的通信=cyan に既存色は予約されているので、
-     "信号物質" は phosphor bone (warm) を基調にして、cyan で
-     halo を被せる＝シアン回路を bone の packet が通る印象。
-     importance high/urgent は head の色温度を上げる。 */
+  /* Mail comet: gradients and compositor-friendly opacity/transform only. */
   .mail-comet{pointer-events:none;mix-blend-mode:screen}
-  .mail-comet .mc-tail{fill:var(--bone);opacity:.45;
-    filter:blur(1.6px)}
-  .mail-comet .mc-halo{fill:var(--cyan);opacity:.22;
-    filter:blur(3px)}
-  .mail-comet .mc-head{fill:#fff7e2;
-    filter:drop-shadow(0 0 5px var(--bone))
-           drop-shadow(0 0 12px var(--cyan))}
-  .mail-comet.imp-high .mc-head{fill:#fff0c4;
-    filter:drop-shadow(0 0 4px var(--amber))
-           drop-shadow(0 0 14px var(--amber))}
-  .mail-comet.imp-high .mc-tail{fill:var(--amber);opacity:.36}
-  .mail-comet.imp-urgent .mc-head{fill:#ffd9d1;
-    filter:drop-shadow(0 0 4px var(--alert))
-           drop-shadow(0 0 16px var(--alert));
-    animation:mc-throb .42s ease-in-out infinite}
-  .mail-comet.imp-urgent .mc-tail{fill:var(--alert);opacity:.38}
-  @keyframes mc-throb {
-    0%,100%{transform:scale(1)} 50%{transform:scale(1.45)} }
+  .mail-comet .mc-tail{fill:url(#comet-tail-grad)}
+  .mail-comet .mc-halo{fill:url(#comet-core-grad);opacity:.28}
+  .mail-comet .mc-head{fill:var(--bone)}
+  .mail-comet.imp-high .mc-head,
+  .mail-comet.imp-urgent .mc-head{fill:var(--amber)}
   /* 受信ノードに広がる弧波。送信時は控えめ。色はノード側の
      系統色には踏み込まず、bone で「届いた」感だけ表現。 */
   .node-arr-pulse{fill:none;stroke:var(--bone);stroke-width:1.4;
@@ -877,12 +858,11 @@
   .an-chip.on{border-color:var(--amber);color:var(--void);background:var(--amber);
     box-shadow:var(--glow-a)}
   .an-form{display:flex;gap:6px;align-items:center}
-  .an-emoji,.an-role{font-family:"IBM Plex Mono",monospace;font-size:12px;
+  .an-role{font-family:"IBM Plex Mono",monospace;font-size:12px;
     background:var(--void);border:1px solid var(--line);color:var(--bone);
     padding:5px 8px;border-radius:3px;outline:none}
-  .an-emoji{width:46px;text-align:center}
   .an-role{flex:1;min-width:60px;letter-spacing:.3px}
-  .an-emoji:focus,.an-role:focus{border-color:var(--cyan);
+  .an-role:focus{border-color:var(--cyan);
     box-shadow:0 0 8px rgba(54,232,255,.25)}
   .an-set,.an-clear{font-family:"Chakra Petch",sans-serif;font-size:10px;
     font-weight:700;letter-spacing:1.5px;padding:6px 13px;border-radius:3px;
@@ -1523,11 +1503,14 @@
     padding-top:2px}
   #gtip .gt-live{color:var(--cyan)}
   #gtip .gt-empty{color:var(--bone-dim);font-style:italic}
-  #gtip .gt-hp{font-family:"IBM Plex Mono",monospace;letter-spacing:-1px;
-    font-size:11px}
-  #gtip .gt-hp-hi{color:#3fd6a0}
-  #gtip .gt-hp-mid{color:#ffb44a}
-  #gtip .gt-hp-lo{color:#ff5a4d}
+  #gtip .gt-gauge{display:inline-block;width:74px;height:3px;border-radius:2px;
+    background:rgba(236,229,214,.08);overflow:hidden;vertical-align:2px;
+    margin-right:6px}
+  #gtip .gt-gauge i{display:block;height:100%;border-radius:2px;
+    background:linear-gradient(90deg,var(--bone-dim),var(--bone))}
+  #gtip .gt-gauge-mid i{
+    background:linear-gradient(90deg,var(--bone-dim),var(--amber))}
+  #gtip .gt-gauge-lo i{background:var(--amber)}
   @media (prefers-reduced-motion:reduce){
     .node.run .pulse{animation:none;opacity:0}
     .node.run .ring{opacity:.95}
@@ -1616,10 +1599,14 @@
     font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
   .tm-summary .ts-live{color:var(--cyan)}
   .tm-summary .ts-empty{color:var(--bone-dim);font-style:italic}
-  .tm-summary .ts-hp{font-family:"IBM Plex Mono",monospace;letter-spacing:-1px}
-  .tm-summary .ts-hp-hi{color:#3fd6a0}
-  .tm-summary .ts-hp-mid{color:var(--amber)}
-  .tm-summary .ts-hp-lo{color:var(--alert)}
+  .tm-summary .ts-gauge{display:inline-block;width:74px;height:3px;
+    border-radius:2px;background:rgba(236,229,214,.08);overflow:hidden;
+    vertical-align:2px;margin-right:6px}
+  .tm-summary .ts-gauge i{display:block;height:100%;border-radius:2px;
+    background:linear-gradient(90deg,var(--bone-dim),var(--bone))}
+  .tm-summary .ts-gauge-mid i{
+    background:linear-gradient(90deg,var(--bone-dim),var(--amber))}
+  .tm-summary .ts-gauge-lo i{background:var(--amber)}
 
   /* ── HISTORY 24H sparkline (Task E) ───────────────────────────
      past trace を panel ヘッダー下に常時可視で。live コメットとは別系。
@@ -2026,6 +2013,64 @@
   body.embed #net{height:calc(100vh - 44px)}
   body.embed #replayBar{top:52px}
   body.embed main{padding-top:13px}
+  /* Shared history language: mono smallcaps, hairlines, amber monochrome. */
+  .tm-spark{font-family:var(--mono);background:rgba(11,13,17,.25);
+    border-bottom:1px solid var(--hair)}
+  .tm-spark .sp-bar{margin-bottom:7px}
+  .tm-spark .sp-led{width:14px;height:1px;border-radius:0;
+    background:var(--amber);box-shadow:none}
+  .tm-spark .sp-ttl,.tm-spark .sp-tot,.tm-spark .sp-axis{
+    font-family:var(--mono);font-size:8.5px;font-weight:500;
+    letter-spacing:.12em;text-transform:uppercase}
+  .tm-spark .sp-ttl{color:var(--ink-dim)}
+  .tm-spark .sp-tot,.tm-spark .sp-axis{color:var(--ink-faint)}
+  .tm-spark .sp-leg{gap:5px;font-family:var(--mono)}
+  .tm-spark .sp-leg .sp-chip{padding:2px 6px;border:1px solid var(--hair);
+    border-radius:999px;background:rgba(255,255,255,.015);
+    color:var(--ink-faint);font-size:7.5px;font-style:normal;
+    letter-spacing:.1em;line-height:1.2;box-shadow:none}
+  .tm-spark .sp-leg .sp-chip.spawn{color:var(--amber);
+    border-color:rgba(242,182,90,.28)}
+  .tm-spark .sp-frame{border:1px solid var(--hair);border-radius:7px;
+    background:repeating-linear-gradient(0deg,
+      rgba(255,255,255,.018) 0 1px,transparent 1px 8px),
+      rgba(11,13,17,.38);
+    box-shadow:inset 0 12px 30px rgba(0,0,0,.18)}
+  .tm-spark .sp-svg .grid{stroke:rgba(236,229,214,.055)}
+  .tm-spark .sp-svg .mid{stroke:rgba(242,182,90,.13)}
+  .tm-spark .sp-svg .base,.tm-spark .sp-svg .nowline{
+    stroke:rgba(242,182,90,.3)}
+  .tm-spark .sp-svg .ev{transition:opacity .12s}
+  .tm-spark .sp-svg .ev.mail_sent,
+  .tm-spark .sp-svg .ev.mail_recv{stroke:var(--amber);filter:none}
+  .tm-spark .sp-svg .ev.mail_recv{stroke-opacity:.42}
+  .tm-spark .sp-svg .ev.spawn{fill:var(--amber);filter:none}
+  .tm-spark .sp-svg .ev.retire,.tm-spark .sp-svg .ev.exit{
+    stroke:var(--ink-faint);filter:none}
+  .tm-spark .sp-svg .ev:hover,.tm-spark .sp-svg .ev.act{
+    filter:none;opacity:1}
+  .tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv,
+  .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn,
+  .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit{
+    background:rgba(17,19,25,.94);border:1px solid var(--hair);
+    border-left:2px solid rgba(242,182,90,.5);border-radius:5px;
+    box-shadow:0 8px 24px rgba(0,0,0,.28);backdrop-filter:none}
+  .tm-spark .sp-tip .tp-k,.tm-spark .sp-tip.mail_recv .tp-k,
+  .tm-spark .sp-tip.mail_sent .tp-k,.tm-spark .sp-tip.spawn .tp-k,
+  .tm-spark .sp-tip.retire .tp-k,.tm-spark .sp-tip.exit .tp-k{
+    color:var(--amber)}
+  .tm-hist{font-family:var(--mono)}
+  .msg .who,.msg.user .who,.msg.assistant .who{
+    color:var(--ink-faint);font-family:var(--mono);font-size:8px;
+    font-weight:500;letter-spacing:.14em;text-transform:uppercase}
+  .msg .who time{color:var(--ink-faint);font-family:var(--mono)}
+  .bub,.msg.user .bub,.msg.assistant .bub{
+    color:var(--ink);background:rgba(255,255,255,.018);
+    border:1px solid var(--hair);border-radius:7px}
+  .bub.tool,.bub.think,.bub.tool.res{
+    color:var(--ink-dim);background:rgba(11,13,17,.34);
+    border-color:var(--hair);border-left:2px solid var(--amber)}
+  .bub.tool .tk,.bub.tool.res .tk{color:var(--amber)}
   @media (prefers-reduced-motion:reduce){
     .node.act-work .motion-ring,.legend .motion-sample.working{animation:none}}
   @media (max-width:760px){
@@ -2354,9 +2399,9 @@ OFF = legacy snapshot+comet mode">
         <span class="sp-tot" id="sp-tot"></span>
         <span class="sp-grow"></span>
         <span class="sp-leg">
-          <em class="sp-sw mail"></em>mail
-          <em class="sp-sw spawn"></em>spawn
-          <em class="sp-sw exit"></em>exit
+          <span class="sp-chip mail">MAIL</span>
+          <span class="sp-chip spawn">SPAWN</span>
+          <span class="sp-chip exit">EXIT</span>
         </span>
       </header>
       <div class="sp-frame">
@@ -2933,7 +2978,7 @@ function bay(a,i){
   const chips=[];
   if(a.model) chips.push(`<span class="chip" title="${esc(a.model_raw||a.model)}">${esc(a.model)}</span>`);
   if(a.ctx_window) chips.push(`<span class="chip win" title="context window">◷ ${esc(a.ctx_window)}</span>`);
-  if(+a.deliv>0) chips.push(`<span class="chip dv" title="output logs: ${+a.deliv}">📄 ${+a.deliv}</span>`);
+  if(+a.deliv>0) chips.push(`<span class="chip dv" title="output logs: ${+a.deliv}">¶ ${+a.deliv}</span>`);
   if(a.attached) chips.push(`<span class="chip att">◉ LINKED</span>`);
   // 'agent' は section header(ACTIVE AGENTS) と冗長なので省略
   if(a.category==='finished')
@@ -2960,19 +3005,17 @@ function bay(a,i){
         `last ${esc(a.last_disp)}</div>`;
     }
   }
-  // HP帯（portrait 段と task 段の間の delimiter・稼働中で ctx 取得済みのみ）
-  const hp=(a.running&&typeof a.ctx_used==='number')
+  // Context hairline (running agents with context telemetry only).
+  const ctxline=(a.running&&typeof a.ctx_used==='number')
     ? (()=>{ const rem=Math.max(0,Math.min(100,100-a.ctx_used));
         const tier=rem>=50?'hi':rem>=20?'mid':'lo';
-        return `<div class="hpbar hp-${tier}" title="ctx ${rem}% left">`+
+        return `<div class="ctxline ctx-${tier}" title="ctx ${rem}% left">`+
           `<i style="width:${rem}%"></i></div>`;})()
     : '';
 
   let live;
   if(a.live){
-    const g=a.live[0], rest=a.live.slice(1).trim();
-    live=`<div class="live" title="${esc(a.live)}">`+
-      `<span class="g">${esc(g)}</span><span>${esc(rest)}</span></div>`;
+    live=`<div class="live" title="${esc(a.live)}"><span>${esc(a.live)}</span></div>`;
   }else{
     live=`<div class="live standby">— STANDBY · no live activity —</div>`;
   }
@@ -3020,7 +3063,7 @@ function bay(a,i){
         <div class="chips">${chips.join('')}</div>
       </div>
     </div>
-    ${hp}${live}${task}${instr}
+    ${ctxline}${live}${task}${instr}
     <div class="foot">
       <div class="foot-left">
         <s>${a.running?'● ONLINE':'○ SHELL'}</s>
@@ -3134,6 +3177,21 @@ function defs(){
     halo.appendChild(svgEl('stop',{
       offset,'stop-color':'#ece5d6','stop-opacity':opacity}));
   d.appendChild(halo);
+  const cometTail=svgEl('linearGradient',{
+    id:'comet-tail-grad',gradientUnits:'userSpaceOnUse',
+    x1:-29,y1:0,x2:0,y2:0});
+  for(const[offset,color,opacity]of[
+    ['0%','#f2b65a',0],['68%','#f2b65a',.3],['100%','#ece5d6',.88]])
+    cometTail.appendChild(svgEl('stop',{
+      offset,'stop-color':color,'stop-opacity':opacity}));
+  d.appendChild(cometTail);
+  const cometCore=svgEl('radialGradient',{
+    id:'comet-core-grad',cx:'50%',cy:'50%',r:'50%'});
+  for(const[offset,color,opacity]of[
+    ['0%','#ece5d6',.75],['45%','#f2b65a',.32],['100%','#f2b65a',0]])
+    cometCore.appendChild(svgEl('stop',{
+      offset,'stop-color':color,'stop-opacity':opacity}));
+  d.appendChild(cometCore);
   const cp=svgEl('clipPath',{id:'pclip'});
   cp.appendChild(svgEl('circle',{cx:0,cy:0,r:13}));
   d.appendChild(cp);
@@ -3591,18 +3649,17 @@ function tipShow(name,ev){
     `${ROLE[g.role]||'—'}</span></div>`;
   const dv=+g.deliv||0;
   const delivRow=dv>0
-    ? `<div class="gt-row"><b>out</b><span>📄 ${dv} logs</span></div>`
+    ? `<div class="gt-row"><b>out</b><span>¶ ${dv} logs</span></div>`
     : '';
   const STL={work:'⚙ working',wait:'Zz waiting',ask:'! approval'};
   let hpRow='';
   if(g.running&&typeof g.ctxUsed==='number'){
     const hpv=100-g.ctxUsed,
       tier=hpv>=50?'hi':hpv>=20?'mid':'lo',
-      f=Math.round(hpv/10),
       win=g.ctxWindow?` / ${esc(g.ctxWindow)}`:'';
     hpRow=`<div class="gt-row"><b>ctx</b><span>`+
-      `<span class="gt-hp gt-hp-${tier}">`+
-      `${'█'.repeat(f)}${'░'.repeat(10-f)}</span> `+
+      `<span class="gt-gauge gt-gauge-${tier}">`+
+      `<i style="width:${hpv}%"></i></span>`+
       `${hpv}% left <span class="gt-empty">(${g.ctxUsed}% used${win})</span>`+
       `</span></div>`;
     const tm=g.actState==='work'&&g.workDisp
@@ -4075,6 +4132,20 @@ function mailDrain(){
   }
 }
 
+function cometEnvelope(t,reduced=false){
+  t=Math.max(0,Math.min(1,t));
+  if(reduced)return {opacity:1,scale:1,tailOpacity:.45};
+  const smooth=x=>x*x*(3-2*x);
+  const fadeIn=smooth(Math.min(1,t/.15));
+  const fadeOut=1-smooth(Math.max(0,(t-.82)/.18));
+  const opacity=fadeIn*fadeOut;
+  const scale=t<=.5
+    ? 1+.6*smooth(t/.5)
+    : 1.6-.8*smooth((t-.5)/.5);
+  const tailOpacity=opacity*(.2+.8*Math.sin(Math.PI*t));
+  return {opacity,scale,tailOpacity};
+}
+
 function runMessageAnim(m){
   const a=gmap.get(m.sender), b=gmap.get(m.recipient);
   if(!a||!b){ return; }   // どちらか window 外: skip（静かに）
@@ -4086,6 +4157,7 @@ function runMessageAnim(m){
   // 2) comet 本体（SVG, world 座標）
   const comet=makeComet(imp);
   gsvg.appendChild(comet);
+  const cometTail=comet.querySelector('.mc-tail');
   // 3) コンテンツカード（HTML, screen 座標）— broadcast は group ごとに1枚だけ
   const gkey=m._gkey||(m.sender+'|'+(m.subject||'')+'|'+m.ts);
   const showCard=!mailShownGroups.has(gkey);
@@ -4133,12 +4205,17 @@ function runMessageAnim(m){
     if(!sa||!sb){ cleanup(); return; }
     const cx=sa.x+(sb.x-sa.x)*e;
     const cy=sa.y+(sb.y-sa.y)*e;
-    comet.setAttribute('transform','translate('+cx.toFixed(1)+' '+cy.toFixed(1)+')');
+    const env=cometEnvelope(tn,REDUCED);
+    comet.style.opacity=env.opacity.toFixed(3);
+    comet.setAttribute('transform','translate('+cx.toFixed(1)+' '+cy.toFixed(1)+
+      ') scale('+env.scale.toFixed(3)+')');
     // comet 進行方向に tail 回転
     const dx=sb.x-sa.x, dy=sb.y-sa.y;
     const ang=Math.atan2(dy,dx)*180/Math.PI;
-    const tail=comet.querySelector('.mc-tail');
-    if(tail) tail.setAttribute('transform','rotate('+ang.toFixed(1)+')');
+    if(cometTail){
+      cometTail.setAttribute('transform','rotate('+ang.toFixed(1)+')');
+      cometTail.style.opacity=env.tailOpacity.toFixed(3);
+    }
     // カード位置: comet の少し上に
     // カードは comet を追わず edge midpoint に固定（読みやすさ優先）。
     // sender/recipient の動的位置から midpoint を再計算するので物理 sim
@@ -4165,9 +4242,11 @@ function runMessageAnim(m){
   }
   function arrive(){
     spawnNodePulse(m.recipient,'arr');
-    comet.style.transition='opacity .35s';
-    comet.style.opacity='0';
-    setTimeout(()=>comet.remove(), 380);
+    if(REDUCED){
+      comet.style.transition='opacity .35s';
+      comet.style.opacity='0';
+    }
+    setTimeout(()=>comet.remove(), REDUCED?380:40);
     // カードは到着後 LINGER ms 残してから fade out。hover 中は待つ。
     if(card){
       const startFade=()=>{
@@ -4194,7 +4273,9 @@ function runMessageAnim(m){
 
 function makeComet(imp){
   const g=svgEl('g',{class:'mail-comet imp-'+imp});
-  const tail=svgEl('ellipse',{class:'mc-tail',cx:-11,cy:0,rx:18,ry:2.8});
+  const tail=svgEl('g',{class:'mc-tail'});
+  tail.appendChild(svgEl('circle',{
+    class:'mc-tail-fill',cx:-11,cy:0,r:18,transform:'scale(1 .16)'}));
   const halo=svgEl('circle',{class:'mc-halo',cx:0,cy:0,r:8});
   const head=svgEl('circle',{class:'mc-head',cx:0,cy:0,r:4.2});
   g.appendChild(tail); g.appendChild(halo); g.appendChild(head);
@@ -5355,37 +5436,30 @@ function openPanel(name){
   setTab('hist');
 }
 
-// 役割プリセット（クリックで emoji＋role を流し込む）。人狼デモ＋汎用エージェント役。
+// Generic, text-only role presets for OSS.
 const ANNOT_PRESETS=[
-  {e:'🎲',r:'GM'},{e:'🐺',r:'人狼'},{e:'🔮',r:'占い師'},{e:'🛡️',r:'狩人'},
-  {e:'👤',r:'村人'},{e:'👻',r:'霊媒師'},
-  {e:'🧭',r:'orchestrator'},{e:'🔬',r:'researcher'},
-  {e:'🔎',r:'reviewer'},{e:'🛠️',r:'builder'}
+  'orchestrator','researcher','reviewer','builder'
 ];
 
 // ROLE ASSIGN エディタを agent パネルに描画。UI から役割ラベルを付与/変更/削除。
 function renderAnnotEditor(name,annot){
   const box=TM('tm-annot'); if(!box)return;
   const cur=annot||{};
-  const chips=ANNOT_PRESETS.map(p=>{
-    const on=(cur.role===p.r&&cur.emoji===p.e)?' on':'';
-    return `<button class="an-chip${on}" data-e="${p.e}" data-r="${esc(p.r)}">`
-      +`${p.e} <span>${esc(p.r)}</span></button>`;}).join('');
-  const curTxt=(cur.role||cur.emoji)
-    ? esc(((cur.emoji?cur.emoji+' ':'')+(cur.role||'')).trim())
-    : '<i>unassigned</i>';
+  const chips=ANNOT_PRESETS.map(role=>{
+    const on=cur.role===role?' on':'';
+    return `<button class="an-chip${on}" data-r="${esc(role)}">`
+      +`${esc(role)}</button>`;}).join('');
+  const curTxt=cur.role?esc(cur.role):'<i>unassigned</i>';
   box.innerHTML=
-    `<div class="an-head">◇ ROLE ASSIGN<span class="an-cur">${curTxt}</span></div>`
+    `<div class="an-head">ROLE ASSIGN<span class="an-cur">${curTxt}</span></div>`
     +`<div class="an-presets">${chips}</div>`
     +`<div class="an-form">`
-    +`<input class="an-emoji" id="an-emoji" maxlength="4" placeholder="🎲" `
-    +`value="${esc(cur.emoji||'')}">`
     +`<input class="an-role" id="an-role" maxlength="40" placeholder="role label …" `
     +`value="${esc(cur.role||'')}">`
     +`<button class="an-set" id="an-set">Set</button>`
     +`<button class="an-clear" id="an-clear">Clear</button></div>`;
   box.querySelectorAll('.an-chip').forEach(b=>b.onclick=()=>{
-    TM('an-emoji').value=b.dataset.e; TM('an-role').value=b.dataset.r;
+    TM('an-role').value=b.dataset.r;
     box.querySelectorAll('.an-chip').forEach(x=>x.classList.remove('on'));
     b.classList.add('on'); TM('an-role').focus();
   });
@@ -5397,7 +5471,7 @@ function renderAnnotEditor(name,annot){
 }
 
 async function saveAnnot(name,clear){
-  const emoji=clear?'':(TM('an-emoji')?.value||'').trim();
+  const emoji='';
   const role =clear?'':(TM('an-role')?.value ||'').trim();
   try{
     const r=await fetch('/api/annotate',{method:'POST',
@@ -5405,12 +5479,12 @@ async function saveAnnot(name,clear){
       body:JSON.stringify({name,role,emoji})});
     const j=await r.json();
     if(!j.ok){flashAnnot('FAILED'); return;}
-    const next=(role||emoji)?{role,emoji,
+    const next=role?{role,emoji,
       group:(typeof gmap!=='undefined'&&gmap.get(name)?.annot?.group)||''}:null;
     const g=(typeof gmap!=='undefined')&&gmap.get(name);
     if(g)g.annot=next;                        // 次 netTick を待たず即反映
     renderAnnotEditor(name,next);
-    flashAnnot(clear?'CLEARED':'ASSIGNED ✓');
+    flashAnnot(clear?'CLEARED':'ASSIGNED');
     if(typeof buildEls==='function')buildEls(); // チップを即再描画
   }catch(e){flashAnnot('ERROR');}
 }
@@ -5445,11 +5519,10 @@ function renderPanelSummary(name, a, g){
   if(typeof ctxUsed==='number'){
     const hpv=100-ctxUsed,
       tier=hpv>=50?'hi':hpv>=20?'mid':'lo',
-      f=Math.round(hpv/10),
       win=ctxWin?` / ${esc(ctxWin)}`:'';
     rows.push(`<div class="ts-row"><b>ctx</b><span>`+
-      `<span class="ts-hp ts-hp-${tier}">`+
-      `${'█'.repeat(f)}${'░'.repeat(10-f)}</span> `+
+      `<span class="ts-gauge ts-gauge-${tier}">`+
+      `<i style="width:${hpv}%"></i></span>`+
       `${hpv}% left <span class="ts-empty">(${ctxUsed}% used${win})</span></span></div>`);
     const STL={work:'⚙ working',wait:'Zz waiting',ask:'! approval',question:'? question'};
     const tm=actState==='work'&&workDisp
@@ -5461,7 +5534,7 @@ function renderPanelSummary(name, a, g){
   const taskHtml=task?esc(task):'<span class="ts-empty">(no task recorded)</span>';
   rows.push(`<div class="ts-row"><b>task</b><span>${taskHtml}</span></div>`);
   if(live) rows.push(`<div class="ts-row"><b>live</b><span class="ts-live">${esc(live)}</span></div>`);
-  if(deliv>0) rows.push(`<div class="ts-row"><b>out</b><span>📄 ${deliv} logs</span></div>`);
+  if(deliv>0) rows.push(`<div class="ts-row"><b>out</b><span>¶ ${deliv} logs</span></div>`);
   box.innerHTML=rows.join('');
   box.setAttribute('aria-hidden', rows.length?'false':'true');
 }
@@ -5650,8 +5723,8 @@ function showSparkTip(tip, wrap, svg, ev, idx, since, now){
   const ago=Math.round((now-ev.ts)/60);
   const agoTxt=ago<60?`${ago}m ago`
     :`${Math.floor(ago/60)}h${ago%60?(' '+(ago%60)+'m'):''} ago`;
-  const KLAB={mail_sent:'▶ MAIL SENT',mail_recv:'◀ MAIL RECV',
-    spawn:'✦ SPAWN',retire:'✕ RETIRE',exit:'✕ EXIT'};
+  const KLAB={mail_sent:'MAIL SENT',mail_recv:'MAIL RECV',
+    spawn:'SPAWN',retire:'RETIRE',exit:'EXIT'};
   const klab=KLAB[ev.kind]||ev.kind.toUpperCase();
   // overlay 方式: kind を tip 自体のクラスに、3 行 grid (kind+time / who / subj)
   tip.className='sp-tip '+ev.kind;
@@ -5731,21 +5804,21 @@ async function loadHistory(){
         const sp=e.text.indexOf('  ');
         const nm=sp>0?e.text.slice(0,sp):e.text;
         const arg=sp>0?e.text.slice(sp+2):'';
-        P.push(`<div class="msg assistant"><div class="who">⚙ TOOL`+
+        P.push(`<div class="msg assistant"><div class="who">TOOL`+
           ` <time>${t}</time></div><div class="bub tool">`+
           `<span class="tk">${esc(nm)}</span>${esc(arg)}</div></div>`);
       }else if(e.kind==='tool_result'){
-        P.push(`<div class="msg user"><div class="who">⮌ RESULT`+
+        P.push(`<div class="msg user"><div class="who">RESULT`+
           ` <time>${t}</time></div>`+
           `<div class="bub tool res">${esc(e.text)}</div></div>`);
       }else if(e.kind==='thinking'){
-        P.push(`<div class="msg assistant"><div class="who">✦ THINKING`+
+        P.push(`<div class="msg assistant"><div class="who">THINKING`+
           ` <time>${t}</time></div>`+
           `<div class="bub think">${esc(e.text)}</div></div>`);
       }else{
         const u=e.role==='user';
         P.push(`<div class="msg ${u?'user':'assistant'}">`+
-          `<div class="who">${u?'■ USER':'◆ ASSISTANT'}`+
+          `<div class="who">${u?'USER':'ASSISTANT'}`+
           ` <time>${t}</time></div>`+
           `<div class="bub">${esc(e.text)}</div></div>`);
       }
