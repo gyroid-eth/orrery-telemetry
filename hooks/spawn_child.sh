@@ -1453,22 +1453,20 @@ if ! REGISTER_RESULT=$(call_mcp "register_agent" "$REGISTER_ARGS"); then
     echo "Error: register_agent request failed" >&2
     exit 1
 fi
-if ! CHILD_NAME=$(python3 -c "
-	import json, sys
-	r = json.loads(sys.stdin.read())
-	data = json.loads(r['result']['content'][0]['text'])
-	print(data['name'])
-" <<< "$REGISTER_RESULT"); then
+if printf '%s' "$REGISTER_RESULT" | mcp_response_has_error; then
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
-    echo "Error: failed to parse register_agent response" >&2
+    echo "Error: register_agent returned an error" >&2
     exit 1
 fi
+CHILD_NAME="$(printf '%s' "$REGISTER_RESULT" | mcp_extract_agent_name)"
 
-if [[ -z "$CHILD_NAME" ]]; then
-    echo "Error: failed to read child agent name" >&2
-    echo "$REGISTER_RESULT" >&2
+if [[ -z "$CHILD_NAME" || ! "$CHILD_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "Error: register_agent returned no valid child agent name" >&2
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
     exit 1
+fi
+if [[ "$CHILD_NAME" != "$CHILD_NAME_CANDIDATE" ]]; then
+    echo "[spawn_child] register_agent normalized '$CHILD_NAME_CANDIDATE' to actual identity '$CHILD_NAME'" >&2
 fi
 
 # Adopt the token the SERVER persisted, not the one we sent. Stock

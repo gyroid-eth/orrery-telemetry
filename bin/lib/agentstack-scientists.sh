@@ -87,7 +87,10 @@ ags_pick_adjective_scientist_name() {
   local adjective scientist
   adjective="$(ags_pick_adjective)" || return 1
   scientist="$(ags_pick_scientist "$json_path")" || return 1
-  printf '%s%s\n' "$adjective" "$scientist"
+  # Stock mcp-agent-mail preserves this spelling as the durable identity.
+  # Some local patched deployments coerce it to AdjectiveScientist instead;
+  # callers must always adopt register_agent's returned name after registering.
+  printf '%s-%s\n' "$adjective" "$scientist"
 }
 
 ags_has_scientist_suffix() {

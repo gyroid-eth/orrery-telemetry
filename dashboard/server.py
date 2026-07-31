@@ -2804,22 +2804,39 @@ def _codex_models() -> list[str]:
     return models or list(_CODEX_DEFAULT_MODELS)
 
 
+def _agent_name_comparison_key(name: str) -> str:
+    """Normalize only for identity comparisons across stock/local servers.
+
+    Stock mcp-agent-mail preserves ``Adjective-Scientist`` while some local
+    deployments deterministically remove the hyphen.  API calls, tmux names,
+    and credential paths must keep the register_agent read-back verbatim; this
+    helper is deliberately limited to occupancy/duplicate comparisons.
+    """
+    return (name or "").replace("-", "").casefold()
+
+
 def _spawn_name_status(name: str) -> str:
     """Return available/occupied/unknown; database failures fail closed."""
     if not name or not os.path.exists(DB_PATH):
         return "unknown"
+    comparison_key = _agent_name_comparison_key(name)
     try:
         with _db() as con:
-            row = con.execute("SELECT 1 FROM agents WHERE lower(name)=lower(?) LIMIT 1", (name,)).fetchone()
-        return "occupied" if row else "available"
+            registered_names = (
+                row[0] for row in con.execute("SELECT name FROM agents")
+                if isinstance(row[0], str)
+            )
+            occupied = any(
+                _agent_name_comparison_key(registered) == comparison_key
+                for registered in registered_names
+            )
+        return "occupied" if occupied else "available"
     except sqlite3.Error:
         return "unknown"
 
 
-def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
-    """Pick an available AdjectiveScientist name, without treating unknown as free."""
-    if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
-        return None
+def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
+    """Load the launcher-owned scientist/adjective vocabulary once."""
     try:
         output = subprocess.run(
             [
@@ -2831,20 +2848,49 @@ def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
             capture_output=True, text=True, timeout=3, check=True,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return None
+        return [], []
     scientists_raw, separator, adjectives_raw = output.partition("\036")
     if not separator:
-        return None
-    scientists = {
+        return [], []
+    scientists = [
         line.strip() for line in scientists_raw.splitlines() if line.strip()
-    }
-    if scientist not in scientists:
-        return None
+    ]
     adjectives = [
         line.strip() for line in adjectives_raw.splitlines() if line.strip()
     ]
+    return scientists, adjectives
+
+
+def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
+    """Pick an available Adjective-Scientist name; unknown fails closed."""
+    if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
+        return None
+    scientists, adjectives = _spawn_name_vocabulary()
+    if scientist not in scientists:
+        return None
     for adjective in secrets.SystemRandom().sample(adjectives, min(attempts, len(adjectives))):
-        candidate = f"{adjective}{scientist}"
+        candidate = f"{adjective}-{scientist}"
+        if _spawn_name_status(candidate) == "available":
+            return candidate
+    return None
+
+
+def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
+    """Generate a safe explicit name for AUTO spawn instead of MCP auto-name.
+
+    A stock server can return a separator-less auto-name that is later coerced
+    on token-bearing re-registration.  Supplying an available hyphenated name
+    keeps registration idempotent, while read-back still follows local servers
+    that remove the separator.
+    """
+    scientists, adjectives = _spawn_name_vocabulary()
+    candidates = [
+        f"{adjective}-{scientist}"
+        for adjective in adjectives
+        for scientist in scientists
+    ]
+    for candidate in secrets.SystemRandom().sample(
+            candidates, min(attempts, len(candidates))):
         if _spawn_name_status(candidate) == "available":
             return candidate
     return None
@@ -2920,7 +2966,7 @@ def _spawn_scientist_statuses(
     try:
         with _db() as con:
             occupied = {
-                row[0].lower()
+                _agent_name_comparison_key(row[0])
                 for row in con.execute("SELECT name FROM agents")
                 if isinstance(row[0], str)
             }
@@ -2931,7 +2977,8 @@ def _spawn_scientist_statuses(
             scientist: (
                 "available"
                 if any(
-                    f"{adjective}{scientist}".lower() not in occupied
+                    _agent_name_comparison_key(
+                        f"{adjective}-{scientist}") not in occupied
                     for adjective in adjectives
                 )
                 else "occupied"
@@ -2963,7 +3010,7 @@ def spawn_names_payload() -> dict:
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
-        "naming": "adjective+scientist",
+        "naming": "adjective-scientist",
         "dirs": dirs,
         "models": list(_SPAWN_MODELS),
         "default_model": "claude-sonnet-5",
@@ -3051,7 +3098,7 @@ def do_spawn(payload: dict) -> dict:
     effort = (payload.get("effort") or "").strip().lower()
     worktree = bool(payload.get("worktree"))
     worktree_base = (payload.get("worktree_base") or "").strip()
-    requested_name = (payload.get("name") or "").strip().replace("-", "")
+    requested_name = (payload.get("name") or "").strip()
     work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
 
     if not standalone and (not parent or _NAME_RE.fullmatch(parent) is None):
@@ -3075,7 +3122,9 @@ def do_spawn(payload: dict) -> dict:
         program, model_str = "codex-cli", model
     else:
         return {"ok": False, "error": f"provider not allowed: {provider}"}
-    if requested_name and re.fullmatch(r"[A-Z][A-Za-z]{1,63}", requested_name) is None:
+    if requested_name and re.fullmatch(
+            r"[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?",
+            requested_name) is None:
         return {"ok": False, "error": "name invalid"}
     if requested_name and _spawn_name_status(requested_name) != "available":
         return {"ok": False, "error": "name is occupied or cannot be verified"}
@@ -3087,9 +3136,16 @@ def do_spawn(payload: dict) -> dict:
     if not project_key:
         return {"ok": False, "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
 
+    if not requested_name:
+        requested_name = _suggest_any_spawn_name() or ""
+        if not requested_name:
+            return {"ok": False,
+                    "error": "no available agent name could be verified"}
+
     task_short = task[:80]
 
-    # 1) register_agent (name 省略で auto-generate adjective+noun name)
+    # 1) Always send an explicit hyphenated request name.  The response name
+    # is authoritative and may be separator-less on a local patched server.
     child_token = secrets.token_urlsafe(32)
     reg = _mcp_call("register_agent", {
         "project_key": project_key,
@@ -3097,7 +3153,7 @@ def do_spawn(payload: dict) -> dict:
         "model": model_str,
         "task_description": task_short,
         "registration_token": child_token,
-        **({"name": requested_name} if requested_name else {}),
+        "name": requested_name,
     })
     if not reg["ok"]:
         return {"ok": False,

@@ -35,13 +35,32 @@ def test_expanded_adjective_vocabulary_is_valid_and_single_sourced(monkeypatch):
     assert payload["adjectives"] == adjectives
     suggestion = server.suggest_spawn_name("Curie")
     assert suggestion and suggestion.endswith("Curie")
-    assert suggestion.removesuffix("Curie") in adjectives
+    suggested_adjective, separator, suggested_scientist = suggestion.partition("-")
+    assert separator == "-"
+    assert suggested_adjective in adjectives
+    assert suggested_scientist == "Curie"
 
     picked = subprocess.run(
         ["bash", "-c", 'source "$1" && ags_pick_adjective', "adjectives", str(LIB)],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert picked in adjectives
+
+
+def test_generated_agent_names_use_the_stock_safe_hyphen_separator():
+    scientists = subprocess.run(
+        ["bash", "-c", 'source "$1" && ags_scientist_list', "scientists", str(LIB)],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    generated = subprocess.run(
+        ["bash", "-c", 'source "$1" && ags_pick_adjective_scientist_name', "names", str(LIB)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    adjective, separator, scientist = generated.partition("-")
+    assert separator == "-"
+    assert adjective in _launcher_adjectives()
+    assert scientist in scientists
 
 
 def test_scientist_json_matches_agent_mail_canonical_set():

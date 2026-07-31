@@ -60,10 +60,17 @@ PROJECT_KEY="${PROJECT_KEY:-$PROJECT_KEY_DEFAULT}"
 if [[ -z "$AGENT_NAME" ]]; then
     exit 0
 fi
+if [[ ! "$AGENT_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    # State/config paths below are keyed by the exact register_agent read-back.
+    # Reject path separators instead of normalizing an API identity.
+    exit 0
+fi
 
 STATE_FILE="$STATE_DIR/${AGENT_NAME}.json"
 TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
+MCP_CONFIG_FILE="$STATE_DIR/${AGENT_NAME}.mcp.json"
+CODEX_HOME_DIR="$STATE_DIR/${AGENT_NAME}.codex-home"
 if [[ -f "$STATE_FILE" ]]; then
     STATE_PROJECT_KEY=$(python3 -c "
 	import json, sys
@@ -173,6 +180,7 @@ except OSError:
     raise SystemExit(0)
 path.write_text("\n".join(line for line in lines if line != name) + "\n", encoding="utf-8")
 PYEOF
-rm -f "$STATE_FILE" "$TOKEN_FILE"
+rm -f "$STATE_FILE" "$TOKEN_FILE" "$MCP_CONFIG_FILE"
+rm -rf "$CODEX_HOME_DIR"
 
 exit 0

@@ -6233,7 +6233,8 @@ let spmBusy=false,spmReady=false,spmLoadSeq=0;
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
 let spmSelectedEffort='',spmProviders=[];
 let spmNameStatus=new Map();
-let spmAdjectives=[],spmSelectedAdjective='';
+let spmAdjectives=[],spmSuggestedName='',spmSuggestedPrefix='';
+let spmSuggestedScientist='';
 let spmIdentitySeq=0,spmIdentityState='auto',spmIdentityError='';
 let spmDirSeq=0,spmDirTimer=null,spmDirOptions=[],spmDirActive=-1;
 let spmDirRoot='';
@@ -6325,7 +6326,9 @@ function selectSpawnName(name){
   });
   if(!spmSelectedName){
     spmIdentitySeq++;
-    spmSelectedAdjective='';
+    spmSuggestedName='';
+    spmSuggestedPrefix='';
+    spmSuggestedScientist='';
     spmIdentityState='auto';
     spmIdentityError='';
     renderSpawnComposite();
@@ -6339,15 +6342,16 @@ function selectSpawnName(name){
 function renderSpawnComposite(){
   const card=SPM('spm-name-card');
   const picked=!!spmSelectedName;
-  const on=picked&&!!spmSelectedAdjective&&spmIdentityState==='verified';
+  const on=picked&&!!spmSuggestedName&&spmIdentityState==='verified';
   card.classList.toggle('on',on);
   card.classList.toggle('checking',picked&&spmIdentityState==='checking');
   card.classList.toggle('err',picked&&spmIdentityState==='error');
   card.setAttribute('aria-busy',
     picked&&spmIdentityState==='checking'?'true':'false');
-  SPM('spm-adjective').textContent=on?spmSelectedAdjective:
+  SPM('spm-adjective').textContent=on?spmSuggestedPrefix:
     (picked?(spmIdentityState==='checking'?'VERIFYING':'UNAVAILABLE'):'AUTO');
-  SPM('spm-scientist').textContent=picked?spmSelectedName:'NAME';
+  SPM('spm-scientist').textContent=on?spmSuggestedScientist:
+    (picked?spmSelectedName:'NAME');
   const portrait=SPM('spm-name-portrait');
   const fallback=SPM('spm-name-auto');
   fallback.hidden=false;
@@ -6364,7 +6368,7 @@ function renderSpawnComposite(){
   }
   if(on){
     SPM('spm-name-note').textContent=
-      `Ready to launch as ${spmSelectedAdjective}${spmSelectedName} · verified available`;
+      `Ready to launch as ${spmSuggestedName} · verified available`;
   }else if(picked&&spmIdentityState==='checking'){
     SPM('spm-name-note').textContent='Checking the live identity registry…';
   }else if(picked&&spmIdentityState==='error'){
@@ -6380,7 +6384,9 @@ function renderSpawnComposite(){
 async function requestSuggestedSpawnName(scientist){
   const requested=String(scientist||'');
   const seq=++spmIdentitySeq;
-  spmSelectedAdjective='';
+  spmSuggestedName='';
+  spmSuggestedPrefix='';
+  spmSuggestedScientist='';
   spmIdentityState='checking';
   spmIdentityError='';
   renderSpawnComposite();
@@ -6392,13 +6398,15 @@ async function requestSuggestedSpawnName(scientist){
     const payload=await response.json();
     if(seq!==spmIdentitySeq||requested!==spmSelectedName)return '';
     const fullName=String(payload&&payload.name||'').trim();
-    const adjective=fullName.endsWith(requested)
-      ? fullName.slice(0,-requested.length):'';
     if(response.status===409)
       throw new Error(`${requested} is fully booked · choose another scientist or AUTO`);
-    if(!response.ok||!adjective||!spmAdjectives.includes(adjective))
+    if(!response.ok||!fullName)
       throw new Error((payload&&payload.error)||'identity verification failed');
-    spmSelectedAdjective=adjective;
+    const displayScientist=scientistOf(fullName)||'';
+    spmSuggestedName=fullName;
+    spmSuggestedPrefix=displayScientist
+      ? fullName.slice(0,-displayScientist.length):'';
+    spmSuggestedScientist=displayScientist||fullName;
     spmIdentityState='verified';
     renderSpawnComposite();
     setSpawnStat('ready · verified identity in launch manifest','');
@@ -6406,7 +6414,9 @@ async function requestSuggestedSpawnName(scientist){
     return fullName;
   }catch(error){
     if(seq!==spmIdentitySeq||requested!==spmSelectedName)return '';
-    spmSelectedAdjective='';
+    spmSuggestedName='';
+    spmSuggestedPrefix='';
+    spmSuggestedScientist='';
     spmIdentityState='error';
     spmIdentityError='Unavailable · '+String(error&&error.message||error);
     renderSpawnComposite();
@@ -6776,7 +6786,8 @@ async function loadSpawnCatalog(seq){
   }catch(error){
     if(seq!==spmLoadSeq)return;
     spmReady=false;
-    spmAdjectives=[];spmSelectedAdjective='';
+    spmAdjectives=[];spmSuggestedName='';
+    spmSuggestedPrefix='';spmSuggestedScientist='';
     renderSpawnComposite();
     SPM('spm-agent-strip').innerHTML=
       '<div class="spm-load">scientist roster unavailable</div>';
@@ -6814,7 +6825,8 @@ function openSpawnModal(){
   SPM('spm-worktree-base').value='';
   spmBusy=false;spmReady=false;spmSelectedName='';
   spmSelectedProvider='';spmSelectedModel='';spmSelectedEffort='';
-  spmProviders=[];spmAdjectives=[];spmSelectedAdjective='';
+  spmProviders=[];spmAdjectives=[];spmSuggestedName='';
+  spmSuggestedPrefix='';spmSuggestedScientist='';
   spmIdentitySeq++;spmIdentityState='auto';spmIdentityError='';
   spmDirSeq++;
   spmDirRoot='';
@@ -6888,10 +6900,10 @@ function buildSpawnPayload(){
   const parent=SPM('spm-parent').value.trim();
   if(parent)payload.parent=parent;
   else payload.standalone=true;
-  if(spmSelectedName&&spmSelectedAdjective&&
+  if(spmSelectedName&&spmSuggestedName&&
      spmIdentityState==='verified'&&
      spmNameStatus.get(spmSelectedName)==='available')
-    payload.name=spmSelectedAdjective+spmSelectedName;
+    payload.name=spmSuggestedName;
   if(spmSelectedEffort)payload.effort=spmSelectedEffort;
   if(SPM('spm-worktree').checked){
     payload.worktree=true;

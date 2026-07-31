@@ -32,7 +32,7 @@ response body は、画像と HTML を除き JSON です。dashboard 自体に l
 | GET | `/api/version` | なし | `{name, version, api}` |
 | GET | `/api/spawn-names` | なし | name / dir / provider catalog |
 | GET | `/api/name-status` | `name` | exact identity status |
-| GET | `/api/suggest-name` | `scientist` | verified `AdjectiveScientist` |
+| GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | なし | `{ts, agents}` |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, ts}` |
@@ -497,8 +497,8 @@ request:
 ```json
 {
   "ok":true,
-  "child_name":"SunnyCurie",
-  "tmux_session":"SunnyCurie",
+  "child_name":"Sunny-Curie",
+  "tmux_session":"Sunny-Curie",
   "annot":"ok",
   "worktree":false,
   "standalone":true,
@@ -519,9 +519,9 @@ non-git directory では Codex が trust dialog を出すことがあります�
 ```json
 {
   "ok":false,
-  "child_name":"SunnyCurie",
+  "child_name":"Sunny-Curie",
   "registration_retained":true,
-  "error":"... child registration 'SunnyCurie' remains ..."
+  "error":"... child registration 'Sunny-Curie' remains ..."
 }
 ```
 

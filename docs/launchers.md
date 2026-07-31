@@ -41,7 +41,7 @@ terminal process が終了した後も shell を残すため、調査や scrollb
 
 ## 科学者名
 
-top-level launcher の新規 identity は `AdjectiveScientist`、たとえば `WindyFermi` です。
+top-level launcher の新規 identity は要求時 `Adjective-Scientist`（ハイフン形、たとえば `Windy-Fermi`）です。**実際の登録名は `register_agent` 応答の read-back が正**で、サーバーが separator を除去する環境では `WindyFermi` 形に落ちます。launcher は read-back した実登録名を tmux session 名・token・state に採用します（要求名前提にしない）。
 
 - adjective は `bin/lib/agentstack-scientists.sh` の134語
 - scientist は `dashboard/scientist_portraits.json`

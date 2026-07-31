@@ -109,6 +109,34 @@ ags_register_session /project codex model cx /work Fresh-Dirac candidate >/dev/n
         assert "stale-owner-token" not in args, args
 
 
+def test_registration_adopts_the_server_returned_name_on_every_call():
+    """Local agent-mail removes hyphens, so response name is the identity."""
+    register_lib = _ROOT / "bin" / "lib" / "agentstack-register.sh"
+    script = f'''
+source "{register_lib}"
+ags_mcp_call() {{
+  local tool="$1"; shift
+  if [[ "$tool" == "register_agent" ]]; then
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"FrostyPasteur","registration_token":"stable-owner-token"}}}}}}'
+  else
+    printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
+  fi
+}}
+ags_generate_registration_token() {{ printf '%s\\n' requested-owner-token; }}
+ags_store_registration_token() {{ printf '%s|%s\\n' "$1" "$2"; }}
+ags_apply_contact_policy() {{ :; }}
+for _ in 1 2; do
+  ags_register_session /project codex model cx /work Frosty-Pasteur candidate >/dev/null
+  printf 'registered=%s token=%s\\n' "$AGS_REGISTERED_AGENT_NAME" "$AGS_REGISTERED_REGISTRATION_TOKEN"
+done
+'''
+    result = _run_bash(script)
+    assert result.stdout.splitlines() == [
+        "registered=FrostyPasteur token=stable-owner-token",
+        "registered=FrostyPasteur token=stable-owner-token",
+    ]
+
+
 def test_reserved_child_marker_and_rename_failure_are_explicit():
     spawn = _read("hooks/spawn_child.sh")
     bootstrap = _read("bin/agentstack-codex-bootstrap")

@@ -54,6 +54,10 @@ def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_pa
         for item in server.spawn_names_payload()["names"]
     }
     assert names == {"Boltzmann": "occupied", "Curie": "available"}
+    # Local DB rows may have the separator stripped while stock requests keep
+    # it.  Comparison normalizes only this occupancy check, never API names.
+    assert server._spawn_name_status("Sunny-Boltzmann") == "occupied"
+    assert server._spawn_name_status("SunnyBoltzmann") == "occupied"
 
 
 def test_spawn_name_status_fails_closed_when_db_missing(monkeypatch):
@@ -86,7 +90,7 @@ def test_spawn_names_uses_current_codex_defaults(monkeypatch):
     ]
 
 
-def test_codex_spawn_passes_model_effort_and_normalized_name(monkeypatch, tmp_path):
+def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path):
     launcher = tmp_path / "spawn_child.sh"
     launcher.write_text("#!/bin/bash\n")
     launcher.chmod(0o755)
@@ -108,8 +112,42 @@ def test_codex_spawn_passes_model_effort_and_normalized_name(monkeypatch, tmp_pa
     result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": "gpt-5.6-sol", "effort": "high"})
 
     assert result["ok"] is True
-    assert calls[0][1]["name"] == "SunnyCurie"
+    # The request stays in stock-safe hyphen spelling; only the registration
+    # response's actual name is used by the launcher/token path below.
+    assert calls[0][1]["name"] == "Sunny-Curie"
     assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", "gpt-5.6-sol", "--effort", "high", "work", str(tmp_path)]
+
+
+def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path):
+    """Omitting name must not let stock agent-mail generate a new identity."""
+    launcher = tmp_path / "spawn_child.sh"
+    launcher.write_text("#!/bin/bash\n")
+    launcher.chmod(0o755)
+    calls, launched = [], []
+
+    def mcp(method, args, timeout=15):
+        calls.append((method, args))
+        return {"ok": True, "data": {"name": "Zesty-Curie"} if method == "register_agent" else {}}
+
+    monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(server, "HERE", str(tmp_path))
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    monkeypatch.setattr(server, "_suggest_any_spawn_name", lambda: "Zesty-Curie")
+    monkeypatch.setattr(server, "_mcp_call", mcp)
+    monkeypatch.setattr(server.time, "sleep", lambda _: None)
+    monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+
+    result = server.do_spawn({"parent": "Parent", "task": "work", "dir": str(tmp_path)})
+
+    assert result["ok"] is True
+    assert calls[0] == ("register_agent", {
+        "project_key": "/project", "program": "claude-code", "model": "claude-sonnet-5",
+        "task_description": "work", "registration_token": calls[0][1]["registration_token"],
+        "name": "Zesty-Curie",
+    })
+    assert launched[0][2] == "Zesty-Curie"
 
 
 def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
@@ -191,7 +229,7 @@ def test_suggest_name_rejects_scientist_outside_roster(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "SPAWN_SCIENTISTS_SCRIPT", str(script))
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     assert server.suggest_spawn_name("NotAScientist") is None
-    assert server.suggest_spawn_name("Boltzmann") == "StormyBoltzmann"
+    assert server.suggest_spawn_name("Boltzmann") == "Stormy-Boltzmann"
 
 
 def test_suggest_name_endpoint_returns_409_when_exhausted(monkeypatch):
