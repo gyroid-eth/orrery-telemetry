@@ -131,6 +131,49 @@ def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
     assert text.count("exited before becoming ready") == 2
 
 
+def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():
+    helper = _extract("codex_accept_trust_dialog")
+    fake_tmux = """
+tmux() {
+    printf '%s\\n' "$*"
+}
+"""
+    accepted = _run_bash(
+        helper + fake_tmux
+        + '\ncodex_accept_trust_dialog Child 1 10 test-prefix\n'
+    )
+    assert accepted.returncode == 0
+    assert accepted.stdout.strip() == "send-keys -t Child C-m"
+    assert "(1/10)" in accepted.stderr
+
+    exhausted = _run_bash(
+        helper + fake_tmux
+        + '\ncodex_accept_trust_dialog Child 11 10 test-prefix\n'
+    )
+    assert exhausted.returncode != 0
+    assert exhausted.stdout == ""
+    assert "persisted after 10 attempts" in exhausted.stderr
+
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert text.count('TRUST_MAX=10') == 2
+    assert text.count('TRUST_FAILED=true') == 2
+    assert text.count('codex_accept_trust_dialog \\') == 2
+
+
+def test_preregistered_standalone_contract_is_parentless_and_direct_prompted():
+    text = _SPAWN.read_text(encoding="utf-8")
+    prereg = text[text.index("# --- Pre-registered mode ---"):
+                  text.index("# --- Argument validation ---")]
+
+    assert 'STANDALONE=false' in text
+    assert '--standalone requires --pre-registered' in text
+    assert 'if [[ "$STANDALONE" != true ]]; then' in prereg
+    assert 'TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")' in prereg
+    assert "a standalone agent with no parent" in prereg
+    assert prereg.count("${TASK}") >= 2
+    assert prereg.count("printf '\\033[200~'") == 2
+
+
 def test_child_window_opens_in_the_background_by_default():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "open -na Ghostty.app" not in text, "child window still steals focus"

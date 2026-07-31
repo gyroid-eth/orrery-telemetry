@@ -2788,7 +2788,12 @@ _SPAWN_MODELS = {
     "claude-opus-5": ("claude-code", "claude-opus-5"),
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
 }
-_CODEX_DEFAULT_MODEL = "gpt-5.5"
+_CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
+_CODEX_DEFAULT_MODELS = (
+    _CODEX_DEFAULT_MODEL,
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+)
 _CODEX_EFFORTS = ("low", "medium", "high", "xhigh")
 SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
 
@@ -2796,7 +2801,7 @@ SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "age
 def _codex_models() -> list[str]:
     """Return the installer's Codex model allow-list (comma-separated override)."""
     models = [value.strip() for value in os.environ.get("AGENTSTACK_CODEX_MODELS", "").split(",") if value.strip()]
-    return models or [_CODEX_DEFAULT_MODEL]
+    return models or list(_CODEX_DEFAULT_MODELS)
 
 
 def _spawn_name_status(name: str) -> str:
@@ -2811,6 +2816,133 @@ def _spawn_name_status(name: str) -> str:
         return "unknown"
 
 
+def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
+    """Pick an available AdjectiveScientist name, without treating unknown as free."""
+    if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
+        return None
+    try:
+        output = subprocess.run(
+            [
+                "bash", "-c",
+                'source "$1" && ags_scientist_list && printf "\\036" && '
+                'ags_adjective_list',
+                "suggest-name", SPAWN_SCIENTISTS_SCRIPT,
+            ],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    scientists_raw, separator, adjectives_raw = output.partition("\036")
+    if not separator:
+        return None
+    scientists = {
+        line.strip() for line in scientists_raw.splitlines() if line.strip()
+    }
+    if scientist not in scientists:
+        return None
+    adjectives = [
+        line.strip() for line in adjectives_raw.splitlines() if line.strip()
+    ]
+    for adjective in secrets.SystemRandom().sample(adjectives, min(attempts, len(adjectives))):
+        candidate = f"{adjective}{scientist}"
+        if _spawn_name_status(candidate) == "available":
+            return candidate
+    return None
+
+
+def _spawn_roots() -> list[str]:
+    raw_roots = os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
+    roots = raw_roots if any(raw_roots) else [os.path.expanduser("~")]
+    return [os.path.realpath(os.path.expanduser(root)) for root in roots if os.path.isdir(os.path.expanduser(root))]
+
+
+def _is_within_root(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def spawn_directory_suggestions(raw_path: str) -> dict:
+    """List visible child directories without allowing traversal outside configured roots."""
+    roots = _spawn_roots()
+    raw_path = (raw_path or "").strip()
+    if not roots or any(part == ".." for part in raw_path.split(os.sep)):
+        return {"path": None, "dirs": []}
+    target = os.path.realpath(os.path.expanduser(raw_path or roots[0]))
+    allowed_roots = [root for root in roots if _is_within_root(target, root)]
+    if not allowed_roots or not os.path.isdir(target):
+        return {"path": None, "dirs": []}
+    root = max(allowed_roots, key=len)
+    dirs: list[dict[str, str]] = []
+    try:
+        with os.scandir(target) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                try:
+                    real_entry = os.path.realpath(entry.path)
+                    if entry.is_dir(follow_symlinks=True) and _is_within_root(real_entry, root):
+                        dirs.append({"name": entry.name, "path": real_entry})
+                except OSError:
+                    continue
+    except OSError:
+        return {"path": target, "dirs": []}
+    dirs.sort(key=lambda item: item["name"].lower())
+    return {"path": target, "dirs": dirs[:20], "truncated": len(dirs) > 20}
+
+
+_SPAWN_STATUS_CACHE: dict = {"ts": 0.0, "key": None, "data": {}}
+_SPAWN_STATUS_TTL = 4.5
+_SPAWN_STATUS_LOCK = threading.Lock()
+
+
+def _spawn_scientist_statuses(
+        adjectives: list[str], scientists: list[str]) -> dict[str, str]:
+    """Report whether each scientist has at least one free adjective pairing.
+
+    Read the agent roster once, then evaluate every dynamically-loaded
+    adjective/scientist combination in Python.  This remains one SQL query even
+    when the vocabulary grows beyond SQLite's traditional parameter limit.
+    """
+    if not adjectives or not scientists or not os.path.exists(DB_PATH):
+        return {scientist: "unknown" for scientist in scientists}
+    try:
+        db_mtime = os.stat(DB_PATH).st_mtime_ns
+    except OSError:
+        return {scientist: "unknown" for scientist in scientists}
+    key = (DB_PATH, db_mtime, tuple(adjectives), tuple(scientists))
+    now = time.monotonic()
+    with _SPAWN_STATUS_LOCK:
+        if (_SPAWN_STATUS_CACHE["key"] == key
+                and now - _SPAWN_STATUS_CACHE["ts"] < _SPAWN_STATUS_TTL):
+            return dict(_SPAWN_STATUS_CACHE["data"])
+    try:
+        with _db() as con:
+            occupied = {
+                row[0].lower()
+                for row in con.execute("SELECT name FROM agents")
+                if isinstance(row[0], str)
+            }
+    except sqlite3.Error:
+        statuses = {scientist: "unknown" for scientist in scientists}
+    else:
+        statuses = {
+            scientist: (
+                "available"
+                if any(
+                    f"{adjective}{scientist}".lower() not in occupied
+                    for adjective in adjectives
+                )
+                else "occupied"
+            )
+            for scientist in scientists
+        }
+    with _SPAWN_STATUS_LOCK:
+        _SPAWN_STATUS_CACHE.update(ts=now, key=key, data=statuses)
+    return dict(statuses)
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     try:
@@ -2823,12 +2955,13 @@ def spawn_names_payload() -> dict:
     adjective_text, _, scientist_text = output.partition("\x1e")
     adjectives = [line.strip() for line in adjective_text.splitlines() if line.strip()]
     scientists = [line.strip() for line in scientist_text.splitlines() if line.strip()]
+    statuses = _spawn_scientist_statuses(adjectives, scientists)
     raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
     dirs = [value for value in raw_dirs if value] or ["~"]
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
-                   "status": _spawn_name_status(name)} for name in scientists],
+                   "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
         "naming": "adjective+scientist",
         "dirs": dirs,
@@ -2903,8 +3036,12 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
-    payload: {parent, name?, dir?, role?, group?, task, provider?, model?, effort?}.
+    payload: {parent?, standalone?, name?, dir?, role?, group?, task,
+              provider?, model?, effort?}.
     """
+    if "standalone" in payload and not isinstance(payload["standalone"], bool):
+        return {"ok": False, "error": "standalone must be boolean"}
+    standalone = payload.get("standalone", False)
     parent = (payload.get("parent") or "").strip()
     task = (payload.get("task") or "").strip()
     role = (payload.get("role") or "").strip()[:40]
@@ -2917,8 +3054,10 @@ def do_spawn(payload: dict) -> dict:
     requested_name = (payload.get("name") or "").strip().replace("-", "")
     work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
 
-    if not parent or _NAME_RE.fullmatch(parent) is None:
+    if not standalone and (not parent or _NAME_RE.fullmatch(parent) is None):
         return {"ok": False, "error": "parent name invalid"}
+    if standalone:
+        parent = ""
     if not task:
         return {"ok": False, "error": "task description required"}
     if provider == "claude":
@@ -2979,54 +3118,121 @@ def do_spawn(payload: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             annot_status = f"err:{e}"
 
-    # 3) send_message — child inbox にタスク本文を投函 (sender = 親エージェント)
-    # 親も cc に入れて自分の inbox にコピーが届くようにする (dashboard UI 経由 spawn
-    # は親 Claude セッションが知らないままタスクが進むため、audit trail と
-    # mail-watcher 通知の両方を確実にする)。先頭の prefix で「dashboard 起因」と
-    # 即時識別できる。
-    subject = f"タスク依頼: {task[:50]}"
-    body_lines = [
-        "> [via dashboard +NEW AGENT]",
-        "",
-        "## 依頼内容", "", task, "",
-        "## 補足", "",
-        f"- 親エージェント: {parent}",
-        "- spawn 元: dashboard `+ NEW AGENT` (POST /api/spawn)",
-        f"- mcp-agent-mail の project_key は `{project_key}` を使うこと "
-        "(cwd ではない、特に worktree モード時は必須)",
-    ]
-    if worktree:
-        body_lines += [
-            f"- 分離 worktree モードで起動 (branch: exp/{child_name})",
-            f"- worktree base: {worktree_base or 'HEAD'}",
-            f"- worktree dir: /tmp/cc-worktrees/{child_name}",
+    def retained_registration_error(error: str, **extra) -> dict:
+        """Report a post-registration failure without pretending it rolled back.
+
+        The dashboard's service credential can create registrations, but it is
+        intentionally not used as an owner credential to delete them.  Keep
+        this explicit so callers do not retry and silently create more junk
+        identities.
+        """
+        result = {
+            "ok": False,
+            "error": (
+                f"{error}; child registration '{child_name}' remains because "
+                "the dashboard server has no permission to delete it"
+            ),
+            "child_name": child_name,
+            "annot": annot_status,
+            "registration_retained": True,
+        }
+        result.update(extra)
+        return result
+
+    # 3) Normal children receive the task through agent-mail.  Standalone
+    # children have no parent/sender, so the launcher receives the full task
+    # directly and no synthetic self-mail is created.
+    if not standalone:
+        subject = f"タスク依頼: {task[:50]}"
+        body_lines = [
+            "> [via dashboard +NEW AGENT]",
+            "",
+            "## 依頼内容", "", task, "",
+            "## 補足", "",
+            f"- 親エージェント: {parent}",
+            "- spawn 元: dashboard `+ NEW AGENT` (POST /api/spawn)",
+            f"- mcp-agent-mail の project_key は `{project_key}` を使うこと "
+            "(cwd ではない、特に worktree モード時は必須)",
         ]
-    body_lines += [
-        "- 完了したら親に reply してください。",
-    ]
-    body_md = "\n".join(body_lines)
-    snd = _mcp_call("send_message", {
-        "project_key": project_key,
-        "sender_name": parent,
-        "to": [child_name],
-        "cc": [parent],
-        "subject": subject,
-        "body_md": body_md,
-        "importance": "high",
-    })
-    if not snd["ok"]:
-        return {"ok": False,
-                "error": f"send_message failed: {snd.get('error')}",
-                "child_name": child_name, "annot": annot_status}
+        if worktree:
+            body_lines += [
+                f"- 分離 worktree モードで起動 (branch: exp/{child_name})",
+                f"- worktree base: {worktree_base or 'HEAD'}",
+                f"- worktree dir: /tmp/cc-worktrees/{child_name}",
+            ]
+        body_lines += [
+            "- 完了したら親に reply してください。",
+        ]
+        snd = _mcp_call("send_message", {
+            "project_key": project_key,
+            "sender_name": parent,
+            "to": [child_name],
+            "cc": [parent],
+            "subject": subject,
+            "body_md": "\n".join(body_lines),
+            "importance": "high",
+        })
+        if not snd["ok"]:
+            return retained_registration_error(
+                f"send_message failed: {snd.get('error')}")
 
     # 4) spawn_child.sh --pre-registered を background で起動
+    token_file = ""
+    token_created = False
+    log_fh = None
+
+    def remove_spawn_credentials() -> None:
+        """Remove both the one-shot handoff and any launcher-persisted copies."""
+        nonlocal token_created
+        paths = []
+        if token_created and token_file:
+            paths.append(token_file)
+        token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", child_name)
+        paths.extend([
+            os.path.join(RUNTIME_DIR, f"agent_token_{token_key}"),
+            os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.json"),
+        ])
+        for path in paths:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logging.warning(
+                    "failed to remove failed-spawn credential %s: %s", path, e)
+        token_created = False
+
+    def kill_spawn_session() -> None:
+        try:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", f"={child_name}"],
+                capture_output=True, text=True)
+        except OSError:
+            pass
+
     token_dir = os.path.join(RUNTIME_DIR, "spawn-tokens")
-    os.makedirs(token_dir, mode=0o700, exist_ok=True)
-    token_file = os.path.join(token_dir, f"{child_name}.token")
-    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(child_token)
+    try:
+        os.makedirs(token_dir, mode=0o700, exist_ok=True)
+        os.chmod(token_dir, 0o700)
+        token_file = os.path.join(
+            token_dir, f"{child_name}.{secrets.token_hex(8)}.token")
+        open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            open_flags |= os.O_NOFOLLOW
+        fd = os.open(token_file, open_flags, 0o600)
+        token_created = True
+        with os.fdopen(fd, "w") as f:
+            f.write(child_token)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(token_file, 0o600)
+    except Exception as e:  # noqa: BLE001
+        remove_spawn_credentials()
+        return retained_registration_error(f"spawn token write failed: {e}")
+
     args = [SPAWN_SCRIPT, "--pre-registered", child_name, "--child-token-file", token_file]
+    if standalone:
+        args.append("--standalone")
     if provider == "codex":
         args.append("--codex")
     args.extend(["--model", model_str])
@@ -3036,9 +3242,12 @@ def do_spawn(payload: dict) -> dict:
         args.append("--worktree")
         if worktree_base:
             args.extend(["--worktree-base", worktree_base])
-    args.extend([task_short, work_dir])
+    args.extend([task[:4000] if standalone else task_short, work_dir])
     env = os.environ.copy()
-    env["PARENT_AGENT"] = parent
+    if standalone:
+        env.pop("PARENT_AGENT", None)
+    else:
+        env["PARENT_AGENT"] = parent
     env["PROJECT_KEY"] = project_key
     # launchd の最小 PATH には ~/.local/bin が無く、spawn_child.sh が tmux 内で
     # 起動する `zsh -lc` は非対話シェルのため ~/.zshrc を source せず claude が
@@ -3057,23 +3266,65 @@ def do_spawn(payload: dict) -> dict:
         ts = datetime.now(timezone.utc).isoformat()
         log_fh.write(
             f"\n=== {ts} spawn child={child_name} parent={parent} "
-            f"provider={provider} model={model_str} effort={effort or '-'} worktree={worktree} ===\n".encode())
-        subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
-                         start_new_session=True)
-        time.sleep(3)
-        probe = subprocess.run(["tmux", "has-session", "-t", child_name], capture_output=True, text=True)
+            f"provider={provider} model={model_str} effort={effort or '-'} "
+            f"standalone={standalone} worktree={worktree} ===\n".encode())
+        proc = subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
+                                start_new_session=True)
+
+        # The launcher performs readiness/death detection and consumes the
+        # one-shot token before returning.  Wait for that verdict instead of
+        # treating a briefly-created tmux session as success.
+        if hasattr(proc, "wait"):
+            try:
+                returncode = proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    try:
+                        proc.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                kill_spawn_session()
+                remove_spawn_credentials()
+                return retained_registration_error(
+                    "spawn launcher did not finish readiness checks within 120s")
+            if returncode != 0:
+                kill_spawn_session()
+                remove_spawn_credentials()
+                tail = ""
+                try:
+                    with open(log_path, encoding="utf-8", errors="replace") as f:
+                        tail = f.read()[-1000:]
+                except OSError:
+                    pass
+                return retained_registration_error(
+                    f"spawn launcher exited with status {returncode}",
+                    detail=tail)
+
+        probe = subprocess.run(
+            ["tmux", "has-session", "-t", f"={child_name}"],
+            capture_output=True, text=True)
         if probe.returncode:
-            log_fh.close()
+            kill_spawn_session()
+            remove_spawn_credentials()
             tail = ""
             try:
                 with open(log_path, encoding="utf-8", errors="replace") as f:
                     tail = f.read()[-1000:]
             except OSError:
                 pass
-            return {"ok": False, "error": "spawn launcher exited before tmux session was created", "detail": tail}
+            return retained_registration_error(
+                "spawn launcher exited before a live tmux session was created",
+                detail=tail)
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"spawn launch failed: {e}",
-                "child_name": child_name, "annot": annot_status}
+        kill_spawn_session()
+        remove_spawn_credentials()
+        return retained_registration_error(f"spawn launch failed: {e}")
+    finally:
+        if log_fh is not None:
+            log_fh.close()
 
     return {
         "ok": True,
@@ -3081,6 +3332,7 @@ def do_spawn(payload: dict) -> dict:
         "tmux_session": child_name,
         "annot": annot_status,
         "worktree": worktree,
+        "standalone": standalone,
         "provider": provider,
         "model": model_str,
         "effort": effort or None,
@@ -3307,6 +3559,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
             except ValueError as e:
                 self._send(503, json.dumps({"ok": False, "error": str(e)}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/name-status":
+            query = parse_qs(urlparse(self.path).query)
+            name = (query.get("name") or [""])[0]
+            self._send(200, json.dumps({"name": name, "status": _spawn_name_status(name)}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/suggest-name":
+            query = parse_qs(urlparse(self.path).query)
+            scientist = (query.get("scientist") or [""])[0]
+            name = suggest_spawn_name(scientist)
+            payload = {"name": name} if name else {"error": "no available name found"}
+            self._send(200 if name else 409, json.dumps(payload).encode(), "application/json; charset=utf-8")
+        elif path == "/api/fs/dirs":
+            query = parse_qs(urlparse(self.path).query)
+            payload = spawn_directory_suggestions((query.get("path") or [""])[0])
+            self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
             body = json.dumps(
                 {"ts": int(time.time()), "agents": build_agents()},
@@ -3522,14 +3788,60 @@ class Handler(BaseHTTPRequestHandler):
                         "/api/annotate", "/api/spawn"):
             self._send(404, b"not found", "text/plain")
             return
-        n = int(self.headers.get("Content-Length", 0) or 0)
+
+        # All POST endpoints mutate local tmux/agent state.  Browsers must prove
+        # same-origin, while CLI clients remain usable by omitting both browser
+        # provenance headers.  Requiring JSON prevents simple-form CSRF.
+        content_type = self.headers.get_content_type().lower()
+        if content_type != "application/json":
+            self._send(
+                415,
+                json.dumps({"ok": False,
+                            "error": "Content-Type must be application/json"}).encode(),
+                "application/json; charset=utf-8",
+            )
+            return
+        origin = (self.headers.get("Origin") or "").strip()
+        fetch_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if origin or fetch_site:
+            expected_origin = f"http://{self.headers.get('Host', '')}"
+            if ((origin and origin != expected_origin)
+                    or (fetch_site and fetch_site != "same-origin")):
+                self._send(
+                    403,
+                    json.dumps({"ok": False,
+                                "error": "cross-origin POST rejected"}).encode(),
+                    "application/json; charset=utf-8",
+                )
+                return
+        try:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            self._send(
+                400,
+                json.dumps({"ok": False,
+                            "error": "invalid Content-Length"}).encode(),
+                "application/json; charset=utf-8",
+            )
+            return
         raw = self.rfile.read(n) if n else b""
-        body: dict = {}
         try:
             body = json.loads(raw or b"{}")
-        except Exception:
-            q = parse_qs(urlparse(self.path).query)
-            body = {k: v[0] for k, v in q.items()}
+        except (TypeError, ValueError):
+            self._send(
+                400,
+                json.dumps({"ok": False, "error": "invalid JSON body"}).encode(),
+                "application/json; charset=utf-8",
+            )
+            return
+        if not isinstance(body, dict):
+            self._send(
+                400,
+                json.dumps({"ok": False,
+                            "error": "JSON body must be an object"}).encode(),
+                "application/json; charset=utf-8",
+            )
+            return
         session = body.get("session", "")
         if path == "/api/jump":
             result = do_jump(session)

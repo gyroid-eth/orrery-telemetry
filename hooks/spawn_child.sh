@@ -8,6 +8,7 @@
 #   spawn_child.sh --model opus --resources "path" "<task>"
 #   spawn_child.sh --worktree --resources "path" "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
+#   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
 # モデル指定（--model。Codex は gpt-5.5 既定で任意の許可済み model を渡せる）:
 #   --model 省略         → claude-opus-4-8[1m]（Opus 4.8 1M。保存既定と一致・プラン同梱で無料）
@@ -190,6 +191,7 @@ RESOURCE_TTL=14400
 UNSAFE_NO_RESOURCES=false
 PRE_REGISTERED=""
 CHILD_TOKEN_FILE=""
+STANDALONE=false
 USE_WORKTREE=false
 WORKTREE_BASE="/tmp/cc-worktrees"
 WORKTREE_BASE_REV=""   # --worktree-base で指定された起点 rev (空=HEAD)
@@ -230,6 +232,10 @@ while [[ "${1:-}" == --* ]]; do
             CHILD_TOKEN_FILE="$2"
             shift 2
             ;;
+        --standalone)
+            STANDALONE=true
+            shift
+            ;;
         --worktree)
             USE_WORKTREE=true
             shift
@@ -251,61 +257,122 @@ if [[ -n "$WORKTREE_BASE_REV" && "$USE_WORKTREE" != true ]]; then
     exit 1
 fi
 
-load_child_state_token() {
-    # Split declaration: bash 3.2 (macOS system bash) does not make an
-    # earlier name in the same `local` statement visible to a later
-    # initializer, so a combined line trips `set -u` (agent_name: unbound).
-    local agent_name="$1"
-    local state_file="$CHILD_STATE_DIR/$agent_name.json"
-    [[ -f "$state_file" ]] || return 1
-    python3 - "$state_file" <<'PY'
-import json
-import sys
+if [[ "$STANDALONE" == true && -z "$PRE_REGISTERED" ]]; then
+    echo "Error: --standalone requires --pre-registered" >&2
+    exit 1
+fi
 
-try:
-    data = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(1)
-token = data.get("registration_token")
-if not isinstance(token, str) or not token:
-    sys.exit(1)
-print(token)
-PY
+child_token_file_path() {
+    local agent_name="$1" key
+    key="$(printf '%s' "$agent_name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+    [[ -n "$key" ]] || return 1
+    printf '%s/agent_token_%s\n' "$RUNTIME_DIR" "$key"
 }
 
-read_token_file() {
-    local token_file="$1" token
-    [[ -n "$token_file" && -f "$token_file" ]] || return 1
-    IFS= read -r token < "$token_file" || true
-    [[ -n "$token" ]] || return 1
-    printf '%s\n' "$token"
-}
-
-write_child_state() {
-    # Split declaration (see load_child_state_token): bash 3.2 can't reference
-    # agent_name from a later initializer in the same `local` statement.
-    local agent_name="$1" project_key="$2" registration_token="$3"
-    local state_file="$CHILD_STATE_DIR/$agent_name.json"
-    mkdir -p "$CHILD_STATE_DIR"
-    python3 - "$agent_name" "$project_key" "$registration_token" "$state_file" <<'PY'
+# Copy a child token from a 0600 file into the durable per-child runtime files.
+# The secret is read inside Python and never appears in a process argv or tmux
+# environment.  A dashboard handoff is one-shot, so its source is unlinked only
+# after both durable files have been atomically installed.
+adopt_child_token_file() {
+    local agent_name="$1" project_key="$2" source_file="$3"
+    local consume_source="${4:-false}" token_file state_file
+    token_file="$(child_token_file_path "$agent_name")" || return 1
+    state_file="$CHILD_STATE_DIR/$agent_name.json"
+    python3 - "$agent_name" "$project_key" "$source_file" "$token_file" \
+        "$state_file" "$consume_source" <<'PY'
 import json
 import os
 import pathlib
+import stat
 import sys
 
-agent_name, project_key, registration_token, state_file = sys.argv[1:5]
-path = pathlib.Path(state_file)
-path.parent.mkdir(parents=True, exist_ok=True)
-tmp = path.with_name(path.name + ".tmp")
-with open(tmp, "w", encoding="utf-8") as f:
+agent_name, project_key, source, token_file, state_file, consume = sys.argv[1:7]
+source_path = pathlib.Path(source)
+token_path = pathlib.Path(token_file)
+state_path = pathlib.Path(state_file)
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(source_path, flags)
+try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("token handoff is not a regular file")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise PermissionError("token handoff permissions must be 0600")
+    registration_token = os.read(fd, 4097).decode("utf-8").strip()
+finally:
+    os.close(fd)
+if not registration_token or len(registration_token) > 4096:
+    raise ValueError("token handoff is empty or too large")
+
+token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.chmod(token_path.parent, 0o700)
+state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.chmod(state_path.parent, 0o700)
+
+token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
+with open(token_tmp, "x", encoding="utf-8") as f:
+    f.write(registration_token)
+    f.flush()
+    os.fsync(f.fileno())
+os.chmod(token_tmp, 0o600)
+with open(state_tmp, "x", encoding="utf-8") as f:
     json.dump({
         "agent_name": agent_name,
         "project_key": project_key,
         "registration_token": registration_token,
     }, f)
+    f.flush()
+    os.fsync(f.fileno())
+os.chmod(state_tmp, 0o600)
+os.replace(token_tmp, token_path)
+os.replace(state_tmp, state_path)
+os.chmod(token_path, 0o600)
+os.chmod(state_path, 0o600)
+if consume == "true" and source_path != token_path:
+    try:
+        source_path.unlink()
+    except Exception:
+        token_path.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+        raise
+print(token_path)
+PY
+}
+
+# Restore the canonical token file from an existing 0600 state file without
+# exposing the token to the shell.  This is compatibility-only; new dashboard
+# spawns always arrive through adopt_child_token_file's one-shot path.
+restore_child_token_file_from_state() {
+    local agent_name="$1" state_file token_file
+    state_file="$CHILD_STATE_DIR/$agent_name.json"
+    token_file="$(child_token_file_path "$agent_name")" || return 1
+    [[ -f "$state_file" ]] || return 1
+    python3 - "$state_file" "$token_file" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+token_path = pathlib.Path(sys.argv[2])
+if stat.S_IMODE(state_path.stat().st_mode) & 0o077:
+    raise PermissionError("child state permissions must be 0600")
+data = json.loads(state_path.read_text(encoding="utf-8"))
+token = data.get("registration_token")
+if not isinstance(token, str) or not token:
+    raise ValueError("child state has no registration token")
+token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+with open(tmp, "x", encoding="utf-8") as handle:
+    handle.write(token)
 os.chmod(tmp, 0o600)
-os.replace(tmp, path)
-os.chmod(path, 0o600)
+os.replace(tmp, token_path)
+os.chmod(token_path, 0o600)
+print(token_path)
 PY
 }
 
@@ -461,6 +528,23 @@ codex_session_alive() {
     tmux has-session -t "=$1" 2>/dev/null
 }
 
+# Accept Codex's untrusted-directory prompt.  tmux's symbolic `Enter` did not
+# submit this dialog on Codex 0.144.x; the carriage return key `C-m` does.
+# Bound repeated detections so a future dialog change fails through the normal
+# pre-registration cleanup path instead of hanging the dashboard request.
+codex_accept_trust_dialog() {
+    local session_name="$1"
+    local attempt="$2"
+    local max_attempts="$3"
+    local log_prefix="${4:-spawn_child}"
+    if (( attempt > max_attempts )); then
+        echo "[$log_prefix] Trust dialog persisted after ${max_attempts} attempts; aborting" >&2
+        return 1
+    fi
+    echo "[$log_prefix] Trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
+    tmux send-keys -t "$session_name" C-m
+}
+
 # --- Authenticated per-child MCP connection ------------------------------
 # Writes a child-scoped --mcp-config that points mcp-agent-mail at the local
 # stdio proxy instead of the shared HTTP endpoint. The proxy holds the child's
@@ -599,20 +683,105 @@ PY
     printf '%s\n' "$home_dir"
 }
 
-# The proxy reads the child's token from a file so it never travels through an
-# argv or an environment variable the agent can print. Modes that hold the token
-# in a shell variable (direct/legacy spawn) materialise that file here, using the
-# same runtime layout as ags_registration_token_file().
-ensure_child_token_file() {
-    local child_name="$1" token="$2"
-    [[ -n "$child_name" && -n "$token" ]] || return 0
-    local key
-    key="$(printf '%s' "$child_name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
-    local token_file="$RUNTIME_DIR/agent_token_$key"
-    mkdir -p "$RUNTIME_DIR" || return 0
-    ( umask 077 && printf '%s' "$token" > "$token_file" ) || return 0
-    chmod 600 "$token_file" 2>/dev/null || true
-    printf '%s\n' "$token_file"
+# Generate the direct-spawn registration token in a 0600 one-shot file.  The
+# token itself never crosses a shell argument boundary.
+generate_child_token_file() {
+    local token_file="$1"
+    mkdir -p "$(dirname "$token_file")"
+    chmod 700 "$(dirname "$token_file")" 2>/dev/null || true
+    python3 - "$token_file" <<'PY'
+import os
+import secrets
+import sys
+
+path = sys.argv[1]
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(path, flags, 0o600)
+try:
+    os.write(fd, secrets.token_urlsafe(32).encode("utf-8"))
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.chmod(path, 0o600)
+PY
+}
+
+# Persist the token actually returned by register_agent (some servers replace
+# the caller-supplied value), falling back to the sent one-shot token.  The MCP
+# response is supplied on stdin and the secret remains file-only.
+adopt_registered_token_response() {
+    local agent_name="$1" project_key="$2" sent_token_file="$3"
+    local token_file state_file
+    token_file="$(child_token_file_path "$agent_name")" || return 1
+    state_file="$CHILD_STATE_DIR/$agent_name.json"
+    python3 -c '
+import json
+import os
+import pathlib
+import sys
+
+agent_name, project_key, sent_file, token_file, state_file = sys.argv[1:6]
+response = json.load(sys.stdin)
+
+def candidate_tokens(obj):
+    if isinstance(obj, dict):
+        value = obj.get("registration_token")
+        if isinstance(value, str) and value:
+            yield value
+
+token = ""
+objects = [response]
+result = response.get("result") if isinstance(response, dict) else None
+objects.append(result)
+if isinstance(result, dict):
+    objects.append(result.get("structuredContent"))
+    for part in result.get("content") or []:
+        if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+            continue
+        try:
+            objects.append(json.loads(part["text"]))
+        except Exception:
+            pass
+for obj in objects:
+    token = next(candidate_tokens(obj), "")
+    if token:
+        break
+if not token:
+    token = pathlib.Path(sent_file).read_text(encoding="utf-8").strip()
+if not token:
+    raise ValueError("register_agent returned no usable registration token")
+
+token_path = pathlib.Path(token_file)
+state_path = pathlib.Path(state_file)
+token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.chmod(token_path.parent, 0o700)
+os.chmod(state_path.parent, 0o700)
+token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
+with open(token_tmp, "x", encoding="utf-8") as handle:
+    handle.write(token)
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(token_tmp, 0o600)
+with open(state_tmp, "x", encoding="utf-8") as handle:
+    json.dump({
+        "agent_name": agent_name,
+        "project_key": project_key,
+        "registration_token": token,
+    }, handle)
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(state_tmp, 0o600)
+os.replace(token_tmp, token_path)
+os.replace(state_tmp, state_path)
+os.chmod(token_path, 0o600)
+os.chmod(state_path, 0o600)
+pathlib.Path(sent_file).unlink(missing_ok=True)
+print(token_path)
+' "$agent_name" "$project_key" "$sent_token_file" "$token_file" "$state_file"
 }
 
 TASK="${1:-}"
@@ -640,32 +809,86 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     else
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
     fi
-    PARENT_NAME="${PARENT_AGENT:-$(tmux display-message -p '#S' 2>/dev/null || echo unknown)}"
+    if [[ "$STANDALONE" == true ]]; then
+        PARENT_NAME=""
+    else
+        PARENT_NAME="${PARENT_AGENT:-$(tmux display-message -p '#S' 2>/dev/null || echo unknown)}"
+        if [[ "$PARENT_NAME" == "unknown" || -z "$PARENT_NAME" ]]; then
+            echo "Error: parent agent name required unless --standalone is set" >&2
+            exit 1
+        fi
+    fi
 
     if [[ -z "$TASK" ]]; then
         echo "Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> \"<task>\" [workdir]" >&2
         exit 1
     fi
+    if [[ ! -d "$WORK_DIR" ]]; then
+        echo "Error: workdir does not exist: $WORK_DIR" >&2
+        exit 1
+    fi
 
     # Pre-registered children must use their own token. Never inherit the
     # caller's ambient CHILD_REGISTRATION_TOKEN here; that may be the parent's
-    # owner token and would both fail strict auth and leak a secret to the child.
-    PRE_REGISTERED_CHILD_TOKEN=""
+    # owner token. Adopt the 0600 one-shot into durable child-owned files and
+    # unlink the handoff only after both writes succeed.
+    PRE_REGISTERED_TOKEN_CREATED=false
+    PRE_REGISTERED_SESSION_STARTED=false
+    PRE_REGISTERED_SUCCESS=false
+    cleanup_preregister_failure() {
+        if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
+            return
+        fi
+        if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
+            tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+        fi
+        if [[ "$PRE_REGISTERED_TOKEN_CREATED" == true ]]; then
+            rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
+        fi
+        cleanup_worktree
+        if [[ -f "$MANAGED_FILE" ]]; then
+            python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except OSError:
+    raise SystemExit(0)
+path.write_text(
+    "\n".join(line for line in lines if line != name) + "\n",
+    encoding="utf-8",
+)
+PY
+        fi
+    }
+    trap cleanup_preregister_failure EXIT
+
     if [[ -n "$CHILD_TOKEN_FILE" ]]; then
-        if ! PRE_REGISTERED_CHILD_TOKEN="$(read_token_file "$CHILD_TOKEN_FILE")"; then
-            echo "Error: --child-token-file is unreadable or empty: $CHILD_TOKEN_FILE" >&2
+        ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
+        if ! CHILD_TOKEN_FILE="$(
+            adopt_child_token_file "$CHILD_NAME" "$PROJECT_KEY" \
+                "$ONE_SHOT_TOKEN_FILE" true
+        )"; then
+            echo "Error: --child-token-file is unreadable, insecure, or empty: $ONE_SHOT_TOKEN_FILE" >&2
             exit 1
         fi
+        PRE_REGISTERED_TOKEN_CREATED=true
     else
-        PRE_REGISTERED_CHILD_TOKEN="$(load_child_state_token "$CHILD_NAME" 2>/dev/null || true)"
+        CHILD_TOKEN_FILE="$(child_token_file_path "$CHILD_NAME")"
+        if [[ ! -s "$CHILD_TOKEN_FILE" ]]; then
+            if ! CHILD_TOKEN_FILE="$(
+                restore_child_token_file_from_state "$CHILD_NAME"
+            )"; then
+                echo "Error: pre-registered child token is required for $CHILD_NAME" >&2
+                echo "  Generate/register the child with a child-owned token, then pass --child-token-file <path>." >&2
+                echo "  Existing state fallback: $CHILD_STATE_DIR/$CHILD_NAME.json" >&2
+                exit 1
+            fi
+        fi
     fi
-    if [[ -z "$PRE_REGISTERED_CHILD_TOKEN" ]]; then
-        echo "Error: pre-registered child token is required for $CHILD_NAME" >&2
-        echo "  Generate/register the child with a child-owned token, then pass --child-token-file <path>." >&2
-        echo "  Existing state fallback: $CHILD_STATE_DIR/$CHILD_NAME.json" >&2
-        exit 1
-    fi
-    write_child_state "$CHILD_NAME" "$PROJECT_KEY" "$PRE_REGISTERED_CHILD_TOKEN"
 
     # --worktree が指定されていれば worktree を作って WORK_DIR を上書き
     if [[ "$USE_WORKTREE" == true ]]; then
@@ -691,17 +914,17 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
+    if [[ "$STANDALONE" != true ]]; then
+        TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
+    fi
     if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
     fi
-    TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$PRE_REGISTERED_CHILD_TOKEN")
-
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).
         CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
-        TOKEN=$(get_agentstack_token 2>/dev/null || true)
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
             echo "[spawn_child/pre-reg] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
@@ -709,11 +932,16 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         else
             echo "[spawn_child/pre-reg] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
         fi
-        CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
+        if [[ "$STANDALONE" == true ]]; then
+            CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+
+${TASK}"
+        else
+            CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+        fi
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
-            -e "MCP_AGENT_MAIL_TOKEN=$TOKEN" \
             '/bin/zsh -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
                 if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
@@ -733,12 +961,16 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 fi
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
+        PRE_REGISTERED_SESSION_STARTED=true
 
         echo "[spawn_child/pre-reg] Waiting for Codex REPL..." >&2
         WAITED=0
         WAIT_MAX=90
         READY=false
         DIED=false
+        TRUST_FAILED=false
+        TRUST_ATTEMPTS=0
+        TRUST_MAX=10
         while [[ $WAITED -lt $WAIT_MAX ]]; do
             sleep 3
             WAITED=$((WAITED + 3))
@@ -751,8 +983,12 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             fi
             # Trust ダイアログ: "Do you trust the contents of this directory?"
             if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
-                echo "[spawn_child/pre-reg] Trust dialog detected; pressing Enter" >&2
-                tmux send-keys -t "$CHILD_NAME" Enter
+                TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
+                if ! codex_accept_trust_dialog \
+                    "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
+                    TRUST_FAILED=true
+                    break
+                fi
                 sleep 3
                 continue
             fi
@@ -774,7 +1010,10 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             fi
         done
 
-        if [[ "$DIED" == true ]]; then
+        if [[ "$TRUST_FAILED" == true ]]; then
+            echo "[spawn_child/pre-reg] Aborting: unable to accept the Codex trust dialog." >&2
+            exit 1
+        elif [[ "$DIED" == true ]]; then
             echo "[spawn_child/pre-reg] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
             exit 1
         elif [[ "$READY" == true ]]; then
@@ -785,7 +1024,11 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             sleep 2
         fi
 
-        tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
+        if [[ "$STANDALONE" == true ]]; then
+            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CODEX_PROMPT}$(printf '\033[201~')"
+        else
+            tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
+        fi
         sleep 0.5
         tmux send-keys -t "$CHILD_NAME" C-m
     else
@@ -798,11 +1041,17 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         # 旧実装は部分一致（*opus* + *[1m]* skip）だったため、opus[1m] は skip できても
         # fable 等の非デフォルトモデルが warm-sonnet に握り潰されていた（RainyKepler 事例）。
         # exact-match に広げて [1m] 以外の降格も塞ぐ。
-        case "$CHILD_MODEL" in
-            claude-opus-4-8)   WARM_TYPE="opus" ;;
-            claude-sonnet-4-6) WARM_TYPE="sonnet" ;;
-            *)                 WARM_TYPE="__skip_warm__" ;;
-        esac
+        if [[ "$STANDALONE" == true ]]; then
+            # A claimed warm session may retain a parent environment. Cold
+            # start standalone children so PARENT_AGENT is guaranteed absent.
+            WARM_TYPE="__skip_warm__"
+        else
+            case "$CHILD_MODEL" in
+                claude-opus-4-8)   WARM_TYPE="opus" ;;
+                claude-sonnet-4-6) WARM_TYPE="sonnet" ;;
+                *)                 WARM_TYPE="__skip_warm__" ;;
+            esac
+        fi
 
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
@@ -810,6 +1059,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
             if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
                 WARM_CLAIMED=true
+                PRE_REGISTERED_SESSION_STARTED=true
                 echo "[spawn_child/pre-reg] Warm session claimed -> $CHILD_NAME" >&2
             fi
         fi
@@ -829,19 +1079,46 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
                 '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG"); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+            PRE_REGISTERED_SESSION_STARTED=true
 
             WAITED=0
+            READY=false
+            CLAUDE_EXITED=false
             while [[ $WAITED -lt 60 ]]; do
                 sleep 2
                 WAITED=$((WAITED + 2))
                 PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-                if echo "$PANE_TEXT" | grep -qE '(for shortcuts|^❯ )'; then break; fi
+                if echo "$PANE_TEXT" | grep -qE '(for shortcuts|^❯ )'; then
+                    READY=true
+                    break
+                fi
+                if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+                    echo "[spawn_child/pre-reg] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
+                    printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+                    CLAUDE_EXITED=true
+                    break
+                fi
             done
+            if [[ "$CLAUDE_EXITED" == true ]]; then
+                echo "[spawn_child/pre-reg] Aborting: Claude terminated before readiness." >&2
+                exit 1
+            fi
             sleep 1
         fi
 
-        CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
-        tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
+        if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+            echo "[spawn_child/pre-reg] Claude session '$CHILD_NAME' is not alive" >&2
+            exit 1
+        fi
+        if [[ "$STANDALONE" == true ]]; then
+            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+
+${TASK}"
+            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CHILD_PROMPT}$(printf '\033[201~')"
+        else
+            CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+            tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
+        fi
         sleep 0.3
         tmux send-keys -t "$CHILD_NAME" C-m
     fi
@@ -857,6 +1134,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         echo "[spawn_child/pre-reg] cleanup: git -C $WORKTREE_SOURCE worktree remove $WORKTREE_DIR && git -C $WORKTREE_SOURCE branch -D exp/${CHILD_NAME}" >&2
     fi
 
+    PRE_REGISTERED_SUCCESS=true
     echo "$CHILD_NAME"
     exit 0
 fi
@@ -905,14 +1183,17 @@ fi
 call_mcp() {
     local method="$1"
     local args_json="$2"
-    python3 - "$method" "$args_json" "$MCP_URL" "$TOKEN" <<'PYEOF'
+    # Both the owner token embedded in args_json and the HTTP bearer travel over
+    # stdin.  Neither secret is visible in ps(1) argv or a child environment.
+    printf '%s\0%s' "$args_json" "$TOKEN" | python3 -c '
 import sys, json, http.client
 from urllib.parse import urlparse
 
 method = sys.argv[1]
-args = json.loads(sys.argv[2])
-url = sys.argv[3]
-token = sys.argv[4]
+url = sys.argv[2]
+args_raw, token = sys.stdin.buffer.read().split(b"\0", 1)
+args = json.loads(args_raw)
+token = token.decode("utf-8")
 
 parsed = urlparse(url)
 payload = json.dumps({
@@ -932,7 +1213,7 @@ conn.request("POST", parsed.path, body=payload, headers={
 resp = conn.getresponse()
 print(resp.read().decode())
 conn.close()
-PYEOF
+' "$method" "$MCP_URL"
 }
 
 load_agent_name_helpers() {
@@ -1096,18 +1377,22 @@ pick_available_child_agent_name() {
     return 1
 }
 
-retire_agent_with_registration_token() {
+retire_agent_with_token_file() {
     local agent_name="$1"
-    local registration_token="$2"
+    local token_file="$2"
     local retire_args
-    retire_args=$(python3 -c "
-import json, sys
+    [[ -s "$token_file" ]] || return 1
+    retire_args=$(python3 -c '
+import json
+import pathlib
+import sys
 print(json.dumps({
-    'project_key': sys.argv[1],
-    'agent_name': sys.argv[2],
-    'registration_token': sys.argv[3],
+    "project_key": sys.argv[1],
+    "agent_name": sys.argv[2],
+    "registration_token": pathlib.Path(sys.argv[3]).read_text(
+        encoding="utf-8").strip(),
 }))
-" "$PROJECT_KEY" "$agent_name" "$registration_token")
+' "$PROJECT_KEY" "$agent_name" "$token_file")
     call_mcp "retire_agent" "$retire_args"
 }
 
@@ -1137,36 +1422,52 @@ else
     CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
 fi
 
-CHILD_REGISTRATION_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 if ! CHILD_NAME_CANDIDATE="$(pick_available_child_agent_name)"; then
     echo "Error: failed to generate an available child agent name" >&2
     exit 1
 fi
 
-REGISTER_ARGS=$(python3 -c "
-import json, sys
+TOKEN_HANDOFF_DIR="$RUNTIME_DIR/spawn-tokens"
+TOKEN_NONCE="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+DIRECT_ONE_SHOT_TOKEN_FILE="$TOKEN_HANDOFF_DIR/direct.$$.${TOKEN_NONCE}.token"
+generate_child_token_file "$DIRECT_ONE_SHOT_TOKEN_FILE"
+REGISTER_ARGS=$(python3 -c '
+import json
+import pathlib
+import sys
 args = {
-    'project_key': sys.argv[1],
-    'program': sys.argv[2],
-    'model': sys.argv[3],
-    'task_description': sys.argv[4],
-    'registration_token': sys.argv[5],
-    'name': sys.argv[6],
+    "project_key": sys.argv[1],
+    "program": sys.argv[2],
+    "model": sys.argv[3],
+    "task_description": sys.argv[4],
+    "registration_token": pathlib.Path(sys.argv[5]).read_text(
+        encoding="utf-8").strip(),
+    "name": sys.argv[6],
 }
 print(json.dumps(args))
-" "$PROJECT_KEY" "$CHILD_PROGRAM" "$CHILD_MODEL" "$TASK_SHORT" "$CHILD_REGISTRATION_TOKEN" "$CHILD_NAME_CANDIDATE")
+' "$PROJECT_KEY" "$CHILD_PROGRAM" "$CHILD_MODEL" "$TASK_SHORT" \
+    "$DIRECT_ONE_SHOT_TOKEN_FILE" "$CHILD_NAME_CANDIDATE")
 
-REGISTER_RESULT=$(call_mcp "register_agent" "$REGISTER_ARGS")
-CHILD_NAME=$(python3 -c "
-import json, sys
-r = json.loads(sys.stdin.read())
-data = json.loads(r['result']['content'][0]['text'])
-print(data['name'])
-" <<< "$REGISTER_RESULT")
+if ! REGISTER_RESULT=$(call_mcp "register_agent" "$REGISTER_ARGS"); then
+    rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    echo "Error: register_agent request failed" >&2
+    exit 1
+fi
+if ! CHILD_NAME=$(python3 -c "
+	import json, sys
+	r = json.loads(sys.stdin.read())
+	data = json.loads(r['result']['content'][0]['text'])
+	print(data['name'])
+" <<< "$REGISTER_RESULT"); then
+    rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    echo "Error: failed to parse register_agent response" >&2
+    exit 1
+fi
 
 if [[ -z "$CHILD_NAME" ]]; then
     echo "Error: failed to read child agent name" >&2
     echo "$REGISTER_RESULT" >&2
+    rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
     exit 1
 fi
 
@@ -1174,33 +1475,29 @@ fi
 # mcp-agent-mail ignores the client-supplied registration_token and mints its
 # own, returning it in the response; keeping our sent token would leave the
 # child holding a token the server never stored, so its reregister/fetch_inbox
-# all fail with "Invalid registration_token". Fall back to the sent token only
-# when the server omits one (lenient variants). Every downstream use — state
-# file, cleanup retire, and the child's env — reads $CHILD_REGISTRATION_TOKEN,
-# so reassigning it here fixes them all. Mirrors agentstack-preregister-child
-# and ags_register_session.
-if declare -F ags_extract_registration_token >/dev/null 2>&1; then
-    _registered_token="$(printf '%s' "$REGISTER_RESULT" | ags_extract_registration_token)"
-    [[ -n "$_registered_token" ]] && CHILD_REGISTRATION_TOKEN="$_registered_token"
+# all fail with "Invalid registration_token". The response and sent fallback
+# are consumed inside Python and persisted only in 0600 files.
+if ! CHILD_TOKEN_FILE="$(
+    printf '%s' "$REGISTER_RESULT" |
+        adopt_registered_token_response "$CHILD_NAME" "$PROJECT_KEY" \
+            "$DIRECT_ONE_SHOT_TOKEN_FILE"
+)"; then
+    rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    echo "Error: failed to persist the registered child token" >&2
+    exit 1
 fi
 
-mkdir -p "$CHILD_STATE_DIR"
-python3 -c "
-import json, pathlib, sys
-path = pathlib.Path(sys.argv[4])
-path.write_text(json.dumps({
-    'agent_name': sys.argv[1],
-    'project_key': sys.argv[2],
-    'registration_token': sys.argv[3],
-}), encoding='utf-8')
-" "$CHILD_NAME" "$PROJECT_KEY" "$CHILD_REGISTRATION_TOKEN" "$CHILD_STATE_DIR/$CHILD_NAME.json"
-
 # --- 失敗時cleanup trap ---
-# tmux セッション生成前に異常終了した場合だけ、登録済みの子エージェントと予約を解放する
+# Launcher が完全に readiness/prompt injection を終える前に異常終了したら、
+# 一瞬 tmux session が作られていても child credentials と予約を回収する。
+SPAWN_COMPLETED=false
 CHILD_SESSION_STARTED=false
 cleanup_on_failure() {
-    if [[ "$CHILD_SESSION_STARTED" == true ]]; then
+    if [[ "$SPAWN_COMPLETED" == true ]]; then
         return
+    fi
+    if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
+        tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
     fi
     if [[ -n "${CHILD_NAME:-}" ]]; then
         echo "[spawn_child] cleanup: retiring $CHILD_NAME and releasing reservations" >&2
@@ -1214,12 +1511,30 @@ print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
             call_mcp "release_file_reservations" "$release_args" > /dev/null 2>&1 || true
         fi
         # エージェント retire
-        if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
-            retire_agent_with_registration_token "$CHILD_NAME" "$CHILD_REGISTRATION_TOKEN" > /dev/null 2>&1 || true
+        if [[ -s "${CHILD_TOKEN_FILE:-}" ]]; then
+            retire_agent_with_token_file "$CHILD_NAME" "$CHILD_TOKEN_FILE" > /dev/null 2>&1 || true
         fi
     fi
     # worktree も作っていれば撤去
     cleanup_worktree
+    rm -f "${CHILD_TOKEN_FILE:-}" "$CHILD_STATE_DIR/${CHILD_NAME:-}.json"
+    if [[ -n "${CHILD_NAME:-}" && -f "$MANAGED_FILE" ]]; then
+        python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except OSError:
+    raise SystemExit(0)
+path.write_text(
+    "\n".join(line for line in lines if line != name) + "\n",
+    encoding="utf-8",
+)
+PY
+    fi
 }
 trap cleanup_on_failure EXIT
 
@@ -1271,11 +1586,12 @@ import json, sys
 print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
 " "$PROJECT_KEY" "$CHILD_NAME")
         call_mcp "release_file_reservations" "$RELEASE_ARGS" > /dev/null 2>&1 || true
-        if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
-            retire_agent_with_registration_token "$CHILD_NAME" "$CHILD_REGISTRATION_TOKEN" > /dev/null 2>&1 || true
+        if [[ -s "${CHILD_TOKEN_FILE:-}" ]]; then
+            retire_agent_with_token_file "$CHILD_NAME" "$CHILD_TOKEN_FILE" > /dev/null 2>&1 || true
         fi
         echo "[spawn_child] Released reservations and retired $CHILD_NAME" >&2
-        CHILD_SESSION_STARTED=true  # suppress cleanup trap; cleanup already done
+        rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
+        SPAWN_COMPLETED=true  # cleanup already completed explicitly above
         exit 21
     fi
 fi
@@ -1368,13 +1684,8 @@ fi
 if [[ -n "$RESOURCES" ]]; then
     TMUX_ENV_ARGS+=(-e "CHILD_RESOURCES=$RESOURCES")
 fi
-if [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]]; then
-    TMUX_ENV_ARGS+=(-e "CHILD_REGISTRATION_TOKEN=$CHILD_REGISTRATION_TOKEN")
-fi
-
 if [[ "$USE_CODEX" == true ]]; then
-    CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" \
-        "$(ensure_child_token_file "$CHILD_NAME" "$CHILD_REGISTRATION_TOKEN")")"
+    CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
     if [[ -n "$CHILD_CODEX_HOME" ]]; then
         echo "[spawn_child] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
@@ -1383,11 +1694,10 @@ if [[ "$USE_CODEX" == true ]]; then
         echo "[spawn_child] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
     fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
-    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. If the helper is unavailable, ensure_project with human_key ${PROJECT_KEY}, then register_agent with name ${CHILD_NAME} and registration_token only if CHILD_REGISTRATION_TOKEN is visible, then fetch_inbox. Do not infer the task from this prompt; treat the inbox request as authoritative."
+    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
-        -e "MCP_AGENT_MAIL_TOKEN=$TOKEN" \
         '/bin/zsh -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
             if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
@@ -1408,7 +1718,6 @@ if [[ "$USE_CODEX" == true ]]; then
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
     CHILD_SESSION_STARTED=true
-
     # Codex REPL起動待機
     # 注意: モデルアップグレードダイアログやサインインプロンプトが
     # 表示されることがある。これらを自動スキップしてから入力待ちを検知する。
@@ -1417,6 +1726,9 @@ if [[ "$USE_CODEX" == true ]]; then
     WAIT_MAX=90
     READY=false
     DIED=false
+    TRUST_FAILED=false
+    TRUST_ATTEMPTS=0
+    TRUST_MAX=10
     while [[ $WAITED -lt $WAIT_MAX ]]; do
         sleep 3
         WAITED=$((WAITED + 3))
@@ -1432,8 +1744,12 @@ if [[ "$USE_CODEX" == true ]]; then
 
         # Trust ダイアログ: "Do you trust the contents of this directory?"
         if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
-            echo "[spawn_child] Trust dialog detected; pressing Enter" >&2
-            tmux send-keys -t "$CHILD_NAME" Enter
+            TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
+            if ! codex_accept_trust_dialog \
+                "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
+                TRUST_FAILED=true
+                break
+            fi
             sleep 3
             continue
         fi
@@ -1458,7 +1774,10 @@ if [[ "$USE_CODEX" == true ]]; then
         fi
     done
 
-    if [[ "$DIED" == true ]]; then
+    if [[ "$TRUST_FAILED" == true ]]; then
+        echo "[spawn_child] Aborting: unable to accept the Codex trust dialog." >&2
+        exit 1
+    elif [[ "$DIED" == true ]]; then
         echo "[spawn_child] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
         exit 1
     elif [[ "$READY" == true ]]; then
@@ -1477,25 +1796,39 @@ if [[ "$USE_CODEX" == true ]]; then
     tmux send-keys -t "$CHILD_NAME" C-m
 else
     # Claude Code 起動（モデル指定付き）
+    CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
-        '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; claude --model "$CLAUDE_CHILD_MODEL"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+        -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+        '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG"); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
     CHILD_SESSION_STARTED=true
-
     # Claude REPL起動待機
     echo "[spawn_child] Waiting for Claude REPL..." >&2
     WAITED=0
     WAIT_MAX=60
+    READY=false
+    CLAUDE_EXITED=false
     while [[ $WAITED -lt $WAIT_MAX ]]; do
         sleep 2
         WAITED=$((WAITED + 2))
         PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
         if echo "$PANE_TEXT" | grep -qE '(for shortcuts|^❯ )'; then
+            READY=true
+            break
+        fi
+        if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+            echo "[spawn_child] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
+            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+            CLAUDE_EXITED=true
             break
         fi
     done
+    if [[ "$CLAUDE_EXITED" == true ]]; then
+        echo "[spawn_child] Aborting: Claude terminated before readiness." >&2
+        exit 1
+    fi
     sleep 1
     echo "[spawn_child] Waited ${WAITED}s (+1s); injecting prompt" >&2
 
@@ -1506,6 +1839,7 @@ else
 fi
 
 open_child_terminal "$CHILD_NAME"
+SPAWN_COMPLETED=true
 
 # --- Complete: stdout contains only child agent name ---
 echo "$CHILD_NAME"
