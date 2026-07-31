@@ -12,12 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Run tests (stdlib only — includes the bash 3.2 local-selfref lint)
+      - name: Install pytest
+        run: python3 -m pip install pytest
+      - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)
         run: |
           set -euo pipefail
-          rc=0
-          for t in tests/test_*.py; do
-            echo "== $t =="
-            PYTHONPATH=. python3 "$t" || rc=1
-          done
-          exit "$rc"
+          PYTHONPATH=. python3 -m pytest -q tests/
