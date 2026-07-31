@@ -6,11 +6,12 @@ import dashboard.server as server
 
 def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
     script = tmp_path / "scientists.sh"
-    script.write_text('ags_scientist_list() { printf "Curie\\n"; }\n')
+    script.write_text('ags_adjective_list() { printf "Sunny\\n"; }\nags_scientist_list() { printf "Curie\\n"; }\n')
     monkeypatch.setattr(server, "SPAWN_SCIENTISTS_SCRIPT", str(script))
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "unknown")
     data = server.spawn_names_payload()
     assert data["names"] == [{"name": "Curie", "portrait": True, "status": "unknown"}]
+    assert data["adjectives"] == ["Sunny"]
     assert data["default_model"] == "claude-sonnet-5"
     assert "emoji" not in data
 

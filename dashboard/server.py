@@ -18,6 +18,7 @@ import atexit
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -2805,18 +2806,22 @@ def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     try:
         output = subprocess.run(
-            ["bash", "-c", 'source "$1" && ags_scientist_list', "spawn-names", SPAWN_SCIENTISTS_SCRIPT],
+            ["bash", "-c", 'source "$1" && ags_adjective_list && printf "\\036" && ags_scientist_list', "spawn-names", SPAWN_SCIENTISTS_SCRIPT],
             capture_output=True, text=True, timeout=3, check=True,
         ).stdout
     except (OSError, subprocess.SubprocessError) as e:
         raise ValueError(f"scientist vocabulary unavailable: {e}") from e
-    scientists = [line.strip() for line in output.splitlines() if line.strip()]
+    adjective_text, _, scientist_text = output.partition("\x1e")
+    adjectives = [line.strip() for line in adjective_text.splitlines() if line.strip()]
+    scientists = [line.strip() for line in scientist_text.splitlines() if line.strip()]
     raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
     dirs = [value for value in raw_dirs if value] or ["~"]
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": _spawn_name_status(name)} for name in scientists],
+        "adjectives": adjectives,
+        "naming": "adjective+scientist",
         "dirs": dirs,
         "models": list(_SPAWN_MODELS),
         "default_model": "claude-sonnet-5",
@@ -2899,7 +2904,7 @@ def do_spawn(payload: dict) -> dict:
         return {"ok": False, "error": "task description required"}
     if model not in _SPAWN_MODELS:
         return {"ok": False, "error": f"model not allowed: {model}"}
-    if requested_name and _NAME_RE.fullmatch(requested_name) is None:
+    if requested_name and re.fullmatch(r"[A-Z][A-Za-z]{1,63}", requested_name) is None:
         return {"ok": False, "error": "name invalid"}
     if requested_name and _spawn_name_status(requested_name) != "available":
         return {"ok": False, "error": "name is occupied or cannot be verified"}
@@ -2915,11 +2920,13 @@ def do_spawn(payload: dict) -> dict:
     task_short = task[:80]
 
     # 1) register_agent (name 省略で auto-generate adjective+noun name)
+    child_token = secrets.token_urlsafe(32)
     reg = _mcp_call("register_agent", {
         "project_key": project_key,
         "program": program,
         "model": model_str,
         "task_description": task_short,
+        "registration_token": child_token,
         **({"name": requested_name} if requested_name else {}),
     })
     if not reg["ok"]:
@@ -2980,7 +2987,13 @@ def do_spawn(payload: dict) -> dict:
                 "child_name": child_name, "annot": annot_status}
 
     # 4) spawn_child.sh --pre-registered を background で起動
-    args = [SPAWN_SCRIPT, "--pre-registered", child_name,
+    token_dir = os.path.join(RUNTIME_DIR, "spawn-tokens")
+    os.makedirs(token_dir, mode=0o700, exist_ok=True)
+    token_file = os.path.join(token_dir, f"{child_name}.token")
+    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(child_token)
+    args = [SPAWN_SCRIPT, "--pre-registered", child_name, "--child-token-file", token_file,
             "--model", model_str]
     if worktree:
         args.append("--worktree")
@@ -3010,6 +3023,17 @@ def do_spawn(payload: dict) -> dict:
             f"model={model_str} worktree={worktree} ===\n".encode())
         subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
                          start_new_session=True)
+        time.sleep(3)
+        probe = subprocess.run(["tmux", "has-session", "-t", child_name], capture_output=True, text=True)
+        if probe.returncode:
+            log_fh.close()
+            tail = ""
+            try:
+                with open(log_path, encoding="utf-8", errors="replace") as f:
+                    tail = f.read()[-1000:]
+            except OSError:
+                pass
+            return {"ok": False, "error": "spawn launcher exited before tmux session was created", "detail": tail}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"spawn launch failed: {e}",
                 "child_name": child_name, "annot": annot_status}

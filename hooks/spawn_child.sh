@@ -709,6 +709,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             "${TMUX_ENV_ARGS[@]}" \
             -e "MCP_AGENT_MAIL_TOKEN=$TOKEN" \
             '/bin/zsh -lc '"'"'
+                export PATH="$HOME/.local/bin:$PATH";
                 if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
                     source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
                 fi
@@ -821,7 +822,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-                '/bin/zsh -lc '"'"'MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG"); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+                '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG"); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
 
             WAITED=0
             while [[ $WAITED -lt 60 ]]; do
@@ -1381,6 +1382,7 @@ if [[ "$USE_CODEX" == true ]]; then
         "${TMUX_ENV_ARGS[@]}" \
         -e "MCP_AGENT_MAIL_TOKEN=$TOKEN" \
         '/bin/zsh -lc '"'"'
+                export PATH="$HOME/.local/bin:$PATH";
             if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
                 source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
             fi
@@ -1472,7 +1474,7 @@ else
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
-        '/bin/zsh -lc '"'"'claude --model "$CLAUDE_CHILD_MODEL"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+        '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; claude --model "$CLAUDE_CHILD_MODEL"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
     CHILD_SESSION_STARTED=true
 
     # Claude REPL起動待機
