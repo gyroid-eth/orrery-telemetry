@@ -12,7 +12,15 @@ First calls:
    resolved `name` (`$AGENT_NAME`, or the name printed by the SessionStart
    reminder) and pass `CHILD_REGISTRATION_TOKEN` as `registration_token` when it
    is available.
-3. On the first `fetch_inbox`/`whois` call in this MCP session, read
+3. Tokens: **if your agent-mail MCP server runs through the local proxy, you
+   never touch a token.** Spawned children are configured that way, and the
+   SessionStart reminder says so ("この接続はローカル MCP proxy 経由で既に認証済み
+   です"). The proxy holds your token and authenticates every call, so do not
+   read `agent_token_<name>` — that only costs an approval prompt and puts the
+   secret in your context.
+
+   Only when the proxy is absent (a top-level session, or an install without
+   it) does the old rule apply: on the first `fetch_inbox`/`whois` call, read
    `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
    pass its value as `registration_token`. Later calls in the authenticated MCP
    session may omit it.

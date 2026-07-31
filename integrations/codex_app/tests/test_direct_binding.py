@@ -174,3 +174,29 @@ def test_missing_or_empty_token_is_a_clear_error(tmp_path):
     })
     with pytest.raises(ProxyError):
         load_direct_owner_token(config_empty)
+
+
+def test_documented_arguments_are_accepted_when_they_match(tmp_path):
+    """Agents are taught to pass project_key/agent_name; that must not error.
+
+    The tester hit "unexpected keyword argument" on a child's first call
+    because the proxy takes identity from its binding instead.
+    """
+    proxy, transport = _proxy(tmp_path)
+    result = _dispatch(proxy, "fetch_inbox", {
+        "project_key": PROJECT, "agent_name": AGENT, "limit": 5,
+    })
+    assert result == []
+    _, arguments = transport.calls[-1]
+    # The binding still decides what goes upstream.
+    assert arguments["agent_name"] == AGENT
+    assert arguments["registration_token"] == TOKEN
+
+
+def test_mismatched_identity_arguments_are_refused(tmp_path):
+    """Accepting the arguments must not become a way to act as someone else."""
+    proxy, _ = _proxy(tmp_path)
+    with pytest.raises(ProxyError):
+        _dispatch(proxy, "fetch_inbox", {"agent_name": "Other-Bohr"})
+    with pytest.raises(ProxyError):
+        _dispatch(proxy, "fetch_inbox", {"project_key": "/somewhere/else"})

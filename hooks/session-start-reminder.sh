@@ -44,6 +44,20 @@ find_register_lib() {
     return 1
 }
 
+# True when this session's agent-mail MCP server is the per-child proxy that
+# spawn_child.sh configured. The proxy injects the token, so the agent must not
+# read it: doing so triggers a Bash approval prompt and pulls the secret into
+# the model's context for no benefit.
+child_uses_mcp_proxy() {
+    agent_name="$1"
+    [ -n "$agent_name" ] || return 1
+    # Claude children get --mcp-config; Codex children get their own CODEX_HOME.
+    [ -n "${CLAUDE_CHILD_MCP_CONFIG:-}" ] && return 0
+    [ -f "$RUNTIME_DIR/child-agents/${agent_name}.mcp.json" ] && return 0
+    [ -f "$RUNTIME_DIR/child-agents/${agent_name}.codex-home/config.toml" ] && return 0
+    return 1
+}
+
 shell_register_resolved_agent() {
     local register_lib restored_token work_dir model
     [ -n "$RESOLVED_AGENT" ] || return 1
@@ -87,7 +101,14 @@ if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
         echo "新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。"
         echo "1. fetch_inbox (agent_name=\"$SHELL_REGISTERED_AGENT\")"
-        echo "初回の fetch_inbox/whois では、$RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
+        if child_uses_mcp_proxy "$SHELL_REGISTERED_AGENT"; then
+            # The local proxy holds this agent's token and authenticates every
+            # call. Telling the agent to read the token anyway costs a Bash
+            # approval prompt for nothing, and puts the secret in its context.
+            echo "この接続はローカル MCP proxy 経由で既に認証済みです。token ファイルを読む必要はありません（読まないでください）。"
+        else
+            echo "初回の fetch_inbox/whois では、$RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
+        fi
     elif [ -n "$RESOLVED_AGENT" ]; then
         echo "mcp-agent-mail server is running. Register this session before working."
         echo "あなたの名前は「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。新しい名前を生成せず、必ず name=\"${RESOLVED_AGENT}\" で register_agent してください。"

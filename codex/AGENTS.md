@@ -14,7 +14,15 @@ First calls:
    `AGENT_NAME`:
    `AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"`.
 3. If that succeeds, do not call `register_agent` again.
-4. On the first `fetch_inbox`/`whois` call in this MCP session, read
+4. Tokens: **if your agent-mail MCP server runs through the local proxy, you
+   never touch a token.** Spawned Codex children are configured that way (their
+   `CODEX_HOME` points `[mcp_servers.agent-mail]` at the proxy), and the
+   SessionStart reminder says so. The proxy holds your token and authenticates
+   every call, so do not read `agent_token_<name>`: it only costs an approval
+   prompt and puts the secret in your context.
+
+   Only when the proxy is absent does the old rule apply: on the first
+   `fetch_inbox`/`whois` call, read
    `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
    pass its value as `registration_token`. Later calls in the authenticated MCP
    session may omit it.

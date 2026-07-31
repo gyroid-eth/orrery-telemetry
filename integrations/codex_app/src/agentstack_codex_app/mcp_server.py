@@ -383,6 +383,10 @@ class AgentStackProxy:
     def bound_session_id(self) -> str | None:
         return None if self._binding is None else self._binding["session_id"]
 
+    @property
+    def bound_binding(self) -> dict[str, Any] | None:
+        return None if self._binding is None else dict(self._binding)
+
     def _resolve(
         self, session_id: str, agent_id: str | None
     ) -> tuple[dict[str, Any], str]:
@@ -514,6 +518,24 @@ def _dispatch(
     # have to know (or be able to spoof) a session id.
     if "session_id" not in call_arguments and proxy.bound_session_id is not None:
         call_arguments["session_id"] = proxy.bound_session_id
+    # Agents are told (by CLAUDE.md / AGENTS.md and by habit) to call agent-mail
+    # with project_key and agent_name. The proxy takes those from its binding
+    # instead, but rejecting the arguments outright turns documented usage into
+    # "unexpected keyword argument" on a child's very first call. Accept them
+    # when they agree with the binding, and refuse only a real mismatch — which
+    # is someone trying to act as another agent or project.
+    binding = proxy.bound_binding
+    for field in ("project_key", "agent_name"):
+        if field not in call_arguments:
+            continue
+        supplied = call_arguments.pop(field)
+        if supplied is None or binding is None:
+            continue
+        if str(supplied) != str(binding[field]):
+            raise ProxyError(
+                f"{field} does not match this connection's binding: "
+                f"this process serves {binding['agent_name']!r}"
+            )
     return handler(**call_arguments)
 
 
