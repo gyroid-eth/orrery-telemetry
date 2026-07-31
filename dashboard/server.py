@@ -1381,8 +1381,8 @@ def do_resume(session: str) -> dict:
 
     ※ codex agent は ~/.claude/projects/ に自分の transcript を持たないため
       Claude 用 _transcript_path の selfref 探索だと「その名前を最も多く参照
-      する別 agent(=子)の transcript」を誤マッチする(2026-06-02 SunnyEuler が
-      子 NavyVesalius の会話で復元された事故)。program で先に分岐して回避する。"""
+      する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
+      会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)

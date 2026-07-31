@@ -25,7 +25,7 @@ _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
 # why matching that one string made the launcher wait out its whole timeout.
 _FOOTER_TESTER = "\n".join(["", "  gpt-5.5 xhigh · ~/obsidian", ""])
 _FOOTER_CONTEXT = "\n".join(
-    ["", "  gpt-5.5 medium · Context 100% left · ~/Syncthing/<vault-directory>", ""]
+    ["", "  gpt-5.5 medium · Context 100% left · ~/workspace/notes", ""]
 )
 _FOOTER_SHORTCUTS = "\n".join(["", "  ? for shortcuts", ""])
 _MODEL_DIALOG = "\n".join(
