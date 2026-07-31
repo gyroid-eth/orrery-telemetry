@@ -79,6 +79,25 @@ PORTRAIT_OVERLAY_DIR = _env_path("AGENTSTACK_PORTRAITS_DIR", "")
 CUSTOM_PORTRAITS_PATH = _env_path("AGENTSTACK_CUSTOM_PORTRAITS", "")
 
 
+def _resolve_version() -> str:
+    """Resolve a shipped version artifact before falling back to git metadata."""
+    for version_file in (os.path.join(os.path.dirname(HERE), "VERSION"), os.path.join(HERE, "VERSION")):
+        try:
+            with open(version_file, encoding="utf-8") as f:
+                version = f.read().strip()
+            if version:
+                return version
+        except OSError:
+            pass
+    try:
+        return subprocess.run(
+            ["git", "-C", os.path.dirname(HERE), "describe", "--tags", "--always", "--dirty"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def _project_key() -> str:
     return PROJECT_KEY or VAULT
 
@@ -3173,18 +3192,7 @@ class Handler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send(500, b"index.html missing", "text/plain")
         elif path == "/api/version":
-            version_file = os.path.join(os.path.dirname(HERE), "VERSION")
-            try:
-                with open(version_file, encoding="utf-8") as f:
-                    version = f.read().strip()
-            except OSError:
-                try:
-                    version = subprocess.run(
-                        ["git", "-C", os.path.dirname(HERE), "describe", "--tags", "--always", "--dirty"],
-                        capture_output=True, text=True, timeout=3,
-                    ).stdout.strip() or "unknown"
-                except (OSError, subprocess.SubprocessError):
-                    version = "unknown"
+            version = _resolve_version()
             self._send(200, json.dumps({"name": "claude-agent-stack", "version": version, "api": 1}).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
             body = json.dumps(

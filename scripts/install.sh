@@ -228,6 +228,10 @@ install_payload() {
     plan "skip skills copy for --dashboard-only"
   fi
   copy_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR"
+  plan "copy VERSION -> $INSTALL_DIR/VERSION"
+  if [[ "$DRY_RUN" != true ]]; then
+    cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"
+  fi
   plan "install helper scripts into $BIN_DIR"
   if [[ "$DRY_RUN" != true ]]; then
     cp "$SCRIPT_DIR/uninstall.sh" "$BIN_DIR/agentstack-uninstall"
