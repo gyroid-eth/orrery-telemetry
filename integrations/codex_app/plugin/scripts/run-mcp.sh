@@ -5,10 +5,43 @@ PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$HOME/.agentstack/integrations/codex_app}"
 ENV_FILE="$INSTALL_DIR/env.sh"
 
+# The installed env.sh belongs to the Codex App bridge and uses plain `export`,
+# so sourcing it would clobber values the CALLER set. spawn_child.sh launches
+# this runner per child with that child's identity, project and endpoint in the
+# environment; letting a machine-wide file win would silently bind the child to
+# the bridge's project and endpoint instead of its own. Caller wins: snapshot
+# what was passed in, source the file for anything still unset, restore.
+_AGS_CALLER_KEYS=(
+  AGENTSTACK_PROXY_AGENT_NAME
+  AGENTSTACK_PROXY_TOKEN_FILE
+  AGENTSTACK_PROXY_PROGRAM
+  AGENTSTACK_PROJECT_KEY
+  AGENTSTACK_MCP_URL
+  AGENTSTACK_MAIL_ENV
+  AGENTSTACK_RUNTIME_DIR
+  AGENTSTACK_CODEX_APP_RUNTIME_DIR
+  MCP_AGENT_MAIL_TOKEN
+)
+_ags_saved_names=()
+_ags_saved_values=()
+for _ags_key in "${_AGS_CALLER_KEYS[@]}"; do
+  if [[ -n "${!_ags_key:-}" ]]; then
+    _ags_saved_names+=("$_ags_key")
+    _ags_saved_values+=("${!_ags_key}")
+  fi
+done
+
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   . "$ENV_FILE"
 fi
+
+_ags_i=0
+while [[ $_ags_i -lt ${#_ags_saved_names[@]} ]]; do
+  export "${_ags_saved_names[$_ags_i]}=${_ags_saved_values[$_ags_i]}"
+  _ags_i=$((_ags_i + 1))
+done
+unset _ags_key _ags_i _ags_saved_names _ags_saved_values _AGS_CALLER_KEYS
 
 if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
   export MCP_AGENT_MAIL_TOKEN

@@ -217,12 +217,53 @@ copy_tree() {
   fi
 }
 
+# The child MCP proxy that spawn_child.sh points each child at. It lives under
+# integrations/codex_app because the Codex App bridge introduced it, but a
+# spawned child's authenticated agent-mail connection is a CORE feature: without
+# this, hooks/spawn_child.sh silently falls back to the shared endpoint and the
+# child must read its own token instead of the proxy injecting it.
+#
+# Only the runtime subset ships here (the runner plus the package it imports).
+# The full optional bridge — daemon, launchd, marketplace — still comes from
+# scripts/install-codex-app-integration.sh into this same directory.
+install_child_mcp_proxy() {
+  local source_dir="$REPO_ROOT/integrations/codex_app"
+  local dest_dir="$INSTALL_DIR/integrations/codex_app"
+  if [[ ! -f "$source_dir/plugin/scripts/run-mcp.sh" ]]; then
+    warn "child MCP proxy not found in the repo; spawned children will fall back to the shared agent-mail endpoint"
+    return 0
+  fi
+  plan "install child MCP proxy -> $dest_dir"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  python3 - "$source_dir" "$dest_dir" <<'PY'
+import pathlib
+import shutil
+import sys
+
+source, dest = (pathlib.Path(p) for p in sys.argv[1:3])
+ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
+for name in ("plugin", "src"):
+    src = source / name
+    if not src.is_dir():
+        continue
+    dst = dest / name
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst, ignore=ignore)
+PY
+  chmod +x "$dest_dir/plugin/scripts/run-mcp.sh" 2>/dev/null || true
+}
+
 install_payload() {
   if [[ "$TIER" != "tier0" ]]; then
     copy_tree "$REPO_ROOT/hooks" "$HOOKS_DIR"
     copy_tree "$REPO_ROOT/skills" "$SKILLS_DIR"
     copy_tree "$REPO_ROOT/codex" "$INSTALL_DIR/codex"
     copy_tree "$REPO_ROOT/claude" "$INSTALL_DIR/claude"
+    install_child_mcp_proxy
   else
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"

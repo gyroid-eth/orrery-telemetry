@@ -77,6 +77,23 @@ else
   status=1
 fi
 
+# Without the proxy a spawned child still works, but its agent-mail connection
+# is not authenticated as itself: the child has to read its own token instead.
+# That degradation is silent at spawn time, so surface it here.
+CHILD_MCP_PROXY="$INSTALL_DIR/integrations/codex_app/plugin/scripts/run-mcp.sh"
+if [[ -x "$CHILD_MCP_PROXY" ]]; then
+  if [[ -d "$INSTALL_DIR/integrations/codex_app/src/agentstack_codex_app" ]]; then
+    echo "ok: child MCP proxy installed"
+  else
+    echo "warn: child MCP proxy runner present but its source tree is missing;" \
+         "spawned children will fall back to the shared agent-mail endpoint"
+  fi
+else
+  echo "warn: child MCP proxy missing ($CHILD_MCP_PROXY);" \
+       "spawned children fall back to the shared agent-mail endpoint and must" \
+       "read their own token. Re-run scripts/install.sh to install it."
+fi
+
 warn_managed_block() {
   local label="$1" target="$2" marker="$3"
   if [[ -f "$target" ]] && grep -Fq "$marker" "$target"; then

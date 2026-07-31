@@ -211,6 +211,143 @@ def test_launcher_passes_the_config_to_claude_only_when_present():
     assert '[[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]]' in text
 
 
+def _extract_install_fn(func: str) -> str:
+    text = (_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    start = text.index(f"{func}() {{")
+    end = text.index("\n}\n", start) + len("\n}\n")
+    return text[start:end]
+
+
+def test_installer_ships_the_child_mcp_proxy():
+    """The launcher's proxy path must exist after a normal install.
+
+    Found via the tester's 2026-07-31 re-test: children were falling back to
+    the shared endpoint because integrations/ was never installed.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        install_dir = tmpdir / "agentstack"
+        script = (
+            'REPO_ROOT="$1"; INSTALL_DIR="$2"; DRY_RUN=false\n'
+            'plan() { echo "$*"; }\n'
+            'warn() { echo "warning: $*" >&2; }\n'
+            + _extract_install_fn("install_child_mcp_proxy")
+            + "\ninstall_child_mcp_proxy\n"
+        )
+        result = subprocess.run(
+            ["bash", "-c", script, "bash", str(_ROOT), str(install_dir)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+        # Exactly the path hooks/spawn_child.sh defaults to.
+        runner = install_dir / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+        assert runner.is_file(), "proxy runner not installed"
+        assert os.access(runner, os.X_OK), "proxy runner is not executable"
+
+        # ...and the package it execs, or the runner dies on first use.
+        package = install_dir / "integrations" / "codex_app" / "src" / "agentstack_codex_app"
+        assert (package / "mcp_server.py").is_file()
+        for module in ("agent_mail_client.py", "hook_entry.py", "identity_store.py",
+                       "snapshot.py"):
+            assert (package / module).is_file(), module
+
+        # Build artefacts must not ship.
+        assert not list(package.rglob("__pycache__")), "shipped __pycache__"
+        assert not list(package.rglob("*.pyc")), "shipped .pyc files"
+
+
+def test_installed_proxy_path_matches_what_the_launcher_looks_for():
+    """A path drift between installer and launcher reintroduces the fallback."""
+    spawn = _SPAWN.read_text(encoding="utf-8")
+    assert "/integrations/codex_app/plugin/scripts/run-mcp.sh" in spawn
+    install = (_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "integrations/codex_app" in install
+    assert "install_child_mcp_proxy" in install
+
+
+def test_machine_wide_env_file_cannot_override_the_child_identity():
+    """The runner sources the bridge's env.sh; the caller must still win.
+
+    That file uses plain `export`, so before this guard a machine that had the
+    Codex App bridge installed would rebind every spawned child to the bridge's
+    project_key and endpoint instead of its own.
+    """
+    runner = _ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+
+        # A bridge env.sh that disagrees with the caller on every shared key.
+        install_dir = tmpdir / "codex_app"
+        install_dir.mkdir()
+        (install_dir / "env.sh").write_text(
+            "export AGENTSTACK_PROJECT_KEY=/bridge/project\n"
+            "export AGENTSTACK_MCP_URL=http://127.0.0.1:8765/api/\n",
+            encoding="utf-8",
+        )
+
+        # Stand in for python3 so no server is needed: dump what the proxy would see.
+        stub = tmpdir / "fake-python"
+        stub.write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$AGENTSTACK_PROJECT_KEY" "$AGENTSTACK_MCP_URL" '
+            '"$AGENTSTACK_PROXY_AGENT_NAME"\n',
+            encoding="utf-8",
+        )
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+        env = os.environ.copy()
+        env.update({
+            "AGENTSTACK_CODEX_APP_INSTALL_DIR": str(install_dir),
+            "AGENTSTACK_PYTHON": str(stub),
+            "AGENTSTACK_PROJECT_KEY": "/child/project",
+            "AGENTSTACK_MCP_URL": "http://127.0.0.1:19999/mcp",
+            "AGENTSTACK_PROXY_AGENT_NAME": "Dark-Langmuir",
+        })
+        result = subprocess.run(
+            ["/bin/bash", str(runner)], text=True, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        project, url, agent = result.stdout.strip().splitlines()[:3]
+        assert project == "/child/project", f"bridge env.sh overrode project_key: {project}"
+        assert url == "http://127.0.0.1:19999/mcp", f"bridge env.sh overrode endpoint: {url}"
+        assert agent == "Dark-Langmuir"
+
+
+def test_env_file_still_supplies_values_the_caller_omitted():
+    """Caller-wins must not turn into caller-only: unset keys still come from env.sh."""
+    runner = _ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        install_dir = tmpdir / "codex_app"
+        install_dir.mkdir()
+        (install_dir / "env.sh").write_text(
+            "export AGENTSTACK_MCP_URL=http://127.0.0.1:8765/api/\n", encoding="utf-8")
+        stub = tmpdir / "fake-python"
+        stub.write_text('#!/bin/bash\nprintf "%s\\n" "$AGENTSTACK_MCP_URL"\n', encoding="utf-8")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+        env = os.environ.copy()
+        env.update({
+            "AGENTSTACK_CODEX_APP_INSTALL_DIR": str(install_dir),
+            "AGENTSTACK_PYTHON": str(stub),
+        })
+        env.pop("AGENTSTACK_MCP_URL", None)
+        result = subprocess.run(
+            ["/bin/bash", str(runner)], text=True, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "http://127.0.0.1:8765/api/"
+
+
+def test_doctor_reports_the_fallback_instead_of_staying_silent():
+    doctor = (_ROOT / "scripts" / "doctor.sh").read_text(encoding="utf-8")
+    assert "child MCP proxy" in doctor
+    assert "fall back to the shared agent-mail endpoint" in doctor
+
+
 def _main() -> int:
     failures = 0
     for name, fn in sorted(globals().items()):
