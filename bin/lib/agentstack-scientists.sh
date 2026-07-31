@@ -5,38 +5,21 @@
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_scientists_src="${BASH_SOURCE[0]}"; else _ags_scientists_src="$0"; fi
 AGS_SCIENTISTS_LIB_DIR="$(cd "$(dirname "$_ags_scientists_src")" && pwd)"
 
+# Keep byte-for-byte semantic parity with mcp-agent-mail utils.py
+# SIMPLE_ADJECTIVES (Round 3, 2026-06-26).  Do not extend independently:
+# strict agent-mail deployments validate generated names against that canon.
 AGS_SIMPLE_ADJECTIVES=(
-  Red
-  Orange
-  Pink
-  Black
-  Purple
-  Blue
-  Brown
-  White
-  Green
-  Gold
-  Gray
-  Navy
-  Silver
-  Sunny
-  Foggy
-  Stormy
-  Windy
-  Frosty
-  Cloudy
-  Rainy
-  Swift
-  Quiet
-  Bold
-  Calm
-  Bright
-  Dark
-  Wild
-  Brave
-  Noble
-  Curious
-  Sharp
+  Red Orange Pink Black Purple Blue Brown White Green Gold Gray Navy Silver
+  Amber Coral Crimson Cyan Indigo Jade Olive Rose Ruby Sage Scarlet Teal Violet
+  Copper Bronze Emerald Azure Sunny Foggy Stormy Windy Frosty Cloudy Rainy Misty
+  Hazy Dusty Breezy Snowy Starry Wintry Sandy Rocky Leafy Mossy Swift Quiet Bold
+  Calm Bright Dark Wild Brave Noble Curious Sharp Gentle Silent Keen Vivid Sturdy
+  Lucky Happy Merry Jolly Lively Clever Nimble Hardy Mighty Sleek Cozy Grand Royal
+  Loyal Proud Humble Eager Warm Cool Fresh Crisp Pure Kind Quick Wise Witty Spry
+  Brisk Steady Mellow Agile Trusty Tan Mint Lime Aqua Slate Ash Hazel Cream Peach
+  Steel Brass Plum Cherry Cocoa Icy Balmy Chilly Gusty Dewy Polar Solar Lunar Cosmic
+  Stellar Jovial Cheery Plucky Deft Astute Dapper Neat Smart Hearty Snug Zesty Jaunty
+  Rosy Lush
 )
 
 ags_scientists_json() {
