@@ -463,6 +463,6 @@ agent-mail clone、mail home、DB、`.env` は既定で retained path です。�
 
 ## License
 
-Copyright (c) 2026 gyroid. 利用条件は [LICENSE](LICENSE) を参照してください。
+本 repository は **MIT License (with OpenAI/Anthropic Rider)** です。通常の MIT 許諾に、OpenAI・Anthropic とその関係者への提供を制限する rider が付きます。全文は [LICENSE](LICENSE) を参照してください。
 
 `mcp_agent_mail` は別 component であり、上記の Rider 付き MIT license が適用されます。

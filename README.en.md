@@ -463,6 +463,6 @@ The agent-mail clone, mail home, database, and `.env` are retained by default. `
 
 ## License
 
-Copyright (c) 2026 gyroid. See [LICENSE](LICENSE) for the terms.
+This repository is licensed under the **MIT License (with OpenAI/Anthropic Rider)** — a standard MIT grant plus a rider restricting provision to OpenAI, Anthropic, and related parties. See [LICENSE](LICENSE) for the full text.
 
 `mcp_agent_mail` is a separate component under the MIT License with OpenAI/Anthropic Rider described above.
