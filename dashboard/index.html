@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Telemetry</title>
+<title>AgentStack · Agent Telemetry</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <style>
   :root{
     --void:#080a0c;          /* deep ink */
@@ -781,17 +781,13 @@
   .node.sp-child  .prole{stroke:#9d7bff}   /* 子（被委任） */
   .node.sp-both   .prole{stroke:#3fd6a0}   /* 親かつ子（中間） */
   /* 既定の肖像/ドット = グレースケール（＝非active の基準状態） */
-  .node .pimg{image-rendering:pixelated;
-    filter:grayscale(1) contrast(1.06) brightness(.92)}
+  .node .pimg{image-rendering:auto}
 
   /* status = 生存表現（明度・リング・グロー・減光）。
      色は spawn 系統に予約済み — status には絶対に載せない */
 
   /* ▍ACTIVE｜励起したフォスファ：発色 + 常時ハロー + ソナー掃引 */
-  .node.run .pimg{filter:contrast(1.05) saturate(1.18) brightness(1.2)
-    drop-shadow(var(--glow-a))}
-  .node.run .dot,.node.run .prole{
-    filter:drop-shadow(0 0 7px rgba(255,176,46,.75))}
+  .node.run .dot,.node.run .prole{stroke-width:2.8}
   .node.run .ring{opacity:.98;r:23;stroke-width:2.8}
   .node.run .pimg,.node.run .prole,.node.run .dot{transform:scale(1.2);
     transform-box:fill-box;transform-origin:center}
@@ -815,7 +811,6 @@
   /* ▍FINISHED｜残骸：claude 終了済・tmux セッションだけ残存（husk）。
      旧実装は present を一律 idle 表示して非active が沈まなかった（CK P1） */
   .node.finished{opacity:.4}
-  .node.finished .pimg{filter:grayscale(1) brightness(.46) contrast(1.02)}
   .node.finished .pimg,.node.finished .prole,.node.finished .dot{
     transform:scale(.78);transform-box:fill-box;transform-origin:center}
   .node.finished .ring{opacity:0}
@@ -823,7 +818,6 @@
 
   /* ▍GONE｜残像：登録のみ・セッション無し。最も縮小・減光 */
   .node.gone{opacity:.42}
-  .node.gone .pimg{filter:grayscale(1) brightness(.46) contrast(1.02)}
   .node.gone .pimg,.node.gone .prole,.node.gone .dot{
     transform:scale(.72);transform-box:fill-box;transform-origin:center}
   .node.gone .ring{opacity:0}
@@ -831,12 +825,10 @@
 
   /* ▍RETIRED｜焼損：ほぼ消灯 */
   .node.retired{opacity:.28}
-  .node.retired .pimg{filter:grayscale(1) brightness(.34)}
   .node.retired text{fill:#5b574d}
   #net.focus .node{opacity:.26}
   #net.focus .node.hl{opacity:1}
-  #net.focus .node.hl .prole,#net.focus .node.hl .dot{
-    filter:drop-shadow(var(--glow-c))}
+  #net.focus .node.hl .prole,#net.focus .node.hl .dot{stroke-width:2.8}
   .node:hover .dot,.node:hover .prole{stroke:var(--cyan)}
   /* iOS Safari の長押しでテキスト選択メニュー / コールアウトを出さない。
      長押しは独自に gtip 表示用に使う。*/
@@ -853,7 +845,7 @@
 
   /* ── role annotation chip（ノード下: タスク内役割。色は系統予約のため中立）─ */
   .node .annot-pill{fill:rgba(8,10,12,.86);stroke:var(--amber);stroke-width:1;
-    filter:drop-shadow(0 0 5px rgba(255,176,46,.26));pointer-events:none}
+    pointer-events:none}
   .node .annot-lab{fill:var(--bone);font-family:"Chakra Petch",sans-serif;
     font-size:7.5px;font-weight:600;letter-spacing:.3px;pointer-events:none}
   .node.finished .annot-pill,.node.gone .annot-pill{stroke:var(--bone-dim);opacity:.62}
@@ -911,16 +903,12 @@
     transform:rotate(-90deg);
     transition:stroke-dashoffset .7s ease,opacity .3s,stroke .4s}
   .node .scan{fill:none;stroke:#fff4d6;stroke-width:2.6;
-    stroke-linecap:round;opacity:0;transform-box:fill-box;
-    transform-origin:center;filter:drop-shadow(0 0 4px #ffd98a)}
+    stroke-linecap:round;opacity:0;transform-box:fill-box;transform-origin:center}
   .node.run .hptrack{opacity:.85}
   .node.run .hp{opacity:.96}
-  .node .hp.hp-hi{stroke:#3fd6a0;
-    filter:drop-shadow(0 0 4px rgba(63,214,160,.65))}
-  .node .hp.hp-mid{stroke:#ffb44a;
-    filter:drop-shadow(0 0 4px rgba(255,180,74,.7))}
-  .node .hp.hp-lo{stroke:#ff5a4d;
-    filter:drop-shadow(0 0 5px rgba(255,90,77,.85))}
+  .node .hp.hp-hi{stroke:#3fd6a0}
+  .node .hp.hp-mid{stroke:#ffb44a}
+  .node .hp.hp-lo{stroke:#ff5a4d}
   /* WORK｜生成中: 細い走査弧が残量リングを周回（活動の鼓動と同調） */
   .node.act-work .scan{opacity:.92;
     animation:hpscan 1.15s linear infinite}
@@ -948,8 +936,7 @@
   /* ASK｜角丸の本物の吹き出し＋JRPG 風バウンスの「!」＋HP 赤フラッシュ */
   .node .askbub{pointer-events:none;transform-box:fill-box;
     transform-origin:center}
-  .node .askbub .bubp{fill:#2a130e;stroke:#ff6a5d;stroke-width:1.6;
-    filter:drop-shadow(0 0 5px rgba(255,90,77,.8))}
+  .node .askbub .bubp{fill:#2a130e;stroke:#ff6a5d;stroke-width:1.6}
   .node .askbub .bx{font-family:"Chakra Petch",sans-serif;font-weight:800;
     font-size:13px;fill:#ffd0c8;paint-order:stroke;
     stroke:#2a130e;stroke-width:2.6px}
@@ -967,8 +954,7 @@
   /* QUESTION｜AskUserQuestion ウィジェット表示中: シアンの ? 吹き出し点滅 */
   .node .qbub{pointer-events:none;transform-box:fill-box;
     transform-origin:center}
-  .node .qbub .bubq{fill:#0a2630;stroke:#36e8ff;stroke-width:1.6;
-    filter:drop-shadow(0 0 5px rgba(54,232,255,.8))}
+  .node .qbub .bubq{fill:#0a2630;stroke:#36e8ff;stroke-width:1.6}
   .node .qbub .bq{font-family:"Chakra Petch",sans-serif;font-weight:800;
     font-size:13px;fill:#a8f0ff;paint-order:stroke;
     stroke:#0a2630;stroke-width:2.6px}
@@ -995,8 +981,7 @@
   .node .murmur{pointer-events:none;transform-box:fill-box;
     transform-origin:center;opacity:0;
     animation:murmur 3.8s ease-out forwards}
-  .node .murmur .mbp{fill:#1e2228;stroke:#a09680;stroke-width:1.1;
-    filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
+  .node .murmur .mbp{fill:#1e2228;stroke:#a09680;stroke-width:1.1}
   .node .murmur .mtail{fill:#1e2228}
   .node .murmur .mtx{font-family:"Chakra Petch",sans-serif;font-weight:600;
     font-size:9px;letter-spacing:.2px;fill:#ece1c4;
@@ -1048,9 +1033,7 @@
   #net.sel-mode #gsvg{cursor:crosshair}
   #net.sel-mode .node{cursor:pointer}
   /* 選択中ノード: amber リング + 細線フレーム */
-  .node.selnode .ring{stroke:var(--amber);stroke-width:2.4;
-    opacity:1;filter:drop-shadow(0 0 6px rgba(255,176,46,.55))}
-  .node.selnode .pimg{filter:none}
+  .node.selnode .ring{stroke:var(--amber);stroke-width:2.4;opacity:1}
   .node.selnode .prole{stroke:var(--amber);stroke-width:1.8;opacity:.95}
   /* 矩形セレクション (dashed amber + 半透明 fill) */
   .selrect{fill:rgba(255,176,46,.06);stroke:var(--amber);stroke-width:1;
@@ -1365,14 +1348,12 @@
   /* 履歴イベント演出（mail-comet 用の追加 class） */
   .node-spawn-fadein .ring{stroke:var(--rb-amb);
     animation:rb-spawn-fade 1.1s ease-out forwards}
-  @keyframes rb-spawn-fade{0%{opacity:0;filter:drop-shadow(0 0 14px var(--rb-amb))}
-    100%{opacity:1;filter:none}}
+  @keyframes rb-spawn-fade{0%{opacity:0}100%{opacity:1}}
   .node-retire-flash .ring{
     animation:rb-retire-flash 1s ease-out forwards}
-  @keyframes rb-retire-flash{0%{stroke:var(--alert);
-      filter:drop-shadow(0 0 16px var(--alert))}
-    35%{stroke:var(--alert);filter:drop-shadow(0 0 8px var(--alert))}
-    100%{stroke:rgba(150,140,120,.45);filter:saturate(.1)}}
+  @keyframes rb-retire-flash{
+    0%,35%{stroke:var(--alert)}
+    100%{stroke:rgba(150,140,120,.45)}}
   .node-exit-glyph{position:absolute;color:var(--cyan);
     font-family:"IBM Plex Mono";font-size:13px;letter-spacing:.5px;
     text-shadow:0 0 8px rgba(54,232,255,.6);
@@ -1403,9 +1384,8 @@
     100%{opacity:1}}
   .node.tt-spawning .ring{animation:tt-spawn-ring 1.05s ease-out}
   @keyframes tt-spawn-ring{
-    0%{stroke:var(--rb-amb);filter:drop-shadow(0 0 18px var(--rb-amb))}
-    55%{stroke:var(--rb-amb);filter:drop-shadow(0 0 6px var(--rb-amb))}
-    100%{filter:none}}
+    0%,55%{stroke:var(--rb-amb)}
+    100%{stroke:var(--ink-dim)}}
   /* spawn 時の新 edge も同じ amber pulse */
   .edge.tt-edge-spawning{animation:tt-edge-grow 1.1s ease-out}
   @keyframes tt-edge-grow{
@@ -1417,9 +1397,7 @@
     stroke:var(--rb-ask, #ffd166)!important;
     stroke-width:2.4!important;
     animation:rb-ask-flicker 1.4s ease-in-out infinite}
-  @keyframes rb-ask-flicker{
-    0%,100%{filter:drop-shadow(0 0 4px rgba(255,209,102,.45))}
-    50%{filter:drop-shadow(0 0 12px rgba(255,209,102,.95))}}
+  @keyframes rb-ask-flicker{0%,100%{opacity:.55}50%{opacity:1}}
   /* `?` glyph overlay (replay 時): 既存 askbub は live SVG が作るので衝突しない
      replay 用は単独 SVG <text> を ring 横に出す */
   .ask-replay-glyph{position:absolute;color:#ffd166;
@@ -1435,14 +1413,11 @@
   .node.replay-alert .ring{
     animation:rb-alert-pulse .3s steps(2,end) 3 alternate}
   @keyframes rb-alert-pulse{
-    0%{stroke:var(--alert);
-      filter:drop-shadow(0 0 4px var(--alert))}
-    100%{stroke:#ff7a6d;
-      filter:drop-shadow(0 0 14px #ff5a4d)}}
+    0%{stroke:var(--alert);stroke-width:1.4}
+    100%{stroke:#ff7a6d;stroke-width:3.2}}
   /* Task H: retire/exit 引き上げの色味（既存 retire-flash の "残り" を replay 用に） */
-  .node.replay-retired .ring{stroke:rgba(150,140,120,.45)!important;
-    filter:saturate(.1)!important;transition:filter .8s ease-out}
-  .node.replay-retired .pimg{filter:grayscale(.85) brightness(.78)}
+  .node.replay-retired .ring{stroke:rgba(150,140,120,.45)!important}
+  .node.replay-retired .portrait-shade{opacity:.22}
   /* TIME-TRAVEL toggle はトーンを「時間軸」寄りに振る (◷ glyph) */
   #replayBar .rb-tt[aria-checked="true"]{background:var(--rb-amb);
     color:var(--void)}
@@ -1568,7 +1543,7 @@
     .node.run .etime{animation:none;opacity:.9}
     .node .murmur{animation:none;opacity:1}}
 
-  /* ── TERM ボタン & ターミナルオーバーレイ ── */
+  /* ── agent detail overlay ── */
   .term{flex:none;cursor:pointer;font-family:"Chakra Petch",sans-serif;
     font-weight:700;font-size:11px;letter-spacing:2px;color:var(--amber);
     background:rgba(255,176,46,.06);border:1px solid var(--line);
@@ -1596,35 +1571,20 @@
     letter-spacing:1.5px;color:var(--bone)}
   .tm-meta{font-size:10.5px;letter-spacing:1.5px;color:var(--bone-dim);
     text-transform:uppercase}
-  .tm-tabs,.tm-lines{display:flex;border:1px solid var(--line)}
-  .tm-tabs button,.tm-lines button{font-family:"IBM Plex Mono";
+  .tm-tabs{display:flex;border:1px solid var(--line)}
+  .tm-tabs button{font-family:"IBM Plex Mono";
     font-size:10.5px;letter-spacing:1.5px;color:var(--bone-dim);
     background:transparent;border:0;padding:6px 12px;cursor:pointer}
-  .tm-tabs button+button,.tm-lines button+button{
+  .tm-tabs button+button{
     border-left:1px solid var(--line-soft)}
   .tm-tabs button.on{color:var(--void);background:var(--amber)}
-  .tm-lines button.on{color:var(--void);background:var(--cyan)}
   .tm-grow{flex:1}
   .tm-x{cursor:pointer;background:transparent;border:1px solid var(--line);
     color:var(--bone-dim);width:30px;height:28px;font-size:13px}
   .tm-x:hover{color:var(--alert);border-color:var(--alert)}
-  .tm-scr{flex:1;margin:0;overflow:auto;padding:14px 18px;
-    font-family:"IBM Plex Mono",monospace;font-size:12px;line-height:1.42;
-    color:#d6cfbe;background:#070809;white-space:pre;tab-size:8;
-    text-shadow:0 0 1px rgba(214,207,190,.25)}
-  .tm-scr::-webkit-scrollbar{width:11px}
   .tm-foot{display:flex;align-items:center;gap:12px;padding:9px 18px;
     border-top:1px solid var(--line);font-size:10.5px;letter-spacing:1px;
     color:var(--bone-dim)}
-  .tm-follow{display:flex;align-items:center;gap:7px;cursor:pointer;
-    text-transform:uppercase}
-  .tm-follow input{appearance:none;width:30px;height:15px;
-    background:rgba(0,0,0,.5);border:1px solid var(--line);position:relative;
-    cursor:pointer}
-  .tm-follow input::after{content:"";position:absolute;top:1px;left:1px;
-    width:11px;height:11px;background:var(--bone-dim);transition:.15s}
-  .tm-follow input:checked{border-color:var(--amber)}
-  .tm-follow input:checked::after{left:16px;background:var(--amber)}
   .tm-exit-btn{cursor:pointer;font-family:"Chakra Petch",sans-serif;
     font-weight:700;font-size:11px;letter-spacing:1.5px;color:var(--amber);
     background:rgba(255,176,46,.07);border:1px solid rgba(255,176,46,.4);
@@ -1639,18 +1599,10 @@
   .tm-open:hover{background:var(--cyan);color:var(--void);
     box-shadow:var(--glow-c)}
 
-  /* tab 切替: hist / term。term は既定 ttyd、ttyd 不可時 .fallback で
-     read-only capture(.tm-scr)に切替。lines/follow は fallback 時のみ。 */
-  .tm-hist,.tm-scr,.tm-ptty,.tm-deliv{display:none}
+  /* Integrated detail tabs: transcript history and output only. */
+  .tm-hist,.tm-deliv{display:none}
   #term[data-tab="hist"] .tm-hist{display:flex}
   #term[data-tab="deliv"] .tm-deliv{display:flex}
-  #term[data-tab="term"] .tm-ptty{display:block}
-  #term[data-tab="term"].fallback .tm-ptty{display:none}
-  #term[data-tab="term"].fallback .tm-scr{display:block}
-  #tm-lines,#tm-followwrap{display:none}
-  #term[data-tab="term"].fallback #tm-lines,
-  #term[data-tab="term"].fallback #tm-followwrap{display:flex}
-  .tm-ptty{flex:1;width:100%;border:0;background:#070809}
 
   /* gtip 相当の軽量サマリーを panel ヘッダー下に表示。モバイルでは hover
      が無いので、タップで開く openPanel に gtip の情報を統合する。
@@ -1824,6 +1776,268 @@
     letter-spacing:2px;text-transform:uppercase;padding:6px}
   .tm-hist .hempty{margin:auto;color:var(--bone-dim);letter-spacing:3px;
     font-family:"Chakra Petch",sans-serif}
+
+  /* AgentStack telemetry surface: low-saturation glass and restrained amber. */
+  :root{
+    --bg:#0b0d11;--panel:#111419;--panel-2:#161a21;--elev:#1c212a;
+    --ink:#ece5d6;--ink-dim:#9a9384;--ink-faint:#5f5c52;
+    --hair:rgba(236,229,214,.085);--hair-2:rgba(236,229,214,.045);
+    --amber:#f2b65a;--amber-glow:rgba(242,182,90,.22);
+    --ln-local:#5fb3a3;--ln-remote:#b58be0;--ln-delegate:#83b06a;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --serif:'Fraunces',Georgia,serif;
+    --void:var(--bg);--bone:var(--ink);--bone-dim:var(--ink-dim);
+    --amber-deep:#9f7337;--cyan:var(--amber);--alert:#d87863;
+    --line:var(--hair);--line-soft:var(--hair-2);
+    --glow-a:0 0 14px var(--amber-glow);
+    --glow-c:0 0 10px rgba(236,229,214,.16)}
+  html{scrollbar-color:var(--ink-faint) transparent}
+  ::selection{background:var(--amber);color:var(--bg)}
+  ::-webkit-scrollbar-thumb{
+    background:var(--ink-faint);border:3px solid var(--bg);border-radius:8px}
+  body{
+    background:
+      radial-gradient(ellipse 60% 50% at 78% 8%,rgba(242,182,90,.05),transparent 60%),
+      radial-gradient(ellipse 80% 60% at 12% 100%,rgba(95,179,163,.045),transparent 55%),
+      var(--bg);
+    color:var(--ink);font-family:var(--mono);letter-spacing:0;padding-bottom:72px}
+  .fx.scan{opacity:.13;mix-blend-mode:multiply}
+  .fx.grain{opacity:.03}
+  .fx.vignette{background:radial-gradient(115% 100% at 50% 45%,
+    transparent 62%,rgba(0,0,0,.32) 100%)}
+
+  body>header{
+    min-height:58px;padding:9px 22px;gap:22px;
+    background:linear-gradient(180deg,var(--panel),rgba(17,20,25,.76));
+    border-bottom:1px solid var(--hair);backdrop-filter:blur(8px)}
+  body>header::after{background:none}
+  .brand b{
+    font-family:var(--serif);font-size:20px;font-weight:600;
+    letter-spacing:.12em;color:var(--ink);text-shadow:none}
+  .brand b i{color:var(--amber);font-weight:500}
+  .brand span,.gauge .k,.mh-label{
+    font-family:var(--mono);font-size:9px;letter-spacing:.2em;color:var(--ink-faint)}
+  .gauges{gap:16px}.gauge{min-width:62px;gap:4px}
+  .gauge .v{
+    font-family:var(--serif);font-size:18px;font-weight:500;color:var(--ink);
+    text-shadow:none}
+  .gauge.run .v,.gauge.tot .v{color:var(--ink);text-shadow:none}
+  .gauge .bar{height:2px;background:var(--hair-2)}
+  .gauge .bar i,.gauge.run .bar i,.gauge.idle .bar i,.gauge.tot .bar i{
+    background:var(--ink-dim);box-shadow:none}
+  .mail-health,.sesschip{
+    padding:5px 10px;border:1px solid var(--hair);border-radius:999px;
+    background:rgba(17,20,25,.62);letter-spacing:.12em}
+  .mh-dot{width:6px;height:6px;background:var(--ink-faint)}
+  .mail-health[data-status="green"] .mh-dot{background:var(--ink-dim)}
+  .mail-health[data-status="yellow"] .mh-dot,
+  .mail-health[data-status="red"] .mh-dot{background:var(--amber)}
+  .viewtog{
+    background:rgba(17,20,25,.74);border-color:var(--hair);
+    border-radius:999px;clip-path:none;overflow:hidden}
+  .viewtog button,.newbtn,.win,.netinfo,.nctl,.sel-toggle{
+    font-family:var(--mono)}
+  .viewtog button{
+    font-size:9.5px;font-weight:500;letter-spacing:.14em;padding:6px 12px}
+  .viewtog button.on{color:var(--amber);background:var(--amber-glow);box-shadow:none}
+  input[type=search]{
+    width:226px;padding:8px 12px 8px 26px;color:var(--ink);
+    background:rgba(17,20,25,.76);border-color:var(--hair);
+    border-radius:7px;clip-path:none}
+  input[type=search]:focus{
+    border-color:rgba(242,182,90,.42);
+    box-shadow:0 0 0 2px rgba(242,182,90,.06)}
+  .newbtn{
+    border:1px solid rgba(242,182,90,.32);border-radius:7px;clip-path:none;
+    background:var(--amber-glow);color:var(--amber);box-shadow:none}
+  main{gap:10px;padding:22px 22px 0}
+  .sector{
+    margin-top:16px;font-family:var(--mono);font-size:9px;
+    letter-spacing:.22em;color:var(--ink-dim)}
+  .sector::before{background:var(--amber);box-shadow:none}
+  .bay{
+    background:linear-gradient(180deg,rgba(255,255,255,.025),transparent),var(--panel);
+    border-color:var(--hair);border-radius:9px;clip-path:none;
+    box-shadow:0 10px 32px rgba(0,0,0,.12)}
+  .bay:hover{background:var(--panel-2);--edge:rgba(242,182,90,.28)}
+  .bay::after{display:none}
+  .bay .nm,.bay .task{font-family:var(--serif);font-weight:500}
+
+  /* Network medallions use paint primitives only: no per-node CSS filters. */
+  #net{
+    height:calc(100vh - 58px);
+    background:
+      linear-gradient(var(--hair-2) 1px,transparent 1px),
+      linear-gradient(90deg,var(--hair-2) 1px,transparent 1px),
+      radial-gradient(ellipse 68% 62% at 50% 42%,rgba(28,33,42,.68),transparent 72%),
+      var(--bg);
+    background-size:48px 48px,48px 48px,auto;background-position:center}
+  .node .pimg{image-rendering:auto}
+  .node .node-halo{
+    fill:url(#node-halo-grad);opacity:0;pointer-events:none;transition:opacity .2s}
+  .node.run .node-halo{opacity:.34}
+  .node.selnode .node-halo{opacity:.24}
+  #net.focus .node.hl .node-halo{opacity:.2}
+  .node .portrait-shade{fill:#000;opacity:.08;pointer-events:none;transition:opacity .15s}
+  .node.run .portrait-shade{opacity:0}
+  .node.finished .portrait-shade,.node.gone .portrait-shade{opacity:.54}
+  .node.retired .portrait-shade{opacity:.66}
+  .node.run .pimg,.node.run .portrait-shade,.node.run .prole,.node.run .dot{
+    transform:scale(1.2);transform-box:fill-box;transform-origin:center}
+  .node.finished .pimg,.node.finished .portrait-shade,
+  .node.finished .prole,.node.finished .dot{
+    transform:scale(.78);transform-box:fill-box;transform-origin:center}
+  .node.gone .pimg,.node.gone .portrait-shade,
+  .node.gone .prole,.node.gone .dot{
+    transform:scale(.72);transform-box:fill-box;transform-origin:center}
+  .node.sp-none .dot{fill:var(--ink-faint)}
+  .node.sp-parent .dot{fill:var(--ln-local)}
+  .node.sp-child .dot{fill:var(--ln-remote)}
+  .node.sp-both .dot{fill:var(--ln-delegate)}
+  .node .prole{stroke:var(--ink-faint);stroke-width:1.55}
+  .node.sp-parent .prole{stroke:var(--ln-local)}
+  .node.sp-child .prole{stroke:var(--ln-remote)}
+  .node.sp-both .prole{stroke:var(--ln-delegate)}
+  .node .ring{stroke:var(--ink-dim);stroke-width:1.1;opacity:0}
+  .node.run .ring{opacity:0}
+  .node.selnode .ring{opacity:1;stroke:var(--amber);stroke-width:1.25}
+  .node .ctx-track,.node .ctx-arc-glow,.node .ctx-arc{
+    fill:none;stroke-linecap:round;transform:rotate(-90deg);
+    transform-box:fill-box;transform-origin:center}
+  .node .ctx-track{stroke:rgba(236,229,214,.1);stroke-width:1.3}
+  .node .ctx-arc-glow{stroke:var(--amber);stroke-width:4.2;opacity:.16}
+  .node .ctx-arc{stroke:var(--amber);stroke-width:1.55}
+  .node .ctx-arc-glow.ctx-low{stroke:#d87863;opacity:.22}
+  .node .ctx-arc.ctx-low{stroke:#d87863}
+  .node .motion-ring{
+    fill:none;stroke:var(--amber);stroke-width:1.6;stroke-linecap:round;
+    stroke-dasharray:30 70;opacity:0;transform-box:fill-box;transform-origin:center}
+  .node.act-work .motion-ring{opacity:.9;animation:motion-spin 1.5s linear infinite}
+  @keyframes motion-spin{to{transform:rotate(360deg)}}
+  .node text{
+    font-family:var(--mono);font-weight:500;font-size:10px;letter-spacing:.055em;
+    stroke:var(--bg);stroke-width:2.2px}
+  .node text:not([class]){
+    font-family:var(--serif);font-weight:500;font-size:10.5px;letter-spacing:.02em}
+  .node.run text:not([class]){fill:var(--ink);font-size:11px;font-weight:500}
+  .node .annot-lab{
+    font-family:var(--mono);font-size:6.8px;font-weight:500;
+    letter-spacing:.13em;fill:var(--ink-dim)}
+  .node .annot-pill{
+    fill:rgba(17,19,25,.72);stroke:rgba(255,255,255,.09);stroke-width:.75}
+  .node .provider-badge{pointer-events:none}
+  .node .provider-seat-shadow{fill:rgba(0,0,0,.45)}
+  .node .provider-seat{
+    fill:rgba(17,19,25,.9);stroke:rgba(255,255,255,.14);stroke-width:.8}
+  .node .provider-logo{opacity:.82}
+  .node.run .provider-logo{opacity:.96}
+  .node.finished .provider-badge,.node.gone .provider-badge{opacity:.48}
+  .node.retired .provider-badge{opacity:.26}
+  .edge{stroke:var(--ink-dim);opacity:.22}
+  .edge.spawn{
+    stroke:var(--ln-delegate);opacity:.4;stroke-width:1.25!important;
+    stroke-dasharray:none!important}
+  .edge-count{
+    fill:var(--ink-dim);stroke:var(--bg);stroke-width:2.4;
+    font-family:var(--mono);font-size:9px;font-weight:500}
+  .nettool{top:13px;left:14px;gap:6px}
+  .win,.netinfo,.nctl,.sel-toggle,.legend{
+    background:rgba(17,20,25,.9);border:1px solid var(--hair);
+    border-radius:9px;clip-path:none;box-shadow:0 16px 42px rgba(0,0,0,.18)}
+  .legend{color:var(--ink-dim)}
+  .legend .ctx-sample{
+    display:inline-block;width:13px;height:13px;border:2px solid var(--amber);
+    border-right-color:transparent;border-radius:50%;transform:rotate(-30deg)}
+  .legend .motion-sample{
+    display:inline-block;width:13px;height:13px;border:1.5px solid var(--amber);
+    border-left-color:transparent;border-bottom-color:transparent;border-radius:50%}
+  .legend .motion-sample.working{animation:motion-spin 1.5s linear infinite}
+  #net.dense .node text,#net.dense .annot-pill,#net.dense .annot-lab,
+  #net.dense .edge-count,#net.dense .provider-badge,#net.dense .ctx-track,
+  #net.dense .ctx-arc,#net.dense .ctx-arc-glow{display:none}
+
+  /* Detail, spawn and thread surfaces share one glass material. */
+  #term,#spawnmd{background:rgba(8,9,13,.62);backdrop-filter:blur(10px)}
+  #term .tm-box,#spawnmd .spm-frame,#edrawer{
+    background:linear-gradient(180deg,rgba(255,255,255,.045),transparent 140px),
+      rgba(17,19,25,.66);
+    backdrop-filter:blur(26px) saturate(1.12);
+    border:1px solid rgba(255,255,255,.09);clip-path:none;
+    box-shadow:0 30px 90px rgba(0,0,0,.52)}
+  #term .tm-box{
+    width:min(1180px,calc(100vw - 48px));height:min(88vh,900px);
+    border-radius:13px;overflow:hidden}
+  .tm-bar{
+    min-height:72px;padding:11px 16px;gap:12px;background:rgba(255,255,255,.012);
+    border-bottom:1px solid rgba(255,255,255,.075)}
+  .tm-led{width:6px;height:6px;background:var(--ink-faint);box-shadow:none}
+  #term.s-run .tm-led{background:var(--amber);box-shadow:0 0 0 3px rgba(242,182,90,.08)}
+  .tm-portrait{
+    width:46px;height:46px;flex:0 0 46px;object-fit:cover;border-radius:50%;
+    border:1px solid rgba(255,255,255,.12);background:var(--elev);
+    filter:grayscale(1) contrast(1.04) brightness(.96)}
+  .tm-portrait[hidden]{display:none}
+  .tm-ident{
+    min-width:150px;max-width:310px;display:flex;flex-direction:column;
+    justify-content:center;gap:3px}
+  .tm-nm{
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--ink);font-family:var(--serif);font-size:19px;font-weight:500}
+  .tm-meta{
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--ink-faint);font-size:8.5px;letter-spacing:.12em}
+  .tm-tabs{
+    flex:none;border:1px solid var(--hair);border-radius:7px;
+    background:rgba(11,13,17,.34);overflow:hidden}
+  .tm-tabs button{
+    color:var(--ink-dim);font-family:var(--mono);font-size:9px;
+    font-weight:500;letter-spacing:.1em;padding:7px 10px}
+  .tm-tabs button.on{color:var(--amber);background:var(--amber-glow);box-shadow:none}
+  .tm-x,.tm-open,.tm-exit-btn{
+    border:1px solid var(--hair);border-radius:6px;background:transparent;
+    color:var(--ink-dim);box-shadow:none;font-family:var(--mono);
+    font-size:9px;font-weight:500;letter-spacing:.1em}
+  .tm-x{width:auto;height:30px;padding:0 10px}
+  .tm-open,.tm-exit-btn{padding:7px 10px}
+  .tm-x:hover,.tm-open:hover,.tm-exit-btn:hover{
+    color:var(--amber);border-color:rgba(242,182,90,.38);
+    background:var(--amber-glow);box-shadow:none}
+  .tm-summary,.tm-spark,.tm-annot{
+    background:rgba(11,13,17,.25);
+    border-bottom:1px solid rgba(255,255,255,.06)}
+  .tm-hist,.tm-deliv{background:rgba(11,13,17,.58);padding:17px 20px;gap:10px}
+  .bub,.msg.user .bub,.msg.assistant .bub{
+    color:var(--ink);background:rgba(255,255,255,.018);
+    border:1px solid var(--hair);border-radius:7px}
+  #spawnmd .spm-frame{
+    width:min(940px,calc(100vw - 48px));border-radius:13px;padding:21px 24px 19px}
+  #spawnmd .spm-frame::before,#spawnmd .spm-frame::after{display:none}
+  #spawnmd input[type=text],#spawnmd select,#spawnmd textarea{
+    color:var(--ink);background:rgba(11,13,17,.52);
+    border:1px solid var(--hair);border-radius:7px;clip-path:none}
+  #edrawer{
+    top:68px;right:0;bottom:14px;width:min(390px,calc(100vw - 18px));
+    border-right:0;border-radius:13px 0 0 13px}
+  body.embed{padding-bottom:0}
+  body.embed>header{min-height:44px;padding:6px 12px;gap:10px;background:var(--bg)}
+  body.embed>header .brand,body.embed>header .gauges,
+  body.embed>header .mail-health,body.embed>header .spacer{display:none}
+  body.embed>header .controls{margin-left:auto}
+  body.embed #net{height:calc(100vh - 44px)}
+  body.embed #replayBar{top:52px}
+  body.embed main{padding-top:13px}
+  @media (prefers-reduced-motion:reduce){
+    .node.act-work .motion-ring,.legend .motion-sample.working{animation:none}}
+  @media (max-width:760px){
+    main{grid-template-columns:1fr;padding-left:13px;padding-right:13px}
+    body>header{padding:9px 13px}.gauges{display:none}.controls{width:100%}
+    .field{flex:1}input[type=search]{width:100%}
+    #term{padding:8px}
+    #term .tm-box{width:calc(100vw - 16px);height:calc(100vh - 16px);border-radius:10px}
+    .tm-bar{min-height:0;flex-wrap:wrap;padding:10px}
+    .tm-portrait{width:38px;height:38px;flex-basis:38px}
+    .tm-ident{min-width:0;max-width:calc(100% - 92px);flex:1}
+    .tm-tabs{order:5;width:100%}.tm-tabs button{flex:1}}
 </style>
 </head>
 <body data-view="deck">
@@ -1833,7 +2047,7 @@
 
 <header>
   <div class="brand">
-    <b>AGENT<i>//</i>TELEMETRY</b>
+    <b>AGENTSTACK <i>·</i> TELEMETRY</b>
     <span>tmux × mcp-agent-mail</span>
   </div>
   <div class="viewtog">
@@ -1973,17 +2187,14 @@ OFF = legacy snapshot+comet mode">
     </div>
     <div class="lg-row">
       <span class="lg-lab">CTX</span>
-      <span class="lg-itm"><span class="lhp lhp-hi"></span>hi</span>
-      <span class="lg-itm"><span class="lhp lhp-mid"></span>mid</span>
-      <span class="lg-itm"><span class="lhp lhp-lo"></span>low</span>
+      <span class="lg-itm"><span class="ctx-sample"></span>context remaining</span>
     </div>
     <div class="lg-row">
-      <span class="lg-lab">ACT</span>
-      <span class="lg-itm">⚙ working</span>
-      <span class="lg-itm">Zz waiting</span>
-      <span class="lg-itm">! approval</span>
+      <span class="lg-lab">MOTION</span>
+      <span class="lg-itm"><span class="motion-sample waiting"></span>waiting</span>
+      <span class="lg-itm"><span class="motion-sample working"></span>working</span>
     </div>
-    <div class="lg-hint">pulse speed = work intensity · click node/edge for detail</div>
+    <div class="lg-hint">context is static data · motion marks active work</div>
   </div>
   <!-- F1 net-controls: 力学/表示パラメータの即時チューニング（localStorage 永続化） -->
   <div class="nctl" id="nctl">
@@ -2120,22 +2331,20 @@ OFF = legacy snapshot+comet mode">
   <div class="tm-box">
     <div class="tm-bar">
       <span class="tm-led" id="tm-led"></span>
-      <span class="tm-nm" id="tm-nm">—</span>
-      <span class="tm-meta" id="tm-meta"></span>
+      <img class="tm-portrait" id="tm-portrait" alt="" hidden
+           onerror="portraitFallback(this)">
+      <div class="tm-ident">
+        <span class="tm-nm" id="tm-nm">—</span>
+        <span class="tm-meta" id="tm-meta"></span>
+      </div>
       <span class="tm-tabs" id="tm-tabs">
-        <button class="on" data-tab="hist">▤ History</button>
-        <button data-tab="deliv">📄 Output</button>
-        <button data-tab="term">⌨ Terminal</button>
+        <button class="on" data-tab="hist">History</button>
+        <button data-tab="deliv">Output</button>
       </span>
       <span class="tm-grow"></span>
-      <button class="tm-exit-btn" id="tm-exit-btn" style="display:none">↩ Exit</button>
-      <button class="tm-open" id="tm-open">⇱ Open tmux</button>
-      <span class="tm-lines" id="tm-lines">
-        <button data-ln="200">200</button>
-        <button data-ln="500" class="on">500</button>
-        <button data-ln="2000">2K</button>
-      </span>
-      <button class="tm-x" id="tm-x" title="Close (Esc)">✕</button>
+      <button class="tm-exit-btn" id="tm-exit-btn" style="display:none">Exit</button>
+      <button class="tm-open" id="tm-open">OPEN TMUX</button>
+      <button class="tm-x" id="tm-x" title="Close (Esc)">Close</button>
     </div>
     <div class="tm-summary" id="tm-summary" aria-hidden="true"></div>
     <section class="tm-spark" id="tm-spark" aria-hidden="true">
@@ -2161,18 +2370,31 @@ OFF = legacy snapshot+comet mode">
     <div class="tm-annot" id="tm-annot" aria-hidden="true"></div>
     <div class="tm-hist" id="tm-hist"></div>
     <div class="tm-deliv" id="tm-deliv"></div>
-    <pre class="tm-scr" id="tm-scr"></pre>
-    <iframe class="tm-ptty" id="tm-ptty" title="interactive terminal"></iframe>
     <div class="tm-foot">
       <span id="tm-stat">…</span>
-      <span class="tm-grow"></span>
-      <label class="tm-follow" id="tm-followwrap">
-        <input type="checkbox" id="tm-follow" checked>Follow tail</label>
     </div>
   </div>
 </div>
 
 <script>
+const EMBED_MODE=
+  new URLSearchParams(window.location.search).get('embed')==='1' ||
+  window.parent!==window;
+document.body.classList.toggle('embed',EMBED_MODE);
+let netSuspended=false;
+
+window.addEventListener('message',e=>{
+  if(!EMBED_MODE||e.origin!==location.origin)return;
+  const d=e.data;
+  if(!d||typeof d.type!=='string')return;
+  if(d.type==='net-pause')netSuspended=true;
+  if(d.type==='net-resume'){
+    netSuspended=false;
+    if(view==='net'){netTick();mailPulseTick?.();}
+    else tick();
+  }
+});
+
 const CATLABEL={agent:"ACTIVE AGENTS",
   finished:"FINISHED — stale registration (retire / kill)",
   unnamed:"UNNAMED — pending rename",
@@ -2426,6 +2648,17 @@ function reattachMurmurs(){
 }
 function portURL(sci,hi){
   return `/portrait?name=${encodeURIComponent(sci)}${hi?'&hi=1':''}`;
+}
+function portraitFallback(el){
+  if(!el||el.dataset.portraitFallback==='1'){
+    if(el){el.hidden=true;el.style.display='none';}
+    return;
+  }
+  el.dataset.portraitFallback='1';
+  const u=new URL(el.getAttribute('src')||el.getAttribute('href')||'',location.href);
+  u.searchParams.delete('hi');
+  if(el.tagName&&el.tagName.toLowerCase()==='image')el.setAttribute('href',u.pathname+u.search);
+  else el.src=u.pathname+u.search;
 }
 
 function toast(prefix,msg,err){
@@ -2757,7 +2990,8 @@ function bay(a,i){
   const sci=scientistOf(a.name);
   const pkey=avatarKeyOf(a.name);
   const port=pkey
-    ? `<img class="pimg" src="${portURL(pkey)}" alt="" loading="lazy">`
+    ? `<img class="pimg" src="${portURL(pkey,true)}" alt="" loading="lazy" `+
+      `onerror="portraitFallback(this)">`
     : `<div class="pna">${esc(a.name.slice(0,2).toUpperCase())}</div>`;
   const stCls=a.running&&a.act_state?' st-'+a.act_state:'';
   // kill button: finished/gone かつ tmux client が attached していない場合のみ。
@@ -2876,8 +3110,9 @@ async function tick(){
 const SVGNS="http://www.w3.org/2000/svg";
 const gsvg=document.getElementById('gsvg');
 let gWin="1", gWinLabel='~ 1d', gmap=new Map(), gedges=[], gspawn=[],
-    gEls={node:new Map(),edge:[]}, simRAF=0, simHot=0, drag=null,
-    netBooted=false;
+  gEls={node:new Map(),edge:[]}, simRAF=0, simHot=0, drag=null,
+    netBooted=false, netRenderKey='', simPaintEls=null;
+let simCool=1;
 
 function svgEl(t,attrs){const e=document.createElementNS(SVGNS,t);
   for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
@@ -2887,12 +3122,18 @@ function netDims(){const r=gsvg.getBoundingClientRect();
 
 function defs(){
   const d=svgEl('defs');
-  for(const[id,c]of[['mk-c','var(--cyan)'],['mk-s','var(--amber)']]){
+  for(const[id,c]of[['mk-c','var(--amber)'],['mk-s','var(--amber)']]){
     const m=svgEl('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,
       markerWidth:6.5,markerHeight:6.5,orient:'auto-start-reverse'});
     m.appendChild(svgEl('path',{d:'M0 0L10 5L0 10z',fill:c,opacity:.85}));
     d.appendChild(m);
   }
+  const halo=svgEl('radialGradient',{
+    id:'node-halo-grad',cx:'50%',cy:'50%',r:'50%'});
+  for(const[offset,opacity]of[['0%',.28],['50%',.2],['76%',.08],['100%',0]])
+    halo.appendChild(svgEl('stop',{
+      offset,'stop-color':'#ece5d6','stop-opacity':opacity}));
+  d.appendChild(halo);
   const cp=svgEl('clipPath',{id:'pclip'});
   cp.appendChild(svgEl('circle',{cx:0,cy:0,r:13}));
   d.appendChild(cp);
@@ -2928,6 +3169,7 @@ async function netTick(){
     const r=await fetch('/api/graph?'+qs);
     const j=await r.json();
     const {w,h}=netDims();
+    const mapWasCleared=gmap.size===0&&gEls.node&&gEls.node.size>0;
     const seen=new Set();
     for(const n of j.nodes){
       seen.add(n.name);
@@ -2961,7 +3203,8 @@ async function netTick(){
         ctxUsed:(typeof n.ctx_used==='number'?n.ctx_used:null),
         actState:n.act_state||'',ctxWindow:n.ctx_window||'',
         workDisp:n.work_disp||'',workSecs:(+n.work_secs||0),
-        lastDisp:n.last_disp||'',annot:n.annot||null});
+        lastDisp:n.last_disp||'',annot:n.annot||null,
+        surface:n.surface||''});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
     gedges=j.edges.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
@@ -2972,15 +3215,29 @@ async function netTick(){
       `<b>${j.shown??gmap.size}</b> nodes · ${gedges.length} links · `+
       `${gspawn.length} spawn ${gWin==="all"?"":"· "+gWinLabel+" window"}`+
       ` / total ${j.total??'?'}`;
-    buildEls(); simHot=120; runSim();
+    // DOM に影響する状態だけを安定順に並べ、変化のない poll は再構築しない。
+    // task/live/rel 等は tooltip が最新 gmap を都度読むため fingerprint 不要。
+    const nodeKey=[...gmap].map(([name,g])=>[
+      name,g.state,g.running,g.present,g.retired,g.actState,
+      typeof g.ctxUsed==='number'?Math.round(g.ctxUsed):null,
+      g.model||'',g.provider||'',g.deg,
+      g.annot&&g.annot.emoji||'',g.annot&&g.annot.role||''
+    ]).sort((a,b)=>a[0].localeCompare(b[0]));
+    const edgeKey=gedges.map(e=>[e.source,e.target,+e.count||0])
+      .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const spawnKey=gspawn.map(e=>[e.source,e.target,+e.count||0])
+      .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const nextRenderKey=JSON.stringify([nodeKey,edgeKey,spawnKey]);
+    if(mapWasCleared||nextRenderKey!==netRenderKey){
+      buildEls(); netRenderKey=nextRenderKey; simHot=120; runSim();
+    }
   }catch(e){
     document.getElementById('netinfo').textContent='SIGNAL LOST — retry…';
   }
 }
 
-// provider (AI 提供元) を small logo で表示するための icon factory。
-// 公式ロゴ SVG（bone カラーで再着色済み）を /assets/ から配信し <image> 参照。
-// アスペクト比を保つため、size を高さ基準にして幅をアスペクト比から計算する。
+// provider (AI 提供元) をメダリオン右下の丸座金に載せる。
+// 公式ロゴ SVG（bone カラーで再着色済み）は /assets/ から配信。
 // 不明 provider は null（呼び出し側で skip）。
 const _PROVIDER_ASPECT = {
   // 公式 SVG の viewBox から: w/h
@@ -2991,18 +3248,31 @@ const _PROVIDER_ASPECT = {
 // asset の更新が SVG <image> 要素のキャッシュに引っかかるため、ページごとに
 // 一意な version 文字列を付けて確実に最新を取得する（page load ごとに 1 回）。
 const _ASSET_V = Date.now().toString(36);
-function providerLogo(provider,x,y,size){
+function providerKeyFor(g){
+  const raw=String((g&&g.provider)||'').toLowerCase();
+  if(_PROVIDER_ASPECT[raw])return raw;
+  const model=String((g&&g.model)||'').toLowerCase();
+  if(/claude|opus|sonnet|haiku|fable|mythos/.test(model))return 'anthropic';
+  if(/codex|gpt/.test(model))return 'openai';
+  return '';
+}
+function providerBadge(provider,x,y,size=14){
   const ar=_PROVIDER_ASPECT[provider];
   if(!ar)return null;
-  const w=size*ar, h=size;
-  return svgEl('image',{class:'provider-logo','data-provider':provider,
+  const badge=svgEl('g',{class:'provider-badge',
+    transform:`translate(${x.toFixed(2)} ${y.toFixed(2)})`});
+  badge.appendChild(svgEl('circle',{class:'provider-seat',r:(size/2).toFixed(2)}));
+  const h=size*.58,w=h*ar;
+  badge.appendChild(svgEl('image',{class:'provider-logo','data-provider':provider,
     href:`/assets/${provider}.svg?v=${_ASSET_V}`,
-    x:x.toFixed(2), y:y.toFixed(2),
+    x:(-w/2).toFixed(2), y:(-h/2).toFixed(2),
     width:w.toFixed(2), height:h.toFixed(2),
-    preserveAspectRatio:'xMidYMid meet'});
+    preserveAspectRatio:'xMidYMid meet'}));
+  return badge;
 }
 
 function buildEls(){
+  document.getElementById('net').classList.toggle('dense',gmap.size>300);
   [...gsvg.querySelectorAll('.edge,.edge-hit,.edge-count,.node')].forEach(n=>n.remove());
   gEls={node:new Map(),edge:[],badge:[]};
   // kind 別 (to/cc/bcc) かつ方向別 (A→B / B→A) に分かれて来る gedges を
@@ -3060,91 +3330,74 @@ function buildEls(){
     const selCls=selectedSet.has(name)?' selnode':'';
     const cls=`node ${st} sp-${g.role}${selCls}`;
     const grp=svgEl('g',{class:cls});
-    const pulseEl=svgEl('circle',{class:'pulse',r:NR+1});
-    grp.appendChild(pulseEl);
+    grp.appendChild(svgEl('circle',{class:'node-halo',r:NR+11}));
     grp.appendChild(svgEl('circle',{class:'ring',r:NR+1}));
-    // 脈拍 = 生存。稼働中のみ拍動。速度 = tmux 生存シグナル sig
-    // （session_activity の新しさ＝実際に作業しているか。CK P1）。
-    // 直近作業中=0.9s で速く鼓動／停滞=3.4s でゆっくり
+    // 稼働状態はメダリオンの明度、working は外周の回転円弧で表現する。
+    // CTX arc はデータ表示なので状態に関係なく静止させる。
     if(st==='run'){
-      const sig=+g.sig||0;                       // 0..1（server 算出）
-      pulseEl.style.animationDuration=(3.4-sig*2.5).toFixed(2)+'s';
-      // 速い(作業中)＝暖色／遅い(停滞)＝寒色：sig 0→1 で hue 200→30
-      pulseEl.style.stroke=`hsl(${Math.round(200-sig*170)}, 92%, 60%)`;
-      // 動作状態（色は系統に予約済 → 状態は形状・動き・吹き出しで表現）
       const aw=g.actState||'wait';
       grp.classList.add('act-'+aw);
-      // HP = コンテキスト残量。円周そのものをゲージ化＝円モチーフに統合
-      if(typeof g.ctxUsed==='number'){
-        const HPR=NR+5, C=2*Math.PI*HPR;
-        const rem=Math.max(0,Math.min(1,(100-g.ctxUsed)/100));
-        g._hp={rem,tier:rem>=.5?'hi':rem>=.2?'mid':'lo'};
-        grp.appendChild(svgEl('circle',{class:'hptrack',r:HPR}));
-        const hp=svgEl('circle',{class:'hp hp-'+g._hp.tier,r:HPR});
-        hp.style.strokeDasharray=C.toFixed(2);
-        hp.style.strokeDashoffset=(C*(1-rem)).toFixed(2);
-        grp.appendChild(hp);
-        if(aw==='work'){                          // 走査弧が残量リングを周回
-          const sc=svgEl('circle',{class:'scan',r:HPR});
-          sc.style.strokeDasharray='7 '+C.toFixed(0);
-          grp.appendChild(sc);
-        }
-      }
-      // 状態演出（hover 不要・名前テキストの後に前面化）。
-      //   work     : バッジ無し（走査弧＋経過時間＋速い脈拍で表現済み）
-      //   wait     : 頭上に z が立ち昇るスリープ演出（箱なし）
-      //   ask      : 角丸の吹き出し＋JRPG 風ポップの「!」
-      //   question : 角丸の吹き出し＋シアンの「?」（AskUserQuestion ウィジェット）
-      if(aw==='wait'){
-        const zs=svgEl('g',{class:'zsleep'});
-        const z1=svgEl('text',{class:'z z1',x:13,y:-11,
-          'text-anchor':'middle'});z1.textContent='z';
-        const z2=svgEl('text',{class:'z z2',x:18,y:-15,
-          'text-anchor':'middle'});z2.textContent='z';
-        zs.appendChild(z1);zs.appendChild(z2);
-        grp._sbadge=zs;
-      }else if(aw==='ask'){
-        const ab=svgEl('g',{class:'askbub'});
-        ab.appendChild(svgEl('path',{class:'bubp',
-          d:'M19 -20 H25 A7 7 0 0 1 25 -6 H22 L10 3 L17 -6 '
-           +'H19 A7 7 0 0 1 19 -20 Z'}));
-        const x=svgEl('text',{class:'bx',x:22,y:-9,
-          'text-anchor':'middle'});x.textContent='!';
-        ab.appendChild(x);
-        grp._sbadge=ab;
-      }else if(aw==='question'){
-        const qb=svgEl('g',{class:'qbub'});
-        qb.appendChild(svgEl('path',{class:'bubq',
-          d:'M19 -20 H25 A7 7 0 0 1 25 -6 H22 L10 3 L17 -6 '
-           +'H19 A7 7 0 0 1 19 -20 Z'}));
-        const q=svgEl('text',{class:'bq',x:22,y:-9,
-          'text-anchor':'middle'});q.textContent='?';
-        qb.appendChild(q);
-        grp._sbadge=qb;
-      }
       runGrps.push(grp);
     }
-    const sci=scientistOf(name);
+    // CTX fuel = top-origin clockwise arc, capped at 270°. Unknown values
+    // intentionally create no arc. Remaining <20% warms from amber to red.
+    if(typeof g.ctxUsed==='number'){
+      const CTXR=NR+5,C=2*Math.PI*CTXR,maxArc=C*.75;
+      const rem=Math.max(0,Math.min(1,(100-g.ctxUsed)/100));
+      const gap=C-maxArc;
+      const track=svgEl('circle',{class:'ctx-track',r:CTXR});
+      track.setAttribute('stroke-dasharray',
+        `${maxArc.toFixed(2)} ${gap.toFixed(2)}`);
+      grp.appendChild(track);
+      const arcClass=rem<.2?' ctx-low':'';
+      const arcDash=
+        `${(maxArc*rem).toFixed(2)} ${(C-maxArc*rem).toFixed(2)}`;
+      const arcGlow=svgEl('circle',{
+        class:'ctx-arc-glow'+arcClass,r:CTXR,
+        'data-remaining':Math.round(rem*100)});
+      arcGlow.setAttribute('stroke-dasharray',arcDash);
+      grp.appendChild(arcGlow);
+      const arc=svgEl('circle',{
+        class:'ctx-arc'+arcClass,r:CTXR,
+        'data-remaining':Math.round(rem*100)});
+      arc.setAttribute('stroke-dasharray',arcDash);
+      grp.appendChild(arc);
+    }
+    // Working is a separate pathLength-normalized motion ring outside CTX fuel.
+    grp.appendChild(svgEl('circle',{
+      class:'motion-ring',r:NR+9,pathLength:100}));
     const pkey=avatarKeyOf(name);
     if(pkey){
-      grp.appendChild(svgEl('image',{class:'pimg',href:portURL(pkey),
+      const img=svgEl('image',{class:'pimg',href:portURL(pkey,true),
         x:-NR,y:-NR,width:2*NR,height:2*NR,
         'clip-path':'url(#pclip)',
-        preserveAspectRatio:'xMidYMid slice'}));
+        preserveAspectRatio:'xMidYMid slice'});
+      img.addEventListener('error',()=>portraitFallback(img));
+      grp.appendChild(img);
+      grp.appendChild(svgEl('circle',{class:'portrait-shade',r:NR}));
       grp.appendChild(svgEl('circle',{class:'prole',r:NR,fill:'none'}));
     }else{
       const rad=g.running?8:g.deg>3?7:6;
       grp.appendChild(svgEl('circle',{class:'dot',r:rad}));
     }
-    const tx=svgEl('text',{x:0,y:-(NR+6),'text-anchor':'middle'});
+    const engineProvider=providerKeyFor(g);
+    if(engineProvider){
+      const badge=providerBadge(engineProvider,NR*.72,NR*.72,14);
+      if(badge){
+        badge.insertBefore(svgEl('circle',{
+          class:'provider-seat-shadow',cy:1.5,r:7}),badge.firstChild);
+        grp.appendChild(badge);
+      }
+    }
+    const tx=svgEl('text',{x:0,y:NR+16,'text-anchor':'middle'});
     tx.textContent=name;
     grp.appendChild(tx);
-    // 役割アノテーション: ノード下のチップ（絵文字＋役割）。色は系統に予約済
-    // なので塗らず文字＋中立 pill で表現。getComputedTextLength で幅を測る。
-    const hasAnnot=g.annot&&(g.annot.role||g.annot.emoji);
+    // Role is the only secondary text on the node: quiet mono smallcaps pill.
+    const annotLab=g.annot?((g.annot.emoji?g.annot.emoji+' ':'')+(g.annot.role||'')).trim():'';
+    const hasAnnot=!!annotLab;
     if(hasAnnot){
-      const lab=((g.annot.emoji?g.annot.emoji+' ':'')+(g.annot.role||'')).trim();
-      const ay=NR+14;
+      const lab=annotLab;
+      const ay=NR+29;
       const at=svgEl('text',{class:'annot-lab',x:0,y:ay,'text-anchor':'middle'});
       at.textContent=lab;
       grp.appendChild(at);
@@ -3155,15 +3408,6 @@ function buildEls(){
         width:(tw+padX*2).toFixed(1),height:12.5,rx:6.2,ry:6.2});
       grp.insertBefore(ar,at);   // pill を text の後ろ（下層）へ
     }
-    // 稼働経過時間: work 中のみノード直下に live 表示（バトルの詠唱時計風）。
-    // 役割チップがある場合はその下にずらす。
-    if(st==='run'&&g.actState==='work'&&g.workDisp){
-      const et=svgEl('text',{class:'etime',x:0,y:(hasAnnot?NR+27:NR+13),
-        'text-anchor':'middle'});
-      et.textContent='▸ '+g.workDisp;
-      grp.appendChild(et);
-    }
-    if(grp._sbadge)grp.appendChild(grp._sbadge);  // 状態バッジを最前面へ
     grp.addEventListener('mouseenter',ev=>{
       if(!drag){focusNode(name);tipShow(name,ev);}});
     grp.addEventListener('mousemove',ev=>{if(!drag)tipMove(ev);});
@@ -3171,20 +3415,6 @@ function buildEls(){
       if(!drag){clearFocus();tipHide();}});
     grp.addEventListener('pointerdown',ev=>onDown(ev,name));
     gsvg.appendChild(grp);
-    // provider logo: name text の左隣に小さく表示（getComputedTextLength で
-    // 動的計測。font 未ロード等で 0 が返ったら文字数ベースで近似）。
-    // 公式 SVG は provider ごとにアスペクト比が異なる（anthropic 横長 /
-    // openai ほぼ正方形）ため、実描画幅でオフセットを補正する。
-    if(g.provider){
-      const tw=tx.getComputedTextLength()||(name.length*7);
-      const lsz=14,gap=4;
-      const ar=_PROVIDER_ASPECT[g.provider]||1;
-      const lw=lsz*ar;
-      const lx=-tw/2-gap-lw;
-      const ly=-(NR+6)-lsz+3;        // text 視覚中心と概ね一致
-      const lg=providerLogo(g.provider,lx,ly,lsz);
-      if(lg)grp.appendChild(lg);
-    }
     gEls.node.set(name,{grp});
   }
   // 稼働中ノードを最後に再append＝最前面（密グラフで埋もれない CK P2）
@@ -3384,7 +3614,8 @@ function tipShow(name,ev){
   }
   const _sci=avatarKeyOf(name);
   const _pt=_sci
-    ? `<img class="gt-port" src="${portURL(_sci)}" alt="">` : '';
+    ? `<img class="gt-port" src="${portURL(_sci,true)}" alt="" `+
+      `onerror="portraitFallback(this)">` : '';
   gtip.innerHTML=
     `<div class="gt-hd">${_pt}<div class="gt-nm">`+
     `<span class="gt-led"></span>${esc(name)}</div></div>`+
@@ -3609,16 +3840,20 @@ function step(){
   };
   gedges.forEach(e=>spring(e.source,e.target,KS));
   gspawn.forEach(e=>spring(e.source,e.target,SP));
+  let maxMove=0;
   for(const g of arr){
     if(g.fixed)continue;
+    const ox=g.x,oy=g.y;
     g.vx+=(w/2-g.x)*GR*0.04;
     g.vy+=(h/2-g.y)*GR*0.04;
-    g.vx*=.86;g.vy*=.86;
+    g.vx*=.86*simCool;g.vy*=.86*simCool;
     g.x+=Math.max(-18,Math.min(18,g.vx));
     g.y+=Math.max(-18,Math.min(18,g.vy));
     g.x=Math.max(40,Math.min(w-40,g.x));
     g.y=Math.max(28,Math.min(h-24,g.y));
+    maxMove=Math.max(maxMove,Math.hypot(g.x-ox,g.y-oy));
   }
+  return maxMove;
 }
 
 function paint(){
@@ -3642,16 +3877,29 @@ function paint(){
       `translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`
       +(nsc!==1?` scale(${nsc.toFixed(3)})`:''));
   }
+  simPaintEls=gEls;
 }
 
 const REDUCED=matchMedia('(prefers-reduced-motion:reduce)').matches;
+/* Two-stage cooling lowers force-driven terminal velocity before the
+   five-frame settle gate. Unchanged DOM and sub-pixel motion skip paint. */
+const SIM_SETTLE_MOVE=.45, SIM_SETTLE_FRAMES=5, SIM_PAINT_MOVE=.01;
 function runSim(){
   if(simRAF)return;
+  let settledFrames=0,firstFrame=true;
   const loop=()=>{
     const iter=REDUCED?6:1;
-    for(let i=0;i<iter;i++)step();
-    paint();
+    simCool=drag?1:(simHot<30?.70:simHot<60?.90:1);
+    let maxMove=0;
+    for(let i=0;i<iter;i++)maxMove=Math.max(maxMove,step());
+    if(firstFrame||drag||gEls!==simPaintEls||maxMove>=SIM_PAINT_MOVE)paint();
+    firstFrame=false;
+    if(!drag&&maxMove<SIM_SETTLE_MOVE)settledFrames++;
+    else settledFrames=0;
     simHot--;
+    if(!drag&&settledFrames>=SIM_SETTLE_FRAMES){
+      simHot=0;simRAF=0;return;
+    }
     if(simHot>0||drag){simRAF=requestAnimationFrame(loop);}
     else{simRAF=0;}
   };
@@ -3792,7 +4040,7 @@ function worldToScreen(wx,wy){
 }
 
 async function mailPulseTick(){
-  if(view!=='net')return;
+  if(document.hidden||view!=='net'||netSuspended)return;
   try{
     const url='/api/messages-since?since='+mailLastTs;
     const r=await fetch(url);
@@ -4355,9 +4603,11 @@ function _rbDispatch(ev){
         : (ev.recipient||ev.ref);
       _rbNodeAlertPulse(tgt);
     }
-    // mail comet 自体は既存の queue に積む (runMessageAnim 側で gmap チェック)
+    // Broadcast history arrives as one event per recipient with the same id.
+    // Keep comets unique per recipient while grouping the card by message id.
+    const _mid=ev.id||(ev.ts+'-'+ev.sender);
     mailQueue.push({
-      id:'replay-mail-'+(ev.id||(ev.ts+'-'+ev.sender)),
+      id:'replay-mail-'+_mid+':'+(ev.recipient||ev.ref||''),
       ts:ev.ts,
       sender:ev.sender||ev.agent,
       recipient:ev.recipient||ev.ref,
@@ -4367,6 +4617,8 @@ function _rbDispatch(ev){
       kind:'replay',
       thread_id:ev.thread_id||null,
       travel_ms:_rbTravelMsForMail(),
+      _gkey:'rb-mail-'+_mid,
+      _rcount:ev.rcpt_n||1,
     });
     while(mailQueue.length>40) mailQueue.shift();
     mailDrain();
@@ -5065,72 +5317,8 @@ function _rbToggleTimeTravel(){
   });
 })();
 
-/* ════════════════ TERMINAL OVERLAY (Phase 1: 読み取りライブ) ════════════════ */
-const ANSI16=['#1c1c1c','#d4544a','#5ec27e','#e0b341','#5b9bd5','#b97cd6',
-  '#4bc0c8','#cfc8b8','#5a5650','#ff6b5e','#79e3a0','#ffd166','#7fb8f0',
-  '#d79bf0','#73e6ee','#f3eedd'];
-function xterm256(n){
-  if(n<16)return ANSI16[n];
-  if(n<232){n-=16;const r=Math.floor(n/36),g=Math.floor(n/6)%6,b=n%6;
-    const v=x=>x?55+x*40:0;
-    return `rgb(${v(r)},${v(g)},${v(b)})`;}
-  const g=8+(n-232)*10;return `rgb(${g},${g},${g})`;}
-function ansiToHtml(s){
-  let out='',fg=null,bg=null,bold=false,dim=false,uns=false,inv=false,open=false;
-  const esc=t=>t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  const close=()=>{if(open){out+='</span>';open=false;}};
-  const span=()=>{
-    close();
-    let f=fg,b=bg;if(inv){f=bg||'#070809';b=fg||'#d6cfbe';}
-    const st=[];
-    if(f)st.push('color:'+f);
-    if(b)st.push('background:'+b);
-    if(bold)st.push('font-weight:700');
-    if(dim)st.push('opacity:.65');
-    if(uns)st.push('text-decoration:underline');
-    if(st.length){out+='<span style="'+st.join(';')+'">';open=true;}
-  };
-  let i=0;
-  while(i<s.length){
-    const ch=s[i];
-    if(ch==='\x1b'&&s[i+1]==='['){
-      const m=/^\x1b\[([0-9;]*)([A-Za-z])/.exec(s.slice(i));
-      if(m){
-        i+=m[0].length;
-        if(m[2]==='m'){
-          const ps=m[1]===''?[0]:m[1].split(';').map(Number);
-          for(let k=0;k<ps.length;k++){
-            const p=ps[k];
-            if(p===0){fg=bg=null;bold=dim=uns=inv=false;}
-            else if(p===1)bold=true;else if(p===2)dim=true;
-            else if(p===4)uns=true;else if(p===7)inv=true;
-            else if(p===22){bold=dim=false;}
-            else if(p===24)uns=false;else if(p===27)inv=false;
-            else if(p===39)fg=null;else if(p===49)bg=null;
-            else if(p>=30&&p<=37)fg=ANSI16[p-30];
-            else if(p>=90&&p<=97)fg=ANSI16[p-90+8];
-            else if(p>=40&&p<=47)bg=ANSI16[p-40];
-            else if(p>=100&&p<=107)bg=ANSI16[p-100+8];
-            else if(p===38||p===48){
-              const tgt=p===38;
-              if(ps[k+1]===5){const c=xterm256(ps[k+2]);
-                tgt?fg=c:(bg=c);k+=2;}
-              else if(ps[k+1]===2){const c=`rgb(${ps[k+2]},${ps[k+3]},${ps[k+4]})`;
-                tgt?fg=c:(bg=c);k+=4;}
-            }
-          }
-          span();
-        }
-        continue;            /* 他の CSI(カーソル等)は破棄 */
-      }
-    }
-    out+=esc(ch);i++;
-  }
-  close();
-  return out;
-}
-
-let panelName=null,termLines=500,termTimer=0,panelTab='hist';
+/* ═══════════════════════ AGENT DETAIL PANEL ═══════════════════════ */
+let panelName=null,panelTab='hist';
 const TM=id=>document.getElementById(id);
 
 function openPanel(name){
@@ -5142,6 +5330,13 @@ function openPanel(name){
   const run=!!a.running, rel=a.last_active_rel||a.rel||'';
   const stat=a.retired?'RETIRED':run?'● ONLINE':
     a.category==='finished'?'EXITED':a.present===false?'○ REGISTERED':'○ SHELL';
+  const portrait=TM('tm-portrait'),avatar=avatarKeyOf(name);
+  portrait.hidden=!avatar;
+  portrait.style.display='';
+  portrait.dataset.portraitFallback='0';
+  portrait.alt=avatar?`${name} portrait`:'';
+  if(avatar)portrait.src=portURL(avatar,true);
+  else portrait.removeAttribute('src');
   TM('tm-nm').textContent=name;
   const T=TM('term');
   T.classList.toggle('s-run',run);
@@ -5151,7 +5346,7 @@ function openPanel(name){
   const exitBtn=TM('tm-exit-btn');
   if(exitBtn){exitBtn.style.display=run?'':'none';
     exitBtn.classList.remove('arming');exitBtn.disabled=false;
-    exitBtn.textContent='↩ Exit';}
+    exitBtn.textContent='Exit';}
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);
@@ -5471,9 +5666,7 @@ function showSparkTip(tip, wrap, svg, ev, idx, since, now){
 }
 
 function closeTerm(){
-  clearInterval(termTimer);termTimer=0;panelName=null;
-  const fr=TM('tm-ptty');           // ttyd ws/tmux クライアントを切断
-  if(fr){fr.src='about:blank';fr.dataset.sess='';}
+  panelName=null;
   // sparkline 後始末: tooltip を確実に閉じる（別 panel で残ると邪魔）
   const tip=TM('sp-tip'); if(tip)tip.setAttribute('aria-hidden','true');
   const sp=TM('tm-spark'); if(sp)sp.setAttribute('aria-hidden','true');
@@ -5485,10 +5678,8 @@ function setTab(tab){
   TM('term').dataset.tab=tab;
   [...TM('tm-tabs').children].forEach(b=>
     b.classList.toggle('on',b.dataset.tab===tab));
-  clearInterval(termTimer);termTimer=0;
   if(tab==='hist') loadHistory();
   else if(tab==='deliv') loadDeliverables();
-  else if(tab==='term') loadTerm();
 }
 // 成果物: LOG_*.md の frontmatter agent: が一致するノートを obsidian:// で開く
 async function loadDeliverables(){
@@ -5518,33 +5709,6 @@ async function loadDeliverables(){
       `</span><span class="dv-d">${d}</span></a>`;
   }).join('');
 }
-// 端末タブ: ttyd(対話) を主、不可なら read-only capture にフォールバック
-async function loadTerm(){
-  if(!panelName)return;
-  const T=TM('term'), fr=TM('tm-ptty');
-  TM('tm-stat').textContent='terminal starting…';
-  try{
-    const r=await fetch(`/api/ptty?session=${encodeURIComponent(panelName)}`);
-    const j=await r.json();
-    if(j.ok){
-      T.classList.remove('fallback');
-      if(fr.dataset.sess!==panelName){fr.dataset.sess=panelName;fr.src=j.url;}
-      TM('tm-stat').textContent=
-        `interactive ${esc(j.url)}${j.reused?' (reused)':''} · `+
-        `input goes to the live session`;
-      return;
-    }
-    throw new Error(j.error||'ttyd failed');
-  }catch(e){
-    // フォールバック: 非侵襲の read-only capture ポーリング
-    T.classList.add('fallback');
-    fr.src='about:blank';fr.dataset.sess='';
-    termRefresh(); termTimer=setInterval(termRefresh,1500);
-    TM('tm-stat').textContent=
-      `read-only fallback (no input: ${esc(''+e.message)})`;
-  }
-}
-
 async function loadHistory(){
   if(!panelName)return;
   const box=TM('tm-hist');
@@ -5593,27 +5757,6 @@ async function loadHistory(){
   }catch(e){ box.innerHTML='<div class="hempty">comm failed</div>'; }
 }
 
-async function termRefresh(){
-  if(!panelName||panelTab!=='term')return;
-  try{
-    const r=await fetch(`/api/term?session=`+
-      `${encodeURIComponent(panelName)}&lines=${termLines}`);
-    const j=await r.json();
-    const scr=TM('tm-scr');
-    if(!j.ok){
-      scr.innerHTML=
-        `<span style="color:var(--alert)">✕ ${esc(j.error||'failed')}</span>`;
-      TM('tm-stat').textContent='—';return;
-    }
-    const atBottom=scr.scrollHeight-scr.scrollTop-scr.clientHeight<40;
-    scr.innerHTML=ansiToHtml(j.content||'');
-    if(TM('tm-follow').checked&&atBottom)scr.scrollTop=scr.scrollHeight;
-    TM('tm-stat').textContent=
-      `read-only ${termLines} lines · `+
-      `${new Date().toLocaleTimeString('en-US')} (no input)`;
-  }catch(e){ TM('tm-stat').textContent='comm failed — retry…'; }
-}
-
 TM('tm-x').addEventListener('click',closeTerm);
 TM('term').addEventListener('click',e=>{if(e.target.id==='term')closeTerm();});
 TM('tm-exit-btn').addEventListener('click',async()=>{
@@ -5645,18 +5788,12 @@ TM('tm-tabs').addEventListener('click',e=>{
 TM('tm-open').addEventListener('click',()=>{
   if(panelName)jump(panelName,{stopPropagation(){}});
 });
-TM('tm-lines').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-ln]');if(!b)return;
-  termLines=+b.dataset.ln;
-  [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
-  termRefresh();
-});
 
 document.getElementById('q').addEventListener('input',render);
 document.getElementById('showAll').addEventListener('change',render);
 loadCustomPortraits();
 tick();
-setInterval(()=>{ if(view==='deck') tick(); },3000);
+setInterval(()=>{ if(document.hidden||netSuspended)return; if(view==='deck') tick(); },3000);
 
 async function mailHealthTick(){
   try{
@@ -5677,7 +5814,7 @@ async function mailHealthTick(){
   }catch(e){}
 }
 mailHealthTick();
-setInterval(mailHealthTick,10000);
+setInterval(()=>{ if(document.hidden||netSuspended)return; mailHealthTick(); },10000);
 
 // ── + NEW AGENT spawn modal ────────────────────────────────────
 // 1) parent dropdown を現存 agent から構築 (running 優先)
@@ -5819,12 +5956,20 @@ async function submitSpawn(){
 
 // Task H: replay 中は netTick で buildEls が走ると tt-hidden が消えるので停止。
 //   replay 終了で次の周期から自動再開（stopReplay は state を残さない）。
-setInterval(()=>{ if(view==='net' && !window._replayMode) netTick(); },5000);
+setInterval(()=>{
+  if(document.hidden)return;
+  if(view==='net' && !window._replayMode && !netSuspended)netTick();
+},5000);
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden||netSuspended)return;
+  if(view==='net'&&!window._replayMode){netTick();mailPulseTick();}
+  else if(view==='deck')tick();
+});
 // Tier A: 1.5s ハートビート。各エージェントは個別の `_nextSpeakTs` 持ち、
 // 発話時刻が独立にランダム化されるため出現タイミングが散らばる。
 // 初回観測時は 3-22s 後にシードして起動時の一斉発話を回避。
 setInterval(()=>{
-  if(view!=='net'||drag||pan) return;
+  if(document.hidden||netSuspended||view!=='net'||drag||pan) return;
   const now=Date.now();
   const due=[];
   for(const[name,g]of gmap){
