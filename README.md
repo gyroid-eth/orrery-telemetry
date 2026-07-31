@@ -1,554 +1,468 @@
 # claude-agent-stack
 
+[English](README.en.md)
+
+ローカルで動く Claude Code / Codex エージェント群のための、協調基盤とライブ telemetry ダッシュボードです。[mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) をメッセージ・identity・file reservation の正本にし、tmux 上の実行状態、親子関係、通信履歴、コンテキスト残量を一つの画面に重ねます。
+
 ![claude-agent-stack demo](assets/demo.gif)
 
-A coordination layer + live telemetry dashboard for running multiple
-[Claude Code](https://docs.claude.com/en/docs/claude-code) (and Codex) agents on one machine.
+設計の中心は「LLM に協調を期待するだけでなく、launcher・hook・mail・可視化で運用規約を実行可能にする」ことです。
 
-It sits **on top of** [`mcp_agent_mail`](https://github.com/Dicklesworthstone/mcp_agent_mail)
-(inter-agent messaging + file reservations) and adds:
+## 主な機能
 
-- **Live dashboard** — see every tmux-resident agent, what it's working on, its
-  context budget, parent/child spawn lineage, and agent-to-agent communication,
-  updated in real time. Click an agent to jump to its terminal window.
-- **Coordination hooks** for Claude Code — file-reservation guard, agent
-  registration gate, child-agent spawning, and a mail watcher that injects
-  inbox signals back into each agent's terminal.
+- `agent-start` / `agent-start-codex` で、agent-mail identity と同名の tmux session を起動
+- Claude Code hook による登録ゲート、file reservation の強制、session 記録
+- agent-mail の inbox signal を実行中の Claude / Codex REPL へ再注入
+- DECK / NETWORK の二つのビューで、状態、担当、通信、spawn 系譜、成果物を可視化
+- dashboard から graceful EXIT、RESUME、REPLAY、role annotation、child spawn を操作
+- `/delegate` と `/log` skill、Codex / Claude 向け managed instructions
+- Obsidian vault を使う場合はログ、Daily Note backlink、成果物 index を統合
 
-  The watcher submits a notification in two tmux calls: it sends the text first,
-  waits briefly, then sends `C-m`.  Keep that separation in compatible hooks;
-  some Codex REPLs do not submit reliably when text and Enter are sent together.
-- **Bundled skills** — `/delegate` (spawn and supervise a child agent) and
-  `/log` (write a structured session log), registered with Claude Code at
-  install time. See [Skills](#skills).
-- **One-command install** — `./install.sh` clones agent-mail, wires up the
-  config, and starts the dashboard (macOS launchd / Linux systemd / plain nohup).
-  The default Tier1 path shows dry-run diffs/previews and waits for an explicit
-  `yes` before adding the recommended managed hook, Codex `AGENTS.md`, and
-  Claude `CLAUDE.md` entries.
+agent-mail を置き換えるのではなく上に重ねる構成です。mail と reservation の正本を一つに保つことで、UI を再起動しても協調状態が分裂しません。
 
+## 動作要件
 
-## Works best with Obsidian
+- macOS を主対象とします。launcher / hook は macOS 標準 Bash 3.2 でも動くよう実装されています
+- `python3`、`tmux`、`git`、`uv`
+- Claude Code または Codex CLI
+- `fzf`（任意。引数なし launcher の directory picker）
+- Ghostty（推奨。click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback）
+- Obsidian（任意。`/log` と Output index の vault 統合）
 
-This stack is usable with any project, but it **shines when your knowledge base
-runs on [Obsidian](https://obsidian.md/)**. The coordination layer was designed
-alongside an Obsidian vault, and the `/log` skill (phase 4) writes structured
-work logs directly into your vault — complete with Daily Note backlinks, graph
-connections, and tag-based maturity tracking.
+Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。Windows native は対象外です。WSL2 では localhost dashboard は利用できますが、Ghostty による click-to-jump は使えません。
 
-Without Obsidian, logs fall back to a `logs/` directory in the current working
-directory. All other features (dashboard, hooks, agent-mail) work regardless.
-
-If you use Obsidian, set `AGENTSTACK_PROJECT_KEY` to your vault path and point
-`AGENTSTACK_OBSIDIAN_APP` at the Obsidian CLI binary:
+## インストール
 
 ```bash
-export AGENTSTACK_PROJECT_KEY="$HOME/path/to/your-vault"
-export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/obsidian"
-```
-
-## Requirements
-
-- `python3`, `tmux`, `git`, and `uv` (for agent-mail)
-- macOS or Linux (see [Windows / WSL2](#windows--wsl2) below)
-- [Obsidian](https://obsidian.md/) *(recommended — unlocks full log integration)*
-- [Ghostty](https://ghostty.org/) *(recommended — enables click-to-jump and auto window titles; falls back to iTerm2 → macOS Terminal → none automatically)*
-- [`fzf`](https://github.com/junegunn/fzf) *(optional — lets `agent-start` browse a vault for the working directory; without it, pass a path explicitly)*
-
-## Quick start
-
-```bash
-git clone <this-repo> && cd claude-agent-stack
-./install.sh
-# open http://127.0.0.1:8770/
-```
-
-The default Tier1 install recommends all three coordination surfaces:
-Claude Code hooks in `~/.claude/settings.json`, Codex instructions in
-`~/.codex/AGENTS.md`, and Claude instructions in `CLAUDE.md`. Each write is
-shown as a dry-run/preview first and only applied after typing `yes`; existing
-files are preserved with timestamped backups and idempotent managed blocks.
-
-The dashboard binds to `127.0.0.1` by default. For access from a trusted LAN or
-VPN, set `AGENTSTACK_BIND_HOST=0.0.0.0`; this exposes control endpoints and the
-terminal bridge to that network.
-
-## Upgrading from an earlier install
-
-Recommended in-place upgrade:
-
-```bash
+git clone https://github.com/gyroid-eth/claude-agent-stack.git
 cd claude-agent-stack
-git pull
-./install.sh
+./scripts/install.sh
 ```
 
-The installer copies the current launcher, dashboard, hook, skill, Codex, and
-Claude template payloads over the existing install, restarts the dashboard
-service (`bootout` then `bootstrap` on launchd, or the equivalent service start
-path on other platforms), re-runs the settings safe-merge preview/consent flow,
-and updates the Codex `AGENTS.md` and Claude `CLAUDE.md` managed blocks
-idempotently after consent. Finish with:
+完了後に `http://127.0.0.1:8770/` を開き、診断を実行します。
 
 ```bash
 ~/.agentstack/bin/agentstack-doctor
 ```
 
-If the install looks unhealthy, do a clean reinstall while keeping agent-mail
-data:
+installer は upstream agent-mail を `~/mcp_agent_mail` へ取得し、`~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置します。生成する `env.sh` は mode `0600` で、bearer token は書き込みません。
 
-```bash
-~/.agentstack/bin/agentstack-uninstall
-./install.sh
+### install tier
+
+| 呼び出し | Tier | 内容 |
+| --- | --- | --- |
+| `./scripts/install.sh` | Tier 1 / default | 全 payload を導入。Claude settings の hooks・permissions・`skillsDirectories` と、Codex `AGENTS.md` / Claude `CLAUDE.md` の managed block は preview 後、`yes` のときだけ merge |
+| `./scripts/install.sh --dashboard-only` | Tier 0 | dashboard と helper のみ。hooks、skills、Codex / Claude template は導入しない |
+| `./scripts/install.sh --scoped` | Tier 2 placeholder | payload は導入するが、user settings / managed docs は変更しない |
+| `./scripts/install.sh --dry-run` | preview | 変更予定だけを表示し、file や service を変更しない |
+
+merge は JSON parser ベースです。既存設定を上書きせず、追加した hooks・permissions・skills directory を manifest に記録し、変更前 backup を残すのは、再実行と uninstall を安全にするためです。
+
+主要 option:
+
+```text
+--install-dir PATH      default: ~/.agentstack
+--project-key PATH      default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, repo root
+--port PORT             default: 8770
+--label-prefix PREFIX   default: org.agentstack
+--terminal MODE         auto | ghostty | iterm | terminal | none
 ```
 
-Existing registered agents keep their old names. New `agent-start` and
-`agent-start-codex` sessions receive `Adjective-Scientist` names such as
-`Swift-Bohr`; no migration is needed. Names are generated by
-claude-agent-stack itself, so updating the agent-mail upstream clone is not
-required for this feature. Running sessions keep the launcher code they started
-with; restart those Claude/Codex sessions to pick up new launcher behavior.
-This upgrade does not rely on removed payload files, so no stale-file cleanup
-is needed.
+`--bin-dir` は installer の公開 option ではありません。permissions template 内の `__AGENTSTACK_BIN_DIR__` を安全に展開するため、installer が内部で `agentstack-merge-settings --bin-dir ~/.agentstack/bin` を呼びます。
 
-### Agent-mail upstream compatibility
+version の正本は repository の `VERSION` です。installer はこれを install root にコピーし、`GET /api/version` は install 済み artifact、repository artifact、git metadata の順で解決します。
 
-The former git-walk hardening patch is unnecessary: upstream agent-mail #240
-now uses a single glob-pathspec walk and a threaded probe. Re-evaluate only if
-pinning agent-mail to a commit older than that upstream fix.
+### macOS の TCC / Full Disk Access
 
-## Launching agents
+`~/Desktop`、`~/Documents`、`~/Downloads` は macOS TCC の保護対象です。root agent を Full Disk Access のない terminal から起動すると、その terminal identity が tmux と子孫へ伝播し、子 agent だけ `EPERM` になることがあります。
 
-For the dashboard to list an agent and let you click-to-jump to it, the agent
-must run **inside a named tmux session**. The installed `agent-start` launcher
-(in `~/.agentstack/bin`) does exactly that: from outside tmux it replaces the
-current terminal tab with a fresh tmux session and runs `claude` inside it.
-Before Claude starts, the launcher registers the session with
-agent-mail using an explicit `Adjective-Scientist` name such as `Swift-Bohr`;
-the dashboard matches the scientist suffix to show the bundled portrait. If
-the launcher cannot reach agent-mail, it still exports that name as
-`AGENT_NAME` so Claude can register the same name through its MCP client.
+- root agent を Full Disk Access 済み terminal から起動する
+- または project を保護対象外へ移す
+- context を変えた後は既存 tmux server / session を作り直す
 
-The single hyphen makes these names explicit IDs for stock `mcp_agent_mail`,
-so the default coerce mode honors them as written. The suffix remains a bundled
-scientist key, so dashboard portrait matching still works without any
-agent-mail name-mode override.
+launcher はこの状態を警告します。必要なら `AGENTSTACK_TCC_GUARD=0` で警告を無効化し、`AGENTSTACK_TCC_DIRS` で対象 directory を変更できます。権限エラーを chmod だけで直そうとしないのは、判定主体が file mode ではなく起動元 app だからです。
+
+## エージェントを起動する
 
 ```bash
-# add the launcher to your PATH (e.g. in ~/.zshrc or ~/.bashrc)
 export PATH="$HOME/.agentstack/bin:$PATH"
 
-agent-start ~/code/my-project   # run claude in that directory
-agent-start                     # pick a directory interactively (needs fzf)
+agent-start ~/code/my-project
+agent-start-codex ~/code/my-project
 ```
 
-### Pick a working directory from your vault
-
-Set `AGENTSTACK_BASE_DIR` to the root you want the interactive picker to browse
-(defaults to `$HOME`). Point it at your Obsidian vault to drill into a subfolder
-without typing the path:
+引数を省略すると、`fzf` があれば `AGENTSTACK_BASE_DIR`（既定 `$HOME`）以下を選べます。なければ現在 directory を使います。
 
 ```bash
 export AGENTSTACK_BASE_DIR="$HOME/Obsidian/MyVault"
+agent-start
 ```
 
-Then `agent-start` (no argument) opens an `fzf` browser rooted there:
+tmux 外からは新しい named session を作り、tmux 内からは current session を rename してその場で起動します。session 名と agent-mail identity を一致させるのは、dashboard の jump、signal 配送、token recovery の照合を曖昧にしないためです。
 
-- **→** descend into the highlighted directory · **←** go to parent (stops at the base)
-- **Enter** select the highlighted directory · **Esc** cancel
+### 科学者名と fail-closed 判定
 
-Without `fzf`, `agent-start` falls back to the current directory; pass a path
-explicitly (`agent-start PATH`) to be precise.
+新規 identity は `Adjective-Scientist`、たとえば `Swift-Bohr` です。形容詞は内蔵 list、科学者 suffix は `dashboard/scientist_portraits.json` から選びます。suffix が portrait key なので、個別登録なしで顔が決まります。
 
-### Other launcher options
+候補の利用可否は `available / occupied / unknown` の三値です。transport failure、auth error、timeout は `unknown` とし、空き名として扱いません。既定で `unknown` が3回続くと停止し、衝突を疑う名前を取得しない fail-closed 設計です。
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AGENTSTACK_BASE_DIR` | `$HOME` | Root the interactive picker browses |
-| `AGENTSTACK_CLAUDE_BIN` | `claude` | Path to the `claude` binary |
+### identity と token
 
-If you launch `agent-start` from **inside** an existing tmux session, it runs
-`claude` in place and renames the current session after registration instead of
-starting a new tmux session.
+既存 identity の再登録には、その identity の `registration_token` が必要です。top-level token は次へ mode `0600` で保存されます。
 
-### Codex agents
-
-`agent-start-codex` is the [Codex CLI](https://github.com/openai/codex)
-counterpart. It takes the same directory selection (`AGENTSTACK_BASE_DIR`,
-explicit path, or fzf). Because Codex has no hook system, the launcher runs
-`agentstack-codex-bootstrap` inside the session to register the agent with
-agent-mail using an explicit `Adjective-Scientist` name before starting Codex.
-The same suffix matching drives dashboard portraits. If the shell registration
-path is unavailable, the bootstrap still exports the preselected name as
-`AGENT_NAME`; Codex can then register it through its MCP client.
-
-```bash
-agent-start-codex ~/code/my-project
-agent-start-codex                     # pick a directory (needs fzf)
-```
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AGENTSTACK_CODEX_BIN` | `codex` | Path to the `codex` binary |
-| `AGENTSTACK_VAULT` | *(unset)* | Extra writable dir passed as `codex --add-dir` |
-| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | `codex --sandbox` value |
-| `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `codex --ask-for-approval` value |
-
-Registration needs a running agent-mail (the install sets this up) and
-`AGENTSTACK_PROJECT_KEY`; without them Codex still launches with a preselected
-`Adjective-Scientist` `AGENT_NAME`, just without shell-side registration.
-`OPENAI_API_KEY` is stripped at launch so Codex uses its ChatGPT OAuth login.
-
-The optional Codex App Bridge uses a separate identity path. For each fresh App
-root or subagent session it omits `name` from `register_agent`, adopts the name
-returned by agent-mail, and persists that server-confirmed name in the binding.
-This keeps Bridge identities in agent-mail's canonical name/portrait namespace.
-If registration is temporarily unavailable, diagnostics may show a local-only
-`Pending-<external-id-hash>` label; that provisional label is never sent to
-agent-mail and is replaced as soon as registration succeeds. Re-authentication
-of an already confirmed binding continues to send its persisted name and owner
-token.
-
-#### Identity registration is token-strict
-
-Stock agent-mail requires the original `registration_token` when re-registering
-an existing agent name. Read-only calls such as `fetch_inbox` and `whois` are
-also token-gated for an existing identity unless the same MCP session has
-already authenticated as that agent. The launchers keep that token in
-`CHILD_REGISTRATION_TOKEN` and persist it under the runtime directory. Top-level
-sessions use `agent_token_<name>`:
-
-```bash
+```text
 ${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>
 ```
 
-Delegated children also have child runtime state:
+delegated child は加えて `child-agents/<name>.json` に child-owned state を持ちます。pre-registered child へ親 token を転送しません。`CHILD_REGISTRATION_TOKEN` という名前は歴史的なもので、top-level identity の再認証にも使われます。
 
 ```bash
-${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json
+AGENTSTACK_PROJECT_KEY=/path/to/project \
+  ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
-`agentstack-reregister` reads both locations. In pre-registered delegate flows,
-`spawn_child.sh --pre-registered` requires a child-owned token file or existing
-`child-agents/<name>.json` state; it does not forward the parent's ambient
-`CHILD_REGISTRATION_TOKEN`.
+helper は token を transcript や process argument に表示せず復元します。同名登録が失敗しても別名を作らないでください。別名は inbox と thread continuity を分断します。
 
-The `CHILD_` prefix is historical: this is the re-authentication token for
-continuing an existing identity, not only a child-agent token. If
-`CHILD_REGISTRATION_TOKEN` is available, pass it as `registration_token`; if it
-is missing, omit `registration_token` rather than inventing a new one for an
-existing name.
+launcher / child spawner は tmux session ごとの環境に `CLAUDECODE=1` を設定します。これは interactive shell の exit hook が tmux server 全体を連鎖 kill する事故を防ぐ guard です。また、継承した `AGENT_NAME`、`PARENT_AGENT`、token、reserved marker は top-level 起動前に消し、identity hijack を防ぎます。
 
-Claude sessions also have a SessionStart hook that can re-register an existing
-identity from the persisted token before the model starts work. Codex sessions
-do not have that hook, so the managed Codex instructions start with:
+Codex は Claude Code の hook system を持たないため、`agentstack-codex-bootstrap` が起動前の登録と tmux rename を担当します。Codex 起動時は `OPENAI_API_KEY` を除き、ChatGPT OAuth を優先します。
+
+## Dashboard
+
+<!-- TODO: screenshot: DECK view -->
+
+### DECK
+
+DECK は agent ごとの運用カードです。
+
+- running / standby / finished / gone / retired を section 分け
+- portrait、model、provider、context window、task、最後の受信指示、成果物数、attach 状態
+- work / wait / approval / question と経過時間
+- context 残量をカード下端の hairline で表示（緑・橙・赤）
+- live pane title、agent-mail の last active、検索、`show all`
+- card から History / Output panel、tmux open、running agent の二段確認 EXIT
+- finished / gone は、attached client がない場合だけ二段確認 KILL / soft retire
+
+KILL の可否は frontend の見た目ではなく server の `build_agents()` category を再利用して判定します。過去 session を running と誤判定して消さないため、分類の正本を一つにしています。
+
+### NETWORK
+
+<!-- TODO: screenshot: NETWORK view -->
+
+NETWORK は spawn 系譜と agent-mail 通信を force graph で重ねます。
+
+- node medallion に portrait、provider badge、running halo、状態 motion ring
+- context 残量を node 外周の最大270度 arc として静的表示
+- hover / long press tooltip に task、live state、model、last activity
+- node click で詳細 panel。History は transcript と24時間 event sparkline、Output は vault の `LOG_*.md`
+- ROLE ASSIGN で role / group annotation を保存・削除
+- communication edge click で mail drawer。両者間の subject、importance、時刻、本文を表示
+- time window slider / ALL、mail comet、spawn edge、legend
+- TUNE で node size、link distance / width、repel、center、spring を調整し localStorage に保存
+- 300 node を超えると label、annotation、badge、context arc を隠す dense mode
+
+`AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと edge drawer は `NOT CONFIGURED` を表示します。tmux telemetry 自体は見えるため、mail 設定不足と dashboard 全停止を区別できます。
+
+### SELECT と一括操作
+
+SELECT mode では drag rectangle または node click で複数選択できます。
+
+- EXIT: running / finished へ順番に `/api/exit`
+- RESUME: gone / retired へ `/api/jump`。tmux がなければ transcript resume へ fallback
+- REPLAY: mail history を持つ2 agent 以上で DIGEST REPLAY
+
+EXIT / RESUME は二段確認し、60 ms 間隔で順次送信します。一括操作を安全弁のない並列 request にしないのは、誤操作と service spike を避けるためです。
+
+### DIGEST REPLAY
+
+REPLAY は選択 agent の mail、spawn、exit / retire、承認待ち event を時系列再生します。
+
+- play / pause、seek、event marker、absolute / relative clock
+- 対数 scale の速度 `×1`〜`×10000`
+- message card の HOLD `0.1s`〜`15s`
+- GROUP-ONLY で選択 group 内の通信だけを表示
+- TIME-TRAVEL は initial snapshot から node / edge / state を再構築。OFF は現在 graph 上の comet replay
+- `Esc` / CLOSE で live graph snapshot と mail polling を復元
+
+履歴範囲は event の最古・最新へ自動 fit し、短すぎる範囲は操作できる幅まで広げます。大量 event は topology と group 内 mail を優先して間引きます。
+
+### NEW AGENT
+
+<!-- TODO: screenshot: NEW AGENT modal -->
+
+`+ NEW AGENT` は `/api/spawn-names` の catalog を使い、科学者、形容詞、working directory、model、parent、role / group、task、任意の isolated worktree を選びます。occupied / unknown の科学者は選択不可です。科学者を選ぶと形容詞が付き、shuffle で `WindyCurie` のような separator なしの名前を再構成します。科学者を選ばない場合は `name` を省略し、agent-mail の自動命名に委ねます。
+
+spawn は `register_agent → annotate → send_message → spawn_child.sh --pre-registered` の順です。token file を mode `0600` で渡し、3秒後に tmux session の存在を確認します。失敗時は `dashboard/logs/spawn.log` の tail を API error に含めます。
+
+### embed mode
+
+`/?embed=1` または same-origin iframe では compact header の embed mode になります。parent window は次を送れます。
+
+```js
+frame.contentWindow.postMessage({type: "net-pause"}, location.origin);
+frame.contentWindow.postMessage({type: "net-resume"}, location.origin);
+```
+
+pause は polling を止め、resume は現在 view を即 refresh します。hidden iframe が tmux / SQLite を継続 polling しないための契約です。
+
+## API reference
+
+dashboard API は既定で `127.0.0.1` に bind します。認証 layer はないため、`AGENTSTACK_BIND_HOST=0.0.0.0` は control endpoint と terminal bridge を trusted LAN / VPN へ公開する操作です。
+
+### endpoint 一覧
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/api/version` | name、version、API revision |
+| GET | `/api/spawn-names` | name status、adjective、directory、model catalog |
+| GET | `/api/agents` | DECK 用の tmux + mail live rows |
+| GET | `/api/graph?days=4&all=0` | NETWORK nodes、communication edges、spawn edges |
+| GET | `/api/history?session=NAME&limit=220` | Claude / Codex transcript |
+| GET | `/api/agent-history?name=NAME&hours=24` | 単一 agent event。`names=A,B` で replay union、`include_pane_states=1` で ask event |
+| GET | `/api/edge-messages?a=A&b=B&limit=60` | 二者間 thread drawer |
+| GET | `/api/messages-since?since=EPOCH&limit=80` | live mail comet |
+| GET | `/api/annotations` | role / emoji / group map |
+| GET | `/api/deliverables?agent=NAME` | vault 成果物 index |
+| GET | `/api/custom-portraits` | custom portrait mapping |
+| GET | `/api/term?session=NAME&lines=500` | tmux capture |
+| GET | `/api/ptty?session=NAME` | browser terminal 用 ttyd を確保 |
+| GET | `/api/mail-watcher-health` | watcher、signal backlog、直近配送結果 |
+| POST | `/api/jump` | tmux open / focus、または transcript resume |
+| POST | `/api/exit` | graceful `/exit` |
+| POST | `/api/kill` | finished / gone の tmux kill と soft retire |
+| POST | `/api/annotate` | role annotation の upsert / delete |
+| POST | `/api/spawn` | child 登録、task 配送、tmux 起動 |
+
+static resource として `/portrait?name=Curie&hi=1`、`/assets/*.svg|png` も提供します。
+
+### request / response 例
 
 ```bash
-AGENTSTACK_PROJECT_KEY="/path/to/project" ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
+curl -s http://127.0.0.1:8770/api/version
 ```
 
-That helper reads the token from runtime state and calls agent-mail without
-printing the token to the transcript. It also supports Claude recovery with
-`agentstack-reregister "$AGENT_NAME" claude-code`. After it succeeds, continue
-with `fetch_inbox(agent_name="$AGENT_NAME")`; do not call `register_agent`
-again.
-
-Shell-hook registration and the model's MCP tool session are separate
-authentication contexts. On the first `fetch_inbox` or `whois` call in a new
-MCP session, read
-`${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
-pass its value as `registration_token`. The authenticated MCP session can omit
-it on later calls.
-
-Registration also sets the agent's `contact_policy` to `open` by default so
-single-operator meshes can send first messages without an idle approval gate.
-Override with `AGENTSTACK_CONTACT_POLICY=auto`, `contacts_only`, `block_all`, or
-`closed`; set it to an empty value or `skip` to leave the server default alone.
-
-## Skills
-
-The installer copies the bundled skills to `~/.agentstack/skills` and registers
-that directory in Claude Code's `skillsDirectories`, so the slash commands below
-are available in any Claude Code session (no manual symlinking). Both are
-env-driven - they read `AGENTSTACK_*` from the install, not hard-coded paths.
-
-### `/delegate` — spawn and supervise a child agent
-
-Hands a bounded task to a child Claude (or Codex) agent and keeps the parent
-responsible for the outcome: it writes a risk profile, reserves files to avoid
-collisions, spawns the child via `spawn_child.sh`, annotates it in the
-dashboard, monitors progress, and reports a verified result.
-Pre-registered children should be created through
-`bin/agentstack-preregister-child`, then launched with
-`spawn_child.sh --pre-registered --child-token-file <file>` so the parent LLM
-does not handle the child token and the parent's token is not forwarded.
+```json
+{"name":"claude-agent-stack","version":"0.9.0","api":1}
+```
 
 ```bash
-/delegate "<task>"                       # child Claude agent in the current project
-/delegate "<task>" --dir <directory>     # run the child elsewhere
-/delegate "<task>" --codex               # use a Codex child instead
-/delegate "<task>" --model <model-name>  # pick the child's model
-/delegate "<task>" --worktree            # isolate the child in a git worktree
+curl -s http://127.0.0.1:8770/api/spawn-names
 ```
 
-The child appears in the dashboard with its spawn lineage, and completion is
-delivered back to the parent over agent-mail.
-
-### `/log` — structured session log
-
-Writes a structured log of the current session. If `AGENTSTACK_PROJECT_KEY`
-points at an Obsidian vault, the log lands there with daily-note backlinks and
-graph connections; otherwise it falls back to a local `logs/` directory.
+```json
+{
+  "names":[{"name":"Curie","portrait":true,"status":"available"}],
+  "adjectives":["Windy","Curious"],
+  "naming":"adjective+scientist",
+  "dirs":["~","/path/to/project"],
+  "models":["claude-sonnet-5","claude-opus-5","claude-haiku-4-5-20251001"],
+  "default_model":"claude-sonnet-5"
+}
+```
 
 ```bash
-/log <theme> [project]
+curl -s -X POST http://127.0.0.1:8770/api/annotate \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"WindyCurie","role":"docs","group":"release"}'
 ```
 
-### Managed agent instructions
+```json
+{"ok":true,"annot":{"name":"WindyCurie","role":"docs","emoji":"","group":"release"}}
+```
 
-The slash commands above are a Claude Code feature. Claude gets the shared
-coordination rules from hooks plus `CLAUDE.md`; Codex gets equivalent rules from
-its global `~/.codex/AGENTS.md`. The default installer offers both managed
-blocks. Re-run them any time after upgrading the stack:
+`role` と `emoji` を空にすると削除です。
 
 ```bash
-~/.agentstack/bin/agentstack-codex-setup      # managed block in ~/.codex/AGENTS.md
-~/.agentstack/bin/agentstack-claude-setup     # managed block in project CLAUDE.md
+curl -s -X POST http://127.0.0.1:8770/api/spawn \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "parent":"Curious-Copernicus",
+    "name":"WindyCurie",
+    "dir":"/path/to/project",
+    "model":"claude-sonnet-5",
+    "role":"docs",
+    "group":"release",
+    "task":"README を検証する",
+    "worktree":false
+  }'
 ```
 
-Both setup commands are idempotent, preserve existing content, write a
-timestamped backup before changing a file, support `--print`, and support
-`--uninstall`. `agentstack-claude-setup` writes the project `CLAUDE.md` by
-default, where the project root is `AGENTSTACK_PROJECT_KEY`; set
-`AGENTSTACK_CLAUDE_MD_SCOPE=global` for `~/.claude/CLAUDE.md` or `both` for both
-targets.
-
-The managed blocks point agents at `~/.agentstack/skills/<name>/SKILL.md` and
-spell out the startup discipline: use the shared project key, register/fetch
-inbox, obey parent task messages, and reserve files before editing.
-
-## Collision prevention (file reservations)
-
-Agents on one machine share a **file-reservation registry** (provided by
-`mcp_agent_mail`): before editing a file an agent reserves its path, so two
-agents don't clobber the same file. Reservations are taken, renewed, and
-released over agent-mail and are visible in the dashboard.
-
-Enforcement differs by agent type:
-
-- **Claude Code agents are hard-enforced.** The `check-file-reservation.sh`
-  PreToolUse hook blocks `Edit`/`Write` under the protected roots
-  (`AGENTSTACK_PROTECTED_ROOTS`, default the project key) unless a current
-  reservation exists.
-- **Codex agents are not auto-blocked** — Codex has no hook system, so it must
-  reserve voluntarily. `agentstack-codex-setup` writes that discipline into
-  `~/.codex/AGENTS.md` (reserve before editing, renew long edits, release when
-  done). Run it so Codex-heavy setups stay collision-safe.
-- **Claude instructions are mirrored in CLAUDE.md.** `agentstack-claude-setup`
-  writes the same startup and reservation discipline into the selected
-  `CLAUDE.md` target without overwriting existing content.
-
-Either way the underlying registry is shared, so a Claude reservation is visible
-to Codex and vice versa — the difference is only whether editing is *blocked*
-or *expected* without one.
-
-## Windows / WSL2
-
-Native Windows is not supported. On Windows, run everything inside
-**WSL2** (Ubuntu 22.04+ recommended).
-
-### 1. Install WSL2 and Ubuntu
-
-```powershell
-# Run in PowerShell (Admin)
-wsl --install
-# Restart when prompted, then open "Ubuntu" from the Start menu
+```json
+{"ok":true,"child_name":"WindyCurie","tmux_session":"WindyCurie","annot":"ok","worktree":false}
 ```
 
-### 2. Install dependencies inside WSL2
+`name` は任意です。指定時は `available` が確認できなければ拒否します。`parent`、`task`、存在する `dir`、許可 model は必須です。
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-pip tmux git curl
-# uv (fast Python package manager, needed for agent-mail)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -s -X POST http://127.0.0.1:8770/api/exit \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"WindyCurie"}'
 ```
 
-### 3. Install Claude Code inside WSL2
-
-```bash
-npm install -g @anthropic-ai/claude-code
+```json
+{"ok":true,"session":"WindyCurie","actions":["exit-sent"]}
 ```
 
-If `node` / `npm` is missing:
+error response は原則 `{"ok":false,"error":"..."}` で HTTP 400、spawn catalog の source が読めない場合は HTTP 503 です。
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt install -y nodejs
-```
+## 設定
 
-### 4. Install claude-agent-stack
+### Dashboard / `server.py`
 
-```bash
-git clone <this-repo> && cd claude-agent-stack
-./install.sh
-```
+| 環境変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `AGENTSTACK_PORT` | `8770` | HTTP port |
+| `AGENTSTACK_BIND_HOST` | `127.0.0.1` | bind address |
+| `AGENTSTACK_MAIL_DB` | `~/mcp_agent_mail/storage.sqlite3` | agent-mail SQLite |
+| `AGENTSTACK_MAIL_ENV` | `~/mcp_agent_mail/.env` | dashboard spawn が bearer token を読む file |
+| `AGENTSTACK_PROJECT_KEY` | 未設定 | agent-mail project の human key |
+| `AGENTSTACK_VAULT` | 未設定 | project key fallback と Output scan root |
+| `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
+| `AGENTSTACK_TERMINAL` | `auto` | `ghostty` / `iterm` / `terminal` / `none` |
+| `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
+| `AGENTSTACK_RUNTIME_DIR` | `~/.claude/runtime` | token、notification state、annotation 周辺 runtime |
+| `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal data root |
+| `AGENTSTACK_SIGNALS_DIR` | `$AGENTSTACK_MAIL_HOME/signals` | mail signal root |
+| `AGENTSTACK_PORTRAITS_DIR` | 未設定 | private PNG overlay directory |
+| `AGENTSTACK_CUSTOM_PORTRAITS` | 未設定 | agent name → portrait key JSON |
+| `AGENTSTACK_SPAWN_SCRIPT` | `$AGENTSTACK_HOOKS_DIR/spawn_child.sh` | NEW AGENT launcher |
+| `AGENTSTACK_SPAWN_DIRS` | `~` | NEW AGENT の preset directories。`:` 区切り |
 
-The installer detects Linux and uses **systemd user units** (if available)
-or a plain **nohup** fallback to keep the dashboard running.
+`AGENTSTACK_PROJECT_KEY` と `AGENTSTACK_VAULT` が両方未設定でも DECK の tmux state、terminal open、local annotation は動きます。一方、launcher の shell-side agent registration、edge mail、history / replay、dashboard spawn、project scoped retire、vault Output は動きません。mail 系だけが `NOT CONFIGURED` になるのは、local telemetry を診断に残すためです。
 
-### 5. Open the dashboard from Windows
+### Installer / launcher
 
-The dashboard runs at `http://127.0.0.1:8770/` inside WSL2.
-Open that URL in your **Windows browser** — WSL2 automatically forwards
-localhost ports to Windows.
+| 環境変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `AGENTSTACK_HOME` | `~/.agentstack` | install root |
+| `AGENTSTACK_MAIL_DIR` | `~/mcp_agent_mail` | upstream clone |
+| `AGENTSTACK_AGENT_MAIL_REPO` | upstream GitHub URL | clone source |
+| `AGENTSTACK_MCP_URL` | `http://127.0.0.1:8765/mcp` | agent-mail MCP endpoint |
+| `AGENTSTACK_BASE_DIR` | `$HOME` | launcher picker root |
+| `AGENTSTACK_CLAUDE_BIN` | `claude` | Claude CLI |
+| `AGENTSTACK_CODEX_BIN` | `codex` | Codex CLI |
+| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex sandbox |
+| `AGENTSTACK_CODEX_APPROVAL` | `on-request` | Codex approval mode |
+| `AGENTSTACK_VAULT` | 未設定 | Codex へ `--add-dir` する追加 writable directory |
+| `AGENTSTACK_PROTECTED_ROOTS` | project key | Claude file-reservation hook の保護 root |
+| `AGENTSTACK_CONTACT_POLICY` | `open` | 登録後の agent-mail contact policy。`skip` で server default |
 
-### Known limitations on WSL2
+installer が生成する `~/.agentstack/env.sh` が通常の設定箇所です。service の environment は install 時に plist / unit へ焼き込むため、変更後は installer を再実行するか service definition も更新してください。
 
-- **Ghostty is not available on WSL2.** The dashboard auto-detects this and
-  sets `AGENTSTACK_TERMINAL=none`, which disables click-to-jump. You can still
-  reach any agent manually with `tmux attach -t <name>` inside WSL2.
-- Obsidian on Windows cannot directly read a vault that lives inside the WSL2
-  filesystem (`\\wsl$\...`). Either keep your vault on the Windows filesystem
-  and mount it in WSL2 (`/mnt/c/...`), or run Obsidian inside WSL2 with an
-  X server / WSLg.
+`AGENTSTACK_MCP_URL` は launcher / hook の接続先です。現行の dashboard `/api/spawn` は `http://127.0.0.1:8765/mcp` を固定で使うため、別 endpoint を使う場合は dashboard spawn との整合も確認してください。
 
-## Personal portrait overlays
+## カスタマイズ
 
-The repository keeps bundled dashboard portraits generic. To use local portraits
-without committing personal files, point the dashboard at a private PNG directory
-and a private name-to-portrait JSON file:
+### portrait overlay
 
 ```bash
 export AGENTSTACK_PORTRAITS_DIR="$HOME/.agentstack/portraits_64"
 export AGENTSTACK_CUSTOM_PORTRAITS="$HOME/.agentstack/custom_portraits.json"
 ```
 
-Place `mybot.png` in the overlay directory, then map the lowercased registered
-agent name to that portrait key:
+overlay directory に `mybot.png` を置き、登録名を小文字 key で portrait stem へ対応させます。
 
 ```json
-{"mybot":"mybot"}
+{"mybot":"mybot","windycurie":"Curie"}
 ```
 
-See `examples/custom_portraits.example.json` for a neutral template. When these
-environment variables are unset, the dashboard uses only the bundled portraits.
+`examples/custom_portraits.example.json` も参照してください。private asset を repository へ commit せず、distribution の generic portrait と分離する設計です。
 
-## Troubleshooting
+### NEW AGENT directory presets
 
-### Agent registration or inbox read fails
+```bash
+export AGENTSTACK_SPAWN_DIRS="$HOME/code:$HOME/Obsidian/MyVault:/tmp"
+```
 
-Symptoms:
+API は `~` を symbolic のまま返し、実際の spawn 時に展開します。UI は最後に選んだ directory を localStorage に保存します。
 
-- The agent cannot register.
-- `fetch_inbox` or `whois` returns an authentication error.
-- The inbox appears empty even though the parent or operator sent a task.
-- Agent-mail reports `requires registration_token` for an existing name.
-- The dashboard or telemetry shows an identity split: the terminal title and
-  active agent disagree, or a new alias appears instead of the expected name.
+## Skills と file reservation
 
-Cause:
+installer は `skills/delegate` と `skills/log` を `~/.agentstack/skills` へ配置します。
 
-- Stock agent-mail is token-strict for existing names. Re-registering an
-  existing identity requires the original `registration_token`.
-- If `CHILD_REGISTRATION_TOKEN` is missing, the persisted runtime token is
-  missing, or either token is stale, same-name registration is rejected.
-- Read-only calls are also token-gated for existing identities, so trying
-  `fetch_inbox` before recovery can fail with the same token error.
+- `/delegate`: resource を宣言・予約し、Claude / Codex child、任意 model、worktree を起動して監視
+- `/log`: Obsidian vault なら `05_Agents` と Daily Note へ接続した log、なければ local `logs/`
 
-Fix:
+Claude Code は `check-file-reservation.sh` の PreToolUse hook で `Edit` / `Write` を hard block します。Codex には同等 hook がないため、managed `~/.codex/AGENTS.md` が reserve / renew / release discipline を指示します。registry は共通なので、Claude と Codex の reservation は相互に見えます。
 
-- Do not register under a different name to get unstuck; that creates a split
-  identity and loses the existing inbox/thread continuity.
-- Claude sessions normally recover through the SessionStart hook, which
-  restores the persisted token and re-registers before the model starts work.
-- Codex sessions normally recover by running
-  `agentstack-reregister "$AGENT_NAME"`, which reads runtime state and calls
-  agent-mail without printing the token.
-- If recovery still fails, check runtime state for the expected agent:
-  top-level sessions use `agent_token_<name>`, while delegated children use
-  `child-agents/<name>.json`. If the token file is missing or stale, report
-  that condition to the parent/operator instead of inventing a new token or
-  alias.
-- If the visible `CHILD_REGISTRATION_TOKEN` exists but still fails, suspect a
-  wrong token, such as a parent token that leaked into a pre-registered child.
-  Re-run `agentstack-reregister`; if that cannot restore from runtime state,
-  restart with the correct child-owned token file/state and report the mismatch.
-- If the name itself belongs to another token, treat it as a name conflict. Do
-  not hard-delete or claim the name unless the operator explicitly approves it.
-- Interpret the inbox result carefully: an empty inbox after successful
-  authentication is normal; an auth error means registration recovery is still
-  needed; a response under a different name means identity split risk.
+## agent-mail は別 component
 
-Token diagnosis quick flow:
+`mcp_agent_mail` はこの repository に同梱しません。installer が upstream を取得し、既存 clone があれば remote を確認して再利用します。データ directory と `.env` は uninstall 時も既定で保持します。
 
-| Symptom | Check | Recovery |
-| --- | --- | --- |
-| No visible token | Run `agentstack-reregister "$AGENT_NAME"`; check `agent_token_<name>` or `child-agents/<name>.json` exists | Restore from runtime state, or report missing token to the parent/operator |
-| Wrong token | Env token exists but strict registration still fails; for children, compare against `child-agents/<name>.json` state | Restart or re-run with the correct child-owned token file/state; do not forward a parent token |
-| Stale token | Runtime token exists but no longer matches the server identity | Report stale token and restart/re-register from the operator-approved token source |
-| Name conflict | The expected name belongs to another token or agent | Stop; do not create a new alias or hard-delete without explicit operator approval |
+upstream の license は **MIT License with OpenAI/Anthropic Rider** です。通常の MIT 許諾に加え、OpenAI、Anthropic とその関係者に対する追加制限があります。正確な条件は取得した `~/mcp_agent_mail/LICENSE` を確認してください。本 repository 自体の条件は [LICENSE](LICENSE) が正本で、両者は別 license です。
 
-### Files in the project fail with `EPERM` / "Operation not permitted" (macOS)
+## トラブルシューティング
 
-Symptoms:
+### `NOT CONFIGURED`
 
-- An agent — often a delegated child, while its siblings work fine — cannot read
-  existing files under the project directory. Reads fail with a bare
-  `EPERM: operation not permitted`, but only for a project located under
-  `~/Desktop`, `~/Documents`, or `~/Downloads`. Files elsewhere (`~/`, other
-  paths) read normally, and the same file is readable from a plain shell.
+dashboard service に `AGENTSTACK_PROJECT_KEY` または `AGENTSTACK_VAULT` がありません。`~/.agentstack/env.sh` だけでなく launchd plist / systemd unit の environment を確認し、installer を再実行して service を再起動します。
 
-Cause:
+### launchd が起動しない
 
-- Those folders are macOS **privacy-protected (TCC)** locations. Access is decided
-  by the *terminal identity* of the process, not by file permissions. `agent-start`
-  and `spawn_child.sh` launch agents with `tmux new-session`, which carries the
-  caller's environment (including `__CFBundleIdentifier` / `TERM_PROGRAM`) into the
-  child. If the **root** agent was launched from a terminal *without* Full Disk
-  Access (e.g. Terminal.app), that identity propagates down the entire delegate
-  chain, so descendants are judged as that non-FDA app and denied — even when the
-  tmux server itself is owned by an FDA terminal such as Ghostty.
+```bash
+label=org.agentstack.agentdashboard
+plist="$HOME/Library/LaunchAgents/$label.plist"
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$plist"
+launchctl enable "gui/$(id -u)/$label"
+tail -f ~/.agentstack/dashboard/dashboard.log
+```
 
-Fix (either one):
+同じ port を使う process があると installer は停止します。`AGENTSTACK_PORT` または `--port` を変えてください。
 
-- Launch the **root** agent from a Full-Disk-Access terminal (e.g. Ghostty) so the
-  whole chain inherits an FDA identity, **or**
-- Move the project outside `~/Desktop`, `~/Downloads`, `~/Documents`.
+### Codex に通知 text は入るが送信されない
 
-A running agent's access context cannot be changed in place; recreate the session
-(`tmux kill-server`, then relaunch from the FDA terminal). The launchers print a
-one-time warning when they detect this condition; set `AGENTSTACK_TCC_GUARD=0` to
-silence it, or `AGENTSTACK_TCC_DIRS` to override which folders are treated as
-protected.
+tmux injection は一回の `send-keys` に text と Enter を混ぜず、必ず二回に分けます。
 
-### Mouse wheel scrolls the terminal, not tmux scrollback
+```bash
+tmux send-keys -t "$session" -l "$text"
+sleep 0.2
+tmux send-keys -t "$session" C-m
+```
 
-Every agent runs **inside a tmux session**, so to scroll back through an
-agent's output you need tmux's mouse mode enabled. Without it the wheel
-scrolls Ghostty's (or iTerm2 / Terminal's) own buffer instead — which looks
-broken because tmux owns the screen and you can't reach the agent's history.
+Codex REPL では `Enter` keysym が submit されない場合があるため `C-m` を使います。watcher は bare shell への誤注入を避け、tmux call を timeout 付き worker で実行します。
 
-Add this to `~/.tmux.conf` (create the file if it doesn't exist):
+### dashboard spawn がすぐ消える
+
+1. `dashboard/logs/spawn.log` の末尾を見る
+2. `tmux has-session -t '<child-name>'` を確認する
+3. `~/.local/bin/claude` または指定 CLI が service の `PATH` から見えるか確認する
+4. `AGENTSTACK_SPAWN_SCRIPT`、working directory、`AGENTSTACK_PROJECT_KEY` を確認する
+5. `~/.agentstack/bin/agentstack-reregister '<child-name>'` で token state を確認する
+
+dashboard は launcher 起動後3秒で tmux session を probe します。launchd の最小 PATH では `~/.local/bin` が欠けやすいため、spawn path はこれを先頭へ補います。
+
+### registration / inbox の認証に失敗する
+
+別名を作らず `agentstack-reregister "$AGENT_NAME"` を実行し、`agent_token_<name>` または `child-agents/<name>.json` の存在を確認します。token が missing / stale / wrong-owner なら親または operator へ報告してください。
+
+### tmux の scrollback が使えない
 
 ```tmux
-set -g mouse on            # wheel scrolls tmux scrollback
-set -g history-limit 50000 # keep more scrollback
-setw -g mode-keys vi       # vi-style copy-mode keys
+set -g mouse on
+set -g history-limit 50000
 ```
 
-Reload it without restarting: `tmux source-file ~/.tmux.conf` (or just launch
-a new agent). Keyboard alternative that needs no config: `Ctrl+b [` enters
-copy-mode — scroll with the arrow keys / PageUp / PageDown, then `q` to exit.
+または `Ctrl+b [` で copy mode に入ります。`agentstack-doctor` も mouse mode を確認します。
 
-`scripts/doctor.sh` prints a hint when mouse mode looks off.
+## Upgrade / uninstall
+
+```bash
+git pull
+./scripts/install.sh
+~/.agentstack/bin/agentstack-doctor
+```
+
+installer は payload と `VERSION` を更新し、service を再登録し、managed merge を再び preview します。managed block は idempotent です。
+
+```bash
+~/.agentstack/bin/agentstack-uninstall
+```
+
+agent-mail clone、mail home、DB、`.env` は既定で retained path です。削除範囲は `~/.agentstack/install-state.json` が正本です。
 
 ## License
 
-Copyright (c) 2026 gyroid. All rights reserved.
+Copyright (c) 2026 gyroid. 利用条件は [LICENSE](LICENSE) を参照してください。
 
-This software is provided for personal use by authorized recipients only.
-Redistribution, sublicensing, or commercial use without explicit written
-permission from the author is prohibited.
-
-`mcp_agent_mail` is a separate upstream dependency fetched at install time
-and carries its own license.
+`mcp_agent_mail` は別 component であり、上記の Rider 付き MIT license が適用されます。
