@@ -111,6 +111,7 @@ cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
+  -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
   "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"

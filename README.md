@@ -14,6 +14,10 @@ It sits **on top of** [`mcp_agent_mail`](https://github.com/Dicklesworthstone/mc
 - **Coordination hooks** for Claude Code — file-reservation guard, agent
   registration gate, child-agent spawning, and a mail watcher that injects
   inbox signals back into each agent's terminal.
+
+  The watcher submits a notification in two tmux calls: it sends the text first,
+  waits briefly, then sends `C-m`.  Keep that separation in compatible hooks;
+  some Codex REPLs do not submit reliably when text and Enter are sent together.
 - **Bundled skills** — `/delegate` (spawn and supervise a child agent) and
   `/log` (write a structured session log), registered with Claude Code at
   install time. See [Skills](#skills).

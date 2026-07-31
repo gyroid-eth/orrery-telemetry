@@ -31,6 +31,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
 from urllib.parse import urlparse, parse_qs
 
+# `server.py` is both an executable script and an importable dashboard module
+# in the tests.  Support both import roots without coupling callers to cwd.
+try:
+    from dashboard.providers.codex_app import CodexAppRuntimeProvider
+except ModuleNotFoundError:  # direct `python dashboard/server.py`
+    from providers.codex_app import CodexAppRuntimeProvider
+
 
 def _env_path(name: str, default: str = "") -> str:
     value = os.environ.get(name, default).strip()
@@ -65,7 +72,9 @@ SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signa
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
 NOTIFY_DAEMON_LABEL = f"{LABEL_PREFIX}.notify-daemon"
 PORT_64 = os.path.join(HERE, "portraits_64")
-PORT_HI = os.path.join(HERE, "portraits_pixel")
+# High-resolution portraits are optional distribution assets.  Keep the legacy
+# 64px set as a graceful fallback when a downstream install does not ship them.
+PORT_HI = os.path.join(HERE, "portraits_hi")
 PORTRAIT_OVERLAY_DIR = _env_path("AGENTSTACK_PORTRAITS_DIR", "")
 CUSTOM_PORTRAITS_PATH = _env_path("AGENTSTACK_CUSTOM_PORTRAITS", "")
 
@@ -79,7 +88,7 @@ def _project_key() -> str:
 # Fold them to one display label. Structural parser (<family>-<version>) so
 # future versions (opus-4.8 ...) work with no code change. Source of truth:
 # ~/mcp_agent_mail/src/mcp_agent_mail/model_normalize.py — keep in sync.
-_MN_FAMILIES = ("opus", "sonnet", "haiku", "gpt", "gemini", "grok",
+_MN_FAMILIES = ("fable", "mythos", "opus", "sonnet", "haiku", "gpt", "gemini", "grok",
                 "llama", "qwen", "mistral", "deepseek")
 _MN_FAMILY_RE = re.compile(
     r"(?P<family>" + "|".join(_MN_FAMILIES) + r")[-_. ]*"
@@ -88,7 +97,7 @@ _MN_FAMILY_RE = re.compile(
 )
 _MN_VENDOR_RE = re.compile(r"^(?:claude|anthropic|openai|google)[-_. ]*")
 _MN_CTX_RE = re.compile(r"[\[\(\-_ ]*\d+\s*m(?:[-_ ]?context)?[\]\)]*\s*$")
-_MN_DISPLAY = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku",
+_MN_DISPLAY = {"fable": "Fable", "mythos": "Mythos", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku",
                "gpt": "GPT", "gemini": "Gemini", "grok": "Grok",
                "llama": "Llama", "qwen": "Qwen", "mistral": "Mistral",
                "deepseek": "DeepSeek"}
@@ -126,6 +135,7 @@ def _display_model(raw: str | None) -> str:
 # family → 提供元 (network view の provider logo 判定に使用)。
 # 不明 family は空文字を返し、フロントで logo 非描画。
 _MN_PROVIDER = {
+    "fable": "anthropic", "mythos": "anthropic",
     "opus": "anthropic", "sonnet": "anthropic", "haiku": "anthropic",
     "gpt": "openai",
     "gemini": "google", "grok": "xai",
@@ -181,7 +191,7 @@ def _png_names(directory: str) -> set[str]:
 
 
 def _portrait_set() -> set[str]:
-    return _png_names(PORT_64) | _png_names(PORTRAIT_OVERLAY_DIR)
+    return _png_names(PORT_64) | _png_names(PORT_HI) | _png_names(PORTRAIT_OVERLAY_DIR)
 
 
 def _portrait_file(name: str, hi: bool) -> str:
@@ -192,7 +202,25 @@ def _portrait_file(name: str, hi: bool) -> str:
         fp = os.path.join(PORTRAIT_OVERLAY_DIR, fname)
         if os.path.isfile(fp):
             return fp
-    return os.path.join(PORT_HI if hi else PORT_64, fname)
+    if hi:
+        fp = os.path.join(PORT_HI, fname)
+        if os.path.isfile(fp):
+            return fp
+    fp = os.path.join(PORT_64, fname)
+    return fp if os.path.isfile(fp) else ""
+
+
+def _portrait_fallback(name: str, hi: bool) -> bytes:
+    """Return a dependency-free initials portrait for valid unknown names."""
+    size = 256 if hi else 64
+    initials = (name[:2] or "??").upper()
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" '
+        f'height="{size}" viewBox="0 0 64 64">'
+        '<rect width="64" height="64" fill="#0e1012"/>'
+        '<text x="32" y="32" fill="#c4c0b2" font-family="Menlo,monospace" '
+        f'font-size="26" text-anchor="middle" dominant-baseline="central">{initials}</text></svg>'
+    ).encode()
 
 
 def _custom_portrait_map() -> dict:
@@ -405,7 +433,7 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     # しまう。agent-mail に program=codex-cli で登録され、かつ tmux session が
     # 生きているなら「Codex 起動中」とみなす。終了時は tmux session が消えて
     # build_agents の 2nd pass で gone/retired として扱われる。
-    if not claude and program == "codex-cli" and in_mail:
+    if not claude and program and program.startswith("codex") and in_mail:
         claude = True
     if PENDING_RE.match(name):
         return "unnamed" if claude else "idle"
@@ -421,6 +449,7 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
 def build_agents() -> list[dict]:
     sessions = tmux_state()
     mail_agents, mail_instr = agentmail_state()
+    codex_apps = _codex_app_runtimes()
     now = int(time.time())
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
     rows = []
@@ -477,6 +506,7 @@ def build_agents() -> list[dict]:
                 "last_active": last_active,
                 "last_active_rel": _rel(last_active, now),
                 "created": s["created"],
+                "surface": "tmux",
             }
         )
     # 2nd pass: tmux 不在の agent-mail 登録 (retired / gone) も rows に含める。
@@ -507,7 +537,7 @@ def build_agents() -> list[dict]:
                 if r["name"] in seen:
                     continue
                 la = _iso_to_epoch(r["last_active_ts"])
-                rows.append({
+                row = {
                     "name": r["name"],
                     "category": "retired" if r["retired"] else "gone",
                     "running": False, "attached": False, "cmd": "", "live": "",
@@ -521,7 +551,24 @@ def build_agents() -> list[dict]:
                     "deliv": len(didx.get(r["name"], [])),
                     "last_active": la, "last_active_rel": _rel(la, now),
                     "created": 0, "retired": bool(r["retired"]),
-                })
+                    "surface": "tmux",
+                }
+                # A Codex App runtime has no tmux pane.  It may still be a
+                # live dashboard agent, but only provider-validated snapshots
+                # are allowed to promote it from gone/retired.
+                runtime = None if r["retired"] else codex_apps.get(r["name"])
+                if runtime:
+                    app_live = _codex_app_live(runtime)
+                    row.update(cmd="codex-app", live=app_live["live"],
+                               surface="codex-app", model=runtime["model"],
+                               model_raw=runtime["model"],
+                               provider=_provider_of(runtime["model"]))
+                    if app_live["running"]:
+                        row.update(category="agent", running=True,
+                                   act_state=app_live["act_state"])
+                    else:
+                        row.update(category="finished")
+                rows.append(row)
             con.close()
         except Exception:
             pass  # 失敗しても tmux ベースの rows は返す
@@ -562,6 +609,62 @@ def _rel(epoch: int, now: int) -> str:
 # --------------------------------------------------------------------------- #
 # Graph (親子 + agent-mail 通信網)
 # --------------------------------------------------------------------------- #
+_CODEX_APP_PROVIDER = CodexAppRuntimeProvider()
+_CAPP_CACHE: dict = {"ts": 0.0, "map": {}}
+_CAPP_RUN_STATES = frozenset(("registering", "working", "waiting", "blocked"))
+
+
+def _codex_app_runtimes() -> dict[str, dict]:
+    """Return provider-validated Codex App records keyed by agent name."""
+    now = time.time()
+    if now - _CAPP_CACHE["ts"] < 4.5:
+        return _CAPP_CACHE["map"]
+    records: dict[str, dict] = {}
+    for snapshot in _CODEX_APP_PROVIDER.list_runtimes():
+        rec = dict(snapshot.metadata)
+        name = rec.get("agent_name")
+        if not isinstance(name, str) or not name:
+            continue
+        previous = records.get(name)
+        if previous and (previous.get("last_seen_at") or "") > (rec.get("last_seen_at") or ""):
+            continue
+        records[name] = rec
+    _CAPP_CACHE.update(ts=now, map=records)
+    return records
+
+
+def _codex_app_live(rec: dict) -> dict:
+    """Convert a provider record into the dashboard's live-state vocabulary."""
+    state = str(rec.get("state") or "")
+    seen = _iso_to_epoch(str(rec.get("last_seen_at") or "").replace("Z", ""))
+    delta = max(0, int(time.time()) - seen) if seen else 99999
+    # Bridge snapshots are write-on-change.  A once-working record that has not
+    # been refreshed for ten minutes must not remain visibly active forever.
+    if state in _CAPP_RUN_STATES and delta > 600:
+        state = "dormant"
+    running = state in _CAPP_RUN_STATES
+    delivery = rec.get("delivery") or {}
+    wake = str(delivery.get("wake_status") or "")
+    live = f"Codex App · {state}" if wake in ("", "idle") else f"Codex App · wake:{wake}"
+    return {
+        "present": True, "running": running, "attached": False,
+        "live": live, "state": "run" if running else "finished",
+        "sig": round(max(0.0, min(1.0, 1.0 - delta / 480.0)), 3) if running else 0.0,
+        "act_state": {"working": "work", "registering": "work", "waiting": "wait", "blocked": "ask"}.get(state),
+        "surface": "codex-app",
+    }
+
+
+def _open_codex_app(name: str) -> dict:
+    for snapshot in _CODEX_APP_PROVIDER.list_runtimes():
+        if snapshot.metadata.get("agent_name") == name:
+            result = _CODEX_APP_PROVIDER.perform(snapshot.external_id, "open")
+            if result.ok:
+                return {"ok": True, "action": "opened", "detail": "Codex App を前面化", **dict(result.details)}
+            return {"ok": False, "error": result.error or "Codex App activation failed"}
+    return {"ok": False, "error": "unknown Codex App runtime"}
+
+
 _GRAPH_CACHE: dict = {"ts": 0, "data": None}
 
 
@@ -739,6 +842,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
     mx = max((n["last_active"] for n in nodes if n["last_active"]), default=0)
     win = days * 86400
     sessions = tmux_state()  # name -> {attached, cmd, title, activity, ...}
+    codex_apps = _codex_app_runtimes()
     if show_all:
         keep = {n["name"] for n in nodes}
     else:
@@ -748,6 +852,10 @@ def graph_payload(days: float, show_all: bool) -> dict:
         for nm, s in sessions.items():
             t = (s.get("title") or "").strip()
             if s["cmd"] in ("node", "claude") or (t and _is_activity_glyph(t[:1])):
+                running_set.add(nm)
+        retired_names = {n["name"] for n in nodes if n.get("retired")}
+        for nm, rec in codex_apps.items():
+            if nm not in retired_names and _codex_app_live(rec)["running"]:
                 running_set.add(nm)
         # running な agent は window bypass、それ以外は last_active でフィルタ。
         keep = {
@@ -761,6 +869,8 @@ def graph_payload(days: float, show_all: bool) -> dict:
     def live(name: str, program: str | None = None) -> dict:
         s = sessions.get(name)
         if not s:
+            if program == "codex-app" and (rec := codex_apps.get(name)):
+                return _codex_app_live(rec)
             # tmux セッション無し = プロセス終了済み（DB登録のみ残る）
             return {"present": False, "running": False, "attached": False,
                     "live": "", "state": "gone", "sig": 0.0}
@@ -770,7 +880,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
         )
         # Codex は cmd=zsh で報告されるため、program=codex-cli 登録で tmux
         # session が live なら running 扱い (build_agents と同じ判定)
-        if not running and program == "codex-cli":
+        if not running and program and program.startswith("codex"):
             running = True
         live_txt = ""
         if t and t not in (s.get("cmd", ""), name) and not t.startswith("/"):
@@ -1254,7 +1364,10 @@ def do_resume(session: str) -> dict:
       Claude 用 _transcript_path の selfref 探索だと「その名前を最も多く参照
       する別 agent(=子)の transcript」を誤マッチする(2026-06-02 SunnyEuler が
       子 NavyVesalius の会話で復元された事故)。program で先に分岐して回避する。"""
-    if _agent_program(session).startswith("codex"):
+    program = _agent_program(session)
+    if program == "codex-app" and session in _codex_app_runtimes():
+        return _open_codex_app(session)
+    if program.startswith("codex"):
         return _do_resume_codex(session)
     path = _transcript_path(session)
     if not path:
@@ -2462,6 +2575,10 @@ def _ttyd_cleanup() -> None:
 def do_jump(session: str) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
+    # Codex App lives outside tmux and its provider owns the safe activation
+    # action.  Check it before the terminal-adapter gate.
+    if _agent_program(session) == "codex-app" and session in _codex_app_runtimes():
+        return _open_codex_app(session)
     if _terminal_adapter() == "none":
         return _terminal_unsupported()
     if subprocess.run(
@@ -2901,7 +3018,14 @@ def do_exit(session: str) -> dict:
         actions.append(f"zombie-pane:{pane_cmd}")
     else:
         r = subprocess.run(
-            ["tmux", "send-keys", "-t", session, "/exit", "Enter"],
+            ["tmux", "send-keys", "-t", session, "-l", "/exit"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
+        time.sleep(0.3)
+        r = subprocess.run(
+            ["tmux", "send-keys", "-t", session, "C-m"],
             capture_output=True, text=True,
         )
         if r.returncode != 0:
@@ -3048,6 +3172,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, f.read(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 self._send(500, b"index.html missing", "text/plain")
+        elif path == "/api/version":
+            version_file = os.path.join(os.path.dirname(HERE), "VERSION")
+            try:
+                with open(version_file, encoding="utf-8") as f:
+                    version = f.read().strip()
+            except OSError:
+                try:
+                    version = subprocess.run(
+                        ["git", "-C", os.path.dirname(HERE), "describe", "--tags", "--always", "--dirty"],
+                        capture_output=True, text=True, timeout=3,
+                    ).stdout.strip() or "unknown"
+                except (OSError, subprocess.SubprocessError):
+                    version = "unknown"
+            self._send(200, json.dumps({"name": "claude-agent-stack", "version": version, "api": 1}).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
             body = json.dumps(
                 {"ts": int(time.time()), "agents": build_agents()},
@@ -3207,7 +3345,11 @@ class Handler(BaseHTTPRequestHandler):
             hi = (q.get("hi") or ["0"])[0] in ("1", "true")
             fp = _portrait_file(nm, hi)
             if not fp:
-                self._send(404, b"no portrait", "text/plain")
+                if not re.fullmatch(r"[A-Za-z][A-Za-z ._-]{0,23}", nm or ""):
+                    self._send(404, b"no portrait", "text/plain")
+                    return
+                img = _portrait_fallback(nm, hi)
+                self._send(200, img, "image/svg+xml")
                 return
             try:
                 with open(fp, "rb") as f:

@@ -76,6 +76,7 @@ cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  -e CLAUDECODE=1 \
   "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
