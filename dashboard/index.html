@@ -392,6 +392,13 @@
   #edrawer .ed-list{flex:1;overflow-y:auto;padding:6px 0}
   #edrawer .ed-empty{padding:30px 18px;color:var(--bone-dim);
     text-align:center;font-size:12px;line-height:1.7}
+  #edrawer .ed-config{margin:18px;padding:16px 14px;text-align:left;
+    border:1px solid rgba(242,182,90,.28);border-radius:7px;
+    background:rgba(242,182,90,.045);font-family:var(--mono)}
+  #edrawer .ed-config b{display:block;color:var(--amber);font-size:9px;
+    font-weight:600;letter-spacing:.16em;margin-bottom:7px}
+  #edrawer .ed-config span{display:block;color:var(--ink-dim);
+    font-size:10px;line-height:1.55;letter-spacing:.02em}
   #edrawer .ed-msg{padding:10px 14px;border-bottom:1px solid var(--line-soft);
     cursor:pointer;transition:background .12s}
   #edrawer .ed-msg:hover{background:rgba(54,232,255,.04)}
@@ -521,22 +528,6 @@
     background-size:5px 5px,5px 5px;background-repeat:no-repeat;
     padding-right:28px}
   #spawnmd textarea{resize:vertical;min-height:96px;line-height:1.55}
-  #spawnmd .spm-emoji-row{display:grid;grid-template-columns:64px 1fr;gap:8px}
-  /* radio group: 2 つの中から択一。amber pill 風 */
-  #spawnmd .spm-radio{display:flex;gap:8px}
-  #spawnmd .spm-radio label{flex:1;cursor:pointer;
-    border:1px solid var(--line);padding:8px 10px;
-    font-family:"IBM Plex Mono",monospace;font-size:11px;
-    color:var(--bone-dim);letter-spacing:.5px;text-align:center;
-    transition:.14s;background:rgba(0,0,0,.35);position:relative;
-    clip-path:polygon(0 0,100% 0,100% 100%,7px 100%,0 calc(100% - 7px))}
-  #spawnmd .spm-radio input{position:absolute;opacity:0;pointer-events:none}
-  #spawnmd .spm-radio label:hover{color:var(--bone);border-color:var(--bone-dim)}
-  #spawnmd .spm-radio label:has(input:checked){
-    color:var(--void);background:var(--amber);border-color:var(--amber);
-    box-shadow:var(--glow-a);font-weight:600}
-  #spawnmd .spm-radio .spm-r-meta{display:block;font-size:8.5px;
-    letter-spacing:1.8px;opacity:.7;margin-top:2px;text-transform:uppercase}
   /* checkbox row (worktree) */
   #spawnmd .spm-check{display:flex;align-items:center;gap:9px;cursor:pointer;
     border:1px solid var(--line);padding:9px 12px;
@@ -594,6 +585,227 @@
   @media (max-width:640px){
     #spawnmd .spm-grid{grid-template-columns:1fr}
     #spawnmd .spm-frame{padding:18px 16px}
+  }
+
+  /* Cockpit spawn v2 parity: one quiet launch manifest, not a generic
+     glowing console. Identity → engine → directory encode the real flow. */
+  #spawnmd{background:rgba(8,9,13,.6);
+    backdrop-filter:blur(10px) saturate(1.05);padding:24px}
+  #spawnmd .spm-frame{
+    width:min(790px,96vw);max-height:92vh;overflow:auto;padding:0;
+    background:linear-gradient(180deg,rgba(255,255,255,.045),transparent 140px),
+      rgba(17,19,25,.88);
+    backdrop-filter:blur(26px) saturate(1.12);
+    border:1px solid rgba(255,255,255,.09);border-radius:13px;
+    clip-path:none;box-shadow:0 30px 90px rgba(0,0,0,.58)}
+  #spawnmd .spm-frame::before,#spawnmd .spm-frame::after{display:none}
+  #spawnmd .spm-hd{align-items:center;padding:17px 19px;margin:0;
+    border-bottom:1px solid var(--hair)}
+  #spawnmd .spm-kicker{font-family:var(--mono);font-size:8px;
+    font-weight:600;letter-spacing:.18em;color:var(--amber);
+    text-transform:uppercase;margin-bottom:3px}
+  #spawnmd .spm-tt{font-family:var(--serif);font-weight:500;
+    font-size:24px;letter-spacing:.02em;color:var(--ink);line-height:1.1}
+  #spawnmd .spm-sub{font-family:var(--mono);font-size:8.5px;
+    letter-spacing:.13em;color:var(--ink-faint);margin-top:5px}
+  #spawnmd .spm-x{border:0;width:30px;height:30px}
+  #spawnmd .spm-x:hover,#spawnmd .spm-x:focus-visible{
+    color:var(--amber);outline:none}
+  #spawnmd .spm-grid{grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px 16px;padding:18px 19px}
+  #spawnmd .spm-section{padding:12px;border:1px solid var(--hair);
+    border-radius:10px;background:rgba(8,9,13,.3)}
+  #spawnmd .spm-section-head{display:flex;align-items:baseline;gap:10px;
+    margin-bottom:9px}
+  #spawnmd .spm-section-head .spm-lab{margin:0}
+  #spawnmd .spm-section-meta{margin-left:auto;color:var(--ink-faint);
+    font-family:var(--mono);font-size:7.5px;letter-spacing:.1em;
+    text-transform:uppercase}
+  #spawnmd .spm-lab{font-family:var(--mono);font-weight:500;
+    font-size:8.5px;letter-spacing:.14em;color:var(--ink-dim)}
+  #spawnmd .spm-lab::before{content:"";width:11px;height:1px;
+    background:var(--amber);opacity:.7}
+  #spawnmd input[type=text],#spawnmd select,#spawnmd textarea{
+    color:var(--ink);background:rgba(11,13,17,.52);
+    border:1px solid var(--hair);border-radius:7px;clip-path:none}
+  #spawnmd .spm-agent-strip{display:flex;gap:7px;overflow-x:auto;
+    padding:2px 1px 8px;scroll-snap-type:x proximity;
+    scrollbar-color:var(--ink-faint) transparent}
+  #spawnmd .spm-agent{width:68px;min-width:68px;padding:6px 4px;
+    display:flex;flex-direction:column;align-items:center;gap:5px;
+    border:1px solid transparent;border-radius:8px;background:transparent;
+    color:var(--ink-dim);font-family:var(--mono);cursor:pointer;
+    scroll-snap-align:start;transition:.14s}
+  #spawnmd .spm-agent:not(:disabled):hover{
+    color:var(--ink);border-color:rgba(242,182,90,.34);
+    background:rgba(242,182,90,.055)}
+  #spawnmd .spm-agent.on{color:var(--amber);
+    border-color:rgba(242,182,90,.55);background:var(--amber-glow)}
+  #spawnmd .spm-agent:disabled{cursor:not-allowed;opacity:.3;
+    filter:grayscale(1)}
+  #spawnmd .spm-agent-face{position:relative;width:42px;height:42px;
+    display:grid;place-items:center;border-radius:50%;overflow:hidden;
+    border:1px solid rgba(255,255,255,.1);background:var(--elev)}
+  #spawnmd .spm-agent-auto .spm-agent-face{border-style:dashed;
+    color:var(--ink-dim);font-family:var(--serif);font-size:18px}
+  #spawnmd .spm-agent-face img{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover;filter:grayscale(1) contrast(1.04)}
+  #spawnmd .spm-agent-init{font-family:var(--serif);font-size:15px;
+    color:var(--ink-faint)}
+  #spawnmd .spm-agent-name{max-width:62px;overflow:hidden;text-overflow:ellipsis;
+    font-family:var(--serif);font-size:10px;white-space:nowrap}
+  #spawnmd .spm-agent-status{font-size:6.5px;letter-spacing:.1em;
+    color:var(--ink-faint);text-transform:uppercase}
+  #spawnmd .spm-name-card{display:flex;align-items:center;gap:11px;
+    min-height:62px;padding:9px 10px;margin-bottom:9px;
+    border:1px solid var(--hair);border-radius:9px;background:var(--bg)}
+  #spawnmd .spm-name-card.on{border-color:rgba(242,182,90,.28)}
+  #spawnmd .spm-name-face{position:relative;width:44px;height:44px;flex:none;
+    display:grid;place-items:center;border:1px dashed var(--hair);
+    border-radius:50%;overflow:hidden;color:var(--ink-faint);
+    font-family:var(--serif);font-size:17px}
+  #spawnmd .spm-name-face img{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover}
+  #spawnmd .spm-name-main{min-width:0;flex:1;display:flex;
+    flex-direction:column;align-items:flex-start}
+  #spawnmd .spm-name-card:not(.on) .spm-shuffle{display:none}
+  #spawnmd .spm-name-card.checking .spm-shuffle,
+  #spawnmd .spm-name-card.err .spm-shuffle{display:block}
+  #spawnmd .spm-name-card-label{color:var(--ink-faint);
+    font-family:var(--mono);font-size:7px;letter-spacing:.14em;
+    text-transform:uppercase}
+  #spawnmd .spm-composite{display:inline-flex;align-items:baseline;gap:4px;
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--ink-dim);font-family:var(--mono);font-size:13px}
+  #spawnmd .spm-composite strong{color:var(--ink);
+    font-family:var(--serif);font-size:17px;font-weight:600}
+  #spawnmd .spm-name-hint{margin-top:2px;color:var(--ink-faint);
+    font-family:var(--mono);font-size:8px;letter-spacing:.04em}
+  #spawnmd .spm-shuffle{margin-left:auto;border:1px solid var(--hair);
+    border-radius:999px;background:transparent;color:var(--ink-dim);
+    padding:6px 9px;font-family:var(--mono);font-size:8px;
+    letter-spacing:.1em;cursor:pointer;transition:.14s}
+  #spawnmd .spm-shuffle:hover{color:var(--amber);
+    border-color:rgba(242,182,90,.36);background:var(--amber-glow)}
+  #spawnmd .spm-shuffle:disabled{opacity:.4;cursor:wait}
+  #spawnmd .spm-name-card.checking{border-color:rgba(242,182,90,.2)}
+  #spawnmd .spm-name-card.err{border-color:rgba(224,101,95,.38)}
+  #spawnmd .spm-name-card.err .spm-name-hint{color:#e0655f}
+  #spawnmd .spm-dir-pick{display:grid;
+    grid-template-columns:minmax(0,auto) 1fr;gap:9px;align-items:center}
+  #spawnmd .spm-dir-typeahead{position:relative;min-width:0}
+  #spawnmd .spm-dir-options{position:absolute;z-index:4;top:calc(100% + 4px);
+    left:0;right:0;max-height:156px;overflow-y:auto;padding:3px;
+    border:1px solid var(--hair);border-radius:7px;
+    background:rgba(17,19,25,.98);box-shadow:0 15px 34px rgba(0,0,0,.42);
+    scrollbar-color:rgba(236,229,214,.16) transparent}
+  #spawnmd .spm-dir-options[hidden]{display:none}
+  #spawnmd .spm-dir-option{display:flex;align-items:center;gap:7px;
+    width:100%;min-width:0;border:1px solid transparent;border-radius:5px;
+    background:transparent;color:var(--ink-dim);padding:6px 8px;
+    text-align:left;font-family:var(--mono);font-size:10px;cursor:pointer}
+  #spawnmd .spm-dir-option:hover,
+  #spawnmd .spm-dir-option[aria-selected=true]{
+    color:var(--ink);border-color:rgba(242,182,90,.24);
+    background:rgba(242,182,90,.055)}
+  #spawnmd .spm-dir-option .spm-dir-arrow{color:var(--amber);
+    font-size:8px;opacity:.7}
+  #spawnmd .spm-dir-option .spm-dir-option-name{overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  #spawnmd .spm-dir-option .spm-dir-option-path{margin-left:auto;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--ink-faint);font-size:7px}
+  #spawnmd .spm-dir-empty{padding:8px;color:var(--ink-faint);
+    font-family:var(--mono);font-size:8px;letter-spacing:.06em}
+  #spawnmd .spm-chipset{display:flex;gap:6px;flex-wrap:wrap}
+  #spawnmd .spm-chip{border:1px solid var(--hair);border-radius:999px;
+    background:rgba(11,13,17,.42);color:var(--ink-dim);
+    padding:6px 10px;font-family:var(--mono);font-size:9px;
+    letter-spacing:.04em;cursor:pointer;transition:.14s}
+  #spawnmd .spm-chip:hover{color:var(--ink);
+    border-color:rgba(242,182,90,.3)}
+  #spawnmd .spm-chip.on{color:var(--amber);background:var(--amber-glow);
+    border-color:rgba(242,182,90,.42)}
+  #spawnmd .spm-provider-tabs{display:flex;width:max-content;max-width:100%;
+    margin-bottom:8px;border:1px solid var(--hair);border-radius:7px;
+    overflow:hidden}
+  #spawnmd .spm-provider-tab{min-width:108px;border:0;background:transparent;
+    color:var(--ink-dim);padding:7px 14px;font-family:var(--mono);
+    font-size:9px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer}
+  #spawnmd .spm-provider-tab+.spm-provider-tab{
+    border-left:1px solid var(--hair)}
+  #spawnmd .spm-provider-tab.on{background:var(--amber-glow);color:var(--amber)}
+  #spawnmd .spm-provider-tab:focus-visible{outline:1px solid var(--amber);
+    outline-offset:-2px}
+  #spawnmd .spm-models{display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:7px}
+  #spawnmd .spm-model-chip{min-width:0;text-align:left;border-radius:7px;
+    padding:9px 10px}
+  #spawnmd .spm-model-chip b{display:block;font-size:9px;font-weight:500}
+  #spawnmd .spm-model-chip small{display:block;margin-top:2px;
+    color:var(--ink-faint);font-size:6.5px;letter-spacing:.1em;
+    text-transform:uppercase}
+  #spawnmd .spm-model-tone{display:block;margin-top:4px;color:var(--ink-dim);
+    font-family:var(--mono);font-size:7.5px;font-style:normal;
+    letter-spacing:.025em;line-height:1.35}
+  #spawnmd .spm-model-chip.on small{color:var(--amber)}
+  #spawnmd .spm-effort-row{display:flex;align-items:center;gap:9px;
+    flex-wrap:wrap;margin-top:9px}
+  #spawnmd .spm-effort-row[hidden]{display:none}
+  #spawnmd .spm-effort-label{color:var(--ink-faint);font-family:var(--mono);
+    font-size:8px;letter-spacing:.18em}
+  #spawnmd .spm-efforts{display:flex;gap:5px;flex-wrap:wrap}
+  #spawnmd .spm-effort-chip{min-width:58px;padding:5px 8px}
+  #spawnmd .spm-effort-hint{flex-basis:100%;color:var(--ink-faint);
+    font-family:var(--mono);font-size:7.5px;letter-spacing:.06em}
+  #spawnmd .spm-effort-hint[hidden]{display:none}
+  #spawnmd .spm-advanced{padding:0;border:1px solid var(--hair);
+    border-radius:8px;background:rgba(8,9,13,.2);overflow:hidden}
+  #spawnmd .spm-advanced summary{display:flex;align-items:center;gap:9px;
+    padding:9px 11px;color:var(--ink-dim);cursor:pointer;list-style:none;
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;
+    text-transform:uppercase}
+  #spawnmd .spm-advanced summary::-webkit-details-marker{display:none}
+  #spawnmd .spm-advanced summary::before{content:"＋";color:var(--amber);
+    width:12px;font-size:10px}
+  #spawnmd .spm-advanced[open] summary::before{content:"−"}
+  #spawnmd .spm-advanced summary:hover,
+  #spawnmd .spm-advanced summary:focus-visible{color:var(--ink);outline:none;
+    background:rgba(242,182,90,.035)}
+  #spawnmd .spm-advanced-meta{margin-left:auto;color:var(--ink-faint);
+    font-size:7px;letter-spacing:.1em}
+  #spawnmd .spm-advanced-grid{display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;
+    padding:12px;border-top:1px solid var(--hair)}
+  #spawnmd .spm-load{width:100%;padding:20px;text-align:center;
+    color:var(--ink-faint);font-family:var(--mono);font-size:8px;
+    letter-spacing:.14em;text-transform:uppercase;
+    border:1px solid var(--hair);border-radius:8px}
+  #spawnmd .spm-agent:focus-visible,#spawnmd .spm-chip:focus-visible,
+  #spawnmd .spm-shuffle:focus-visible{
+    outline:1px solid var(--amber);outline-offset:2px}
+  #spawnmd .spm-foot{margin:0;padding:13px 19px;
+    border-top:1px solid var(--hair)}
+  #spawnmd .spm-cancel{font-family:var(--mono);font-weight:500;
+    font-size:9px;letter-spacing:.12em;border:1px solid var(--hair);
+    border-radius:6px;padding:8px 12px;clip-path:none}
+  #spawnmd .spm-spawn{font-family:var(--mono);font-weight:600;
+    font-size:9.5px;letter-spacing:.13em;color:var(--amber);
+    background:transparent;border:1px solid rgba(242,182,90,.4);
+    border-radius:6px;padding:8px 12px;clip-path:none;box-shadow:none}
+  #spawnmd .spm-spawn:hover,#spawnmd .spm-spawn:focus-visible{
+    color:var(--void);background:var(--amber);outline:none;animation:none}
+  @media(max-width:640px){
+    #spawnmd{padding:10px}
+    #spawnmd .spm-grid{grid-template-columns:1fr;padding:14px}
+    #spawnmd .spm-frame{padding:0}
+    #spawnmd .spm-dir-pick{grid-template-columns:1fr}
+    #spawnmd .spm-advanced-grid{grid-template-columns:1fr}
+    #spawnmd .spm-provider-tabs{width:100%}
+    #spawnmd .spm-provider-tab{flex:1;min-width:0}
+  }
+  @media(prefers-reduced-motion:reduce){
+    #spawnmd.on,#spawnmd .spm-frame{animation:none}
   }
 
   #toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(20px);
@@ -1939,6 +2151,58 @@
     display:inline-block;width:13px;height:13px;border:1.5px solid var(--amber);
     border-left-color:transparent;border-bottom-color:transparent;border-radius:50%}
   .legend .motion-sample.working{animation:motion-spin 1.5s linear infinite}
+  .legend-toggle{
+    flex:none;width:29px;height:29px;border:1px solid rgba(255,255,255,.09);
+    border-radius:50%;background:rgba(255,255,255,.025);color:var(--ink-dim);
+    font-family:var(--mono);font-size:12px;cursor:pointer;
+    transition:color .14s,border-color .14s,background .14s}
+  .legend-toggle:hover,.legend-toggle:focus-visible{
+    color:var(--amber);border-color:rgba(242,182,90,.34);
+    background:rgba(242,182,90,.08);outline:none}
+  .legend-pop{
+    inset:64px auto auto 14px;margin:0;
+    width:min(330px,calc(100vw - 28px));max-height:calc(100vh - 82px);
+    overflow:auto;padding:12px 14px;
+    background:linear-gradient(180deg,rgba(255,255,255,.045),transparent 140px),
+      rgba(17,19,25,.94);
+    backdrop-filter:blur(26px) saturate(1.12);
+    border:1px solid rgba(255,255,255,.09);border-radius:10px;
+    color:var(--ink);font-family:var(--mono);box-sizing:border-box;
+    box-shadow:0 30px 90px rgba(0,0,0,.52)}
+  .legend-pop::backdrop{background:transparent}
+  .legend-pop:popover-open{animation:glass-pop .16s ease-out}
+  @keyframes glass-pop{
+    from{opacity:0;transform:translateY(-4px)}
+    to{opacity:1;transform:translateY(0)}}
+  .lp-title{font-family:var(--serif);font-size:13px;letter-spacing:.04em;
+    color:var(--ink);margin-bottom:9px}
+  .lp-row{display:flex;align-items:center;gap:9px;min-height:23px;
+    border-top:1px solid rgba(255,255,255,.055);
+    color:var(--ink-dim);font-size:9px;letter-spacing:.07em}
+  .lp-title+.lp-row{border-top:0}
+  .lp-key{width:58px;color:var(--ink);font-size:8px;
+    letter-spacing:.14em;text-transform:uppercase}
+  .lp-row>span:not(.lp-key){display:inline-flex;align-items:center;gap:4px}
+  .lp-dot{display:inline-block;width:7px;height:7px;border-radius:50%}
+  .lp-dot.parent{background:var(--ln-local)}
+  .lp-dot.child{background:var(--ln-remote)}
+  .lp-dot.both{background:var(--ln-delegate)}
+  .lp-arc{width:15px;height:15px;border-radius:50%;
+    border:1.5px solid var(--amber);border-left-color:transparent}
+  #net svg.lp-motion{position:static;inset:auto;width:16px;height:16px;
+    overflow:visible}
+  .lp-motion circle{fill:none;stroke:var(--amber);stroke-width:1.5;
+    stroke-linecap:round;stroke-dasharray:30 70;
+    transform-box:fill-box;transform-origin:center}
+  .lp-motion.working circle{animation:motion-spin 1.5s linear infinite}
+  .nettool>:not(.legend-pop){
+    transition:opacity .18s ease,transform .18s ease}
+  body.legend-open .nettool>:not(.legend-toggle):not(.legend-pop){
+    opacity:0;pointer-events:none;transform:translateY(-6px)}
+  body.legend-open .nctl,body.legend-open #replayBar{
+    opacity:0!important;pointer-events:none!important;
+    transform:translateY(-10px)!important;
+    transition:opacity .18s ease,transform .18s ease}
   #net.dense .node text,#net.dense .annot-pill,#net.dense .annot-lab,
   #net.dense .edge-count,#net.dense .provider-badge,#net.dense .ctx-track,
   #net.dense .ctx-arc,#net.dense .ctx-arc-glow{display:none}
@@ -1997,7 +2261,7 @@
     color:var(--ink);background:rgba(255,255,255,.018);
     border:1px solid var(--hair);border-radius:7px}
   #spawnmd .spm-frame{
-    width:min(940px,calc(100vw - 48px));border-radius:13px;padding:21px 24px 19px}
+    width:min(790px,calc(100vw - 48px));border-radius:13px;padding:0}
   #spawnmd .spm-frame::before,#spawnmd .spm-frame::after{display:none}
   #spawnmd input[type=text],#spawnmd select,#spawnmd textarea{
     color:var(--ink);background:rgba(11,13,17,.52);
@@ -2005,6 +2269,12 @@
   #edrawer{
     top:68px;right:0;bottom:14px;width:min(390px,calc(100vw - 18px));
     border-right:0;border-radius:13px 0 0 13px}
+  #replayBar{top:16px}
+  body.replay-on .nettool{opacity:0;pointer-events:none;
+    transform:translateY(-10px);
+    transition:transform .32s cubic-bezier(.16,.7,.24,1),opacity .22s ease-out}
+  body.replay-on .nctl{top:118px;
+    transition:top .32s cubic-bezier(.16,.7,.24,1)}
   body.embed{padding-bottom:0}
   body.embed>header{min-height:44px;padding:6px 12px;gap:10px;background:var(--bg)}
   body.embed>header .brand,body.embed>header .gauges,
@@ -2135,6 +2405,35 @@
     </div>
     <button id="selToggle" class="sel-toggle" title="rectangle multi-select (drag to select / Esc to clear)"><span class="gl">◫</span>Select</button>
     <span class="netinfo" id="netinfo">…</span>
+    <button class="legend-toggle" type="button" popovertarget="net-legend"
+            aria-label="show graph legend" title="graph legend">?</button>
+    <div class="legend-pop" id="net-legend" popover>
+      <div class="lp-title">Reading the graph</div>
+      <div class="lp-row">
+        <span class="lp-key">Lineage</span>
+        <span><i class="lp-dot parent"></i>parent</span>
+        <span><i class="lp-dot child"></i>child</span>
+        <span><i class="lp-dot both"></i>both</span>
+      </div>
+      <div class="lp-row">
+        <span class="lp-key">Context</span>
+        <span class="lp-arc"></span>
+        <span>context remaining</span>
+      </div>
+      <div class="lp-row">
+        <span class="lp-key">Motion</span>
+        <svg class="lp-motion waiting" width="16" height="16" viewBox="0 0 16 16"
+             aria-hidden="true">
+          <circle cx="8" cy="8" r="6" pathLength="100"></circle>
+        </svg>
+        <span>waiting</span>
+        <svg class="lp-motion working" width="16" height="16" viewBox="0 0 16 16"
+             aria-hidden="true">
+          <circle cx="8" cy="8" r="6" pathLength="100"></circle>
+        </svg>
+        <span>working</span>
+      </div>
+    </div>
   </div>
   <!-- Task G: DIGEST REPLAY controller (slide-in above SVG, below .nettool) -->
   <div id="replayBar" role="region" aria-label="digest replay controller" aria-hidden="true">
@@ -2210,37 +2509,6 @@ OFF = legacy snapshot+comet mode">
     </div>
   </div>
   <svg id="gsvg" xmlns="http://www.w3.org/2000/svg"></svg>
-  <div class="legend">
-    <div class="lg-row">
-      <span class="lg-lab">ROLE</span>
-      <span class="lg-itm"><span class="d" style="background:#ff9d2e"></span>parent</span>
-      <span class="lg-itm"><span class="d" style="background:#9d7bff"></span>child</span>
-      <span class="lg-itm"><span class="d" style="background:#3fd6a0"></span>both</span>
-      <span class="lg-itm"><span class="d" style="background:#6a6354"></span>none</span>
-    </div>
-    <div class="lg-row">
-      <span class="lg-lab">EDGE</span>
-      <span class="lg-itm"><span class="i l-comm"></span>comm</span>
-      <span class="lg-itm"><span class="i l-spawn"></span>spawn</span>
-    </div>
-    <div class="lg-row">
-      <span class="lg-lab">STATE</span>
-      <span class="lg-itm"><span class="d run"></span>active</span>
-      <span class="lg-itm"><span class="d idle"></span>finished</span>
-      <span class="lg-itm"><span class="d gone"></span>gone</span>
-      <span class="lg-itm"><span class="d ret"></span>retired</span>
-    </div>
-    <div class="lg-row">
-      <span class="lg-lab">CTX</span>
-      <span class="lg-itm"><span class="ctx-sample"></span>context remaining</span>
-    </div>
-    <div class="lg-row">
-      <span class="lg-lab">MOTION</span>
-      <span class="lg-itm"><span class="motion-sample waiting"></span>waiting</span>
-      <span class="lg-itm"><span class="motion-sample working"></span>working</span>
-    </div>
-    <div class="lg-hint">context is static data · motion marks active work</div>
-  </div>
   <!-- F1 net-controls: 力学/表示パラメータの即時チューニング（localStorage 永続化） -->
   <div class="nctl" id="nctl">
     <div class="nctl-hd" id="nctl-hd" title="クリックで開閉">
@@ -2279,58 +2547,84 @@ OFF = legacy snapshot+comet mode">
 <div id="toast"></div>
 <div id="gtip"></div>
 
-<!-- + NEW AGENT spawn modal (control-room console) -->
+<!-- + NEW AGENT spawn modal (cockpit launch manifest) -->
 <div id="spawnmd" role="dialog" aria-modal="true" aria-labelledby="spm-tt"
      aria-hidden="true" onclick="if(event.target===this)closeSpawnModal()">
   <div class="spm-frame" role="document">
     <div class="spm-hd">
       <div>
-        <div class="spm-tt" id="spm-tt"><i>+</i>SPAWN AGENT</div>
-        <div class="spm-sub">register · annotate · message · tmux</div>
+        <div class="spm-kicker">NEW AGENT</div>
+        <div class="spm-tt" id="spm-tt">Launch an agent</div>
+        <div class="spm-sub">identity · engine · directory · task</div>
       </div>
       <button class="spm-x" type="button" onclick="closeSpawnModal()"
               title="cancel (Esc)" aria-label="close">✕</button>
     </div>
     <div class="spm-grid">
-      <div class="spm-row">
-        <label class="spm-lab" for="spm-parent">parent agent</label>
-        <select id="spm-parent" required></select>
-      </div>
-      <div class="spm-row">
-        <label class="spm-lab" for="spm-group">group <span class="spm-opt">optional</span></label>
-        <input type="text" id="spm-group" maxlength="24" placeholder="task-A-B">
-      </div>
-      <div class="spm-row">
-        <label class="spm-lab" for="spm-role">role <span class="spm-opt">optional</span></label>
-        <input type="text" id="spm-role" maxlength="40" placeholder="調査 / 実装 / 検証">
-      </div>
-      <div class="spm-row">
-        <label class="spm-lab" for="spm-emoji">emoji <span class="spm-opt">1 glyph</span></label>
-        <div class="spm-emoji-row">
-          <input type="text" id="spm-emoji" maxlength="4" placeholder="🔧">
-          <input type="text" id="spm-emoji-hint" disabled
-                 value="🔍 🔧 🧪 ▸ ◇ ◈" tabindex="-1"
-                 style="opacity:.45;cursor:default">
+      <div class="spm-row full spm-section">
+        <div class="spm-section-head">
+          <div class="spm-lab">agent identity</div>
+          <span class="spm-section-meta">optional · auto name available</span>
+        </div>
+        <div class="spm-name-card" id="spm-name-card" aria-live="polite">
+          <span class="spm-name-face">
+            <span id="spm-name-auto">∴</span>
+            <img id="spm-name-portrait" alt="" hidden
+                 onerror="portraitFallback(this)">
+          </span>
+          <span class="spm-name-main">
+            <span class="spm-name-card-label">launch identity</span>
+            <span class="spm-composite">
+              <span id="spm-adjective">AUTO</span><strong id="spm-scientist">NAME</strong>
+            </span>
+            <span class="spm-name-hint" id="spm-name-note">
+              Launcher will choose an available name
+            </span>
+          </span>
+          <button class="spm-shuffle" id="spm-shuffle" type="button">
+            ⟳ SHUFFLE
+          </button>
+        </div>
+        <div class="spm-agent-strip" id="spm-agent-strip" role="listbox"
+             aria-label="Scientist name">
+          <div class="spm-load">loading scientist roster</div>
         </div>
       </div>
-      <div class="spm-row">
-        <label class="spm-lab">model</label>
-        <div class="spm-radio">
-          <label><input type="radio" name="spm-model" value="claude-sonnet-4-6" checked>
-            Sonnet 4.6<span class="spm-r-meta">default</span></label>
-          <label><input type="radio" name="spm-model" value="claude-opus-4-7">
-            Opus 4.7<span class="spm-r-meta">heavy</span></label>
+      <div class="spm-row full spm-section">
+        <div class="spm-section-head">
+          <div class="spm-lab">engine</div>
+          <span class="spm-section-meta" id="spm-engine-note">provider · model</span>
+        </div>
+        <div class="spm-provider-tabs" id="spm-providers"
+             role="tablist" aria-label="Provider"></div>
+        <div class="spm-models" id="spm-models" role="radiogroup"
+             aria-label="Model">
+          <div class="spm-load">loading engine catalog</div>
+        </div>
+        <div class="spm-effort-row" id="spm-effort-row" hidden>
+          <span class="spm-effort-label">EFFORT</span>
+          <div class="spm-efforts" id="spm-efforts"
+               role="radiogroup" aria-label="Reasoning effort"></div>
+          <span class="spm-effort-hint" id="spm-effort-hint"
+                aria-live="polite" hidden></span>
         </div>
       </div>
-      <div class="spm-row">
-        <label class="spm-lab">isolation</label>
-        <label class="spm-check">
-          <input type="checkbox" id="spm-worktree">
-          <span>Run in isolated worktree branch</span>
-        </label>
-        <div class="spm-wt-base" id="spm-wt-base">
-          <input type="text" id="spm-worktree-base" placeholder="base rev (default: main)"
-                 style="margin-top:0">
+      <div class="spm-row full spm-section">
+        <div class="spm-section-head">
+          <label class="spm-lab" for="spm-dir">launch directory</label>
+          <span class="spm-section-meta">presets or exact path</span>
+        </div>
+        <div class="spm-dir-pick">
+          <div class="spm-chipset" id="spm-dir-chips"
+               aria-label="Configured directories"></div>
+          <div class="spm-dir-typeahead">
+            <input type="text" id="spm-dir" maxlength="512"
+                   placeholder="Enter another directory" autocomplete="off"
+                   role="combobox" aria-autocomplete="list"
+                   aria-expanded="false" aria-controls="spm-dir-options">
+            <div class="spm-dir-options" id="spm-dir-options" role="listbox"
+                 aria-label="Directory suggestions" hidden></div>
+          </div>
         </div>
       </div>
       <div class="spm-row full">
@@ -2338,6 +2632,37 @@ OFF = legacy snapshot+comet mode">
         <textarea id="spm-task" maxlength="4000" rows="6"
           placeholder="What should the child do? (becomes the inbox message body)"></textarea>
       </div>
+      <details class="spm-row full spm-advanced" id="spm-advanced">
+        <summary>
+          <span>advanced</span>
+          <span class="spm-advanced-meta">parent · role · group · isolation</span>
+        </summary>
+        <div class="spm-advanced-grid">
+          <div class="spm-row full">
+            <label class="spm-lab" for="spm-parent">parent agent <span class="spm-opt">optional</span></label>
+            <select id="spm-parent"></select>
+          </div>
+          <div class="spm-row">
+            <label class="spm-lab" for="spm-role">role <span class="spm-opt">optional</span></label>
+            <input type="text" id="spm-role" maxlength="40" placeholder="調査 / 実装 / 検証">
+          </div>
+          <div class="spm-row">
+            <label class="spm-lab" for="spm-group">group <span class="spm-opt">optional</span></label>
+            <input type="text" id="spm-group" maxlength="24" placeholder="task-A-B">
+          </div>
+          <div class="spm-row full">
+            <label class="spm-lab">isolation</label>
+            <label class="spm-check">
+              <input type="checkbox" id="spm-worktree">
+              <span>Run in isolated worktree branch</span>
+            </label>
+            <div class="spm-wt-base" id="spm-wt-base">
+              <input type="text" id="spm-worktree-base" placeholder="base rev (default: main)"
+                     style="margin-top:0">
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
     <div class="spm-foot">
       <span class="spm-stat" id="spm-stat">ready · fill the form &amp; ▸ SPAWN</span>
@@ -2427,6 +2752,10 @@ const EMBED_MODE=
   window.parent!==window;
 document.body.classList.toggle('embed',EMBED_MODE);
 let netSuspended=false;
+const netLegend=document.getElementById('net-legend');
+if(netLegend)netLegend.addEventListener('beforetoggle',event=>{
+  document.body.classList.toggle('legend-open',event.newState==='open');
+});
 
 window.addEventListener('message',e=>{
   if(!EMBED_MODE||e.origin!==location.origin)return;
@@ -3577,8 +3906,11 @@ function closeDrawer(){
 }
 function renderDrawerError(msg){
   edrawer.querySelector('.ed-cnt').textContent='!';
-  document.getElementById('ed-list').innerHTML=
-    `<div class="ed-empty">✕ ${esc(msg)}</div>`;
+  const notConfigured=/AGENTSTACK_(?:PROJECT_KEY|VAULT).*not configured/i.test(msg);
+  document.getElementById('ed-list').innerHTML=notConfigured
+    ? `<div class="ed-config"><b>NOT CONFIGURED</b>`+
+      `<span>Set AGENTSTACK_PROJECT_KEY to enable agent-mail thread history.</span></div>`
+    : `<div class="ed-empty">✕ ${esc(msg)}</div>`;
 }
 function fmtEdgeTs(m){
   const unix=Number(m.ts_unix||0);
@@ -5895,12 +6227,27 @@ setInterval(()=>{ if(document.hidden||netSuspended)return; mailHealthTick(); },1
 //    annotate / spawn_child.sh を実行
 // 3) child name を toast し、5s 後 tick() が deck に新エージェントを拾う
 const SPM=id=>document.getElementById(id);
-let spmBusy=false;
+const SPM_DIR_KEY='agentdash.spawn.dir';
+const SPM_ADVANCED_KEY='agentdash.spawn.advanced';
+let spmBusy=false,spmReady=false,spmLoadSeq=0;
+let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
+let spmSelectedEffort='',spmProviders=[];
+let spmNameStatus=new Map();
+let spmAdjectives=[],spmSelectedAdjective='';
+let spmIdentitySeq=0,spmIdentityState='auto',spmIdentityError='';
+let spmDirSeq=0,spmDirTimer=null,spmDirOptions=[],spmDirActive=-1;
+let spmDirRoot='';
+
+function updateSpawnButton(){
+  const button=SPM('spm-spawn');
+  if(!button)return;
+  const identityReady=!spmSelectedName||spmIdentityState==='verified';
+  button.disabled=spmBusy||!spmReady||!identityReady;
+}
 
 function populateParentSelect(){
   const sel=SPM('spm-parent');
   if(!sel) return;
-  const prev=sel.value;
   // lastData: render() 同期で更新される現存 agent 配列
   const candidates=(Array.isArray(lastData)?lastData:[])
     .filter(a=>a&&a.name&&(a.category==='agent'||a.category==='finished'))
@@ -5912,41 +6259,599 @@ function populateParentSelect(){
     });
   // dashboard 自身が親になりたい場合に備えて手動入力も許可するが、
   // まずは現存 agent から拾う (空でも壊れない)
+  const standalone=
+    '<option value="">STANDALONE · independent agent</option>';
   const opts=candidates.map(a=>{
     const tag=a.running?'●':'○';
     const meta=a.last_active_rel||'';
     return `<option value="${esc(a.name)}">${tag} ${esc(a.name)} · ${esc(meta)}</option>`;
   });
-  sel.innerHTML=opts.join('')||
-    '<option value="" disabled>(no agents available — register one first)</option>';
-  // 既存選択を復元、無ければ最上位 (= 直近 active running)
-  if(prev && [...sel.options].some(o=>o.value===prev)) sel.value=prev;
+  sel.innerHTML=standalone+opts.join('');
+  sel.value='';
+}
+
+function renderSpawnNames(names){
+  const strip=SPM('spm-agent-strip');
+  spmNameStatus=new Map();
+  const rows=Array.isArray(names)?names:[];
+  for(const row of rows){
+    if(row&&row.name)spmNameStatus.set(row.name,
+      row.status==='available'?'available':
+      row.status==='occupied'?'occupied':'unknown');
+  }
+  const auto=`<button type="button" class="spm-agent spm-agent-auto on" `+
+    `data-name="" role="option" aria-selected="true">`+
+    `<span class="spm-agent-face">∴</span>`+
+    `<span class="spm-agent-name">AUTO</span>`+
+    `<span class="spm-agent-status">launcher</span></button>`;
+  strip.innerHTML=auto+rows.map(row=>{
+    const name=String(row&&row.name||'');
+    const status=spmNameStatus.get(name)||'unknown';
+    const enabled=status==='available';
+    const initials=name.slice(0,2).toUpperCase();
+    const portrait=row&&row.portrait
+      ? `<img src="${portURL(name,true)}" alt="" loading="lazy" `+
+        `onerror="portraitFallback(this)">`
+      : '';
+    return `<button type="button" class="spm-agent status-${status}" `+
+      `data-name="${esc(name)}" role="option" aria-selected="false" `+
+      `${enabled?'':`disabled aria-disabled="true"`}>`+
+      `<span class="spm-agent-face"><span class="spm-agent-init">`+
+      `${esc(initials)}</span>${portrait}</span>`+
+      `<span class="spm-agent-name">${esc(name)}</span>`+
+      `<span class="spm-agent-status">${status}</span></button>`;
+  }).join('');
+  strip.querySelectorAll('.spm-agent:not(:disabled)').forEach(btn=>{
+    btn.onclick=()=>selectSpawnName(btn.dataset.name);
+  });
+  strip.onwheel=e=>{
+    if(Math.abs(e.deltaY)<=Math.abs(e.deltaX))return;
+    e.preventDefault();
+    strip.scrollLeft+=e.deltaY;
+  };
+  const available=[...spmNameStatus.values()]
+    .filter(status=>status==='available').length;
+  SPM('spm-name-note').textContent=
+    `Launcher will choose a name · ${available} scientists available`;
+}
+
+function selectSpawnName(name){
+  if(name&&spmNameStatus.get(name)!=='available')return;
+  spmSelectedName=name||'';
+  SPM('spm-agent-strip').querySelectorAll('.spm-agent').forEach(btn=>{
+    const on=btn.dataset.name===spmSelectedName;
+    btn.classList.toggle('on',on);
+    btn.setAttribute('aria-selected',on?'true':'false');
+  });
+  if(!spmSelectedName){
+    spmIdentitySeq++;
+    spmSelectedAdjective='';
+    spmIdentityState='auto';
+    spmIdentityError='';
+    renderSpawnComposite();
+    if(spmReady)setSpawnStat('ready · review the launch manifest','');
+    updateSpawnButton();
+    return Promise.resolve('');
+  }
+  return requestSuggestedSpawnName(spmSelectedName);
+}
+
+function renderSpawnComposite(){
+  const card=SPM('spm-name-card');
+  const picked=!!spmSelectedName;
+  const on=picked&&!!spmSelectedAdjective&&spmIdentityState==='verified';
+  card.classList.toggle('on',on);
+  card.classList.toggle('checking',picked&&spmIdentityState==='checking');
+  card.classList.toggle('err',picked&&spmIdentityState==='error');
+  card.setAttribute('aria-busy',
+    picked&&spmIdentityState==='checking'?'true':'false');
+  SPM('spm-adjective').textContent=on?spmSelectedAdjective:
+    (picked?(spmIdentityState==='checking'?'VERIFYING':'UNAVAILABLE'):'AUTO');
+  SPM('spm-scientist').textContent=picked?spmSelectedName:'NAME';
+  const portrait=SPM('spm-name-portrait');
+  const fallback=SPM('spm-name-auto');
+  fallback.hidden=false;
+  fallback.textContent=picked?spmSelectedName.slice(0,2).toUpperCase():'∴';
+  portrait.hidden=!picked;
+  if(picked){
+    portrait.style.display='';
+    delete portrait.dataset.portraitFallback;
+    portrait.src=portURL(spmSelectedName,true);
+    portrait.alt=spmSelectedName;
+  }else{
+    portrait.removeAttribute('src');
+    portrait.alt='';
+  }
+  if(on){
+    SPM('spm-name-note').textContent=
+      `Ready to launch as ${spmSelectedAdjective}${spmSelectedName} · verified available`;
+  }else if(picked&&spmIdentityState==='checking'){
+    SPM('spm-name-note').textContent='Checking the live identity registry…';
+  }else if(picked&&spmIdentityState==='error'){
+    SPM('spm-name-note').textContent=
+      spmIdentityError||'Identity availability could not be verified';
+  }else{
+    SPM('spm-name-note').textContent=
+      'Launcher will choose an available name';
+  }
+  SPM('spm-shuffle').disabled=picked&&spmIdentityState==='checking';
+}
+
+async function requestSuggestedSpawnName(scientist){
+  const requested=String(scientist||'');
+  const seq=++spmIdentitySeq;
+  spmSelectedAdjective='';
+  spmIdentityState='checking';
+  spmIdentityError='';
+  renderSpawnComposite();
+  if(spmReady)setSpawnStat('checking identity availability','');
+  updateSpawnButton();
+  try{
+    const response=await fetch('/api/suggest-name?scientist='+
+      encodeURIComponent(requested),{cache:'no-store'});
+    const payload=await response.json();
+    if(seq!==spmIdentitySeq||requested!==spmSelectedName)return '';
+    const fullName=String(payload&&payload.name||'').trim();
+    const adjective=fullName.endsWith(requested)
+      ? fullName.slice(0,-requested.length):'';
+    if(response.status===409)
+      throw new Error(`${requested} is fully booked · choose another scientist or AUTO`);
+    if(!response.ok||!adjective||!spmAdjectives.includes(adjective))
+      throw new Error((payload&&payload.error)||'identity verification failed');
+    spmSelectedAdjective=adjective;
+    spmIdentityState='verified';
+    renderSpawnComposite();
+    setSpawnStat('ready · verified identity in launch manifest','');
+    updateSpawnButton();
+    return fullName;
+  }catch(error){
+    if(seq!==spmIdentitySeq||requested!==spmSelectedName)return '';
+    spmSelectedAdjective='';
+    spmIdentityState='error';
+    spmIdentityError='Unavailable · '+String(error&&error.message||error);
+    renderSpawnComposite();
+    setSpawnStat('identity unavailable · retry SHUFFLE or choose AUTO','err');
+    updateSpawnButton();
+    return '';
+  }
+}
+
+function shuffleSpawnAdjective(){
+  if(!spmSelectedName)return Promise.resolve('');
+  return requestSuggestedSpawnName(spmSelectedName);
+}
+
+function setSpawnDir(value,persist=false){
+  const dir=String(value||'').trim();
+  SPM('spm-dir').value=dir;
+  SPM('spm-dir-chips').querySelectorAll('.spm-dir-chip').forEach(btn=>{
+    const on=btn.dataset.dir===dir;
+    btn.classList.toggle('on',on);
+    btn.setAttribute('aria-pressed',on?'true':'false');
+  });
+  if(persist&&dir){
+    try{localStorage.setItem(SPM_DIR_KEY,dir);}catch(e){}
+  }
+  closeSpawnDirOptions();
+}
+
+function closeSpawnDirOptions(){
+  const root=SPM('spm-dir-options');
+  if(!root)return;
+  spmDirSeq++;
+  spmDirOptions=[];spmDirActive=-1;
+  root.hidden=true;
+  root.innerHTML='';
+  SPM('spm-dir').setAttribute('aria-expanded','false');
+  SPM('spm-dir').removeAttribute('aria-activedescendant');
+}
+
+function renderSpawnDirOptions(rows,message=''){
+  const root=SPM('spm-dir-options');
+  spmDirOptions=Array.isArray(rows)?rows:[];
+  spmDirActive=-1;
+  if(!spmDirOptions.length&&!message){
+    closeSpawnDirOptions();
+    return;
+  }
+  root.innerHTML=spmDirOptions.length?spmDirOptions.map((row,index)=>
+    `<button type="button" class="spm-dir-option" role="option" `+
+    `id="spm-dir-option-${index}" data-index="${index}" `+
+    `aria-selected="false"><span class="spm-dir-arrow">▸</span>`+
+    `<span class="spm-dir-option-name">${esc(row.name)}</span>`+
+    `<span class="spm-dir-option-path">${esc(row.path)}</span></button>`
+  ).join(''):`<div class="spm-dir-empty">${esc(message)}</div>`;
+  root.hidden=false;
+  SPM('spm-dir').setAttribute('aria-expanded','true');
+  root.querySelectorAll('.spm-dir-option').forEach(button=>{
+    button.onmousedown=event=>event.preventDefault();
+    button.onclick=()=>chooseSpawnDirOption(Number(button.dataset.index));
+  });
+}
+
+function setSpawnDirActive(index){
+  if(!spmDirOptions.length)return;
+  spmDirActive=(index+spmDirOptions.length)%spmDirOptions.length;
+  SPM('spm-dir-options').querySelectorAll('.spm-dir-option').forEach((button,i)=>{
+    const on=i===spmDirActive;
+    button.setAttribute('aria-selected',on?'true':'false');
+    if(on)button.scrollIntoView({block:'nearest'});
+  });
+  SPM('spm-dir').setAttribute('aria-activedescendant',
+    `spm-dir-option-${spmDirActive}`);
+}
+
+function chooseSpawnDirOption(index){
+  const option=spmDirOptions[index];
+  if(!option)return;
+  setSpawnDir(option.path,true);
+  SPM('spm-dir').focus();
+}
+
+function splitSpawnDirQuery(value){
+  const raw=String(value||'').trim();
+  if(!raw)return {path:'~',prefix:''};
+  if(raw==='~'||raw==='.')return {path:'~',prefix:''};
+  if(raw.endsWith('/'))return {path:raw.slice(0,-1)||'/',prefix:''};
+  const slash=raw.lastIndexOf('/');
+  if(slash<0)return {path:'~',prefix:raw};
+  return {path:raw.slice(0,slash)||'/',prefix:raw.slice(slash+1)};
+}
+
+async function fetchSpawnDirOptions(value,seq=++spmDirSeq){
+  let query=splitSpawnDirQuery(value);
+  try{
+    let response=null,payload=null;
+    if(query.path==='~'||query.path.startsWith('~/')){
+      if(!spmDirRoot){
+        response=await fetch('/api/fs/dirs',{cache:'no-store'});
+        payload=await response.json();
+        if(!response.ok||!payload||typeof payload.path!=='string'||
+           !payload.path.startsWith('/'))
+          throw new Error((payload&&payload.error)||'directory root unavailable');
+        spmDirRoot=payload.path;
+      }
+      const absolute=spmDirRoot+query.path.slice(1);
+      query={path:absolute,prefix:query.prefix};
+      if(payload&&absolute!==spmDirRoot){response=null;payload=null;}
+    }
+    if(!payload){
+      response=await fetch('/api/fs/dirs?path='+
+        encodeURIComponent(query.path),{cache:'no-store'});
+      payload=await response.json();
+    }
+    if(seq!==spmDirSeq)return;
+    if(!response.ok||!payload||!Array.isArray(payload.dirs))
+      throw new Error((payload&&payload.error)||'directory lookup failed');
+    const prefix=query.prefix.toLowerCase();
+    const rows=payload.dirs.map(row=>({
+      name:String(row&&row.name||''),
+      path:String(row&&row.path||'')
+    })).filter(row=>row.name&&row.path&&
+      (!prefix||row.name.toLowerCase().startsWith(prefix)));
+    renderSpawnDirOptions(rows,rows.length?'':'no matching directories');
+  }catch(error){
+    if(seq!==spmDirSeq)return;
+    renderSpawnDirOptions([],'directory suggestions unavailable');
+  }
+}
+
+function scheduleSpawnDirOptions(value,delay=250){
+  if(spmDirTimer)clearTimeout(spmDirTimer);
+  const seq=++spmDirSeq;
+  spmDirTimer=setTimeout(()=>{
+    spmDirTimer=null;
+    fetchSpawnDirOptions(value,seq);
+  },delay);
+}
+
+function renderSpawnDirs(dirs){
+  const root=SPM('spm-dir-chips');
+  const clean=[...new Set((Array.isArray(dirs)?dirs:[])
+    .map(value=>String(value||'').trim()).filter(Boolean))];
+  root.innerHTML=clean.map(dir=>
+    `<button type="button" class="spm-chip spm-dir-chip" `+
+    `data-dir="${esc(dir)}" aria-pressed="false">${esc(dir)}</button>`
+  ).join('');
+  root.querySelectorAll('.spm-dir-chip').forEach(btn=>{
+    btn.onclick=()=>setSpawnDir(btn.dataset.dir,true);
+  });
+  let remembered='';
+  try{remembered=localStorage.getItem(SPM_DIR_KEY)||'';}catch(e){}
+  setSpawnDir(remembered||clean[0]||'~',false);
+  const input=SPM('spm-dir');
+  input.oninput=()=>{
+    const value=input.value.trim();
+    root.querySelectorAll('.spm-dir-chip').forEach(btn=>{
+      const on=btn.dataset.dir===value;
+      btn.classList.toggle('on',on);
+      btn.setAttribute('aria-pressed',on?'true':'false');
+    });
+    scheduleSpawnDirOptions(input.value);
+  };
+  input.onfocus=()=>scheduleSpawnDirOptions(input.value,0);
+  input.onblur=()=>setTimeout(()=>{
+    if(!SPM('spm-dir-options').contains(document.activeElement))
+      closeSpawnDirOptions();
+  },100);
+  input.onchange=()=>{
+    if(spmDirActive<0)setSpawnDir(input.value,true);
+  };
+  input.onkeydown=event=>{
+    if(event.key==='ArrowDown'&&spmDirOptions.length){
+      event.preventDefault();setSpawnDirActive(spmDirActive+1);
+    }else if(event.key==='ArrowUp'&&spmDirOptions.length){
+      event.preventDefault();
+      setSpawnDirActive(spmDirActive<0?spmDirOptions.length-1:spmDirActive-1);
+    }else if(event.key==='Enter'&&spmDirActive>=0){
+      event.preventDefault();chooseSpawnDirOption(spmDirActive);
+    }else if(event.key==='Escape'&&!SPM('spm-dir-options').hidden){
+      event.preventDefault();event.stopPropagation();closeSpawnDirOptions();
+    }
+  };
+}
+
+function normalizeSpawnProviders(catalog){
+  const legacy=Array.isArray(catalog.models)?[{
+    id:'claude',label:'Claude',models:catalog.models,
+    default_model:catalog.default_model
+  }]:[];
+  const source=Array.isArray(catalog.providers)&&catalog.providers.length
+    ? catalog.providers:legacy;
+  return source.map(provider=>{
+    const id=String(provider&&provider.id||'').trim().toLowerCase();
+    const models=(Array.isArray(provider&&provider.models)?provider.models:[])
+      .map(model=>{
+        if(typeof model==='string')return {id:model,label:model,default:false,badge:''};
+        const modelId=String(model&&model.id||'').trim();
+        return {id:modelId,label:String(model&&model.label||modelId).trim(),
+          default:Boolean(model&&model.default),
+          badge:String(model&&model.badge||'').trim()};
+      }).filter(model=>model.id);
+    const defaultModel=String(provider&&provider.default_model||
+      ((models.find(model=>model.default)||{}).id)||
+      (id==='claude'?catalog.default_model:'')||'').trim();
+    const efforts=[...new Set((Array.isArray(provider&&provider.efforts)
+      ? provider.efforts:[]).map(value=>String(value||'').trim())
+      .filter(Boolean))];
+    return {id,label:String(provider&&provider.label||id).trim(),
+      models,defaultModel,efforts,
+      defaultEffort:String(provider&&provider.effort_default||'').trim()};
+  }).filter(provider=>/^[a-z][a-z0-9_-]*$/.test(provider.id)&&
+    provider.models.length);
+}
+
+const SPM_MODEL_TONES=Object.freeze({
+  'gpt-5.6-sol':'deepest reasoning · hard problems',
+  'gpt-5.6-terra':'everyday implementation',
+  'gpt-5.6-luna':'fast & light'
+});
+const SPM_EFFORT_HINTS=Object.freeze({
+  low:'routine',medium:'standard',high:'complex',xhigh:'hardest · default'
+});
+
+function spawnModelTone(providerId,modelId){
+  if(SPM_MODEL_TONES[modelId])return SPM_MODEL_TONES[modelId];
+  if(providerId==='claude'){
+    if(modelId.includes('opus'))return 'deep design · hard problems';
+    if(modelId.includes('sonnet'))return 'everyday implementation';
+    if(modelId.includes('haiku'))return 'fast & light';
+  }
+  return '';
+}
+
+function renderSpawnProviders(providers){
+  spmProviders=providers;
+  const root=SPM('spm-providers');
+  root.innerHTML=providers.map(provider=>
+    `<button type="button" class="spm-provider-tab" role="tab" `+
+    `data-provider="${esc(provider.id)}" aria-selected="false">`+
+    `${esc(provider.label||provider.id)}</button>`
+  ).join('');
+  root.querySelectorAll('.spm-provider-tab').forEach(btn=>{
+    btn.onclick=()=>selectSpawnProvider(btn.dataset.provider);
+  });
+  const initial=providers.find(provider=>provider.id==='claude')||
+    providers[0]||null;
+  selectSpawnProvider(initial&&initial.id||'');
+}
+
+function selectSpawnProvider(providerId){
+  const provider=spmProviders.find(item=>item.id===providerId);
+  spmSelectedProvider=provider?provider.id:'';
+  spmSelectedModel='';
+  spmSelectedEffort='';
+  SPM('spm-providers').querySelectorAll('.spm-provider-tab').forEach(btn=>{
+    const on=btn.dataset.provider===spmSelectedProvider;
+    btn.classList.toggle('on',on);
+    btn.setAttribute('aria-selected',on?'true':'false');
+    btn.tabIndex=on?0:-1;
+  });
+  renderSpawnModels(provider);
+}
+
+function renderSpawnModels(provider){
+  const root=SPM('spm-models');
+  const models=provider&&Array.isArray(provider.models)?provider.models:[];
+  const fallback=models.some(model=>model.id===provider.defaultModel)
+    ? provider.defaultModel:((models[0]||{}).id||'');
+  root.innerHTML=models.map(model=>{
+    const tone=spawnModelTone(provider&&provider.id||'',model.id);
+    const displayLabel=tone?(model.label||model.id):model.id;
+    const catalogId=tone&&displayLabel!==model.id
+      ? `<small>${esc(model.id)}</small>`:'';
+    return `<button type="button" class="spm-chip spm-model-chip" `+
+      `data-model="${esc(model.id)}" role="radio" aria-checked="false">`+
+      `<b>${esc(displayLabel)}</b>${catalogId}`+
+      `${tone?`<em class="spm-model-tone">${esc(tone)}</em>`:''}`+
+      `</button>`;
+  }).join('')||'<div class="spm-load">no models configured</div>';
+  root.querySelectorAll('.spm-model-chip').forEach(btn=>{
+    btn.onclick=()=>selectSpawnModel(btn.dataset.model);
+  });
+  selectSpawnModel(fallback);
+  renderSpawnEfforts(provider);
+}
+
+function selectSpawnModel(model){
+  const valid=[...SPM('spm-models').querySelectorAll('.spm-model-chip')]
+    .some(btn=>btn.dataset.model===model);
+  spmSelectedModel=valid?model:'';
+  SPM('spm-models').querySelectorAll('.spm-model-chip').forEach(btn=>{
+    const on=btn.dataset.model===spmSelectedModel;
+    btn.classList.toggle('on',on);
+    btn.setAttribute('aria-checked',on?'true':'false');
+  });
+  renderSpawnEngineNote();
+}
+
+function renderSpawnEfforts(provider){
+  const row=SPM('spm-effort-row');
+  const root=SPM('spm-efforts');
+  const hint=SPM('spm-effort-hint');
+  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  row.hidden=!efforts.length;
+  root.innerHTML=efforts.map(effort=>
+    `<button type="button" class="spm-chip spm-effort-chip" `+
+    `data-effort="${esc(effort)}" role="radio" aria-checked="false" `+
+    `title="${esc(SPM_EFFORT_HINTS[effort]
+      ? effort+' · '+SPM_EFFORT_HINTS[effort]:'')}">`+
+    `${esc(effort)}</button>`
+  ).join('');
+  hint.hidden=true;hint.textContent='';
+  root.querySelectorAll('.spm-effort-chip').forEach(btn=>{
+    btn.onclick=()=>selectSpawnEffort(btn.dataset.effort);
+  });
+  const fallback=efforts.includes(provider&&provider.defaultEffort)
+    ? provider.defaultEffort:(efforts[0]||'');
+  selectSpawnEffort(fallback);
+}
+
+function selectSpawnEffort(effort){
+  const valid=[...SPM('spm-efforts').querySelectorAll('.spm-effort-chip')]
+    .some(btn=>btn.dataset.effort===effort);
+  spmSelectedEffort=valid?effort:'';
+  SPM('spm-efforts').querySelectorAll('.spm-effort-chip').forEach(btn=>{
+    const on=btn.dataset.effort===spmSelectedEffort;
+    btn.classList.toggle('on',on);
+    btn.setAttribute('aria-checked',on?'true':'false');
+  });
+  const hint=SPM('spm-effort-hint');
+  const copy=SPM_EFFORT_HINTS[spmSelectedEffort]||'';
+  hint.hidden=!copy;
+  hint.textContent=copy?`${spmSelectedEffort} · ${copy}`:'';
+  renderSpawnEngineNote();
+}
+
+function renderSpawnEngineNote(){
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  const parts=[provider&&provider.label||spmSelectedProvider,
+    spmSelectedModel,spmSelectedEffort].filter(Boolean);
+  SPM('spm-engine-note').textContent=parts.length
+    ? parts.join(' · '):'provider · model';
+}
+
+async function loadSpawnCatalog(seq){
+  try{
+    const response=await fetch('/api/spawn-names',{cache:'no-store'});
+    const catalog=await response.json();
+    if(seq!==spmLoadSeq)return;
+    if(!response.ok||!catalog||!Array.isArray(catalog.names)||
+       !Array.isArray(catalog.adjectives)||!Array.isArray(catalog.dirs))
+      throw new Error((catalog&&catalog.error)||'invalid picker response');
+    const providers=normalizeSpawnProviders(catalog);
+    if(!providers.length)throw new Error('engine catalog unavailable');
+    spmAdjectives=[...new Set(catalog.adjectives
+      .map(value=>String(value||'').trim())
+      .filter(value=>/^[A-Z][A-Za-z]*$/.test(value)))];
+    if(!spmAdjectives.length)
+      throw new Error('adjective catalog unavailable');
+    renderSpawnNames(catalog.names);
+    selectSpawnName('');
+    renderSpawnProviders(providers);
+    renderSpawnDirs(catalog.dirs);
+    spmReady=true;
+    updateSpawnButton();
+    setSpawnStat('ready · review the launch manifest','');
+  }catch(error){
+    if(seq!==spmLoadSeq)return;
+    spmReady=false;
+    spmAdjectives=[];spmSelectedAdjective='';
+    renderSpawnComposite();
+    SPM('spm-agent-strip').innerHTML=
+      '<div class="spm-load">scientist roster unavailable</div>';
+    SPM('spm-providers').innerHTML='';
+    SPM('spm-models').innerHTML=
+      '<div class="spm-load">engine catalog unavailable</div>';
+    SPM('spm-effort-row').hidden=true;
+    updateSpawnButton();
+    setSpawnStat('launch catalog unavailable · '+String(error),'err');
+  }
+}
+
+function restoreSpawnAdvanced(){
+  const details=SPM('spm-advanced');
+  if(!details)return;
+  let open=false;
+  try{open=localStorage.getItem(SPM_ADVANCED_KEY)==='open';}catch(e){}
+  details.ontoggle=null;
+  details.open=open;
+  details.ontoggle=()=>{
+    try{localStorage.setItem(SPM_ADVANCED_KEY,
+      details.open?'open':'closed');}catch(e){}
+  };
 }
 
 function openSpawnModal(){
   const md=SPM('spawnmd');
   if(!md) return;
   populateParentSelect();
-  // reset fields (但し parent と group は前回の値を保持して連続 spawn を楽に)
+  // Reset the manifest; parent deliberately returns to standalone every time.
   SPM('spm-task').value='';
   SPM('spm-role').value='';
-  SPM('spm-emoji').value='';
   SPM('spm-worktree').checked=false;
   SPM('spm-wt-base').classList.remove('on');
   SPM('spm-worktree-base').value='';
-  document.querySelector('input[name="spm-model"][value="claude-sonnet-4-6"]').checked=true;
-  setSpawnStat('ready · fill the form & ▸ SPAWN','');
-  spmBusy=false;
-  SPM('spm-spawn').disabled=false;
+  spmBusy=false;spmReady=false;spmSelectedName='';
+  spmSelectedProvider='';spmSelectedModel='';spmSelectedEffort='';
+  spmProviders=[];spmAdjectives=[];spmSelectedAdjective='';
+  spmIdentitySeq++;spmIdentityState='auto';spmIdentityError='';
+  spmDirSeq++;
+  spmDirRoot='';
+  if(spmDirTimer){clearTimeout(spmDirTimer);spmDirTimer=null;}
+  spmNameStatus=new Map();
+  SPM('spm-agent-strip').innerHTML=
+    '<div class="spm-load">loading scientist roster</div>';
+  renderSpawnComposite();
+  SPM('spm-shuffle').onclick=shuffleSpawnAdjective;
+  SPM('spm-dir-chips').innerHTML='';
+  SPM('spm-dir').value='';
+  closeSpawnDirOptions();
+  restoreSpawnAdvanced();
+  SPM('spm-providers').innerHTML='';
+  SPM('spm-engine-note').textContent='provider · model';
+  SPM('spm-models').innerHTML=
+    '<div class="spm-load">loading engine catalog</div>';
+  SPM('spm-efforts').innerHTML='';
+  SPM('spm-effort-row').hidden=true;
+  setSpawnStat('loading launch catalog','');
   SPM('spm-spawn').classList.remove('busy');
+  updateSpawnButton();
   md.classList.add('on');
   md.setAttribute('aria-hidden','false');
+  const seq=++spmLoadSeq;
+  loadSpawnCatalog(seq);
   setTimeout(()=>SPM('spm-task').focus(),120);
 }
 function closeSpawnModal(){
   if(spmBusy) return;  // 飛行中はクローズ拒否（中断防止）
   const md=SPM('spawnmd');
   if(!md) return;
+  spmLoadSeq++;
+  spmIdentitySeq++;
+  spmDirSeq++;
+  if(spmDirTimer){clearTimeout(spmDirTimer);spmDirTimer=null;}
+  closeSpawnDirOptions();
   md.classList.remove('on');
   md.setAttribute('aria-hidden','true');
 }
@@ -5971,41 +6876,68 @@ addEventListener('keydown',e=>{
   }
 });
 
+function buildSpawnPayload(){
+  const payload={
+    task:SPM('spm-task').value.trim(),
+    dir:SPM('spm-dir').value.trim(),
+    provider:spmSelectedProvider,
+    model:spmSelectedModel,
+    role:SPM('spm-role').value.trim(),
+    group:SPM('spm-group').value.trim()
+  };
+  const parent=SPM('spm-parent').value.trim();
+  if(parent)payload.parent=parent;
+  else payload.standalone=true;
+  if(spmSelectedName&&spmSelectedAdjective&&
+     spmIdentityState==='verified'&&
+     spmNameStatus.get(spmSelectedName)==='available')
+    payload.name=spmSelectedAdjective+spmSelectedName;
+  if(spmSelectedEffort)payload.effort=spmSelectedEffort;
+  if(SPM('spm-worktree').checked){
+    payload.worktree=true;
+    const base=SPM('spm-worktree-base').value.trim();
+    if(base)payload.worktree_base=base;
+  }
+  return payload;
+}
+
 async function submitSpawn(){
   if(spmBusy) return;
-  const parent=SPM('spm-parent').value.trim();
-  const task=SPM('spm-task').value.trim();
-  const role=SPM('spm-role').value.trim();
-  const emoji=SPM('spm-emoji').value.trim();
-  const group=SPM('spm-group').value.trim();
-  const model=(document.querySelector('input[name="spm-model"]:checked')||{}).value
-              ||'claude-sonnet-4-6';
-  const worktree=SPM('spm-worktree').checked;
-  const worktreeBase=SPM('spm-worktree-base').value.trim();
-  if(!parent){setSpawnStat('parent agent is required','err');return;}
-  if(!task){setSpawnStat('task description is required','err');
+  if(!spmReady){setSpawnStat('launch catalog is not ready','err');return;}
+  if(spmSelectedName&&spmIdentityState!=='verified'){
+    setSpawnStat('identity availability is not verified','err');
+    updateSpawnButton();return;
+  }
+  const payload=buildSpawnPayload();
+  if(!payload.task){setSpawnStat('task description is required','err');
     SPM('spm-task').focus();return;}
+  if(!payload.dir){setSpawnStat('launch directory is required','err');
+    SPM('spm-dir').focus();return;}
+  if(!payload.provider){setSpawnStat('provider is required','err');return;}
+  if(!payload.model){setSpawnStat('model is required','err');return;}
+  const provider=spmProviders.find(item=>item.id===payload.provider);
+  if(provider&&provider.efforts.length&&!payload.effort){
+    setSpawnStat('effort is required for this provider','err');return;
+  }
   spmBusy=true;
   const btn=SPM('spm-spawn');
   btn.disabled=true; btn.classList.add('busy');
   SPM('newbtn').classList.add('busy');
-  setSpawnStat('▸ launching… register → annotate → message → tmux','');
+  setSpawnStat('▸ launching… register → launch → tmux','');
   try{
+    try{localStorage.setItem(SPM_DIR_KEY,payload.dir);}catch(e){}
     const r=await fetch('/api/spawn',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        parent,task,role,emoji,group,model,
-        worktree, worktree_base:worktreeBase
-      })
+      body:JSON.stringify(payload)
     });
     const j=await r.json();
     spmBusy=false;
     btn.classList.remove('busy');
     SPM('newbtn').classList.remove('busy');
     if(!j.ok){
-      btn.disabled=false;
       setSpawnStat('✕ '+(j.error||'spawn failed'),'err');
+      updateSpawnButton();
       return;
     }
     setSpawnStat('▸ SPAWNED '+(j.child_name||'')+
@@ -6014,16 +6946,17 @@ async function submitSpawn(){
       ' :: tmux session opening');
     // 1.2s 余韻を見せてから自動クローズ
     setTimeout(()=>{
-      btn.disabled=false;
+      updateSpawnButton();
       closeSpawnModal();
     },1200);
     // 次回ポーリングまで待たず即時 tick で新エージェントを拾いに行く
     setTimeout(()=>{ if(view==='deck') tick(); else netTick(); }, 1800);
   }catch(e){
     spmBusy=false;
-    btn.disabled=false; btn.classList.remove('busy');
+    btn.classList.remove('busy');
     SPM('newbtn').classList.remove('busy');
     setSpawnStat('✕ network err: '+e,'err');
+    updateSpawnButton();
   }
 }
 
