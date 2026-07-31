@@ -562,14 +562,15 @@ write_child_mcp_config() {
     local config_path="$config_dir/${child_name}.mcp.json"
     mkdir -p "$config_dir" || return 0
     python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
-        "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" <<'PY' || return 0
+        "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
+        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" <<'PY' || return 0
 # NOTE: no line here may start with "}" in column 0 — the shell function is
 # extracted by "up to the first line that is just a closing brace".
 import json
 import os
 import sys
 
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir = sys.argv[1:9]
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json = sys.argv[1:10]
 server_env = dict(
     AGENTSTACK_PROXY_AGENT_NAME=child,
     AGENTSTACK_PROXY_TOKEN_FILE=token_file,
@@ -580,7 +581,36 @@ server_env = dict(
     AGENTSTACK_RUNTIME_DIR=runtime_dir,
 )
 server = dict(command=runner, args=[], env=server_env)
-config = dict(mcpServers=dict([("mcp-agent-mail", server)]))
+
+
+def looks_like_agent_mail(name):
+    return "agentmail" in name.replace("-", "").replace("_", "").lower()
+
+
+# The child inherits the user's own MCP servers, including their DIRECT
+# agent-mail connection. Publishing the proxy under a NEW name just adds a
+# second agent-mail, and the model reaches for the name it knows — the direct,
+# unauthenticated one. --mcp-config overrides a same-named server (measured),
+# so claim exactly the names the user already uses.
+names = set()
+try:
+    with open(claude_json, encoding="utf-8") as handle:
+        settings = json.load(handle)
+except Exception:
+    settings = dict()
+scopes = [settings.get("mcpServers")]
+projects = settings.get("projects")
+if isinstance(projects, dict):
+    for scope in projects.values():
+        if isinstance(scope, dict):
+            scopes.append(scope.get("mcpServers"))
+for scope in scopes:
+    if isinstance(scope, dict):
+        names.update(name for name in scope if looks_like_agent_mail(name))
+if not names:
+    names = set(["mcp-agent-mail"])
+
+config = dict(mcpServers=dict((name, server) for name in sorted(names)))
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(config, handle, indent=2)
 os.chmod(path, 0o600)
@@ -644,17 +674,34 @@ for entry in source_path.iterdir():
             continue
     os.symlink(entry, link)
 
+def looks_like_agent_mail(name):
+    return "agentmail" in name.replace("-", "").replace("_", "").replace('"', "").lower()
+
+
+# Strip EVERY agent-mail server the user has, not just one spelling. A child
+# that still sees the direct connection will use it — the model reaches for the
+# name it knows — and that connection is not authenticated as the child.
 lines = []
 skipping = False
+claimed = []
 config_source = source_path / "config.toml"
 text = config_source.read_text(encoding="utf-8") if config_source.exists() else ""
 for line in text.splitlines():
     stripped = line.strip()
     if stripped.startswith("["):
         header = stripped.strip("[]").strip()
-        skipping = header.startswith("mcp_servers.agent-mail") or header.startswith('mcp_servers."agent-mail"')
+        server = ""
+        if header.startswith("mcp_servers."):
+            server = header[len("mcp_servers."):].split(".")[0]
+        skipping = bool(server) and looks_like_agent_mail(server)
+        if skipping:
+            name = server.strip('"')
+            if name not in claimed:
+                claimed.append(name)
     if not skipping:
         lines.append(line)
+if not claimed:
+    claimed = ["agent-mail"]
 
 def toml_string(value):
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
@@ -663,18 +710,23 @@ def toml_string(value):
 lines.append("")
 lines.append("# Written by spawn_child.sh: this child talks to agent-mail through the")
 lines.append("# local proxy, which authenticates every call with the child's own token.")
-lines.append("[mcp_servers.agent-mail]")
-lines.append("command = " + toml_string(runner))
-lines.append("args = []")
-lines.append("")
-lines.append("[mcp_servers.agent-mail.env]")
-lines.append("AGENTSTACK_PROXY_AGENT_NAME = " + toml_string(child))
-lines.append("AGENTSTACK_PROXY_TOKEN_FILE = " + toml_string(token_file))
-lines.append("AGENTSTACK_PROXY_PROGRAM = " + toml_string("codex"))
-lines.append("AGENTSTACK_PROJECT_KEY = " + toml_string(project_key))
-lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
-lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
-lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
+lines.append("# The proxy claims the same server name(s) the user's own config used,")
+lines.append("# so the model's habitual call lands on the authenticated connection.")
+for name in claimed:
+    key = "mcp_servers." + toml_string(name)
+    lines.append("")
+    lines.append("[" + key + "]")
+    lines.append("command = " + toml_string(runner))
+    lines.append("args = []")
+    lines.append("")
+    lines.append("[" + key + ".env]")
+    lines.append("AGENTSTACK_PROXY_AGENT_NAME = " + toml_string(child))
+    lines.append("AGENTSTACK_PROXY_TOKEN_FILE = " + toml_string(token_file))
+    lines.append("AGENTSTACK_PROXY_PROGRAM = " + toml_string("codex"))
+    lines.append("AGENTSTACK_PROJECT_KEY = " + toml_string(project_key))
+    lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
+    lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
+    lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
 
 target = home_path / "config.toml"
 target.write_text("\n".join(lines) + "\n", encoding="utf-8")

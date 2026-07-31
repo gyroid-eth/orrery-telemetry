@@ -155,12 +155,12 @@ def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
 
         # The shared HTTP transport for agent-mail is gone, replaced by stdio.
         assert 'url = "http://127.0.0.1:8765/api/"' not in config
-        assert "[mcp_servers.agent-mail]" in config
+        assert '[mcp_servers."agent-mail"]' in config
         assert "command = " in config
         assert 'AGENTSTACK_PROXY_AGENT_NAME = "Red-Euler"' in config
         # Per-tool approval subtables of the replaced server must go too,
         # otherwise they re-describe a server that no longer exists.
-        assert "[mcp_servers.agent-mail.tools.fetch_inbox]" not in config
+        assert "tools.fetch_inbox" not in config
         # Unrelated config survives untouched.
         assert 'model = "gpt-5.5"' in config
         assert "[mcp_servers.notion]" in config
@@ -183,7 +183,7 @@ def test_codex_child_home_works_when_the_user_has_no_config():
         tmpdir = pathlib.Path(tmp)
         home = _run_codex_home(tmpdir, config_text=None)
         config = (pathlib.Path(home) / "config.toml").read_text(encoding="utf-8")
-        assert "[mcp_servers.agent-mail]" in config
+        assert '[mcp_servers."agent-mail"]' in config
 
 
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
@@ -340,6 +340,96 @@ def test_env_file_still_supplies_values_the_caller_omitted():
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "http://127.0.0.1:8765/api/"
+
+
+_TESTER_CLAUDE_JSON = """{
+  "mcpServers": {
+    "mcp_agent_mail": {"type": "http", "url": "http://127.0.0.1:8765/api/"},
+    "semantic-search": {"command": "semantic"}
+  },
+  "projects": {"/p": {"mcpServers": {"freecad": {"command": "fc"}}}}
+}
+"""
+
+
+def _claude_child_config(tmpdir, claude_json: str | None) -> dict:
+    runner = tmpdir / "run-mcp.sh"
+    runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+    token_file = tmpdir / "token"
+    token_file.write_text("child-owner-token", encoding="utf-8")
+    settings = tmpdir / "claude.json"
+    if claude_json is not None:
+        settings.write_text(claude_json, encoding="utf-8")
+
+    script = (
+        'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
+        + _extract("write_child_mcp_config")
+        + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
+    )
+    env = os.environ.copy()
+    env["AGENTSTACK_MCP_PROXY"] = str(runner)
+    env["AGENTSTACK_CLAUDE_JSON"] = str(settings)
+    proc = subprocess.run(
+        ["bash", "-c", script, "bash", str(tmpdir / "runtime"), "/p",
+         "http://127.0.0.1:8765/mcp", str(tmpdir / "mail.env"), str(token_file)],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, check=False,
+    )
+    assert proc.stdout.strip(), proc.stderr
+    return json.loads(pathlib.Path(proc.stdout.strip()).read_text(encoding="utf-8"))
+
+
+def test_claude_child_proxy_claims_the_users_own_server_name():
+    """Otherwise the child sees two agent-mail servers and picks the direct one.
+
+    Measured: --mcp-config overrides a same-named global server, so claiming
+    the user's name replaces their unauthenticated HTTP connection.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        config = _claude_child_config(pathlib.Path(tmp), _TESTER_CLAUDE_JSON)
+        servers = config["mcpServers"]
+        assert "mcp_agent_mail" in servers, servers
+        assert servers["mcp_agent_mail"]["command"].endswith("run-mcp.sh")
+        # Only agent-mail is claimed; the user's other servers are untouched.
+        assert "semantic-search" not in servers
+        assert "freecad" not in servers
+
+
+def test_claude_child_falls_back_to_a_default_name_without_user_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = _claude_child_config(pathlib.Path(tmp), None)
+        assert list(config["mcpServers"]) == ["mcp-agent-mail"]
+
+
+def test_codex_child_replaces_every_agent_mail_spelling():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = (
+            'model = "gpt-5.6-sol"\n\n'
+            "[mcp_servers.mcp_agent_mail]\n"
+            'url = "http://127.0.0.1:8765/mcp"\n\n'
+            "[mcp_servers.mcp_agent_mail.tools.fetch_inbox]\n"
+            'approval_mode = "approve"\n\n'
+            "[mcp_servers.agent-mail]\n"
+            'url = "http://127.0.0.1:8765/api/"\n\n'
+            "[mcp_servers.notion]\n"
+            'url = "https://mcp.notion.com/mcp"\n'
+        )
+        home = pathlib.Path(_run_codex_home(tmpdir, config_text=source))
+        text = (home / "config.toml").read_text(encoding="utf-8")
+
+        # Every direct agent-mail transport is gone (the endpoint still appears
+        # inside the proxy's env block, which is what the proxy dials).
+        assert 'url = "http://127.0.0.1:8765/mcp"' not in text
+        assert 'url = "http://127.0.0.1:8765/api/"' not in text
+        assert "tools.fetch_inbox" not in text
+        # ...and both names now resolve to the proxy.
+        assert '[mcp_servers."mcp_agent_mail"]' in text
+        assert '[mcp_servers."agent-mail"]' in text
+        assert text.count("run-mcp.sh") >= 2
+        # Unrelated config survives.
+        assert "[mcp_servers.notion]" in text
+        assert 'model = "gpt-5.6-sol"' in text
 
 
 def test_doctor_reports_the_fallback_instead_of_staying_silent():
