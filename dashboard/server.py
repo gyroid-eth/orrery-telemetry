@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
 import secrets
@@ -2787,7 +2788,15 @@ _SPAWN_MODELS = {
     "claude-opus-5": ("claude-code", "claude-opus-5"),
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
 }
+_CODEX_DEFAULT_MODEL = "gpt-5.5"
+_CODEX_EFFORTS = ("low", "medium", "high", "xhigh")
 SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
+
+
+def _codex_models() -> list[str]:
+    """Return the installer's Codex model allow-list (comma-separated override)."""
+    models = [value.strip() for value in os.environ.get("AGENTSTACK_CODEX_MODELS", "").split(",") if value.strip()]
+    return models or [_CODEX_DEFAULT_MODEL]
 
 
 def _spawn_name_status(name: str) -> str:
@@ -2825,6 +2834,10 @@ def spawn_names_payload() -> dict:
         "dirs": dirs,
         "models": list(_SPAWN_MODELS),
         "default_model": "claude-sonnet-5",
+        "providers": [
+            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": "claude-sonnet-5", "efforts": None},
+            {"id": "codex", "label": "Codex", "program": "codex-cli", "models": _codex_models(), "default_model": _codex_models()[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
+        ],
     }
 
 
@@ -2855,7 +2868,9 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
     if not token:
         return {"ok": False, "error": "HTTP_BEARER_TOKEN missing (~/mcp_agent_mail/.env)"}
     payload = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        # MCP servers may cache/replay duplicate JSON-RPC ids.  A fixed id made
+        # sequential register/send calls consume an unrelated prior response.
+        "jsonrpc": "2.0", "id": secrets.token_hex(8), "method": "tools/call",
         "params": {"name": method, "arguments": args},
     }).encode()
     req = urllib.request.Request(
@@ -2874,10 +2889,12 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     if isinstance(body, dict) and body.get("error"):
         return {"ok": False, "error": str(body["error"])}
-    # MCP tools/call 返値は {result:{content:[{type:'text', text:JSONstr}]}}
+    # Newer MCP servers expose the decoded payload in structuredContent.
     try:
-        text = body["result"]["content"][0]["text"]
-        data = json.loads(text)
+        result = body["result"]
+        data = result.get("structuredContent")
+        if not isinstance(data, dict):
+            data = json.loads(result["content"][0]["text"])
     except (KeyError, IndexError, TypeError, ValueError) as e:
         return {"ok": False, "error": f"unexpected response shape: {e}"}
     return {"ok": True, "data": data}
@@ -2886,31 +2903,45 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
-    payload: {parent, name?, dir?, role?, group?, task, model}; old fields remain tolerated.
+    payload: {parent, name?, dir?, role?, group?, task, provider?, model?, effort?}.
     """
     parent = (payload.get("parent") or "").strip()
     task = (payload.get("task") or "").strip()
     role = (payload.get("role") or "").strip()[:40]
     group = (payload.get("group") or "").strip()[:24]
-    model = (payload.get("model") or "claude-sonnet-5").strip()
+    provider = (payload.get("provider") or "claude").strip().lower()
+    model = (payload.get("model") or ("claude-sonnet-5" if provider == "claude" else _codex_models()[0])).strip()
+    effort = (payload.get("effort") or "").strip().lower()
     worktree = bool(payload.get("worktree"))
     worktree_base = (payload.get("worktree_base") or "").strip()
-    requested_name = (payload.get("name") or "").strip()
+    requested_name = (payload.get("name") or "").strip().replace("-", "")
     work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
 
     if not parent or _NAME_RE.fullmatch(parent) is None:
         return {"ok": False, "error": "parent name invalid"}
     if not task:
         return {"ok": False, "error": "task description required"}
-    if model not in _SPAWN_MODELS:
-        return {"ok": False, "error": f"model not allowed: {model}"}
+    if provider == "claude":
+        if model not in _SPAWN_MODELS:
+            return {"ok": False, "error": f"model not allowed for provider claude: {model}"}
+        if effort:
+            return {"ok": False, "error": "effort not supported for provider: claude"}
+        program, model_str = _SPAWN_MODELS[model]
+    elif provider == "codex":
+        if model not in _codex_models():
+            return {"ok": False, "error": f"model not allowed for provider codex: {model}"}
+        effort = effort or "xhigh"
+        if effort not in _CODEX_EFFORTS:
+            return {"ok": False, "error": f"effort not allowed for provider codex: {effort}"}
+        program, model_str = "codex-cli", model
+    else:
+        return {"ok": False, "error": f"provider not allowed: {provider}"}
     if requested_name and re.fullmatch(r"[A-Z][A-Za-z]{1,63}", requested_name) is None:
         return {"ok": False, "error": "name invalid"}
     if requested_name and _spawn_name_status(requested_name) != "available":
         return {"ok": False, "error": "name is occupied or cannot be verified"}
     if not os.path.isdir(work_dir):
         return {"ok": False, "error": f"dir does not exist: {work_dir}"}
-    program, model_str = _SPAWN_MODELS[model]
     if not os.path.exists(SPAWN_SCRIPT):
         return {"ok": False, "error": f"spawn script missing: {SPAWN_SCRIPT}"}
     project_key = _project_key()
@@ -2936,6 +2967,8 @@ def do_spawn(payload: dict) -> dict:
     if not child_name or _NAME_RE.fullmatch(child_name) is None:
         return {"ok": False,
                 "error": f"invalid child name from register: {child_name!r}"}
+    if requested_name and child_name != requested_name:
+        logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
 
     # 2) role/emoji/group annotation (best-effort, failure is non-fatal)
     annot_status = "skipped"
@@ -2993,8 +3026,12 @@ def do_spawn(payload: dict) -> dict:
     fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(child_token)
-    args = [SPAWN_SCRIPT, "--pre-registered", child_name, "--child-token-file", token_file,
-            "--model", model_str]
+    args = [SPAWN_SCRIPT, "--pre-registered", child_name, "--child-token-file", token_file]
+    if provider == "codex":
+        args.append("--codex")
+    args.extend(["--model", model_str])
+    if provider == "codex":
+        args.extend(["--effort", effort])
     if worktree:
         args.append("--worktree")
         if worktree_base:
@@ -3020,7 +3057,7 @@ def do_spawn(payload: dict) -> dict:
         ts = datetime.now(timezone.utc).isoformat()
         log_fh.write(
             f"\n=== {ts} spawn child={child_name} parent={parent} "
-            f"model={model_str} worktree={worktree} ===\n".encode())
+            f"provider={provider} model={model_str} effort={effort or '-'} worktree={worktree} ===\n".encode())
         subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
                          start_new_session=True)
         time.sleep(3)
@@ -3044,6 +3081,9 @@ def do_spawn(payload: dict) -> dict:
         "tmux_session": child_name,
         "annot": annot_status,
         "worktree": worktree,
+        "provider": provider,
+        "model": model_str,
+        "effort": effort or None,
     }
 
 

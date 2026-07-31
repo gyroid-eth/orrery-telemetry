@@ -9,7 +9,7 @@
 #   spawn_child.sh --worktree --resources "path" "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
 #
-# モデル指定（--model, Claude 子のみ。Codex は常に gpt-5.5）:
+# モデル指定（--model。Codex は gpt-5.5 既定で任意の許可済み model を渡せる）:
 #   --model 省略         → claude-opus-4-8[1m]（Opus 4.8 1M。保存既定と一致・プラン同梱で無料）
 #   --model opus         → claude-opus-4-8[1m]（[1m] 自動付与）
 #   --model opus[1m]     → claude-opus-4-8[1m]（friendly エイリアス。要シングルクォート: glob 回避）
@@ -184,6 +184,7 @@ open_child_terminal() {
 # フラグの処理
 USE_CODEX=false
 CLAUDE_MODEL=""
+CODEX_EFFORT="xhigh"
 RESOURCES=""
 RESOURCE_TTL=14400
 UNSAFE_NO_RESOURCES=false
@@ -203,6 +204,10 @@ while [[ "${1:-}" == --* ]]; do
             ;;
         --model)
             CLAUDE_MODEL="$2"
+            shift 2
+            ;;
+        --effort)
+            CODEX_EFFORT="$2"
             shift 2
             ;;
         --resources)
@@ -629,9 +634,9 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
     TASK="${1:-}"
     WORK_DIR="${2:-$(pwd)}"
-    # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）。Codex 子は後段で gpt-5.5 に上書き。
+    # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）。Codex は指定 model をそのまま渡す。
     if [[ "$USE_CODEX" == true ]]; then
-        CHILD_MODEL="gpt-5.5"
+        CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
     else
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
     fi
@@ -694,7 +699,8 @@ if [[ -n "$PRE_REGISTERED" ]]; then
 
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).
-        CHILD_MODEL="gpt-5.5"
+        CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         TOKEN=$(get_agentstack_token 2>/dev/null || true)
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
@@ -714,7 +720,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                     source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
                 fi
                 if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
-                    env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model gpt-5.5 -c model_reasoning_effort=xhigh
+                    env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 else
                     EXTRA_ARGS=()
                     if [[ -n "${AGENTSTACK_PROJECT_KEY:-}" && -d "$AGENTSTACK_PROJECT_KEY" ]]; then
@@ -723,7 +729,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                     [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
                     [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
                     env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
-                        "${EXTRA_ARGS[@]}" --model gpt-5.5 -c model_reasoning_effort=xhigh
+                        "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 fi
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -1124,7 +1130,7 @@ fi
 TASK_SHORT="${TASK:0:80}"
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_PROGRAM="codex"
-    CHILD_MODEL="gpt-5.5"
+    CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
 else
     CHILD_PROGRAM="claude-code"
     # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）
@@ -1369,6 +1375,7 @@ fi
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" \
         "$(ensure_child_token_file "$CHILD_NAME" "$CHILD_REGISTRATION_TOKEN")")"
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
     if [[ -n "$CHILD_CODEX_HOME" ]]; then
         echo "[spawn_child] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
         TMUX_ENV_ARGS+=(-e "CODEX_HOME=$CHILD_CODEX_HOME")
@@ -1387,7 +1394,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
             fi
             if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
-                env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model gpt-5.5 -c model_reasoning_effort=xhigh
+                env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             else
                 EXTRA_ARGS=()
                 if [[ -n "${AGENTSTACK_PROJECT_KEY:-}" && -d "$AGENTSTACK_PROJECT_KEY" ]]; then
@@ -1396,7 +1403,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
                 [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
                 env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
-                    "${EXTRA_ARGS[@]}" --model gpt-5.5 -c model_reasoning_effort=xhigh
+                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             fi
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
