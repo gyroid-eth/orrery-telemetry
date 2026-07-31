@@ -43,12 +43,14 @@ terminal process が終了した後も shell を残すため、調査や scrollb
 
 top-level launcher の新規 identity は `AdjectiveScientist`、たとえば `WindyFermi` です。
 
-- adjective は `bin/lib/agentstack-scientists.sh` の内蔵 list
+- adjective は `bin/lib/agentstack-scientists.sh` の134語
 - scientist は `dashboard/scientist_portraits.json`
 - scientist suffix が portrait key
 - ASCII alphabetic の scientist だけを候補にする
 
-launcher、dashboard API、child preregistration は同じ adjective / scientist source を共有します。命名 source を重複させないことで、portrait と登録名の drift を防ぎます。
+134語は agent-mail の正典 `SIMPLE_ADJECTIVES` Round 3 と逐語同期しています。strict agent-mail deployment は正典で生成名を検証するため、AgentStack 側だけへ独自語を追加してはいけません。
+
+launcher、dashboard catalog、suggestion API、child preregistration は同じ adjective / scientist source を共有します。命名 source を重複させないことで、portrait、登録名、server-side validation の drift を防ぎます。
 
 ## Name availability と fail-closed
 
@@ -62,7 +64,7 @@ launcher、dashboard API、child preregistration は同じ adjective / scientist
 
 `unknown` は空き名として扱いません。launcher の availability probe は既定で `unknown` が3回続くと停止します。通信障害時に衝突しうる identity を取得しない fail-closed 設計です。
 
-dashboard spawn は指定名から `-` を除いて正規化し、確認結果が `available` でない場合は拒否します。spawn v2 の移行状況は [Dashboard](dashboard.md#new-agent) と [API](api.md#post-apispawn) を参照してください。
+dashboard spawn は scientist rail の空き判定後、`/api/suggest-name` で完全名を再検証します。指定名から `-` を除いて正規化し、exact status が `available` でない場合は拒否します。詳しくは [Dashboard](dashboard.md#new-agent) と [API](api.md#post-apispawn) を参照してください。
 
 ## Identity 登録
 

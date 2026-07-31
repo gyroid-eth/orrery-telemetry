@@ -34,7 +34,8 @@
 | `AGENTSTACK_CUSTOM_PORTRAITS` | 未設定 | agent name → portrait key JSON |
 | `AGENTSTACK_SPAWN_SCRIPT` | `$AGENTSTACK_HOOKS_DIR/spawn_child.sh` | NEW AGENT launcher |
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:` 区切りの spawn directory preset |
-| `AGENTSTACK_CODEX_MODELS` | `gpt-5.5` | `,` 区切りの dashboard Codex model allow-list |
+| `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:` 区切りの directory typeahead 許可 root |
+| `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,` 区切りの dashboard Codex model allow-list |
 
 path 系は `~` を展開します。空文字は未設定として扱います。integer の `AGENTSTACK_PORT` が不正なら `8770` に戻ります。
 
@@ -112,7 +113,9 @@ http://127.0.0.1:8765/mcp
 
 を固定で使います。別 endpoint を使う場合は、launcher / hook だけでなく dashboard spawn との整合も確認してください。
 
-## Spawn directory preset
+## Spawn directory
+
+quick-select chip:
 
 ```bash
 export AGENTSTACK_SPAWN_DIRS="$HOME/code:$HOME/Obsidian/MyVault:/tmp"
@@ -120,13 +123,23 @@ export AGENTSTACK_SPAWN_DIRS="$HOME/code:$HOME/Obsidian/MyVault:/tmp"
 
 `GET /api/spawn-names` は `:` で分割した値を順番に返します。未設定時は `["~"]` です。`~` は API では symbolic のまま保持し、実際の spawn 時に展開します。
 
+typeahead の探索境界:
+
+```bash
+export AGENTSTACK_SPAWN_ROOTS="$HOME/code:$HOME/Obsidian"
+```
+
+`GET /api/fs/dirs` はこの root 内の child directory だけを返します。未設定時は `$HOME` が唯一の root です。server は `realpath` で境界を検証し、`..`、root 外、hidden directory、root 外への symlink を拒否します。
+
+`SPAWN_DIRS` は「最初に見せる chip」、`SPAWN_ROOTS` は「typeahead で閲覧できる範囲」です。chip が root 外を指す構成では exact path として入力できますが、その配下の suggestion は表示されません。
+
 ## Codex model catalog
 
 ```bash
-export AGENTSTACK_CODEX_MODELS="gpt-5.5,gpt-5.5-codex"
+export AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna"
 ```
 
-空要素と前後空白は除去されます。指定がない場合は `gpt-5.5` です。dashboard spawn はこの allow-list 外の Codex model を拒否します。
+空要素と前後空白は除去されます。指定がない場合は上記3モデルで、先頭の `gpt-5.6-sol` が default です。reasoning effort は `low / medium / high / xhigh`、default は `xhigh` です。dashboard spawn は allow-list 外の Codex model / effort を拒否します。
 
 ## Portrait overlay
 

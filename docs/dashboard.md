@@ -2,8 +2,6 @@
 
 > English version: planned.
 
-<!-- NOTE: spawn v2 改修中・確定後に更新 -->
-
 [前: Launcher と identity](launchers.md) · [README に戻る](../README.md) · [次: API reference](api.md)
 
 dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、agent-mail SQLite、runtime state、Obsidian vault を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
@@ -120,38 +118,63 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ## NEW AGENT
 
-<!-- NOTE: spawn v2 改修中・確定後に更新 -->
-
 <!-- TODO: screenshot: NEW AGENT modal -->
 
-`+ NEW AGENT` は child の登録、task 配送、annotation、tmux 起動を dashboard から行う control panel です。
+`+ NEW AGENT` は identity、engine、directory、task を順に確認する launch manifest です。通常項目を一方向に並べ、parent / role / group / isolation は ADVANCED に畳むことで、standalone agent の起動を最短経路にしています。
 
-### 現在の server 契約
+### Identity
 
-`GET /api/spawn-names` は次を返します。
+- `AUTO`: `name` を送らず agent-mail の自動命名に委ねる
+- scientist rail: portrait と `available / occupied / unknown`
+- scientist 選択: `/api/suggest-name` が空き adjective を付けて live registry で検証
+- SHUFFLE: 同じ scientist で別の verified name を再提案
+- `occupied / unknown`: 選択不可
+- roster 外または空き候補なし: HTTP 409 として別 scientist / AUTO を促す
 
-- scientist と `available / occupied / unknown`
-- adjective list
-- directory preset
-- Claude model
-- provider catalog
-- Codex model と effort `low / medium / high / xhigh`
+scientist rail の `available` は bare surname ではなく、134 adjective のどれかとの組み合わせに空きがあることを意味します。adjective は agent-mail 正典 `SIMPLE_ADJECTIVES` と同期し、UI は local で未検証名を作りません。
 
-`POST /api/spawn` は `provider` を `claude` または `codex` から選び、provider ごとの model / effort allow-list を検証します。指定名の `-` は除去され、たとえば `Sunny-Curie` は `SunnyCurie` になります。科学者を選ばず `name` を省略すると、agent-mail の自動命名に委ねます。
+### Engine
 
-現在、server 側は provider / effort 対応済みですが、checked-in UI は旧 payload の modal から段階的に移行中です。確定仕様は [API reference](api.md#get-apispawn-names) の server 契約を優先してください。
+- Claude / Codex provider tab
+- provider ごとの model card と用途 guide
+- Claude は Sonnet / Opus / Haiku
+- Codex は `gpt-5.6-sol / terra / luna`
+- Codex の effort は `low / medium / high / xhigh`、既定 `xhigh`
+
+server の provider / model / effort allow-list を catalog と validation の両方に使います。
+
+### Directory
+
+`AGENTSTACK_SPAWN_DIRS` の preset chip と exact path input を表示します。input は `/api/fs/dirs` の root-scoped typeahead で、arrow key / Enter でも選択できます。最後に使った directory は `localStorage` に保存します。
+
+typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
+
+### Task と ADVANCED
+
+task は必須、最大4000文字です。ADVANCED の開閉状態は `localStorage` に保存します。
+
+- parent: 既定は `STANDALONE · independent agent`
+- role: 任意、最大40文字
+- group: 任意、最大24文字
+- isolation: isolated worktree と base revision
+
+parent を選ばないと `standalone: true` を送り、`PARENT_AGENT` のない独立 agent として起動します。parent を選ぶと通常 child になり、task を child inbox へ送り、parent を CC した audit trail を残します。
 
 ### Spawn 順序
 
 1. `register_agent` で child identity と専用 token を作成
 2. role / group annotation（best effort）
-3. parent を sender にして child inbox へ task message を送信
-4. parent 自身を CC にして監査 trail と watcher 通知を残す
-5. token を mode `0600` file に保存
-6. `spawn_child.sh --pre-registered` を background 起動
-7. 3秒後に tmux session の存在を probe
+3. 通常 child だけ、parent を sender にして task message と CC audit trail を作成
+4. token を mode `0600` の one-shot file に保存
+5. `spawn_child.sh --pre-registered` を background 起動
+6. launcher の readiness verdict を最大120秒待つ
+7. live tmux session を再確認
 
-失敗時は `dashboard/logs/spawn.log` の末尾を API error の `detail` に含めます。Codex では `--codex --model <model> --effort <effort>` を spawner へ渡します。
+失敗時は tmux session と token / child credential file を cleanup し、`dashboard/logs/spawn.log` の末尾を API error の `detail` に含めます。登録済み identity は server に削除権限がないため保持され、response の `registration_retained: true` で明示されます。
+
+Codex では `--codex --model <model> --effort <effort>` を渡します。non-git directory の trust dialog は `C-m` で最大10回受理を試み、残り続ける場合は fail-fast します。
+
+すべての POST は JSON body が必須です。browser は same-origin、CLI は `Origin` / `Sec-Fetch-Site` を付けない request だけを受け付けます。
 
 ### Isolated worktree
 

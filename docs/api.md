@@ -2,8 +2,6 @@
 
 > English version: planned.
 
-<!-- NOTE: spawn v2 改修中・確定後に更新 -->
-
 [前: Dashboard](dashboard.md) · [README に戻る](../README.md) · [次: 設定](configuration.md)
 
 ## 基本
@@ -14,7 +12,9 @@ base URL:
 http://127.0.0.1:8770
 ```
 
-response body は、画像と HTML を除き JSON です。control endpoint に認証 layer はありません。`AGENTSTACK_BIND_HOST=0.0.0.0` を使うときは trusted LAN / VPN に限定してください。
+response body は、画像と HTML を除き JSON です。dashboard 自体に login layer はありません。`AGENTSTACK_BIND_HOST=0.0.0.0` を使うときは trusted LAN / VPN に限定してください。
+
+すべての POST endpoint は `Content-Type: application/json` と JSON object body が必須です。browser request は `Origin` / `Sec-Fetch-Site` が same-origin でなければ HTTP 403、CLI は両 header を送らない場合に利用できます。simple-form CSRF を受け付けないための共通 guard です。
 
 失敗は原則:
 
@@ -22,7 +22,7 @@ response body は、画像と HTML を除き JSON です。control endpoint に�
 {"ok":false,"error":"reason"}
 ```
 
-で HTTP 400 です。存在しない route は HTTP 404、spawn catalog source が読めない場合は HTTP 503 です。
+で HTTP 400 です。media type 不一致は HTTP 415、cross-origin POST は HTTP 403、存在しない route は HTTP 404、spawn catalog source が読めない場合は HTTP 503 です。
 
 ## Route 一覧
 
@@ -31,6 +31,9 @@ response body は、画像と HTML を除き JSON です。control endpoint に�
 | GET | `/` | optional `?embed=1` | dashboard HTML |
 | GET | `/api/version` | なし | `{name, version, api}` |
 | GET | `/api/spawn-names` | なし | name / dir / provider catalog |
+| GET | `/api/name-status` | `name` | exact identity status |
+| GET | `/api/suggest-name` | `scientist` | verified `AdjectiveScientist` |
+| GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | なし | `{ts, agents}` |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
@@ -65,8 +68,6 @@ version の解決順は [インストール](install.md#version)を参照して�
 
 ## GET `/api/spawn-names`
 
-<!-- NOTE: spawn v2 改修中・確定後に更新 -->
-
 query はありません。
 
 ```bash
@@ -100,8 +101,8 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"codex",
       "label":"Codex",
       "program":"codex-cli",
-      "models":["gpt-5.5"],
-      "default_model":"gpt-5.5",
+      "models":["gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna"],
+      "default_model":"gpt-5.6-sol",
       "efforts":["low","medium","high","xhigh"],
       "effort_default":"xhigh"
     }
@@ -109,7 +110,71 @@ curl -s http://127.0.0.1:8770/api/spawn-names
 }
 ```
 
-`status` は `available / occupied / unknown` です。DB がない、または query に失敗した場合は `unknown` とし、指定 spawn 名には使えません。`AGENTSTACK_CODEX_MODELS` があれば Codex model list を上書きします。
+scientist rail の `status` は、その scientist と134語の adjective の組み合わせに少なくとも1件の空きがあるかを表します。全組み合わせが埋まると `occupied`、DB がない、または query に失敗すると `unknown` です。bare surname の登録有無だけでは決めません。
+
+adjective は agent-mail の正典 `SIMPLE_ADJECTIVES` Round 3 と逐語同期し、launcher・catalog・suggestion API が同じ source を使います。独自追加は strict deployment の name validation と乖離するため禁止です。
+
+`AGENTSTACK_CODEX_MODELS` があれば Codex model list を上書きします。未設定時は `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` の順で、default は `gpt-5.6-sol`、effort default は `xhigh` です。
+
+## GET `/api/name-status`
+
+完全な identity 名を exact check します。
+
+```bash
+curl -s 'http://127.0.0.1:8770/api/name-status?name=WindyFermi'
+```
+
+```json
+{"name":"WindyFermi","status":"available"}
+```
+
+`status` は `available / occupied / unknown` です。DB がない、query error、空の名前は fail-closed の `unknown` になります。この endpoint 自体は name syntax を検証せず、`POST /api/spawn` が別途検証します。HTTP status は結果にかかわらず 200 です。
+
+## GET `/api/suggest-name`
+
+scientist rail で選んだ suffix に、空きが確認できた adjective を server が付与します。
+
+```bash
+curl -s 'http://127.0.0.1:8770/api/suggest-name?scientist=Fermi'
+```
+
+```json
+{"name":"WindyFermi"}
+```
+
+server は正典 adjective から最大20候補をランダム順で検査し、`available` を確認した最初の名前だけを返します。scientist が roster 外、または検査した候補がすべて occupied / unknown の場合:
+
+```json
+{"error":"no available name found"}
+```
+
+を HTTP 409 で返します。UI の SHUFFLE は local で名前を組み立てず、この endpoint で毎回再検証します。
+
+## GET `/api/fs/dirs`
+
+NEW AGENT の directory typeahead 用です。
+
+```bash
+curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
+```
+
+```json
+{
+  "path":"/Users/me/code",
+  "dirs":[
+    {"name":"project-a","path":"/Users/me/code/project-a"}
+  ],
+  "truncated":false
+}
+```
+
+`path` を省略すると `AGENTSTACK_SPAWN_ROOTS` の先頭を使います。許可 root 外、`..` を含む path、存在しない directory には:
+
+```json
+{"path":null,"dirs":[]}
+```
+
+を返します。hidden directory と root 外へ出る symlink は除外し、名前順の先頭20件だけを返します。21件以上なら `truncated: true` です。
 
 ## GET `/api/agents`
 
@@ -126,7 +191,7 @@ response:
       "session":"WindyFermi",
       "running":true,
       "category":"agent",
-      "model":"gpt-5.5",
+      "model":"gpt-5.6-sol",
       "provider":"openai",
       "task":"README を更新",
       "last_active":1785480000
@@ -378,9 +443,7 @@ response:
 
 ## POST `/api/spawn`
 
-<!-- NOTE: spawn v2 改修中・確定後に更新 -->
-
-Claude:
+parent ありの Claude child:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8770/api/spawn \
@@ -402,11 +465,11 @@ Codex:
 
 ```json
 {
-  "parent":"CuriousCopernicus",
+  "standalone":true,
   "name":"Sunny-Curie",
   "dir":"/path/to/project",
   "provider":"codex",
-  "model":"gpt-5.5",
+  "model":"gpt-5.6-sol",
   "effort":"high",
   "task":"API を検証する"
 }
@@ -416,8 +479,9 @@ request:
 
 | Field | 必須 | 内容 |
 | --- | --- | --- |
-| `parent` | yes | 有効な既存 agent 名 |
-| `task` | yes | task 本文。登録 summary は先頭80文字 |
+| `parent` | child のみ | 有効な既存 agent 名。`standalone: true` では省略 |
+| `standalone` | no | boolean。`true` なら parentless 起動 |
+| `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
 | `dir` | no | 存在する working directory。既定は source repo |
 | `provider` | no | `claude`（既定）または `codex` |
@@ -437,13 +501,31 @@ request:
   "tmux_session":"SunnyCurie",
   "annot":"ok",
   "worktree":false,
+  "standalone":true,
   "provider":"codex",
-  "model":"gpt-5.5",
+  "model":"gpt-5.6-sol",
   "effort":"high"
 }
 ```
 
-Claude provider に `effort` を渡すと拒否します。Codex model は `AGENTSTACK_CODEX_MODELS` allow-list、Claude model は server の `_SPAWN_MODELS` に従います。
+`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と CC audit trail を作り、登録 summary / launcher prompt は先頭80文字です。
+
+Claude provider に `effort` を渡すと拒否します。Codex model は `AGENTSTACK_CODEX_MODELS` allow-list、Claude model は server の `_SPAWN_MODELS` に従います。Codex の既定は `gpt-5.6-sol` / `xhigh` です。
+
+non-git directory では Codex が trust dialog を出すことがあります。spawner は `C-m` で受理し、3秒ごと・最大10回を超えて dialog が残る場合は fail-fast します。server は launcher readiness を最大120秒待ち、失敗時は tmux session と token / child credential file を cleanup します。
+
+登録後の mail、token、launcher failure では identity registration 自体は削除されません。server は owner credential で削除する権限を持たないため、error response に:
+
+```json
+{
+  "ok":false,
+  "child_name":"SunnyCurie",
+  "registration_retained":true,
+  "error":"... child registration 'SunnyCurie' remains ..."
+}
+```
+
+を含めます。同じ request を無条件 retry せず、残った identity を確認してください。
 
 spawn は fixed `http://127.0.0.1:8765/mcp` を使い、`AGENTSTACK_MAIL_ENV` の `HTTP_BEARER_TOKEN` を読みます。launcher / hook の `AGENTSTACK_MCP_URL` とは別なので、agent-mail endpoint を変更する場合は注意してください。
 
