@@ -80,6 +80,7 @@ backup、remote access、purge の方針はこの data boundary を前提に決�
 ## 関連文書
 
 - [インストール](install.md)
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)

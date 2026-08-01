@@ -246,6 +246,7 @@ remote access は SSH tunnel、trusted VPN、または別の認証 proxy を使�
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [API reference](api.md)
 - [トラブルシューティング](troubleshooting.md)

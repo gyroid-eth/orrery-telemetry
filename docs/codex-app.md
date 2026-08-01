@@ -2,7 +2,7 @@
 
 > English version: planned.
 
-[前: Launcher と identity](launchers.md) · [README に戻る](../README.md) · [次: Dashboard](dashboard.md)
+[前: Hooks](hooks.md) · [README に戻る](../README.md) · [次: Dashboard](dashboard.md)
 
 Codex App 統合は、**Codex Desktop で動く root task / subagent** を agent-mail の identity と結び、lifecycle、inbox、file reservation、dashboard telemetry を tmux 外の runtime にも広げる任意機能です。通常の `agent-start-codex` は Codex CLI を tmux で起動するための launcher であり、この Bridge とは別経路です。
 
@@ -244,6 +244,7 @@ uninstall は最初に preview します。
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [Hooks と運用 helper](hooks.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
