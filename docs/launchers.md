@@ -151,14 +151,18 @@ Codex では `Enter` keysym が submit にならない場合があるため `C-m
 
 ## Skills（2件）と file reservation
 
-installer は次の skill を `~/.agentstack/skills` へ配置します。
+installer は次の skill を正本の `~/.agentstack/skills` へ配置し、Claude Code の標準 discovery path `~/.claude/skills/<name>` から各正本への絶対 symlink を作ります。
 
 - [`/delegate`](../skills/delegate/SKILL.md): resource を宣言・予約し、Claude / Codex child、任意 model、worktree を起動して監視
 - [`/log`](../skills/log/SKILL.md): session の決定、変更、検証、次 action を再利用できる Markdown log に整理
 
+install 前から開いていた Claude Code session は追加された skill を認識しません。一度 `/exit` し、新しい terminal から `agent-start <project>` で起動し直してください。
+
 ### `/delegate`
 
 `/delegate` は child を起動するだけの shortcut ではありません。
+
+AgentStack の委譲は、必ず先頭の slash を付けて `/delegate ...` と入力します。`delegate ...` は通常の prompt であり、この skill の呼び出しではありません。Claude が組み込み subagent / Agent tool で処理した場合、成果物ができても AgentStack の identity、reservation、専用 tmux session、dashboard telemetry には載りません。AgentStack で監視する child を作る目的では、組み込み Agent tool を `/delegate` の代わりに使わないでください。
 
 | 項目 | 内容 |
 | --- | --- |

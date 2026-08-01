@@ -37,7 +37,7 @@ installer は次を行います。
 
 1. dependency と port を検査
 2. upstream `mcp_agent_mail` を既定の `~/mcp_agent_mail` へ clone、または既存 clone を検証
-3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置
+3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` と `install-state.json` を生成
 5. launchd / systemd user / `nohup` のいずれかで dashboard と watcher を登録
 6. Tier 1 では Claude Code settings と managed instructions の差分を preview し、明示的な `yes` の後だけ merge
@@ -49,13 +49,21 @@ installer は次を行います。
 open http://127.0.0.1:8770/
 ```
 
+install 前から開いていた Claude Code session は、新しく導入した skill を再走査しません。既存 session で `/exit` した後、新しい terminal から project を指定して起動し直します。
+
+```bash
+agent-start /path/to/project
+```
+
+再起動後は Claude Code で `/delegate` のように先頭の slash を付けて呼び出します。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
+
 生成する `env.sh` は mode `0600` です。bearer token は `env.sh` へ書き込みません。
 
 ## Install tier
 
 | 呼び出し | Tier | 内容 |
 | --- | --- | --- |
-| `./scripts/install.sh` | Tier 1 / default | 全 payload。hooks・permissions・`skillsDirectories` と Codex / Claude managed block は preview 後、承認時だけ merge |
+| `./scripts/install.sh` | Tier 1 / default | 全 payloadと Claude standard skill link。hooks・permissions と Codex / Claude managed block は preview 後、承認時だけ merge |
 | `./scripts/install.sh --dashboard-only` | Tier 0 | dashboard と helper のみ。hooks、skills、Codex / Claude template は導入しない |
 | `./scripts/install.sh --scoped` | Tier 2 placeholder | payload は導入するが、user settings / managed docs は変更しない |
 | `./scripts/install.sh --dry-run` | preview | 変更予定を表示し、file や service を変更しない |
@@ -74,11 +82,11 @@ open http://127.0.0.1:8770/
 
 `--bin-dir` は installer の公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
 
-## Settings と permissions の merge
+## Settings、permissions、Claude skill の merge
 
 Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベースです。
 
-- 既存の hooks、permissions、`skillsDirectories` を保持
+- 既存の hooks、permissions、その他の user settings を保持
 - AgentStack が追加する値だけを重複なしで追記
 - merge 前の settings backup を `~/.agentstack/backups` に保存
 - 追加した entry と変更結果を manifest に記録
@@ -86,6 +94,19 @@ Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベ�
 - `install-state.json` を uninstall の削除範囲の正本にする
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
+
+`skillsDirectories` は Claude Code の setting ではなく、installer は新しい値を追加しません。skill payload の正本は `~/.agentstack/skills/<name>` のままにし、Claude Code が標準で読む `~/.claude/skills/<name>` へ絶対 symlink を作ります。
+
+```text
+~/.claude/skills/delegate -> ~/.agentstack/skills/delegate
+~/.claude/skills/log      -> ~/.agentstack/skills/log
+```
+
+同じ AgentStack payload を指す symlink がすでにある場合は再利用し、manifest に所有登録します。この link は payload と一緒に無効になるため、uninstall では削除対象です。同名の file、directory、または別 target の symlink がある場合は warning を出して保持し、所有登録しません。
+
+uninstall は manifest の path と実際の symlink target を照合し、所有登録された、AgentStack payload を指す symlink だけを削除します。利用者が file や directory に置き換えた path、または retarget した symlink は残します。
+
+旧 installer が `skillsDirectories` に `~/.agentstack/skills` を追加していた環境では、Tier 1 の settings merge を承認した再インストール時にその旧 AgentStack entry だけを削除します。同じ配列の他の user value と、それ以外の settings は保持します。
 
 installer は `~/.claude.json` と shell dotfile を変更しません。project 内では、Tier 1 の preview 後に承認した場合だけ `CLAUDE.md` の managed marker 間を更新し、それ以外の file は変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
 
