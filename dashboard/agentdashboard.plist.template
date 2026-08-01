@@ -44,6 +44,8 @@
     <string>__PROJECT_KEY__</string>
     <key>AGENTSTACK_PROTECTED_ROOTS</key>
     <string>__PROTECTED_ROOTS__</string>
+    <key>AGENTSTACK_DELIVERABLE_ROOTS</key>
+    <string>__DELIVERABLE_ROOTS__</string>
     <key>AGENTSTACK_HOOKS_DIR</key>
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>

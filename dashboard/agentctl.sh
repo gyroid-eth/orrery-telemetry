@@ -23,9 +23,10 @@ SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-~/.mcp_agent_mail/signals}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-~/.agentstack/hooks}"
-RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-~/.claude/runtime}"
-MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-~/.claude/managed_agents.txt}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}"
+MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-~/.agentstack/runtime/managed_agents.txt}"
 VAULT="${AGENTSTACK_VAULT:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 URL="http://127.0.0.1:$PORT/"
@@ -49,6 +50,7 @@ render_plist() {
     -e "s|__TERMINAL__|$(sed_escape "$TERMINAL")|g" \
     -e "s|__PROJECT_KEY__|$(sed_escape "$PROJECT_KEY")|g" \
     -e "s|__PROTECTED_ROOTS__|$(sed_escape "$PROTECTED_ROOTS")|g" \
+    -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
     -e "s|__HOOKS_DIR__|$(sed_escape "$HOOKS_DIR")|g" \
     -e "s|__RUNTIME_DIR__|$(sed_escape "$RUNTIME_DIR")|g" \
     -e "s|__MANAGED_AGENTS_FILE__|$(sed_escape "$MANAGED_AGENTS_FILE")|g" \

@@ -7,6 +7,7 @@ MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 
 DRY_RUN=false
 TIER="tier1"
+TIER_OPTION=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DIR="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
@@ -15,6 +16,7 @@ LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$REPO_ROOT}}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
@@ -27,7 +29,9 @@ Usage: install.sh [--dry-run] [--dashboard-only|--scoped] [options]
 Core install only. This creates ~/.agentstack, installs hooks/skills/dashboard assets,
 creates env.sh and service files, and writes install-state.json. Tier1 shows a
 Claude Code user-settings dry-run diff and only merges after explicit approval.
-It does not modify ~/.claude.json, shell dotfiles, or project files.
+It does not modify ~/.claude.json or shell dotfiles. After Tier1 preview and
+explicit approval, only the managed marker block in project/global CLAUDE.md
+may be updated; other project files are not changed.
 
 Options:
   --dry-run              Print planned actions without writing files
@@ -49,11 +53,21 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --dashboard-only)
+      if [[ -n "$TIER_OPTION" && "$TIER_OPTION" != "dashboard-only" ]]; then
+        echo "error: --dashboard-only and --scoped are mutually exclusive" >&2
+        exit 2
+      fi
       TIER="tier0"
+      TIER_OPTION="dashboard-only"
       shift
       ;;
     --scoped)
+      if [[ -n "$TIER_OPTION" && "$TIER_OPTION" != "scoped" ]]; then
+        echo "error: --dashboard-only and --scoped are mutually exclusive" >&2
+        exit 2
+      fi
       TIER="tier2"
+      TIER_OPTION="scoped"
       shift
       ;;
     --install-dir)
@@ -425,6 +439,7 @@ values = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -504,6 +519,7 @@ repl = {
     "__TERMINAL__": "$TERMINAL",
     "__PROJECT_KEY__": "$PROJECT_KEY",
     "__PROTECTED_ROOTS__": "$PROTECTED_ROOTS",
+    "__DELIVERABLE_ROOTS__": "$DELIVERABLE_ROOTS",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
     "__MANAGED_AGENTS_FILE__": "$MANAGED_AGENTS_FILE",
@@ -543,6 +559,7 @@ env = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -676,6 +693,7 @@ manifest = {
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
         "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
         "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+        "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
         "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",

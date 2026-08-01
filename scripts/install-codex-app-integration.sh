@@ -11,7 +11,9 @@ INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$HOME/.agentstack/integrations/
 RUNTIME_DIR="${AGENTSTACK_CODEX_APP_RUNTIME_DIR:-$HOME/.agentstack/runtime/codex-app}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-}"
-MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.mcp_agent_mail/.env}"
+# The bearer file lives with the upstream clone.  ~/.mcp_agent_mail is the
+# intentionally separate runtime/archive root used for signal data.
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$HOME/.mcp_agent_mail/signals}"
 LABEL="${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}"
 MARKETPLACE_NAME="${AGENTSTACK_CODEX_APP_MARKETPLACE:-agentstack-local}"

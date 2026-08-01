@@ -10,8 +10,8 @@ if [[ -z "$AGENT_NAME" ]]; then
     exit 0
 fi
 
-RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
-MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$HOME/.claude/managed_agents.txt}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
 
 mac_app_exists() {

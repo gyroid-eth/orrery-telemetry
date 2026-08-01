@@ -5,7 +5,7 @@
 # Exit 2 = block, 0 = allow
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 if [[ -z "$PROTECTED_ROOTS" && -n "$PROJECT_KEY" ]]; then

@@ -27,7 +27,7 @@ LOCK_ACQUIRED=0
 #   - notify-state.json で「(agent, msg_id) → 配送結果」を永続キャッシュ
 #   - notify-locks/ で短命 lease lock (重複 inject 防止、watcher/daemon dual で必須)
 #   - 失敗時は state に記録するだけで signal は残し、後で再試行可能
-STATE_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+STATE_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 STATE_FILE="${STATE_DIR}/notify-state.json"
 LEASE_DIR="${STATE_DIR}/notify-locks"
 SCAN_INTERVAL=30      # periodic scan で取りこぼし救済

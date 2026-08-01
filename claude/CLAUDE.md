@@ -78,9 +78,9 @@ Details and exceptions for the first calls:
   Success prints `agentstack-reregister: registered <name>` and exits 0. If it
   succeeds, skip `register_agent` and call `fetch_inbox`.
 - Top-level sessions store their runtime token at
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`.
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>`.
   Delegated children also use
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json`.
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json`.
   `agentstack-reregister` reads both locations. It is acceptable for stack
   helpers to use these token files. Do not read agent-mail's `storage.sqlite3`
   directly; the DB is outside the recovery boundary and ad hoc DB reads risk

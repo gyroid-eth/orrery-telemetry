@@ -12,7 +12,7 @@ projects; see logs/ in the dashboard project).
 Key = agent-mail `id` (global PRIMARY KEY → unique per session). For each
 register_agent we write:
 
-    ~/.claude/runtime/session_index/<agent_id>.json
+    ~/.agentstack/runtime/session_index/<agent_id>.json
         {agent_id, agent_name, session_id, transcript_path, cwd, ts}
 
 Idempotent re-registration / resume keeps the same id and session_id, so we
@@ -90,7 +90,7 @@ def main():
         return
 
     runtime_dir = os.path.expanduser(
-        os.environ.get("AGENTSTACK_RUNTIME_DIR", "~/.claude/runtime")
+        os.environ.get("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
     )
     out_dir = os.path.join(runtime_dir, "session_index")
     try:
