@@ -23,6 +23,40 @@ import tempfile
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
+_CODEX_PROXY_TOOLS = (
+    "bootstrap",
+    "fetch_inbox",
+    "send_message",
+    "acknowledge_message",
+    "reserve_files",
+    "renew_reservations",
+    "release_reservations",
+    "runtime_status",
+)
+
+
+def _assert_proxy_tool_approvals(config: str, server_names: tuple[str, ...]) -> None:
+    for server_name in server_names:
+        for tool_name in _CODEX_PROXY_TOOLS:
+            block = (
+                f'[mcp_servers."{server_name}".tools."{tool_name}"]\n'
+                'approval_mode = "approve"'
+            )
+            assert block in config, block
+    assert config.count('approval_mode = "approve"') == (
+        len(server_names) * len(_CODEX_PROXY_TOOLS)
+    )
+    assert "default_tools_approval_mode" not in config
+
+
+def test_codex_child_approval_allowlist_matches_proxy_surface_exactly():
+    source = _ROOT / "integrations" / "codex_app" / "src"
+    sys.path.insert(0, str(source))
+    try:
+        from agentstack_codex_app.mcp_server import TOOL_DEFINITIONS
+    finally:
+        sys.path.pop(0)
+    assert _CODEX_PROXY_TOOLS == tuple(item["name"] for item in TOOL_DEFINITIONS)
 
 
 def _extract(func: str) -> str:
@@ -143,6 +177,12 @@ approval_mode = "approve"
 [mcp_servers.notion]
 url = "https://mcp.notion.com/mcp"
 enabled = false
+
+[plugins."agentstack-codex-app@test-market"]
+enabled = true
+
+[plugins."agentstack-codex-app@test-market".mcp_servers.agentstack]
+enabled = true
 """
 
 
@@ -156,11 +196,22 @@ def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
         # The shared HTTP transport for agent-mail is gone, replaced by stdio.
         assert 'url = "http://127.0.0.1:8765/api/"' not in config
         assert '[mcp_servers."agent-mail"]' in config
+        assert '[mcp_servers."agentstack"]' in config
         assert "command = " in config
         assert 'AGENTSTACK_PROXY_AGENT_NAME = "Red-Euler"' in config
-        # Per-tool approval subtables of the replaced server must go too,
-        # otherwise they re-describe a server that no longer exists.
-        assert "tools.fetch_inbox" not in config
+        assert (
+            'AGENTSTACK_CODEX_APP_RUNTIME_DIR = "'
+            in config
+        )
+        assert "/Red-Euler.codex-home/proxy-runtime\"" in config
+        # The source transport's approval table is replaced by the complete,
+        # fixed proxy allowlist. Shell approvals and unrelated MCP servers stay
+        # untouched.
+        _assert_proxy_tool_approvals(config, ("agent-mail", "agentstack"))
+        assert (
+            '[plugins."agentstack-codex-app@test-market".'
+            'mcp_servers.agentstack]\nenabled = false'
+        ) in config
         # Unrelated config survives untouched.
         assert 'model = "gpt-5.5"' in config
         assert "[mcp_servers.notion]" in config
@@ -184,6 +235,8 @@ def test_codex_child_home_works_when_the_user_has_no_config():
         home = _run_codex_home(tmpdir, config_text=None)
         config = (pathlib.Path(home) / "config.toml").read_text(encoding="utf-8")
         assert '[mcp_servers."agent-mail"]' in config
+        assert '[mcp_servers."agentstack"]' in config
+        _assert_proxy_tool_approvals(config, ("agent-mail", "agentstack"))
 
 
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
@@ -200,6 +253,9 @@ def test_both_codex_launch_paths_use_the_child_home():
     text = _SPAWN.read_text(encoding="utf-8")
     assert text.count('CHILD_CODEX_HOME="$(write_child_codex_home') == 2
     assert text.count('-e "CODEX_HOME=$CHILD_CODEX_HOME"') == 2
+    # The user's optional workspace launcher intentionally reads this override;
+    # without it, that wrapper replaces the child home with ~/.codex again.
+    assert text.count('-e "CODEX_SHARED_CODEX_DIR=$CHILD_CODEX_HOME"') == 2
 
 
 def test_launcher_passes_the_config_to_claude_only_when_present():
@@ -426,7 +482,11 @@ def test_codex_child_replaces_every_agent_mail_spelling():
         # ...and both names now resolve to the proxy.
         assert '[mcp_servers."mcp_agent_mail"]' in text
         assert '[mcp_servers."agent-mail"]' in text
-        assert text.count("run-mcp.sh") >= 2
+        assert '[mcp_servers."agentstack"]' in text
+        assert text.count("run-mcp.sh") >= 3
+        _assert_proxy_tool_approvals(
+            text, ("mcp_agent_mail", "agent-mail", "agentstack")
+        )
         # Unrelated config survives.
         assert "[mcp_servers.notion]" in text
         assert 'model = "gpt-5.6-sol"' in text

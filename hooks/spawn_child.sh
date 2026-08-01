@@ -654,6 +654,7 @@ write_child_codex_home() {
         "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" <<'PY' || return 0
 import os
 import pathlib
+import re
 import sys
 
 home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir = sys.argv[1:10]
@@ -678,12 +679,38 @@ def looks_like_agent_mail(name):
     return "agentmail" in name.replace("-", "").replace("_", "").replace('"', "").lower()
 
 
+def toml_string(value):
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped + '"'
+
+
+def plugin_name(header):
+    match = re.match(r'^plugins\.(?:"([^"]+)"|([A-Za-z0-9_-]+))', header)
+    return (match.group(1) or match.group(2)) if match else ""
+
+
+# `--ask-for-approval never` governs model-generated shell commands, not MCP
+# calls. Codex otherwise prompts for these tools even though this proxy is
+# already child-bound and exposes only this fixed coordination surface.
+proxy_tools = (
+    "bootstrap",
+    "fetch_inbox",
+    "send_message",
+    "acknowledge_message",
+    "reserve_files",
+    "renew_reservations",
+    "release_reservations",
+    "runtime_status",
+)
+
+
 # Strip EVERY agent-mail server the user has, not just one spelling. A child
 # that still sees the direct connection will use it — the model reaches for the
 # name it knows — and that connection is not authenticated as the child.
 lines = []
 skipping = False
 claimed = []
+plugin_ids = []
 config_source = source_path / "config.toml"
 text = config_source.read_text(encoding="utf-8") if config_source.exists() else ""
 for line in text.splitlines():
@@ -693,25 +720,39 @@ for line in text.splitlines():
         server = ""
         if header.startswith("mcp_servers."):
             server = header[len("mcp_servers."):].split(".")[0]
-        skipping = bool(server) and looks_like_agent_mail(server)
+        name = server.strip('"')
+        plugin_id = plugin_name(header)
+        if plugin_id.startswith("agentstack-codex-app@"):
+            if plugin_id not in plugin_ids:
+                plugin_ids.append(plugin_id)
+            plugin_prefix = "plugins." + toml_string(plugin_id)
+            skipping = header.startswith(plugin_prefix + ".mcp_servers.agentstack")
+        else:
+            skipping = False
+        if name and (looks_like_agent_mail(name) or name == "agentstack"):
+            skipping = True
         if skipping:
-            name = server.strip('"')
-            if name not in claimed:
+            if name and name not in claimed:
                 claimed.append(name)
     if not skipping:
         lines.append(line)
 if not claimed:
     claimed = ["agent-mail"]
-
-def toml_string(value):
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return '"' + escaped + '"'
+# Codex's deferred tool registry identifies this proxy by serverInfo.name
+# (`agentstack`), while direct MCP calls use the configured server key. Claim
+# both so the same per-tool policy applies through either path.
+if "agentstack" not in claimed:
+    claimed.append("agentstack")
 
 lines.append("")
 lines.append("# Written by spawn_child.sh: this child talks to agent-mail through the")
 lines.append("# local proxy, which authenticates every call with the child's own token.")
 lines.append("# The proxy claims the same server name(s) the user's own config used,")
 lines.append("# so the model's habitual call lands on the authenticated connection.")
+for plugin_id in plugin_ids:
+    lines.append("")
+    lines.append("[plugins." + toml_string(plugin_id) + ".mcp_servers.agentstack]")
+    lines.append("enabled = false")
 for name in claimed:
     key = "mcp_servers." + toml_string(name)
     lines.append("")
@@ -727,6 +768,16 @@ for name in claimed:
     lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
     lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
     lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
+    # run-mcp.sh also reads the machine-wide Codex App env for missing values.
+    # Pin its state inside this child-owned home so a bridge install cannot
+    # redirect the sandboxed child back into the live bridge runtime.
+    lines.append("AGENTSTACK_CODEX_APP_RUNTIME_DIR = " + toml_string(
+        os.fspath(home_path / "proxy-runtime")
+    ))
+    for tool_name in proxy_tools:
+        lines.append("")
+        lines.append("[" + key + ".tools." + toml_string(tool_name) + "]")
+        lines.append("approval_mode = \"approve\"")
 
 target = home_path / "config.toml"
 target.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -980,7 +1031,10 @@ PY
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
             echo "[spawn_child/pre-reg] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
-            TMUX_ENV_ARGS+=(-e "CODEX_HOME=$CHILD_CODEX_HOME")
+            TMUX_ENV_ARGS+=(
+                -e "CODEX_HOME=$CHILD_CODEX_HOME"
+                -e "CODEX_SHARED_CODEX_DIR=$CHILD_CODEX_HOME"
+            )
         else
             echo "[spawn_child/pre-reg] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
         fi
@@ -1739,7 +1793,10 @@ if [[ "$USE_CODEX" == true ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
     if [[ -n "$CHILD_CODEX_HOME" ]]; then
         echo "[spawn_child] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
-        TMUX_ENV_ARGS+=(-e "CODEX_HOME=$CHILD_CODEX_HOME")
+        TMUX_ENV_ARGS+=(
+            -e "CODEX_HOME=$CHILD_CODEX_HOME"
+            -e "CODEX_SHARED_CODEX_DIR=$CHILD_CODEX_HOME"
+        )
     else
         echo "[spawn_child] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
     fi
