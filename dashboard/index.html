@@ -2747,8 +2747,18 @@ OFF = legacy snapshot+comet mode">
 </div>
 
 <script>
+function initialDashboardRoute(search){
+  const params=new URLSearchParams(search);
+  const requestedView=params.get('view');
+  return {
+    view:(requestedView==='deck'||requestedView==='net')?requestedView:'deck',
+    showAll:params.get('showAll')==='1',
+    embed:params.get('embed')==='1'
+  };
+}
+const INITIAL_ROUTE=initialDashboardRoute(window.location.search);
 const EMBED_MODE=
-  new URLSearchParams(window.location.search).get('embed')==='1' ||
+  INITIAL_ROUTE.embed ||
   window.parent!==window;
 document.body.classList.toggle('embed',EMBED_MODE);
 let netSuspended=false;
@@ -6201,8 +6211,11 @@ TM('tm-open').addEventListener('click',()=>{
 });
 
 document.getElementById('q').addEventListener('input',render);
-document.getElementById('showAll').addEventListener('change',render);
+const showAllInput=document.getElementById('showAll');
+showAllInput.checked=INITIAL_ROUTE.showAll;
+showAllInput.addEventListener('change',render);
 loadCustomPortraits();
+if(INITIAL_ROUTE.view==='net')setView('net');
 tick();
 setInterval(()=>{ if(document.hidden||netSuspended)return; if(view==='deck') tick(); },3000);
 
