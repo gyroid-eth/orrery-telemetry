@@ -87,7 +87,25 @@ Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベ�
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
 
-installer は `~/.claude.json`、shell dotfile、project file を変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
+installer は `~/.claude.json` と shell dotfile を変更しません。project 内では、Tier 1 の preview 後に承認した場合だけ `CLAUDE.md` の managed marker 間を更新し、それ以外の file は変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
+
+### Managed instruction helper
+
+Tier 1 が preview / merge に使う helper は単独でも実行できます。
+
+```bash
+~/.agentstack/bin/agentstack-codex-setup --print
+~/.agentstack/bin/agentstack-claude-setup --print
+```
+
+`--print` は placeholder を解決した block と対象を表示するだけで変更しません。引数なしでは既存 file を backup し、marker 間の AgentStack block だけを install / update します。
+
+```bash
+~/.agentstack/bin/agentstack-codex-setup
+~/.agentstack/bin/agentstack-claude-setup
+```
+
+block だけを外す場合はそれぞれ `--uninstall` を使います。Codex は `$CODEX_HOME/AGENTS.md`、Claude は `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both` で選んだ `CLAUDE.md` が対象です。marker 外の既存内容は保持します。
 
 ## VERSION
 
@@ -158,6 +176,7 @@ uninstaller は `install-state.json` に記録された file、service、setting
 ## 関連文書
 
 - [Launcher と identity](launchers.md)
+- [Codex App 統合](codex-app.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
 - [第三者コンポーネント](third-party.md)

@@ -27,7 +27,7 @@
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
-| `AGENTSTACK_RUNTIME_DIR` | `~/.claude/runtime` | token、annotation、session state |
+| `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、annotation、session state |
 | `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal data root |
 | `AGENTSTACK_SIGNALS_DIR` | `$AGENTSTACK_MAIL_HOME/signals` | mail signal directory |
 | `AGENTSTACK_PORTRAITS_DIR` | 未設定 | private PNG overlay directory |
@@ -126,6 +126,35 @@ child の Codex model と reasoning effort は spawner が `--model` / `--effort
 export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidian"
 ```
 
+## Advanced helper override
+
+通常は installer が生成した path を使います。custom layout、複数 install、wrapper を運用するときだけ次を変更してください。
+
+| 環境変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `AGENTSTACK_ENV_FILE` | 未設定 | `agentstack-preregister-child` / `agentstack-reregister` が標準 `env.sh` より先に読む追加 env file |
+| `AGENTSTACK_CLAUDE_JSON` | `~/.claude.json` | Claude child 用 MCP config を作るとき、既存 agent-mail server 名を読む source |
+| `AGENTSTACK_MANAGED_AGENTS_FILE` | installer: `$AGENTSTACK_RUNTIME_DIR/managed_agents.txt` | title / spawn / cleanup helper が管理する agent 名一覧。未導入 helper の fallback は `~/.claude/managed_agents.txt` |
+| `AGENTSTACK_MCP_HEALTH_URL` | `AGENTSTACK_MCP_URL` から導出 | `session-start-reminder.sh` の liveness endpoint |
+| `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
+| `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
+| `AGENTSTACK_MAIL_WATCHER_SESSION` | `mail-watcher` | launcher が起動・再利用する watcher の tmux session 名 |
+| `AGENTSTACK_REREGISTER_PROGRAM` | `codex` | `agentstack-reregister` の第2引数を省略した場合の program |
+| `AGENTSTACK_REREGISTER_MODEL` | program ごとの既定 | `agentstack-reregister` の第3引数を省略した場合の model label |
+
+`AGENTSTACK_MCP_PROXY` が欠けても spawn 自体は継続しますが、child は shared endpoint へ fallback し、自分の owner token を明示して認証する必要があります。通常は path を差し替えるより `./scripts/install.sh` を再実行して proxy payload を復旧してください。
+
+## 内部値
+
+次は installer、spawner、proxy、test が生成・注入する値です。公開設定として手動 export しないでください。
+
+- `AGENTSTACK_SKILLS_DIR`、`AGENTSTACK_TEMPLATE_HOME`、`AGENTSTACK_REGISTER_LIB`、`AGENTSTACK_SCIENTISTS_LIB`: install layout と library injection
+- `AGENTSTACK_PROXY_AGENT_NAME`、`AGENTSTACK_PROXY_TOKEN_FILE`、`AGENTSTACK_PROXY_PROGRAM`、`AGENTSTACK_RESERVED_IDENTITY`: child session と owner credential の binding
+- `AGENTSTACK_HOME_DIR`: `spawn_child.sh` が `AGENTSTACK_HOME` から導出する shell 内部値
+- `AGENTSTACK_PYTEST`、`AGENTSTACK_RUN_AGENT_MAIL_INTEGRATION`、`AGENTSTACK_RUN_CODEX_INTEGRATION`、`AGENTSTACK_RUN_CODEX_WAKE_INTEGRATION`、`AGENTSTACK_CODEX_WAKE_SESSION_ID`: test / export の opt-in と executable injection
+
+`__AGENTSTACK_HOME__`、`__AGENTSTACK_HOOKS_DIR__`、`__AGENTSTACK_PROJECT_KEY__` のように前後が `__` の文字列は managed document の置換 token であり、環境変数ではありません。Codex Desktop Bridge 固有の生成値と tuning 値は [Codex App 統合](codex-app.md#設定)を参照してください。
+
 ## MCP endpoint の注意
 
 `AGENTSTACK_MCP_URL` は launcher / hook の接続先です。
@@ -217,5 +246,6 @@ remote access は SSH tunnel、trusted VPN、または別の認証 proxy を使�
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [Codex App 統合](codex-app.md)
 - [API reference](api.md)
 - [トラブルシューティング](troubleshooting.md)

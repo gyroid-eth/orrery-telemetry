@@ -124,7 +124,7 @@ curl -s http://127.0.0.1:8770/api/mail-watcher-health
 6. `AGENTSTACK_MAIL_ENV` に `HTTP_BEARER_TOKEN` があるか確認
 7. `agentstack-reregister '<child-name>'` で token state を確認
 
-dashboard は launcher 起動後3秒で tmux session を probe します。launchd の最小 PATH では `~/.local/bin` が欠けやすいため、spawn path はこれを先頭へ補います。
+dashboard は launcher 自身の readiness / early-death verdict を最大120秒待ち、その launcher が成功した後に exact tmux session を probe します。launchd の最小 PATH では `~/.local/bin` が欠けやすいため、spawn path はこれを先頭へ補います。
 
 Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-list も確認してください。
 
@@ -157,6 +157,45 @@ $AGENTSTACK_RUNTIME_DIR/child-agents/<name>.json
 ```
 
 token が missing / stale / wrong-owner なら親または operator へ報告してください。token を chat、log、process argument に貼らないでください。
+
+## Hook が `AGENT NOT REGISTERED` で block する
+
+Claude Code の `check-agent-registered.sh` は、現在の `session_id` で `register_agent` の成功が記録されるまで Edit / Write / Bash を block します。`/clear`、resume、compact 後は SessionStart hook の reminder を読み、既存 identity があるなら別名を作らず再登録します。
+
+優先する復旧:
+
+```bash
+AGENTSTACK_PROJECT_KEY=/absolute/project/path \
+  ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
+```
+
+成功後に自分の `fetch_inbox` を実行します。`pending-*` tmux session のままなら registration read-back と rename が完了していません。server が返した canonical name を使い、既存同名 tmux session を自動で kill しないでください。
+
+## Hook が `FILE RESERVATION REQUIRED` で block する
+
+protected root 内の Edit / Write では、hook が現在の agent の既存 reservation を renew し、なければ exact relative path の auto-acquire を試します。それでも block する場合:
+
+1. `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` が reservation を作った project と一致するか確認
+2. tmux session 名、`AGENT_NAME`、pane metadata が同じ canonical identity を指すか確認
+3. exact path または最小の glob を `file_reservation_paths` で予約
+4. conflict が返ったら holder へ agent-mail で連絡し、release または expiry を待つ
+5. token-strict server で renew が0なら `agentstack-reregister` で owner token state を復旧
+
+server 到達不能または protected root 未設定では hook は fail-open します。block を消すために guard を無効化せず、project / identity / reservation の不一致を直してください。
+
+## Spawned child が自分の inbox を読めない
+
+core doctor を実行します。
+
+```bash
+~/.agentstack/bin/agentstack-doctor
+```
+
+`child MCP proxy missing` または source tree 不足の warning が出る場合、`./scripts/install.sh` を再実行します。proxy がある child は owner token を model context に読み込まず、child-scoped stdio connection が代理で認証します。shared endpoint へ fallback した状態と proxy 経由を混在させないでください。
+
+## Codex App Bridge / cold wake が動かない
+
+Codex Desktop 統合には core doctor とは別の doctor、runtime state、失敗分類があります。[Codex App 統合の「よくある失敗」](codex-app.md#よくある失敗)を参照してください。Codex CLI session が Bridge に現れないのは意図された surface filter です。
 
 ## Dashboard に agent が二重表示される
 
@@ -216,5 +255,6 @@ manifest がない状態で推測削除は行いません。settings や mail da
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
