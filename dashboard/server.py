@@ -839,13 +839,28 @@ def _deliverables_index() -> dict:
 
 # --------------------------------------------------------------------------- #
 # Role annotations（ノードの「タスク内役割」ラベル: 人狼デモ / delegate 構図）
-#   annotations.json = {agent_name: {"role": str, "emoji": str, "group": str}}
+#   $AGENTSTACK_RUNTIME_DIR/annotations.json =
+#       {agent_name: {"role": str, "emoji": str, "group": str}}
 #   tmux/agent-mail には無い情報を read-time に重ねる。色は spawn 系統に予約済
 #   なので役割は色で塗らず、ノード下のチップ文字で表現（UI 規約に従う）。
 # --------------------------------------------------------------------------- #
-ANNOT_PATH = os.path.join(HERE, "annotations.json")
-_ANNOT_CACHE: dict = {"mtime": -1.0, "data": {}}
+ANNOT_PATH = os.path.join(RUNTIME_DIR, "annotations.json")
+LEGACY_ANNOT_PATH = os.path.join(HERE, "annotations.json")
+_ANNOT_CACHE: dict = {"path": "", "mtime": -1.0, "data": {}}
 _ANNOT_LOCK = threading.Lock()
+
+
+def _annotation_read_path() -> str:
+    """Return the canonical store, falling back to the pre-runtime location.
+
+    Once the runtime file exists it always wins.  This keeps a legacy install
+    readable until the next annotation write migrates the complete store.
+    """
+    if os.path.isfile(ANNOT_PATH):
+        return ANNOT_PATH
+    if os.path.isfile(LEGACY_ANNOT_PATH):
+        return LEGACY_ANNOT_PATH
+    return ANNOT_PATH
 
 
 def _annotations() -> dict:
@@ -853,18 +868,21 @@ def _annotations() -> dict:
 
     `{name: {...}}` の素形式と `{"agents": {name: {...}}}` ラッパの両対応。
     壊れた JSON / 不在は空 dict（チップを出さないだけで全体は落とさない）。"""
+    path = _annotation_read_path()
     try:
-        mt = os.path.getmtime(ANNOT_PATH)
+        mt = os.path.getmtime(path)
     except OSError:
-        _ANNOT_CACHE.update(mtime=-1.0, data={})
+        _ANNOT_CACHE.update(path="", mtime=-1.0, data={})
         return {}
-    if mt == _ANNOT_CACHE["mtime"]:
+    if path == _ANNOT_CACHE.get("path") and mt == _ANNOT_CACHE["mtime"]:
         return _ANNOT_CACHE["data"]
     try:
-        with open(ANNOT_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, ValueError):
-        return _ANNOT_CACHE.get("data") or {}
+        if path == _ANNOT_CACHE.get("path"):
+            return _ANNOT_CACHE.get("data") or {}
+        return {}
     data: dict[str, dict] = {}
     if isinstance(raw, dict):
         src = raw.get("agents") if isinstance(raw.get("agents"), dict) else raw
@@ -876,7 +894,7 @@ def _annotations() -> dict:
             group = str(v.get("group", "")).strip()[:24]
             if role or emoji or group:
                 data[name] = {"role": role, "emoji": emoji, "group": group}
-    _ANNOT_CACHE.update(mtime=mt, data=data)
+    _ANNOT_CACHE.update(path=path, mtime=mt, data=data)
     return data
 
 
@@ -886,15 +904,18 @@ def _write_annotation(name: str, role: str, emoji: str,
 
     role / emoji / group がすべて空な場合だけ削除する。
 
-    annotations.json をロックして read-modify-write（atomic replace）。"""
+    runtime の annotations.json をロックして read-modify-write（atomic
+    replace）。旧 dashboard path しかない場合は内容を引き継いで新 path
+    に書く。"""
     if not name or _NAME_RE.fullmatch(name) is None:
         return {"ok": False, "error": "invalid name"}
     role = (role or "").strip()[:40]
     emoji = (emoji or "").strip()[:8]
     group = (group or "").strip()[:24]
     with _ANNOT_LOCK:
+        source_path = _annotation_read_path()
         try:
-            with open(ANNOT_PATH, "r", encoding="utf-8") as f:
+            with open(source_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             if not isinstance(raw, dict):
                 raw = {}
@@ -909,11 +930,12 @@ def _write_annotation(name: str, role: str, emoji: str,
             store.pop(name, None)
             removed = True
         out = {"agents": store} if wrapped else store
+        os.makedirs(os.path.dirname(ANNOT_PATH), exist_ok=True)
         tmp = ANNOT_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
         os.replace(tmp, ANNOT_PATH)
-    _ANNOT_CACHE.update(mtime=-1.0)  # 次回 _annotations で強制再読込
+    _ANNOT_CACHE.update(path="", mtime=-1.0)  # 次回 _annotations で強制再読込
     if removed:
         return {"ok": True, "removed": name}
     return {"ok": True, "annot": {"name": name, "role": role,

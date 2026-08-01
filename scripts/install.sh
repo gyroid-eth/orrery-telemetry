@@ -221,6 +221,35 @@ create_layout() {
   run mkdir -p "$HOOKS_DIR" "$SKILLS_DIR" "$DASHBOARD_DIR" "$BIN_DIR" "$RUNTIME_DIR" "$BACKUPS_DIR"
 }
 
+migrate_legacy_annotations() {
+  local legacy_path="$DASHBOARD_DIR/annotations.json"
+  local runtime_path="$RUNTIME_DIR/annotations.json"
+  if [[ ! -f "$legacy_path" || -e "$runtime_path" ]]; then
+    return
+  fi
+  plan "migrate dashboard annotations $legacy_path -> $runtime_path"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  python3 - "$legacy_path" "$runtime_path" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+target.parent.mkdir(parents=True, exist_ok=True)
+temporary = target.with_name(target.name + ".tmp")
+shutil.copy2(source, temporary)
+os.replace(temporary, target)
+try:
+    source.unlink()
+except OSError as exc:
+    print(f"warning: migrated annotations but could not remove legacy copy {source}: {exc}", file=sys.stderr)
+PY
+}
+
 copy_tree() {
   local src="$1"
   local dst="$2"
@@ -657,6 +686,11 @@ for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude"):
     base = install_dir / rel
     if base.exists():
         for path in base.rglob("*"):
+            if path == install_dir / "dashboard" / "annotations.json":
+                # Pre-runtime releases wrote user state into the payload tree.
+                # It is migrated before payload installation and is never an
+                # installer-owned file if a best-effort cleanup leaves it here.
+                continue
             if path.is_file() or path.is_symlink():
                 owned_files.append(str(path))
 owned_files.extend([str(pathlib.Path("$ENV_FILE")), str(pathlib.Path("$MANIFEST"))])
@@ -723,6 +757,7 @@ manifest = {
         "$MAIL_HOME",
         "$MAIL_DB",
         "$MAIL_ENV",
+        "$RUNTIME_DIR",
     ],
     "purge_paths": [
         "$MAIL_DIR",
@@ -758,6 +793,7 @@ main() {
   service_kind="$(detect_service_kind)"
   say "service mode: $service_kind"
   create_layout
+  migrate_legacy_annotations
   install_payload
   render_installed_templates
   write_env_file
