@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 import shlex
 import shutil
 import socket
@@ -4014,7 +4015,36 @@ class Handler(BaseHTTPRequestHandler):
         )
 
 
+def _start_supervisor_watchdog():
+    supervisor_fd_raw = os.environ.pop("AGENTSTACK_DASHBOARD_SUPERVISOR_FD", "")
+    if not supervisor_fd_raw:
+        return
+    try:
+        supervisor_fd = int(supervisor_fd_raw)
+    except ValueError:
+        return
+    if supervisor_fd < 0:
+        return
+
+    def _watch_supervisor():
+        try:
+            while os.read(supervisor_fd, 4096):
+                pass
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(supervisor_fd)
+            except OSError:
+                pass
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=_watch_supervisor, daemon=True).start()
+
+
 def main():
+    _start_supervisor_watchdog()
+
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     subprocess.run(
         ["pkill", "-f", "ttyd -p .* tmux attach -t ="],

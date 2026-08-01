@@ -8,7 +8,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
-    <string>__INSTALL_DIR__/server.py</string>
+    <string>__INSTALL_DIR__/service_runner.py</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -17,9 +17,9 @@
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>StandardOutPath</key>
-  <string>__INSTALL_DIR__/dashboard.log</string>
+  <string>__DASHBOARD_LOG__</string>
   <key>StandardErrorPath</key>
-  <string>__INSTALL_DIR__/dashboard.log</string>
+  <string>__DASHBOARD_LOG__</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -50,6 +50,14 @@
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>
     <string>__RUNTIME_DIR__</string>
+    <key>AGENTSTACK_DASHBOARD_LOG</key>
+    <string>__DASHBOARD_LOG__</string>
+    <key>AGENTSTACK_DASHBOARD_LOG_MAX_BYTES</key>
+    <string>__DASHBOARD_LOG_MAX_BYTES__</string>
+    <key>AGENTSTACK_DASHBOARD_LOG_BACKUPS</key>
+    <string>__DASHBOARD_LOG_BACKUPS__</string>
+    <key>AGENTSTACK_DASHBOARD_RESTART_DELAY</key>
+    <string>__DASHBOARD_RESTART_DELAY__</string>
     <key>AGENTSTACK_MANAGED_AGENTS_FILE</key>
     <string>__MANAGED_AGENTS_FILE__</string>
     <key>AGENTSTACK_VAULT</key>

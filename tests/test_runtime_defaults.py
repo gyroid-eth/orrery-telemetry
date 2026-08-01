@@ -249,6 +249,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     user_skill.write_text("---\nname: user-owned\n---\n", encoding="utf-8")
     legacy_path = install_dir / "dashboard" / "annotations.json"
     legacy_path.parent.mkdir(parents=True)
+    legacy_log = install_dir / "dashboard" / "dashboard.log"
+    legacy_log.write_text("legacy dashboard crash\n", encoding="utf-8")
     legacy_data = {
         "WiseFaraday": {"role": "legacy", "emoji": "", "group": "runtime"}
     }
@@ -277,11 +279,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_TERMINAL": "auto",
     })
 
+    install_command = ["bash", str(ROOT / "scripts" / "install.sh")]
     subprocess.run(
-        [
-            "bash",
-            str(ROOT / "scripts" / "install.sh"),
-        ],
+        install_command,
         cwd=ROOT,
         env=env,
         text=True,
@@ -290,8 +290,43 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
 
     runtime_path = install_dir / "runtime" / "annotations.json"
+    runtime_log = install_dir / "runtime" / "dashboard.log"
     assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
+    assert runtime_log.read_text(encoding="utf-8") == "legacy dashboard crash\n"
     assert not legacy_path.exists()
+    assert not legacy_log.exists()
+
+    # Reinstall must keep every old operational log out of the payload tree,
+    # even when the canonical and first legacy migration targets already exist.
+    legacy_log.write_text("second legacy dashboard crash\n", encoding="utf-8")
+    subprocess.run(
+        install_command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    runtime_legacy_log = install_dir / "runtime" / "dashboard.legacy.log"
+    assert runtime_legacy_log.read_text(encoding="utf-8") == (
+        "second legacy dashboard crash\n"
+    )
+    assert not legacy_log.exists()
+
+    legacy_log.write_text("third legacy dashboard crash\n", encoding="utf-8")
+    subprocess.run(
+        install_command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    runtime_legacy_log_1 = install_dir / "runtime" / "dashboard.legacy.1.log"
+    assert runtime_legacy_log_1.read_text(encoding="utf-8") == (
+        "third legacy dashboard crash\n"
+    )
+    assert not legacy_log.exists()
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -324,6 +359,18 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         assert link.resolve() == pathlib.Path(record["target"])
         assert record["path"] in manifest["owned_files"]
     assert set(_expected_owned_dirs(install_dir)) <= set(manifest["owned_dirs"])
+    systemd_unit = (
+        home / ".config" / "systemd" / "user" / "org.agentstack.agentdashboard.service"
+    ).read_text(encoding="utf-8")
+    exec_start = next(
+        line for line in systemd_unit.splitlines() if line.startswith("ExecStart=")
+    )
+    assert exec_start.split()[-1] == str(install_dir / "dashboard" / "service_runner.py")
+    assert "Restart=always" in systemd_unit
+    assert (
+        f'Environment="AGENTSTACK_DASHBOARD_LOG={install_dir}/runtime/dashboard.log"'
+        in systemd_unit
+    )
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
@@ -371,6 +418,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "runtime",
         "runtime/annotations.json",
         "runtime/agent_token_WiseFaraday",
+        "runtime/dashboard.log",
+        "runtime/dashboard.legacy.log",
+        "runtime/dashboard.legacy.1.log",
     }
     assert not (install_dir / "VERSION").exists()
     assert not (install_dir / "integrations").exists()

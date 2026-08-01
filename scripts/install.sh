@@ -118,6 +118,10 @@ MAIL_DB="${AGENTSTACK_MAIL_DB:-$MAIL_DIR/storage.sqlite3}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$MAIL_DIR/.env}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
+DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-$RUNTIME_DIR/dashboard.log}"
+DASHBOARD_LOG_MAX_BYTES="${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-5242880}"
+DASHBOARD_LOG_BACKUPS="${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-3}"
+DASHBOARD_RESTART_DELAY="${AGENTSTACK_DASHBOARD_RESTART_DELAY:-5}"
 LABEL="$LABEL_PREFIX.agentdashboard"
 URL="http://127.0.0.1:$PORT/"
 
@@ -248,6 +252,43 @@ try:
     source.unlink()
 except OSError as exc:
     print(f"warning: migrated annotations but could not remove legacy copy {source}: {exc}", file=sys.stderr)
+PY
+}
+
+migrate_legacy_dashboard_log() {
+  local legacy_path="$DASHBOARD_DIR/dashboard.log"
+  local target_path="$DASHBOARD_LOG"
+  local suffix=1
+  if [[ ! -f "$legacy_path" ]]; then
+    return
+  fi
+  if [[ -e "$target_path" ]]; then
+    target_path="$RUNTIME_DIR/dashboard.legacy.log"
+  fi
+  while [[ -e "$target_path" ]]; do
+    target_path="$RUNTIME_DIR/dashboard.legacy.$suffix.log"
+    suffix=$((suffix + 1))
+  done
+  plan "migrate dashboard log $legacy_path -> $target_path"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  python3 - "$legacy_path" "$target_path" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+target.parent.mkdir(parents=True, exist_ok=True)
+try:
+    os.replace(source, target)
+except OSError:
+    temporary = target.with_name(target.name + ".tmp")
+    shutil.copy2(source, temporary)
+    os.replace(temporary, target)
+    source.unlink()
 PY
 }
 
@@ -529,6 +570,10 @@ values = {
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
+    "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
+    "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
+    "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
+    "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
     "AGENTSTACK_VAULT": "",
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
     "AGENTSTACK_PATH": "$PATH_VALUE",
@@ -607,6 +652,10 @@ repl = {
     "__DELIVERABLE_ROOTS__": "$DELIVERABLE_ROOTS",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
+    "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
+    "__DASHBOARD_LOG_MAX_BYTES__": "$DASHBOARD_LOG_MAX_BYTES",
+    "__DASHBOARD_LOG_BACKUPS__": "$DASHBOARD_LOG_BACKUPS",
+    "__DASHBOARD_RESTART_DELAY__": "$DASHBOARD_RESTART_DELAY",
     "__MANAGED_AGENTS_FILE__": "$MANAGED_AGENTS_FILE",
     "__VAULT__": "",
     "__PATH__": "$PATH_VALUE",
@@ -649,6 +698,10 @@ env = {
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
+    "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
+    "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
+    "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
+    "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
     "AGENTSTACK_VAULT": "",
     "PATH": "$PATH_VALUE",
 }
@@ -666,7 +719,7 @@ lines = [
 for key, value in env.items():
     lines.append(f'Environment="{key}={esc(value)}"')
 lines.extend([
-    f"ExecStart={esc('$PYTHON_BIN')} {esc('$DASHBOARD_DIR/server.py')}",
+    f"ExecStart={esc('$PYTHON_BIN')} {esc('$DASHBOARD_DIR/service_runner.py')}",
     "Restart=always",
     "RestartSec=5",
     "",
@@ -707,7 +760,8 @@ start_service() {
         (
           # shellcheck disable=SC1090
           . "$ENV_FILE"
-          nohup "$PYTHON_BIN" "$DASHBOARD_DIR/server.py" >> "$DASHBOARD_DIR/dashboard.log" 2>&1 &
+          AGENTSTACK_DASHBOARD_SELF_RESTART=1 \
+            nohup "$PYTHON_BIN" "$DASHBOARD_DIR/service_runner.py" >> "$DASHBOARD_LOG" 2>&1 &
           echo $! > "$SERVICE_PATH"
         )
       fi
@@ -825,6 +879,10 @@ manifest = {
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
         "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+        "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
+        "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
+        "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
+        "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
         "AGENTSTACK_MAIL_DB": "$MAIL_DB",
         "AGENTSTACK_MAIL_ENV": "$MAIL_ENV",
         "AGENTSTACK_MAIL_HOME": "$MAIL_HOME",
@@ -853,6 +911,7 @@ manifest = {
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
         "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+        "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
         "Installer does not modify Claude MCP user config.",
     ],
 }
@@ -880,6 +939,7 @@ main() {
   say "service mode: $service_kind"
   create_layout
   migrate_legacy_annotations
+  migrate_legacy_dashboard_log
   install_payload
   install_claude_skill_links
   render_installed_templates
@@ -894,6 +954,7 @@ main() {
   else
     say "Install complete: $URL"
     say "Manifest: $MANIFEST"
+    say "Dashboard log: $DASHBOARD_LOG"
     say "Run doctor: $BIN_DIR/agentstack-doctor"
     if [[ "$TIER" != "tier0" ]]; then
       say "Recommended managed setup:"

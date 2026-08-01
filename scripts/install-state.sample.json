@@ -129,6 +129,10 @@
     "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
+    "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
+    "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "5242880",
+    "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
+    "AGENTSTACK_DASHBOARD_RESTART_DELAY": "5",
     "AGENTSTACK_MAIL_DB": "/home/alice/mcp_agent_mail/storage.sqlite3",
     "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env",
     "AGENTSTACK_MAIL_HOME": "/home/alice/.mcp_agent_mail",
@@ -221,6 +225,7 @@
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
     "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+    "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
     "Installer does not modify Claude MCP user config."
   ]
 }

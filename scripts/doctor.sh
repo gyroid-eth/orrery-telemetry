@@ -70,10 +70,20 @@ else
   status=1
 fi
 
-if [[ -f "$INSTALL_DIR/dashboard/server.py" ]]; then
+if [[ -f "$INSTALL_DIR/dashboard/server.py" && \
+      -f "$INSTALL_DIR/dashboard/service_runner.py" ]]; then
   echo "ok: dashboard installed"
 else
   echo "missing: dashboard under $INSTALL_DIR/dashboard" >&2
+  status=1
+fi
+
+DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}/dashboard.log}"
+if [[ -f "$DASHBOARD_LOG" ]]; then
+  echo "ok: dashboard log $DASHBOARD_LOG"
+else
+  echo "missing: dashboard log $DASHBOARD_LOG" >&2
+  echo "         the dashboard service may not have started; inspect the service manager" >&2
   status=1
 fi
 
