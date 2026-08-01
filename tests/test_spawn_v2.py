@@ -13,10 +13,19 @@ import pytest
 import dashboard.server as server
 
 
-def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
-    path = tmp_path / "annotations.json"
+def _set_annotation_paths(monkeypatch, tmp_path):
+    path = tmp_path / "runtime" / "annotations.json"
+    legacy = tmp_path / "dashboard" / "annotations.json"
     monkeypatch.setattr(server, "ANNOT_PATH", str(path))
-    monkeypatch.setattr(server, "_ANNOT_CACHE", {"mtime": -1.0, "data": {}})
+    monkeypatch.setattr(server, "LEGACY_ANNOT_PATH", str(legacy))
+    monkeypatch.setattr(
+        server, "_ANNOT_CACHE", {"path": "", "mtime": -1.0, "data": {}}
+    )
+    return path, legacy
+
+
+def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
+    path, _legacy = _set_annotation_paths(monkeypatch, tmp_path)
 
     result = server._write_annotation("WiseFaraday", "", "", "runtime-audit")
 
@@ -28,18 +37,71 @@ def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
 
 
 def test_annotation_is_removed_only_when_all_fields_are_empty(monkeypatch, tmp_path):
-    path = tmp_path / "annotations.json"
+    path, _legacy = _set_annotation_paths(monkeypatch, tmp_path)
+    path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps({"WiseFaraday": {"role": "", "emoji": "", "group": "audit"}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "ANNOT_PATH", str(path))
-    monkeypatch.setattr(server, "_ANNOT_CACHE", {"mtime": -1.0, "data": {}})
 
     result = server._write_annotation("WiseFaraday", "", "", "")
 
     assert result == {"ok": True, "removed": "WiseFaraday"}
     assert json.loads(path.read_text(encoding="utf-8")) == {}
+
+
+def test_legacy_annotation_is_read_then_migrated_on_write(monkeypatch, tmp_path):
+    path, legacy = _set_annotation_paths(monkeypatch, tmp_path)
+    legacy.parent.mkdir(parents=True)
+    legacy_data = {
+        "WiseFaraday": {"role": "auditor", "emoji": "", "group": "runtime"},
+        "ProOpus": {"role": "parent", "emoji": "", "group": "runtime"},
+    }
+    legacy.write_text(json.dumps(legacy_data), encoding="utf-8")
+
+    assert server._annotations() == legacy_data
+
+    result = server._write_annotation(
+        "WiseFaraday", "runtime maintainer", "", "runtime"
+    )
+
+    assert result["ok"] is True
+    migrated = json.loads(path.read_text(encoding="utf-8"))
+    assert migrated["WiseFaraday"]["role"] == "runtime maintainer"
+    assert migrated["ProOpus"] == legacy_data["ProOpus"]
+    assert json.loads(legacy.read_text(encoding="utf-8")) == legacy_data
+    assert server._annotations() == migrated
+
+
+def test_new_annotation_path_wins_over_legacy(monkeypatch, tmp_path):
+    path, legacy = _set_annotation_paths(monkeypatch, tmp_path)
+    path.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"WiseFaraday": {"role": "new", "emoji": "", "group": ""}}),
+        encoding="utf-8",
+    )
+    legacy.write_text(
+        json.dumps({"WiseFaraday": {"role": "old", "emoji": "", "group": ""}}),
+        encoding="utf-8",
+    )
+
+    assert server._annotations()["WiseFaraday"]["role"] == "new"
+    server._write_annotation("WiseFaraday", "updated", "", "")
+    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"]["role"] == "updated"
+
+
+def test_annotation_null_case_creates_runtime_store(monkeypatch, tmp_path):
+    path, legacy = _set_annotation_paths(monkeypatch, tmp_path)
+
+    assert server._annotations() == {}
+    assert not path.exists()
+    assert not legacy.exists()
+
+    result = server._write_annotation("WiseFaraday", "maintainer", "", "")
+
+    assert result["ok"] is True
+    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"]["role"] == "maintainer"
 
 
 def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import socket
 import subprocess
 
 
@@ -32,6 +33,22 @@ def test_runtime_fallbacks_live_under_install_root(tmp_path):
         check=True,
     )
     assert result.stdout.strip() == str(tmp_path / ".agentstack" / "runtime")
+
+    result = subprocess.run(
+        [
+            "python3",
+            "-c",
+            "from dashboard.server import ANNOT_PATH; print(ANNOT_PATH)",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == str(
+        tmp_path / ".agentstack" / "runtime" / "annotations.json"
+    )
 
     result = subprocess.run(
         [
@@ -155,6 +172,82 @@ def test_install_tier_options_are_mutually_exclusive(tmp_path):
         assert result.returncode == 2
         assert "mutually exclusive" in result.stderr
         assert not (tmp_path / ".agentstack").exists()
+
+
+def test_installer_migrates_legacy_annotations_and_uninstall_retains_them(tmp_path):
+    env = _clean_env(tmp_path / "home")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "launchctl": "#!/bin/sh\nexit 0\n",
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    install_dir = tmp_path / "install"
+    legacy_path = install_dir / "dashboard" / "annotations.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_data = {
+        "WiseFaraday": {"role": "legacy", "emoji": "", "group": "runtime"}
+    }
+    legacy_path.write_text(json.dumps(legacy_data), encoding="utf-8")
+    mail_dir = tmp_path / "mail"
+    (mail_dir / ".git").mkdir(parents=True)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test.annotations",
+    })
+
+    subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "install.sh"),
+            "--dashboard-only",
+            "--terminal",
+            "none",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    runtime_path = install_dir / "runtime" / "annotations.json"
+    assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
+    assert not legacy_path.exists()
+    manifest = json.loads(
+        (install_dir / "install-state.json").read_text(encoding="utf-8")
+    )
+    assert str(install_dir / "runtime") in manifest["retained_paths"]
+    assert str(install_dir / "runtime") in manifest["purge_paths"]
+    assert str(legacy_path) not in manifest["owned_files"]
+
+    subprocess.run(
+        [
+            "bash",
+            str(install_dir / "bin" / "agentstack-uninstall"),
+            "--install-dir",
+            str(install_dir),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
 
 
 def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
