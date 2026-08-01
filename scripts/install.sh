@@ -112,6 +112,7 @@ BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
 CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-$MAIL_DIR/storage.sqlite3}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$MAIL_DIR/.env}"
@@ -337,6 +338,61 @@ install_payload() {
       "$BIN_DIR/agentstack-preregister-child" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup"
   fi
+}
+
+symlink_points_to() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import pathlib
+import sys
+
+link = pathlib.Path(sys.argv[1])
+expected = pathlib.Path(sys.argv[2])
+try:
+    target = pathlib.Path(os.readlink(link))
+except OSError:
+    raise SystemExit(1)
+if not target.is_absolute():
+    target = link.parent / target
+raise SystemExit(0 if target.resolve(strict=False) == expected.resolve(strict=False) else 1)
+PY
+}
+
+install_claude_skill_links() {
+  if [[ "$TIER" == "tier0" ]]; then
+    plan "skip Claude skill links for --dashboard-only"
+    return
+  fi
+
+  if [[ -e "$CLAUDE_SKILLS_DIR" && ! -d "$CLAUDE_SKILLS_DIR" ]]; then
+    warn "Claude skills path exists but is not a directory; leaving it untouched: $CLAUDE_SKILLS_DIR"
+    return
+  fi
+  plan "create Claude standard skills directory $CLAUDE_SKILLS_DIR"
+  run mkdir -p "$CLAUDE_SKILLS_DIR"
+
+  local discovery_root="$SKILLS_DIR"
+  if [[ "$DRY_RUN" == true ]]; then
+    discovery_root="$REPO_ROOT/skills"
+  fi
+  local skill_file skill_name source_path link_path
+  while IFS= read -r -d '' skill_file; do
+    skill_name="$(basename "$(dirname "$skill_file")")"
+    source_path="$SKILLS_DIR/$skill_name"
+    link_path="$CLAUDE_SKILLS_DIR/$skill_name"
+
+    if [[ -e "$link_path" || -L "$link_path" ]]; then
+      if [[ -L "$link_path" ]] && symlink_points_to "$link_path" "$source_path"; then
+        plan "reuse Claude skill link $link_path -> $source_path"
+      else
+        warn "Claude skill '$skill_name' already exists; leaving it untouched: $link_path"
+      fi
+      continue
+    fi
+
+    plan "link Claude skill $link_path -> $source_path"
+    run ln -s "$source_path" "$link_path"
+  done < <(find "$discovery_root" -mindepth 2 -maxdepth 2 -name SKILL.md -type f -print0)
 }
 
 render_installed_templates() {
@@ -681,6 +737,7 @@ out = pathlib.Path(sys.argv[1])
 service_kind = sys.argv[2]
 service_path = sys.argv[3]
 install_dir = pathlib.Path("$INSTALL_DIR")
+claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
 for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrations"):
     base = install_dir / rel
@@ -704,6 +761,20 @@ settings_merge = None
 if merge_result_path.exists():
     settings_merge = json.loads(merge_result_path.read_text(encoding="utf-8"))
     owned_files.append(str(merge_result_path))
+skill_links = []
+skills_root = install_dir / "skills"
+if skills_root.is_dir():
+    for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+        source = skill_file.parent
+        link = claude_skills_dir / source.name
+        if not link.is_symlink():
+            continue
+        raw_target = pathlib.Path(os.readlink(link))
+        target = raw_target if raw_target.is_absolute() else link.parent / raw_target
+        if target.resolve(strict=False) != source.resolve(strict=False):
+            continue
+        skill_links.append({"path": str(link), "target": str(source)})
+        owned_files.append(str(link))
 owned_files = sorted(dict.fromkeys(owned_files))
 owned_dir_paths = {
     install_dir / rel
@@ -763,6 +834,7 @@ manifest = {
     },
     "owned_files": owned_files,
     "owned_dirs": owned_dirs,
+    "skill_links": skill_links,
     "services": services,
     "backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
     "settings_backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
@@ -780,7 +852,7 @@ manifest = {
     ],
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-        "Tier1 user-settings merge records both hook entries and skillsDirectories additions.",
+        "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
         "Installer does not modify Claude MCP user config.",
     ],
 }
@@ -809,6 +881,7 @@ main() {
   create_layout
   migrate_legacy_annotations
   install_payload
+  install_claude_skill_links
   render_installed_templates
   write_env_file
   ensure_agent_mail

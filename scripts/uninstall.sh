@@ -167,7 +167,33 @@ owned_files = [safe_path(p) for p in data.get("owned_files", [])]
 if manifest_path not in owned_files:
     owned_files.append(manifest_path)
 
+skill_link_paths = set()
+for record in data.get("skill_links", []):
+    if not isinstance(record, dict):
+        raise RuntimeError("manifest skill_links entries must be objects")
+    raw_path = record.get("path")
+    raw_target = record.get("target")
+    if not isinstance(raw_path, str) or not isinstance(raw_target, str):
+        raise RuntimeError("manifest skill_links entries require string path and target")
+    path = safe_path(raw_path)
+    target = pathlib.Path(raw_target).expanduser().resolve(strict=False)
+    skill_link_paths.add(path)
+    if not path.is_symlink():
+        if path.exists():
+            print(f"kept modified skill path: {path}", file=sys.stderr)
+        continue
+    raw_actual = pathlib.Path(os.readlink(path))
+    actual = raw_actual if raw_actual.is_absolute() else path.parent / raw_actual
+    if actual.resolve(strict=False) != target:
+        print(f"kept retargeted skill link: {path}", file=sys.stderr)
+        continue
+    say("remove owned skill link", path)
+    if not dry_run:
+        path.unlink()
+
 for path in owned_files:
+    if path in skill_link_paths:
+        continue
     say("remove file", path)
     if not dry_run:
         try:

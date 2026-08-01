@@ -79,6 +79,28 @@ def test_merge_installs_permissions_into_fresh_settings():
         assert any(str(tmpdir / "bin") in rule for rule in allow), allow
         assert "__AGENTSTACK_BIN_DIR__" not in json.dumps(written)
         assert detail["permissions"]["added"]["allow"], detail
+        assert "skillsDirectories" not in written
+        assert detail["skills_dirs"] == {
+            "added": [], "skipped_existing": [], "removed_legacy": []
+        }
+
+
+def test_merge_removes_only_legacy_agentstack_skills_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        legacy = str(tmpdir / "skills")
+        user_skills = str(tmpdir / "user-skills")
+        existing = {
+            "theme": "dark",
+            "skillsDirectories": [legacy, user_skills],
+        }
+        written, detail, rc = _merge(tmpdir, existing)
+        assert rc == 0, detail
+        assert written["theme"] == "dark"
+        assert written["skillsDirectories"] == [user_skills]
+        assert detail["skills_dirs"] == {
+            "added": [], "skipped_existing": [], "removed_legacy": [legacy]
+        }
 
 
 def test_merge_preserves_user_rules_and_is_idempotent():
@@ -115,6 +137,29 @@ def test_remove_takes_back_only_what_the_installer_added():
         permissions = written_after.get("permissions", {})
         assert permissions.get("allow") == ["Bash(git status:*)"], permissions
         assert permissions.get("deny") == ["Bash(rm:*)"], permissions
+
+
+def test_remove_keeps_backward_compatibility_with_old_skills_manifest():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        legacy = str(tmpdir / "skills")
+        user_skills = str(tmpdir / "user-skills")
+        manifest = tmpdir / "manifest.json"
+        manifest.write_text(json.dumps({"settings_merge": {
+            "added_entries": [],
+            "skills_dirs": {"added": [legacy], "skipped_existing": []},
+            "permissions": {"added": {"allow": [], "deny": []}},
+        }}), encoding="utf-8")
+
+        written, detail, rc = _merge(
+            tmpdir,
+            {"skillsDirectories": [legacy, user_skills], "theme": "dark"},
+            "--remove",
+            manifest=manifest,
+        )
+        assert rc == 0, detail
+        assert written == {"skillsDirectories": [user_skills], "theme": "dark"}
+        assert detail["skills_dirs"]["removed"] == [legacy]
 
 
 def test_bin_token_without_bin_dir_is_an_error_not_a_literal():

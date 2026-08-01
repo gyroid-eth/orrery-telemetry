@@ -244,6 +244,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
 
     home = pathlib.Path(env["HOME"])
     install_dir = home / ".agentstack"
+    user_skill = home / ".claude" / "skills" / "user-owned" / "SKILL.md"
+    user_skill.parent.mkdir(parents=True)
+    user_skill.write_text("---\nname: user-owned\n---\n", encoding="utf-8")
     legacy_path = install_dir / "dashboard" / "annotations.json"
     legacy_path.parent.mkdir(parents=True)
     legacy_data = {
@@ -307,6 +310,19 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert str(
         install_dir / "integrations/codex_app/src/agentstack_codex_app/mcp_server.py"
     ) in manifest["owned_files"]
+    expected_skill_links = [
+        {
+            "path": str(home / ".claude" / "skills" / name),
+            "target": str(install_dir / "skills" / name),
+        }
+        for name in ("delegate", "log")
+    ]
+    assert manifest["skill_links"] == expected_skill_links
+    for record in expected_skill_links:
+        link = pathlib.Path(record["path"])
+        assert link.is_symlink()
+        assert link.resolve() == pathlib.Path(record["target"])
+        assert record["path"] in manifest["owned_files"]
     assert set(_expected_owned_dirs(install_dir)) <= set(manifest["owned_dirs"])
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
@@ -316,7 +332,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env = _normalize_sample_paths(manifest["env"], manifest)
     normalized_env["AGENTSTACK_PORT"] = "8770"
     assert normalized_env == sample["env"]
-    for key in ("retained_paths", "purge_paths", "notes", "services"):
+    for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
     normalized_expected_dirs = _normalize_sample_paths(
         _expected_owned_dirs(install_dir), manifest
@@ -358,6 +374,15 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     }
     assert not (install_dir / "VERSION").exists()
     assert not (install_dir / "integrations").exists()
+    assert not (home / ".claude" / "skills" / "delegate").exists()
+    assert not (home / ".claude" / "skills" / "log").exists()
+    claude_remaining = {
+        str(path.relative_to(home / ".claude"))
+        for path in (home / ".claude").rglob("*")
+    }
+    assert claude_remaining == {
+        "skills", "skills/user-owned", "skills/user-owned/SKILL.md"
+    }
 
 
 def test_install_state_sample_settings_merge_matches_generator(tmp_path):
@@ -408,6 +433,72 @@ def test_install_state_sample_settings_merge_matches_generator(tmp_path):
     assert generated == sample["settings_merge"]
     assert sample["backups"] == [sample["settings_merge"]["backup"]]
     assert sample["settings_backups"] == sample["backups"]
+
+
+def test_installer_preserves_conflicting_user_skill(tmp_path):
+    env = _clean_env(tmp_path / "home")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "systemctl": "#!/bin/sh\nexit 0\n",
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    home = pathlib.Path(env["HOME"])
+    install_dir = home / ".agentstack"
+    user_delegate = home / ".claude" / "skills" / "delegate" / "SKILL.md"
+    user_delegate.parent.mkdir(parents=True)
+    original = "---\nname: delegate\n---\n\nUser-owned delegate.\n"
+    user_delegate.write_text(original, encoding="utf-8")
+    mail_dir = home / "mcp_agent_mail"
+    (mail_dir / ".git").mkdir(parents=True)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    project_dir = home / "project"
+    project_dir.mkdir()
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_PROJECT_KEY": str(project_dir),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "install.sh")],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=True,
+    )
+    assert "already exists; leaving it untouched" in result.stderr
+    assert user_delegate.read_text(encoding="utf-8") == original
+    assert not user_delegate.parent.is_symlink()
+    manifest = json.loads((install_dir / "install-state.json").read_text(encoding="utf-8"))
+    assert all(record["path"] != str(user_delegate.parent) for record in manifest["skill_links"])
+    log_link = home / ".claude" / "skills" / "log"
+    assert log_link.is_symlink()
+    user_log = home / ".claude" / "skills" / "user-log"
+    user_log.mkdir()
+    log_link.unlink()
+    log_link.symlink_to(user_log, target_is_directory=True)
+
+    uninstall = subprocess.run(
+        [
+            "bash", str(install_dir / "bin" / "agentstack-uninstall"),
+            "--install-dir", str(install_dir),
+        ],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=True,
+    )
+    assert user_delegate.read_text(encoding="utf-8") == original
+    assert "kept retargeted skill link" in uninstall.stderr
+    assert log_link.is_symlink()
+    assert log_link.resolve() == user_log
 
 
 def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
