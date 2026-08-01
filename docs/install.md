@@ -165,7 +165,9 @@ uninstaller は `install-state.json` に記録された file、service、setting
 - merge した Claude settings entry を構造的に除去
 - AgentStack 所有 file を削除
 - 空になった所有 directory だけを削除
-- agent-mail clone、DB、`.env`、runtime log は既定で保持
+- agent-mail clone、DB、`.env`、runtime directory（annotation、token、session state / log）は既定で保持
+
+旧 `dashboard/annotations.json` は user state として payload の owned file に含めません。upgrade 時は installer が payload copy の前に `$AGENTSTACK_RUNTIME_DIR/annotations.json` へ自動移行し、通常の uninstall 後も runtime directory に保持します。
 
 保持データも削除する場合:
 
@@ -173,7 +175,7 @@ uninstaller は `install-state.json` に記録された file、service、setting
 ~/.agentstack/bin/agentstack-uninstall --purge-data
 ```
 
-`--purge-data` も manifest に記録された exact path だけを対象にし、home directory や未記録 path は削除しません。
+`--purge-data` も manifest に記録された exact path だけを対象にし、home directory や未記録 path は削除しません。runtime directory は purge path に含まれるため、この option では annotation も削除されます。
 
 ## 関連文書
 
