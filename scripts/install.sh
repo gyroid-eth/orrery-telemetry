@@ -746,12 +746,12 @@ start_service() {
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       fi
       # launchctl's enabled/disabled override persists independently of the
-      # plist. Apply it before bootstrap so the live job is loaded with its
-      # RunAtLoad/KeepAlive conditions active, not merely enabled afterward.
+      # plist, so explicitly clear a stale disabled override during install.
       run launchctl enable "gui/$(id -u)/$LABEL"
       run launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH"
-      # RunAtLoad should start the service, but kickstart makes installation
-      # deterministic and the HTTP health check below verifies actual service.
+      # kickstart is the explicit activation demand. In an on-demand-only GUI
+      # domain, RunAtLoad/KeepAlive may be deferred even after bootstrap. The
+      # HTTP health check below verifies the service rather than its metadata.
       run launchctl kickstart "gui/$(id -u)/$LABEL"
       ;;
     systemd-user)

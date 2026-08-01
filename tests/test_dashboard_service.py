@@ -63,7 +63,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert "AGENTSTACK_DASHBOARD_SELF_RESTART=1" in installer
 
 
-def test_launchd_install_enables_before_bootstrap_then_kickstarts_and_checks_health(
+def test_launchd_install_explicitly_kickstarts_before_checking_health(
     tmp_path,
 ):
     fake_bin = tmp_path / "fake-bin"
@@ -102,11 +102,11 @@ def test_launchd_install_enables_before_bootstrap_then_kickstarts_and_checks_hea
         check=True,
     )
     output = result.stdout
-    enable = output.index("launchctl enable gui/")
+    assert "launchctl enable gui/" in output
     bootstrap = output.index("launchctl bootstrap gui/")
     kickstart = output.index("launchctl kickstart gui/")
     health = output.index("verify dashboard API responds")
-    assert enable < bootstrap < kickstart < health
+    assert bootstrap < kickstart < health
 
 
 def test_runner_records_sigkill_and_self_restarts_for_nohup(tmp_path):
