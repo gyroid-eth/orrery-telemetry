@@ -224,6 +224,7 @@ hidden iframe が tmux / SQLite を継続 polling しないための契約です
 
 ## 関連文書
 
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [API reference](api.md)
 - [設定](configuration.md)

@@ -176,6 +176,7 @@ uninstaller は `install-state.json` に記録された file、service、setting
 ## 関連文書
 
 - [Launcher と identity](launchers.md)
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)

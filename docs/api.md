@@ -531,6 +531,7 @@ spawn は fixed `http://127.0.0.1:8765/mcp` を使い、`AGENTSTACK_MAIL_ENV` �
 
 ## 関連文書
 
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)

@@ -95,6 +95,7 @@ The Japanese documentation is canonical. English versions of the detailed guides
 | --- | --- |
 | [Installation](docs/install.md) | Install tiers, settings merge, VERSION, TCC, upgrade, and uninstall |
 | [Launchers and identity](docs/launchers.md) | `agent-start`, naming, tokens, fail-closed checks, and `CLAUDECODE` |
+| [Hooks and operational helpers](docs/hooks.md) | Five Claude event hooks, six launcher/watcher helpers, triggers, blocking, and cleanup |
 | [Codex App integration](docs/codex-app.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
 | [Dashboard](docs/dashboard.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
 | [API reference](docs/api.md) | Every route, query/request fields, and response schemas |

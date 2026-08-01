@@ -2,7 +2,7 @@
 
 > English version: planned.
 
-[前: インストール](install.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
+[前: インストール](install.md) · [README に戻る](../README.md) · [次: Hooks](hooks.md)
 
 ## 起動コマンド
 
@@ -149,7 +149,7 @@ tmux send-keys -t "$session" C-m
 
 Codex では `Enter` keysym が submit にならない場合があるため `C-m` を使います。watcher は bare shell への誤注入を避け、tmux call を timeout 付き worker で実行します。
 
-## Skills と file reservation
+## Skills（2件）と file reservation
 
 installer は次の skill を `~/.agentstack/skills` へ配置します。
 
@@ -159,6 +159,15 @@ installer は次の skill を `~/.agentstack/skills` へ配置します。
 ### `/delegate`
 
 `/delegate` は child を起動するだけの shortcut ではありません。
+
+| 項目 | 内容 |
+| --- | --- |
+| トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
+| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--worktree] [--worktree-base <rev>]` |
+| 必須前提 | 親の agent-mail identity と正本 project key。編集 task では対象 resource 宣言と reservation |
+| 任意前提 | `--worktree` には git repository、dashboard annotation には dashboard service |
+
+親 agent は task を渡して終了せず、scope と risk の決定、reservation、monitoring、成果物の検証に責任を持ちます。`--codex` で Codex child、`--model` で許可済み model、`--dir` で child の cwd を選びます。
 
 1. 対象 resource、排他性、失敗点、可逆性から risk と監視頻度を決める
 2. `agentstack-preregister-child` で child-owned token と canonical name を作る
@@ -173,6 +182,13 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 
 ### `/log`
 
+| 項目 | 内容 |
+| --- | --- |
+| トリガー | session log の作成、現在作業の要約、決定・変更・検証の保存を依頼されたとき |
+| 基本形 | `/log <theme> [project]` |
+| 必須前提 | theme。project が自明でなく、安全に推定できない場合だけ確認 |
+| 任意前提 | Obsidian mode には `AGENTSTACK_OBSIDIAN_APP` と vault 内を指す `AGENTSTACK_PROJECT_KEY` |
+
 `/log` は `AGENTSTACK_OBSIDIAN_APP` と `AGENTSTACK_PROJECT_KEY` が揃い、project が vault 内にある場合だけ Obsidian mode を使います。既存の project `logs/` と daily note 規約があればそこへ接続し、規約が見つからなければ private な directory 構成を推測しません。
 
 それ以外は:
@@ -183,24 +199,15 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 
 へ書きます。log は transcript ではなく、Goal、Decisions、Work Performed、Verification、Related Notes、Next Actions を中心にします。
 
-### Hook の役割
-
-| Hook / helper | 役割 |
-| --- | --- |
-| `session-start-reminder.sh` | startup / resume / clear / compact で identity を env → pane metadata → tmux session の順に解決し、owner token があれば同名再登録。別名へ分岐しない |
-| `check-agent-registered.sh` + `mark-agent-registered.sh` | Claude Code の Edit / Write / Bash を登録完了まで block。成功後は session flag、session index、pending tmux rename を更新 |
-| `check-file-reservation.sh` | protected root 内の Edit / Write で reservation を renew。未取得なら exact path の auto-acquire を試し、競合または取得失敗なら block |
-| `resolve-agent-name.sh` + `set-ghostty-title.sh` | pane と identity の対応を記録し、`pending-*` session だけを canonical name へ rename。既存同名 session を kill せず fail-closed |
-| `watch_agent_mail_signals.sh` | signal file を削除せず、exact-match の tmux session へ通知。fswatch または polling、delivery lease、retry state で重複注入を抑制 |
-| `monitor_child_agent.sh` | child の shell return、permission prompt、stasis、任意の danger pattern を一回分検査し、状態を exit code で親へ返す |
-| `cleanup-child-agent.sh` | launcher の REPL command から戻った child の reservation、remote identity、credential、MCP config を best-effort cleanup |
-
-`cleanup-child-agent.sh` は crash / resume でも起こりうる Claude Code `SessionEnd` hook には登録されません。remote identity の retire を暗黙の lifecycle event に結びつけないためです。
+### Hook と reservation enforcement
 
 Claude Code は `check-file-reservation.sh` の PreToolUse hook で `Edit` / `Write` を hard block します。Codex には同等 hook がないため、managed `~/.codex/AGENTS.md` が reserve / renew / release discipline を指示します。registry は共通なので、Claude と Codex の reservation は相互に見えます。
 
+repository にある11件の hook / helper の発火タイミング、caller、block 条件、cleanup lifecycle は [Hooks と運用 helper](hooks.md)を参照してください。
+
 ## 関連文書
 
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)

@@ -95,6 +95,7 @@ dashboard の全表示・操作は local HTTP API から利用できます。por
 | --- | --- |
 | [インストール](docs/install.md) | install tier、settings merge、VERSION、TCC、upgrade / uninstall |
 | [Launcher と identity](docs/launchers.md) | `agent-start`、命名、token、fail-closed、`CLAUDECODE` |
+| [Hooks と運用 helper](docs/hooks.md) | Claude event hook 5件、launcher / watcher helper 6件、発火条件、block / cleanup |
 | [Codex App 統合](docs/codex-app.md) | Codex Desktop plugin、Bridge、session-bound MCP、inbox 通知、cold wake |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
 | [API reference](docs/api.md) | 全 route、query / request、response schema |

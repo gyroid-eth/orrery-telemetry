@@ -255,6 +255,7 @@ manifest がない状態で推測削除は行いません。settings や mail da
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
