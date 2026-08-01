@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely merge claude-agent-stack hooks and skills into Claude Code settings."""
+"""Safely merge claude-agent-stack hooks and permissions into Claude settings."""
 
 from __future__ import annotations
 
@@ -30,13 +30,16 @@ class MergeError(RuntimeError):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Safely merge or remove claude-agent-stack hook entries and skills directories.",
+        description="Safely merge or remove claude-agent-stack settings entries.",
     )
     parser.add_argument("--settings", required=True, help="Claude settings.json path")
     parser.add_argument("--template", help="settings.template.json path")
     parser.add_argument("--hooks-dir", required=True, help="Installed hooks directory")
     parser.add_argument("--bin-dir", help="Installed bin directory (for permission rules)")
-    parser.add_argument("--skills-dir", help="Installed skills directory")
+    parser.add_argument(
+        "--skills-dir",
+        help="Installed skills directory (used to remove the legacy unsupported setting)",
+    )
     parser.add_argument("--backup-dir", required=True, help="Backup root directory")
     parser.add_argument("--manifest", help="Manifest whose recorded entries constrain --remove")
     parser.add_argument("--result-json", help="Write machine-readable operation result")
@@ -365,26 +368,13 @@ def skills_dir_key(skills_dir: pathlib.Path) -> str:
     return str(skills_dir)
 
 
-def ensure_target_skills_directories(settings: dict[str, Any]) -> list[str]:
-    skills_dirs = settings.setdefault("skillsDirectories", [])
-    if not isinstance(skills_dirs, list):
-        raise MergeError("settings skillsDirectories must be an array; refusing to repair it")
-    for item in skills_dirs:
-        if not isinstance(item, str):
-            raise MergeError("settings skillsDirectories entries must be strings")
-    return skills_dirs
-
-
-def merge_skills_directory(
+def migrate_legacy_skills_directory(
     settings: dict[str, Any],
     skills_dir: pathlib.Path,
 ) -> dict[str, list[str]]:
     value = skills_dir_key(skills_dir)
-    skills_dirs = ensure_target_skills_directories(settings)
-    if value in skills_dirs:
-        return {"added": [], "skipped_existing": [value]}
-    skills_dirs.append(value)
-    return {"added": [value], "skipped_existing": []}
+    removed = remove_skills_directories(settings, {value})["removed"]
+    return {"added": [], "skipped_existing": [], "removed_legacy": removed}
 
 
 def path_under(path: str, root: pathlib.Path) -> bool:
@@ -720,9 +710,9 @@ def run() -> int:
         template_hooks = load_template_hooks(template, template_path)
         merged, details = merge_template_entries(original, template_hooks)
         details["skills_dirs"] = (
-            merge_skills_directory(merged, skills_dir)
+            migrate_legacy_skills_directory(merged, skills_dir)
             if skills_dir
-            else {"added": [], "skipped_existing": []}
+            else {"added": [], "skipped_existing": [], "removed_legacy": []}
         )
         details["permissions"] = merge_permissions(
             merged, load_template_permissions(template, template_path)

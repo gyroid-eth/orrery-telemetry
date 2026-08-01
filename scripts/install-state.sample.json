@@ -48,10 +48,9 @@
     ],
     "skipped_existing": [],
     "skills_dirs": {
-      "added": [
-        "/home/alice/.agentstack/skills"
-      ],
-      "skipped_existing": []
+      "added": [],
+      "skipped_existing": [],
+      "removed_legacy": []
     },
     "permissions": {
       "added": {
@@ -144,6 +143,8 @@
     "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
     "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
     "/home/alice/.agentstack/runtime/settings-merge-result.json",
+    "/home/alice/.claude/skills/delegate",
+    "/home/alice/.claude/skills/log",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
   ],
   "owned_dirs": [
@@ -173,6 +174,16 @@
     "/home/alice/.agentstack/skills",
     "/home/alice/.agentstack/skills/delegate",
     "/home/alice/.agentstack/skills/log"
+  ],
+  "skill_links": [
+    {
+      "path": "/home/alice/.claude/skills/delegate",
+      "target": "/home/alice/.agentstack/skills/delegate"
+    },
+    {
+      "path": "/home/alice/.claude/skills/log",
+      "target": "/home/alice/.agentstack/skills/log"
+    }
   ],
   "services": [
     {
@@ -209,7 +220,7 @@
   ],
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-    "Tier1 user-settings merge records both hook entries and skillsDirectories additions.",
+    "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
     "Installer does not modify Claude MCP user config."
   ]
 }
