@@ -138,20 +138,41 @@
     "AGENTSTACK_TERMINAL": "auto"
   },
   "owned_files": [
+    "/home/alice/.agentstack/VERSION",
     "/home/alice/.agentstack/env.sh",
     "/home/alice/.agentstack/install-state.json",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
+    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
     "/home/alice/.agentstack/runtime/settings-merge-result.json",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
   ],
   "owned_dirs": [
-    "/home/alice/.agentstack/hooks",
-    "/home/alice/.agentstack/skills",
-    "/home/alice/.agentstack/dashboard",
-    "/home/alice/.agentstack/bin",
-    "/home/alice/.agentstack/claude",
-    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack",
     "/home/alice/.agentstack/backups",
-    "/home/alice/.agentstack"
+    "/home/alice/.agentstack/bin",
+    "/home/alice/.agentstack/bin/lib",
+    "/home/alice/.agentstack/claude",
+    "/home/alice/.agentstack/codex",
+    "/home/alice/.agentstack/dashboard",
+    "/home/alice/.agentstack/dashboard/assets",
+    "/home/alice/.agentstack/dashboard/portraits_64",
+    "/home/alice/.agentstack/dashboard/portraits_pixel",
+    "/home/alice/.agentstack/dashboard/providers",
+    "/home/alice/.agentstack/hooks",
+    "/home/alice/.agentstack/integrations",
+    "/home/alice/.agentstack/integrations/codex_app",
+    "/home/alice/.agentstack/integrations/codex_app/plugin",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/.codex-plugin",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/hooks",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/skills",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/skills/coordinate",
+    "/home/alice/.agentstack/integrations/codex_app/src",
+    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app",
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/skills",
+    "/home/alice/.agentstack/skills/delegate",
+    "/home/alice/.agentstack/skills/log"
   ],
   "services": [
     {
