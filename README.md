@@ -124,6 +124,10 @@ agent-mail を置き換えるのではなく、その上に launcher、運用 gu
 
 ## License
 
-本 repository は **MIT License (with OpenAI/Anthropic Rider)** です。通常の MIT 許諾に、OpenAI・Anthropic とその関係者への提供を制限する rider が付きます。全文は [LICENSE](LICENSE) を参照してください。
+本 repository は **PolyForm Perimeter License 1.0.1 (with OpenAI/Anthropic Rider)** です。source-available であり、OSI の意味での open source ではありません。全文は [LICENSE](LICENSE) を参照してください。
 
-別 component の `mcp_agent_mail` も Rider 付き MIT license で提供されます。分離方針と正確な参照先は[第三者コンポーネント](docs/third-party.md)にまとめています。
+- 利用・改変・再配布は目的を問わず可能です
+- ただし**本ソフトウェアと競合する製品を他者へ提供すること**はできません。無償配布・別言語への移植・service / library / plug-in としての提供も競合に含まれます
+- Rider により、OpenAI・Anthropic とその関係者への提供と、それらのための利用は許諾されません
+
+別 component の `mcp_agent_mail` は upstream の license に従います（本 repository の license は及びません）。分離方針と正確な参照先は[第三者コンポーネント](docs/third-party.md)にまとめています。

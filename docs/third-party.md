@@ -33,15 +33,17 @@ uninstall でも agent-mail clone、DB、`.env` は既定で保持します。Ag
 
 ## License
 
-claude-agent-stack 本体は **MIT License (with OpenAI/Anthropic Rider)** です。正本は repository の [`LICENSE`](../LICENSE) です。
+claude-agent-stack 本体は **PolyForm Perimeter License 1.0.1 (with OpenAI/Anthropic Rider)** です。正本は repository の [`LICENSE`](../LICENSE) です。source-available であり、OSI の意味での open source ではありません。
 
-`mcp_agent_mail` も upstream の **MIT License with OpenAI/Anthropic Rider** に従います。取得後の正本:
+Perimeter の中核は Noncompete 条項です。利用・改変・再配布は目的を問わず可能ですが、**本ソフトウェアと競合する製品を他者へ提供すること**はできません。license は競合を広く定義しており、無償配布、別言語や別プラットフォームへの移植、service / library / plug-in としての提供も含みます。
+
+`mcp_agent_mail` は upstream の **MIT License with OpenAI/Anthropic Rider** に従います。**本 repository の license は `mcp_agent_mail` に及びません。** 取得後の正本:
 
 ```text
 ${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}/LICENSE
 ```
 
-Rider は通常の MIT 許諾に加え、OpenAI, L.L.C.、Anthropic, PBC、それぞれの Affiliate、およびそれらのために行動する者を Restricted Parties と定義し、提供・アクセス・利用などを制限します。
+Rider は両 component に共通で、OpenAI, L.L.C.、Anthropic, PBC、それぞれの Affiliate、およびそれらのために行動する者を Restricted Parties と定義し、提供・アクセス・利用などを制限します。
 
 この文書は要約であり、license 条項そのものではありません。配布・派生物・host・benchmark・dataset / training / evaluation への利用を判断するときは、必ず各 component の `LICENSE` 全文を確認してください。
 

@@ -38,3 +38,13 @@ for t in tests/test_*.py; do python3 "$t"; done
 `tests/test_bash32_local_selfref.py` fails the build on any self-referencing
 `local`/`declare`. When feasible, also exercise the actual code path on
 `/bin/bash` (3.2), not just a newer bash.
+
+## License of contributions
+
+This repository is under the [PolyForm Perimeter License 1.0.1 with an
+OpenAI/Anthropic Rider](LICENSE). It is source-available, not open source in
+the OSI sense: you may use, modify, and redistribute the software for any
+purpose except providing others with a product that competes with it.
+
+By submitting a contribution you agree that it is licensed under those same
+terms.

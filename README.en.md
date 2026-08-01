@@ -124,6 +124,10 @@ The stack does not replace agent-mail. It layers launchers, operational guards, 
 
 ## License
 
-This repository uses the **MIT License (with OpenAI/Anthropic Rider)**. The Rider adds restrictions on providing the software to OpenAI, Anthropic, and related parties. See [LICENSE](LICENSE) for the complete terms.
+This repository uses the **PolyForm Perimeter License 1.0.1 (with OpenAI/Anthropic Rider)**. It is source-available, not open source in the OSI sense. See [LICENSE](LICENSE) for the complete terms.
 
-The separate `mcp_agent_mail` component also uses an MIT license with the Rider. See [Third-party components](docs/third-party.md) for the separation model and authoritative references.
+- You may use, modify, and redistribute it for any purpose.
+- You may **not** provide others with a product that competes with this software. Competing covers free distribution, ports to another language, and delivery as a service, library, or plug-in.
+- The Rider withholds any grant to OpenAI, Anthropic, and related parties, including use on their behalf.
+
+The separate `mcp_agent_mail` component follows its own upstream license; this repository's license does not extend to it. See [Third-party components](docs/third-party.md) for the separation model and authoritative references.
