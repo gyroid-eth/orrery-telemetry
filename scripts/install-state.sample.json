@@ -21,9 +21,29 @@
     "after_sha256": "example-after-sha256",
     "added_entries": [
       {
+        "event": "SessionStart",
+        "matcher": null,
+        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh"
+      },
+      {
+        "event": "SessionStart",
+        "matcher": null,
+        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh"
+      },
+      {
         "event": "PreToolUse",
         "matcher": "Edit|Write",
         "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
+      },
+      {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write|Bash",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh"
       }
     ],
     "skipped_existing": [],
@@ -33,26 +53,94 @@
       ],
       "skipped_existing": []
     },
+    "permissions": {
+      "added": {
+        "allow": [
+          "mcp__mcp-agent-mail__health_check",
+          "mcp__mcp-agent-mail__ensure_project",
+          "mcp__mcp-agent-mail__register_agent",
+          "mcp__mcp-agent-mail__whois",
+          "mcp__mcp-agent-mail__fetch_inbox",
+          "mcp__mcp-agent-mail__fetch_summary",
+          "mcp__mcp-agent-mail__fetch_topic",
+          "mcp__mcp-agent-mail__mark_message_read",
+          "mcp__mcp-agent-mail__acknowledge_message",
+          "mcp__mcp-agent-mail__send_message",
+          "mcp__mcp-agent-mail__reply_message",
+          "mcp__mcp-agent-mail__list_contacts",
+          "mcp__mcp-agent-mail__request_contact",
+          "mcp__mcp-agent-mail__respond_contact",
+          "mcp__mcp-agent-mail__set_contact_policy",
+          "mcp__mcp-agent-mail__file_reservation_paths",
+          "mcp__mcp-agent-mail__macro_file_reservation_cycle",
+          "mcp__mcp-agent-mail__renew_file_reservations",
+          "mcp__mcp-agent-mail__release_file_reservations",
+          "mcp__mcp-agent-mail__macro_start_session",
+          "Bash(/home/alice/.agentstack/bin/agentstack-reregister:*)"
+        ],
+        "deny": [
+          "mcp__mcp-agent-mail__hard_delete_agent",
+          "mcp__mcp-agent-mail__hard_delete_project",
+          "mcp__mcp-agent-mail__archive_project",
+          "mcp__mcp-agent-mail__purge_old_messages",
+          "mcp__mcp-agent-mail__force_release_file_reservation",
+          "mcp__mcp-agent-mail__retire_agent",
+          "mcp__mcp-agent-mail__deregister_agent"
+        ]
+      },
+      "skipped_existing": {
+        "allow": [],
+        "deny": []
+      }
+    },
     "entries": [
+      {
+        "event": "SessionStart",
+        "matcher": null,
+        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh"
+      },
+      {
+        "event": "SessionStart",
+        "matcher": null,
+        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh"
+      },
       {
         "event": "PreToolUse",
         "matcher": "Edit|Write",
         "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
+      },
+      {
+        "event": "PreToolUse",
+        "matcher": "Edit|Write|Bash",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
+        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh"
       }
     ]
   },
   "env": {
-    "AGENTSTACK_PORT": "${AGENTSTACK_PORT:-8770}",
+    "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
+    "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
+    "AGENTSTACK_DELIVERABLE_ROOTS": "",
     "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
     "AGENTSTACK_MAIL_DB": "/home/alice/mcp_agent_mail/storage.sqlite3",
-    "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env"
+    "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env",
+    "AGENTSTACK_MAIL_HOME": "/home/alice/.mcp_agent_mail",
+    "AGENTSTACK_SIGNALS_DIR": "/home/alice/.mcp_agent_mail/signals",
+    "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+    "AGENTSTACK_TERMINAL": "auto"
   },
   "owned_files": [
     "/home/alice/.agentstack/env.sh",
+    "/home/alice/.agentstack/install-state.json",
+    "/home/alice/.agentstack/runtime/settings-merge-result.json",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
   ],
   "owned_dirs": [
@@ -60,6 +148,7 @@
     "/home/alice/.agentstack/skills",
     "/home/alice/.agentstack/dashboard",
     "/home/alice/.agentstack/bin",
+    "/home/alice/.agentstack/claude",
     "/home/alice/.agentstack/runtime",
     "/home/alice/.agentstack/backups",
     "/home/alice/.agentstack"
@@ -87,7 +176,10 @@
   ],
   "retained_paths": [
     "/home/alice/mcp_agent_mail",
-    "/home/alice/.mcp_agent_mail"
+    "/home/alice/.mcp_agent_mail",
+    "/home/alice/mcp_agent_mail/storage.sqlite3",
+    "/home/alice/mcp_agent_mail/.env",
+    "/home/alice/.agentstack/runtime"
   ],
   "purge_paths": [
     "/home/alice/mcp_agent_mail",

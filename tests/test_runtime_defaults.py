@@ -10,6 +10,28 @@ import subprocess
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
+
+
+def _normalize_sample_paths(value, manifest):
+    """Map an isolated manifest's dynamic roots to the sample's Alice paths."""
+    install_dir = pathlib.Path(manifest["install_dir"])
+    replacements = (
+        (manifest["repo_root"], "/home/alice/src/claude-agent-stack"),
+        (manifest["env"]["AGENTSTACK_PROJECT_KEY"], "/home/alice/project"),
+        (str(install_dir.parent), "/home/alice"),
+    )
+    if isinstance(value, dict):
+        return {
+            key: _normalize_sample_paths(item, manifest)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_sample_paths(item, manifest) for item in value]
+    if isinstance(value, str):
+        for source, target in replacements:
+            value = value.replace(source, target)
+    return value
 
 
 def _clean_env(home: pathlib.Path) -> dict[str, str]:
@@ -174,39 +196,50 @@ def test_install_tier_options_are_mutually_exclusive(tmp_path):
         assert not (tmp_path / ".agentstack").exists()
 
 
-def test_installer_migrates_legacy_annotations_and_uninstall_retains_them(tmp_path):
+def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp_path):
     env = _clean_env(tmp_path / "home")
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
-        "launchctl": "#!/bin/sh\nexit 0\n",
+        "systemctl": "#!/bin/sh\nexit 0\n",
         "tmux": "#!/bin/sh\nexit 0\n",
-        "uname": "#!/bin/sh\necho Darwin\n",
+        "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
     }.items():
         command = fake_bin / name
         command.write_text(body, encoding="utf-8")
         command.chmod(0o755)
 
-    install_dir = tmp_path / "install"
+    home = pathlib.Path(env["HOME"])
+    install_dir = home / ".agentstack"
     legacy_path = install_dir / "dashboard" / "annotations.json"
     legacy_path.parent.mkdir(parents=True)
     legacy_data = {
         "WiseFaraday": {"role": "legacy", "emoji": "", "group": "runtime"}
     }
     legacy_path.write_text(json.dumps(legacy_data), encoding="utf-8")
-    mail_dir = tmp_path / "mail"
+    mail_dir = home / "mcp_agent_mail"
     (mail_dir / ".git").mkdir(parents=True)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    project_dir = home / "project"
+    project_dir.mkdir()
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MAIL_DB": str(mail_dir / "storage.sqlite3"),
+        "AGENTSTACK_MAIL_ENV": str(mail_dir / ".env"),
+        "AGENTSTACK_SIGNALS_DIR": str(home / ".mcp_agent_mail" / "signals"),
         "AGENTSTACK_PORT": str(port),
-        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test.annotations",
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
+        "AGENTSTACK_PROJECT_KEY": str(project_dir),
+        "AGENTSTACK_PROTECTED_ROOTS": str(project_dir),
+        "AGENTSTACK_DELIVERABLE_ROOTS": "",
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+        "AGENTSTACK_TERMINAL": "auto",
     })
 
     subprocess.run(
@@ -214,8 +247,6 @@ def test_installer_migrates_legacy_annotations_and_uninstall_retains_them(tmp_pa
             "bash",
             str(ROOT / "scripts" / "install.sh"),
             "--dashboard-only",
-            "--terminal",
-            "none",
         ],
         cwd=ROOT,
         env=env,
@@ -234,6 +265,22 @@ def test_installer_migrates_legacy_annotations_and_uninstall_retains_them(tmp_pa
     assert str(install_dir / "runtime") in manifest["purge_paths"]
     assert str(legacy_path) not in manifest["owned_files"]
 
+    sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
+    assert set(sample) == set(manifest)
+    assert set(sample["env"]) == set(manifest["env"])
+
+    normalized_env = _normalize_sample_paths(manifest["env"], manifest)
+    normalized_env["AGENTSTACK_PORT"] = "8770"
+    assert normalized_env == sample["env"]
+    for key in ("owned_dirs", "retained_paths", "purge_paths", "notes", "services"):
+        assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
+
+    normalized_owned = set(_normalize_sample_paths(manifest["owned_files"], manifest))
+    sample_owned = set(sample["owned_files"])
+    # Tier0 does not perform the sample's Tier1 settings merge.
+    sample_owned.remove("/home/alice/.agentstack/runtime/settings-merge-result.json")
+    assert sample_owned <= normalized_owned
+
     subprocess.run(
         [
             "bash",
@@ -248,6 +295,56 @@ def test_installer_migrates_legacy_annotations_and_uninstall_retains_them(tmp_pa
         check=True,
     )
     assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
+
+
+def test_install_state_sample_settings_merge_matches_generator(tmp_path):
+    sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
+    home = tmp_path / "home"
+    settings_path = home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text("{}\n", encoding="utf-8")
+    result_path = tmp_path / "settings-merge-result.json"
+    install_dir = home / ".agentstack"
+    subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "lib" / "merge_settings.py"),
+            "--settings",
+            str(settings_path),
+            "--template",
+            str(ROOT / "hooks" / "settings.template.json"),
+            "--hooks-dir",
+            str(install_dir / "hooks"),
+            "--bin-dir",
+            str(install_dir / "bin"),
+            "--skills-dir",
+            str(install_dir / "skills"),
+            "--backup-dir",
+            str(install_dir / "backups"),
+            "--result-json",
+            str(result_path),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    generated = json.loads(result_path.read_text(encoding="utf-8"))
+    generated = _normalize_sample_paths(
+        generated,
+        {
+            "install_dir": str(install_dir),
+            "repo_root": str(ROOT),
+            "env": {"AGENTSTACK_PROJECT_KEY": str(tmp_path / "project")},
+        },
+    )
+    generated["before_sha256"] = "example-before-sha256"
+    generated["after_sha256"] = "example-after-sha256"
+    generated["backup"] = sample["settings_merge"]["backup"]
+
+    assert generated == sample["settings_merge"]
+    assert sample["backups"] == [sample["settings_merge"]["backup"]]
+    assert sample["settings_backups"] == sample["backups"]
 
 
 def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
