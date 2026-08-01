@@ -47,6 +47,8 @@ open http://127.0.0.1:8770/
 
 `agent-start` は agent-mail identity と同名の tmux session を作ります。これが dashboard の jump、mail signal 配送、token recovery を一意に結びます。設定を変える場合は[インストール](docs/install.md)と[設定](docs/configuration.md)を参照してください。
 
+Codex Desktop の root task / subagent も同じ agent-mail と dashboard に接続する場合は、任意の [Codex App 統合](docs/codex-app.md)を追加します。Codex CLI だけを使う場合、この追加 install は不要です。
+
 ## 機能ギャラリー
 
 ### 1. Launcher と identity
@@ -93,6 +95,7 @@ dashboard の全表示・操作は local HTTP API から利用できます。por
 | --- | --- |
 | [インストール](docs/install.md) | install tier、settings merge、VERSION、TCC、upgrade / uninstall |
 | [Launcher と identity](docs/launchers.md) | `agent-start`、命名、token、fail-closed、`CLAUDECODE` |
+| [Codex App 統合](docs/codex-app.md) | Codex Desktop plugin、Bridge、session-bound MCP、inbox 通知、cold wake |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
 | [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
@@ -104,13 +107,16 @@ dashboard の全表示・操作は local HTTP API から利用できます。por
 ## 仕組み
 
 ```text
-Claude Code / Codex
+Claude Code / Codex CLI
         │ launcher + hooks
         ▼
 tmux session ── telemetry ──► dashboard
+        │                         ▲
+        │                         │ sanitized snapshot
+        │                  Codex App Bridge ◄── plugin hooks ── Codex Desktop
         │                         │
-        └──── mcp-agent-mail ◄────┘
-              identity / inbox / reservations
+        └──────── mcp-agent-mail ◄┘
+                  identity / inbox / reservations
 ```
 
 agent-mail を置き換えるのではなく、その上に launcher、運用 guard、可視化、control plane を重ねます。dashboard が落ちても identity・mail・reservation の正本は失われません。

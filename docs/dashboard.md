@@ -2,7 +2,7 @@
 
 > English version: planned.
 
-[前: Launcher と identity](launchers.md) · [README に戻る](../README.md) · [次: API reference](api.md)
+[前: Codex App 統合](codex-app.md) · [README に戻る](../README.md) · [次: API reference](api.md)
 
 dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、agent-mail SQLite、runtime state、Obsidian vault を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
 
@@ -44,6 +44,17 @@ mail の `last_active` だけで running と判定せず、tmux process、pane s
 - finished / gone agent の KILL / soft retire
 
 KILL の可否は frontend の見た目だけで決めず、server の `build_agents()` category を再検証します。attached client がある session は warning を返します。
+
+## Codex App runtime
+
+[Codex App 統合](codex-app.md)を導入すると、dashboard は Bridge の allowlist 済み snapshot を tmux state と並べて読みます。同じ agent-mail 名の row を `surface: codex-app` として昇格し、`Codex App · <state>` または `Codex App · wake:<status>` を live 表示します。
+
+- `registering / working / waiting / blocked`: running 扱い
+- `dormant / degraded`: finished 扱い
+- active 系 state でも snapshot 更新が10分以上ない: stale な running 表示を避けるため dormant 扱い
+- capability: `open` のみ
+
+Codex App runtime には tmux pane がありません。terminal attach、dashboard の EXIT / KILL / wake は行わず、jump / resume action は macOS の ChatGPT app を前面化します。inbox の cold wake と delivery retry は dashboard ではなく Bridge が所有します。
 
 ## NETWORK
 
@@ -124,14 +135,14 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ### Identity
 
-- `AUTO`: `name` を送らず agent-mail の自動命名に委ねる
+- `AUTO`: server が shared vocabulary から空き `Adjective-Scientist` を検証し、その explicit `name` を登録 request に送る
 - scientist rail: portrait と `available / occupied / unknown`
 - scientist 選択: `/api/suggest-name` が空き adjective を付けて live registry で検証
 - SHUFFLE: 同じ scientist で別の verified name を再提案
 - `occupied / unknown`: 選択不可
 - roster 外または空き候補なし: HTTP 409 として別 scientist / AUTO を促す
 
-scientist rail の `available` は bare surname ではなく、134 adjective のどれかとの組み合わせに空きがあることを意味します。adjective は agent-mail 正典 `SIMPLE_ADJECTIVES` と同期し、UI は local で未検証名を作りません。
+scientist rail の `available` は bare surname ではなく、134 adjective のどれかとの組み合わせに空きがあることを意味します。adjective は agent-mail 正典 `SIMPLE_ADJECTIVES` と同期し、client は local で未検証名を作りません。AUTO でも server が最大75候補を live registry で fail-closed 検証し、空きを確認できなければ spawn を拒否します。
 
 ### Engine
 
@@ -213,6 +224,7 @@ hidden iframe が tmux / SQLite を継続 polling しないための契約です
 
 ## 関連文書
 
+- [Codex App 統合](codex-app.md)
 - [API reference](api.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)

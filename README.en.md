@@ -47,6 +47,8 @@ open http://127.0.0.1:8770/
 
 `agent-start` gives the tmux session the same name as its agent-mail identity. That unambiguously connects dashboard jumps, mail-signal delivery, and token recovery. See [Installation](docs/install.md) and [Configuration](docs/configuration.md) for other setups.
 
+To connect Codex Desktop root tasks and subagents to the same agent-mail project and dashboard, add the optional [Codex App integration](docs/codex-app.md). Codex CLI-only setups do not need this additional install.
+
 ## Feature gallery
 
 ### 1. Launchers and identity
@@ -93,6 +95,7 @@ The Japanese documentation is canonical. English versions of the detailed guides
 | --- | --- |
 | [Installation](docs/install.md) | Install tiers, settings merge, VERSION, TCC, upgrade, and uninstall |
 | [Launchers and identity](docs/launchers.md) | `agent-start`, naming, tokens, fail-closed checks, and `CLAUDECODE` |
+| [Codex App integration](docs/codex-app.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
 | [Dashboard](docs/dashboard.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
 | [API reference](docs/api.md) | Every route, query/request fields, and response schemas |
 | [Configuration](docs/configuration.md) | `AGENTSTACK_*` environment variables and customization |
@@ -104,13 +107,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.
 ## How it fits together
 
 ```text
-Claude Code / Codex
+Claude Code / Codex CLI
         │ launchers + hooks
         ▼
 tmux session ── telemetry ──► dashboard
+        │                         ▲
+        │                         │ sanitized snapshot
+        │                  Codex App Bridge ◄── plugin hooks ── Codex Desktop
         │                         │
-        └──── mcp-agent-mail ◄────┘
-              identity / inbox / reservations
+        └──────── mcp-agent-mail ◄┘
+                  identity / inbox / reservations
 ```
 
 The stack does not replace agent-mail. It layers launchers, operational guards, visualization, and a control plane on top. If the dashboard stops, identities, mail, and reservations remain in their source of truth.
