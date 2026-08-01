@@ -67,11 +67,18 @@ def test_session_index_writer_uses_install_root_runtime(tmp_path):
 
 
 def test_runtime_code_has_no_legacy_claude_fallback():
-    roots = ["hooks", "bin", "scripts", "dashboard", "integrations", "claude", "codex"]
+    roots = ("hooks", "bin", "scripts", "dashboard", "integrations", "claude", "codex")
     offenders = []
-    paths = [ROOT / ".env.example"]
-    for root in roots:
-        paths.extend((ROOT / root).rglob("*"))
+    # Only tracked files: dashboard/logs/*.log and other gitignored runtime
+    # output live under these roots once the dashboard has run, and they
+    # legitimately contain historical paths.
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", ".env.example", *roots],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    paths = [ROOT / rel for rel in tracked if rel]
     for path in paths:
         if path.is_file() and path.suffix not in {".png", ".pyc"}:
             try:
