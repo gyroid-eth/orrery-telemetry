@@ -682,7 +682,7 @@ service_kind = sys.argv[2]
 service_path = sys.argv[3]
 install_dir = pathlib.Path("$INSTALL_DIR")
 owned_files = []
-for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude"):
+for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrations"):
     base = install_dir / rel
     if base.exists():
         for path in base.rglob("*"):
@@ -693,6 +693,9 @@ for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude"):
                 continue
             if path.is_file() or path.is_symlink():
                 owned_files.append(str(path))
+version_path = install_dir / "VERSION"
+if version_path.is_file() or version_path.is_symlink():
+    owned_files.append(str(version_path))
 owned_files.extend([str(pathlib.Path("$ENV_FILE")), str(pathlib.Path("$MANIFEST"))])
 if service_path:
     owned_files.append(service_path)
@@ -702,6 +705,26 @@ if merge_result_path.exists():
     settings_merge = json.loads(merge_result_path.read_text(encoding="utf-8"))
     owned_files.append(str(merge_result_path))
 owned_files = sorted(dict.fromkeys(owned_files))
+owned_dir_paths = {
+    install_dir / rel
+    for rel in ("hooks", "skills", "dashboard", "bin", "runtime", "backups")
+}
+owned_dir_paths.add(install_dir)
+for raw in owned_files:
+    path = pathlib.Path(raw)
+    try:
+        path.relative_to(install_dir)
+    except ValueError:
+        # Service definitions live outside the install tree; their parent
+        # directories belong to the user/system and are never installer-owned.
+        continue
+    parent = path.parent
+    while True:
+        owned_dir_paths.add(parent)
+        if parent == install_dir:
+            break
+        parent = parent.parent
+owned_dirs = sorted(str(path) for path in owned_dir_paths)
 services = []
 if service_kind == "launchd":
     services.append({"kind": "launchd", "label": "$LABEL", "path": service_path})
@@ -739,16 +762,7 @@ manifest = {
         "AGENTSTACK_TERMINAL": "$TERMINAL",
     },
     "owned_files": owned_files,
-    "owned_dirs": [
-        "$HOOKS_DIR",
-        "$SKILLS_DIR",
-        "$DASHBOARD_DIR",
-        "$BIN_DIR",
-        "$INSTALL_DIR/claude",
-        "$RUNTIME_DIR",
-        "$BACKUPS_DIR",
-        "$INSTALL_DIR",
-    ],
+    "owned_dirs": owned_dirs,
     "services": services,
     "backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
     "settings_backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],

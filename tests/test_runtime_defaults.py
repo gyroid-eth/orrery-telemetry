@@ -34,6 +34,38 @@ def _normalize_sample_paths(value, manifest):
     return value
 
 
+def _tracked_core_payload_files() -> list[str]:
+    """Return only files the core installer copies, never ignored artifacts."""
+    tracked = subprocess.run(
+        [
+            "git", "-C", str(ROOT), "ls-files", "-z",
+            "VERSION", "hooks", "skills", "dashboard", "bin", "codex", "claude",
+            "integrations/codex_app/plugin", "integrations/codex_app/src",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    return [path for path in tracked if path]
+
+
+def _expected_owned_dirs(install_dir: pathlib.Path) -> list[str]:
+    directories = {
+        install_dir,
+        *(install_dir / rel for rel in (
+            "hooks", "skills", "dashboard", "bin", "runtime", "backups"
+        )),
+    }
+    for relative in _tracked_core_payload_files():
+        parent = (install_dir / relative).parent
+        while True:
+            directories.add(parent)
+            if parent == install_dir:
+                break
+            parent = parent.parent
+    return sorted(str(path) for path in directories)
+
+
 def _clean_env(home: pathlib.Path) -> dict[str, str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
@@ -246,7 +278,6 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         [
             "bash",
             str(ROOT / "scripts" / "install.sh"),
-            "--dashboard-only",
         ],
         cwd=ROOT,
         env=env,
@@ -264,6 +295,19 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert str(install_dir / "runtime") in manifest["retained_paths"]
     assert str(install_dir / "runtime") in manifest["purge_paths"]
     assert str(legacy_path) not in manifest["owned_files"]
+    expected_payload_files = {
+        str(install_dir / relative)
+        for relative in _tracked_core_payload_files()
+    }
+    assert expected_payload_files <= set(manifest["owned_files"])
+    assert str(install_dir / "VERSION") in manifest["owned_files"]
+    assert str(
+        install_dir / "integrations/codex_app/plugin/scripts/run-mcp.sh"
+    ) in manifest["owned_files"]
+    assert str(
+        install_dir / "integrations/codex_app/src/agentstack_codex_app/mcp_server.py"
+    ) in manifest["owned_files"]
+    assert set(_expected_owned_dirs(install_dir)) <= set(manifest["owned_dirs"])
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
@@ -272,14 +316,21 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env = _normalize_sample_paths(manifest["env"], manifest)
     normalized_env["AGENTSTACK_PORT"] = "8770"
     assert normalized_env == sample["env"]
-    for key in ("owned_dirs", "retained_paths", "purge_paths", "notes", "services"):
+    for key in ("retained_paths", "purge_paths", "notes", "services"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
+    normalized_expected_dirs = _normalize_sample_paths(
+        _expected_owned_dirs(install_dir), manifest
+    )
+    assert normalized_expected_dirs == sample["owned_dirs"]
 
     normalized_owned = set(_normalize_sample_paths(manifest["owned_files"], manifest))
     sample_owned = set(sample["owned_files"])
     # Tier0 does not perform the sample's Tier1 settings merge.
     sample_owned.remove("/home/alice/.agentstack/runtime/settings-merge-result.json")
     assert sample_owned <= normalized_owned
+
+    token_path = install_dir / "runtime" / "agent_token_WiseFaraday"
+    token_path.write_text("retained-token\n", encoding="utf-8")
 
     subprocess.run(
         [
@@ -295,6 +346,18 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         check=True,
     )
     assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
+    assert token_path.read_text(encoding="utf-8") == "retained-token\n"
+    remaining = {
+        str(path.relative_to(install_dir))
+        for path in install_dir.rglob("*")
+    }
+    assert remaining == {
+        "runtime",
+        "runtime/annotations.json",
+        "runtime/agent_token_WiseFaraday",
+    }
+    assert not (install_dir / "VERSION").exists()
+    assert not (install_dir / "integrations").exists()
 
 
 def test_install_state_sample_settings_merge_matches_generator(tmp_path):
