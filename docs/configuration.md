@@ -76,6 +76,7 @@ mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す�
 | `AGENTSTACK_PATH` | Homebrew と system path | service に渡す `PATH` |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:8765/mcp` | launcher / hook の MCP endpoint |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |
+| `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | `agentstack-claude-setup` が managed block を書く先。`project / global / both` |
 
 `PROJECT_KEY` も fallback として読まれますが、永続設定には `AGENTSTACK_PROJECT_KEY` を推奨します。
 
@@ -100,6 +101,18 @@ mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す�
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | scientist vocabulary override |
 
 `AGENTSTACK_RESERVED_IDENTITY`、proxy token path、child token などは spawner が session ごとに設定する内部値です。top-level launcher へ手動で設定しないでください。
+
+## Child spawn
+
+`spawn_child.sh` と `agentstack-preregister-child` の挙動を変える変数です。
+
+| 環境変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `AGENTSTACK_FOCUS_CHILD` | 未設定 | `1` で child の terminal window を前面に出す。既定は背面で開き、手元の作業を奪いません |
+| `AGENTSTACK_STRICT_AGENT_NAMES` | 未設定 | `1` で off-list な child 名を警告ではなくエラーにする |
+| `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | `1` で monitor の危険コマンド検知を有効にする。既定は passive |
+
+child の Codex model と reasoning effort は spawner が `--model` / `--effort` から決め、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。effort の既定は `xhigh` です。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
 
 ## Skill
 

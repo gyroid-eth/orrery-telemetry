@@ -13,9 +13,10 @@ The central design principle is to make operating rules executable through launc
 - macOS is the primary target; launchers and hooks support the system Bash 3.2
 - `python3`, `tmux`, `git`, and `uv`
 - Claude Code or the Codex CLI
+- `fswatch` (optional; the mail watcher polls without it)
 - `fzf` (optional directory picker)
 - Ghostty (recommended; falls back to iTerm2, Terminal.app, or `none`)
-- Obsidian (optional work-log and deliverables integration)
+- Obsidian (optional work-log and deliverables integration; requires `AGENTSTACK_OBSIDIAN_APP`)
 
 On Linux, the dashboard uses a systemd user service when available and falls back to `nohup`. Native Windows is not supported. See [Installation](docs/install.md#動作環境) for details.
 
