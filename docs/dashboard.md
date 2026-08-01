@@ -6,6 +6,21 @@
 
 dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、agent-mail SQLite、runtime state、project log、任意の Obsidian link hint を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
 
+ここでいう agent-mail / mail-watcher は、AgentStack 内のエージェント間メッセージを扱う機構です。利用者のメールアカウント、メールクライアント、受信箱には一切アクセスしません。
+
+## やりたいことから探す
+
+| やりたいこと | 最短の操作 |
+| --- | --- |
+| 今動いているエージェントを見る | [DECK](#deck) を開き、`ACTIVE AGENTS` のカードを見る。カードをクリックすると task、live state、History、Output、terminal 操作をまとめて確認できます。 |
+| 親子関係を見る | [NETWORK](#network) に切り替える。parent と child は spawn edge で結ばれ、node をクリックすると個別の詳細 panel が開きます。 |
+| エージェント同士が何を話したか読む | NETWORK の communication edge をクリックする。右側の mail drawer に、その2者間の subject、importance、時刻、本文が表示されます。[mail 設定がない場合](#edge-と-mail)は `NOT CONFIGURED` になります。 |
+| 複数のエージェントをまとめて操作する | NETWORK 上部の `Select` を有効にし、node をクリックするか空白部分を矩形 drag する。選択後に画面下部へ出る action bar で、running / finished agent は `Exit N`、2人以上は `Replay N` を選べます。EXIT は同じ button をもう一度押す二段確認です。 |
+| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の `show all` または NETWORK の `ALL` で過去 agent を出し、カード / node → 詳細 panel → `OPEN TMUX` と進む。tmux session がなければ `/api/jump` が保存済み transcript の resume に切り替わります。NETWORK の `Select` で gone / retired node を選び、画面下部の `Resume N` を二度押す経路もあります。resume には transcript、元の cwd、対応 CLI、terminal adapter が必要です。 |
+| 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の `show all` を有効にする。DECK は直近30日の `gone` / `retired` card を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
+
+NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の `show all`、親へ届く完了報告を確認してください。
+
 ## DECK
 
 <!-- TODO: screenshot: DECK view -->
