@@ -182,7 +182,7 @@ ags_generate_registration_token() {
 }
 
 ags_registration_runtime_dir() {
-  printf '%s\n' "${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+  printf '%s\n' "${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 }
 
 ags_agent_token_key() {
@@ -471,10 +471,20 @@ ags_record_managed_agent() {
 # This is a DETECT-AND-WARN guard only: it never blocks a spawn and it fires only
 # on an actual read failure inside a protected folder (a functional probe → zero
 # false positives when access works). Override the protected-dir list with
-# AGENTSTACK_TCC_DIRS (space-separated) or disable with AGENTSTACK_TCC_GUARD=0.
+# AGENTSTACK_TCC_DIRS (colon-separated; legacy whitespace lists also work) or
+# disable with AGENTSTACK_TCC_GUARD=0.
 ags_tcc_dir_is_protected() {
   local dir="$1" p
-  local dirs="${AGENTSTACK_TCC_DIRS:-$HOME/Desktop $HOME/Downloads $HOME/Documents}"
+  local dirs="${AGENTSTACK_TCC_DIRS:-$HOME/Desktop:$HOME/Downloads:$HOME/Documents}"
+  if [[ "$dirs" == *:* ]]; then
+    local IFS=:
+    for p in $dirs; do
+      [[ -n "$p" ]] || continue
+      [[ "$dir" == "$p" || "$dir" == "$p"/* ]] && return 0
+    done
+    return 1
+  fi
+  # Compatibility with pre-0.9 examples that used a whitespace list.
   for p in $dirs; do
     [[ -n "$p" ]] || continue
     [[ "$dir" == "$p" || "$dir" == "$p"/* ]] && return 0

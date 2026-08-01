@@ -2,9 +2,9 @@
 set -euo pipefail
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 STATE_DIR="$RUNTIME_DIR/child-agents"
-MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$HOME/.claude/managed_agents.txt}"
+MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 PROJECT_KEY_DEFAULT="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"

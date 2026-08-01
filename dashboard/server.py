@@ -68,7 +68,7 @@ PROJECT_KEY = _env_text("AGENTSTACK_PROJECT_KEY", "")
 LABEL_PREFIX = _env_text("AGENTSTACK_LABEL_PREFIX", "org.agentstack")
 TERMINAL_SETTING = _env_text("AGENTSTACK_TERMINAL", "auto").lower()
 HOOKS_DIR = _env_path("AGENTSTACK_HOOKS_DIR", "~/.agentstack/hooks")
-RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.claude/runtime")
+RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
 MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.mcp_agent_mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
@@ -708,40 +708,107 @@ def _raw_graph() -> dict:
 
 # エージェント名 -> 成果物 LOG の索引（60秒キャッシュ）。
 # LOG_*.md の frontmatter `agent:` がノード名と一致するものを成果物とみなす。
-_DELIV_CACHE: dict = {"ts": 0.0, "map": None}
+_DELIV_CACHE: dict = {"ts": 0.0, "key": None, "map": None}
+_DELIV_BASE_CACHE: dict = {"cwd": None, "base": None}
 _AGENT_FM_RE = re.compile(r"^agent:\s*(.+?)\s*$", re.M)
+
+
+def _deliverable_roots() -> list[str]:
+    """Return generic, project-scoped roots that may contain ``LOG_*.md``.
+
+    An explicit colon-separated ``AGENTSTACK_DELIVERABLE_ROOTS`` list is the
+    project's source of truth.  Otherwise the log skill's fallback contract is
+    used: ``logs/`` below the configured project.  With no project path, the
+    server's cwd is resolved to its git root once and then used as the fallback.
+    ``AGENTSTACK_VAULT`` remains a link-integration hint; it is not a private
+    directory-layout convention.
+    """
+    configured = os.environ.get("AGENTSTACK_DELIVERABLE_ROOTS", "").strip()
+    if configured:
+        candidates = configured.split(os.pathsep)
+    else:
+        base = PROJECT_KEY if os.path.isabs(PROJECT_KEY) else ""
+        if not base:
+            base = VAULT if os.path.isabs(VAULT) else ""
+        if base:
+            base = os.path.realpath(os.path.expanduser(base))
+        else:
+            cwd = os.path.realpath(os.getcwd())
+            base = (
+                _DELIV_BASE_CACHE.get("base")
+                if _DELIV_BASE_CACHE.get("cwd") == cwd else None
+            )
+            if not base:
+                base = cwd
+                try:
+                    result = subprocess.run(
+                        ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        check=False,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        base = result.stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                _DELIV_BASE_CACHE.update(cwd=cwd, base=base)
+        candidates = [os.path.join(base, "logs")]
+
+    roots: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        root = os.path.realpath(os.path.expanduser(candidate))
+        if os.path.isdir(root) and root not in seen:
+            seen.add(root)
+            roots.append(root)
+    return roots
+
+
+def _deliverable_location(path: str, root: str) -> tuple[str, str]:
+    """Return ``(relative_path, obsidian_vault_name)`` for one result."""
+    if VAULT:
+        vault_root = os.path.realpath(VAULT)
+        real_path = os.path.realpath(path)
+        try:
+            if os.path.commonpath([real_path, vault_root]) == vault_root:
+                return (
+                    os.path.relpath(real_path, vault_root),
+                    os.path.basename(os.path.normpath(vault_root)),
+                )
+        except ValueError:
+            pass
+    return os.path.relpath(path, root), ""
 
 
 def _deliverables_index() -> dict:
     """{agent_name: [{title, rel, mtime}, ...]} を返す（mtime 降順）。
 
-    走査対象: `05_Agents/**` と `21_Coding Projects/*/logs/**` の
-    `LOG_*.md`。frontmatter 先頭付近のみ読むので軽量。"""
+    走査対象は ``AGENTSTACK_DELIVERABLE_ROOTS``、未設定なら project の
+    ``logs/``。frontmatter 先頭付近のみ読むので軽量。"""
     now = time.time()
+    roots = _deliverable_roots()
+    cache_key = (tuple(roots), os.path.realpath(VAULT) if VAULT else "")
     cached = _DELIV_CACHE["map"]
-    if cached is not None and now - _DELIV_CACHE["ts"] < 60:
+    if (cached is not None and _DELIV_CACHE.get("key") == cache_key
+            and now - _DELIV_CACHE["ts"] < 60):
         return cached
-    if not VAULT:
-        _DELIV_CACHE.update(ts=now, map={})
-        return {}
-
-    roots = [os.path.join(VAULT, "05_Agents")]
-    cp = os.path.join(VAULT, "21_Coding Projects")
-    try:
-        for proj in os.listdir(cp):
-            lg = os.path.join(cp, proj, "logs")
-            if os.path.isdir(lg):
-                roots.append(lg)
-    except OSError:
-        pass
 
     idx: dict[str, list] = {}
+    seen_files: set[str] = set()
     for root in roots:
         for dp, _dn, fns in os.walk(root):
             for fn in fns:
                 if not (fn.startswith("LOG_") and fn.endswith(".md")):
                     continue
                 fp = os.path.join(dp, fn)
+                real_fp = os.path.realpath(fp)
+                if real_fp in seen_files:
+                    continue
+                seen_files.add(real_fp)
                 try:
                     with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                         head = fh.read(800)  # frontmatter のみで十分
@@ -757,14 +824,16 @@ def _deliverables_index() -> dict:
                     mt = int(os.path.getmtime(fp))
                 except OSError:
                     mt = 0
+                rel, vault_name = _deliverable_location(fp, root)
                 idx.setdefault(ag, []).append(
                     {"title": fn[:-3],
-                     "rel": os.path.relpath(fp, VAULT),
+                     "rel": rel,
+                     "vault": vault_name,
                      "mtime": mt}
                 )
     for v in idx.values():
         v.sort(key=lambda x: -x["mtime"])
-    _DELIV_CACHE.update(ts=now, map=idx)
+    _DELIV_CACHE.update(ts=now, key=cache_key, map=idx)
     return idx
 
 
@@ -805,7 +874,7 @@ def _annotations() -> dict:
             role = str(v.get("role", "")).strip()[:40]
             emoji = str(v.get("emoji", "")).strip()[:8]
             group = str(v.get("group", "")).strip()[:24]
-            if role or emoji:
+            if role or emoji or group:
                 data[name] = {"role": role, "emoji": emoji, "group": group}
     _ANNOT_CACHE.update(mtime=mt, data=data)
     return data
@@ -813,7 +882,9 @@ def _annotations() -> dict:
 
 def _write_annotation(name: str, role: str, emoji: str,
                       group: str = "") -> dict:
-    """1 エージェント分の役割を upsert / 削除（role も emoji も空なら削除）。
+    """1 エージェント分の annotation を upsert / 削除。
+
+    role / emoji / group がすべて空な場合だけ削除する。
 
     annotations.json をロックして read-modify-write（atomic replace）。"""
     if not name or _NAME_RE.fullmatch(name) is None:
@@ -832,7 +903,7 @@ def _write_annotation(name: str, role: str, emoji: str,
         wrapped = isinstance(raw.get("agents"), dict)
         store = raw["agents"] if wrapped else raw
         removed = False
-        if role or emoji:
+        if role or emoji or group:
             store[name] = {"role": role, "emoji": emoji, "group": group}
         else:
             store.pop(name, None)
@@ -1230,7 +1301,7 @@ def _indexed_transcript(name: str) -> str | None:
     """精密マップ(record-session-index.py が登録時に書く id→sessionId/
     transcript)から該当 transcript を引く。
 
-    name→agent-mail id→`~/.claude/runtime/session_index/<id>.json` の
+    name→agent-mail id→`~/.agentstack/runtime/session_index/<id>.json` の
     transcript_path を返す。これは selfref スコア+活動期間窓のヒューリス
     ティックと違い、登録時に焼いた exact な対応なので同名使い回し・
     last_active 固着のどちらにも左右されない。マップが無い(本フック導入前

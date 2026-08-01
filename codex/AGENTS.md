@@ -93,9 +93,9 @@ Details and exceptions for the first calls:
   after token-backed registration. Set `AGENTSTACK_CONTACT_POLICY=auto`,
   `contacts_only`, `block_all`, or an empty value to override that behavior.
 - Top-level sessions store their runtime token at
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/agent_token_<name>`.
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>`.
   Delegated children also use
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}/child-agents/<name>.json`.
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json`.
   `agentstack-reregister` reads both locations. It is acceptable for stack
   helpers to use these token files. Do not read agent-mail's `storage.sqlite3`
   directly; the DB is outside the recovery boundary and ad hoc DB reads risk

@@ -1936,7 +1936,7 @@
   .tm-hist::-webkit-scrollbar{width:11px}
   .tm-deliv{flex:1;overflow:auto;padding:16px 20px;background:#070809;
     flex-direction:column;gap:7px}
-  .tm-deliv a{display:flex;align-items:baseline;gap:12px;
+  .tm-deliv a,.tm-deliv .dv-item{display:flex;align-items:baseline;gap:12px;
     text-decoration:none;color:var(--bone);padding:9px 13px;
     border:1px solid var(--line-soft);background:rgba(255,176,46,.025);
     transition:.12s}
@@ -6086,7 +6086,8 @@ function setTab(tab){
   if(tab==='hist') loadHistory();
   else if(tab==='deliv') loadDeliverables();
 }
-// 成果物: LOG_*.md の frontmatter agent: が一致するノートを obsidian:// で開く
+// 成果物: LOG_*.md の frontmatter agent: が一致するノートを表示する。
+// vault 内の結果だけ obsidian:// link にし、通常の project logs も読める形を保つ。
 async function loadDeliverables(){
   if(!panelName)return;
   const box=TM('tm-deliv');
@@ -6105,13 +6106,18 @@ async function loadDeliverables(){
   if(!items.length){
     box.innerHTML='<div class="hempty">no output logs</div>';return;}
   box.innerHTML=items.map(it=>{
-    const file=it.rel.replace(/\.md$/,'');
-    const url='obsidian://open?vault='+encodeURIComponent(vault)+
-      '&file='+encodeURIComponent(file);
+    const itemVault=Object.prototype.hasOwnProperty.call(it,'vault')?
+      it.vault:vault;
     const d=it.mtime?new Date(it.mtime*1000)
       .toLocaleDateString('en-US',{month:'2-digit',day:'2-digit'}):'';
-    return `<a href="${url}"><span class="dv-t">${esc(it.title)}`+
-      `</span><span class="dv-d">${d}</span></a>`;
+    const body=`<span class="dv-t">${esc(it.title)}</span>`+
+      `<span class="dv-d">${d}</span>`;
+    if(!itemVault)
+      return `<div class="dv-item" title="${esc(it.rel||'')}">${body}</div>`;
+    const file=(it.rel||'').replace(/\.md$/,'');
+    const url='obsidian://open?vault='+encodeURIComponent(itemVault)+
+      '&file='+encodeURIComponent(file);
+    return `<a href="${url}" title="${esc(it.rel||'')}">${body}</a>`;
   }).join('');
 }
 async function loadHistory(){

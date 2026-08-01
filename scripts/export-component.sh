@@ -175,7 +175,7 @@ if [[ "$SKIP_INSTALL_CHECK" != true ]]; then
       --no-plugin \
       --project-key "$gate_home/project" \
       --agent-mail-url "http://127.0.0.1:8765/api/" \
-      --agent-mail-env "$gate_home/.mcp_agent_mail/.env" \
+      --agent-mail-env "$gate_home/mcp_agent_mail/.env" \
       --signals-dir "$gate_home/.mcp_agent_mail/signals"
   find "$gate_home" -type f -delete
   find "$gate_home" -depth -type d -empty -delete

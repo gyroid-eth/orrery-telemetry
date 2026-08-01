@@ -60,6 +60,7 @@ build_codex_cmd() {
 # Already inside a real tmux pane: register + run codex in place.
 if [[ -n "${TMUX:-}" ]]; then
   cd "$DIR"
+  export CLAUDECODE=1
   # shellcheck disable=SC1090
   source "$BOOTSTRAP" "$DIR"
   eval "exec $(build_codex_cmd "$DIR")"

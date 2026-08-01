@@ -5,7 +5,7 @@
 #
 # Usage: source this script, then read RESOLVED_AGENT and RESOLVED_AGENT_SRC.
 
-RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.claude/runtime}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 

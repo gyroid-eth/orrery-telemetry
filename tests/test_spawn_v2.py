@@ -1,6 +1,7 @@
 """Unit coverage for the lightweight dashboard spawn API."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import urllib.error
@@ -10,6 +11,35 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 import dashboard.server as server
+
+
+def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
+    path = tmp_path / "annotations.json"
+    monkeypatch.setattr(server, "ANNOT_PATH", str(path))
+    monkeypatch.setattr(server, "_ANNOT_CACHE", {"mtime": -1.0, "data": {}})
+
+    result = server._write_annotation("WiseFaraday", "", "", "runtime-audit")
+
+    assert result["ok"] is True
+    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"] == {
+        "role": "", "emoji": "", "group": "runtime-audit",
+    }
+    assert server._annotations()["WiseFaraday"]["group"] == "runtime-audit"
+
+
+def test_annotation_is_removed_only_when_all_fields_are_empty(monkeypatch, tmp_path):
+    path = tmp_path / "annotations.json"
+    path.write_text(
+        json.dumps({"WiseFaraday": {"role": "", "emoji": "", "group": "audit"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "ANNOT_PATH", str(path))
+    monkeypatch.setattr(server, "_ANNOT_CACHE", {"mtime": -1.0, "data": {}})
+
+    result = server._write_annotation("WiseFaraday", "", "", "")
+
+    assert result == {"ok": True, "removed": "WiseFaraday"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
 
 
 def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
