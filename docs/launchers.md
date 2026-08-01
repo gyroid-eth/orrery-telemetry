@@ -194,6 +194,7 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 | `watch_agent_mail_signals.sh` | signal file を削除せず、exact-match の tmux session へ通知。fswatch または polling、delivery lease、retry state で重複注入を抑制 |
 | `monitor_child_agent.sh` | child の shell return、permission prompt、stasis、任意の danger pattern を一回分検査し、状態を exit code で親へ返す |
 | `cleanup-child-agent.sh` | launcher の REPL command から戻った child の reservation、remote identity、credential、MCP config を best-effort cleanup |
+| `record-session-index.py` | `mark-agent-registered.sh` が background で呼ぶ helper。agent 名と Claude Code session ID の対応を書き、dashboard の exact session resume を支える |
 
 `cleanup-child-agent.sh` は crash / resume でも起こりうる Claude Code `SessionEnd` hook には登録されません。remote identity の retire を暗黙の lifecycle event に結びつけないためです。
 
