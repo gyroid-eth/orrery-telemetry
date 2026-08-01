@@ -16,7 +16,7 @@ The central design principle is to make operating rules executable through launc
 - `fswatch` (optional; the mail watcher polls without it)
 - `fzf` (optional directory picker)
 - Ghostty (recommended; falls back to iTerm2, Terminal.app, or `none`)
-- Obsidian (optional work-log and deliverables integration; requires `AGENTSTACK_OBSIDIAN_APP`)
+- Obsidian (optional `/log` vault/Daily Note integration and links for Output items inside a vault; generic project `logs/` still appear without it; `/log` vault mode requires `AGENTSTACK_OBSIDIAN_APP`)
 
 On Linux, the dashboard uses a systemd user service when available and falls back to `nohup`. Native Windows is not supported. See [Installation](docs/install.md#動作環境) for details.
 

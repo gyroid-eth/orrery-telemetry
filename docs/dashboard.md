@@ -4,7 +4,7 @@
 
 [前: Codex App 統合](codex-app.md) · [README に戻る](../README.md) · [次: API reference](api.md)
 
-dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、agent-mail SQLite、runtime state、Obsidian vault を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
+dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、agent-mail SQLite、runtime state、project log、任意の Obsidian link hint を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
 
 ## DECK
 
@@ -38,12 +38,20 @@ mail の `last_active` だけで running と判定せず、tmux process、pane s
 ### カード操作
 
 - History panel: Claude / Codex transcript
-- Output panel: vault の `LOG_*.md` と成果物
+- Output panel: project または設定 root の `LOG_*.md` と成果物
 - terminal open / focus
-- running / finished agent への二段確認 EXIT
-- finished / gone agent の KILL / soft retire
+- running agent への二段確認 EXIT。`/api/exit` 自体は finished agent も受け付ける
+- tmux client が attach していない finished / gone agent の KILL / soft retire
 
-KILL の可否は frontend の見た目だけで決めず、server の `build_agents()` category を再検証します。attached client がある session は warning を返します。
+KILL の可否は frontend の見た目だけで決めず、server の `build_agents()` category を再検証します。attached client がある session では UI が KILL button を隠し、API を直接呼んでも server が `refusing to kill (detach first)` で hard refusal します。
+
+## Output / deliverables
+
+Output は vault 専用ではありません。`AGENTSTACK_DELIVERABLE_ROOTS` があれば `:` 区切りの root 群、なければ project の `logs/` を再帰走査し、frontmatter の `agent:` が選択 agent と一致する `LOG_*.md` を mtime 降順で最大25件表示します。
+
+project base は絶対 path の `AGENTSTACK_PROJECT_KEY`、絶対 path の `AGENTSTACK_VAULT`、dashboard の cwd / git root の順に fallback します。明示した deliverable root は既定 root を置き換えます。
+
+検出 item が `AGENTSTACK_VAULT` 内なら `obsidian://` link にし、それ以外の generic project / shared log は非リンク項目として表示します。Obsidian がなくても一覧と成果物数は利用できます。
 
 ## Codex App runtime
 
@@ -71,7 +79,7 @@ NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 - hover / long press tooltip に task、live state、model、last activity
 - click で詳細 panel
 
-詳細 panel の History は transcript と24時間 event sparkline、Output は vault の成果物です。ROLE ASSIGN では role / group annotation を保存または削除できます。
+詳細 panel の History は transcript と24時間 event sparkline、Output は project-scoped な成果物です。ROLE ASSIGN では role / group annotation を保存または削除できます。
 
 ### Edge と mail
 

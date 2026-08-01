@@ -11,7 +11,9 @@
 git -C /path/to/claude-agent-stack status --short
 ```
 
-を実行し、install root、service、tmux、settings merge、project key、mail watcher を確認します。
+core doctor は install footprint、必須 command、managed block、managed agent 名、tmux mouse、tmux global identity env を検査します。repository 側は `git status` で変更を確認します。
+
+doctor は dashboard service state と mail-watcher health を検査しません。service は後述の launchd / systemd command、watcher は `/api/mail-watcher-health` で別に確認してください。
 
 ## `NOT CONFIGURED`
 
@@ -30,7 +32,16 @@ export AGENTSTACK_PROJECT_KEY=/absolute/project/path
 ./scripts/install.sh
 ```
 
-DECK の tmux state は設定なしでも見えます。mail edge、history / replay、spawn、vault Output だけが使えない状態は意図された縮退動作です。
+DECK の tmux state は設定なしでも見えます。mail edge、history / replay、spawn だけが使えない状態は意図された縮退動作です。Output は cwd / git root の `logs/` fallback を引き続き探索します。
+
+## Output が空、または link にならない
+
+Output の file は `LOG_*.md` で、frontmatter の `agent:` が dashboard の canonical agent 名と一致する必要があります。
+
+1. `AGENTSTACK_DELIVERABLE_ROOTS` を設定した場合は `:` 区切りの各 directory が service process から読めるか確認
+2. 未設定なら `AGENTSTACK_PROJECT_KEY/logs/`、次に vault、cwd / git root の fallback を確認
+3. `env.sh` だけを変えた場合は installer を再実行し、launchd / systemd environment に反映
+4. item が `AGENTSTACK_VAULT` の外なら非リンク表示が正常です。vault 内 item だけが `obsidian://` link になります
 
 ## launchd が起動しない
 
