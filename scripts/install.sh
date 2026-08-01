@@ -745,8 +745,14 @@ start_service() {
       else
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       fi
-      run launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH"
+      # launchctl's enabled/disabled override persists independently of the
+      # plist. Apply it before bootstrap so the live job is loaded with its
+      # RunAtLoad/KeepAlive conditions active, not merely enabled afterward.
       run launchctl enable "gui/$(id -u)/$LABEL"
+      run launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH"
+      # RunAtLoad should start the service, but kickstart makes installation
+      # deterministic and the HTTP health check below verifies actual service.
+      run launchctl kickstart "gui/$(id -u)/$LABEL"
       ;;
     systemd-user)
       render_systemd_unit
@@ -770,6 +776,40 @@ start_service() {
       die "unknown service kind: $kind"
       ;;
   esac
+}
+
+verify_dashboard_service() {
+  plan "verify dashboard API responds at http://127.0.0.1:$PORT/api/agents"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  if "$PYTHON_BIN" - "$PORT" <<'PY'
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = int(sys.argv[1])
+url = f"http://127.0.0.1:{port}/api/agents"
+deadline = time.monotonic() + 15
+last_error = "no response"
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=1) as response:
+            if response.status == 200:
+                raise SystemExit(0)
+            last_error = f"HTTP {response.status}"
+    except (OSError, urllib.error.URLError) as exc:
+        last_error = str(exc)
+    time.sleep(0.25)
+print(f"dashboard health check failed: {last_error}", file=sys.stderr)
+raise SystemExit(1)
+PY
+  then
+    say "dashboard healthy: http://127.0.0.1:$PORT/api/agents"
+  else
+    die "dashboard service did not become healthy; inspect $DASHBOARD_LOG"
+  fi
 }
 
 write_manifest() {
@@ -949,6 +989,7 @@ main() {
   safe_merge_settings
   safe_managed_doc_setups
   write_manifest "$service_kind" "${SERVICE_PATH:-}"
+  verify_dashboard_service
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
   else

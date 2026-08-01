@@ -63,6 +63,52 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert "AGENTSTACK_DASHBOARD_SELF_RESTART=1" in installer
 
 
+def test_launchd_install_enables_before_bootstrap_then_kickstarts_and_checks_health(
+    tmp_path,
+):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_TERMINAL": "none",
+    })
+    result = subprocess.run(
+        [
+            "bash", str(ROOT / "scripts" / "install.sh"),
+            "--dashboard-only", "--dry-run",
+            "--install-dir", str(home / ".agentstack"),
+            "--project-key", str(project),
+            "--port", "18952",
+            "--label-prefix", "org.agentstack.order-test",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    output = result.stdout
+    enable = output.index("launchctl enable gui/")
+    bootstrap = output.index("launchctl bootstrap gui/")
+    kickstart = output.index("launchctl kickstart gui/")
+    health = output.index("verify dashboard API responds")
+    assert enable < bootstrap < kickstart < health
+
+
 def test_runner_records_sigkill_and_self_restarts_for_nohup(tmp_path):
     child = tmp_path / "crash_then_wait.py"
     counter = tmp_path / "attempts.txt"

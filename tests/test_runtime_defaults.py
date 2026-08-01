@@ -5,12 +5,61 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import signal
 import socket
 import subprocess
+import sys
+import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
+
+
+def _fake_systemctl() -> str:
+    """Start/stop the installed dashboard for isolated installer tests."""
+    return """#!/bin/sh
+case "$2" in
+  show-environment|daemon-reload)
+    exit 0
+    ;;
+  enable)
+    nohup "$AGENTSTACK_TEST_PYTHON" \
+      "$AGENTSTACK_HOME/dashboard/service_runner.py" >/dev/null 2>&1 &
+    echo $! > "$AGENTSTACK_TEST_SERVICE_PID"
+    ;;
+  disable)
+    if [ -f "$AGENTSTACK_TEST_SERVICE_PID" ]; then
+      kill "$(sed -n '1p' "$AGENTSTACK_TEST_SERVICE_PID")" 2>/dev/null || true
+    fi
+    ;;
+esac
+exit 0
+"""
+
+
+def _stop_fake_dashboard(env: dict[str, str]) -> None:
+    pidfile = pathlib.Path(env["AGENTSTACK_TEST_SERVICE_PID"])
+    try:
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, ValueError):
+        pid = 0
+    if pid > 1:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    deadline = time.monotonic() + 5
+    port = int(env["AGENTSTACK_PORT"])
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            probe.settimeout(0.1)
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
+                pidfile.unlink(missing_ok=True)
+                return
+        time.sleep(0.05)
+    raise AssertionError(f"fake dashboard did not release port {port}")
 
 
 def _normalize_sample_paths(value, manifest):
@@ -233,7 +282,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
-        "systemctl": "#!/bin/sh\nexit 0\n",
+        "systemctl": _fake_systemctl(),
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
@@ -277,10 +326,12 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
         "AGENTSTACK_TERMINAL": "auto",
+        "AGENTSTACK_TEST_PYTHON": sys.executable,
+        "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
     })
 
     install_command = ["bash", str(ROOT / "scripts" / "install.sh")]
-    subprocess.run(
+    install_result = subprocess.run(
         install_command,
         cwd=ROOT,
         env=env,
@@ -288,16 +339,20 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         capture_output=True,
         check=True,
     )
+    assert "dashboard healthy:" in install_result.stdout
 
     runtime_path = install_dir / "runtime" / "annotations.json"
     runtime_log = install_dir / "runtime" / "dashboard.log"
     assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
-    assert runtime_log.read_text(encoding="utf-8") == "legacy dashboard crash\n"
+    assert runtime_log.read_text(encoding="utf-8").startswith(
+        "legacy dashboard crash\n"
+    )
     assert not legacy_path.exists()
     assert not legacy_log.exists()
 
     # Reinstall must keep every old operational log out of the payload tree,
     # even when the canonical and first legacy migration targets already exist.
+    _stop_fake_dashboard(env)
     legacy_log.write_text("second legacy dashboard crash\n", encoding="utf-8")
     subprocess.run(
         install_command,
@@ -308,11 +363,12 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         check=True,
     )
     runtime_legacy_log = install_dir / "runtime" / "dashboard.legacy.log"
-    assert runtime_legacy_log.read_text(encoding="utf-8") == (
+    assert runtime_legacy_log.read_text(encoding="utf-8").startswith(
         "second legacy dashboard crash\n"
     )
     assert not legacy_log.exists()
 
+    _stop_fake_dashboard(env)
     legacy_log.write_text("third legacy dashboard crash\n", encoding="utf-8")
     subprocess.run(
         install_command,
@@ -323,10 +379,11 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         check=True,
     )
     runtime_legacy_log_1 = install_dir / "runtime" / "dashboard.legacy.1.log"
-    assert runtime_legacy_log_1.read_text(encoding="utf-8") == (
+    assert runtime_legacy_log_1.read_text(encoding="utf-8").startswith(
         "third legacy dashboard crash\n"
     )
     assert not legacy_log.exists()
+
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )
@@ -408,6 +465,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         capture_output=True,
         check=True,
     )
+    _stop_fake_dashboard(env)
     assert json.loads(runtime_path.read_text(encoding="utf-8")) == legacy_data
     assert token_path.read_text(encoding="utf-8") == "retained-token\n"
     remaining = {
@@ -490,7 +548,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
-        "systemctl": "#!/bin/sh\nexit 0\n",
+        "systemctl": _fake_systemctl(),
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
@@ -520,12 +578,15 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
         "AGENTSTACK_TERMINAL": "none",
+        "AGENTSTACK_TEST_PYTHON": sys.executable,
+        "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
     })
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "install.sh")],
         cwd=ROOT, env=env, text=True, capture_output=True, check=True,
     )
+    assert "dashboard healthy:" in result.stdout
     assert "already exists; leaving it untouched" in result.stderr
     assert user_delegate.read_text(encoding="utf-8") == original
     assert not user_delegate.parent.is_symlink()
@@ -545,6 +606,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
         ],
         cwd=ROOT, env=env, text=True, capture_output=True, check=True,
     )
+    _stop_fake_dashboard(env)
     assert user_delegate.read_text(encoding="utf-8") == original
     assert "kept retargeted skill link" in uninstall.stderr
     assert log_link.is_symlink()
