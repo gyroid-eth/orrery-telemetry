@@ -23,11 +23,12 @@
 | `AGENTSTACK_MAIL_DB` | `~/mcp_agent_mail/storage.sqlite3` | agent-mail SQLite |
 | `AGENTSTACK_MAIL_ENV` | `~/mcp_agent_mail/.env` | dashboard spawn が bearer token を読む file |
 | `AGENTSTACK_PROJECT_KEY` | 未設定 | agent-mail project の human key |
-| `AGENTSTACK_VAULT` | 未設定 | project key fallback と Output scan root |
+| `AGENTSTACK_VAULT` | 未設定 | project key 不在時の fallback と、vault 内 Output item の Obsidian link hint |
+| `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | `:` 区切りで `LOG_*.md` を再帰走査する root。未設定時は project の `logs/` |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
-| `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、annotation、session state |
+| `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、session index、child / watcher state |
 | `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal data root |
 | `AGENTSTACK_SIGNALS_DIR` | `$AGENTSTACK_MAIL_HOME/signals` | mail signal directory |
 | `AGENTSTACK_PORTRAITS_DIR` | 未設定 | private PNG overlay directory |
@@ -47,6 +48,7 @@ path 系は `~` を展開します。空文字は未設定として扱います�
 - terminal open / local capture
 - local annotation
 - bundled portrait
+- Output / deliverables（cwd または git root の `logs/` へ fallback）
 
 次は動きません。
 
@@ -55,9 +57,24 @@ path 系は `~` を展開します。空文字は未設定として扱います�
 - mail history / DIGEST REPLAY
 - dashboard spawn
 - project-scoped retire
-- vault Output / deliverables
 
 mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す設計です。
+
+## Output / deliverables
+
+Output index は `LOG_*.md` の先頭付近にある `agent: <name>` と dashboard の agent 名が一致する file を最大25件表示します。
+
+- `AGENTSTACK_DELIVERABLE_ROOTS` を設定した場合、その `:` 区切り root 群を再帰走査します。明示 root は既定の `logs/` を置き換えます
+- 未設定時は、絶対 path の `AGENTSTACK_PROJECT_KEY`、絶対 path の `AGENTSTACK_VAULT`、dashboard の cwd / git root の順で base を決め、その直下の `logs/` を走査します
+- `AGENTSTACK_VAULT` は private directory layout の走査指定ではありません。検出 item がその vault 内にあるときだけ `obsidian://` link を作る hint です
+- vault 外の item も一覧に出ますが、無効な Obsidian link を作らず非リンク項目として表示します
+
+custom root は service environment へ配線するため、設定後に installer を再実行します。
+
+```bash
+export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
+./scripts/install.sh
+```
 
 ## Installer
 
@@ -69,6 +86,7 @@ mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す�
 | `AGENTSTACK_AGENT_MAIL_REPO` | upstream GitHub URL | agent-mail clone source |
 | `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
 | `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
+| `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | Output index の `:` 区切り走査 root。env / service / manifest へ保存 |
 | `AGENTSTACK_PORT` | `8770` | dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | service label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |
@@ -97,8 +115,10 @@ mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す�
 | `AGENTSTACK_AGENT_NAME_ATTEMPTS` | implementation default | name 候補の最大試行数 |
 | `AGENTSTACK_NAME_UNKNOWN_LIMIT` | `3` | 連続 `unknown` の停止閾値 |
 | `AGENTSTACK_TCC_GUARD` | enabled | macOS TCC warning。`0` で無効 |
-| `AGENTSTACK_TCC_DIRS` | Desktop / Documents / Downloads | TCC probe 対象 |
+| `AGENTSTACK_TCC_DIRS` | `$HOME/Desktop:$HOME/Downloads:$HOME/Documents` | `:` 区切りの TCC probe 対象 |
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | scientist vocabulary override |
+
+`AGENTSTACK_TCC_DIRS` は空白を含む path も保持できる `:` 区切りが正本です。colon を含まない旧 whitespace 区切りも legacy compatibility として解釈します。
 
 `AGENTSTACK_RESERVED_IDENTITY`、proxy token path、child token などは spawner が session ごとに設定する内部値です。top-level launcher へ手動で設定しないでください。
 
@@ -134,7 +154,7 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | --- | --- | --- |
 | `AGENTSTACK_ENV_FILE` | 未設定 | `agentstack-preregister-child` / `agentstack-reregister` が標準 `env.sh` より先に読む追加 env file |
 | `AGENTSTACK_CLAUDE_JSON` | `~/.claude.json` | Claude child 用 MCP config を作るとき、既存 agent-mail server 名を読む source |
-| `AGENTSTACK_MANAGED_AGENTS_FILE` | installer: `$AGENTSTACK_RUNTIME_DIR/managed_agents.txt` | title / spawn / cleanup helper が管理する agent 名一覧。未導入 helper の fallback は `~/.claude/managed_agents.txt` |
+| `AGENTSTACK_MANAGED_AGENTS_FILE` | `$AGENTSTACK_RUNTIME_DIR/managed_agents.txt` | title / spawn / cleanup helper が管理する agent 名一覧 |
 | `AGENTSTACK_MCP_HEALTH_URL` | `AGENTSTACK_MCP_URL` から導出 | `session-start-reminder.sh` の liveness endpoint |
 | `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
 | `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
@@ -222,13 +242,13 @@ sample は [`examples/custom_portraits.example.json`](../examples/custom_portrai
 
 ## Annotation
 
-role / emoji / group は `AGENTSTACK_RUNTIME_DIR` 下の local JSON に保存されます。
+role / emoji / group の入力上限と保持条件は次のとおりです。
 
 - role: 最大40文字
 - emoji: 最大8文字
 - group: 最大24文字
 
-現行の保存判定は role または emoji がある entry です。group だけの annotation は保持されません。dashboard spawn は role / group を渡しますが emoji は空にします。
+role / emoji / group のいずれかがあれば entry を保持します。3項目すべてが空のときだけ削除するため、group だけの annotation も保存されます。dashboard spawn は role / group を渡し、emoji は空にします。
 
 ## Security boundary
 

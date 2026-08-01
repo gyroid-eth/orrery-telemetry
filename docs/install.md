@@ -21,7 +21,7 @@
 - `fswatch`: mail watcher。なければ 2 秒間隔の polling に fallback します（通知は届きます）
 - `fzf`: 引数なし launcher の directory picker。なければカレントディレクトリを使います
 - Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback。ただし既存ウィンドウの前面化は Ghostty のみで、iTerm2 と Terminal.app では jump のたびに新しいウィンドウが開きます
-- Obsidian: `/log` と Output index の vault 統合。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard の Output index は一覧までは動いて `obsidian://` リンクだけが開けません
+- Obsidian: `/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard は generic project log を非リンク項目として表示します
 
 Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。WSL2 でも localhost dashboard は使えますが、Ghostty の click-to-jump は使えません。Windows native は対象外です。
 
@@ -136,6 +136,8 @@ launcher はこの状態を警告します。必要なら:
 export AGENTSTACK_TCC_GUARD=0
 export AGENTSTACK_TCC_DIRS="$HOME/Desktop:$HOME/Documents:$HOME/Downloads"
 ```
+
+`AGENTSTACK_TCC_DIRS` は `:` 区切りが正本です。colon を含まない旧 whitespace 区切りも compatibility のため引き続き受け付けます。
 
 権限エラーを `chmod` だけで直そうとしないでください。判定主体は file mode ではなく起動元 app です。
 

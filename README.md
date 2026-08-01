@@ -16,7 +16,7 @@
 - `fswatch`（任意。mail watcher。なければ polling）
 - `fzf`（任意。directory picker）
 - Ghostty（推奨。iTerm2、Terminal.app、`none` へ fallback）
-- Obsidian（任意。作業ログと成果物 index の統合。`AGENTSTACK_OBSIDIAN_APP` の設定が必要）
+- Obsidian（任意。`/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。未導入でも generic project の `logs/` は Output に表示できます。`/log` の vault mode には `AGENTSTACK_OBSIDIAN_APP` が必要）
 
 Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。Windows native は対象外です。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
 

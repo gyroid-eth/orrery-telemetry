@@ -64,9 +64,7 @@ hook は prompt 本文、tool input、tool output を Bridge へ渡しません�
 ./scripts/install-codex-app-integration.sh \
   --dry-run \
   --project-key "$AGENTSTACK_PROJECT_KEY" \
-  --agent-mail-url http://127.0.0.1:8765/api/ \
-  --agent-mail-env "$AGENTSTACK_MAIL_ENV" \
-  --signals-dir "$AGENTSTACK_SIGNALS_DIR"
+  --agent-mail-url http://127.0.0.1:8765/api/
 ```
 
 preview が正しければ `--dry-run` だけを外します。
@@ -74,10 +72,10 @@ preview が正しければ `--dry-run` だけを外します。
 ```bash
 ./scripts/install-codex-app-integration.sh \
   --project-key "$AGENTSTACK_PROJECT_KEY" \
-  --agent-mail-url http://127.0.0.1:8765/api/ \
-  --agent-mail-env "$AGENTSTACK_MAIL_ENV" \
-  --signals-dir "$AGENTSTACK_SIGNALS_DIR"
+  --agent-mail-url http://127.0.0.1:8765/api/
 ```
+
+source 済みの core `env.sh` に custom path があれば installer はそれを使います。未指定時の bearer file は upstream clone 側の `~/mcp_agent_mail/.env`、signal directory は runtime/archive 側の `~/.mcp_agent_mail/signals` です。この2つは用途の異なる directory です。
 
 installer は次を行います。
 
@@ -199,7 +197,7 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 | 症状 | 確認と対処 |
 | --- | --- |
 | installer が project key を拒否 | `--project-key` に absolute path を渡す |
-| Bridge が agent-mail へ接続できない | `tools/call` を通常の JSON で返す endpoint（installer の例は `/api/`）、`--agent-mail-env`、bearer file の存在を確認 |
+| Bridge が agent-mail へ接続できない | `tools/call` を通常の JSON で返す endpoint（installer の例は `/api/`）、`AGENTSTACK_MAIL_ENV`（既定 `~/mcp_agent_mail/.env`）、bearer file の存在を確認 |
 | doctor が socket / startup diagnostic を失敗扱い | `launchctl print gui/$(id -u)/org.agentstack.codex-app-bridge` と `bridge.stderr.log` を確認。意図的な停止中だけ `--allow-stopped` |
 | Codex App runtime が dashboard に出ない | Codex Desktop plugin が有効か確認。CLI session と transcript のない session は意図的に対象外 |
 | state が `degraded` | owner token 読み取りまたは agent-mail 登録が失敗。URL、bearer、runtime file mode、registration retry log を確認し、別 identity を作らない |

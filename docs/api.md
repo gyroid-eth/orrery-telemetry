@@ -297,7 +297,7 @@ response は live comet 用の message list と watermark を含みます。設�
 }
 ```
 
-annotation は local runtime JSON が正本です。
+annotation は `GET /api/annotations` と `POST /api/annotate` を通じて読み書きします。
 
 ## GET `/api/deliverables`
 
@@ -309,12 +309,21 @@ curl -s 'http://127.0.0.1:8770/api/deliverables?agent=WindyFermi'
 {
   "ok":true,
   "agent":"WindyFermi",
-  "vault":"MyVault",
-  "items":[]
+  "vault":"",
+  "items":[
+    {
+      "title":"LOG_2026-08-01T0900 Release audit",
+      "rel":"LOG_2026-08-01T0900 Release audit.md",
+      "vault":"",
+      "mtime":1785542400
+    }
+  ]
 }
 ```
 
-最大25件です。`AGENTSTACK_VAULT` がない場合は `vault` と `items` が空になります。
+最大25件です。`AGENTSTACK_DELIVERABLE_ROOTS` が設定されていれば、その `:` 区切り root 群を再帰走査します。未設定時は project、vault、cwd / git root の順で base を決め、その `logs/` を使います。`LOG_*.md` の frontmatter `agent:` が query の agent と一致する item だけを返します。
+
+各 item の `vault` は、その file が `AGENTSTACK_VAULT` 内にある場合だけ vault 名になります。その場合の `rel` は vault-relative path で、UI は Obsidian link を作れます。vault 外では `vault` は空、`rel` は走査 root からの relative path となり、UI は非リンク項目として表示します。top-level `vault` は設定された vault 名を返す compatibility field です。
 
 ## GET `/api/custom-portraits`
 
