@@ -28,7 +28,7 @@
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
-| `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、session index、child / watcher state |
+| `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、annotation、session index、child / watcher state |
 | `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal data root |
 | `AGENTSTACK_SIGNALS_DIR` | `$AGENTSTACK_MAIL_HOME/signals` | mail signal directory |
 | `AGENTSTACK_PORTRAITS_DIR` | 未設定 | private PNG overlay directory |
@@ -241,6 +241,21 @@ resolution 順:
 sample は [`examples/custom_portraits.example.json`](../examples/custom_portraits.example.json) を参照してください。private asset を repository へ commit せず、distribution asset と分離できます。
 
 ## Annotation
+
+annotation の正本は:
+
+```text
+$AGENTSTACK_RUNTIME_DIR/annotations.json
+```
+
+です。`AGENTSTACK_RUNTIME_DIR` 未設定時は `~/.agentstack/runtime/annotations.json` になります。
+
+既存 install の `dashboard/annotations.json` は自動移行されます。
+
+- 新 path があれば常にそちらを読みます
+- 新 path がなく旧 path だけがあれば旧 store を読み、次の annotate 書き込みで全 agent を保持したまま新 path へ書きます。この遅延移行では旧 file を残します
+- installer を再実行した場合は payload copy より前に旧 store を runtime へ移します。移行後の旧 file 削除に失敗しても warning に留め、install と annotation は維持します
+- annotation は user state として通常の uninstall で保持され、`--purge-data` のときだけ runtime directory とともに削除されます
 
 role / emoji / group の入力上限と保持条件は次のとおりです。
 
