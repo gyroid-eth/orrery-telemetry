@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the deterministic 33-second AgentStack concept-demo timeline.
+"""Run the deterministic 54-second AgentStack concept-demo timeline.
 
 The reel uses a newly created SQLite database, an isolated dashboard process,
 and exactly three real tmux printer sessions.  All remaining panes are virtual
@@ -33,11 +33,12 @@ DEFAULT_INSTALL_DIR = Path("/private/tmp/agentstack-demo-reel")
 DEFAULT_PORT = 8878
 PROFILE = "agentstack-demo-reel-v1"
 SESSION_PREFIX = "agentstack-reel-"
-STORY_SECONDS = 33.0
+STORY_SECONDS = 54.0
 HUMAN_LOOP_AT = 25.0
+HUMAN_LOOP_BEAT_AT = 41.0
 HUMAN_LOOP_STATE_LEAD_SECONDS = 6.0
-HUMAN_LOOP_STATE_AT = HUMAN_LOOP_AT - HUMAN_LOOP_STATE_LEAD_SECONDS
-HUMAN_LOOP_RESOLVE_AT = 31.0
+HUMAN_LOOP_STATE_AT = HUMAN_LOOP_BEAT_AT - HUMAN_LOOP_STATE_LEAD_SECONDS
+HUMAN_LOOP_RESOLVE_AT = 48.5
 DEMO_MAIL_TRAVEL_MS = 2500
 NETWORK_TUNE = "NSIZE:11,L:175,KR:6400,GR:.006,KS:.015"
 
@@ -134,7 +135,23 @@ CAPTIONS = (
     {"at": 16.5, "text": "SIGNALS CROSS BORDERS"},
     {"at": 22.0, "text": "ONE COORDINATION MESH"},
     {"at": HUMAN_LOOP_AT, "text": "HUMAN IN THE LOOP"},
-    {"at": HUMAN_LOOP_RESOLVE_AT, "text": "ONE CLICK · SYSTEM MOVES"},
+    {"at": 31.0, "text": "ONE CLICK · SYSTEM MOVES"},
+)
+
+# Logical phase beats for pacing reports and tests.  CAPTIONS intentionally
+# remain on their existing schedule; the recorder aligns them to measured UI
+# transitions after capture.
+PHASE_TIMES = (
+    ("one_terminal", 0.0),
+    ("project_roots", 4.0),
+    ("first_generation", 9.0),
+    ("second_generation_a", 14.0),
+    ("second_generation_b", 22.0),
+    ("intra_cluster_mail", 24.0),
+    ("cross_cluster_mail", 35.0),
+    ("human_loop", HUMAN_LOOP_BEAT_AT),
+    ("resolve", HUMAN_LOOP_RESOLVE_AT),
+    ("outro_end", STORY_SECONDS),
 )
 
 
@@ -166,97 +183,95 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _agent_add(0.0, "Bright-Curie"),
     _state(0.0, "Bright-Curie", "work", 12),
 
-    _agent_add(2.5, "Swift-Noether"),
-    _agent_add(2.5, "Calm-Turing"),
-    _state(2.5, "Swift-Noether", "wait", 19),
-    _state(2.5, "Calm-Turing", "work", 24),
+    _agent_add(4.0, "Swift-Noether"),
+    _agent_add(4.0, "Calm-Turing"),
+    _state(4.0, "Swift-Noether", "wait", 19),
+    _state(4.0, "Calm-Turing", "work", 24),
 
-    _agent_add(5.0, "Warm-Lovelace"),
-    _agent_add(5.0, "Bold-Hopper"),
-    _agent_add(5.0, "Quiet-Franklin"),
-    _spawn(5.1, "Bright-Curie", "Warm-Lovelace"),
-    _spawn(5.1, "Swift-Noether", "Bold-Hopper"),
-    _spawn(5.1, "Calm-Turing", "Quiet-Franklin"),
+    _agent_add(9.0, "Warm-Lovelace"),
+    _agent_add(9.0, "Bold-Hopper"),
+    _agent_add(9.0, "Quiet-Franklin"),
+    _spawn(9.1, "Bright-Curie", "Warm-Lovelace"),
+    _spawn(9.1, "Swift-Noether", "Bold-Hopper"),
+    _spawn(9.1, "Calm-Turing", "Quiet-Franklin"),
 
-    _agent_add(8.0, "Keen-Faraday"),
-    _agent_add(8.0, "Gentle-Lamarr"),
-    _agent_add(8.0, "Steady-Bose"),
-    _spawn(8.1, "Warm-Lovelace", "Keen-Faraday"),
-    _spawn(8.1, "Bold-Hopper", "Gentle-Lamarr"),
-    _spawn(8.1, "Quiet-Franklin", "Steady-Bose"),
+    _agent_add(14.0, "Keen-Faraday"),
+    _agent_add(14.0, "Gentle-Lamarr"),
+    _agent_add(14.0, "Steady-Bose"),
+    _spawn(14.1, "Warm-Lovelace", "Keen-Faraday"),
+    _spawn(14.1, "Bold-Hopper", "Gentle-Lamarr"),
+    _spawn(14.1, "Quiet-Franklin", "Steady-Bose"),
 
-    _agent_add(10.0, "Soft-Galileo"),
-    _agent_add(10.0, "Clear-Somerville"),
-    _agent_add(10.0, "Vivid-Feynman"),
-    _spawn(10.1, "Warm-Lovelace", "Soft-Galileo"),
-    _spawn(10.1, "Bold-Hopper", "Clear-Somerville"),
-    _spawn(10.1, "Quiet-Franklin", "Vivid-Feynman"),
+    _agent_add(22.0, "Soft-Galileo"),
+    _agent_add(22.0, "Clear-Somerville"),
+    _agent_add(22.0, "Vivid-Feynman"),
+    _spawn(22.1, "Warm-Lovelace", "Soft-Galileo"),
+    _spawn(22.1, "Bold-Hopper", "Clear-Somerville"),
+    _spawn(22.1, "Quiet-Franklin", "Vivid-Feynman"),
 
     # Phase 1: every project speaks only inside its own two-generation tree.
-    _mail(11.5, "Bright-Curie", "Warm-Lovelace", "Shape the signal branch"),
-    _mail(11.5, "Swift-Noether", "Bold-Hopper", "Shape the orbit branch"),
-    _mail(11.5, "Calm-Turing", "Quiet-Franklin", "Shape the lumen branch"),
-    _mail(12.5, "Warm-Lovelace", "Keen-Faraday", "Tune the signal relay"),
-    _mail(12.5, "Bold-Hopper", "Gentle-Lamarr", "Tune the spectrum relay"),
-    _mail(12.5, "Quiet-Franklin", "Steady-Bose", "Tune the ambient relay"),
-    _mail(13.5, "Warm-Lovelace", "Soft-Galileo", "Review signal scale"),
-    _mail(13.5, "Bold-Hopper", "Clear-Somerville", "Review orbit notes"),
-    _mail(13.5, "Quiet-Franklin", "Vivid-Feynman", "Review lumen handoff"),
-    _mail(14.5, "Keen-Faraday", "Soft-Galileo", "Signal branch aligned"),
-    _mail(14.5, "Gentle-Lamarr", "Clear-Somerville", "Orbit branch aligned"),
-    _mail(14.5, "Steady-Bose", "Vivid-Feynman", "Lumen branch aligned"),
-    _mail(15.5, "Soft-Galileo", "Warm-Lovelace", "Signal loop complete"),
-    _mail(15.5, "Clear-Somerville", "Bold-Hopper", "Orbit loop complete"),
-    _mail(15.5, "Vivid-Feynman", "Quiet-Franklin", "Lumen loop complete"),
+    _mail(24.0, "Bright-Curie", "Warm-Lovelace", "Shape the signal branch"),
+    _mail(24.4, "Swift-Noether", "Bold-Hopper", "Shape the orbit branch"),
+    _mail(24.8, "Calm-Turing", "Quiet-Franklin", "Shape the lumen branch"),
+    _mail(26.0, "Warm-Lovelace", "Keen-Faraday", "Tune the signal relay"),
+    _mail(26.4, "Bold-Hopper", "Gentle-Lamarr", "Tune the spectrum relay"),
+    _mail(26.8, "Quiet-Franklin", "Steady-Bose", "Tune the ambient relay"),
+    _mail(28.0, "Warm-Lovelace", "Soft-Galileo", "Review signal scale"),
+    _mail(28.4, "Bold-Hopper", "Clear-Somerville", "Review orbit notes"),
+    _mail(28.8, "Quiet-Franklin", "Vivid-Feynman", "Review lumen handoff"),
+    _mail(30.0, "Keen-Faraday", "Soft-Galileo", "Signal branch aligned"),
+    _mail(30.4, "Gentle-Lamarr", "Clear-Somerville", "Orbit branch aligned"),
+    _mail(30.8, "Steady-Bose", "Vivid-Feynman", "Lumen branch aligned"),
+    _mail(32.0, "Soft-Galileo", "Warm-Lovelace", "Signal loop complete"),
+    _mail(32.4, "Clear-Somerville", "Bold-Hopper", "Orbit loop complete"),
+    _mail(32.8, "Vivid-Feynman", "Quiet-Franklin", "Lumen loop complete"),
 
     # Phase 2: bridges repeat across clusters, so the web and edge counts grow.
-    _mail(16.5, "Warm-Lovelace", "Bold-Hopper", "Open the first bridge"),
-    _mail(16.5, "Bold-Hopper", "Warm-Lovelace", "First bridge confirmed"),
-    _mail(17.5, "Quiet-Franklin", "Warm-Lovelace", "Share the lumen map"),
-    _mail(17.5, "Warm-Lovelace", "Quiet-Franklin", "Signal map linked"),
-    _mail(18.5, "Gentle-Lamarr", "Steady-Bose", "Exchange spectrum rhythm"),
-    _mail(18.5, "Steady-Bose", "Gentle-Lamarr", "Spectrum rhythm received"),
-
     # Runtime captures are cached for 4.5s, then observed on the next graph
-    # poll.  Lead the 25s caption by 6s so the live glyphs overlap the full
-    # HUMAN IN THE LOOP beat instead of appearing only at the reel's end.
+    # poll.  Lead the logical human-loop beat by 6s and keep the state until
+    # resolve so both live glyphs remain visible for at least eight seconds.
     _state(HUMAN_LOOP_STATE_AT, "Bright-Curie", "question", 28),
     _state(HUMAN_LOOP_STATE_AT, "Swift-Noether", "ask", 36),
     _state(HUMAN_LOOP_STATE_AT, "Calm-Turing", "work", 41),
+    _mail(35.0, "Warm-Lovelace", "Bold-Hopper", "Open the first bridge"),
+    _mail(35.5, "Bold-Hopper", "Warm-Lovelace", "First bridge confirmed"),
+    _mail(36.0, "Quiet-Franklin", "Warm-Lovelace", "Share the lumen map"),
+    _mail(36.5, "Warm-Lovelace", "Quiet-Franklin", "Signal map linked"),
+    _mail(37.0, "Gentle-Lamarr", "Steady-Bose", "Exchange spectrum rhythm"),
+    _mail(37.5, "Steady-Bose", "Gentle-Lamarr", "Spectrum rhythm received"),
+    _mail(38.0, "Soft-Galileo", "Clear-Somerville", "Compare shared scale"),
+    _mail(38.5, "Clear-Somerville", "Soft-Galileo", "Shared scale accepted"),
+    _mail(39.0, "Vivid-Feynman", "Keen-Faraday", "Connect the relay path"),
+    _mail(39.5, "Keen-Faraday", "Vivid-Feynman", "Relay path connected"),
+    _mail(40.0, "Bright-Curie", "Swift-Noether", "Join mission telemetry"),
+    _mail(40.5, "Swift-Noether", "Calm-Turing", "Join telemetry journey"),
+    _mail(41.0, "Calm-Turing", "Bright-Curie", "Close the root triangle"),
+    _mail(41.5, "Bright-Curie", "Swift-Noether", "Reinforce mission telemetry"),
+    _mail(42.0, "Bold-Hopper", "Quiet-Franklin", "Bind orbit to lumen"),
+    _mail(42.5, "Quiet-Franklin", "Bold-Hopper", "Lumen binding confirmed"),
+    _mail(43.0, "Clear-Somerville", "Vivid-Feynman", "Merge observation notes"),
+    _mail(43.5, "Vivid-Feynman", "Clear-Somerville", "Observation mesh ready"),
 
-    _mail(19.5, "Soft-Galileo", "Clear-Somerville", "Compare shared scale"),
-    _mail(19.5, "Clear-Somerville", "Soft-Galileo", "Shared scale accepted"),
-    _mail(20.5, "Vivid-Feynman", "Keen-Faraday", "Connect the relay path"),
-    _mail(20.5, "Keen-Faraday", "Vivid-Feynman", "Relay path connected"),
-    _mail(21.5, "Bright-Curie", "Swift-Noether", "Join mission telemetry"),
-    _mail(21.5, "Swift-Noether", "Calm-Turing", "Join telemetry journey"),
-    _mail(22.5, "Calm-Turing", "Bright-Curie", "Close the root triangle"),
-    _mail(22.5, "Bright-Curie", "Swift-Noether", "Reinforce mission telemetry"),
-    _mail(23.5, "Bold-Hopper", "Quiet-Franklin", "Bind orbit to lumen"),
-    _mail(23.5, "Quiet-Franklin", "Bold-Hopper", "Lumen binding confirmed"),
-    _mail(24.5, "Clear-Somerville", "Vivid-Feynman", "Merge observation notes"),
-    _mail(24.5, "Vivid-Feynman", "Clear-Somerville", "Observation mesh ready"),
-
-    _mail(25.5, "Steady-Bose", "Keen-Faraday", "Route the human decision"),
-    _mail(25.5, "Keen-Faraday", "Steady-Bose", "Decision route open"),
-    _mail(26.5, "Warm-Lovelace", "Bold-Hopper", "Propagate the approval"),
-    _mail(26.5, "Bold-Hopper", "Warm-Lovelace", "Approval propagated"),
-    _mail(27.5, "Bright-Curie", "Calm-Turing", "Share mission decision"),
-    _mail(27.5, "Calm-Turing", "Swift-Noether", "Decision reaches telemetry"),
-    _mail(28.5, "Gentle-Lamarr", "Soft-Galileo", "Unify spectrum and scale"),
-    _mail(28.5, "Soft-Galileo", "Gentle-Lamarr", "Unified scale returned"),
-    _mail(29.5, "Quiet-Franklin", "Clear-Somerville", "Unify lumen observations"),
-    _mail(29.5, "Clear-Somerville", "Quiet-Franklin", "Observations returned"),
-    _mail(30.5, "Keen-Faraday", "Bold-Hopper", "Publish relay telemetry"),
-    _mail(30.5, "Bold-Hopper", "Keen-Faraday", "Telemetry published"),
+    _mail(44.0, "Steady-Bose", "Keen-Faraday", "Route the human decision"),
+    _mail(44.5, "Keen-Faraday", "Steady-Bose", "Decision route open"),
+    _mail(45.0, "Warm-Lovelace", "Bold-Hopper", "Propagate the approval"),
+    _mail(45.5, "Bold-Hopper", "Warm-Lovelace", "Approval propagated"),
+    _mail(46.0, "Bright-Curie", "Calm-Turing", "Share mission decision"),
+    _mail(46.5, "Calm-Turing", "Swift-Noether", "Decision reaches telemetry"),
+    _mail(47.0, "Gentle-Lamarr", "Soft-Galileo", "Unify spectrum and scale"),
+    _mail(47.5, "Soft-Galileo", "Gentle-Lamarr", "Unified scale returned"),
+    _mail(48.0, "Quiet-Franklin", "Clear-Somerville", "Unify lumen observations"),
+    _mail(48.5, "Clear-Somerville", "Quiet-Franklin", "Observations returned"),
 
     _state(HUMAN_LOOP_RESOLVE_AT, "Bright-Curie", "wait", 31),
     _state(HUMAN_LOOP_RESOLVE_AT, "Swift-Noether", "work", 39),
     _state(HUMAN_LOOP_RESOLVE_AT, "Calm-Turing", "wait", 44),
-    _mail(31.5, "Vivid-Feynman", "Warm-Lovelace", "Publish the final handoff"),
-    _mail(31.5, "Warm-Lovelace", "Vivid-Feynman", "Final handoff accepted"),
-    _mail(32.2, "Bright-Curie", "Swift-Noether", "All three projects aligned"),
-    _mail(32.2, "Calm-Turing", "Bright-Curie", "Coordination mesh complete"),
+    _mail(49.0, "Keen-Faraday", "Bold-Hopper", "Publish relay telemetry"),
+    _mail(49.5, "Bold-Hopper", "Keen-Faraday", "Telemetry published"),
+    _mail(50.0, "Vivid-Feynman", "Warm-Lovelace", "Publish the final handoff"),
+    _mail(50.5, "Warm-Lovelace", "Vivid-Feynman", "Final handoff accepted"),
+    _mail(51.0, "Bright-Curie", "Swift-Noether", "All three projects aligned"),
+    _mail(51.5, "Calm-Turing", "Bright-Curie", "Coordination mesh complete"),
 )
 
 EVENT_TYPES = frozenset({"agent_add", "spawn", "mail", "state"})
@@ -609,11 +624,14 @@ class ReadOnlyReelHandler(server.Handler):
             self._send(200, json.dumps(body).encode(), "application/json; charset=utf-8")
             return
         if path == "/api/graph":
-            try:
-                stat = DB.stat()
-                signature = (stat.st_mtime_ns, stat.st_size)
-            except OSError:
-                signature = None
+            signature_parts = []
+            for db_path in (DB, Path(str(DB) + "-wal")):
+                try:
+                    stat = db_path.stat()
+                    signature_parts.append((stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    signature_parts.append(None)
+            signature = tuple(signature_parts)
             if signature != graph_signature:
                 graph_signature = signature
                 server._GRAPH_CACHE.update(ts=0, data=None)
@@ -766,6 +784,64 @@ def _message(
     _touch_session(root, recipient)
 
 
+def _event_created(
+    event: dict[str, Any], anchor: datetime, ordinal: int, *, realtime: bool
+) -> datetime:
+    scheduled = anchor + timedelta(seconds=float(event["at"]))
+    # Several same-beat events are committed serially.  Recording only their
+    # scheduled time can make a later commit look older than a browser cursor
+    # that already polled during that beat.  Preserve ordering while never
+    # backdating an event behind the time at which its commit begins.
+    created = max(scheduled, datetime.now(timezone.utc)) if realtime else scheduled
+    return created + timedelta(microseconds=ordinal)
+
+
+def _apply_agent_add_batch(
+    root: Path,
+    events: list[tuple[int, dict[str, Any]]],
+    anchor: datetime,
+    *,
+    realtime: bool,
+) -> None:
+    """Commit one visual generation atomically so graph polls cannot split it."""
+    rows: list[tuple[Any, ...]] = []
+    names: list[str] = []
+    for ordinal, event in events:
+        if event.get("type") != "agent_add":
+            raise ValueError("agent-add batch contains a different event type")
+        name = str(event["agent"])
+        data = AGENTS[name]
+        created = _event_created(event, anchor, ordinal, realtime=realtime)
+        rows.append(
+            (
+                data["id"], name, data["model"], data["program"], data["task"],
+                _iso(created), _iso(created),
+            )
+        )
+        names.append(name)
+
+    with sqlite3.connect(root / "mail" / "storage.sqlite3", timeout=4) as con:
+        con.executemany(
+            """
+            INSERT INTO agents(
+                id, project_id, name, model, program, task_description,
+                inception_ts, last_active_ts, retired_at
+            ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            rows,
+        )
+
+    annot = _annotations(root)
+    for name in names:
+        data = AGENTS[name]
+        annot["agents"][name] = {
+            "role": data["role"], "emoji": data["emoji"], "group": data["group"],
+        }
+    _atomic_json(root / "runtime" / "annotations.json", annot)
+    for name in names:
+        _touch_session(root, name)
+
+
 def _apply_event(
     root: Path,
     event: dict[str, Any],
@@ -777,34 +853,12 @@ def _apply_event(
     event_type = str(event["type"])
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unknown timeline primitive: {event_type}")
-    scheduled = anchor + timedelta(seconds=float(event["at"]))
-    # Several same-beat events are committed serially.  Recording only their
-    # scheduled time can make a later commit look older than a browser cursor
-    # that already polled during that beat.  Preserve ordering while never
-    # backdating an event behind the time at which its commit begins.
-    created = (
-        max(scheduled, datetime.now(timezone.utc)) if realtime else scheduled
-    ) + timedelta(microseconds=ordinal)
     if event_type == "agent_add":
-        name = str(event["agent"])
-        data = AGENTS[name]
-        with sqlite3.connect(root / "mail" / "storage.sqlite3", timeout=4) as con:
-            con.execute(
-                """
-                INSERT INTO agents(
-                    id, project_id, name, model, program, task_description,
-                    inception_ts, last_active_ts, retired_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, NULL)
-                """,
-                (data["id"], name, data["model"], data["program"], data["task"], _iso(created), _iso(created)),
-            )
-        annot = _annotations(root)
-        annot["agents"][name] = {
-            "role": data["role"], "emoji": data["emoji"], "group": data["group"],
-        }
-        _atomic_json(root / "runtime" / "annotations.json", annot)
-        _touch_session(root, name)
+        _apply_agent_add_batch(
+            root, [(ordinal, event)], anchor, realtime=realtime
+        )
         return
+    created = _event_created(event, anchor, ordinal, realtime=realtime)
     if event_type == "spawn":
         child = str(event["child"])
         _message(
@@ -1024,15 +1078,33 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
             message_counts.append(messages)
         next_sample = now + 0.9
 
-    for ordinal, event in enumerate(TIMELINE, start=1):
+    indexed_timeline = list(enumerate(TIMELINE, start=1))
+    timeline_index = 0
+    while timeline_index < len(indexed_timeline):
+        ordinal, event = indexed_timeline[timeline_index]
+        timeline_index += 1
         if float(event["at"]) <= 0:
             continue
+        batch = [(ordinal, event)]
+        if event["type"] == "agent_add":
+            while timeline_index < len(indexed_timeline):
+                next_ordinal, next_event = indexed_timeline[timeline_index]
+                if (
+                    next_event["type"] != "agent_add"
+                    or float(next_event["at"]) != float(event["at"])
+                ):
+                    break
+                batch.append((next_ordinal, next_event))
+                timeline_index += 1
         deadline = start + float(event["at"])
         while time.monotonic() < deadline:
             observe()
             time.sleep(min(0.08, max(0.0, deadline - time.monotonic())))
-        _apply_event(root, event, anchor, ordinal, realtime=True)
-        applied += 1
+        if len(batch) > 1:
+            _apply_agent_add_batch(root, batch, anchor, realtime=True)
+        else:
+            _apply_event(root, event, anchor, ordinal, realtime=True)
+        applied += len(batch)
         elapsed = min(STORY_SECONDS, time.monotonic() - start)
         _atomic_json(
             _status_path(root),
@@ -1186,7 +1258,7 @@ def _parser() -> argparse.ArgumentParser:
     up_parser = sub.add_parser("up", help="prepare isolated dashboard, DB, and three tmux printers")
     up_parser.add_argument("--install-dir", default=str(DEFAULT_INSTALL_DIR))
     up_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    play_parser = sub.add_parser("play", help="reset and run the real-time 33-second story")
+    play_parser = sub.add_parser("play", help="reset and run the real-time 54-second story")
     play_parser.add_argument("--install-dir", default=str(DEFAULT_INSTALL_DIR))
     play_parser.add_argument("--port", type=int)
     frame_parser = sub.add_parser("frame", help="hold a deterministic timeline frame")
