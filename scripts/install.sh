@@ -1125,6 +1125,8 @@ start_service() {
         say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $SERVICE_PATH"
         say "DRY-RUN would run: launchctl enable gui/$(id -u)/$LABEL"
         say "DRY-RUN would run: launchctl kickstart gui/$(id -u)/$LABEL"
+        say "DRY-RUN note: a real run treats those commands as the probe; if the"
+        say "  gui/$(id -u) domain refuses them it switches to supervised background mode."
         ACTIVE_SERVICE_KIND="launchd"
         return
       fi
@@ -1416,7 +1418,10 @@ main() {
   resolve_agent_mail_connection
   local service_kind
   service_kind="$(detect_service_kind)"
-  say "service mode: $service_kind"
+  # detect_service_kind knows which manager to try, not whether it will work:
+  # the bootstrap below is the capability probe. Say "planned" so a dry-run,
+  # which never reaches that probe, cannot be read as a promise.
+  say "planned service mode: $service_kind (falls back to supervised background if it cannot start)"
   create_layout
   migrate_legacy_annotations
   migrate_legacy_dashboard_log
