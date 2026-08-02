@@ -441,30 +441,45 @@ resolve_agent_mail_connection() {
     say "existing agent-mail listener detected at $MCP_URL"
     discover_agent_mail_listener_process
     database_url="$(probe_agent_mail_database_url || true)"
-    if [[ -z "$database_url" ]]; then
-      die "$MCP_URL is already listening, but it did not identify itself as agent-mail. Stop that service or set AGENTSTACK_MCP_URL."
-    fi
 
-    resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
+    # The probe is one way to find the database, not the gate that decides
+    # whether this listener is agent-mail. A server too old to report
+    # database_url, or one that wants credentials the installer cannot see,
+    # still holds its database open — and the operator may simply have told us
+    # where it is. Treating a silent probe as "not agent-mail" turned a working
+    # install into a dead end whose two suggested escapes both led back here.
+    if [[ -n "$database_url" ]]; then
+      resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
+    fi
     if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
       resolved_db="$(listener_open_database || true)"
     fi
-    if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
+    if [[ -z "$database_url" && -z "$explicit_db" && ( -z "$resolved_db" || ! -f "$resolved_db" ) ]]; then
+      die "$MCP_URL is already listening, but it did not answer an agent-mail health check and no SQLite database of its own could be found. Stop that service, point AGENTSTACK_MCP_URL at agent-mail, or set AGENTSTACK_MAIL_DB to the database it uses."
+    fi
+    # Everything above is evidence from the server itself, so a disagreement
+    # with AGENTSTACK_MAIL_DB is worth stopping for. Guesses from well-known
+    # locations are not: prefer what the operator told us over a coincidence.
+    if [[ -n "$resolved_db" && -f "$resolved_db" ]]; then
+      resolved_db="$(normalize_path "$resolved_db")"
+      if [[ -n "$explicit_db" && "$explicit_db" != "$resolved_db" ]]; then
+        die "AGENTSTACK_MAIL_DB points to '$explicit_db', but the running agent-mail server uses '$resolved_db'"
+      fi
+    elif [[ -n "$explicit_db" ]]; then
+      [[ -f "$explicit_db" ]] || die "AGENTSTACK_MAIL_DB does not exist: $explicit_db"
+      resolved_db="$explicit_db"
+    else
       while IFS= read -r resolved_db; do
         [[ -n "$resolved_db" ]] && candidates+=("$resolved_db")
       done < <(existing_mail_db_candidates)
       if [[ "${#candidates[@]}" -eq 1 ]]; then
-        resolved_db="${candidates[0]}"
+        resolved_db="$(normalize_path "${candidates[0]}")"
       else
         resolved_db=""
       fi
     fi
     [[ -n "$resolved_db" && -f "$resolved_db" ]] || \
       die "agent-mail is running at $MCP_URL, but its SQLite database could not be resolved from '$database_url'. Set AGENTSTACK_MAIL_DB to the existing database."
-    resolved_db="$(normalize_path "$resolved_db")"
-    if [[ -n "$explicit_db" && "$explicit_db" != "$resolved_db" ]]; then
-      die "AGENTSTACK_MAIL_DB points to '$explicit_db', but the running agent-mail server uses '$resolved_db'"
-    fi
 
     say "existing agent-mail database: $resolved_db"
     if [[ "$DRY_RUN" != true ]] && ! confirm_existing_agent_mail; then
