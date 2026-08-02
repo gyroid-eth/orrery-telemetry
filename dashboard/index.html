@@ -3626,7 +3626,10 @@ async function netTick(){
       .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
     const nextRenderKey=JSON.stringify([nodeKey,edgeKey,spawnKey]);
     if(mapWasCleared||nextRenderKey!==netRenderKey){
+      // 表示集合が丸ごと入れ替わったとき（window 変更 / ALL 切替）は再 fit する
+      if(mapWasCleared)fitPending=true;
       buildEls(); netRenderKey=nextRenderKey; simHot=120; runSim();
+      if(fitPending)scheduleFit();
     }
   }catch(e){
     document.getElementById('netinfo').textContent='SIGNAL LOST — retry…';
@@ -4042,6 +4045,45 @@ function tipHide(){gtip.classList.remove('on');}
 const gView={vx:0,vy:0,k:1};
 const K_MIN=0.3, K_MAX=4, K_STEP=1.15;
 let pan=null;
+/* Fit-to-view: 力学の到達範囲はノード数と斥力に依存するので、広い画面ほど
+   グラフが中央に小さく固まる。収束後に bbox を測って viewBox を合わせる。
+   ユーザーが一度でも wheel / pan した後は自動 fit しない（操作を奪わない）。 */
+let fitPending=true, viewUserAdjusted=false, fitTimer=0;
+const FIT_PAD=64;        // world px。ノード半径＋ラベル＋role チップの余白
+const FIT_K_MAX=2.0;     // 少数ノードで過剰に拡大しないための上限
+function fitView(){
+  const arr=[...gmap.values()];
+  if(!arr.length)return;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const g of arr){
+    if(g.x<x0)x0=g.x; if(g.x>x1)x1=g.x;
+    if(g.y<y0)y0=g.y; if(g.y>y1)y1=g.y;
+  }
+  x0-=FIT_PAD;y0-=FIT_PAD;x1+=FIT_PAD;y1+=FIT_PAD;
+  const {w,h}=netDims();
+  const bw=Math.max(1,x1-x0), bh=Math.max(1,y1-y0);
+  const k=Math.max(K_MIN,Math.min(FIT_K_MAX,Math.min(w/bw,h/bh)));
+  // bbox 中心を画面中心に置く
+  gView.k=k;
+  gView.vx=(x0+x1)/2-w/(2*k);
+  gView.vy=(y0+y1)/2-h/(2*k);
+  applyView();
+}
+/* 収束イベントだけに頼ると、rAF が止まる状況（非表示タブ・合成停止）で
+   一度も fit されない。フォールバックとして遅延タイマーでも fit する。
+   通常は収束 fit の方が先に撃たれ、このタイマーは空振りして終わる。
+   fitPending は残すので、後から収束すれば最終レイアウトで撃ち直す。 */
+const FIT_FALLBACK_MS=3500, FIT_FALLBACK_TRIES=3;
+function scheduleFit(tries=FIT_FALLBACK_TRIES){
+  if(fitTimer)clearTimeout(fitTimer);
+  fitTimer=setTimeout(()=>{
+    fitTimer=0;
+    if(!fitPending||viewUserAdjusted||!gmap.size)return;
+    fitView();
+    // 最後の試行で打ち止め。以後の再収束で勝手に視点が飛ばないようにする
+    if(tries>1)scheduleFit(tries-1); else fitPending=false;
+  },FIT_FALLBACK_MS);
+}
 function applyView(){
   const {w,h}=netDims();
   gsvg.setAttribute('viewBox',
@@ -4063,6 +4105,7 @@ gsvg.addEventListener('wheel',ev=>{
     gView.k*(ev.deltaY<0?K_STEP:1/K_STEP)));
   // カーソル位置の world 点を固定したまま倍率変更
   gView.vx=wx-cx/k2;gView.vy=wy-cy/k2;gView.k=k2;
+  viewUserAdjusted=true;
   applyView();
 },{passive:false});
 gsvg.addEventListener('pointerdown',ev=>{
@@ -4104,6 +4147,7 @@ gsvg.addEventListener('pointermove',ev=>{
   if(!pan||ev.pointerId!==pan.id)return;
   gView.vx=pan.vx0-(ev.clientX-pan.x0)/gView.k;
   gView.vy=pan.vy0-(ev.clientY-pan.y0)/gView.k;
+  if(Math.hypot(ev.clientX-pan.x0,ev.clientY-pan.y0)>5)viewUserAdjusted=true;
   applyView();
 });
 const _panEnd=ev=>{
@@ -4134,6 +4178,12 @@ const _panEnd=ev=>{
   }};
 gsvg.addEventListener('pointerup',_panEnd);
 gsvg.addEventListener('pointercancel',_panEnd);
+// 空き領域のダブルクリックで fit に戻す（zoom/pan した後の復帰口）
+gsvg.addEventListener('dblclick',ev=>{
+  if(ev.target.closest('.node'))return;
+  if(ev.target.classList.contains('edge-hit'))return;
+  viewUserAdjusted=false;fitPending=false;fitView();
+});
 function setsEqual(a,b){
   if(a.size!==b.size)return false;
   for(const x of a)if(!b.has(x))return false;
@@ -4297,6 +4347,11 @@ function runSim(){
     else settledFrames=0;
     simHot--;
     if(!drag&&settledFrames>=SIM_SETTLE_FRAMES){
+      // 収束したフレームで一度だけ fit（ユーザー操作後は抑制）
+      if(fitPending&&!viewUserAdjusted&&gmap.size){
+        fitView();fitPending=false;
+        if(fitTimer){clearTimeout(fitTimer);fitTimer=0;}
+      }
       simHot=0;simRAF=0;return;
     }
     if(simHot>0||drag){simRAF=requestAnimationFrame(loop);}
