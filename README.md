@@ -105,7 +105,7 @@ murmur は browser の言語から日本語 / 英語を自動選択し、`?lang=
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
 | [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
 | [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
-| [第三者コンポーネント](docs/third-party.md) | agent-mail、Rider、credits |
+| [第三者コンポーネント](docs/third-party.md) | agent-mail、license、credits |
 
 コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md) も参照してください。
 
@@ -128,10 +128,9 @@ agent-mail を置き換えるのではなく、その上に launcher、運用 gu
 
 ## License
 
-本 repository は **PolyForm Perimeter License 1.0.1 (with OpenAI/Anthropic Rider)** です。source-available であり、OSI の意味での open source ではありません。全文は [LICENSE](LICENSE) を参照してください。
+本 repository は **PolyForm Perimeter License 1.0.1** です。source-available であり、OSI の意味での open source ではありません。全文は [LICENSE](LICENSE) を参照してください。
 
 - 利用・改変・再配布は目的を問わず可能です
 - ただし**本ソフトウェアと競合する製品を他者へ提供すること**はできません。無償配布・別言語への移植・service / library / plug-in としての提供も競合に含まれます
-- Rider により、OpenAI・Anthropic とその関係者への提供と、それらのための利用は許諾されません
 
 別 component の `mcp_agent_mail` は upstream の license に従います（本 repository の license は及びません）。分離方針と正確な参照先は[第三者コンポーネント](docs/third-party.md)にまとめています。

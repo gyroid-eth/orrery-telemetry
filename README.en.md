@@ -103,7 +103,7 @@ The Japanese documentation is canonical. English versions of the detailed guides
 | [API reference](docs/api.md) | Every route, query/request fields, and response schemas |
 | [Configuration](docs/configuration.md) | `AGENTSTACK_*` environment variables and customization |
 | [Troubleshooting](docs/troubleshooting.md) | `NOT CONFIGURED`, services, notifications, spawn, and authentication |
-| [Third-party components](docs/third-party.md) | agent-mail, the Rider, and credits |
+| [Third-party components](docs/third-party.md) | agent-mail, licensing, and credits |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.
 
@@ -126,10 +126,9 @@ The stack does not replace agent-mail. It layers launchers, operational guards, 
 
 ## License
 
-This repository uses the **PolyForm Perimeter License 1.0.1 (with OpenAI/Anthropic Rider)**. It is source-available, not open source in the OSI sense. See [LICENSE](LICENSE) for the complete terms.
+This repository uses the **PolyForm Perimeter License 1.0.1**. It is source-available, not open source in the OSI sense. See [LICENSE](LICENSE) for the complete terms.
 
 - You may use, modify, and redistribute it for any purpose.
 - You may **not** provide others with a product that competes with this software. Competing covers free distribution, ports to another language, and delivery as a service, library, or plug-in.
-- The Rider withholds any grant to OpenAI, Anthropic, and related parties, including use on their behalf.
 
 The separate `mcp_agent_mail` component follows its own upstream license; this repository's license does not extend to it. See [Third-party components](docs/third-party.md) for the separation model and authoritative references.
