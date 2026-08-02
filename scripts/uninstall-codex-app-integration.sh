@@ -46,9 +46,11 @@ python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" <<'PY'
 import json
 import os
 import pathlib
+import signal
 import shutil
 import subprocess
 import sys
+import time
 
 manifest_path = pathlib.Path(sys.argv[1]).expanduser()
 dry_run = sys.argv[2] == "true"
@@ -77,7 +79,9 @@ if plugin.get("enabled"):
     run([codex_binary, "plugin", "marketplace", "remove", str(plugin["marketplace_name"])])
 
 launchd = data.get("launchd", {})
-if launchd.get("enabled"):
+service = data.get("service", {})
+service_kind = str(service.get("kind") or ("launchd" if launchd.get("enabled") else "disabled"))
+if service_kind == "launchd":
     label = str(launchd["label"])
     run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
     plist = safe(pathlib.Path(launchd["path"]).expanduser())
@@ -85,6 +89,39 @@ if launchd.get("enabled"):
     if not dry_run:
         try:
             plist.unlink()
+        except FileNotFoundError:
+            pass
+elif service_kind == "nohup":
+    pidfile_value = str(service.get("pidfile", ""))
+    if not pidfile_value:
+        raise RuntimeError("supervised Bridge manifest is missing pidfile")
+    pidfile = safe(pathlib.Path(pidfile_value).expanduser())
+    if dry_run:
+        print(f"DRY-RUN would stop supervised Bridge from {pidfile}")
+    else:
+        try:
+            pid = int(pidfile.read_text(encoding="utf-8").splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            pid = 0
+        if pid > 1:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        try:
+            pidfile.unlink()
         except FileNotFoundError:
             pass
 

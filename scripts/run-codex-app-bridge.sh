@@ -32,4 +32,45 @@ fi
 
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 export PYTHONPATH="$INSTALL_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-exec "$PYTHON_BIN" -m agentstack_codex_app.daemon
+SELF_RESTART="${AGENTSTACK_CODEX_APP_SELF_RESTART:-0}"
+RESTART_DELAY="${AGENTSTACK_CODEX_APP_RESTART_DELAY:-5}"
+CHILD_PIDFILE="${AGENTSTACK_CODEX_APP_RUNTIME_DIR}/bridge-child.pid"
+
+if [[ "$SELF_RESTART" != "1" ]]; then
+  exec "$PYTHON_BIN" -m agentstack_codex_app.daemon
+fi
+
+child_pid=""
+stop_supervisor() {
+  trap - INT TERM
+  if [[ "$child_pid" =~ ^[0-9]+$ ]] && kill -0 "$child_pid" 2>/dev/null; then
+    kill "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+  rm -f "$CHILD_PIDFILE"
+  exit 0
+}
+trap stop_supervisor INT TERM
+
+while true; do
+  "$PYTHON_BIN" -m agentstack_codex_app.daemon &
+  child_pid=$!
+  umask 077
+  printf '%s\n' "$child_pid" > "$CHILD_PIDFILE"
+  if wait "$child_pid"; then
+    child_status=0
+  else
+    child_status=$?
+  fi
+  rm -f "$CHILD_PIDFILE"
+  child_pid=""
+  printf '{"event":"bridge_supervisor_restart","child_status":%d,"delay_seconds":%d,"timestamp":"%s"}\n' \
+    "$child_status" "$RESTART_DELAY" \
+    "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2
+  if (( RESTART_DELAY > 0 )); then
+    sleep "$RESTART_DELAY" &
+    child_pid=$!
+    wait "$child_pid" || true
+    child_pid=""
+  fi
+done

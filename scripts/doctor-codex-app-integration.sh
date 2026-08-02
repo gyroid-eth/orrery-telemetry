@@ -122,9 +122,20 @@ for log_path in "$STDOUT_LOG" "$STDERR_LOG"; do
   fi
 done
 
-if [[ -f "$STDERR_LOG" && "$STDERR_LOG" -nt "$PLIST_PATH" ]] \
-  && grep -q '"event":"bridge_launcher_start"' "$STDERR_LOG" \
-  && grep -q '"event":"bridge_start"' "$STDERR_LOG"; then
+if [[ -f "$STDERR_LOG" ]] && python3 - "$STDERR_LOG" "$PLIST_PATH" 2>/dev/null <<'PY'
+import pathlib
+import sys
+
+log_path, plist_path = map(pathlib.Path, sys.argv[1:])
+if log_path.stat().st_mtime_ns < plist_path.stat().st_mtime_ns:
+    raise SystemExit(1)
+text = log_path.read_text(encoding="utf-8", errors="replace")
+if '"event":"bridge_launcher_start"' not in text:
+    raise SystemExit(1)
+if '"event":"bridge_start"' not in text:
+    raise SystemExit(1)
+PY
+then
   ok "Bridge startup diagnostic"
 elif [[ "$ALLOW_STOPPED" == true ]]; then
   warn "Bridge startup diagnostic absent (allowed while stopped)"
@@ -382,7 +393,7 @@ else
   fail "codex command missing"
 fi
 
-IFS=$'\t' read -r LAUNCHD_ENABLED LAUNCHD_LABEL < <(
+IFS=$'\t' read -r SERVICE_KIND SERVICE_IDENTITY < <(
   python3 - "$MANIFEST" <<'PY'
 import json
 import pathlib
@@ -390,21 +401,48 @@ import sys
 
 data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 launchd = data.get("launchd", {})
-print(
-    ("true" if launchd.get("enabled") else "false")
-    + "\t"
-    + str(launchd.get("label", ""))
-)
+service = data.get("service", {})
+kind = str(service.get("kind") or ("launchd" if launchd.get("enabled") else "disabled"))
+if kind == "launchd":
+    identity = str(service.get("label") or launchd.get("label", ""))
+elif kind == "nohup":
+    identity = str(service.get("pidfile", ""))
+else:
+    identity = ""
+print(kind + "\t" + identity)
 PY
 )
-if [[ "${LAUNCHD_ENABLED:-false}" == "true" ]]; then
-  if launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; then
-    ok "launchd service registered"
-  else
-    fail "launchd service is not registered"
-  fi
-else
-  ok "launchd registration intentionally disabled"
-fi
+case "${SERVICE_KIND:-disabled}" in
+  launchd)
+    if launchd_record="$(launchctl print "gui/$(id -u)/$SERVICE_IDENTITY" 2>/dev/null)"; then
+      if printf '%s\n' "$launchd_record" | grep -Eq \
+        '^[[:space:]]*(state[[:space:]]*=[[:space:]]*running|pid[[:space:]]*=[[:space:]]*[1-9][0-9]*)[[:space:]]*$'
+      then
+        ok "Bridge service mode launchd (running)"
+      else
+        fail "launchd Bridge is loaded but not running"
+      fi
+    else
+      fail "launchd Bridge is not registered"
+    fi
+    ;;
+  nohup)
+    supervisor_pid="$(sed -n '1p' "$SERVICE_IDENTITY" 2>/dev/null || true)"
+    if [[ "$supervisor_pid" =~ ^[0-9]+$ ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
+      ok "Bridge service mode supervised-background (pid $supervisor_pid)"
+    else
+      fail "supervised Bridge pidfile is stale or missing: $SERVICE_IDENTITY"
+    fi
+    ;;
+  disabled)
+    ok "launchd registration intentionally disabled"
+    ;;
+  manual)
+    fail "Bridge service requires a manual start"
+    ;;
+  *)
+    fail "unknown Bridge service mode: $SERVICE_KIND"
+    ;;
+esac
 
 exit "$status"

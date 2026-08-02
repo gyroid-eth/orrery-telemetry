@@ -93,7 +93,15 @@ The installer keeps source and generated state separate:
   tokens;
 - the local marketplace snapshot contains a self-contained plugin cache bundle
   with its Python source and schemas;
-- launchd uses `RunAtLoad` and `KeepAlive`, with logs in the runtime directory.
+- on macOS the installer treats `launchctl bootstrap`/`enable`/`kickstart` as
+  the capability probe; launchd uses `RunAtLoad` and `KeepAlive` when they
+  succeed;
+- when the GUI launchd domain is unavailable (including headless SSH or a
+  sleeping GUI session), the installer removes the live plist and starts a
+  supervised background Bridge instead. The supervisor restarts a failed
+  Bridge child and keeps its pidfile and logs in the runtime directory;
+- the install manifest and doctor report and verify the service mode that is
+  actually running. `--no-service` disables both launchd and the fallback.
 
 Preview an install without touching Codex or launchd:
 

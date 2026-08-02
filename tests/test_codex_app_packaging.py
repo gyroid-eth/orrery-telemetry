@@ -5,7 +5,9 @@ import os
 import plistlib
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -42,12 +44,12 @@ def _install_args(
     *,
     runtime_dir: Path | None = None,
     agent_mail_url: str = "http://127.0.0.1:8765/api/",
+    service: bool = False,
 ) -> list[str]:
     codex_binary = shutil.which("codex")
     assert codex_binary is not None
     args = [
         str(INSTALLER),
-        "--no-service",
         "--project-key",
         str(home / "project"),
         "--agent-mail-url",
@@ -59,6 +61,8 @@ def _install_args(
         "--codex-bin",
         codex_binary,
     ]
+    if not service:
+        args.insert(1, "--no-service")
     if runtime_dir is not None:
         args.extend(["--runtime-dir", str(runtime_dir)])
     return args
@@ -137,6 +141,139 @@ def test_installer_skip_git_check_is_explicit_and_persisted(tmp_path):
         env=environment,
         check=True,
     )
+
+
+def test_launchd_bootstrap_failure_uses_supervised_background(tmp_path):
+    home = _prepare_home(tmp_path)
+    environment = _environment(home)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir="/private/tmp"))
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    for name, body in {
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "launchctl": """#!/bin/sh
+echo "$*" >> "$AGENTSTACK_TEST_LAUNCHCTL_LOG"
+case "$1" in
+  bootstrap)
+    echo "Bootstrap failed: 125: Domain does not support specified action" >&2
+    exit 125
+    ;;
+  print)
+    exit 1
+    ;;
+esac
+exit 0
+""",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+    environment.update({
+        "PATH": f"{fake_bin}:{environment['PATH']}",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_CODEX_APP_RESTART_DELAY": "0",
+        "AGENTSTACK_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+    })
+
+    result = subprocess.run(
+        [
+            *_install_args(
+                home,
+                runtime_dir=runtime_dir,
+                service=True,
+            ),
+            "--no-plugin",
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    try:
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads(
+            (install_dir / "install-state.json").read_text(encoding="utf-8")
+        )
+        pidfile = Path(manifest["service"]["pidfile"])
+        supervisor_pid = int(pidfile.read_text(encoding="utf-8").strip())
+        os.kill(supervisor_pid, 0)
+        assert manifest["service"]["kind"] == "nohup"
+        assert manifest["launchd"]["enabled"] is False
+        live_plist = (
+            home
+            / "Library"
+            / "LaunchAgents"
+            / f'{manifest["launchd"]["label"]}.plist'
+        )
+        assert not live_plist.exists()
+        assert "falling back to supervised background" in result.stderr
+        assert "Service mode: supervised background" in result.stdout
+
+        socket_path = runtime_dir / "bridge.sock"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not socket_path.exists():
+            time.sleep(0.05)
+        assert socket_path.is_socket()
+
+        child_pidfile = runtime_dir / "bridge-child.pid"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not child_pidfile.exists():
+            time.sleep(0.05)
+        first_child_pid = int(child_pidfile.read_text(encoding="utf-8").strip())
+        os.kill(first_child_pid, signal.SIGTERM)
+        deadline = time.monotonic() + 10
+        restarted_child_pid = first_child_pid
+        while time.monotonic() < deadline:
+            try:
+                restarted_child_pid = int(
+                    child_pidfile.read_text(encoding="utf-8").strip()
+                )
+            except (FileNotFoundError, ValueError):
+                pass
+            if restarted_child_pid != first_child_pid and socket_path.is_socket():
+                break
+            time.sleep(0.05)
+        assert restarted_child_pid != first_child_pid
+        os.kill(supervisor_pid, 0)
+
+        doctor = subprocess.run(
+            [str(install_dir / "bin" / "doctor-codex-app-integration")],
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        assert doctor.returncode == 0, doctor.stderr
+        assert "Bridge service mode supervised-background" in doctor.stdout
+
+        subprocess.run(
+            [
+                str(install_dir / "bin" / "uninstall-codex-app-integration"),
+                "--purge-data",
+            ],
+            env=environment,
+            check=True,
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(supervisor_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("background Bridge supervisor survived uninstall")
+    finally:
+        manifest_path = install_dir / "install-state.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            pidfile_value = manifest.get("service", {}).get("pidfile")
+            if pidfile_value:
+                try:
+                    os.kill(int(Path(pidfile_value).read_text().strip()), signal.SIGTERM)
+                except (FileNotFoundError, ProcessLookupError, ValueError):
+                    pass
 
 
 def test_clean_home_install_uninstall_reinstall(tmp_path):

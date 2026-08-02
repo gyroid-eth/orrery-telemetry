@@ -50,7 +50,7 @@ hook は prompt 本文、tool input、tool output を Bridge へ渡しません�
 - absolute path の `AGENTSTACK_PROJECT_KEY`
 - agent-mail の `tools/call` を通常の JSON response で返す HTTP endpoint（例: `/api/`）と bearer token を含む `.env` の path
 - `python3` と plugin command を持つ Codex executable
-- launchd service を使う場合は macOS
+- service の自動登録を使う場合は macOS（GUI domain が利用できない場合は supervised background へ自動切替）
 
 基本 installer は spawned child 用の session-scoped MCP proxy を `~/.agentstack/integrations/codex_app/` へ配置しますが、Codex Desktop plugin、Bridge service、delivery DB は有効にしません。これらは次の専用 installer で明示的に導入します。
 
@@ -83,7 +83,9 @@ installer は次を行います。
 2. runtime directory を `~/.agentstack/runtime/codex-app/` に作成
 3. token を含まない mode `0600` の `env.sh` と install manifest を生成
 4. self-contained local marketplace を構築し、Codex plugin を登録
-5. macOS では `org.agentstack.codex-app-bridge` launchd service を登録
+5. macOS では `org.agentstack.codex-app-bridge` を launchd へ実際に bootstrap し、GUI domain が拒否した場合は supervised background で Bridge を起動
+
+launchd の可否はログイン情報から推測せず、`gui/$UID` への bootstrap、enable、kickstart がすべて成功したかで決めます。ヘッドレス SSH や画面スリープ中などで失敗した場合、live plist を残さず `bridge-supervisor.pid` を持つ background supervisor に切り替わります。この supervisor は Bridge 子プロセスが終了すると既定5秒後に再起動します。install manifest と doctor は、希望した方式ではなく実際に選ばれた方式を記録・表示します。
 
 主な option:
 
@@ -91,7 +93,7 @@ installer は次を行います。
 | --- | --- |
 | `--install-dir PATH` | integration source と manifest の配置先 |
 | `--runtime-dir PATH` | private socket、binding、snapshot、delivery DB、log の配置先 |
-| `--no-service` | launchd を登録しない。macOS 以外では必須 |
+| `--no-service` | launchd と supervised background のどちらも起動しない。macOS 以外では必須 |
 | `--no-plugin` | marketplace は構築するが Codex plugin を登録しない |
 | `--wake-limit COUNT` | root task ごとの cold wake 上限回数 / 時 |
 | `--stale-after SECONDS` | waiting runtime を dormant にする閾値。300〜604800秒 |
@@ -108,7 +110,7 @@ installer は次を行います。
 
 ## 確認
 
-専用 doctor は manifest、file mode、payload、marketplace、plugin、launchd、socket、binding store、stale drain、delivery error をまとめて確認します。
+専用 doctor は manifest、file mode、payload、marketplace、plugin、実際の service mode、socket、binding store、stale drain、delivery error をまとめて確認します。launchd は登録の有無だけでなく `state = running` または正の `pid` を確認し、supervised background は pidfile の supervisor が生存していることを確認します。
 
 ```bash
 ~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration
@@ -121,7 +123,7 @@ Bridge を意図的に停止して検査するときだけ:
   --allow-stopped
 ```
 
-launchd の log は既定で次にあります。
+launchd / supervised background の log はどちらも既定で次にあります。
 
 ```text
 ~/.agentstack/runtime/codex-app/bridge.stdout.log
@@ -173,6 +175,7 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 | `AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS` | `12` | identity 登録 retry の最大 call 数 |
 | `AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS` | `3600` | identity 登録 retry の寿命 |
 | `AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS` | `300` | identity 登録 retry の backoff 上限 |
+| `AGENTSTACK_CODEX_APP_RESTART_DELAY` | `5` | supervised background で Bridge 子プロセスを再起動するまでの秒数 |
 | `AGENTSTACK_CODEX_APP_COLD_WAKE` | `1` | `0` で cold wake だけを無効化 |
 | `AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK` | `0` | `1` で resume の git trust check を解除 |
 | `AGENTSTACK_CODEX_BINARY` | install 時に解決した `codex` | plugin 操作と `codex exec resume` |
@@ -198,7 +201,7 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 | --- | --- |
 | installer が project key を拒否 | `--project-key` に absolute path を渡す |
 | Bridge が agent-mail へ接続できない | `tools/call` を通常の JSON で返す endpoint（installer の例は `/api/`）、`AGENTSTACK_MAIL_ENV`（既定 `~/mcp_agent_mail/.env`）、bearer file の存在を確認 |
-| doctor が socket / startup diagnostic を失敗扱い | `launchctl print gui/$(id -u)/org.agentstack.codex-app-bridge` と `bridge.stderr.log` を確認。意図的な停止中だけ `--allow-stopped` |
+| doctor が service / socket / startup diagnostic を失敗扱い | doctor が表示する実 service mode を確認。launchd なら `launchctl print gui/$(id -u)/org.agentstack.codex-app-bridge`、supervised background なら `bridge-supervisor.pid` と `bridge.stderr.log` を確認。意図的な停止中だけ `--allow-stopped` |
 | Codex App runtime が dashboard に出ない | Codex Desktop plugin が有効か確認。CLI session と transcript のない session は意図的に対象外 |
 | state が `degraded` | owner token 読み取りまたは agent-mail 登録が失敗。URL、bearer、runtime file mode、registration retry log を確認し、別 identity を作らない |
 | `identity_auth_required` | binding に owner token がない。doctor で binding store を確認し、同名を別 token で再登録しない |
