@@ -10,7 +10,7 @@
 
 必須:
 
-- Python 3.10 以上（`python3`）
+- Python 3.10 以上（`python3`）。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 です。上限は設けていません（CI が 3.10・3.12・3.14 を毎回回すので、新しい Python で壊れた場合はそこで落ちます）
 - `tmux`
 - `git`
 - `uv`
@@ -37,12 +37,14 @@ cd claude-agent-stack
 
 installer は次を行います。
 
-1. dependency と port を検査
-2. upstream `mcp_agent_mail` を既定の `~/mcp_agent_mail` へ clone、または既存 clone を検証
+1. dependency、dashboard port、agent-mail endpoint を検査
+2. 稼働中の agent-mail server があれば再利用を確認し、その server の実 DB path を health response、listener process、既存 DB 候補から解決。server がなければ実在する DB を探索してから upstream clone を検証
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` を生成
 5. Tier 1 では Claude Code settings と managed instructions の差分を preview し、明示的な `yes` の後だけ merge
 6. launchd / systemd user / supervised background のいずれかで dashboard を起動し、実際の方式を `install-state.json` に記録
+
+agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
 
 サービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。実際の常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 

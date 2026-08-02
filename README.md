@@ -11,7 +11,7 @@
 ## 動作要件
 
 - macOS（主対象。launcher / hook は標準 Bash 3.2 対応）
-- Python 3.10 以上（`python3`）、`tmux`、`git`、`uv`
+- Python 3.10 以上（`python3`）、`tmux`、`git`、`uv`。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 で、上限は設けていません（CI が 3.10・3.12・3.14 を毎回回します）
 - Claude Code または Codex CLI
 - `fswatch`（任意。mail watcher。なければ polling）
 - `fzf`（任意。directory picker）

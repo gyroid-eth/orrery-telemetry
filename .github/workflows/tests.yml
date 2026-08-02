@@ -7,11 +7,18 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # README が「3.10 以上」と書く以上、両端を機械で押さえる。"3.x" 単独だと
+        # 下限は誰も踏まないし、新しい Python が出た日に上限が黙って動く。
+        python-version: ["3.10", "3.12", "3.14"]
+    name: tests (python ${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: ${{ matrix.python-version }}
       - name: Install pytest
         run: python3 -m pip install pytest
       - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)

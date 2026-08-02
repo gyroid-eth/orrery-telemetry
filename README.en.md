@@ -11,7 +11,7 @@ The central design principle is to make operating rules executable through launc
 ## Requirements
 
 - macOS is the primary target; launchers and hooks support the system Bash 3.2
-- Python 3.10 or newer (`python3`), `tmux`, `git`, and `uv`
+- Python 3.10 or newer (`python3`), `tmux`, `git`, and `uv`. The full suite is verified on 3.10, 3.12, 3.13, and 3.14; there is no upper bound, and CI runs 3.10, 3.12, and 3.14 on every push
 - Claude Code or the Codex CLI
 - `fswatch` (optional; the mail watcher polls without it)
 - `fzf` (optional directory picker)
