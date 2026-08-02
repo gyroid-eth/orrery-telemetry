@@ -33,17 +33,37 @@ def test_dashboard_demo_up_verify_down(tmp_path: Path):
         result = json.loads(up.stdout)
         assert result["ok"] is True
         assert stat.S_IMODE((demo / ".agentstack-dashboard-demo.json").stat().st_mode) == 0o600
-        assert result["message_deliveries"] == 14
-        assert result["child_exchange_messages"] == 2
+        assert len(result["agents"]) == 13
+        assert result["state_counts"] == {
+            "agent": 7,
+            "finished": 2,
+            "retired": 2,
+            "gone": 2,
+        }
+        assert result["message_deliveries"] == 48
+        assert result["communication_edges"] >= 20
+        assert result["max_edge_messages"] >= 4
+        assert result["child_exchange_messages"] == 4
         assert result["spawn_picker_scientists"] >= 4
-        assert result["replay_events"] >= 14
+        assert result["replay_events"] >= 48
         assert result["recent_comet_messages"] >= 2
         assert result["agents"]["Bright-Curie"]["category"] == "agent"
-        assert result["agents"]["Bright-Curie"]["ctx_used"] == 38
-        assert result["agents"]["Swift-Noether"]["ctx_used"] == 28
+        assert result["agents"]["Bright-Curie"]["ctx_used"] == 24
+        assert result["agents"]["Swift-Noether"]["ctx_used"] == 19
+        assert result["agents"]["Bold-Hopper"]["ctx_used"] == 38
+        assert result["agents"]["Vivid-Feynman"]["ctx_used"] == 72
         assert result["agents"]["Calm-Turing"]["category"] == "finished"
+        assert result["agents"]["Gentle-Lamarr"]["category"] == "finished"
         assert result["agents"]["Quiet-Franklin"]["category"] == "retired"
-        assert len(result["spawn"]) == 3
+        assert result["agents"]["Soft-Galileo"]["category"] == "retired"
+        assert result["agents"]["Lively-Hubble"]["category"] == "gone"
+        assert result["agents"]["Clear-Somerville"]["category"] == "gone"
+        assert result["running_context_used"] == [9, 19, 24, 38, 47, 57, 72]
+        assert len(result["groups"]) == 4
+        assert {"anthropic", "openai"}.issubset(result["providers"])
+        assert len(result["models"]) >= 5
+        assert len(result["spawn"]) == 12
+        assert result["max_spawn_depth"] == 4
 
         recreated = subprocess.run(
             [sys.executable, str(SCRIPT), "up", "--install-dir", str(demo), "--port", str(port)],
@@ -59,9 +79,13 @@ def test_dashboard_demo_up_verify_down(tmp_path: Path):
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/graph?all=1", timeout=3) as response:
             graph = json.loads(response.read())
         assert {node["name"] for node in graph["nodes"]} == {
-            "Bright-Curie", "Swift-Noether", "Calm-Turing", "Quiet-Franklin"
+            "Bright-Curie", "Swift-Noether", "Calm-Turing", "Quiet-Franklin",
+            "Bold-Hopper", "Warm-Lovelace", "Keen-Faraday", "Gentle-Lamarr",
+            "Vivid-Feynman", "Lively-Hubble", "Steady-Bose", "Soft-Galileo",
+            "Clear-Somerville",
         }
         assert all(node["annot"]["group"] for node in graph["nodes"])
+        assert len({node["annot"]["group"] for node in graph["nodes"]}) == 4
 
         verify = subprocess.run(
             [sys.executable, str(SCRIPT), "verify", "--install-dir", str(demo), "--port", str(port)],

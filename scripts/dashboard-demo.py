@@ -55,6 +55,8 @@ AGENTS = (
         "inception_min": 0,
         "last_active_min": 0,
         "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
     },
     {
         "id": 2,
@@ -65,6 +67,8 @@ AGENTS = (
         "inception_min": 2,
         "last_active_min": 1,
         "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
     },
     {
         "id": 3,
@@ -73,8 +77,10 @@ AGENTS = (
         "program": "claude-code",
         "task": "Write a fictional visitor journey for the orbital greenhouse",
         "inception_min": 4,
-        "last_active_min": 8,
+        "last_active_min": 1,
         "retired_min": None,
+        "expected_category": "finished",
+        "expected_running": False,
     },
     {
         "id": 4,
@@ -83,50 +89,248 @@ AGENTS = (
         "program": "claude-code",
         "task": "Archive fictional exhibit notes and accessibility captions",
         "inception_min": 6,
-        "last_active_min": 16,
-        "retired_min": 12,
+        "last_active_min": 0,
+        "retired_min": 0,
+        "expected_category": "retired",
+        "expected_running": False,
+    },
+    {
+        "id": 5,
+        "name": "Bold-Hopper",
+        "model": "gpt-5.6-terra",
+        "program": "codex-cli",
+        "task": "Compose fictional canopy climate tiles for the Aurora Terrarium",
+        "inception_min": 8,
+        "last_active_min": 2,
+        "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
+    },
+    {
+        "id": 6,
+        "name": "Warm-Lovelace",
+        "model": "claude-sonnet-5",
+        "program": "claude-code",
+        "task": "Tune invented irrigation cues for the cloud-moss canopy",
+        "inception_min": 10,
+        "last_active_min": 3,
+        "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
+    },
+    {
+        "id": 7,
+        "name": "Keen-Faraday",
+        "model": "gpt-5.6-sol",
+        "program": "codex-cli",
+        "task": "Design fictional firefly lighting sequences for the night garden",
+        "inception_min": 12,
+        "last_active_min": 4,
+        "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
+    },
+    {
+        "id": 8,
+        "name": "Gentle-Lamarr",
+        "model": "claude-opus-4-7[1m]",
+        "program": "claude-code",
+        "task": "Draft invented soundscape notes for the visitor airlock",
+        "inception_min": 14,
+        "last_active_min": 1,
+        "retired_min": None,
+        "expected_category": "finished",
+        "expected_running": False,
+    },
+    {
+        "id": 9,
+        "name": "Vivid-Feynman",
+        "model": "gpt-5.6-terra",
+        "program": "codex-cli",
+        "task": "Assemble fictional nutrient-flow diagrams for the canopy lab",
+        "inception_min": 16,
+        "last_active_min": 5,
+        "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
+    },
+    {
+        "id": 10,
+        "name": "Lively-Hubble",
+        "model": "claude-haiku-4-5-20251001",
+        "program": "claude-code",
+        "task": "Check invented mist-cycle labels for the miniature cloud deck",
+        "inception_min": 18,
+        "last_active_min": 14,
+        "retired_min": None,
+        "expected_category": "gone",
+        "expected_running": False,
+    },
+    {
+        "id": 11,
+        "name": "Steady-Bose",
+        "model": "gpt-5.6-sol",
+        "program": "codex-cli",
+        "task": "Balance fictional glow levels across the firefly alcoves",
+        "inception_min": 20,
+        "last_active_min": 6,
+        "retired_min": None,
+        "expected_category": "agent",
+        "expected_running": True,
+    },
+    {
+        "id": 12,
+        "name": "Soft-Galileo",
+        "model": "claude-sonnet-5",
+        "program": "claude-code",
+        "task": "Archive invented nutrient-map legends for the closing tour",
+        "inception_min": 22,
+        "last_active_min": 0,
+        "retired_min": 0,
+        "expected_category": "retired",
+        "expected_running": False,
+    },
+    {
+        "id": 13,
+        "name": "Clear-Somerville",
+        "model": "gpt-5.6-terra",
+        "program": "codex-cli",
+        "task": "Review fictional canopy legends for low-light readability",
+        "inception_min": 24,
+        "last_active_min": 0,
+        "retired_min": None,
+        "expected_category": "gone",
+        "expected_running": False,
     },
 )
+
+EXPECTED_SPAWN = {
+    ("Bright-Curie", "Swift-Noether"),
+    ("Bright-Curie", "Calm-Turing"),
+    ("Bright-Curie", "Quiet-Franklin"),
+    ("Swift-Noether", "Bold-Hopper"),
+    ("Swift-Noether", "Warm-Lovelace"),
+    ("Calm-Turing", "Keen-Faraday"),
+    ("Calm-Turing", "Gentle-Lamarr"),
+    ("Bold-Hopper", "Vivid-Feynman"),
+    ("Bold-Hopper", "Lively-Hubble"),
+    ("Keen-Faraday", "Steady-Bose"),
+    ("Vivid-Feynman", "Soft-Galileo"),
+    ("Vivid-Feynman", "Clear-Somerville"),
+}
 
 MESSAGES = (
     (1, 1, 2, "high", "Task A: telemetry cards", "Create three fictional telemetry cards for the Aurora Terrarium. Use invented sensor readings only.", "demo-telemetry"),
     (2, 1, 3, "high", "Task B: visitor journey", "Draft a fictional three-stop visitor journey: airlock, canopy, and night garden.", "demo-journey"),
     (3, 1, 4, "urgent", "Task C: archive captions", "Prepare invented captions and a compact archive index for the demo exhibit.", "demo-archive"),
-    (4, 2, 1, "normal", "Telemetry palette ready", "The fictional humidity, light, and nutrient cards now share one accessible color system.", "demo-telemetry"),
-    (5, 3, 1, "normal", "Journey draft ready", "The invented visitor route now has a clear beginning, midpoint, and quiet ending.", "demo-journey"),
-    (6, 2, 3, "normal", "Coordinate card labels", "Can the canopy stop reuse the same fictional humidity label as the telemetry deck?", "demo-crosscheck"),
-    (7, 3, 2, "normal", "Re: Coordinate card labels", "Yes. I will call it Canopy Humidity and keep the invented value at sixty-eight percent.", "demo-crosscheck"),
-    (8, 4, 2, "normal", "Caption handoff", "The demo captions are fictional and ready for the telemetry card alt text.", "demo-handoff"),
-    (9, 2, 4, "normal", "Re: Caption handoff", "Received. I added the fictional captions to the card checklist.", "demo-handoff"),
-    (10, 1, 2, "high", "Polish the night-garden card", "Please emphasize the invented bioluminescence trend and keep the copy under two lines.", "demo-telemetry"),
-    (11, 2, 1, "normal", "Night-garden card complete", "The fictional trend is now the visual focus and the supporting copy fits in one line.", "demo-telemetry"),
-    (12, 3, 1, "normal", "Visitor journey complete", "All three fictional stops are ready for the documentation walkthrough.", "demo-journey"),
-    (13, 1, 4, "normal", "Archive accepted", "The invented captions are approved. This demo branch can now be retired.", "demo-archive"),
-    (14, 4, 3, "normal", "Accessibility note", "The fictional night-garden stop includes a non-color cue for every status chip.", "demo-accessibility"),
+    (4, 2, 5, "high", "Task D: canopy climate tiles", "Build fictional temperature and mist tiles for the cloud-moss canopy.", "demo-canopy"),
+    (5, 2, 6, "high", "Task E: irrigation cues", "Create invented irrigation cues that complement the canopy climate tiles.", "demo-irrigation"),
+    (6, 3, 7, "high", "Task F: firefly lighting", "Design a fictional sequence for the night-garden firefly alcoves.", "demo-lumen"),
+    (7, 3, 8, "high", "Task G: airlock soundscape", "Draft an invented three-note soundscape for the visitor airlock.", "demo-sound"),
+    (8, 5, 9, "high", "Task H: nutrient diagrams", "Assemble fictional nutrient-flow diagrams beneath the canopy climate tiles.", "demo-nutrients"),
+    (9, 5, 10, "high", "Task I: mist labels", "Check invented mist-cycle labels against the miniature cloud-deck legend.", "demo-mist"),
+    (10, 7, 11, "high", "Task J: glow balance", "Balance fictional glow readings across the three firefly alcoves.", "demo-glow"),
+    (11, 9, 12, "high", "Task K: closing legends", "Archive invented nutrient-map legends for the closing tour handout.", "demo-legends"),
+    (12, 9, 13, "urgent", "Task L: low-light review", "Review fictional canopy legends for low-light readability and non-color cues.", "demo-lowlight"),
+    (13, 2, 1, "normal", "Telemetry palette ready", "The invented humidity, light, and nutrient cards now share one accessible color system.", "demo-telemetry"),
+    (14, 1, 2, "high", "Polish the night-garden card", "Emphasize the invented bioluminescence trend and keep the copy under two lines.", "demo-telemetry"),
+    (15, 2, 1, "normal", "Night-garden card complete", "The fictional trend is now the visual focus and the supporting copy fits in one line.", "demo-telemetry"),
+    (16, 1, 2, "normal", "Canopy scale check", "Compare the invented canopy scale with the airlock orientation card.", "demo-telemetry"),
+    (17, 2, 1, "normal", "Re: Canopy scale check", "The fictional scale now matches the airlock card and the canopy legend.", "demo-telemetry"),
+    (18, 1, 2, "normal", "Final palette pass", "Give the invented twilight token one last contrast pass.", "demo-telemetry"),
+    (19, 2, 1, "normal", "Palette pass complete", "Twilight contrast now clears the fictional exhibit checklist.", "demo-telemetry"),
+    (20, 3, 1, "normal", "Journey draft ready", "The invented visitor route now has a clear beginning, midpoint, and quiet ending.", "demo-journey"),
+    (21, 1, 3, "normal", "Add canopy pause", "Add a fictional pause point between the airlock and night garden.", "demo-journey"),
+    (22, 3, 1, "normal", "Canopy pause added", "The visitor route now includes a short cloud-moss overlook.", "demo-journey"),
+    (23, 2, 5, "normal", "Tile density note", "Give the nutrient tile twice the visual weight of the mist tile.", "demo-canopy"),
+    (24, 5, 2, "normal", "Re: Tile density note", "The fictional nutrient tile now anchors the canopy row.", "demo-canopy"),
+    (25, 2, 5, "normal", "Compact viewport pass", "Check the invented tiles at the narrow exhibit kiosk width.", "demo-canopy"),
+    (26, 5, 2, "normal", "Viewport pass ready", "All fictional tiles wrap cleanly at the kiosk width.", "demo-canopy"),
+    (27, 5, 9, "normal", "Nutrient route colors", "Use three invented route colors with distinct line patterns.", "demo-nutrients"),
+    (28, 9, 5, "normal", "Route colors mapped", "The three fictional routes now use solid, dotted, and dashed paths.", "demo-nutrients"),
+    (29, 5, 9, "normal", "Add cloud-moss branch", "Extend the fictional nutrient map to the cloud-moss chamber.", "demo-nutrients"),
+    (30, 9, 5, "normal", "Cloud-moss branch ready", "The invented branch now joins the main canopy loop.", "demo-nutrients"),
+    (31, 3, 7, "normal", "Slow the second glow", "Give the fictional second firefly pulse a longer fade.", "demo-lumen"),
+    (32, 7, 3, "normal", "Glow timing adjusted", "The invented second pulse now fades over four calm beats.", "demo-lumen"),
+    (33, 7, 11, "normal", "Alcove balance target", "Keep the fictional east alcove slightly dimmer than the center.", "demo-glow"),
+    (34, 11, 7, "normal", "Balance target applied", "The east alcove now reads eight invented units below center.", "demo-glow"),
+    (35, 7, 11, "normal", "Check quiet mode", "Verify that the fictional quiet mode preserves the glow hierarchy.", "demo-glow"),
+    (36, 11, 7, "normal", "Quiet mode verified", "The hierarchy remains clear with every invented level reduced.", "demo-glow"),
+    (37, 2, 3, "normal", "Coordinate card labels", "Can the canopy stop reuse the invented humidity label from the telemetry deck?", "demo-crosscheck"),
+    (38, 3, 2, "normal", "Re: Coordinate card labels", "Yes. I will call it Canopy Humidity and keep the invented value at sixty-eight percent.", "demo-crosscheck"),
+    (39, 2, 3, "normal", "Share twilight token", "The fictional twilight token may also work for the night-garden route.", "demo-crosscheck"),
+    (40, 3, 2, "normal", "Twilight token accepted", "I applied it to the invented route marker with a non-color cue.", "demo-crosscheck"),
+    (41, 6, 5, "normal", "Irrigation cue alignment", "The invented mist cue now lands between the two canopy readings.", "demo-irrigation"),
+    (42, 5, 6, "normal", "Cue alignment confirmed", "The climate tiles leave enough room for the fictional mist cue.", "demo-irrigation"),
+    (43, 8, 7, "normal", "Sound and glow handoff", "The fictional airlock chime resolves before the first firefly pulse.", "demo-sound"),
+    (44, 7, 8, "normal", "Handoff timing confirmed", "The invented glow sequence now starts one beat after the chime.", "demo-sound"),
+    (45, 4, 12, "normal", "Archive caption pattern", "Reuse the invented quiet-garden caption pattern for the closing legends.", "demo-archive"),
+    (46, 12, 4, "normal", "Caption pattern archived", "The fictional closing legends now include the same non-color cue.", "demo-archive"),
+    (47, 13, 9, "normal", "Low-light review complete", "All invented canopy legends remain distinct at the simulated dusk level.", "demo-lowlight"),
+    (48, 9, 13, "normal", "Review accepted", "The fictional dusk adjustments are approved for the exhibit walkthrough.", "demo-lowlight"),
 )
 
 ANNOTATIONS = {
-    "Bright-Curie": {"role": "Demo director", "emoji": "🧭", "group": "Aurora crew"},
-    "Swift-Noether": {"role": "Visual systems", "emoji": "🎛️", "group": "Aurora crew"},
-    "Calm-Turing": {"role": "Story architect", "emoji": "🪴", "group": "Visitor path"},
-    "Quiet-Franklin": {"role": "Archive curator", "emoji": "🗂️", "group": "Visitor path"},
+    "Bright-Curie": {"role": "Exhibit director", "emoji": "🧭", "group": "Aurora Command"},
+    "Swift-Noether": {"role": "Visual systems", "emoji": "🎛️", "group": "Aurora Command"},
+    "Calm-Turing": {"role": "Journey architect", "emoji": "🪴", "group": "Aurora Command"},
+    "Quiet-Franklin": {"role": "Archive curator", "emoji": "🗂️", "group": "Visitor Orbit"},
+    "Bold-Hopper": {"role": "Climate designer", "emoji": "🌡️", "group": "Canopy Systems"},
+    "Warm-Lovelace": {"role": "Irrigation tuner", "emoji": "💧", "group": "Canopy Systems"},
+    "Keen-Faraday": {"role": "Lumen composer", "emoji": "✨", "group": "Lumen Studio"},
+    "Gentle-Lamarr": {"role": "Soundscape editor", "emoji": "🎧", "group": "Lumen Studio"},
+    "Vivid-Feynman": {"role": "Flow cartographer", "emoji": "🗺️", "group": "Visitor Orbit"},
+    "Lively-Hubble": {"role": "Mist labeler", "emoji": "☁️", "group": "Canopy Systems"},
+    "Steady-Bose": {"role": "Glow balancer", "emoji": "🪲", "group": "Lumen Studio"},
+    "Soft-Galileo": {"role": "Legend archivist", "emoji": "📜", "group": "Visitor Orbit"},
+    "Clear-Somerville": {"role": "Dusk reviewer", "emoji": "🌙", "group": "Visitor Orbit"},
 }
 
 TMUX_SESSIONS = {
     "Bright-Curie": {
         "cmd": "claude",
         "title": "✻ Coordinating the Aurora Terrarium launch",
-        "capture": """Aurora Terrarium demo coordination\n\n✻ Crunched for 1m 36s\n| Opus 4.7 | ctx: 38% used | (1M context)\n""",
+        "capture": """Aurora Terrarium demo coordination\n\n✻ Crunched for 1m 36s\n| Opus 4.7 | ctx: 24% used | (1M context)\n""",
     },
     "Swift-Noether": {
         "cmd": "zsh",
         "title": "• Simulating color-coded telemetry cards",
-        "capture": """Telemetry card preview uses fictional readings only.\n\n• Working (18s • esc to interrupt)\ngpt-5.6-sol xhigh · Context 72% left · /demo/aurora-terrarium\n""",
+        "capture": """Telemetry card preview uses fictional readings only.\n\n• Working (18s • esc to interrupt)\ngpt-5.6-sol xhigh · Context 81% left · /demo/aurora-terrarium\n""",
     },
     "Calm-Turing": {
         "cmd": "zsh",
         "title": "zsh",
         "capture": "Visitor journey draft finished.\n",
+    },
+    "Bold-Hopper": {
+        "cmd": "zsh",
+        "title": "• Arranging fictional canopy climate tiles",
+        "capture": """Canopy climate layout uses invented readings only.\n\n• Working (42s • esc to interrupt)\ngpt-5.6-terra high · Context 62% left · /demo/aurora-terrarium\n""",
+    },
+    "Warm-Lovelace": {
+        "cmd": "claude",
+        "title": "✻ Tuning the cloud-moss irrigation cues",
+        "capture": """Fictional irrigation cue pass\n\n✻ Crunched for 52s\n| Sonnet 5 | ctx: 47% used | (200K context)\n""",
+    },
+    "Keen-Faraday": {
+        "cmd": "zsh",
+        "title": "• Sequencing invented firefly lights",
+        "capture": """Night-garden glow sequence uses fictional levels.\n\n• Working (1m 08s • esc to interrupt)\ngpt-5.6-sol xhigh · Context 43% left · /demo/aurora-terrarium\n""",
+    },
+    "Gentle-Lamarr": {
+        "cmd": "zsh",
+        "title": "zsh",
+        "capture": "Fictional airlock soundscape finished.\n",
+    },
+    "Vivid-Feynman": {
+        "cmd": "zsh",
+        "title": "• Mapping invented nutrient routes",
+        "capture": """Nutrient-flow map is entirely fictional.\n\n• Working (2m 14s • esc to interrupt)\ngpt-5.6-terra medium · Context 28% left · /demo/aurora-terrarium\n""",
+    },
+    "Steady-Bose": {
+        "cmd": "zsh",
+        "title": "• Balancing fictional firefly alcoves",
+        "capture": """Glow balance uses invented lumen units.\n\n• Working (26s • esc to interrupt)\ngpt-5.6-sol high · Context 91% left · /demo/aurora-terrarium\n""",
     },
 }
 
@@ -318,7 +522,7 @@ def _create_database(root: Path, now: datetime) -> None:
     mail_dir.mkdir(parents=True, exist_ok=True)
     db_path = mail_dir / "storage.sqlite3"
     project_key = str(root / "project")
-    base = now.replace(second=0, microsecond=0) - timedelta(minutes=35)
+    base = now.replace(second=0, microsecond=0) - timedelta(minutes=34)
     with sqlite3.connect(db_path) as con:
         con.executescript(
             """
@@ -385,7 +589,13 @@ def _create_database(root: Path, now: datetime) -> None:
                 ),
             )
         for offset, (message_id, sender, recipient, importance, subject, body, thread_id) in enumerate(MESSAGES, start=1):
-            created = base + timedelta(minutes=6 + offset * 2)
+            if offset <= len(EXPECTED_SPAWN):
+                recipient_fixture = next(agent for agent in AGENTS if agent["id"] == recipient)
+                created = base + timedelta(
+                    minutes=int(recipient_fixture["inception_min"]), seconds=30
+                )
+            else:
+                created = base + timedelta(minutes=25, seconds=(offset - 13) * 15)
             con.execute(
                 """
                 INSERT INTO messages(
@@ -426,6 +636,11 @@ def _create_deliverables(root: Path) -> None:
         ("Bright-Curie", "LOG_2026-08-02T0900 Aurora Demo Direction.md", "Fictional shot list for the Aurora Terrarium dashboard demo."),
         ("Swift-Noether", "LOG_2026-08-02T0915 Telemetry Cards.md", "Invented greenhouse telemetry card notes."),
         ("Calm-Turing", "LOG_2026-08-02T0930 Visitor Journey.md", "Fictional visitor journey copy."),
+        ("Bold-Hopper", "LOG_2026-08-02T0940 Canopy Climate.md", "Invented canopy climate tile specification."),
+        ("Warm-Lovelace", "LOG_2026-08-02T0950 Irrigation Cues.md", "Fictional cloud-moss irrigation cues."),
+        ("Keen-Faraday", "LOG_2026-08-02T1000 Firefly Sequence.md", "Invented night-garden glow sequence."),
+        ("Vivid-Feynman", "LOG_2026-08-02T1010 Nutrient Routes.md", "Fictional nutrient-flow route map."),
+        ("Steady-Bose", "LOG_2026-08-02T1020 Alcove Balance.md", "Invented firefly alcove balance readings."),
     )
     for agent, filename, body in items:
         (logs / filename).write_text(
@@ -609,40 +824,75 @@ def _verify(port: int) -> dict[str, Any]:
     expected_names = {agent["name"] for agent in AGENTS}
     if set(agents) != expected_names:
         raise RuntimeError(f"unexpected /api/agents names: {sorted(agents)}")
-    expected_categories = {
-        "Bright-Curie": ("agent", True),
-        "Swift-Noether": ("agent", True),
-        "Calm-Turing": ("finished", False),
-        "Quiet-Franklin": ("retired", False),
-    }
-    for name, (category, running) in expected_categories.items():
+    state_counts: dict[str, int] = {}
+    for fixture in AGENTS:
+        name = str(fixture["name"])
+        category = str(fixture["expected_category"])
+        running = bool(fixture["expected_running"])
         row = agents[name]
         if row.get("category") != category or bool(row.get("running")) != running:
             raise RuntimeError(f"unexpected state for {name}: {row.get('category')}/{row.get('running')}")
         if not row.get("task"):
             raise RuntimeError(f"missing fictional task for {name}")
-    for name in ("Bright-Curie", "Swift-Noether"):
-        if agents[name].get("ctx_used") is None:
+        state_counts[category] = state_counts.get(category, 0) + 1
+    expected_state_counts = {"agent": 7, "finished": 2, "retired": 2, "gone": 2}
+    if state_counts != expected_state_counts:
+        raise RuntimeError(f"unexpected state distribution: {state_counts}")
+    running_context = {
+        agents[str(fixture["name"])].get("ctx_used")
+        for fixture in AGENTS
+        if fixture["expected_running"]
+    }
+    if None in running_context or len(running_context) < 5:
+        raise RuntimeError(f"running context readings are not varied: {running_context}")
+    for fixture in AGENTS:
+        name = str(fixture["name"])
+        if fixture["expected_running"] and agents[name].get("ctx_used") is None:
             raise RuntimeError(f"missing context reading for running agent {name}")
     graph_names = {node["name"] for node in graph.get("nodes", [])}
     if graph_names != expected_names:
         raise RuntimeError(f"unexpected /api/graph names: {sorted(graph_names)}")
-    expected_spawn = {
-        ("Bright-Curie", "Swift-Noether"),
-        ("Bright-Curie", "Calm-Turing"),
-        ("Bright-Curie", "Quiet-Franklin"),
-    }
     actual_spawn = {(item["source"], item["target"]) for item in graph.get("spawn", [])}
-    if actual_spawn != expected_spawn:
+    if actual_spawn != EXPECTED_SPAWN:
         raise RuntimeError(f"unexpected spawn lineage: {sorted(actual_spawn)}")
-    communication_count = sum(int(item.get("count") or 0) for item in graph.get("edges", []))
+    parent_by_child = {child: parent for parent, child in actual_spawn}
+    max_spawn_depth = 0
+    for name in expected_names:
+        depth = 0
+        cursor = name
+        seen: set[str] = set()
+        while cursor in parent_by_child:
+            if cursor in seen:
+                raise RuntimeError("spawn lineage contains a cycle")
+            seen.add(cursor)
+            cursor = parent_by_child[cursor]
+            depth += 1
+        max_spawn_depth = max(max_spawn_depth, depth)
+    if max_spawn_depth < 3:
+        raise RuntimeError(f"spawn lineage is too shallow: {max_spawn_depth}")
+    graph_edges = graph.get("edges", [])
+    edge_counts = [int(item.get("count") or 0) for item in graph_edges]
+    communication_count = sum(edge_counts)
     if communication_count != len(MESSAGES):
         raise RuntimeError(f"expected {len(MESSAGES)} message deliveries, got {communication_count}")
-    if edge.get("count", 0) < 2:
+    if len(graph_edges) < 20 or max(edge_counts, default=0) < 4:
+        raise RuntimeError(f"communication graph lacks varied edge density: {edge_counts}")
+    if edge.get("count", 0) < 4:
         raise RuntimeError("child-to-child edge drawer lacks a multi-message exchange")
     annot_names = set((annotations.get("annotations") or {}).keys())
     if annot_names != expected_names:
         raise RuntimeError(f"unexpected annotations: {sorted(annot_names)}")
+    groups = {
+        str(item.get("annot", {}).get("group"))
+        for item in graph.get("nodes", [])
+        if item.get("annot")
+    }
+    providers = {str(item.get("provider")) for item in graph.get("nodes", [])}
+    models = {str(item.get("model")) for item in graph.get("nodes", [])}
+    if len(groups) < 4:
+        raise RuntimeError(f"demo needs at least four groups: {sorted(groups)}")
+    if not {"anthropic", "openai"}.issubset(providers) or len(models) < 5:
+        raise RuntimeError(f"model/provider mix is too narrow: {sorted(providers)}/{sorted(models)}")
     scientist_names = {item.get("name") for item in spawn_names.get("names", [])}
     if not {"Curie", "Noether", "Turing", "Franklin"}.issubset(scientist_names):
         raise RuntimeError("NEW AGENT picker is missing the demo scientists")
@@ -668,9 +918,17 @@ def _verify(port: int) -> dict[str, Any]:
             for name in sorted(agents)
         },
         "spawn": sorted([list(item) for item in actual_spawn]),
+        "state_counts": state_counts,
+        "max_spawn_depth": max_spawn_depth,
         "message_deliveries": communication_count,
+        "communication_edges": len(graph_edges),
+        "max_edge_messages": max(edge_counts, default=0),
         "child_exchange_messages": edge["count"],
         "annotations": sorted(annot_names),
+        "groups": sorted(groups),
+        "providers": sorted(providers),
+        "models": sorted(models),
+        "running_context_used": sorted(running_context),
         "spawn_picker_scientists": len(scientist_names),
         "replay_events": len(replay["events"]),
         "recent_comet_messages": len(recent_messages["messages"]),
