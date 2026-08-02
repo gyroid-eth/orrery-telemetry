@@ -2205,7 +2205,12 @@
     transition:opacity .18s ease,transform .18s ease}
   #net.dense .node text,#net.dense .annot-pill,#net.dense .annot-lab,
   #net.dense .edge-count,#net.dense .provider-badge,#net.dense .ctx-track,
-  #net.dense .ctx-arc,#net.dense .ctx-arc-glow{display:none}
+  #net.dense .ctx-arc,#net.dense .ctx-arc-glow,
+  #net.dense .askbub,#net.dense .qbub{display:none}
+  /* Replay owns its own transient ? overlay.  Suppress live bubbles while the
+     replay layer is active so one state never renders two intervention glyphs. */
+  body.replay-on .node .askbub,
+  body.replay-on .node .qbub{display:none}
 
   /* Detail, spawn and thread surfaces share one glass material. */
   #term,#spawnmd{background:rgba(8,9,13,.62);backdrop-filter:blur(10px)}
@@ -3671,6 +3676,32 @@ function providerBadge(provider,x,y,size=14){
   return badge;
 }
 
+function renderLiveStateBubble(grp,actState){
+  // buildEls normally creates a fresh node group, but explicit removal keeps
+  // the helper correct if a caller ever updates one group in place.
+  grp.querySelectorAll('.askbub,.qbub').forEach(n=>n.remove());
+  const question=actState==='question';
+  const ask=actState==='ask';
+  if(!question&&!ask)return null;
+  const bubble=svgEl('g',{
+    class:question?'qbub':'askbub',
+    transform:`translate(${(NR*.78).toFixed(2)} ${(-NR*.78).toFixed(2)})`,
+    role:'img',
+    'aria-label':question?'agent question':'approval requested'
+  });
+  bubble.appendChild(svgEl('rect',{
+    class:question?'bubq':'bubp',
+    x:-9,y:-13,width:18,height:18,rx:6,ry:6
+  }));
+  const glyph=svgEl('text',{
+    class:question?'bq':'bx',x:0,y:1.2,'text-anchor':'middle'
+  });
+  glyph.textContent=question?'?':'!';
+  bubble.appendChild(glyph);
+  grp.appendChild(bubble);
+  return bubble;
+}
+
 function buildEls(){
   document.getElementById('net').classList.toggle('dense',gmap.size>300);
   [...gsvg.querySelectorAll('.edge,.edge-hit,.edge-count,.node')].forEach(n=>n.remove());
@@ -3789,6 +3820,7 @@ function buildEls(){
         grp.appendChild(badge);
       }
     }
+    renderLiveStateBubble(grp,g.actState);
     const tx=svgEl('text',{x:0,y:NR+16,'text-anchor':'middle'});
     tx.textContent=name;
     grp.appendChild(tx);

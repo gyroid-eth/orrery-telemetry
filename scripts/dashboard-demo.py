@@ -788,7 +788,10 @@ def _create_command_shims(root: Path, now: datetime) -> None:
         }
         for index, (name, data) in enumerate(TMUX_SESSIONS.items())
     }
-    tmux_script = f"""#!/usr/bin/env python3
+    # The demo server deliberately gets a minimal PATH.  Resolve the current
+    # interpreter now so every runtime capture does not fall back to the much
+    # slower system Python and risk the API's 3-second verification timeout.
+    tmux_script = f"""#!{sys.executable}
 import json
 import sys
 
