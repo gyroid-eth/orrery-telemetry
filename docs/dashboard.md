@@ -23,7 +23,9 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ## DECK
 
-<!-- TODO: screenshot: DECK view -->
+![DECK view — 稼働中エージェントのカード一覧](img/deck.jpg)
+
+本ページの画面写真は `scripts/dashboard-demo.py` が生成する隔離デモ環境（架空データ）のものです。エージェント名、task、mail、transcript はすべて創作で、実在の作業内容ではありません。
 
 DECK は agent ごとの運用カードです。
 
@@ -66,6 +68,8 @@ KILL の可否は frontend の見た目だけで決めず、server の `build_ag
 
 このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。`show all` を有効にすると、直近30日の `gone` / `retired` agent もカードとして表示されます。
 
+![DECK show all — FINISHED / GONE / RETIRED の各セクション](img/deck-show-all.jpg)
+
 NETWORK は現在の稼働状態と選択した time window を重ねる表示です。完了や retire だけを理由に node を即座に隠すわけではありませんが、last activity が window 外になると child node と、それに接続する spawn / mail edge は表示されません。現在の window に見えないことだけでは task failure を意味しません。履歴を確認する場合は NETWORK の `ALL`、個別の終了状態を確認する場合は DECK の `show all` を使います。
 
 ## Output / deliverables
@@ -89,7 +93,7 @@ Codex App runtime には tmux pane がありません。terminal attach、dashbo
 
 ## NETWORK
 
-<!-- TODO: screenshot: NETWORK view -->
+![NETWORK view — spawn 系譜と mail 通信の force graph](img/network.jpg)
 
 NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 
@@ -104,6 +108,8 @@ NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 
 詳細 panel の History は transcript と24時間 event sparkline、Output は project-scoped な成果物です。ROLE ASSIGN では role / group annotation を保存または削除できます。
 
+![node 詳細 panel — CTX / STATE / History / ROLE ASSIGN / transcript](img/agent-detail.jpg)
+
 ### Edge と mail
 
 - spawn edge: parent-child lineage
@@ -114,6 +120,8 @@ NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 - live message は comet animation
 
 `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと mail edge と drawer は `NOT CONFIGURED` になります。tmux telemetry は残るため、mail 設定不足と dashboard 全停止を区別できます。
+
+![edge click 後の mail drawer — 二者間の subject / importance / 時刻 / 本文](img/network-edge-drawer.jpg)
 
 ### 表示制御
 
@@ -138,9 +146,11 @@ SELECT mode では drag rectangle または node click で複数選択できま�
 
 EXIT / RESUME は二段確認し、60 ms 間隔で順次送信します。誤操作と service spike を避けるため、安全弁のない並列 request にはしません。
 
+![SELECT mode — 矩形 drag で13体を選択し、下部に EXIT / RESUME / REPLAY](img/network-select.jpg)
+
 ## DIGEST REPLAY
 
-<!-- TODO: screenshot: DIGEST REPLAY -->
+![DIGEST REPLAY — 選択した11エージェントの event を時系列再生](img/digest-replay.jpg)
 
 選択 agent の mail、spawn、exit / retire、承認待ち event を時系列再生します。
 
@@ -160,7 +170,7 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ## NEW AGENT
 
-<!-- TODO: screenshot: NEW AGENT modal -->
+![NEW AGENT modal — identity / engine / directory / task の launch manifest](img/new-agent.jpg)
 
 `+ NEW AGENT` は identity、engine、directory、task を順に確認する launch manifest です。通常項目を一方向に並べ、parent / role / group / isolation は ADVANCED に畳むことで、standalone agent の起動を最短経路にしています。
 

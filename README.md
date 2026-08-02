@@ -67,19 +67,21 @@ Claude Code hook が未登録 session と競合書き込みを止め、agent-mai
 
 カードごとに running / standby / finished / gone、task、model、context 残量、最後の指示、成果物を表示します。History / Output、terminal open、二段確認付き EXIT / KILL を同じ場所から操作できます。
 
-<!-- TODO: screenshot: DECK view -->
+![DECK view](docs/img/deck.jpg)
 
 ### 4. NETWORK と DIGEST REPLAY
 
 spawn 系譜と agent-mail 通信を force graph に重ね、node、edge、role / group、mail drawer を探索できます。複数 agent を選ぶと、通信と状態遷移を速度・HOLD・TIME-TRAVEL 付きで再生できます。
 
-<!-- TODO: screenshot: NETWORK and DIGEST REPLAY -->
+![NETWORK view](docs/img/network.jpg)
+
+![DIGEST REPLAY](docs/img/digest-replay.jpg)
 
 ### 5. Control plane と NEW AGENT
 
 dashboard から EXIT、RESUME、REPLAY、role annotation、Claude / Codex child spawn を実行できます。登録、task 配送、token file、tmux 起動を一つの監査可能な順序に固定します。
 
-<!-- TODO: screenshot: NEW AGENT modal -->
+![NEW AGENT modal](docs/img/new-agent.jpg)
 
 ### 6. API とカスタマイズ
 

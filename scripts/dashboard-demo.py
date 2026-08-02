@@ -629,18 +629,146 @@ def _create_runtime(root: Path) -> None:
     )
 
 
+DELIVERABLE_BY_AGENT = {
+    "Bright-Curie": "LOG_2026-08-02T0900 Aurora Demo Direction.md",
+    "Swift-Noether": "LOG_2026-08-02T0915 Telemetry Cards.md",
+    "Calm-Turing": "LOG_2026-08-02T0930 Visitor Journey.md",
+    "Bold-Hopper": "LOG_2026-08-02T0940 Canopy Climate.md",
+    "Warm-Lovelace": "LOG_2026-08-02T0950 Irrigation Cues.md",
+    "Keen-Faraday": "LOG_2026-08-02T1000 Firefly Sequence.md",
+    "Vivid-Feynman": "LOG_2026-08-02T1010 Nutrient Routes.md",
+    "Steady-Bose": "LOG_2026-08-02T1020 Alcove Balance.md",
+}
+
+
+def _transcript_turns(agent: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Fictional conversation for one agent's detail-panel transcript.
+
+    Derived from the agent's own invented task so every panel reads
+    consistently with the rest of the Aurora Terrarium fixture.  No real
+    conversation is copied and nothing here touches the user's transcripts.
+    """
+    name = agent["name"]
+    task = agent["task"]
+    deliverable = DELIVERABLE_BY_AGENT.get(name)
+    turns: list[tuple[str, str]] = [
+        ("user", f"Task: {task}"),
+        (
+            "assistant",
+            f"Taking it. I'll keep the wording consistent with the Aurora "
+            f"Terrarium exhibit script and flag anything that needs a "
+            f"decision instead of guessing.",
+        ),
+        ("user", "Where are you?"),
+        (
+            "assistant",
+            "Progress:\n"
+            "- drafted three options and dropped the weakest one\n"
+            "- checked the invented copy against the canopy glossary\n"
+            "- one open question: whether the quiet ending stays in scope",
+        ),
+        ("user", "Keep the quiet ending. Write it up."),
+    ]
+    if deliverable:
+        turns.append(
+            (
+                "assistant",
+                f"Wrote `{deliverable}` with the fictional result and the "
+                f"reasoning behind the two rejected options. Nothing else "
+                f"is outstanding on my side.",
+            )
+        )
+    else:
+        turns.append(
+            (
+                "assistant",
+                "Written up in the exhibit binder. Nothing else is "
+                "outstanding on my side.",
+            )
+        )
+    return tuple(turns)
+
+
+def _create_transcripts(root: Path, now: datetime) -> None:
+    """Write fictional Claude / Codex transcripts for the detail panel.
+
+    Without these the detail panel shows only its empty state, which makes
+    the documentation screenshots read as a broken feature.  Claude agents
+    are resolved through `runtime/session_index/<agent id>.json` (the exact
+    map the server prefers); Codex agents are matched by the session_meta
+    timestamp, so the rollout file carries the fixture's inception time.
+    """
+    base = now.replace(second=0, microsecond=0) - timedelta(minutes=34)
+    claude_dir = root / "home" / ".claude" / "projects" / "demo-aurora-terrarium"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    index_dir = root / "runtime" / "session_index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+
+    for agent in AGENTS:
+        inception = base + timedelta(minutes=int(agent["inception_min"]))
+        turns = _transcript_turns(agent)
+        uid = f"{FIXTURE_SEED}-{agent['id']:02d}"
+        if str(agent["program"]).startswith("codex"):
+            day = root / "home" / ".codex" / "sessions" / f"{inception:%Y/%m/%d}"
+            day.mkdir(parents=True, exist_ok=True)
+            path = day / f"rollout-{inception:%Y-%m-%dT%H-%M-%S}-{uid}.jsonl"
+            lines = [
+                {"type": "session_meta",
+                 "payload": {"id": uid, "timestamp": _iso(inception)}},
+            ]
+            for offset, (role, text) in enumerate(turns):
+                lines.append({
+                    "timestamp": _iso(inception + timedelta(minutes=offset)),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message", "role": role,
+                        "content": [{
+                            "type": ("input_text" if role == "user"
+                                     else "output_text"),
+                            "text": text,
+                        }],
+                    },
+                })
+        else:
+            path = claude_dir / f"{uid}.jsonl"
+            lines = []
+            for offset, (role, text) in enumerate(turns):
+                lines.append({
+                    "type": role,
+                    "message": {"role": role,
+                                "content": [{"type": "text", "text": text}]},
+                    "timestamp": _iso(inception + timedelta(minutes=offset)),
+                    "cwd": str(root / "project"),
+                })
+            (index_dir / f"{agent['id']}.json").write_text(
+                json.dumps({"agent_id": agent["id"], "name": agent["name"],
+                            "session_id": uid, "transcript_path": str(path)},
+                           ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        path.write_text(
+            "".join(json.dumps(line, ensure_ascii=False) + "\n"
+                    for line in lines),
+            encoding="utf-8",
+        )
+
+
 def _create_deliverables(root: Path) -> None:
     logs = root / "project" / "logs"
     logs.mkdir(parents=True, exist_ok=True)
-    items = (
-        ("Bright-Curie", "LOG_2026-08-02T0900 Aurora Demo Direction.md", "Fictional shot list for the Aurora Terrarium dashboard demo."),
-        ("Swift-Noether", "LOG_2026-08-02T0915 Telemetry Cards.md", "Invented greenhouse telemetry card notes."),
-        ("Calm-Turing", "LOG_2026-08-02T0930 Visitor Journey.md", "Fictional visitor journey copy."),
-        ("Bold-Hopper", "LOG_2026-08-02T0940 Canopy Climate.md", "Invented canopy climate tile specification."),
-        ("Warm-Lovelace", "LOG_2026-08-02T0950 Irrigation Cues.md", "Fictional cloud-moss irrigation cues."),
-        ("Keen-Faraday", "LOG_2026-08-02T1000 Firefly Sequence.md", "Invented night-garden glow sequence."),
-        ("Vivid-Feynman", "LOG_2026-08-02T1010 Nutrient Routes.md", "Fictional nutrient-flow route map."),
-        ("Steady-Bose", "LOG_2026-08-02T1020 Alcove Balance.md", "Invented firefly alcove balance readings."),
+    bodies = {
+        "Bright-Curie": "Fictional shot list for the Aurora Terrarium dashboard demo.",
+        "Swift-Noether": "Invented greenhouse telemetry card notes.",
+        "Calm-Turing": "Fictional visitor journey copy.",
+        "Bold-Hopper": "Invented canopy climate tile specification.",
+        "Warm-Lovelace": "Fictional cloud-moss irrigation cues.",
+        "Keen-Faraday": "Invented night-garden glow sequence.",
+        "Vivid-Feynman": "Fictional nutrient-flow route map.",
+        "Steady-Bose": "Invented firefly alcove balance readings.",
+    }
+    items = tuple(
+        (agent, DELIVERABLE_BY_AGENT[agent], body)
+        for agent, body in bodies.items()
     )
     for agent, filename, body in items:
         (logs / filename).write_text(
@@ -905,6 +1033,24 @@ def _verify(port: int) -> dict[str, Any]:
         raise RuntimeError("DIGEST REPLAY lacks the fictional message timeline")
     if len(recent_messages.get("messages", [])) < 2:
         raise RuntimeError("NETWORK comet feed lacks recent fictional messages")
+    # 詳細パネルの transcript は resolver（Claude=session_index / Codex=
+    # session_meta timestamp）を通らないと空状態のまま静かに壊れるので、
+    # 両方の経路を毎回実測する。
+    history: dict[str, int] = {}
+    for fixture in AGENTS:
+        name = str(fixture["name"])
+        payload = _get_json(
+            port, "/api/history?" + urllib.parse.urlencode(
+                {"session": name, "limit": 40}))
+        if not payload.get("ok") or not payload.get("events"):
+            raise RuntimeError(
+                f"transcript is missing for {name}: {payload.get('error')}")
+        expected = "codex" if str(fixture["program"]).startswith("codex") else "claude"
+        if payload.get("source") != expected:
+            raise RuntimeError(
+                f"{name} resolved a {payload.get('source')} transcript, "
+                f"expected {expected}")
+        history[name] = int(payload["total"])
     return {
         "ok": True,
         "url": f"http://127.0.0.1:{port}/",
@@ -932,6 +1078,7 @@ def _verify(port: int) -> dict[str, Any]:
         "spawn_picker_scientists": len(scientist_names),
         "replay_events": len(replay["events"]),
         "recent_comet_messages": len(recent_messages["messages"]),
+        "transcript_events": history,
     }
 
 
@@ -946,6 +1093,7 @@ def up(root: Path, port: int) -> dict[str, Any]:
         _copy_tracked_payload(root)
         _create_database(root, now)
         _create_runtime(root)
+        _create_transcripts(root, now)
         _create_deliverables(root)
         _create_command_shims(root, now)
         wrapper = _create_read_only_server(root)
