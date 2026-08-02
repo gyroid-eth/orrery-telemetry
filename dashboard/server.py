@@ -382,8 +382,29 @@ def _to_int(s: str) -> int:
 # --------------------------------------------------------------------------- #
 # agent-mail SQLite (read-only)
 # --------------------------------------------------------------------------- #
+class _ClosingConnection(sqlite3.Connection):
+    """sqlite connection whose context manager also releases the file handle.
+
+    ``sqlite3.Connection.__exit__`` only commits or rolls back; it does not
+    close the connection.  Dashboard request handlers intentionally use
+    ``with _db()`` throughout, so make that spelling safe by construction.
+    Explicit ``con = _db(); con.close()`` callers remain supported as well.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def _db():
-    return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=2)
+    return sqlite3.connect(
+        f"file:{DB_PATH}?mode=ro",
+        uri=True,
+        timeout=2,
+        factory=_ClosingConnection,
+    )
 
 
 def agentmail_state() -> tuple[dict, dict]:
@@ -2839,7 +2860,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
             row = None
         else:
             try:
-                with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+                with _db() as conn:
                     conn.row_factory = sqlite3.Row
                     row = conn.execute(
                         "SELECT a.id, a.retired_at FROM agents a "
