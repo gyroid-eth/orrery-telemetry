@@ -34,6 +34,10 @@ DEFAULT_PORT = 8878
 PROFILE = "agentstack-demo-reel-v1"
 SESSION_PREFIX = "agentstack-reel-"
 STORY_SECONDS = 33.0
+HUMAN_LOOP_AT = 25.0
+HUMAN_LOOP_STATE_LEAD_SECONDS = 6.0
+HUMAN_LOOP_STATE_AT = HUMAN_LOOP_AT - HUMAN_LOOP_STATE_LEAD_SECONDS
+HUMAN_LOOP_RESOLVE_AT = 31.0
 DEMO_MAIL_TRAVEL_MS = 2500
 NETWORK_TUNE = "NSIZE:11,L:175,KR:6400,GR:.006,KS:.015"
 
@@ -129,8 +133,8 @@ CAPTIONS = (
     {"at": 11.0, "text": "THREE CLUSTERS THINK"},
     {"at": 16.5, "text": "SIGNALS CROSS BORDERS"},
     {"at": 22.0, "text": "ONE COORDINATION MESH"},
-    {"at": 25.0, "text": "HUMAN IN THE LOOP"},
-    {"at": 31.0, "text": "ONE CLICK · SYSTEM MOVES"},
+    {"at": HUMAN_LOOP_AT, "text": "HUMAN IN THE LOOP"},
+    {"at": HUMAN_LOOP_RESOLVE_AT, "text": "ONE CLICK · SYSTEM MOVES"},
 )
 
 
@@ -212,6 +216,14 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _mail(17.5, "Warm-Lovelace", "Quiet-Franklin", "Signal map linked"),
     _mail(18.5, "Gentle-Lamarr", "Steady-Bose", "Exchange spectrum rhythm"),
     _mail(18.5, "Steady-Bose", "Gentle-Lamarr", "Spectrum rhythm received"),
+
+    # Runtime captures are cached for 4.5s, then observed on the next graph
+    # poll.  Lead the 25s caption by 6s so the live glyphs overlap the full
+    # HUMAN IN THE LOOP beat instead of appearing only at the reel's end.
+    _state(HUMAN_LOOP_STATE_AT, "Bright-Curie", "question", 28),
+    _state(HUMAN_LOOP_STATE_AT, "Swift-Noether", "ask", 36),
+    _state(HUMAN_LOOP_STATE_AT, "Calm-Turing", "work", 41),
+
     _mail(19.5, "Soft-Galileo", "Clear-Somerville", "Compare shared scale"),
     _mail(19.5, "Clear-Somerville", "Soft-Galileo", "Shared scale accepted"),
     _mail(20.5, "Vivid-Feynman", "Keen-Faraday", "Connect the relay path"),
@@ -225,9 +237,6 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _mail(24.5, "Clear-Somerville", "Vivid-Feynman", "Merge observation notes"),
     _mail(24.5, "Vivid-Feynman", "Clear-Somerville", "Observation mesh ready"),
 
-    _state(25.0, "Bright-Curie", "question", 28),
-    _state(25.0, "Swift-Noether", "ask", 36),
-    _state(25.0, "Calm-Turing", "work", 41),
     _mail(25.5, "Steady-Bose", "Keen-Faraday", "Route the human decision"),
     _mail(25.5, "Keen-Faraday", "Steady-Bose", "Decision route open"),
     _mail(26.5, "Warm-Lovelace", "Bold-Hopper", "Propagate the approval"),
@@ -241,9 +250,9 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _mail(30.5, "Keen-Faraday", "Bold-Hopper", "Publish relay telemetry"),
     _mail(30.5, "Bold-Hopper", "Keen-Faraday", "Telemetry published"),
 
-    _state(31.0, "Bright-Curie", "wait", 31),
-    _state(31.0, "Swift-Noether", "work", 39),
-    _state(31.0, "Calm-Turing", "wait", 44),
+    _state(HUMAN_LOOP_RESOLVE_AT, "Bright-Curie", "wait", 31),
+    _state(HUMAN_LOOP_RESOLVE_AT, "Swift-Noether", "work", 39),
+    _state(HUMAN_LOOP_RESOLVE_AT, "Calm-Turing", "wait", 44),
     _mail(31.5, "Vivid-Feynman", "Warm-Lovelace", "Publish the final handoff"),
     _mail(31.5, "Warm-Lovelace", "Vivid-Feynman", "Final handoff accepted"),
     _mail(32.2, "Bright-Curie", "Swift-Noether", "All three projects aligned"),
@@ -1037,8 +1046,8 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
         observe()
         time.sleep(min(0.08, max(0.0, end - time.monotonic())))
     # One final poll after the runtime parser's 4.5-second cache had a chance
-    # to sample the 25s states.  The per-session state transitions are all 6s+
-    # apart, matching the verified dashboard contract.
+    # to sample the led human-loop states.  The per-session state transitions
+    # are all 6s+ apart, matching the verified dashboard contract.
     observe(force=True)
     _atomic_json(
         _status_path(root),

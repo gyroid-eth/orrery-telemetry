@@ -69,3 +69,27 @@ def test_reel_url_forces_all_nodes_and_readable_network_tuning():
     assert "lang=en" in url
     assert "tune=NSIZE:11,L:175,KR:6400,GR:.006,KS:.015" in url
     assert reel.DEMO_MAIL_TRAVEL_MS == 2500
+
+
+def test_human_loop_states_lead_caption_by_runtime_cache_budget():
+    reel = _load_reel()
+    human_caption = next(
+        item for item in reel.CAPTIONS if item["text"] == "HUMAN IN THE LOOP"
+    )
+    next_caption = next(
+        item for item in reel.CAPTIONS if item["text"] == "ONE CLICK · SYSTEM MOVES"
+    )
+    intervention = [
+        event for event in reel.TIMELINE
+        if event["type"] == "state" and event["act_state"] in {"ask", "question"}
+    ]
+
+    assert {event["agent"] for event in intervention} == {
+        "Bright-Curie", "Swift-Noether",
+    }
+    assert {event["at"] for event in intervention} == {reel.HUMAN_LOOP_STATE_AT}
+    assert reel.HUMAN_LOOP_STATE_LEAD_SECONDS >= 5.5
+    assert reel.HUMAN_LOOP_STATE_AT == (
+        human_caption["at"] - reel.HUMAN_LOOP_STATE_LEAD_SECONDS
+    )
+    assert next_caption["at"] - human_caption["at"] >= 6.0
