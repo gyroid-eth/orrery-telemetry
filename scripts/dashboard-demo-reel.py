@@ -49,62 +49,62 @@ DEMO = _load_docs_demo()
 
 
 AGENTS: dict[str, dict[str, Any]] = {
-    "agentstack-reel-Curie": {
+    "Bright-Curie": {
         "id": 1, "model": "claude-opus-4-7[1m]", "program": "claude-code",
         "task": "Coordinate the fictional orbital observatory launch",
         "role": "Mission lead", "emoji": "🧭", "group": "Signal Lab", "real": True,
     },
-    "agentstack-reel-Noether": {
+    "Swift-Noether": {
         "id": 2, "model": "gpt-5.6-sol", "program": "codex-cli",
         "task": "Coordinate fictional telemetry systems",
         "role": "Systems lead", "emoji": "🎛️", "group": "Orbit Studio", "real": True,
     },
-    "agentstack-reel-Turing": {
+    "Calm-Turing": {
         "id": 3, "model": "claude-sonnet-5", "program": "claude-code",
         "task": "Coordinate the fictional visitor signal map",
         "role": "Journey lead", "emoji": "🪐", "group": "Lumen Studio", "real": True,
     },
-    "agentstack-reel-Lovelace": {
+    "Warm-Lovelace": {
         "id": 4, "model": "gpt-5.6-terra", "program": "codex-cli",
         "task": "Compose fictional navigation cards",
         "role": "Navigation designer", "emoji": "🗺️", "group": "Signal Lab", "real": False,
     },
-    "agentstack-reel-Hopper": {
+    "Bold-Hopper": {
         "id": 5, "model": "claude-sonnet-5", "program": "claude-code",
         "task": "Build fictional telemetry transforms",
         "role": "Telemetry engineer", "emoji": "📡", "group": "Orbit Studio", "real": False,
     },
-    "agentstack-reel-Franklin": {
+    "Quiet-Franklin": {
         "id": 6, "model": "gpt-5.6-sol", "program": "codex-cli",
         "task": "Draft fictional constellation labels",
         "role": "Constellation editor", "emoji": "✨", "group": "Lumen Studio", "real": False,
     },
-    "agentstack-reel-Faraday": {
+    "Keen-Faraday": {
         "id": 7, "model": "claude-haiku-4-5-20251001", "program": "claude-code",
         "task": "Tune fictional signal relays",
         "role": "Relay tuner", "emoji": "⚡", "group": "Signal Lab", "real": False,
     },
-    "agentstack-reel-Lamarr": {
+    "Gentle-Lamarr": {
         "id": 8, "model": "gpt-5.6-terra", "program": "codex-cli",
         "task": "Map fictional spectrum channels",
         "role": "Spectrum mapper", "emoji": "🌈", "group": "Orbit Studio", "real": False,
     },
-    "agentstack-reel-Bose": {
+    "Steady-Bose": {
         "id": 9, "model": "claude-opus-4-7[1m]", "program": "claude-code",
         "task": "Balance fictional ambient signals",
         "role": "Signal composer", "emoji": "🎧", "group": "Lumen Studio", "real": False,
     },
-    "agentstack-reel-Galileo": {
+    "Soft-Galileo": {
         "id": 10, "model": "gpt-5.6-sol", "program": "codex-cli",
         "task": "Review fictional orbital scale cues",
         "role": "Scale reviewer", "emoji": "🔭", "group": "Signal Lab", "real": False,
     },
-    "agentstack-reel-Somerville": {
+    "Clear-Somerville": {
         "id": 11, "model": "claude-sonnet-5", "program": "claude-code",
         "task": "Validate fictional observation notes",
         "role": "Observation editor", "emoji": "📝", "group": "Orbit Studio", "real": False,
     },
-    "agentstack-reel-Feynman": {
+    "Vivid-Feynman": {
         "id": 12, "model": "gpt-5.6-terra", "program": "codex-cli",
         "task": "Connect fictional exhibit handoffs",
         "role": "Handoff designer", "emoji": "🔗", "group": "Lumen Studio", "real": False,
@@ -112,6 +112,12 @@ AGENTS: dict[str, dict[str, Any]] = {
 }
 
 REAL_AGENT_NAMES = tuple(name for name, data in AGENTS.items() if data["real"])
+REAL_SESSION_BY_AGENT = {
+    "Bright-Curie": f"{SESSION_PREFIX}Curie",
+    "Swift-Noether": f"{SESSION_PREFIX}Noether",
+    "Calm-Turing": f"{SESSION_PREFIX}Turing",
+}
+REAL_SESSION_NAMES = tuple(REAL_SESSION_BY_AGENT[name] for name in REAL_AGENT_NAMES)
 
 CAPTIONS = (
     {"at": 0.0, "text": "ONE TERMINAL"},
@@ -149,65 +155,65 @@ def _state(at: float, agent: str, act_state: str, ctx_used: int) -> dict[str, An
 
 # The story itself is data.  Every event is one of the four public primitives.
 TIMELINE: tuple[dict[str, Any], ...] = (
-    _agent_add(0.0, "agentstack-reel-Curie"),
-    _state(0.0, "agentstack-reel-Curie", "work", 12),
+    _agent_add(0.0, "Bright-Curie"),
+    _state(0.0, "Bright-Curie", "work", 12),
 
-    _agent_add(3.0, "agentstack-reel-Noether"),
-    _agent_add(3.0, "agentstack-reel-Turing"),
-    _state(3.0, "agentstack-reel-Noether", "wait", 19),
-    _state(3.0, "agentstack-reel-Turing", "work", 24),
+    _agent_add(3.0, "Swift-Noether"),
+    _agent_add(3.0, "Calm-Turing"),
+    _state(3.0, "Swift-Noether", "wait", 19),
+    _state(3.0, "Calm-Turing", "work", 24),
 
-    _agent_add(5.0, "agentstack-reel-Lovelace"),
-    _agent_add(5.0, "agentstack-reel-Hopper"),
-    _agent_add(5.0, "agentstack-reel-Franklin"),
-    _spawn(5.1, "agentstack-reel-Curie", "agentstack-reel-Lovelace"),
-    _spawn(5.1, "agentstack-reel-Noether", "agentstack-reel-Hopper"),
-    _spawn(5.1, "agentstack-reel-Turing", "agentstack-reel-Franklin"),
+    _agent_add(5.0, "Warm-Lovelace"),
+    _agent_add(5.0, "Bold-Hopper"),
+    _agent_add(5.0, "Quiet-Franklin"),
+    _spawn(5.1, "Bright-Curie", "Warm-Lovelace"),
+    _spawn(5.1, "Swift-Noether", "Bold-Hopper"),
+    _spawn(5.1, "Calm-Turing", "Quiet-Franklin"),
 
-    _agent_add(7.0, "agentstack-reel-Faraday"),
-    _agent_add(7.0, "agentstack-reel-Lamarr"),
-    _agent_add(7.0, "agentstack-reel-Bose"),
-    _spawn(7.1, "agentstack-reel-Curie", "agentstack-reel-Faraday"),
-    _spawn(7.1, "agentstack-reel-Noether", "agentstack-reel-Lamarr"),
-    _spawn(7.1, "agentstack-reel-Turing", "agentstack-reel-Bose"),
+    _agent_add(7.0, "Keen-Faraday"),
+    _agent_add(7.0, "Gentle-Lamarr"),
+    _agent_add(7.0, "Steady-Bose"),
+    _spawn(7.1, "Bright-Curie", "Keen-Faraday"),
+    _spawn(7.1, "Swift-Noether", "Gentle-Lamarr"),
+    _spawn(7.1, "Calm-Turing", "Steady-Bose"),
 
-    _agent_add(9.0, "agentstack-reel-Galileo"),
-    _agent_add(9.0, "agentstack-reel-Somerville"),
-    _agent_add(9.0, "agentstack-reel-Feynman"),
-    _state(9.0, "agentstack-reel-Curie", "question", 18),
-    _state(9.0, "agentstack-reel-Noether", "ask", 27),
-    _spawn(9.1, "agentstack-reel-Curie", "agentstack-reel-Galileo"),
-    _spawn(9.1, "agentstack-reel-Noether", "agentstack-reel-Somerville"),
-    _spawn(9.1, "agentstack-reel-Turing", "agentstack-reel-Feynman"),
+    _agent_add(9.0, "Soft-Galileo"),
+    _agent_add(9.0, "Clear-Somerville"),
+    _agent_add(9.0, "Vivid-Feynman"),
+    _state(9.0, "Bright-Curie", "question", 18),
+    _state(9.0, "Swift-Noether", "ask", 27),
+    _spawn(9.1, "Bright-Curie", "Soft-Galileo"),
+    _spawn(9.1, "Swift-Noether", "Clear-Somerville"),
+    _spawn(9.1, "Calm-Turing", "Vivid-Feynman"),
 
-    _mail(10.5, "agentstack-reel-Lovelace", "agentstack-reel-Hopper", "Align navigation and telemetry"),
-    _mail(10.5, "agentstack-reel-Hopper", "agentstack-reel-Franklin", "Share the signal scale"),
-    _mail(10.5, "agentstack-reel-Franklin", "agentstack-reel-Lovelace", "Constellation labels ready"),
-    _mail(11.5, "agentstack-reel-Faraday", "agentstack-reel-Lamarr", "Relay spectrum handoff"),
-    _mail(11.5, "agentstack-reel-Lamarr", "agentstack-reel-Bose", "Spectrum cue accepted"),
-    _mail(11.5, "agentstack-reel-Bose", "agentstack-reel-Faraday", "Ambient signal balanced"),
-    _mail(13.0, "agentstack-reel-Galileo", "agentstack-reel-Somerville", "Review the orbital scale"),
-    _mail(13.0, "agentstack-reel-Somerville", "agentstack-reel-Feynman", "Observation notes verified"),
-    _mail(13.0, "agentstack-reel-Feynman", "agentstack-reel-Galileo", "Handoff path connected"),
+    _mail(10.5, "Warm-Lovelace", "Bold-Hopper", "Align navigation and telemetry"),
+    _mail(10.5, "Bold-Hopper", "Quiet-Franklin", "Share the signal scale"),
+    _mail(10.5, "Quiet-Franklin", "Warm-Lovelace", "Constellation labels ready"),
+    _mail(11.5, "Keen-Faraday", "Gentle-Lamarr", "Relay spectrum handoff"),
+    _mail(11.5, "Gentle-Lamarr", "Steady-Bose", "Spectrum cue accepted"),
+    _mail(11.5, "Steady-Bose", "Keen-Faraday", "Ambient signal balanced"),
+    _mail(13.0, "Soft-Galileo", "Clear-Somerville", "Review the orbital scale"),
+    _mail(13.0, "Clear-Somerville", "Vivid-Feynman", "Observation notes verified"),
+    _mail(13.0, "Vivid-Feynman", "Soft-Galileo", "Handoff path connected"),
 
-    _state(15.0, "agentstack-reel-Curie", "wait", 21),
-    _state(15.0, "agentstack-reel-Noether", "work", 31),
-    _state(15.0, "agentstack-reel-Turing", "ask", 36),
-    _mail(15.5, "agentstack-reel-Curie", "agentstack-reel-Noether", "Human decision received"),
-    _mail(15.5, "agentstack-reel-Noether", "agentstack-reel-Turing", "Resume coordinated rollout"),
-    _mail(16.5, "agentstack-reel-Turing", "agentstack-reel-Curie", "Rollout path confirmed"),
-    _mail(17.5, "agentstack-reel-Hopper", "agentstack-reel-Lovelace", "Telemetry cards synchronized"),
-    _mail(18.5, "agentstack-reel-Lamarr", "agentstack-reel-Franklin", "Shared spectrum token"),
-    _mail(19.5, "agentstack-reel-Bose", "agentstack-reel-Somerville", "Observation rhythm aligned"),
+    _state(15.0, "Bright-Curie", "wait", 21),
+    _state(15.0, "Swift-Noether", "work", 31),
+    _state(15.0, "Calm-Turing", "ask", 36),
+    _mail(15.5, "Bright-Curie", "Swift-Noether", "Human decision received"),
+    _mail(15.5, "Swift-Noether", "Calm-Turing", "Resume coordinated rollout"),
+    _mail(16.5, "Calm-Turing", "Bright-Curie", "Rollout path confirmed"),
+    _mail(17.5, "Bold-Hopper", "Warm-Lovelace", "Telemetry cards synchronized"),
+    _mail(18.5, "Gentle-Lamarr", "Quiet-Franklin", "Shared spectrum token"),
+    _mail(19.5, "Steady-Bose", "Clear-Somerville", "Observation rhythm aligned"),
 
-    _state(21.0, "agentstack-reel-Noether", "question", 38),
-    _state(21.0, "agentstack-reel-Turing", "wait", 41),
-    _mail(21.5, "agentstack-reel-Galileo", "agentstack-reel-Feynman", "Final scale pass"),
-    _mail(22.0, "agentstack-reel-Feynman", "agentstack-reel-Curie", "Network handoff complete"),
-    _mail(22.5, "agentstack-reel-Curie", "agentstack-reel-Lovelace", "Publish navigation cue"),
-    _mail(23.0, "agentstack-reel-Noether", "agentstack-reel-Hopper", "Publish telemetry cue"),
-    _mail(23.5, "agentstack-reel-Turing", "agentstack-reel-Franklin", "Publish constellation cue"),
-    _mail(24.0, "agentstack-reel-Lovelace", "agentstack-reel-Turing", "All fictional cues green"),
+    _state(21.0, "Swift-Noether", "question", 38),
+    _state(21.0, "Calm-Turing", "wait", 41),
+    _mail(21.5, "Soft-Galileo", "Vivid-Feynman", "Final scale pass"),
+    _mail(22.0, "Vivid-Feynman", "Bright-Curie", "Network handoff complete"),
+    _mail(22.5, "Bright-Curie", "Warm-Lovelace", "Publish navigation cue"),
+    _mail(23.0, "Swift-Noether", "Bold-Hopper", "Publish telemetry cue"),
+    _mail(23.5, "Calm-Turing", "Quiet-Franklin", "Publish constellation cue"),
+    _mail(24.0, "Warm-Lovelace", "Calm-Turing", "All fictional cues green"),
 )
 
 EVENT_TYPES = frozenset({"agent_add", "spawn", "mail", "state"})
@@ -288,7 +294,7 @@ def _has_real_session(tmux_bin: str, name: str) -> bool:
     return _tmux_run(tmux_bin, ["has-session", "-t", f"={name}"], check=False).returncode == 0
 
 
-def _kill_real_sessions(tmux_bin: str, names: tuple[str, ...] = REAL_AGENT_NAMES) -> None:
+def _kill_real_sessions(tmux_bin: str, names: tuple[str, ...] = REAL_SESSION_NAMES) -> None:
     for name in names:
         if not name.startswith(SESSION_PREFIX):
             raise RuntimeError(f"refusing non-demo tmux session name: {name}")
@@ -440,13 +446,18 @@ elif command == "list-panes":
 elif command == "list-clients":
     pass
 elif command in ("capture-pane", "has-session"):
-    target = args[args.index("-t") + 1] if "-t" in args else ""
-    target = target.lstrip("=")
+    target_index = args.index("-t") + 1 if "-t" in args else -1
+    raw_target = args[target_index] if target_index >= 0 else ""
+    exact = raw_target.startswith("=")
+    target = raw_target.lstrip("=")
     data = sessions.get(target)
     if data is None:
         raise SystemExit(1)
-    if data.get("real"):
-        result = subprocess.run([REAL_TMUX, *args])
+    real_target = str(data.get("real_target") or "")
+    if data.get("real") and real_target:
+        real_args = list(args)
+        real_args[target_index] = ("=" if exact else "") + real_target
+        result = subprocess.run([REAL_TMUX, *real_args])
         raise SystemExit(result.returncode)
     if command == "has-session":
         raise SystemExit(0)
@@ -541,7 +552,7 @@ def _write_printer(root: Path, name: str, capture: str) -> None:
 
 
 def _start_real_sessions(root: Path, real_tmux: str) -> None:
-    collisions = [name for name in REAL_AGENT_NAMES if _has_real_session(real_tmux, name)]
+    collisions = [name for name in REAL_SESSION_NAMES if _has_real_session(real_tmux, name)]
     if collisions:
         raise RuntimeError(f"refusing existing tmux sessions: {', '.join(collisions)}")
     printer = root / "runtime" / "dashboard-demo-printer.py"
@@ -550,6 +561,7 @@ def _start_real_sessions(root: Path, real_tmux: str) -> None:
     created: list[str] = []
     try:
         for name in REAL_AGENT_NAMES:
+            session_name = REAL_SESSION_BY_AGENT[name]
             _write_printer(root, name, _default_capture(name))
             command = shlex.join(
                 [sys.executable, "-u", str(printer),
@@ -558,9 +570,9 @@ def _start_real_sessions(root: Path, real_tmux: str) -> None:
             # CLAUDECODE=1 is deliberately an explicit tmux server env entry.
             _tmux_run(
                 real_tmux,
-                ["new-session", "-d", "-e", "CLAUDECODE=1", "-s", name, command],
+                ["new-session", "-d", "-e", "CLAUDECODE=1", "-s", session_name, command],
             )
-            created.append(name)
+            created.append(session_name)
     except Exception:
         _kill_real_sessions(real_tmux, tuple(created))
         raise
@@ -591,6 +603,7 @@ def _touch_session(root: Path, name: str, *, capture: str | None = None) -> None
             "title": title,
             "capture": capture if capture is not None else current.get("capture", _default_capture(name)),
             "real": bool(data["real"]),
+            "real_target": REAL_SESSION_BY_AGENT.get(name),
         }
     )
     sessions[name] = current
@@ -607,7 +620,7 @@ def _touch_session(root: Path, name: str, *, capture: str | None = None) -> None
             time.sleep(0.18)
             _tmux_run(
                 str(marker["real_tmux"]),
-                ["clear-history", "-t", name],
+                ["clear-history", "-t", REAL_SESSION_BY_AGENT[name]],
                 check=False,
             )
 
@@ -764,7 +777,7 @@ def _reel_down(root: Path) -> dict[str, Any]:
     DEMO._stop_owned_process(root, marker)
     real_tmux = str(marker.get("real_tmux") or _real_tmux())
     recorded = tuple(marker.get("real_sessions") or ())
-    if recorded != REAL_AGENT_NAMES:
+    if recorded != REAL_SESSION_NAMES:
         raise RuntimeError("refusing tmux cleanup: ownership marker session list changed")
     _kill_real_sessions(real_tmux, recorded)
     DEMO._remove_owned_entries(root)
@@ -790,7 +803,8 @@ def up(root: Path, port: int) -> dict[str, Any]:
     marker = DEMO._write_marker(root, port)
     marker.update(
         profile=PROFILE, real_tmux=real_tmux,
-        real_sessions=list(REAL_AGENT_NAMES),
+        real_sessions=list(REAL_SESSION_NAMES),
+        real_session_by_agent=REAL_SESSION_BY_AGENT,
     )
     DEMO._update_marker(root, marker)
     process: subprocess.Popen[bytes] | None = None
@@ -821,11 +835,12 @@ def up(root: Path, port: int) -> dict[str, Any]:
         return {
             "ok": True,
             "url": f"http://127.0.0.1:{port}/?view=net",
-            "terminal_session": REAL_AGENT_NAMES[0],
+            "terminal_session": REAL_SESSION_BY_AGENT[REAL_AGENT_NAMES[0]],
             "install_dir": str(root),
             "dashboard_url": f"http://127.0.0.1:{port}",
             "orrery_mail_db": str(root / "mail" / "storage.sqlite3"),
-            "real_tmux_sessions": list(REAL_AGENT_NAMES),
+            "real_tmux_sessions": list(REAL_SESSION_NAMES),
+            "tmux_session_by_agent": REAL_SESSION_BY_AGENT,
             "initial": initial,
             "play": f"{Path(__file__).resolve()} play --install-dir {root}",
             "cleanup": f"{Path(__file__).resolve()} down --install-dir {root}",
@@ -975,7 +990,7 @@ def _verify_snapshot(root: Path, port: int, *, expect_final: bool) -> dict[str, 
     since = int(time.time()) - 300
     messages = DEMO._get_json(port, f"/api/messages-since?since={since}&limit=200")
     names = {str(agent.get("name")) for agent in agents}
-    expected_names = set(AGENTS) if expect_final else {"agentstack-reel-Curie"}
+    expected_names = set(AGENTS) if expect_final else {"Bright-Curie"}
     if names != expected_names:
         raise RuntimeError(f"unexpected /api/agents names: {sorted(names)}")
     graph_names = {str(node.get("name")) for node in graph.get("nodes", [])}
@@ -992,14 +1007,15 @@ def _verify_snapshot(root: Path, port: int, *, expect_final: bool) -> dict[str, 
     real_tmux = str(_read_marker(root)["real_tmux"])
     captures: dict[str, int] = {}
     for name in REAL_AGENT_NAMES:
-        if not _has_real_session(real_tmux, name):
-            raise RuntimeError(f"real tmux printer is missing: {name}")
-        env = _tmux_run(real_tmux, ["show-environment", "-t", f"={name}", "CLAUDECODE"])
+        session_name = REAL_SESSION_BY_AGENT[name]
+        if not _has_real_session(real_tmux, session_name):
+            raise RuntimeError(f"real tmux printer is missing: {session_name}")
+        env = _tmux_run(real_tmux, ["show-environment", "-t", f"={session_name}", "CLAUDECODE"])
         if "CLAUDECODE=1" not in env.stdout:
-            raise RuntimeError(f"CLAUDECODE safety env missing from {name}")
-        capture = _capture_real(real_tmux, name)
+            raise RuntimeError(f"CLAUDECODE safety env missing from {session_name}")
+        capture = _capture_real(real_tmux, session_name)
         if "AgentStack concept reel" not in capture:
-            raise RuntimeError(f"real tmux printer is empty: {name}")
+            raise RuntimeError(f"real tmux printer is empty: {session_name}")
         captures[name] = len(capture.rstrip().splitlines())
     return {
         "agent_count": len(agents), "graph_node_count": len(graph_names),
@@ -1024,7 +1040,8 @@ def status(root: Path, port: int | None) -> dict[str, Any]:
         "ok": True, "url": f"http://127.0.0.1:{actual_port}/?view=net",
         "dashboard_url": f"http://127.0.0.1:{actual_port}",
         "orrery_mail_db": str(root / "mail" / "storage.sqlite3"),
-        "terminal_session": REAL_AGENT_NAMES[0],
+        "terminal_session": REAL_SESSION_BY_AGENT[REAL_AGENT_NAMES[0]],
+        "tmux_session_by_agent": REAL_SESSION_BY_AGENT,
         "story": DEMO._get_json(actual_port, "/api/demo-reel"),
     }
 
@@ -1035,6 +1052,7 @@ def timeline_payload() -> dict[str, Any]:
         "primitive_types": sorted(EVENT_TYPES),
         "captions": CAPTIONS,
         "events": TIMELINE,
+        "tmux_session_by_agent": REAL_SESSION_BY_AGENT,
     }
 
 

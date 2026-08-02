@@ -1125,42 +1125,26 @@
     22%{opacity:.95}
     70%{opacity:.5}
     100%{opacity:0;transform:translate(9px,-15px) scale(1.5)}}
-  /* ASK｜角丸の本物の吹き出し＋JRPG 風バウンスの「!」＋HP 赤フラッシュ */
-  .node .askbub{pointer-events:none;transform-box:fill-box;
-    transform-origin:center}
-  .node .askbub .bubp{fill:#2a130e;stroke:#ff6a5d;stroke-width:1.6}
-  .node .askbub .bx{font-family:"Chakra Petch",sans-serif;font-weight:800;
-    font-size:13px;fill:#ffd0c8;paint-order:stroke;
-    stroke:#2a130e;stroke-width:2.6px}
-  .node.act-ask .askbub{animation:askbounce 1.25s
-    cubic-bezier(.3,1.5,.5,1) infinite}
-  @keyframes askbounce{
-    0%{transform:scale(.45) translateY(4px);opacity:.3}
-    35%{transform:scale(1.22) translateY(-3px);opacity:1}
-    52%{transform:scale(.92) translateY(0)}
-    66%{transform:scale(1.08)}
-    80%{transform:scale(.98)}
-    100%{transform:scale(1);opacity:1}}
-  .node.act-ask .hp{animation:askflash 1s steps(1) infinite}
-  @keyframes askflash{50%{stroke:#ff5a4d;opacity:.45}}
-  /* QUESTION｜AskUserQuestion ウィジェット表示中: シアンの ? 吹き出し点滅 */
-  .node .qbub{pointer-events:none;transform-box:fill-box;
-    transform-origin:center}
-  .node .qbub .bubq{fill:#0a2630;stroke:#36e8ff;stroke-width:1.6}
-  .node .qbub .bq{font-family:"Chakra Petch",sans-serif;font-weight:800;
-    font-size:13px;fill:#a8f0ff;paint-order:stroke;
-    stroke:#0a2630;stroke-width:2.6px}
-  .node.act-question .qbub{animation:qbounce 1.25s
-    cubic-bezier(.3,1.5,.5,1) infinite}
-  @keyframes qbounce{
-    0%{transform:scale(.45) translateY(4px);opacity:.3}
-    35%{transform:scale(1.22) translateY(-3px);opacity:1}
-    52%{transform:scale(.92) translateY(0)}
-    66%{transform:scale(1.08)}
-    80%{transform:scale(.98)}
-    100%{transform:scale(1);opacity:1}}
-  .node.act-question .hp{animation:qflash 1s steps(1) infinite}
-  @keyframes qflash{50%{stroke:#36e8ff;opacity:.45}}
+  /* 介入グリフ（ASK = `!` / QUESTION = `?`）。
+     計器盤の語彙に合わせる: 塗り潰した吹き出しではなく、細い破線の軌道環と
+     Fraunces italic の字。色は spawn 系統に予約してあるので状態は動きで表す
+     — question は静かな呼吸、ask は呼吸＋軌道の回転で急かす。
+     ORRERY 側 `.orrery-state-glyph` と同じ言語なので、両方の画面で同じ意味に見える。 */
+  .node .askbub,.node .qbub{pointer-events:none;
+    transform-box:fill-box;transform-origin:center}
+  .node .bubo{fill:none;stroke:var(--amber);stroke-width:1.1;
+    stroke-dasharray:24 76;opacity:.72;
+    transform-box:fill-box;transform-origin:center}
+  .node .askbub .bx,.node .qbub .bq{
+    font:italic 600 12px var(--serif);letter-spacing:-.04em;
+    fill:var(--ink);filter:drop-shadow(0 0 3px rgba(236,229,214,.32))}
+  .node.act-question .qbub{animation:glyphbreathe 3.6s ease-in-out infinite}
+  .node.act-ask .askbub{animation:glyphbreathe 2.2s ease-in-out infinite}
+  .node.act-ask .bubo{animation:glyphorbit 7s linear infinite}
+  @keyframes glyphbreathe{0%,100%{opacity:.42}50%{opacity:1}}
+  @keyframes glyphorbit{to{transform:rotate(360deg)}}
+  .node.act-ask .hp{animation:askflash 1.6s ease-in-out infinite}
+  @keyframes askflash{50%{stroke:var(--alert);opacity:.5}}
   /* 稼働経過時間（work のみ）。詠唱時計風の淡いモノスペース */
   .node .etime{font-family:"IBM Plex Mono",monospace;font-size:9px;
     font-weight:600;letter-spacing:.5px;fill:#ffcf7a;
@@ -1732,6 +1716,7 @@
     .node.act-wait .zsleep .z{animation:none;opacity:.85}
     .node.act-wait .zsleep .z1{opacity:0}
     .node.act-ask .askbub{animation:none;opacity:1}
+    .node.act-ask .bubo{animation:none}
     .node.act-ask .hp{animation:none}
     .node.act-question .qbub{animation:none;opacity:1}
     .node.act-question .hp{animation:none}
@@ -3685,16 +3670,16 @@ function renderLiveStateBubble(grp,actState){
   if(!question&&!ask)return null;
   const bubble=svgEl('g',{
     class:question?'qbub':'askbub',
-    transform:`translate(${(NR*.78).toFixed(2)} ${(-NR*.78).toFixed(2)})`,
     role:'img',
     'aria-label':question?'agent question':'approval requested'
   });
-  bubble.appendChild(svgEl('rect',{
-    class:question?'bubq':'bubp',
-    x:-9,y:-13,width:18,height:18,rx:6,ry:6
+  // 破線の軌道環はノードを囲む。字はその右上、環の外周に載せる。
+  bubble.appendChild(svgEl('circle',{
+    class:'bubo',cx:0,cy:0,r:(NR*1.18).toFixed(2),pathLength:'100'
   }));
   const glyph=svgEl('text',{
-    class:question?'bq':'bx',x:0,y:1.2,'text-anchor':'middle'
+    class:question?'bq':'bx',
+    x:(NR*.84).toFixed(2),y:(-NR*.84).toFixed(2),'text-anchor':'middle'
   });
   glyph.textContent=question?'?':'!';
   bubble.appendChild(glyph);

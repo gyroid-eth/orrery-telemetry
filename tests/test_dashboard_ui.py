@@ -65,7 +65,7 @@ def test_live_question_and_approval_bubbles_render_and_clear():
         "cls": "askbub",
         "label": "approval requested",
         "children": [
-            {"tag": "rect", "cls": "bubp", "text": ""},
+            {"tag": "circle", "cls": "bubo", "text": ""},
             {"tag": "text", "cls": "bx", "text": "!"},
         ],
     }
@@ -77,7 +77,7 @@ def test_live_question_and_approval_bubbles_render_and_clear():
         "cls": "qbub",
         "label": "agent question",
         "children": [
-            {"tag": "rect", "cls": "bubq", "text": ""},
+            {"tag": "circle", "cls": "bubo", "text": ""},
             {"tag": "text", "cls": "bq", "text": "?"},
         ],
     }
