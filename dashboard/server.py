@@ -74,6 +74,14 @@ MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.mcp_agent_mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
 NOTIFY_DAEMON_LABEL = f"{LABEL_PREFIX}.notify-daemon"
+MAIL_WATCHER_PIDFILE = _env_path(
+    "AGENTSTACK_MAIL_WATCHER_PIDFILE",
+    "/tmp/mcp-agent-mail-watcher.lock/watcher.pid",
+)
+MAIL_WATCHER_HEARTBEAT = _env_path(
+    "AGENTSTACK_MAIL_WATCHER_HEARTBEAT",
+    os.path.join(os.path.dirname(MAIL_WATCHER_PIDFILE), "heartbeat"),
+)
 PORT_64 = os.path.join(HERE, "portraits_64")
 # High-resolution portraits are optional distribution assets.  Keep the legacy
 # 64px set as a graceful fallback when a downstream install does not ship them.
@@ -530,6 +538,11 @@ def build_agents() -> list[dict]:
         running = s["cmd"] in ("node", "claude") or (
             bool(title) and _is_activity_glyph(title[:1])
         )
+        if name == "mail-watcher":
+            watcher_health = mail_watcher_health()
+            running = bool(watcher_health.get("watcher_running"))
+            if not live and watcher_health.get("watcher_mode"):
+                live = f"watcher: {watcher_health['watcher_mode']}"
         # Codex は zsh が pane_current_command として報告されるので、上の
         # cmd チェック + glyph チェックだけでは待機中に running=False になる。
         # category と整合させるため、cat=="agent" なら running も True に。
@@ -3634,6 +3647,73 @@ def _signal_agent_dirs() -> list[str]:
         return []
 
 
+def _pidfile_process_running(
+    pidfile: str,
+    expected_command_marker: str,
+    heartbeat_file: str = "",
+) -> tuple[bool, int | None]:
+    try:
+        with open(pidfile, encoding="utf-8") as handle:
+            pid = int(handle.readline().strip())
+    except (OSError, ValueError):
+        return False, None
+    if pid <= 1:
+        return False, None
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False, None
+
+    command = ""
+    proc_cmdline = f"/proc/{pid}/cmdline"
+    try:
+        with open(proc_cmdline, "rb") as handle:
+            command = handle.read(65536).replace(b"\0", b" ").decode(
+                "utf-8", errors="replace"
+            )
+    except OSError:
+        try:
+            process = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if process.returncode == 0:
+                command = process.stdout
+        except Exception:
+            command = ""
+    if command:
+        if expected_command_marker not in command:
+            return False, None
+    else:
+        try:
+            heartbeat_age = time.time() - os.path.getmtime(heartbeat_file)
+        except OSError:
+            return False, None
+        if heartbeat_age < 0 or heartbeat_age > 45:
+            return False, None
+    return True, pid
+
+
+def _launchctl_job_running(label: str) -> bool:
+    try:
+        process = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        match = re.search(r'"?PID"?\s*=\s*(\d+)', process.stdout)
+        return (
+            process.returncode == 0
+            and match is not None
+            and int(match.group(1)) > 1
+        )
+    except Exception:
+        return False
+
+
 def mail_watcher_health() -> dict:
     now = time.time()
     cached = _MAIL_HEALTH_CACHE["data"]
@@ -3649,6 +3729,8 @@ def mail_watcher_health() -> dict:
         "signal_count": 0,
         "daemon_running": False,
         "watcher_running": False,
+        "watcher_mode": None,
+        "watcher_pid": None,
         "status": "unknown",
     }
 
@@ -3689,18 +3771,21 @@ def mail_watcher_health() -> dict:
     except OSError:
         pass
 
-    # 配送本体は mail-watcher に統合。notify-daemon は意図的に停止できるため、
-    # health は watcher の生存で判定する (daemon_running は参考情報として残す)。
-    for label, key in ((MAIL_WATCHER_LABEL, "watcher_running"),
-                       (NOTIFY_DAEMON_LABEL, "daemon_running")):
-        try:
-            r = subprocess.run(
-                ["launchctl", "list", label],
-                capture_output=True, text=True, timeout=3,
-            )
-            result[key] = r.returncode == 0 and "PID" in r.stdout
-        except Exception:
-            pass
+    # 配送本体は mail-watcher に統合。GUI launchd domain が使えない環境でも
+    # watcher 自身が持つ pidfile と command line を照合して実プロセスを判定する。
+    watcher_launchd = _launchctl_job_running(MAIL_WATCHER_LABEL)
+    watcher_pidfile, watcher_pid = _pidfile_process_running(
+        MAIL_WATCHER_PIDFILE,
+        "watch_agent_mail_signals.sh",
+        MAIL_WATCHER_HEARTBEAT,
+    )
+    result["watcher_running"] = watcher_launchd or watcher_pidfile
+    if watcher_launchd:
+        result["watcher_mode"] = "launchd"
+    elif watcher_pidfile:
+        result["watcher_mode"] = "pidfile"
+        result["watcher_pid"] = watcher_pid
+    result["daemon_running"] = _launchctl_job_running(NOTIFY_DAEMON_LABEL)
 
     age = result.get("last_success_age_s")
     signals = result["signal_count"]

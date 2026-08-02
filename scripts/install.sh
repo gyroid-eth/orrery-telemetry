@@ -11,6 +11,8 @@ TIER_OPTION=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DIR="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
+MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
+MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
 PORT="${AGENTSTACK_PORT:-8770}"
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
@@ -116,7 +118,7 @@ MANIFEST="$INSTALL_DIR/install-state.json"
 CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
-MAIL_DB="${AGENTSTACK_MAIL_DB:-$MAIL_DIR/storage.sqlite3}"
+MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$MAIL_DIR/.env}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
@@ -130,6 +132,9 @@ ACTIVE_SERVICE_KIND=""
 SERVICE_PATH=""
 SERVICE_HEALTHY=false
 SERVICE_FALLBACK_USED=false
+EXISTING_AGENT_MAIL_SERVER=false
+AGENT_MAIL_LISTENER_PID=""
+AGENT_MAIL_LISTENER_CWD=""
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -225,6 +230,290 @@ select_python() {
 
   [[ -n "$checked" ]] || checked="no python3 candidates found"
   die "Python 3.10 or newer is required; checked: $checked. Install a current Python or set AGENTSTACK_PYTHON."
+}
+
+normalize_path() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
+mcp_endpoint_parts() {
+  "$PYTHON_BIN" - "$MCP_URL" <<'PY'
+import sys
+import urllib.parse
+
+parsed = urllib.parse.urlparse(sys.argv[1])
+if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    raise SystemExit(1)
+port = parsed.port or (443 if parsed.scheme == "https" else 80)
+print(f"{parsed.hostname}|{port}")
+PY
+}
+
+mcp_endpoint_listening() {
+  local parts host port
+  parts="$(mcp_endpoint_parts)" || return 1
+  IFS='|' read -r host port <<< "$parts"
+  "$PYTHON_BIN" - "$host" "$port" <<'PY'
+import socket
+import sys
+
+try:
+    with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=0.5):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
+}
+
+discover_agent_mail_listener_process() {
+  local parts port lsof_bin
+  parts="$(mcp_endpoint_parts)" || return 0
+  port="${parts##*|}"
+  lsof_bin="$(command -v lsof 2>/dev/null || true)"
+  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
+    lsof_bin=/usr/sbin/lsof
+  fi
+  if [[ -n "$lsof_bin" ]]; then
+    AGENT_MAIL_LISTENER_PID="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sed -n '1p')"
+  fi
+  if [[ "$AGENT_MAIL_LISTENER_PID" =~ ^[0-9]+$ ]]; then
+    if [[ -L "/proc/$AGENT_MAIL_LISTENER_PID/cwd" ]]; then
+      AGENT_MAIL_LISTENER_CWD="$(readlink "/proc/$AGENT_MAIL_LISTENER_PID/cwd" 2>/dev/null || true)"
+    elif [[ -n "$lsof_bin" ]]; then
+      AGENT_MAIL_LISTENER_CWD="$("$lsof_bin" -a -p "$AGENT_MAIL_LISTENER_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
+    fi
+  fi
+}
+
+probe_agent_mail_database_url() {
+  local listener_env=""
+  if [[ -n "$AGENT_MAIL_LISTENER_CWD" ]]; then
+    listener_env="$AGENT_MAIL_LISTENER_CWD/.env"
+  fi
+  "$PYTHON_BIN" - "$MCP_URL" "$MAIL_ENV" "$listener_env" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+tokens = [None]
+for raw_path in sys.argv[2:]:
+    if not raw_path:
+        continue
+    try:
+        lines = pathlib.Path(raw_path).expanduser().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        continue
+    for line in lines:
+        if line.startswith("HTTP_BEARER_TOKEN="):
+            token = line.split("=", 1)[1].strip().strip("'\"")
+            if token and token not in tokens:
+                tokens.append(token)
+            break
+
+payload = json.dumps({
+    "jsonrpc": "2.0",
+    "id": "agentstack-installer-probe",
+    "method": "tools/call",
+    "params": {"name": "health_check", "arguments": {}},
+}).encode()
+for token in tokens:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except (OSError, urllib.error.URLError):
+        continue
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    try:
+        data = json.loads(raw)
+        result = data.get("result") or {}
+        health = result.get("structuredContent") or {}
+        if not health:
+            for block in result.get("content") or []:
+                if block.get("type") == "text":
+                    health = json.loads(block.get("text") or "{}")
+                    break
+        database_url = health.get("database_url")
+    except (TypeError, ValueError, AttributeError):
+        continue
+    if isinstance(database_url, str) and database_url:
+        print(database_url)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+database_url_to_path() {
+  "$PYTHON_BIN" - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import urllib.parse
+
+database_url, cwd = sys.argv[1:3]
+prefixes = ("sqlite+aiosqlite:///", "sqlite:///")
+for prefix in prefixes:
+    if database_url.startswith(prefix):
+        raw = urllib.parse.unquote(database_url[len(prefix):].split("?", 1)[0])
+        path = pathlib.Path(raw).expanduser()
+        if not path.is_absolute():
+            if not cwd:
+                raise SystemExit(1)
+            path = pathlib.Path(cwd) / path
+        print(path.resolve(strict=False))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+listener_open_database() {
+  local lsof_bin path
+  [[ "$AGENT_MAIL_LISTENER_PID" =~ ^[0-9]+$ ]] || return 1
+  lsof_bin="$(command -v lsof 2>/dev/null || true)"
+  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
+    lsof_bin=/usr/sbin/lsof
+  fi
+  [[ -n "$lsof_bin" ]] || return 1
+  path="$("$lsof_bin" -a -p "$AGENT_MAIL_LISTENER_PID" -Fn 2>/dev/null |
+    sed -n 's/^n//p' | awk '/\.sqlite3$/ { print; exit }')"
+  [[ -n "$path" && -f "$path" ]] || return 1
+  normalize_path "$path"
+}
+
+existing_mail_db_candidates() {
+  local seen="" raw normalized
+  for raw in \
+    "${MAIL_DB:-}" \
+    "$MAIL_DIR/storage.sqlite3" \
+    "$HOME/.local/share/mcp-agent-mail/git_mailbox_repo/storage.sqlite3" \
+    "$HOME/.local/share/mcp-agent-mail/storage.sqlite3" \
+    "$HOME/.mcp_agent_mail/storage.sqlite3" \
+    "${AGENT_MAIL_LISTENER_CWD:+$AGENT_MAIL_LISTENER_CWD/storage.sqlite3}"
+  do
+    [[ -n "$raw" ]] || continue
+    normalized="$(normalize_path "$raw")"
+    [[ -f "$normalized" ]] || continue
+    case $'\n'"$seen"$'\n' in
+      *$'\n'"$normalized"$'\n'*) continue ;;
+    esac
+    seen="${seen}${seen:+$'\n'}$normalized"
+    printf '%s\n' "$normalized"
+  done
+}
+
+confirm_existing_agent_mail() {
+  if [[ ! -t 0 ]]; then
+    say "non-interactive install: using the detected existing agent-mail server"
+    return 0
+  fi
+  printf 'Use the existing agent-mail server and database above? Type yes to continue: ' >&2
+  local reply
+  read -r reply
+  [[ "$reply" == "yes" ]]
+}
+
+resolve_agent_mail_connection() {
+  local database_url="" resolved_db="" explicit_db="" candidates_text=""
+  local candidates=()
+
+  if [[ -n "$MAIL_DB_EXPLICIT" ]]; then
+    [[ -n "${AGENTSTACK_MAIL_DB:-}" ]] || die "AGENTSTACK_MAIL_DB was set but empty"
+    explicit_db="$(normalize_path "$AGENTSTACK_MAIL_DB")"
+  fi
+
+  if mcp_endpoint_listening; then
+    say "existing agent-mail listener detected at $MCP_URL"
+    discover_agent_mail_listener_process
+    database_url="$(probe_agent_mail_database_url || true)"
+    if [[ -z "$database_url" ]]; then
+      die "$MCP_URL is already listening, but it did not identify itself as agent-mail. Stop that service or set AGENTSTACK_MCP_URL."
+    fi
+
+    resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
+    if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
+      resolved_db="$(listener_open_database || true)"
+    fi
+    if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
+      while IFS= read -r resolved_db; do
+        [[ -n "$resolved_db" ]] && candidates+=("$resolved_db")
+      done < <(existing_mail_db_candidates)
+      if [[ "${#candidates[@]}" -eq 1 ]]; then
+        resolved_db="${candidates[0]}"
+      else
+        resolved_db=""
+      fi
+    fi
+    [[ -n "$resolved_db" && -f "$resolved_db" ]] || \
+      die "agent-mail is running at $MCP_URL, but its SQLite database could not be resolved from '$database_url'. Set AGENTSTACK_MAIL_DB to the existing database."
+    resolved_db="$(normalize_path "$resolved_db")"
+    if [[ -n "$explicit_db" && "$explicit_db" != "$resolved_db" ]]; then
+      die "AGENTSTACK_MAIL_DB points to '$explicit_db', but the running agent-mail server uses '$resolved_db'"
+    fi
+
+    say "existing agent-mail database: $resolved_db"
+    if [[ "$DRY_RUN" != true ]] && ! confirm_existing_agent_mail; then
+      die "existing agent-mail connection declined; set AGENTSTACK_MCP_URL and AGENTSTACK_MAIL_DB explicitly, then re-run"
+    fi
+    MAIL_DB="$resolved_db"
+    EXISTING_AGENT_MAIL_SERVER=true
+    if [[ -z "$MAIL_ENV_EXPLICIT" ]]; then
+      if [[ -n "$AGENT_MAIL_LISTENER_CWD" && -f "$AGENT_MAIL_LISTENER_CWD/.env" ]]; then
+        MAIL_ENV="$AGENT_MAIL_LISTENER_CWD/.env"
+      elif [[ -f "$(dirname "$MAIL_DB")/.env" ]]; then
+        MAIL_ENV="$(dirname "$MAIL_DB")/.env"
+      fi
+    fi
+    return
+  fi
+
+  if [[ -n "$explicit_db" ]]; then
+    if [[ ! -f "$explicit_db" ]]; then
+      if [[ "$DRY_RUN" == true ]]; then
+        warn "AGENTSTACK_MAIL_DB does not exist yet: $explicit_db"
+      else
+        die "AGENTSTACK_MAIL_DB does not exist: $explicit_db"
+      fi
+    fi
+    MAIL_DB="$explicit_db"
+    say "agent-mail database: $MAIL_DB"
+    return
+  fi
+
+  while IFS= read -r resolved_db; do
+    [[ -n "$resolved_db" ]] && candidates+=("$resolved_db")
+  done < <(existing_mail_db_candidates)
+  if [[ "${#candidates[@]}" -eq 1 ]]; then
+    MAIL_DB="${candidates[0]}"
+    say "agent-mail database: $MAIL_DB"
+    return
+  fi
+  if [[ "${#candidates[@]}" -gt 1 ]]; then
+    candidates_text="$(printf '\n  %s' "${candidates[@]}")"
+    die "multiple agent-mail databases exist; set AGENTSTACK_MAIL_DB explicitly:$candidates_text"
+  fi
+
+  MAIL_DB="$(normalize_path "$MAIL_DIR/storage.sqlite3")"
+  if [[ "$DRY_RUN" == true ]]; then
+    warn "no running agent-mail server or existing database found; live install would stop. Set AGENTSTACK_MAIL_DB or start agent-mail first."
+    return
+  fi
+  die "no running agent-mail server at $MCP_URL and no existing SQLite database was found. Start 'am serve-http --port 8765' or set AGENTSTACK_MAIL_DB to an existing database."
 }
 
 check_dependencies() {
@@ -664,6 +953,16 @@ PY
 }
 
 ensure_agent_mail() {
+  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
+    plan "reuse existing agent-mail server at $MCP_URL"
+    if [[ -f "$MAIL_ENV" ]]; then
+      plan "reuse existing agent-mail .env at $MAIL_ENV"
+    else
+      warn "no agent-mail bearer .env was resolved; localhost must allow unauthenticated access"
+    fi
+    return
+  fi
+
   if [[ -e "$MAIL_DIR" ]]; then
     if [[ -d "$MAIL_DIR/.git" ]]; then
       local remote
@@ -1114,6 +1413,7 @@ main() {
   check_dependencies
   validate_repo_assets
   check_port
+  resolve_agent_mail_connection
   local service_kind
   service_kind="$(detect_service_kind)"
   say "service mode: $service_kind"

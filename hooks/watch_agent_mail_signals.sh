@@ -16,8 +16,9 @@ set -euo pipefail
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
-WATCHER_LOCK_DIR="/tmp/mcp-agent-mail-watcher.lock"
-WATCHER_PIDFILE="${WATCHER_LOCK_DIR}/watcher.pid"
+WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/mcp-agent-mail-watcher.lock}"
+WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
+WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
 WATCH_FIFO=""
 WATCH_BACKEND_PID=""
 LOCK_ACQUIRED=0
@@ -177,12 +178,19 @@ is_pid_running() {
     [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+write_heartbeat() {
+    mkdir -p "$(dirname "$WATCHER_HEARTBEAT")"
+    : > "$WATCHER_HEARTBEAT"
+}
+
 acquire_lock() {
     local existing_pid=""
 
     if mkdir "$WATCHER_LOCK_DIR" 2>/dev/null; then
+        mkdir -p "$(dirname "$WATCHER_PIDFILE")"
         printf '%s\n' "$$" > "$WATCHER_PIDFILE"
         LOCK_ACQUIRED=1
+        write_heartbeat
         return 0
     fi
 
@@ -199,24 +207,27 @@ acquire_lock() {
     rm -f "$WATCHER_PIDFILE"
     rmdir "$WATCHER_LOCK_DIR" 2>/dev/null || true
     mkdir "$WATCHER_LOCK_DIR"
+    mkdir -p "$(dirname "$WATCHER_PIDFILE")"
     printf '%s\n' "$$" > "$WATCHER_PIDFILE"
     LOCK_ACQUIRED=1
+    write_heartbeat
 }
 
 cleanup() {
     if is_pid_running "$WATCH_BACKEND_PID"; then
         kill "$WATCH_BACKEND_PID" 2>/dev/null || true
-        wait "$WATCH_BACKEND_PID" 2>/dev/null || true
+        kill -KILL "$WATCH_BACKEND_PID" 2>/dev/null || true
     fi
     if [[ -n "$WATCH_FIFO" && -p "$WATCH_FIFO" ]]; then
         rm -f "$WATCH_FIFO"
     fi
     if [[ "$LOCK_ACQUIRED" -eq 1 ]]; then
-        rm -f "$WATCHER_PIDFILE"
+        rm -f "$WATCHER_PIDFILE" "$WATCHER_HEARTBEAT"
         rmdir "$WATCHER_LOCK_DIR" 2>/dev/null || true
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 # Ensure signals directory exists
 mkdir -p "$SIGNALS_DIR"
@@ -363,6 +374,7 @@ process_existing_signals() {
     # (agents/{name}/{msg_id}.signal) layouts. find -name globs file names so
     # both layouts surface here; handle_signal_file disambiguates by parent dir.
     while IFS= read -r -d '' signal_file; do
+        write_heartbeat
         handle_signal_file "$signal_file"
     done < <(find "$SIGNALS_DIR" -name "*.signal" -type f -print0 2>/dev/null)
 }
@@ -379,6 +391,7 @@ if command -v fswatch &>/dev/null; then
     exec 3<>"$WATCH_FIFO"
     last_scan=$(date +%s)
     while true; do
+        write_heartbeat
         if read -r -t 1 filepath <&3; then
             if [[ "$filepath" == *.signal ]]; then
                 sleep 0.1
@@ -394,6 +407,7 @@ if command -v fswatch &>/dev/null; then
 else
     log "fswatch not found, using polling (${POLL_INTERVAL}s interval)"
     while true; do
+        write_heartbeat
         process_existing_signals
         sleep "$POLL_INTERVAL"
     done

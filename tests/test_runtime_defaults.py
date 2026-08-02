@@ -306,6 +306,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     legacy_path.write_text(json.dumps(legacy_data), encoding="utf-8")
     mail_dir = home / "mcp_agent_mail"
     (mail_dir / ".git").mkdir(parents=True)
+    (mail_dir / "storage.sqlite3").touch()
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -326,7 +327,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
         "AGENTSTACK_LANG": "ja",
         "AGENTSTACK_MURMUR": "off",
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
@@ -442,6 +443,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
 
     normalized_env = _normalize_sample_paths(manifest["env"], manifest)
     normalized_env["AGENTSTACK_PORT"] = "8770"
+    normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:8765/mcp"
     normalized_env["AGENTSTACK_LANG"] = ""
     normalized_env["AGENTSTACK_MURMUR"] = ""
     assert normalized_env == sample["env"]
@@ -574,6 +576,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     user_delegate.write_text(original, encoding="utf-8")
     mail_dir = home / "mcp_agent_mail"
     (mail_dir / ".git").mkdir(parents=True)
+    (mail_dir / "storage.sqlite3").touch()
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -586,6 +589,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),

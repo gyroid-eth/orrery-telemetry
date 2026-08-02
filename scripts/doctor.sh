@@ -79,6 +79,14 @@ else
   status=1
 fi
 
+MAIL_DB_PATH="${AGENTSTACK_MAIL_DB:-}"
+if [[ -n "$MAIL_DB_PATH" && -f "$MAIL_DB_PATH" ]]; then
+  echo "ok: agent-mail database $MAIL_DB_PATH"
+else
+  echo "missing: AGENTSTACK_MAIL_DB does not point to an existing file: ${MAIL_DB_PATH:-<unset>}" >&2
+  status=1
+fi
+
 if [[ -f "$INSTALL_DIR/dashboard/server.py" && \
       -f "$INSTALL_DIR/dashboard/service_runner.py" ]]; then
   echo "ok: dashboard installed"

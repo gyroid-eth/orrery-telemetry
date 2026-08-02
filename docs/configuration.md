@@ -92,6 +92,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_HOME` | `~/.agentstack` | install root。`--install-dir` でも指定可 |
 | `AGENTSTACK_MAIL_DIR` | `~/mcp_agent_mail` | upstream clone |
 | `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal / runtime data |
+| `AGENTSTACK_MAIL_DB` | 稼働中 server / 既存 file から自動解決 | dashboard が読む実在する agent-mail SQLite。候補が複数なら明示指定が必要 |
+| `AGENTSTACK_MAIL_ENV` | `$AGENTSTACK_MAIL_DIR/.env` | agent-mail bearer token file。稼働中 server を再利用するときは server cwd / DB 隣接 file も探索 |
 | `AGENTSTACK_AGENT_MAIL_REPO` | upstream GitHub URL | agent-mail clone source |
 | `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
 | `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
@@ -170,6 +172,8 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
 | `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
 | `AGENTSTACK_MAIL_WATCHER_SESSION` | `mail-watcher` | launcher が起動・再利用する watcher の tmux session 名 |
+| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/mcp-agent-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
+| `AGENTSTACK_MAIL_WATCHER_HEARTBEAT` | pidfile と同じ directory の `heartbeat` | process command を取得できない環境で使う watcher heartbeat |
 | `AGENTSTACK_REREGISTER_PROGRAM` | `codex` | `agentstack-reregister` の第2引数を省略した場合の program |
 | `AGENTSTACK_REREGISTER_MODEL` | program ごとの既定 | `agentstack-reregister` の第3引数を省略した場合の model label |
 

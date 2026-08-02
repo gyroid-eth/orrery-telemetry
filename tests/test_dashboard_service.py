@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import http.server
 import os
 import pathlib
 import plistlib
@@ -12,7 +13,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -225,6 +228,7 @@ exit 0
     project.mkdir()
     mail_dir = home / "mcp_agent_mail"
     (mail_dir / ".git").mkdir(parents=True)
+    (mail_dir / "storage.sqlite3").touch()
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -238,6 +242,7 @@ exit 0
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_LAUNCHCTL_LOG": str(launchctl_log),
     })
@@ -327,6 +332,338 @@ exit 0
             text=True,
             capture_output=True,
         )
+
+
+def test_installer_reuses_existing_agent_mail_listener_database(tmp_path):
+    home = tmp_path / "home"
+    external_root = (
+        home / ".local" / "share" / "mcp-agent-mail" / "git_mailbox_repo"
+    )
+    external_root.mkdir(parents=True)
+    external_db = external_root / "storage.sqlite3"
+    external_db.touch()
+
+    class AgentMailHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            body = json.dumps({
+                "jsonrpc": "2.0",
+                "id": "agentstack-installer-probe",
+                "result": {
+                    "content": [],
+                    "structuredContent": {
+                        "status": "ok",
+                        "http_host": "127.0.0.1",
+                        "http_port": self.server.server_port,
+                        # Upstream's default is cwd-relative.  The installer
+                        # must not reinterpret it below AGENTSTACK_MAIL_DIR.
+                        "database_url": "sqlite+aiosqlite:///./storage.sqlite3",
+                    },
+                    "isError": False,
+                },
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    mail_server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        AgentMailHandler,
+    )
+    mail_thread = threading.Thread(target=mail_server.serve_forever, daemon=True)
+    mail_thread.start()
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "systemctl": "#!/bin/sh\nexit 1\n",
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    install_dir = home / ".agentstack"
+    mail_dir = home / "new-clone-that-must-not-be-created"
+    project = tmp_path / "project"
+    project.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dashboard_port = probe.getsockname()[1]
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MCP_URL": (
+            f"http://127.0.0.1:{mail_server.server_port}/mcp"
+        ),
+        "AGENTSTACK_PORT": str(dashboard_port),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "install.sh"),
+                "--dashboard-only",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        manifest = json.loads(
+            (install_dir / "install-state.json").read_text(encoding="utf-8")
+        )
+        assert manifest["env"]["AGENTSTACK_MAIL_DB"] == str(external_db)
+        assert "existing agent-mail listener detected" in result.stdout
+        assert f"existing agent-mail database: {external_db}" in result.stdout
+        assert "non-interactive install: using" in result.stdout
+        assert "reuse existing agent-mail server" in result.stdout
+        assert not mail_dir.exists()
+
+        doctor = subprocess.run(
+            [
+                "bash",
+                str(install_dir / "bin" / "agentstack-doctor"),
+                "--install-dir",
+                str(install_dir),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert f"ok: agent-mail database {external_db}" in doctor.stdout
+    finally:
+        subprocess.run(
+            [
+                "bash",
+                str(install_dir / "dashboard" / "agentctl.sh"),
+                "stop",
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        mail_server.shutdown()
+        mail_server.server_close()
+        mail_thread.join(timeout=5)
+
+
+def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    home = tmp_path / "home"
+    install_dir = home / ".agentstack"
+    project = tmp_path / "project"
+    project.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dashboard_port = probe.getsockname()[1]
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(home / "not-installed"),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_PORT": str(dashboard_port),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "install.sh"),
+            "--dashboard-only",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "no existing SQLite database was found" in result.stderr
+    assert "set AGENTSTACK_MAIL_DB" in result.stderr
+    assert not (install_dir / "env.sh").exists()
+    assert not (install_dir / "install-state.json").exists()
+
+
+def test_mail_watcher_process_drives_health_and_agents_without_launchd(tmp_path):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    tmux = fake_bin / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+case "$1" in
+  list-sessions)
+    printf 'mail-watcher\\0371700000000\\0371700000100\\n'
+    ;;
+  list-panes)
+    printf 'mail-watcher\\03711\\037bash\\037mail-watcher\\n'
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+    launchctl = fake_bin / "launchctl"
+    launchctl.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    launchctl.chmod(0o755)
+
+    watcher_script = tmp_path / "watch_agent_mail_signals.sh"
+    watcher_script.write_text(
+        "#!/bin/sh\n"
+        'while :; do : > "$AGENTSTACK_MAIL_WATCHER_HEARTBEAT"; sleep 1; done\n',
+        encoding="utf-8",
+    )
+    watcher_script.chmod(0o755)
+    heartbeat = tmp_path / "watcher-heartbeat"
+    watcher_env = os.environ.copy()
+    watcher_env["AGENTSTACK_MAIL_WATCHER_HEARTBEAT"] = str(heartbeat)
+    watcher = subprocess.Popen([str(watcher_script)], env=watcher_env)
+
+    pidfile = tmp_path / "watcher.pid"
+    pidfile.write_text(f"{watcher.pid}\n", encoding="utf-8")
+    database = tmp_path / "storage.sqlite3"
+    database.touch()
+    runtime = tmp_path / "runtime"
+    signals = tmp_path / "signals"
+    project = tmp_path / "project"
+    runtime.mkdir()
+    signals.mkdir()
+    project.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    env = os.environ.copy()
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_MAIL_DB": str(database),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_RUNTIME_DIR": str(runtime),
+        "AGENTSTACK_SIGNALS_DIR": str(signals),
+        "AGENTSTACK_MAIL_WATCHER_PIDFILE": str(pidfile),
+        "AGENTSTACK_MAIL_WATCHER_HEARTBEAT": str(heartbeat),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+    dashboard = subprocess.Popen(
+        [sys.executable, str(ROOT / "dashboard" / "server.py")],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    def get_json(path: str, timeout: float = 10.0) -> dict:
+        deadline = time.monotonic() + timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}{path}",
+                    timeout=1,
+                ) as response:
+                    return json.loads(response.read())
+            except Exception as exc:  # server startup race
+                last_error = exc
+                time.sleep(0.05)
+        raise AssertionError(f"dashboard endpoint did not start: {last_error}")
+
+    try:
+        health = get_json("/api/mail-watcher-health")
+        assert health["watcher_running"] is True
+        assert health["watcher_mode"] == "pidfile"
+        assert health["watcher_pid"] == watcher.pid
+        assert health["status"] == "green"
+
+        agents = get_json("/api/agents")["agents"]
+        watcher_card = next(row for row in agents if row["name"] == "mail-watcher")
+        assert watcher_card["category"] == "infra"
+        assert watcher_card["running"] is True
+        assert watcher_card["live"] == "watcher: pidfile"
+
+        watcher.terminate()
+        watcher.wait(timeout=5)
+        time.sleep(5.1)
+        stale = get_json("/api/mail-watcher-health")
+        assert stale["watcher_running"] is False
+        assert stale["status"] == "red"
+    finally:
+        if watcher.poll() is None:
+            watcher.terminate()
+            watcher.wait(timeout=5)
+        dashboard.terminate()
+        dashboard.wait(timeout=10)
+
+
+def test_mail_watcher_publishes_pidfile_and_live_heartbeat(tmp_path):
+    watcher_lock = tmp_path / "watcher.lock"
+    pidfile = watcher_lock / "watcher.pid"
+    heartbeat = watcher_lock / "heartbeat"
+    env = os.environ.copy()
+    env.update({
+        "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+        "AGENTSTACK_SIGNALS_DIR": str(tmp_path / "signals"),
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(watcher_lock),
+    })
+    watcher = subprocess.Popen(
+        ["bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(pidfile, str(watcher.pid))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not heartbeat.exists():
+            time.sleep(0.05)
+        assert heartbeat.exists()
+        first_mtime = heartbeat.stat().st_mtime_ns
+        while (
+            time.monotonic() < deadline
+            and heartbeat.stat().st_mtime_ns == first_mtime
+        ):
+            time.sleep(0.1)
+        assert heartbeat.stat().st_mtime_ns > first_mtime
+    finally:
+        watcher.terminate()
+        watcher.wait(timeout=10)
+
+    assert not pidfile.exists()
+    assert not heartbeat.exists()
 
 
 def test_runner_records_sigkill_and_self_restarts_for_nohup(tmp_path):
