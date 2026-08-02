@@ -87,6 +87,8 @@ dashboard から EXIT、RESUME、REPLAY、role annotation、Claude / Codex child
 
 dashboard の全表示・操作は local HTTP API から利用できます。portrait overlay、spawn directory、model catalog、terminal bridge を環境変数で構成でき、private asset は repository と分離できます。
 
+murmur は browser の言語から日本語 / 英語を自動選択し、`?lang=` / `AGENTSTACK_LANG` で上書き、`?murmur=on|off` / `AGENTSTACK_MURMUR=off` で表示を制御できます。
+
 <!-- TODO: screenshot: API or customized portraits -->
 
 ## ドキュメント

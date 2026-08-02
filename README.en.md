@@ -85,6 +85,8 @@ The dashboard can EXIT, RESUME, REPLAY, annotate roles, and spawn Claude or Code
 
 Every dashboard view and control is backed by a local HTTP API. Environment variables configure portrait overlays, spawn directories, model catalogs, and the terminal bridge while keeping private assets outside the repository.
 
+Murmurs follow the browser language automatically; override them with `?lang=` / `AGENTSTACK_LANG`, and control visibility with `?murmur=on|off` / `AGENTSTACK_MURMUR=off`.
+
 <!-- TODO: screenshot: API or customized portraits -->
 
 ## Documentation

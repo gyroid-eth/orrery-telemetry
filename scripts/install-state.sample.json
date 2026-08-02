@@ -126,6 +126,8 @@
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
     "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
     "AGENTSTACK_DELIVERABLE_ROOTS": "",
+    "AGENTSTACK_LANG": "",
+    "AGENTSTACK_MURMUR": "",
     "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",

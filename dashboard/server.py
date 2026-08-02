@@ -80,6 +80,28 @@ PORT_64 = os.path.join(HERE, "portraits_64")
 PORT_HI = os.path.join(HERE, "portraits_hi")
 PORTRAIT_OVERLAY_DIR = _env_path("AGENTSTACK_PORTRAITS_DIR", "")
 CUSTOM_PORTRAITS_PATH = _env_path("AGENTSTACK_CUSTOM_PORTRAITS", "")
+DASHBOARD_LANG = _env_text("AGENTSTACK_LANG", "").lower()
+DASHBOARD_MURMUR = _env_text("AGENTSTACK_MURMUR", "").lower()
+
+_DASHBOARD_CONFIG_MARKER = b"const AGENTSTACK_SERVER_DEFAULTS={language:null,murmur:null};"
+
+
+def _render_dashboard_index(
+    source: bytes,
+    language: str = DASHBOARD_LANG,
+    murmur: str = DASHBOARD_MURMUR,
+) -> bytes:
+    """Inject allow-listed display defaults without exposing the server env."""
+    config = {
+        "language": language if language in {"ja", "en"} else None,
+        "murmur": "off" if murmur == "off" else None,
+    }
+    replacement = (
+        "const AGENTSTACK_SERVER_DEFAULTS="
+        + json.dumps(config, ensure_ascii=True, separators=(",", ":"))
+        + ";"
+    ).encode()
+    return source.replace(_DASHBOARD_CONFIG_MARKER, replacement, 1)
 
 
 def _resolve_version() -> str:
@@ -3698,7 +3720,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             try:
                 with open(INDEX_HTML, "rb") as f:
-                    self._send(200, f.read(), "text/html; charset=utf-8")
+                    self._send(
+                        200,
+                        _render_dashboard_index(f.read()),
+                        "text/html; charset=utf-8",
+                    )
             except FileNotFoundError:
                 self._send(500, b"index.html missing", "text/plain")
         elif path == "/api/version":

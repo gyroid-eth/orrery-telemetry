@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the deterministic 25-second AgentStack concept-demo timeline.
+"""Run the deterministic 33-second AgentStack concept-demo timeline.
 
 The reel uses a newly created SQLite database, an isolated dashboard process,
 and exactly three real tmux printer sessions.  All remaining panes are virtual
@@ -33,7 +33,9 @@ DEFAULT_INSTALL_DIR = Path("/private/tmp/agentstack-demo-reel")
 DEFAULT_PORT = 8878
 PROFILE = "agentstack-demo-reel-v1"
 SESSION_PREFIX = "agentstack-reel-"
-STORY_SECONDS = 25.0
+STORY_SECONDS = 33.0
+DEMO_MAIL_TRAVEL_MS = 2500
+NETWORK_TUNE = "NSIZE:11,L:175,KR:6400,GR:.006,KS:.015"
 
 
 def _load_docs_demo():
@@ -121,12 +123,14 @@ REAL_SESSION_NAMES = tuple(REAL_SESSION_BY_AGENT[name] for name in REAL_AGENT_NA
 
 CAPTIONS = (
     {"at": 0.0, "text": "ONE TERMINAL"},
-    {"at": 3.0, "text": "THREE PROJECTS"},
+    {"at": 2.5, "text": "THREE PROJECTS"},
     {"at": 5.0, "text": "AGENTS MULTIPLY"},
-    {"at": 9.0, "text": "1 HUMAN · 12 AGENTS"},
-    {"at": 10.5, "text": "AGENTS NEGOTIATING"},
-    {"at": 15.0, "text": "HUMAN IN THE LOOP"},
-    {"at": 21.0, "text": "ONE CLICK · SYSTEM MOVES"},
+    {"at": 8.0, "text": "A SECOND GENERATION"},
+    {"at": 11.0, "text": "THREE CLUSTERS THINK"},
+    {"at": 16.5, "text": "SIGNALS CROSS BORDERS"},
+    {"at": 22.0, "text": "ONE COORDINATION MESH"},
+    {"at": 25.0, "text": "HUMAN IN THE LOOP"},
+    {"at": 31.0, "text": "ONE CLICK · SYSTEM MOVES"},
 )
 
 
@@ -158,10 +162,10 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _agent_add(0.0, "Bright-Curie"),
     _state(0.0, "Bright-Curie", "work", 12),
 
-    _agent_add(3.0, "Swift-Noether"),
-    _agent_add(3.0, "Calm-Turing"),
-    _state(3.0, "Swift-Noether", "wait", 19),
-    _state(3.0, "Calm-Turing", "work", 24),
+    _agent_add(2.5, "Swift-Noether"),
+    _agent_add(2.5, "Calm-Turing"),
+    _state(2.5, "Swift-Noether", "wait", 19),
+    _state(2.5, "Calm-Turing", "work", 24),
 
     _agent_add(5.0, "Warm-Lovelace"),
     _agent_add(5.0, "Bold-Hopper"),
@@ -170,50 +174,80 @@ TIMELINE: tuple[dict[str, Any], ...] = (
     _spawn(5.1, "Swift-Noether", "Bold-Hopper"),
     _spawn(5.1, "Calm-Turing", "Quiet-Franklin"),
 
-    _agent_add(7.0, "Keen-Faraday"),
-    _agent_add(7.0, "Gentle-Lamarr"),
-    _agent_add(7.0, "Steady-Bose"),
-    _spawn(7.1, "Bright-Curie", "Keen-Faraday"),
-    _spawn(7.1, "Swift-Noether", "Gentle-Lamarr"),
-    _spawn(7.1, "Calm-Turing", "Steady-Bose"),
+    _agent_add(8.0, "Keen-Faraday"),
+    _agent_add(8.0, "Gentle-Lamarr"),
+    _agent_add(8.0, "Steady-Bose"),
+    _spawn(8.1, "Warm-Lovelace", "Keen-Faraday"),
+    _spawn(8.1, "Bold-Hopper", "Gentle-Lamarr"),
+    _spawn(8.1, "Quiet-Franklin", "Steady-Bose"),
 
-    _agent_add(9.0, "Soft-Galileo"),
-    _agent_add(9.0, "Clear-Somerville"),
-    _agent_add(9.0, "Vivid-Feynman"),
-    _state(9.0, "Bright-Curie", "question", 18),
-    _state(9.0, "Swift-Noether", "ask", 27),
-    _spawn(9.1, "Bright-Curie", "Soft-Galileo"),
-    _spawn(9.1, "Swift-Noether", "Clear-Somerville"),
-    _spawn(9.1, "Calm-Turing", "Vivid-Feynman"),
+    _agent_add(10.0, "Soft-Galileo"),
+    _agent_add(10.0, "Clear-Somerville"),
+    _agent_add(10.0, "Vivid-Feynman"),
+    _spawn(10.1, "Warm-Lovelace", "Soft-Galileo"),
+    _spawn(10.1, "Bold-Hopper", "Clear-Somerville"),
+    _spawn(10.1, "Quiet-Franklin", "Vivid-Feynman"),
 
-    _mail(10.5, "Warm-Lovelace", "Bold-Hopper", "Align navigation and telemetry"),
-    _mail(10.5, "Bold-Hopper", "Quiet-Franklin", "Share the signal scale"),
-    _mail(10.5, "Quiet-Franklin", "Warm-Lovelace", "Constellation labels ready"),
-    _mail(11.5, "Keen-Faraday", "Gentle-Lamarr", "Relay spectrum handoff"),
-    _mail(11.5, "Gentle-Lamarr", "Steady-Bose", "Spectrum cue accepted"),
-    _mail(11.5, "Steady-Bose", "Keen-Faraday", "Ambient signal balanced"),
-    _mail(13.0, "Soft-Galileo", "Clear-Somerville", "Review the orbital scale"),
-    _mail(13.0, "Clear-Somerville", "Vivid-Feynman", "Observation notes verified"),
-    _mail(13.0, "Vivid-Feynman", "Soft-Galileo", "Handoff path connected"),
+    # Phase 1: every project speaks only inside its own two-generation tree.
+    _mail(11.5, "Bright-Curie", "Warm-Lovelace", "Shape the signal branch"),
+    _mail(11.5, "Swift-Noether", "Bold-Hopper", "Shape the orbit branch"),
+    _mail(11.5, "Calm-Turing", "Quiet-Franklin", "Shape the lumen branch"),
+    _mail(12.5, "Warm-Lovelace", "Keen-Faraday", "Tune the signal relay"),
+    _mail(12.5, "Bold-Hopper", "Gentle-Lamarr", "Tune the spectrum relay"),
+    _mail(12.5, "Quiet-Franklin", "Steady-Bose", "Tune the ambient relay"),
+    _mail(13.5, "Warm-Lovelace", "Soft-Galileo", "Review signal scale"),
+    _mail(13.5, "Bold-Hopper", "Clear-Somerville", "Review orbit notes"),
+    _mail(13.5, "Quiet-Franklin", "Vivid-Feynman", "Review lumen handoff"),
+    _mail(14.5, "Keen-Faraday", "Soft-Galileo", "Signal branch aligned"),
+    _mail(14.5, "Gentle-Lamarr", "Clear-Somerville", "Orbit branch aligned"),
+    _mail(14.5, "Steady-Bose", "Vivid-Feynman", "Lumen branch aligned"),
+    _mail(15.5, "Soft-Galileo", "Warm-Lovelace", "Signal loop complete"),
+    _mail(15.5, "Clear-Somerville", "Bold-Hopper", "Orbit loop complete"),
+    _mail(15.5, "Vivid-Feynman", "Quiet-Franklin", "Lumen loop complete"),
 
-    _state(15.0, "Bright-Curie", "wait", 21),
-    _state(15.0, "Swift-Noether", "work", 31),
-    _state(15.0, "Calm-Turing", "ask", 36),
-    _mail(15.5, "Bright-Curie", "Swift-Noether", "Human decision received"),
-    _mail(15.5, "Swift-Noether", "Calm-Turing", "Resume coordinated rollout"),
-    _mail(16.5, "Calm-Turing", "Bright-Curie", "Rollout path confirmed"),
-    _mail(17.5, "Bold-Hopper", "Warm-Lovelace", "Telemetry cards synchronized"),
-    _mail(18.5, "Gentle-Lamarr", "Quiet-Franklin", "Shared spectrum token"),
-    _mail(19.5, "Steady-Bose", "Clear-Somerville", "Observation rhythm aligned"),
+    # Phase 2: bridges repeat across clusters, so the web and edge counts grow.
+    _mail(16.5, "Warm-Lovelace", "Bold-Hopper", "Open the first bridge"),
+    _mail(16.5, "Bold-Hopper", "Warm-Lovelace", "First bridge confirmed"),
+    _mail(17.5, "Quiet-Franklin", "Warm-Lovelace", "Share the lumen map"),
+    _mail(17.5, "Warm-Lovelace", "Quiet-Franklin", "Signal map linked"),
+    _mail(18.5, "Gentle-Lamarr", "Steady-Bose", "Exchange spectrum rhythm"),
+    _mail(18.5, "Steady-Bose", "Gentle-Lamarr", "Spectrum rhythm received"),
+    _mail(19.5, "Soft-Galileo", "Clear-Somerville", "Compare shared scale"),
+    _mail(19.5, "Clear-Somerville", "Soft-Galileo", "Shared scale accepted"),
+    _mail(20.5, "Vivid-Feynman", "Keen-Faraday", "Connect the relay path"),
+    _mail(20.5, "Keen-Faraday", "Vivid-Feynman", "Relay path connected"),
+    _mail(21.5, "Bright-Curie", "Swift-Noether", "Join mission telemetry"),
+    _mail(21.5, "Swift-Noether", "Calm-Turing", "Join telemetry journey"),
+    _mail(22.5, "Calm-Turing", "Bright-Curie", "Close the root triangle"),
+    _mail(22.5, "Bright-Curie", "Swift-Noether", "Reinforce mission telemetry"),
+    _mail(23.5, "Bold-Hopper", "Quiet-Franklin", "Bind orbit to lumen"),
+    _mail(23.5, "Quiet-Franklin", "Bold-Hopper", "Lumen binding confirmed"),
+    _mail(24.5, "Clear-Somerville", "Vivid-Feynman", "Merge observation notes"),
+    _mail(24.5, "Vivid-Feynman", "Clear-Somerville", "Observation mesh ready"),
 
-    _state(21.0, "Swift-Noether", "question", 38),
-    _state(21.0, "Calm-Turing", "wait", 41),
-    _mail(21.5, "Soft-Galileo", "Vivid-Feynman", "Final scale pass"),
-    _mail(22.0, "Vivid-Feynman", "Bright-Curie", "Network handoff complete"),
-    _mail(22.5, "Bright-Curie", "Warm-Lovelace", "Publish navigation cue"),
-    _mail(23.0, "Swift-Noether", "Bold-Hopper", "Publish telemetry cue"),
-    _mail(23.5, "Calm-Turing", "Quiet-Franklin", "Publish constellation cue"),
-    _mail(24.0, "Warm-Lovelace", "Calm-Turing", "All fictional cues green"),
+    _state(25.0, "Bright-Curie", "question", 28),
+    _state(25.0, "Swift-Noether", "ask", 36),
+    _state(25.0, "Calm-Turing", "work", 41),
+    _mail(25.5, "Steady-Bose", "Keen-Faraday", "Route the human decision"),
+    _mail(25.5, "Keen-Faraday", "Steady-Bose", "Decision route open"),
+    _mail(26.5, "Warm-Lovelace", "Bold-Hopper", "Propagate the approval"),
+    _mail(26.5, "Bold-Hopper", "Warm-Lovelace", "Approval propagated"),
+    _mail(27.5, "Bright-Curie", "Calm-Turing", "Share mission decision"),
+    _mail(27.5, "Calm-Turing", "Swift-Noether", "Decision reaches telemetry"),
+    _mail(28.5, "Gentle-Lamarr", "Soft-Galileo", "Unify spectrum and scale"),
+    _mail(28.5, "Soft-Galileo", "Gentle-Lamarr", "Unified scale returned"),
+    _mail(29.5, "Quiet-Franklin", "Clear-Somerville", "Unify lumen observations"),
+    _mail(29.5, "Clear-Somerville", "Quiet-Franklin", "Observations returned"),
+    _mail(30.5, "Keen-Faraday", "Bold-Hopper", "Publish relay telemetry"),
+    _mail(30.5, "Bold-Hopper", "Keen-Faraday", "Telemetry published"),
+
+    _state(31.0, "Bright-Curie", "wait", 31),
+    _state(31.0, "Swift-Noether", "work", 39),
+    _state(31.0, "Calm-Turing", "wait", 44),
+    _mail(31.5, "Vivid-Feynman", "Warm-Lovelace", "Publish the final handoff"),
+    _mail(31.5, "Warm-Lovelace", "Vivid-Feynman", "Final handoff accepted"),
+    _mail(32.2, "Bright-Curie", "Swift-Noether", "All three projects aligned"),
+    _mail(32.2, "Calm-Turing", "Bright-Curie", "Coordination mesh complete"),
 )
 
 EVENT_TYPES = frozenset({"agent_add", "spawn", "mail", "state"})
@@ -222,6 +256,45 @@ EXPECTED_SPAWN = {
     for event in TIMELINE if event["type"] == "spawn"
 }
 EXPECTED_MESSAGES = sum(event["type"] in {"spawn", "mail"} for event in TIMELINE)
+INTRA_CLUSTER_MAILS = sum(
+    event["type"] == "mail"
+    and AGENTS[event["sender"]]["group"] == AGENTS[event["recipient"]]["group"]
+    for event in TIMELINE
+)
+CROSS_CLUSTER_MAILS = sum(
+    event["type"] == "mail"
+    and AGENTS[event["sender"]]["group"] != AGENTS[event["recipient"]]["group"]
+    for event in TIMELINE
+)
+
+
+def _spawn_depths() -> dict[str, int]:
+    parents = {event["child"]: event["parent"] for event in TIMELINE if event["type"] == "spawn"}
+    depths: dict[str, int] = {}
+    for name in AGENTS:
+        cursor = name
+        depth = 0
+        visited: set[str] = set()
+        while cursor in parents:
+            if cursor in visited:
+                raise ValueError(f"spawn cycle in demo timeline: {cursor}")
+            visited.add(cursor)
+            cursor = parents[cursor]
+            depth += 1
+        depths[name] = depth
+    return depths
+
+
+SPAWN_DEPTHS = _spawn_depths()
+MAX_SPAWN_DEPTH = max(SPAWN_DEPTHS.values())
+
+
+def _network_url(port: int) -> str:
+    query = urllib.parse.urlencode(
+        {"view": "net", "window": "all", "lang": "en", "tune": NETWORK_TUNE},
+        safe=":,.",
+    )
+    return f"http://127.0.0.1:{port}/?{query}"
 
 
 def _iso(value: datetime) -> str:
@@ -483,7 +556,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 dashboard = Path(__file__).resolve().parent / "dashboard"
 sys.path.insert(0, str(dashboard))
@@ -510,6 +583,21 @@ class ReadOnlyReelHandler(server.Handler):
             return
         if path == "/api/ptty":
             self._send(403, json.dumps({{"ok": False, "error": "read-only concept demo"}}).encode(), "application/json; charset=utf-8")
+            return
+        if path == "/api/messages-since":
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                since = int((query.get("since") or ["0"])[0])
+            except ValueError:
+                since = 0
+            try:
+                limit = int((query.get("limit") or ["80"])[0])
+            except ValueError:
+                limit = 80
+            body = server.messages_since_payload(since, limit)
+            for message in body.get("messages", []):
+                message["travel_ms"] = {DEMO_MAIL_TRAVEL_MS}
+            self._send(200, json.dumps(body).encode(), "application/json; charset=utf-8")
             return
         if path == "/api/graph":
             try:
@@ -669,11 +757,25 @@ def _message(
     _touch_session(root, recipient)
 
 
-def _apply_event(root: Path, event: dict[str, Any], anchor: datetime, ordinal: int) -> None:
+def _apply_event(
+    root: Path,
+    event: dict[str, Any],
+    anchor: datetime,
+    ordinal: int,
+    *,
+    realtime: bool = False,
+) -> None:
     event_type = str(event["type"])
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unknown timeline primitive: {event_type}")
-    created = anchor + timedelta(seconds=float(event["at"]), microseconds=ordinal)
+    scheduled = anchor + timedelta(seconds=float(event["at"]))
+    # Several same-beat events are committed serially.  Recording only their
+    # scheduled time can make a later commit look older than a browser cursor
+    # that already polled during that beat.  Preserve ordering while never
+    # backdating an event behind the time at which its commit begins.
+    created = (
+        max(scheduled, datetime.now(timezone.utc)) if realtime else scheduled
+    ) + timedelta(microseconds=ordinal)
     if event_type == "agent_add":
         name = str(event["agent"])
         data = AGENTS[name]
@@ -834,7 +936,7 @@ def up(root: Path, port: int) -> dict[str, Any]:
         initial = _verify_snapshot(root, port, expect_final=False)
         return {
             "ok": True,
-            "url": f"http://127.0.0.1:{port}/?view=net",
+            "url": _network_url(port),
             "terminal_session": REAL_SESSION_BY_AGENT[REAL_AGENT_NAMES[0]],
             "install_dir": str(root),
             "dashboard_url": f"http://127.0.0.1:{port}",
@@ -899,12 +1001,19 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
         now = time.monotonic()
         if not force and now < next_sample:
             return
-        count, states, messages = _sample(actual_port, since)
+        try:
+            count, states, messages = _sample(actual_port, since)
+        except (OSError, TimeoutError, urllib.error.URLError):
+            # A foreground dashboard and the acceptance poller may overlap
+            # this diagnostic sample.  The timeline must keep its wall-clock
+            # beat; a later sample still validates every multi-second phase.
+            next_sample = now + 0.9
+            return
         agent_counts.add(count)
         act_states.update(states)
         if not message_counts or message_counts[-1] != messages:
             message_counts.append(messages)
-        next_sample = now + 0.45
+        next_sample = now + 0.9
 
     for ordinal, event in enumerate(TIMELINE, start=1):
         if float(event["at"]) <= 0:
@@ -913,7 +1022,7 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
         while time.monotonic() < deadline:
             observe()
             time.sleep(min(0.08, max(0.0, deadline - time.monotonic())))
-        _apply_event(root, event, anchor, ordinal)
+        _apply_event(root, event, anchor, ordinal, realtime=True)
         applied += 1
         elapsed = min(STORY_SECONDS, time.monotonic() - start)
         _atomic_json(
@@ -928,7 +1037,7 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
         observe()
         time.sleep(min(0.08, max(0.0, end - time.monotonic())))
     # One final poll after the runtime parser's 4.5-second cache had a chance
-    # to sample the 21s states.  The per-session state transitions are all 6s+
+    # to sample the 25s states.  The per-session state transitions are all 6s+
     # apart, matching the verified dashboard contract.
     observe(force=True)
     _atomic_json(
@@ -949,6 +1058,9 @@ def play(root: Path, port: int | None) -> dict[str, Any]:
         "observed_agent_counts": sorted(agent_counts),
         "observed_act_states": sorted(act_states),
         "observed_message_counts": message_counts,
+        "max_spawn_depth": MAX_SPAWN_DEPTH,
+        "intra_cluster_mail_count": INTRA_CLUSTER_MAILS,
+        "cross_cluster_mail_count": CROSS_CLUSTER_MAILS,
         "final": snapshot,
     }
 
@@ -1037,7 +1149,7 @@ def status(root: Path, port: int | None) -> dict[str, Any]:
     marker = _read_marker(root)
     actual_port = DEMO._validate_port(int(port if port is not None else marker["port"]))
     return {
-        "ok": True, "url": f"http://127.0.0.1:{actual_port}/?view=net",
+        "ok": True, "url": _network_url(actual_port),
         "dashboard_url": f"http://127.0.0.1:{actual_port}",
         "orrery_mail_db": str(root / "mail" / "storage.sqlite3"),
         "terminal_session": REAL_SESSION_BY_AGENT[REAL_AGENT_NAMES[0]],
@@ -1053,6 +1165,9 @@ def timeline_payload() -> dict[str, Any]:
         "captions": CAPTIONS,
         "events": TIMELINE,
         "tmux_session_by_agent": REAL_SESSION_BY_AGENT,
+        "max_spawn_depth": MAX_SPAWN_DEPTH,
+        "intra_cluster_mail_count": INTRA_CLUSTER_MAILS,
+        "cross_cluster_mail_count": CROSS_CLUSTER_MAILS,
     }
 
 
@@ -1062,7 +1177,7 @@ def _parser() -> argparse.ArgumentParser:
     up_parser = sub.add_parser("up", help="prepare isolated dashboard, DB, and three tmux printers")
     up_parser.add_argument("--install-dir", default=str(DEFAULT_INSTALL_DIR))
     up_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    play_parser = sub.add_parser("play", help="reset and run the real-time 25-second story")
+    play_parser = sub.add_parser("play", help="reset and run the real-time 33-second story")
     play_parser.add_argument("--install-dir", default=str(DEFAULT_INSTALL_DIR))
     play_parser.add_argument("--port", type=int)
     frame_parser = sub.add_parser("frame", help="hold a deterministic timeline frame")

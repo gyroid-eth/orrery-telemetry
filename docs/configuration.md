@@ -25,6 +25,8 @@
 | `AGENTSTACK_PROJECT_KEY` | 未設定 | agent-mail project の human key |
 | `AGENTSTACK_VAULT` | 未設定 | project key 不在時の fallback と、vault 内 Output item の Obsidian link hint |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | `:` 区切りで `LOG_*.md` を再帰走査する root。未設定時は project の `logs/` |
+| `AGENTSTACK_LANG` | browser language | murmur の言語を `ja` / `en` で上書き |
+| `AGENTSTACK_MURMUR` | enabled | `off` で murmur の吹き出しを無効化 |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
@@ -39,6 +41,13 @@
 | `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,` 区切りの dashboard Codex model allow-list |
 
 path 系は `~` を展開します。空文字は未設定として扱います。integer の `AGENTSTACK_PORT` が不正なら `8770` に戻ります。
+
+murmur の言語は `?lang=ja` / `?lang=en`、`AGENTSTACK_LANG`、browser の
+`navigator.language` / `navigator.languages` の順で決まります。browser の言語に
+`ja` 系があれば日本語、それ以外は英語です。`?murmur=on` / `?murmur=off` は
+その URL だけ service の既定を上書きし、`AGENTSTACK_MURMUR=off` は service の
+既定として吹き出しを止めます。環境変数を
+常駐 service に反映するには、設定後に installer を再実行してください。
 
 ## Project key がない場合
 
@@ -87,6 +96,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
 | `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | Output index の `:` 区切り走査 root。env / service / manifest へ保存 |
+| `AGENTSTACK_LANG` | 未設定 | murmur の `ja` / `en` override。未設定時は browser 判定 |
+| `AGENTSTACK_MURMUR` | 未設定 | `off` で murmur を無効化 |
 | `AGENTSTACK_PORT` | `8770` | dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | service label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |

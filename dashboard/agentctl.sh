@@ -24,6 +24,8 @@ MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
+LANG_SETTING="${AGENTSTACK_LANG:-}"
+MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-~/.agentstack/hooks}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-~/.agentstack/runtime/managed_agents.txt}"
@@ -51,6 +53,8 @@ render_plist() {
     -e "s|__PROJECT_KEY__|$(sed_escape "$PROJECT_KEY")|g" \
     -e "s|__PROTECTED_ROOTS__|$(sed_escape "$PROTECTED_ROOTS")|g" \
     -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
+    -e "s|__LANG__|$(sed_escape "$LANG_SETTING")|g" \
+    -e "s|__MURMUR__|$(sed_escape "$MURMUR_SETTING")|g" \
     -e "s|__HOOKS_DIR__|$(sed_escape "$HOOKS_DIR")|g" \
     -e "s|__RUNTIME_DIR__|$(sed_escape "$RUNTIME_DIR")|g" \
     -e "s|__MANAGED_AGENTS_FILE__|$(sed_escape "$MANAGED_AGENTS_FILE")|g" \

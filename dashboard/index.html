@@ -1136,12 +1136,13 @@
     stroke-dasharray:24 76;opacity:.72;
     transform-box:fill-box;transform-origin:center}
   .node .askbub .bx,.node .qbub .bq{
-    font:italic 600 12px var(--serif);letter-spacing:-.04em;
-    fill:var(--ink);filter:drop-shadow(0 0 3px rgba(236,229,214,.32))}
+    font:italic 600 15px var(--serif);letter-spacing:-.04em;
+    fill:var(--ink);filter:drop-shadow(0 0 4px rgba(236,229,214,.45))}
   .node.act-question .qbub{animation:glyphbreathe 3.6s ease-in-out infinite}
   .node.act-ask .askbub{animation:glyphbreathe 2.2s ease-in-out infinite}
-  .node.act-ask .bubo{animation:glyphorbit 7s linear infinite}
-  @keyframes glyphbreathe{0%,100%{opacity:.42}50%{opacity:1}}
+  .node.act-ask .bubo{animation:glyphorbit 7s linear infinite;opacity:.9}
+  /* 呼吸の下限は 0.55。人間を呼ぶ合図なので、消えかけには見せない */
+  @keyframes glyphbreathe{0%,100%{opacity:.55}50%{opacity:1}}
   @keyframes glyphorbit{to{transform:rotate(360deg)}}
   .node.act-ask .hp{animation:askflash 1.6s ease-in-out infinite}
   @keyframes askflash{50%{stroke:var(--alert);opacity:.5}}
@@ -2737,16 +2738,35 @@ OFF = legacy snapshot+comet mode">
 </div>
 
 <script>
-function initialDashboardRoute(search){
+const AGENTSTACK_SERVER_DEFAULTS={language:null,murmur:null};
+function initialDashboardRoute(search,serverDefaults={},browserLanguages=[]){
   const params=new URLSearchParams(search);
   const requestedView=params.get('view');
+  const requestedLanguage=params.get('lang');
+  const requestedMurmur=params.get('murmur');
+  const environmentLanguage=serverDefaults&&serverDefaults.language;
+  const browserJapanese=browserLanguages.some(language=>
+    typeof language==='string'&&/^ja(?:-|$)/i.test(language));
   return {
     view:(requestedView==='deck'||requestedView==='net')?requestedView:'deck',
     showAll:params.get('showAll')==='1',
-    embed:params.get('embed')==='1'
+    embed:params.get('embed')==='1',
+    networkWindow:params.get('window')==='all'?'all':'1',
+    language:(requestedLanguage==='ja'||requestedLanguage==='en')
+      ?requestedLanguage
+      :(environmentLanguage==='ja'||environmentLanguage==='en')
+        ?environmentLanguage
+        :browserJapanese?'ja':'en',
+    murmurEnabled:(requestedMurmur==='on'||requestedMurmur==='off')
+      ?requestedMurmur==='on'
+      :(!serverDefaults||serverDefaults.murmur!=='off')
   };
 }
-const INITIAL_ROUTE=initialDashboardRoute(window.location.search);
+const INITIAL_ROUTE=initialDashboardRoute(
+  window.location.search,
+  AGENTSTACK_SERVER_DEFAULTS,
+  [navigator.language,...(navigator.languages||[])]
+);
 const EMBED_MODE=
   INITIAL_ROUTE.embed ||
   window.parent!==window;
@@ -2974,15 +2994,61 @@ const MURMURS={
     start:["adsorbing"],done:["covered"],
     hungry:["site 満杯"],empty:["desorb"]},
 };
+const MURMURS_EN={
+  _:{say:["checking the signal","thinking it through","one more pass","mapping the path"],
+    start:["starting now","on it"],done:["handoff ready","done"],
+    hungry:["context is filling","need more room"],
+    empty:["refreshing context","starting fresh"]},
+  Curie:{say:["follow the radiation","measure the glow","isolate the signal","nothing is to be feared"],
+    start:["beginning the assay"],done:["sample confirmed"],
+    hungry:["exposure is rising"],empty:["shielding the sample"]},
+  Noether:{say:["symmetry gives conservation","find the invariant","follow the group action","abstract algebra"],
+    start:["checking symmetry"],done:["invariant found"],
+    hungry:["symmetry is breaking"],empty:["resetting the algebra"]},
+  Turing:{say:["will it halt?","state by state","is it decidable?","follow the tape"],
+    start:["starting the machine"],done:["state accepted"],
+    hungry:["running out of tape"],empty:["resetting the state"]},
+  Lovelace:{say:["poetical science","Note G","the engine can compose","loop the cards"],
+    start:["writing the algorithm"],done:["loop complete"],
+    hungry:["more punched cards"],empty:["sorting the cards"]},
+  Hopper:{say:["debug the system","compile it","mind the nanoseconds","ship the language"],
+    start:["starting the compiler"],done:["it works"],
+    hungry:["memory is tight"],empty:["clearing the logs"]},
+  Franklin:{say:["Photo 51","the helix is clear","let the data speak","X-ray pattern ready"],
+    start:["aligning the crystal"],done:["diffraction captured"],
+    hungry:["long exposure"],empty:["resetting the darkroom"]},
+  Faraday:{say:["lines of force","induction!","follow the field","experiment first"],
+    start:["energizing the coil"],done:["field measured"],
+    hungry:["flux is building"],empty:["resetting the circuit"]},
+  Lamarr:{say:["frequency hopping","spread the spectrum","switch the channel","secure the signal"],
+    start:["hopping frequencies"],done:["channel secured"],
+    hungry:["bandwidth is crowded"],empty:["clearing the channel"]},
+  Bose:{say:["count the quanta","share the same state","boson statistics","measure the response"],
+    start:["starting the measurement"],done:["response recorded"],
+    hungry:["sensitivity is fading"],empty:["recalibrating"]},
+  Galileo:{say:["and yet it moves","Jupiter has moons","watch the falling bodies","through the telescope"],
+    start:["beginning observation"],done:["orbit confirmed"],
+    hungry:["narrowing the field"],empty:["polishing the lens"]},
+  Somerville:{say:["map the heavens","translate the mechanism","read the star table","connect every science"],
+    start:["starting the translation"],done:["synthesis complete"],
+    hungry:["too many volumes"],empty:["sorting the library"]},
+  Feynman:{say:["draw the diagram","sum every path","what can I calculate?","let it wiggle"],
+    start:["drawing the paths"],done:["amplitude checked"],
+    hungry:["too many loops"],empty:["renormalizing"]},
+};
 function pickMurmur(name,kind){
   const sci=scientistOf(name);
-  const pool=(MURMURS[sci]&&MURMURS[sci][kind])||MURMURS._[kind];
+  const table=INITIAL_ROUTE.language==='en'?MURMURS_EN:MURMURS;
+  // 英語表に人物が無い場合は英語共通 pool へ落とし、日本語を混ぜない。
+  const entry=table[sci]||table._;
+  const pool=entry[kind]||table._[kind];
   return pool[Math.floor(Math.random()*pool.length)];
 }
 // 永続化 Map: buildEls() が毎 tick でノード DOM を作り直すため、
 // ここに保持して再 append しないと吹き出しが即消えてしまう。
 const gMurmurs=new Map();   // name -> {bub, ts}
 function spawnMurmur(name,text){
+  if(!INITIAL_ROUTE.murmurEnabled)return;
   if(!text) return;
   const o=gEls.node.get(name); if(!o) return;
   const g=gmap.get(name); if(!g) return;
@@ -3481,7 +3547,9 @@ async function tick(){
 /* ════════════════ NETWORK VIEW ════════════════ */
 const SVGNS="http://www.w3.org/2000/svg";
 const gsvg=document.getElementById('gsvg');
-let gWin="1", gWinLabel='~ 1d', gmap=new Map(), gedges=[], gspawn=[],
+let gWin=INITIAL_ROUTE.networkWindow,
+  gWinLabel=INITIAL_ROUTE.networkWindow==='all'?'ALL':'~ 1d',
+  gmap=new Map(), gedges=[], gspawn=[],
   gEls={node:new Map(),edge:[]}, simRAF=0, simHot=0, drag=null,
     netBooted=false, netRenderKey='', simPaintEls=null;
 let simCool=1;
@@ -3548,6 +3616,24 @@ let NSIZE=NETP_DEF.NSIZE, L=NETP_DEF.L, LWMUL=NETP_DEF.LWMUL,
     if(typeof s.GR==='number'&&isFinite(s.GR))GR=s.GR;
     if(typeof s.KS==='number'&&isFinite(s.KS))KS=s.KS;
   }catch(e){}
+  /* `?tune=L:170,KR:5200` は保存された値をこの表示だけ上書きする。
+     kiosk/embed や撮影用の一時ウィンドウは localStorage が空の別プロファイル
+     なので、スライダーを触らずに間隔を指定できる経路が要る。永続化はしない。 */
+  try{
+    const raw=new URLSearchParams(location.search).get('tune');
+    if(raw){
+      const lim={NSIZE:[6,40],L:[40,400],LWMUL:[.2,4],
+                 KR:[200,20000],GR:[0,.2],KS:[0,.2]};
+      const set={NSIZE:v=>NSIZE=v,L:v=>L=v,LWMUL:v=>LWMUL=v,
+                 KR:v=>KR=v,GR:v=>GR=v,KS:v=>KS=v};
+      for(const pair of raw.split(',')){
+        const [k,v]=pair.split(':');
+        const n=parseFloat(v);
+        if(!lim[k]||!isFinite(n))continue;
+        set[k](Math.max(lim[k][0],Math.min(lim[k][1],n)));
+      }
+    }
+  }catch(e){}
 })();
 
 async function netTick(){
@@ -3556,6 +3642,7 @@ async function netTick(){
     const r=await fetch('/api/graph?'+qs);
     const j=await r.json();
     const {w,h}=netDims();
+    const previousNodeCount=gmap.size;
     const mapWasCleared=gmap.size===0&&gEls.node&&gEls.node.size>0;
     const seen=new Set();
     for(const n of j.nodes){
@@ -3616,10 +3703,14 @@ async function netTick(){
       .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
     const nextRenderKey=JSON.stringify([nodeKey,edgeKey,spawnKey]);
     if(mapWasCleared||nextRenderKey!==netRenderKey){
-      // 表示集合が丸ごと入れ替わったとき（window 変更 / ALL 切替）は再 fit する
-      if(mapWasCleared)fitPending=true;
+      // 増殖・retire・window 切替のどれでも画角を追従させる。ユーザーが
+      // zoom/pan 済みなら既存の viewUserAdjusted 契約で自動 fit は抑制される。
+      if(mapWasCleared||gmap.size!==previousNodeCount)fitPending=true;
       buildEls(); netRenderKey=nextRenderKey; simHot=120; runSim();
-      if(fitPending)scheduleFit();
+      if(fitPending){
+        if(!viewUserAdjusted)fitView();
+        scheduleFit();
+      }
     }
   }catch(e){
     document.getElementById('netinfo').textContent='SIGNAL LOST — retry…';
@@ -4065,7 +4156,7 @@ let pan=null;
 /* Fit-to-view: 力学の到達範囲はノード数と斥力に依存するので、広い画面ほど
    グラフが中央に小さく固まる。収束後に bbox を測って viewBox を合わせる。
    ユーザーが一度でも wheel / pan した後は自動 fit しない（操作を奪わない）。 */
-let fitPending=true, viewUserAdjusted=false, fitTimer=0;
+let fitPending=true, viewUserAdjusted=false, fitTimer=0, fitFollowTick=0;
 const FIT_PAD=64;        // world px。ノード半径＋ラベル＋role チップの余白
 const FIT_K_MAX=2.0;     // 少数ノードで過剰に拡大しないための上限
 function fitView(){
@@ -4315,8 +4406,9 @@ function step(){
     g.vx*=.86*simCool;g.vy*=.86*simCool;
     g.x+=Math.max(-18,Math.min(18,g.vx));
     g.y+=Math.max(-18,Math.min(18,g.vy));
-    g.x=Math.max(40,Math.min(w-40,g.x));
-    g.y=Math.max(28,Math.min(h-24,g.y));
+    // 名前＋role pill まで含めて viewport 内に残すための安全余白。
+    g.x=Math.max(76,Math.min(w-76,g.x));
+    g.y=Math.max(36,Math.min(h-66,g.y));
     maxMove=Math.max(maxMove,Math.hypot(g.x-ox,g.y-oy));
   }
   return maxMove;
@@ -4344,6 +4436,9 @@ function paint(){
       +(nsc!==1?` scale(${nsc.toFixed(3)})`:''));
   }
   simPaintEls=gEls;
+  // 増殖中は収束を待たず、現在の bbox に緩く追従する。これにより新しい
+  // 世代が斥力で広がる途中も端で切れない。settle 後は fitPending が落ちる。
+  if(fitPending&&!viewUserAdjusted&&gmap.size&&++fitFollowTick%6===0)fitView();
 }
 
 const REDUCED=matchMedia('(prefers-reduced-motion:reduce)').matches;
@@ -4467,9 +4562,13 @@ function setView(v){
   const rng=document.getElementById('winrange');
   const lbl=document.getElementById('winlabel');
   const btn=document.getElementById('winall');
-  // init from slider default
+  // init from allowlisted URL state, otherwise use the slider default
   const initD=toDays(+rng.value);
-  gWin=String(initD);gWinLabel=fmtDays(initD);lbl.textContent=gWinLabel;
+  if(gWin==='all'){
+    gWinLabel='ALL';lbl.textContent='ALL';btn.classList.add('on');
+  }else{
+    gWin=String(initD);gWinLabel=fmtDays(initD);lbl.textContent=gWinLabel;
+  }
   rng.addEventListener('input',()=>{
     btn.classList.remove('on');
     const d=toDays(+rng.value);
@@ -4495,13 +4594,30 @@ addEventListener('resize',()=>{if(view==='net'){simHot=60;runSim();}});
    sender→recipient の edge 上に "信号 packet" を飛ばし、中間点で
    subject + 本文先頭を一瞬だけ表示する。reduced-motion を尊重。
 */
-let mailLastTs=0, mailPollTm=0, mailQueue=[], mailActive=0;
-const mailShownGroups=new Set();  // broadcast: 既に card を出した group key (= message id)
+let mailLastTs=0, mailPollTm=0, mailQueue=[], mailActive=0, mailRetryTm=0;
+const mailShownGroups=new Set();  // broadcast: 既に card を出した group key (= id + timestamp)
+const mailSeenKeys=new Set(), mailSeenOrder=[];
 const MAIL_MAX_ACTIVE=4;       // 同時飛行 packet 数の上限
 const MAIL_QUEUE_MAX=40;       // バーストで溜まり過ぎたら古い順に捨てる
+const MAIL_SEEN_MAX=400;       // 1 秒 overlap poll の重複排除を有界に保つ
+const MAIL_ENDPOINT_WAIT_MS=7000; // graph poll より先着した mail を捨てずに待つ
+const MAIL_CARD_MAX=3;         // mail storm でも network を文字で覆わない
+const mailVisibleCards=[];     // oldest → newest
 const MAIL_TRAVEL_MS=1700;     // 端→端の所要時間（ゆっくり目で動きが追える）
 const MAIL_LINGER_MS=6000;     // 到着後にカードが滞在する時間（読める長さ）
 const MAIL_HOVER_HOLD=true;    // カード hover 中は fade を保留
+
+function registerMailCard(card){
+  while(mailVisibleCards.length>=MAIL_CARD_MAX){
+    const oldest=mailVisibleCards.shift();
+    if(oldest&&typeof oldest._mailDismiss==='function')oldest._mailDismiss();
+  }
+  mailVisibleCards.push(card);
+}
+function unregisterMailCard(card){
+  const index=mailVisibleCards.indexOf(card);
+  if(index>=0)mailVisibleCards.splice(index,1);
+}
 
 function worldToScreen(wx,wy){
   // viewBox 変換を逆引きして HTML レイヤーの絶対座標に変換
@@ -4513,12 +4629,22 @@ function worldToScreen(wx,wy){
 async function mailPulseTick(){
   if(document.hidden||view!=='net'||netSuspended)return;
   try{
-    const url='/api/messages-since?since='+mailLastTs;
+    // server cursor は秒精度かつ strict `>`。直前 1 秒を重ね、同じ秒の
+    // query 後に commit された message を次回 poll で回収する。
+    const url='/api/messages-since?since='+Math.max(0,mailLastTs-1);
     const r=await fetch(url);
     const j=await r.json();
     if(j.ok){
-      mailLastTs=j.now||mailLastTs;
-      for(const m of annotateBroadcastMessages(j.messages||[])) mailQueue.push(m);
+      mailLastTs=Math.max(mailLastTs,Number(j.now)||0);
+      for(const m of annotateBroadcastMessages(j.messages||[])){
+        const key=mailMessageKey(m);
+        if(mailSeenKeys.has(key))continue;
+        mailSeenKeys.add(key);mailSeenOrder.push(key);
+        while(mailSeenOrder.length>MAIL_SEEN_MAX)
+          mailSeenKeys.delete(mailSeenOrder.shift());
+        m._queuedAt=Date.now();
+        mailQueue.push(m);
+      }
       // 上限超え分は古い方から捨てる
       while(mailQueue.length>MAIL_QUEUE_MAX) mailQueue.shift();
       mailDrain();
@@ -4526,14 +4652,18 @@ async function mailPulseTick(){
   }catch(e){ /* silent */ }
 }
 
+function mailMessageKey(m){
+  return [m.id??'',m.ts??'',m.sender??'',m.recipient??'',m.kind??''].join('|');
+}
+
 function annotateBroadcastMessages(messages){
   const byId=new Map();
   for(const m of messages){
-    const k=(m.id!=null)?('id:'+m.id):('k:'+m.sender+'|'+(m.subject||'')+'|'+m.ts);
+    const k=(m.id!=null)?('id:'+m.id+'@'+(m.ts??'')):('k:'+m.sender+'|'+(m.subject||'')+'|'+m.ts);
     (byId.get(k)||byId.set(k,[]).get(k)).push(m);
   }
   for(const m of messages){
-    const k=(m.id!=null)?('id:'+m.id):('k:'+m.sender+'|'+(m.subject||'')+'|'+m.ts);
+    const k=(m.id!=null)?('id:'+m.id+'@'+(m.ts??'')):('k:'+m.sender+'|'+(m.subject||'')+'|'+m.ts);
     const grp=byId.get(k);
     m._gkey=k; m._rcount=grp.length; m._recips=grp.map(x=>x.recipient);
   }
@@ -4541,8 +4671,22 @@ function annotateBroadcastMessages(messages){
 }
 
 function mailDrain(){
-  while(mailQueue.length && mailActive<MAIL_MAX_ACTIVE){
-    runMessageAnim(mailQueue.shift());
+  const pass=mailQueue.length;
+  let deferred=false;
+  for(let i=0;i<pass&&mailQueue.length&&mailActive<MAIL_MAX_ACTIVE;i++){
+    const m=mailQueue.shift();
+    if(runMessageAnim(m))continue;
+    if(Date.now()-(m._queuedAt||Date.now())<MAIL_ENDPOINT_WAIT_MS){
+      mailQueue.push(m);deferred=true;
+    }
+  }
+  if(deferred&&!mailRetryTm){
+    mailRetryTm=setTimeout(async()=>{
+      mailRetryTm=0;
+      // mail(4s) と graph(5s) の位相が逆でも、endpoint を先に更新して再試行。
+      await netTick();
+      mailDrain();
+    },400);
   }
 }
 
@@ -4562,8 +4706,8 @@ function cometEnvelope(t,reduced=false){
 
 function runMessageAnim(m){
   const a=gmap.get(m.sender), b=gmap.get(m.recipient);
-  if(!a||!b){ return; }   // どちらか window 外: skip（静かに）
-  if(m.sender===m.recipient) return;  // self-loop は描かない
+  if(!a||!b)return false; // graph poll より先着: mailDrain が有界再試行
+  if(m.sender===m.recipient)return true;  // self-loop は描かない
   mailActive++;
   const imp=(m.importance||'normal').toLowerCase();
   // 1) sender 側に小さく弧波（出発）
@@ -4575,14 +4719,28 @@ function runMessageAnim(m){
   // 3) コンテンツカード（HTML, screen 座標）— broadcast は group ごとに1枚だけ
   const gkey=m._gkey||(m.sender+'|'+(m.subject||'')+'|'+m.ts);
   const showCard=!mailShownGroups.has(gkey);
-  let card=null, slot=-1;
+  let card=null, slot=-1, cardShown=false, cardHideTm=0;
   const dropGroup=()=>{ mailShownGroups.delete(gkey); };
+  const removeCard=(fade=true)=>{
+    if(!card||card._mailRemoved)return;
+    card._mailRemoved=true;
+    if(card._hoverExtTm)clearTimeout(card._hoverExtTm);
+    if(cardHideTm)clearTimeout(cardHideTm);
+    unregisterMailCard(card);
+    releaseCardSlot(slot);slot=-1;dropGroup();
+    if(fade){
+      card.classList.add('fading');
+      setTimeout(()=>card.remove(),350);
+    }else card.remove();
+  };
   if(showCard){
     mailShownGroups.add(gkey);
     card=makeMailCard(m,imp);
     slot=acquireCardSlot();
     card.dataset.slot=slot;
     card._hover=false;
+    card._mailDismiss=()=>removeCard(true);
+    registerMailCard(card);
     if(MAIL_HOVER_HOLD){
       card.addEventListener('mouseenter',()=>{ card._hover=true; });
       card.addEventListener('mouseleave',()=>{
@@ -4590,10 +4748,7 @@ function runMessageAnim(m){
         // hover 解除時に追加で短めの延長 fade を仕掛け直す
         if(card._hoverExtTm) clearTimeout(card._hoverExtTm);
         card._hoverExtTm=setTimeout(()=>{
-          if(!card._hover && card.isConnected){
-            card.classList.add('fading');
-            setTimeout(()=>{ card.remove(); releaseCardSlot(slot); dropGroup(); }, 500);
-          }
+          if(!card._hover && card.isConnected)removeCard(true);
         }, 1200);
       });
     }
@@ -4608,7 +4763,6 @@ function runMessageAnim(m){
   const DUR=REDUCED?Math.min(500,baseDur):baseDur;
   // 滞留時間: replay 中は HOLD スライダー (RP.holdMs) で可変、それ以外は既定。
   const LINGER=REDUCED?1200:(RP.active?RP.holdMs:MAIL_LINGER_MS);
-  let cardShown=false, cardHideTm=0;
   function frame(now){
     const elapsed=now-t0;
     const tn=Math.min(1,elapsed/DUR);
@@ -4634,7 +4788,7 @@ function runMessageAnim(m){
     // カードは comet を追わず edge midpoint に固定（読みやすさ優先）。
     // sender/recipient の動的位置から midpoint を再計算するので物理 sim
     // で動いてもカードは追従する。
-    if(card){
+    if(card&&!card._mailRemoved){
       const midX=(sa.x+sb.x)/2, midY=(sa.y+sb.y)/2;
       const scr=worldToScreen(midX,midY);
       const cardW=card.offsetWidth||240, cardH=card.offsetHeight||64;
@@ -4662,14 +4816,13 @@ function runMessageAnim(m){
     }
     setTimeout(()=>comet.remove(), REDUCED?380:40);
     // カードは到着後 LINGER ms 残してから fade out。hover 中は待つ。
-    if(card){
+    if(card&&!card._mailRemoved){
       const startFade=()=>{
         if(card._hover){
           // hover 中。100ms 後に再判定
           cardHideTm=setTimeout(startFade, 100); return;
         }
-        card.classList.add('fading');
-        setTimeout(()=>{ card.remove(); releaseCardSlot(slot); dropGroup(); }, 500);
+        removeCard(true);
       };
       cardHideTm=setTimeout(startFade, LINGER);
     }
@@ -4678,11 +4831,11 @@ function runMessageAnim(m){
   }
   function cleanup(){
     comet.remove();
-    if(card){ card.remove(); releaseCardSlot(slot); dropGroup(); }
-    if(cardHideTm) clearTimeout(cardHideTm);
+    removeCard(false);
     mailActive--; mailDrain();
   }
   requestAnimationFrame(frame);
+  return true;
 }
 
 function makeComet(imp){
@@ -4696,7 +4849,7 @@ function makeComet(imp){
   return g;
 }
 // 同時表示時にカードが重ならないよう slot を割り当て・再利用
-const mailCardSlots=[false,false,false,false,false];
+const mailCardSlots=[false,false,false];
 function acquireCardSlot(){
   for(let i=0;i<mailCardSlots.length;i++){
     if(!mailCardSlots[i]){ mailCardSlots[i]=true; return i; }
