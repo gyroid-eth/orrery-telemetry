@@ -331,7 +331,12 @@ def tmux_state() -> dict:
     """セッション名 -> {created, activity, attached, cmd, title} を返す。"""
     sessions: dict[str, dict] = {}
 
-    fmt = SEP.join(["#{session_name}", "#{session_created}", "#{session_activity}"])
+    fmt = SEP.join([
+        "#{session_name}",
+        "#{session_created}",
+        "#{session_activity}",
+        "#{session_id}",
+    ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
         parts = line.split(SEP)
         if len(parts) < 3:
@@ -340,6 +345,7 @@ def tmux_state() -> dict:
         sessions[name] = {
             "name": name,
             "created": _to_int(created),
+            "session_id": parts[3] if len(parts) >= 4 else "",
             "activity": _to_int(activity),
             "attached": False,
             "client_tty": None,
@@ -377,6 +383,7 @@ def tmux_state() -> dict:
             sessions[sname]["attached"] = True
             sessions[sname]["client_tty"] = tty
 
+    _prune_runtime_cache(sessions)
     return sessions
 
 
@@ -554,7 +561,11 @@ def build_agents() -> list[dict]:
         )
         # 稼働中はペイン直読みの runtime（HP・状態・経過時間・窓）を一括取得。
         # 4.5s TTL キャッシュ済みなので graph_payload との重複呼び出しは無料。
-        rt = _agent_runtime(name) if running else {}
+        rt = (
+            _agent_runtime(name, s.get("created"), s.get("session_id"))
+            if running
+            else {}
+        )
         rows.append(
             {
                 "name": name,
@@ -1064,7 +1075,11 @@ def graph_payload(days: float, show_all: bool) -> dict:
         # graph ノードは全て agent-mail 登録済。present だが claude 非稼働
         # = exit 済でセッションだけ残った husk → idle ではなく finished
         # HP(ctx 残量) + 動作状態は running のみ取得（capture-pane 抑制）
-        rt = _agent_runtime(name) if running else {}
+        rt = (
+            _agent_runtime(name, s.get("created"), s.get("session_id"))
+            if running
+            else {}
+        )
         return {
             "present": True,
             "running": running,
@@ -2516,6 +2531,16 @@ _QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
 # コンテキスト窓: ステータスラインの "Opus 4.7 (1M context)" を直読み。
 #   登録モデル文字列より確実（実セッションが報告する値そのもの）。
 _WIN_RE = re.compile(r"\(\s*([\d.]+\s*[MK])\s*context\s*\)", re.IGNORECASE)
+_WIN_MODEL_RE = re.compile(
+    r"(?im)^\s*Model:\s*[^\n]*\bwith\s+([\d.]+\s*[MK])\s+context\b"
+)
+# 狭いペインでは Claude の Model 行が ``with 1M con…`` の途中で省略
+# される。この緩和は Model: 行の末尾だけに限定し、通常の会話やコードに
+# 出てくる ``1M con`` を context window と誤読しない。
+_WIN_TRUNC_RE = re.compile(
+    r"(?im)^\s*Model:\s*[^\n]*\bwith\s+([\d.]+\s*[MK])\s+"
+    r"con(?:t(?:e(?:x(?:t)?)?)?)?(?:[.…]{1,3})?\)?\s*$"
+)
 # 実モデル: pane のステータスバーに出る文字列を直読み。
 #   Claude Code: "| Opus 4.6 | ctx: 59% used"
 #   Codex:       "gpt-5.4 xhigh · Context 46% left"
@@ -2550,12 +2575,13 @@ def _dur(h: int, m: int, s: int) -> tuple[int, str]:
 
 
 _RT_TTL = 4.5
-_rt_cache: dict[str, tuple[float, dict]] = {}
+_RT_STICKY_KEYS = ("pane_model", "ctx_window")
+_rt_cache: dict[str, tuple[float, str, dict]] = {}
 _rt_lock = threading.Lock()
 
 
 def _parse_runtime(text: str) -> dict:
-    """ペイン文字列 → {ctx_used, act_state, ctx_window, model}。優先度 work>question>ask>wait。"""
+    """ペイン文字列 → runtime 値。動作状態の優先度は work>question>ask>wait。"""
     m = _CTX_RE.search(text)
     if m:                                   # Claude: "ctx: N% used"
         ctx_used = int(m.group(1))
@@ -2568,12 +2594,18 @@ def _parse_runtime(text: str) -> dict:
             ctx_used = int(cu.group(1))
         else:
             ctx_used = None
-    w = _WIN_RE.search(text)
+    # 既存の完全な ``(1M context)`` は従来どおり全 capture から採り、
+    # Model 行の新書式・幅切れだけは誤読を避けるため末尾10行に限定する。
+    tail_for_model = "\n".join(text.splitlines()[-10:])
+    w = (
+        _WIN_RE.search(text)
+        or _WIN_MODEL_RE.search(tail_for_model)
+        or _WIN_TRUNC_RE.search(tail_for_model)
+    )
     ctx_window = re.sub(r"\s+", "", w.group(1)).upper() if w else None
     # ペイン由来の実モデル (steruslineから抽出。末尾10行に限定して
     # スクロールバッファ内のコード片やテキスト中の誤マッチを避ける)
     pane_model = None
-    tail_for_model = "\n".join(text.splitlines()[-10:])
     mm = _MODEL_PANE_RE.search(tail_for_model)
     if mm:
         if mm.group(1):  # Claude family (Opus/Sonnet/Haiku)
@@ -2614,13 +2646,40 @@ def _parse_runtime(text: str) -> dict:
             "pane_model": pane_model}
 
 
-def _agent_runtime(session: str) -> dict:
-    """running セッションの HP(ctx 残量) + 動作状態。4.5s TTL キャッシュ。"""
+def _runtime_generation(created: int | None, session_id: str | None) -> str:
+    """tmux server 内で session を一意にする generation token。"""
+    return f"{int(created or 0)}:{session_id or ''}"
+
+
+def _prune_runtime_cache(sessions: dict[str, dict]) -> None:
+    """終了または同名で再作成された tmux session の runtime を破棄する。"""
+    generations = {
+        name: _runtime_generation(
+            record.get("created"), record.get("session_id")
+        )
+        for name, record in sessions.items()
+    }
+    with _rt_lock:
+        for name, (_, generation, _) in list(_rt_cache.items()):
+            if generations.get(name) != generation:
+                _rt_cache.pop(name, None)
+
+
+def _agent_runtime(
+    session: str,
+    session_created: int | None,
+    session_id: str | None = None,
+) -> dict:
+    """running session の runtime。属性だけを generation 内で保持する。"""
     now = time.monotonic()
+    generation = _runtime_generation(session_created, session_id)
     with _rt_lock:
         hit = _rt_cache.get(session)
+        if hit and hit[1] != generation:
+            _rt_cache.pop(session, None)
+            hit = None
         if hit and (now - hit[0]) < _RT_TTL:
-            return hit[1]
+            return hit[2]
     out = {"ctx_used": None, "act_state": None, "ctx_window": None,
            "work_secs": None, "work_disp": None, "last_disp": None,
            "pane_model": None}
@@ -2636,7 +2695,12 @@ def _agent_runtime(session: str) -> dict:
         except Exception:
             pass
     with _rt_lock:
-        _rt_cache[session] = (now, out)
+        previous = _rt_cache.get(session)
+        if previous and previous[1] == generation:
+            for key in _RT_STICKY_KEYS:
+                if not out.get(key):
+                    out[key] = previous[2].get(key)
+        _rt_cache[session] = (now, generation, out)
     return out
 
 
