@@ -19,7 +19,7 @@ PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
-PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 UPSTREAM_AGENT_MAIL_URL="${AGENTSTACK_AGENT_MAIL_REPO:-https://github.com/Dicklesworthstone/mcp_agent_mail.git}"
@@ -126,6 +126,10 @@ DASHBOARD_LOG_BACKUPS="${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-3}"
 DASHBOARD_RESTART_DELAY="${AGENTSTACK_DASHBOARD_RESTART_DELAY:-5}"
 LABEL="$LABEL_PREFIX.agentdashboard"
 URL="http://127.0.0.1:$PORT/"
+ACTIVE_SERVICE_KIND=""
+SERVICE_PATH=""
+SERVICE_HEALTHY=false
+SERVICE_FALLBACK_USED=false
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -153,8 +157,77 @@ need_cmd() {
   fi
 }
 
+resolve_python_candidate() {
+  case "$1" in
+    */*) printf '%s\n' "$1" ;;
+    *) command -v "$1" 2>/dev/null || true ;;
+  esac
+}
+
+python_version() {
+  "$1" -c 'import sys; print(".".join(str(part) for part in sys.version_info[:3]))' \
+    2>/dev/null || printf '%s\n' unknown
+}
+
+python_is_compatible() {
+  [[ -n "$1" && -x "$1" ]] || return 1
+  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
+    >/dev/null 2>&1
+}
+
+select_python() {
+  local requested="${AGENTSTACK_PYTHON:-}"
+  local candidate version
+  if [[ -n "$requested" ]]; then
+    candidate="$(resolve_python_candidate "$requested")"
+    if [[ -z "$candidate" || ! -x "$candidate" ]]; then
+      die "AGENTSTACK_PYTHON is not an executable Python interpreter: $requested"
+    fi
+    version="$(python_version "$candidate")"
+    if ! python_is_compatible "$candidate"; then
+      die "AGENTSTACK_PYTHON must be Python 3.10 or newer; found $version at $candidate"
+    fi
+    PYTHON_BIN="$candidate"
+    say "python: $PYTHON_BIN ($version)"
+    return
+  fi
+
+  local checked=""
+  local seen=""
+  local raw
+  for raw in \
+    python3 python3.14 python3.13 python3.12 python3.11 python3.10 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 /opt/local/bin/python3 \
+    /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
+    /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+    /opt/homebrew/bin/python3.10 \
+    /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
+    /usr/local/bin/python3.12 /usr/local/bin/python3.11 \
+    /usr/local/bin/python3.10
+  do
+    candidate="$(resolve_python_candidate "$raw")"
+    [[ -n "$candidate" ]] || continue
+    case " $seen " in
+      *" $candidate "*) continue ;;
+    esac
+    seen="$seen $candidate"
+    version="$(python_version "$candidate")"
+    if [[ -n "$checked" ]]; then
+      checked="$checked, "
+    fi
+    checked="$checked$candidate ($version)"
+    if python_is_compatible "$candidate"; then
+      PYTHON_BIN="$candidate"
+      say "python: $PYTHON_BIN ($version)"
+      return
+    fi
+  done
+
+  [[ -n "$checked" ]] || checked="no python3 candidates found"
+  die "Python 3.10 or newer is required; checked: $checked. Install a current Python or set AGENTSTACK_PYTHON."
+}
+
 check_dependencies() {
-  need_cmd python3
   need_cmd tmux
   need_cmd git
   need_cmd uv
@@ -184,7 +257,7 @@ validate_repo_assets() {
 }
 
 port_in_use() {
-  python3 - "$PORT" <<'PY'
+  "$PYTHON_BIN" - "$PORT" <<'PY'
 import socket
 import sys
 port = int(sys.argv[1])
@@ -238,7 +311,7 @@ migrate_legacy_annotations() {
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
-  python3 - "$legacy_path" "$runtime_path" <<'PY'
+  "$PYTHON_BIN" - "$legacy_path" "$runtime_path" <<'PY'
 import os
 import pathlib
 import shutil
@@ -275,7 +348,7 @@ migrate_legacy_dashboard_log() {
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
-  python3 - "$legacy_path" "$target_path" <<'PY'
+  "$PYTHON_BIN" - "$legacy_path" "$target_path" <<'PY'
 import os
 import pathlib
 import shutil
@@ -324,7 +397,7 @@ install_child_mcp_proxy() {
   if [[ "$DRY_RUN" == true ]]; then
     return 0
   fi
-  python3 - "$source_dir" "$dest_dir" <<'PY'
+  "${PYTHON_BIN:-python3}" - "$source_dir" "$dest_dir" <<'PY'
 import pathlib
 import shutil
 import sys
@@ -384,7 +457,7 @@ install_payload() {
 }
 
 symlink_points_to() {
-  python3 - "$1" "$2" <<'PY'
+  "$PYTHON_BIN" - "$1" "$2" <<'PY'
 import os
 import pathlib
 import sys
@@ -442,7 +515,7 @@ render_installed_templates() {
   if [[ "$TIER" != "tier0" ]]; then
     plan "render hook settings template token -> $HOOKS_DIR"
     if [[ "$DRY_RUN" != true ]]; then
-      python3 - "$HOOKS_DIR/settings.template.json" "$HOOKS_DIR" <<'PY'
+      "$PYTHON_BIN" - "$HOOKS_DIR/settings.template.json" "$HOOKS_DIR" <<'PY'
 import pathlib
 import sys
 path = pathlib.Path(sys.argv[1])
@@ -488,13 +561,13 @@ safe_merge_settings() {
 
   say "Tier1 settings safe-merge dry-run: $CLAUDE_SETTINGS"
   if [[ "$DRY_RUN" == true ]]; then
-    python3 "${merge_args[@]}" --dry-run
+    "$PYTHON_BIN" "${merge_args[@]}" --dry-run
     return
   fi
 
-  python3 "${merge_args[@]}" --dry-run
+  "$PYTHON_BIN" "${merge_args[@]}" --dry-run
   if confirm_safe_merge; then
-    python3 "${merge_args[@]}" --result-json "$SAFE_MERGE_RESULT_FILE"
+    "$PYTHON_BIN" "${merge_args[@]}" --result-json "$SAFE_MERGE_RESULT_FILE"
   else
     say "Skipped Tier1 user-settings merge."
   fi
@@ -550,7 +623,7 @@ write_env_file() {
     return
   fi
   umask 077
-  python3 - "$ENV_FILE" <<PY
+  "$PYTHON_BIN" - "$ENV_FILE" <<PY
 import pathlib
 import shlex
 import sys
@@ -615,7 +688,7 @@ ensure_agent_mail() {
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$(dirname "$MAIL_ENV")"
       umask 077
-      python3 - "$MAIL_ENV" <<'PY'
+      "$PYTHON_BIN" - "$MAIL_ENV" <<'PY'
 import pathlib
 import secrets
 import sys
@@ -634,7 +707,7 @@ render_launchd_plist() {
   plan "render launchd plist $plist"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$HOME/Library/LaunchAgents"
-    python3 - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" <<PY
+    "$PYTHON_BIN" - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" <<PY
 import pathlib
 import sys
 
@@ -683,7 +756,7 @@ render_systemd_unit() {
   plan "render systemd user unit $unit"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
-    python3 - "$unit" <<PY
+    "$PYTHON_BIN" - "$unit" <<PY
 import pathlib
 import sys
 
@@ -750,40 +823,93 @@ start_service() {
       render_launchd_plist
       if [[ "$DRY_RUN" == true ]]; then
         say "DRY-RUN would run: launchctl bootout gui/$(id -u)/$LABEL"
-      else
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $SERVICE_PATH"
+        say "DRY-RUN would run: launchctl enable gui/$(id -u)/$LABEL"
+        say "DRY-RUN would run: launchctl kickstart gui/$(id -u)/$LABEL"
+        ACTIVE_SERVICE_KIND="launchd"
+        return
       fi
-      # launchctl's enabled/disabled override persists independently of the
-      # plist, so explicitly clear a stale disabled override during install.
-      run launchctl enable "gui/$(id -u)/$LABEL"
-      run launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH"
-      # kickstart is the explicit activation demand. In an on-demand-only GUI
-      # domain, RunAtLoad/KeepAlive may be deferred even after bootstrap. The
-      # HTTP health check below verifies the service rather than its metadata.
-      run launchctl kickstart "gui/$(id -u)/$LABEL"
+      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      # A GUI domain can disappear while the user is logged in (for example
+      # while the display is asleep), so the bootstrap operation itself is the
+      # capability probe. Never infer availability from login metadata.
+      if launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH" && \
+         launchctl enable "gui/$(id -u)/$LABEL" && \
+         launchctl kickstart "gui/$(id -u)/$LABEL"
+      then
+        ACTIVE_SERVICE_KIND="launchd"
+        return
+      fi
+      warn "launchd could not bootstrap $LABEL in gui/$(id -u); falling back to supervised background mode"
+      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      rm -f "$SERVICE_PATH"
+      SERVICE_FALLBACK_USED=true
+      start_supervised_background || true
       ;;
     systemd-user)
       render_systemd_unit
-      run systemctl --user daemon-reload
-      run systemctl --user enable --now "$LABEL.service"
+      if [[ "$DRY_RUN" == true ]]; then
+        run systemctl --user daemon-reload
+        run systemctl --user enable --now "$LABEL.service"
+        ACTIVE_SERVICE_KIND="systemd-user"
+        return
+      fi
+      if systemctl --user daemon-reload && \
+         systemctl --user enable --now "$LABEL.service"
+      then
+        ACTIVE_SERVICE_KIND="systemd-user"
+        return
+      fi
+      warn "systemd user service setup failed; falling back to supervised background mode"
+      systemctl --user disable --now "$LABEL.service" 2>/dev/null || true
+      rm -f "$SERVICE_PATH"
+      SERVICE_FALLBACK_USED=true
+      start_supervised_background || true
       ;;
     nohup)
-      SERVICE_PATH="$RUNTIME_DIR/dashboard.pid"
-      plan "start dashboard with nohup fallback, pidfile $SERVICE_PATH"
-      if [[ "$DRY_RUN" != true ]]; then
-        (
-          # shellcheck disable=SC1090
-          . "$ENV_FILE"
-          AGENTSTACK_DASHBOARD_SELF_RESTART=1 \
-            nohup "$PYTHON_BIN" "$DASHBOARD_DIR/service_runner.py" >> "$DASHBOARD_LOG" 2>&1 &
-          echo $! > "$SERVICE_PATH"
-        )
-      fi
+      start_supervised_background || true
       ;;
     *)
-      die "unknown service kind: $kind"
+      warn "unknown service kind '$kind'; dashboard was not started"
+      ACTIVE_SERVICE_KIND="manual"
+      SERVICE_PATH=""
       ;;
   esac
+}
+
+start_supervised_background() {
+  SERVICE_PATH="$RUNTIME_DIR/dashboard.pid"
+  ACTIVE_SERVICE_KIND="nohup"
+  plan "start dashboard in supervised background mode, pidfile $SERVICE_PATH"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  mkdir -p "$RUNTIME_DIR"
+  if [[ -f "$SERVICE_PATH" ]]; then
+    local previous_pid
+    previous_pid="$(sed -n '1p' "$SERVICE_PATH" 2>/dev/null || true)"
+    if [[ "$previous_pid" =~ ^[0-9]+$ ]] && kill -0 "$previous_pid" 2>/dev/null; then
+      warn "supervised background process is already running with pid $previous_pid"
+      return 0
+    fi
+    rm -f "$SERVICE_PATH"
+  fi
+  (
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    AGENTSTACK_DASHBOARD_SELF_RESTART=1 \
+      nohup "$PYTHON_BIN" "$DASHBOARD_DIR/service_runner.py" >> "$DASHBOARD_LOG" 2>&1 &
+    echo $! > "$SERVICE_PATH"
+  )
+  local supervisor_pid
+  supervisor_pid="$(sed -n '1p' "$SERVICE_PATH" 2>/dev/null || true)"
+  if [[ ! "$supervisor_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$supervisor_pid" 2>/dev/null; then
+    warn "could not start the supervised background dashboard"
+    rm -f "$SERVICE_PATH"
+    ACTIVE_SERVICE_KIND="manual"
+    SERVICE_PATH=""
+    return 1
+  fi
 }
 
 verify_dashboard_service() {
@@ -814,9 +940,12 @@ print(f"dashboard health check failed: {last_error}", file=sys.stderr)
 raise SystemExit(1)
 PY
   then
+    SERVICE_HEALTHY=true
     say "dashboard healthy: http://127.0.0.1:$PORT/api/agents"
   else
-    die "dashboard service did not become healthy; inspect $DASHBOARD_LOG"
+    SERVICE_HEALTHY=false
+    warn "dashboard service did not become healthy; install files and managed blocks were still completed"
+    warn "inspect $DASHBOARD_LOG and start the dashboard manually"
   fi
 }
 
@@ -828,7 +957,7 @@ write_manifest() {
   local service_kind="$1"
   local service_path="$2"
   local tmp="$MANIFEST.tmp"
-  python3 - "$tmp" "$service_kind" "$service_path" <<PY
+  "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" <<PY
 import json
 import os
 import pathlib
@@ -967,7 +1096,7 @@ manifest = {
 }
 out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
-  python3 -m json.tool "$tmp" >/dev/null
+  "$PYTHON_BIN" -m json.tool "$tmp" >/dev/null
   mv "$tmp" "$MANIFEST"
 }
 
@@ -981,6 +1110,7 @@ main() {
   elif [[ "$TIER" == "tier2" ]]; then
     say "Phase 3a note: Tier2 project enable is a placeholder; no project settings are modified."
   fi
+  select_python
   check_dependencies
   validate_repo_assets
   check_port
@@ -995,10 +1125,10 @@ main() {
   render_installed_templates
   write_env_file
   ensure_agent_mail
-  start_service "$service_kind"
   safe_merge_settings
   safe_managed_doc_setups
-  write_manifest "$service_kind" "${SERVICE_PATH:-}"
+  start_service "$service_kind"
+  write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}"
   verify_dashboard_service
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
@@ -1007,6 +1137,15 @@ main() {
     say "Manifest: $MANIFEST"
     say "Dashboard log: $DASHBOARD_LOG"
     say "Run doctor: $BIN_DIR/agentstack-doctor"
+    if [[ "$SERVICE_FALLBACK_USED" == true ]]; then
+      say "Service mode: supervised background (launchd/systemd unavailable)"
+    fi
+    if [[ "$SERVICE_HEALTHY" != true ]]; then
+      say "Dashboard was not started. Manual supervised start:"
+      say "  . $ENV_FILE"
+      say "  AGENTSTACK_DASHBOARD_SELF_RESTART=1 nohup $PYTHON_BIN $DASHBOARD_DIR/service_runner.py >> $DASHBOARD_LOG 2>&1 &"
+      say "  echo \$! > $RUNTIME_DIR/dashboard.pid"
+    fi
     if [[ "$TIER" != "tier0" ]]; then
       say "Recommended managed setup:"
       say "  hooks/settings.json via Tier1 settings merge"

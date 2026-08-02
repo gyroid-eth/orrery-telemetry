@@ -32,6 +32,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 status=0
+
+if [[ -f "$INSTALL_DIR/env.sh" ]]; then
+  echo "ok: env $INSTALL_DIR/env.sh"
+  # shellcheck disable=SC1090
+  . "$INSTALL_DIR/env.sh"
+else
+  echo "missing: env $INSTALL_DIR/env.sh" >&2
+  status=1
+fi
+
 check_cmd() {
   if command -v "$1" >/dev/null 2>&1; then
     echo "ok: $1"
@@ -41,25 +51,24 @@ check_cmd() {
   fi
 }
 
-check_cmd python3
+PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
+if [[ -x "$PYTHON_BIN" ]] && \
+   "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+then
+  echo "ok: Python 3.10+ ($PYTHON_BIN)"
+else
+  echo "missing: Python 3.10+ interpreter" >&2
+  status=1
+fi
 check_cmd tmux
 check_cmd git
 check_cmd uv
 
 if [[ -f "$MANIFEST" ]]; then
   echo "ok: manifest $MANIFEST"
-  python3 -m json.tool "$MANIFEST" >/dev/null || status=1
+  "$PYTHON_BIN" -m json.tool "$MANIFEST" >/dev/null || status=1
 else
   echo "missing: manifest $MANIFEST" >&2
-  status=1
-fi
-
-if [[ -f "$INSTALL_DIR/env.sh" ]]; then
-  echo "ok: env $INSTALL_DIR/env.sh"
-  # shellcheck disable=SC1090
-  . "$INSTALL_DIR/env.sh"
-else
-  echo "missing: env $INSTALL_DIR/env.sh" >&2
   status=1
 fi
 
@@ -85,6 +94,68 @@ else
   echo "missing: dashboard log $DASHBOARD_LOG" >&2
   echo "         the dashboard service may not have started; inspect the service manager" >&2
   status=1
+fi
+
+report_dashboard_service() {
+  local python_bin="${AGENTSTACK_PYTHON:-python3}"
+  local record kind identity service_path pid
+  record="$("$python_bin" - "$MANIFEST" <<'PY' 2>/dev/null || true
+import json
+import pathlib
+import sys
+
+try:
+    services = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("services", [])
+except (OSError, ValueError):
+    services = []
+if services:
+    service = services[0]
+    print("|".join((
+        str(service.get("kind", "")),
+        str(service.get("label") or service.get("unit") or ""),
+        str(service.get("path") or service.get("pidfile") or ""),
+    )))
+PY
+)"
+  IFS='|' read -r kind identity service_path <<< "$record"
+  case "$kind" in
+    launchd)
+      if command -v launchctl >/dev/null 2>&1 && \
+         launchctl print "gui/$(id -u)/$identity" >/dev/null 2>&1
+      then
+        echo "ok: dashboard service mode launchd (gui/$(id -u)/$identity)"
+      else
+        echo "warn: dashboard service mode launchd, but gui/$(id -u)/$identity is not loaded"
+        status=1
+      fi
+      ;;
+    systemd-user)
+      if command -v systemctl >/dev/null 2>&1 && \
+         systemctl --user is-active --quiet "$identity" >/dev/null 2>&1
+      then
+        echo "ok: dashboard service mode systemd-user ($identity)"
+      else
+        echo "warn: dashboard service mode systemd-user, but $identity is not active"
+        status=1
+      fi
+      ;;
+    nohup)
+      pid="$(sed -n '1p' "$service_path" 2>/dev/null || true)"
+      if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        echo "ok: dashboard service mode supervised-background (pid $pid)"
+      else
+        echo "warn: dashboard service mode supervised-background, but its pidfile is stale or missing: $service_path"
+        status=1
+      fi
+      ;;
+    *)
+      echo "warn: dashboard service mode manual; no active service manager is recorded"
+      ;;
+  esac
+}
+
+if [[ -f "$MANIFEST" ]]; then
+  report_dashboard_service
 fi
 
 # Without the proxy a spawned child still works, but its agent-mail connection

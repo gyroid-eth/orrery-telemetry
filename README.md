@@ -11,14 +11,14 @@
 ## 動作要件
 
 - macOS（主対象。launcher / hook は標準 Bash 3.2 対応）
-- `python3`、`tmux`、`git`、`uv`
+- Python 3.10 以上（`python3`）、`tmux`、`git`、`uv`
 - Claude Code または Codex CLI
 - `fswatch`（任意。mail watcher。なければ polling）
 - `fzf`（任意。directory picker）
 - Ghostty（推奨。iTerm2、Terminal.app、`none` へ fallback）
 - Obsidian（任意。`/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。未導入でも generic project の `logs/` は Output に表示できます。`/log` の vault mode には `AGENTSTACK_OBSIDIAN_APP` が必要）
 
-Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。Windows native は対象外です。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
+macOS では launchd の `gui/$UID` domain への bootstrap を試し、画面スリープ中や SSH 専用環境などで利用できなければ自己再起動付きの background supervisor へ切り替えます。Linux では systemd user service、利用できなければ同じ background supervisor を使います。Windows native は対象外です。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
 
 ## クイックスタート
 

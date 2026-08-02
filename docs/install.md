@@ -10,7 +10,7 @@
 
 必須:
 
-- `python3`
+- Python 3.10 以上（`python3`）
 - `tmux`
 - `git`
 - `uv`
@@ -23,7 +23,9 @@
 - Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback。ただし既存ウィンドウの前面化は Ghostty のみで、iTerm2 と Terminal.app では jump のたびに新しいウィンドウが開きます
 - Obsidian: `/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard は generic project log を非リンク項目として表示します
 
-Linux では systemd user service、利用できなければ `nohup` で dashboard を起動します。WSL2 でも localhost dashboard は使えますが、Ghostty の click-to-jump は使えません。Windows native は対象外です。
+macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使います。WSL2 でも localhost dashboard は使えますが、Ghostty の click-to-jump は使えません。Windows native は対象外です。
+
+`AGENTSTACK_PYTHON` を指定した場合も Python 3.10 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
 ## 基本インストール
 
@@ -38,9 +40,11 @@ installer は次を行います。
 1. dependency と port を検査
 2. upstream `mcp_agent_mail` を既定の `~/mcp_agent_mail` へ clone、または既存 clone を検証
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
-4. `~/.agentstack/env.sh` と `install-state.json` を生成
-5. launchd / systemd user / `nohup` のいずれかで dashboard と watcher を登録
-6. Tier 1 では Claude Code settings と managed instructions の差分を preview し、明示的な `yes` の後だけ merge
+4. `~/.agentstack/env.sh` を生成
+5. Tier 1 では Claude Code settings と managed instructions の差分を preview し、明示的な `yes` の後だけ merge
+6. launchd / systemd user / supervised background のいずれかで dashboard を起動し、実際の方式を `install-state.json` に記録
+
+サービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。実際の常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 
 完了後:
 
