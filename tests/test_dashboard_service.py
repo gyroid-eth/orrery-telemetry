@@ -132,6 +132,101 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
     assert bootstrap < enable < kickstart < health
 
 
+def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
+    home = tmp_path / "home"
+    install_dir = home / ".agentstack"
+    runtime = install_dir / "runtime"
+    database = tmp_path / "storage.sqlite3"
+    project = tmp_path / "project"
+    fake_bin = tmp_path / "fake-bin"
+    for directory in (
+        install_dir / "dashboard",
+        install_dir / "hooks",
+        runtime,
+        project,
+        fake_bin,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    for path in (
+        install_dir / "dashboard" / "server.py",
+        install_dir / "dashboard" / "service_runner.py",
+        install_dir / "hooks" / "spawn_child.sh",
+        runtime / "dashboard.log",
+        database,
+    ):
+        path.touch()
+    (install_dir / "hooks" / "spawn_child.sh").chmod(0o755)
+    (install_dir / "env.sh").write_text(
+        f"export AGENTSTACK_PYTHON={sys.executable}\n"
+        f"export AGENTSTACK_MAIL_DB={database}\n"
+        f"export AGENTSTACK_RUNTIME_DIR={runtime}\n"
+        f"export AGENTSTACK_DASHBOARD_LOG={runtime / 'dashboard.log'}\n"
+        f"export AGENTSTACK_PROJECT_KEY={project}\n",
+        encoding="utf-8",
+    )
+    (install_dir / "install-state.json").write_text(
+        json.dumps({
+            "services": [{
+                "kind": "launchd",
+                "label": "org.agentstack.test-dashboard",
+                "path": str(home / "Library" / "LaunchAgents" / "test.plist"),
+            }],
+        }),
+        encoding="utf-8",
+    )
+    for name, body in {
+        "launchctl": (
+            "#!/bin/sh\n"
+            "printf '%s\\n' '{' '    state = not running' '}'\n"
+        ),
+        "tmux": "#!/bin/sh\nexit 1\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+    })
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "doctor.sh"),
+            "--install-dir",
+            str(install_dir),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "launchd job is loaded but not running" in result.stdout
+    assert "ok: dashboard service mode launchd" not in result.stdout
+
+    (fake_bin / "launchctl").write_text(
+        "#!/bin/sh\nprintf '%s\\n' '{' '    state = running' '    pid = 4321' '}'\n",
+        encoding="utf-8",
+    )
+    running = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "doctor.sh"),
+            "--install-dir",
+            str(install_dir),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "dashboard service mode launchd" in running.stdout
+    assert "running" in running.stdout
+
+
 def test_installer_rejects_explicit_python_39_before_writing(tmp_path):
     python39 = tmp_path / "usr" / "bin" / "python3"
     python39.parent.mkdir(parents=True)

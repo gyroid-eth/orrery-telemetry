@@ -106,7 +106,7 @@ fi
 
 report_dashboard_service() {
   local python_bin="${AGENTSTACK_PYTHON:-python3}"
-  local record kind identity service_path pid
+  local record kind identity service_path pid launchd_record
   record="$("$python_bin" - "$MANIFEST" <<'PY' 2>/dev/null || true
 import json
 import pathlib
@@ -128,10 +128,18 @@ PY
   IFS='|' read -r kind identity service_path <<< "$record"
   case "$kind" in
     launchd)
-      if command -v launchctl >/dev/null 2>&1 && \
-         launchctl print "gui/$(id -u)/$identity" >/dev/null 2>&1
-      then
-        echo "ok: dashboard service mode launchd (gui/$(id -u)/$identity)"
+      if ! command -v launchctl >/dev/null 2>&1; then
+        echo "warn: dashboard service mode launchd, but launchctl is unavailable"
+        status=1
+      elif launchd_record="$(launchctl print "gui/$(id -u)/$identity" 2>/dev/null)"; then
+        if printf '%s\n' "$launchd_record" | grep -Eq \
+          '^[[:space:]]*(state[[:space:]]*=[[:space:]]*running|pid[[:space:]]*=[[:space:]]*[1-9][0-9]*)[[:space:]]*$'
+        then
+          echo "ok: dashboard service mode launchd (gui/$(id -u)/$identity, running)"
+        else
+          echo "warn: dashboard service mode launchd, but its launchd job is loaded but not running: gui/$(id -u)/$identity"
+          status=1
+        fi
       else
         echo "warn: dashboard service mode launchd, but gui/$(id -u)/$identity is not loaded"
         status=1
