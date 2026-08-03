@@ -613,7 +613,20 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
         line for line in result.stdout.splitlines() if line.startswith("python: ")
     ]
     assert len(python_lines) == 1
-    assert python_lines[0].startswith(f"python: {fake_bin / 'python3.10'} ")
+    # The contract is that the too-old `python3` sitting first on PATH is
+    # rejected and something new enough is chosen instead. Asserting *which*
+    # interpreter wins bakes in the maintainer's machine: here /usr/bin/python3
+    # is 3.9, so the stub beside it was the only remaining candidate, while a
+    # Linux CI runner also has /usr/bin/python3.12 and legitimately picks that.
+    # Both obey the rule; only one satisfied the old assertion, and the test
+    # had been failing on every CI run because of it.
+    chosen = python_lines[0][len("python: "):]
+    assert not chosen.startswith(f"{fake_bin / 'python3'} "), (
+        f"installer selected the 3.9 stub it was supposed to skip: {chosen}"
+    )
+    version = re.search(r"\((\d+)\.(\d+)", chosen)
+    assert version, f"no version reported in {chosen!r}"
+    assert (int(version.group(1)), int(version.group(2))) >= (3, 10), chosen
 
 
 def test_macos_launchd_bootstrap_failure_falls_back_and_finishes_install(tmp_path):

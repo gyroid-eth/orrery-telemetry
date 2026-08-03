@@ -20,6 +20,13 @@ from agentstack_codex_app.hook_entry import (
 )
 
 
+# Unix socket paths are capped near 104 bytes, so these tests need a *short*
+# temp directory. macOS puts the real one at /private/tmp; Linux has no such
+# path at all, and pointing at a directory that does not exist made every one
+# of these fail there with FileNotFoundError. None means "use the platform
+# default", which on Linux is /tmp and is already short.
+SHORT_TMP_DIR = "/private/tmp" if os.path.isdir("/private/tmp") else None
+
 def _transcript(tmp_path: Path, *, originator="Codex Desktop", session_id="session-example"):
     path = tmp_path / ".codex" / "sessions" / "2026" / "07" / "16" / (
         f"rollout-test-{session_id}.jsonl"
@@ -81,7 +88,7 @@ def test_append_spool_is_private_jsonl(tmp_path):
 
 
 def test_forward_event_uses_unix_socket():
-    with tempfile.TemporaryDirectory(prefix="cas-hook-", dir="/private/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="cas-hook-", dir=SHORT_TMP_DIR) as directory:
         path = Path(directory) / "bridge.sock"
         received = []
         ready = threading.Event()

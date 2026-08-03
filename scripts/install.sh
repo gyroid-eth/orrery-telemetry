@@ -28,9 +28,10 @@ PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/u
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 UPSTREAM_AGENT_MAIL_URL="${AGENTSTACK_AGENT_MAIL_REPO:-https://github.com/Dicklesworthstone/mcp_agent_mail.git}"
 # agent-mail is somebody else's repository, and an unpinned clone means the
-# version you get depends on the day you installed. Two testers on the same
-# instructions ended up on versions that disagree about whether a hyphenated
-# agent name is legal, which is not a difference either of them could see.
+# version you get depends on the day you installed — a configuration nobody
+# chose and nothing recorded. When a tester and this machine then behave
+# differently, the first question is which code each is running, and until
+# this line existed there was no answer.
 # Pin a ref we have actually run against; `AGENTSTACK_AGENT_MAIL_REF=main`
 # opts out deliberately. Moving this line is how the version changes.
 UPSTREAM_AGENT_MAIL_REF="${AGENTSTACK_AGENT_MAIL_REF:-5e481834ff1c373acda804d28c21d0349a116419}"

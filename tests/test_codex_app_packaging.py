@@ -30,6 +30,13 @@ PROXY_TOOLS = (
 )
 
 
+# Unix socket paths are capped near 104 bytes, so these tests need a *short*
+# temp directory. macOS puts the real one at /private/tmp; Linux has no such
+# path at all, and pointing at a directory that does not exist made every one
+# of these fail there with FileNotFoundError. None means "use the platform
+# default", which on Linux is /tmp and is already short.
+SHORT_TMP_DIR = "/private/tmp" if os.path.isdir("/private/tmp") else None
+
 def _environment(home: Path) -> dict[str, str]:
     environment = os.environ.copy()
     environment["HOME"] = str(home)
@@ -147,7 +154,7 @@ def test_launchd_bootstrap_failure_uses_supervised_background(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
     install_dir = home / ".agentstack" / "integrations" / "codex_app"
-    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir="/private/tmp"))
+    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir=SHORT_TMP_DIR))
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     launchctl_log = tmp_path / "launchctl.log"
@@ -280,7 +287,7 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
     install_dir = home / ".agentstack" / "integrations" / "codex_app"
-    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir="/private/tmp"))
+    runtime_dir = Path(tempfile.mkdtemp(prefix="cas-codex-app-", dir=SHORT_TMP_DIR))
 
     subprocess.run(
         _install_args(home, runtime_dir=runtime_dir),
@@ -806,7 +813,14 @@ def test_export_gate_builds_allowlisted_token_free_artifact(tmp_path):
         env=environment,
         capture_output=True,
         text=True,
-        check=True,
+    )
+    # `check=True` raises CalledProcessError, which prints the argv and hides
+    # both streams — so this failing on Linux CI told us only "exit status 1"
+    # and nothing about why. A test that captures output owes the reader that
+    # output when it fails.
+    assert result.returncode == 0, (
+        f"export-component.sh exited {result.returncode}\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
 
     assert "Export complete:" in result.stdout

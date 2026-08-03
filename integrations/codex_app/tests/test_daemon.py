@@ -26,6 +26,13 @@ from agentstack_codex_app.snapshot import SnapshotStore, read_snapshot, runtime_
 from agentstack_codex_app.wake import WakeCoordinator, WakePolicy
 
 
+# Unix socket paths are capped near 104 bytes, so these tests need a *short*
+# temp directory. macOS puts the real one at /private/tmp; Linux has no such
+# path at all, and pointing at a directory that does not exist made every one
+# of these fail there with FileNotFoundError. None means "use the platform
+# default", which on Linux is /tmp and is already short.
+SHORT_TMP_DIR = "/private/tmp" if os.path.isdir("/private/tmp") else None
+
 class FakeAgentMail:
     def __init__(self, *, normalize_names=False, server_name="Calm-Noether"):
         self.calls = []
@@ -689,7 +696,7 @@ def test_cleanup_orphans_purges_already_retired_legacy_token_binding(tmp_path):
 
 
 def test_private_socket_accepts_event_and_worker_writes_snapshot():
-    with tempfile.TemporaryDirectory(prefix="cas-daemon-", dir="/private/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="cas-daemon-", dir=SHORT_TMP_DIR) as directory:
         config = _config(Path(directory))
         daemon = BridgeDaemon(config, FakeAgentMail())
         thread = threading.Thread(target=daemon.serve_forever)
@@ -708,7 +715,7 @@ def test_private_socket_accepts_event_and_worker_writes_snapshot():
 
 
 def test_bridge_worker_ticks_cold_wake_coordinator():
-    with tempfile.TemporaryDirectory(prefix="cas-wake-", dir="/private/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="cas-wake-", dir=SHORT_TMP_DIR) as directory:
         config = replace(_config(Path(directory)), wake_poll_seconds=0.05)
         wake = FakeWakeCoordinator()
         daemon = BridgeDaemon(
