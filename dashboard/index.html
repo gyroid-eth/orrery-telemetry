@@ -6472,6 +6472,7 @@ setInterval(()=>{ if(document.hidden||netSuspended)return; mailHealthTick(); },1
 // 3) child name を toast し、5s 後 tick() が deck に新エージェントを拾う
 const SPM=id=>document.getElementById(id);
 const SPM_DIR_KEY='agentdash.spawn.dir';
+const SPM_TASK_DRAFT_KEY='agentdash.spawn.task-draft';
 const SPM_ADVANCED_KEY='agentdash.spawn.advanced';
 let spmBusy=false,spmReady=false,spmLoadSeq=0;
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
@@ -6482,6 +6483,46 @@ let spmSuggestedScientist='';
 let spmIdentitySeq=0,spmIdentityState='auto',spmIdentityError='';
 let spmDirSeq=0,spmDirTimer=null,spmDirOptions=[],spmDirActive=-1;
 let spmDirRoot='';
+let spmDraftDir='',spmDraftRestored=false;
+
+function spawnTaskDraftKey(dir){
+  return SPM_TASK_DRAFT_KEY+'.'+encodeURIComponent(String(dir||'').trim());
+}
+
+function saveSpawnTaskDraft(dir=spmDraftDir,value=SPM('spm-task').value){
+  const target=String(dir||'').trim();
+  if(!target)return false;
+  try{
+    const key=spawnTaskDraftKey(target);
+    if(value)localStorage.setItem(key,value);
+    else localStorage.removeItem(key);
+    return true;
+  }catch(e){return false;}
+}
+
+function restoreSpawnTaskDraft(dir){
+  const target=String(dir||'').trim();
+  let draft='';
+  if(target){
+    try{draft=localStorage.getItem(spawnTaskDraftKey(target))||'';}catch(e){}
+  }
+  SPM('spm-task').value=draft;
+  spmDraftDir=target;
+  spmDraftRestored=!!draft;
+  return spmDraftRestored;
+}
+
+function clearSpawnTaskDraft(dir){
+  const target=String(dir||'').trim();
+  if(!target)return;
+  try{localStorage.removeItem(spawnTaskDraftKey(target));}catch(e){}
+}
+
+function setSpawnDraftStatus(restored){
+  if(restored)
+    setSpawnStat('restored saved task draft · '+spmDraftDir,'ok');
+  else setSpawnStat('ready · review the launch manifest','');
+}
 
 function updateSpawnButton(){
   const button=SPM('spm-spawn');
@@ -6677,6 +6718,9 @@ function shuffleSpawnAdjective(){
 
 function setSpawnDir(value,persist=false){
   const dir=String(value||'').trim();
+  const previous=spmDraftDir;
+  const task=SPM('spm-task');
+  if(previous&&previous!==dir)saveSpawnTaskDraft(previous,task.value);
   SPM('spm-dir').value=dir;
   SPM('spm-dir-chips').querySelectorAll('.spm-dir-chip').forEach(btn=>{
     const on=btn.dataset.dir===dir;
@@ -6685,6 +6729,16 @@ function setSpawnDir(value,persist=false){
   });
   if(persist&&dir){
     try{localStorage.setItem(SPM_DIR_KEY,dir);}catch(e){}
+  }
+  if(dir&&dir!==previous){
+    if(!previous&&task.value){
+      spmDraftDir=dir;
+      spmDraftRestored=false;
+      saveSpawnTaskDraft(dir,task.value);
+    }else{
+      restoreSpawnTaskDraft(dir);
+    }
+    if(spmReady)setSpawnDraftStatus(spmDraftRestored);
   }
   closeSpawnDirOptions();
 }
@@ -7026,7 +7080,7 @@ async function loadSpawnCatalog(seq){
     renderSpawnDirs(catalog.dirs);
     spmReady=true;
     updateSpawnButton();
-    setSpawnStat('ready · review the launch manifest','');
+    setSpawnDraftStatus(spmDraftRestored);
   }catch(error){
     if(seq!==spmLoadSeq)return;
     spmReady=false;
@@ -7062,7 +7116,13 @@ function openSpawnModal(){
   if(!md) return;
   populateParentSelect();
   // Reset the manifest; parent deliberately returns to standalone every time.
-  SPM('spm-task').value='';
+  let rememberedDir='';
+  try{rememberedDir=localStorage.getItem(SPM_DIR_KEY)||'';}catch(e){}
+  restoreSpawnTaskDraft(rememberedDir);
+  SPM('spm-task').oninput=()=>{
+    spmDraftRestored=false;
+    saveSpawnTaskDraft();
+  };
   SPM('spm-role').value='';
   SPM('spm-worktree').checked=false;
   SPM('spm-wt-base').classList.remove('on');
@@ -7081,7 +7141,7 @@ function openSpawnModal(){
   renderSpawnComposite();
   SPM('spm-shuffle').onclick=shuffleSpawnAdjective;
   SPM('spm-dir-chips').innerHTML='';
-  SPM('spm-dir').value='';
+  SPM('spm-dir').value=rememberedDir;
   closeSpawnDirOptions();
   restoreSpawnAdvanced();
   SPM('spm-providers').innerHTML='';
@@ -7180,6 +7240,8 @@ async function submitSpawn(){
   btn.disabled=true; btn.classList.add('busy');
   SPM('newbtn').classList.add('busy');
   setSpawnStat('▸ launching… register → launch → tmux','');
+  const draftSaved=saveSpawnTaskDraft(payload.dir,SPM('spm-task').value);
+  spmDraftDir=payload.dir;
   try{
     try{localStorage.setItem(SPM_DIR_KEY,payload.dir);}catch(e){}
     const r=await fetch('/api/spawn',{
@@ -7192,10 +7254,13 @@ async function submitSpawn(){
     btn.classList.remove('busy');
     SPM('newbtn').classList.remove('busy');
     if(!j.ok){
-      setSpawnStat('✕ '+(j.error||'spawn failed'),'err');
+      setSpawnStat('✕ '+(j.error||'spawn failed')+
+        (draftSaved?' · task draft saved':' · task remains in this form'),'err');
       updateSpawnButton();
       return;
     }
+    clearSpawnTaskDraft(payload.dir);
+    spmDraftRestored=false;
     setSpawnStat('▸ SPAWNED '+(j.child_name||'')+
       (j.worktree?' · worktree exp/'+j.child_name:''),'ok');
     toast('▸ SPAWNED','> '+(j.child_name||'')+
@@ -7211,7 +7276,10 @@ async function submitSpawn(){
     spmBusy=false;
     btn.classList.remove('busy');
     SPM('newbtn').classList.remove('busy');
-    setSpawnStat('✕ network err: '+e,'err');
+    setSpawnStat(draftSaved
+      ? 'dashboard server unavailable · task draft saved'
+      : 'dashboard server unavailable · keep this page open; task draft could not be saved',
+      'err');
     updateSpawnButton();
   }
 }
