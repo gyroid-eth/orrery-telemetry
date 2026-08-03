@@ -13,6 +13,7 @@ Runnable two ways:
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -106,6 +107,69 @@ def _patched(mail_dir: pathlib.Path) -> bool:
     return 'mode == "passthrough"' in app
 
 
+def _manifest(home: pathlib.Path) -> dict:
+    return json.loads(
+        (home / ".agentstack" / "install-state.json").read_text(encoding="utf-8")
+    )
+
+
+def test_honored_names_are_recorded_without_a_warning(tmp_path):
+    """Null case first: #140 support is healthy even with patching disabled."""
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(tmp_path / "mail", remote=UPSTREAM)
+    result = _run_installer(
+        home, tmp_path, mail_dir, {"AGENTSTACK_AGENT_MAIL_PASSTHROUGH": "0"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "agent-mail requested-name handling: honored" in result.stdout
+    assert "warning: agent-mail requested-name handling" not in result.stderr
+    recorded = _manifest(home)["agent_mail"]["requested_name_honoring"]
+    assert recorded["status"] == "honored"
+    assert recorded["evidence"] == "validate_explicit_agent_id"
+    installed_classifier = (
+        home / ".agentstack" / "bin" / "lib" / "agent_mail_passthrough.py"
+    )
+    assert installed_classifier.is_file()
+
+
+def test_legacy_names_warn_before_they_are_replaced(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(tmp_path / "mail", remote=UPSTREAM)
+    app = mail_dir / "src" / "mcp_agent_mail" / "app.py"
+    app.write_text(
+        app.read_text(encoding="utf-8").replace(
+            "validate_explicit_agent_id", "legacy_explicit_name_check"
+        ),
+        encoding="utf-8",
+    )
+    result = _run_installer(
+        home, tmp_path, mail_dir, {"AGENTSTACK_AGENT_MAIL_PASSTHROUGH": "0"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "warning: agent-mail requested-name handling: replaced" in result.stderr
+    assert "requested names will be replaced by generated names" in result.stderr
+    recorded = _manifest(home)["agent_mail"]["requested_name_honoring"]
+    assert recorded["status"] == "replaced"
+    assert recorded["evidence"] == "legacy-naming"
+
+
+def test_unreadable_source_is_recorded_as_unknown(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(
+        tmp_path / "mail", remote="https://example.invalid/package.git"
+    )
+    (mail_dir / "src" / "mcp_agent_mail" / "app.py").unlink()
+    result = _run_installer(home, tmp_path, mail_dir, {})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "warning: agent-mail requested-name handling: unknown" in result.stderr
+    recorded = _manifest(home)["agent_mail"]["requested_name_honoring"]
+    assert recorded["status"] == "unknown"
+    assert recorded["evidence"] == "source-unreadable"
+
+
 def test_a_checkout_pointing_elsewhere_is_left_alone(tmp_path):
     """Not our clone: the installer already declines to manage it."""
     home = tmp_path / "home"
@@ -130,6 +194,8 @@ def test_the_patch_can_be_declined_for_our_own_clone(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert not _patched(mail_dir)
     assert "AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0" in result.stdout
+    env_text = (mail_dir / ".env").read_text(encoding="utf-8")
+    assert "AGENT_NAME_ENFORCEMENT_MODE=passthrough" not in env_text
 
 
 def test_our_own_clone_is_configured_without_asking(tmp_path):

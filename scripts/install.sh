@@ -167,6 +167,7 @@ AGENT_MAIL_PIDFILE="$MAIL_HOME/agent-mail.pid"
 AGENT_MAIL_LOG="$MAIL_HOME/agent-mail.log"
 AGENT_MAIL_SERVICE_KIND=""
 AGENT_MAIL_SERVICE_PATH=""
+AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected agent-mail naming source","warning":"requested-name handling is unknown"}'
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -200,6 +201,46 @@ apply_passthrough() {
   local dir="$1"
   "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
     --mail-dir "$dir" --apply >/dev/null
+}
+
+inspect_agent_mail_name_capability() {
+  local dir="$1"
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
+    --mail-dir "$dir" --mail-env "$MAIL_ENV" --name-capability
+}
+
+report_agent_mail_name_capability() {
+  local source_dir="$MAIL_DIR"
+  local summary status evidence
+  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true && -n "$AGENT_MAIL_LISTENER_CWD" ]]; then
+    source_dir="$AGENT_MAIL_LISTENER_CWD"
+  fi
+  AGENT_MAIL_NAME_CAPABILITY_JSON="$(inspect_agent_mail_name_capability "$source_dir")"
+  summary="$("$PYTHON_BIN" - "$AGENT_MAIL_NAME_CAPABILITY_JSON" <<'PY'
+import json
+import sys
+
+try:
+    result = json.loads(sys.argv[1])
+except (IndexError, TypeError, ValueError):
+    result = {"status": "unknown", "evidence": "classifier-error"}
+print(f"{result.get('status', 'unknown')}|{result.get('evidence', 'classifier-error')}")
+PY
+)"
+  IFS='|' read -r status evidence <<< "$summary"
+  case "$status" in
+    honored)
+      say "agent-mail requested-name handling: honored ($evidence)"
+      ;;
+    replaced)
+      warn "agent-mail requested-name handling: replaced ($evidence)"
+      warn "  requested names will be replaced by generated names"
+      ;;
+    *)
+      warn "agent-mail requested-name handling: unknown ($evidence)"
+      warn "  support was not inferred from unavailable or unfamiliar source"
+      ;;
+  esac
 }
 
 set_env_key() {
@@ -747,6 +788,7 @@ validate_repo_assets() {
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
+  [[ -f "$SCRIPT_DIR/lib/agent_mail_passthrough.py" ]] || die "missing scripts/lib/agent_mail_passthrough.py"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
 }
 
@@ -1037,6 +1079,7 @@ install_payload() {
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
     cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
+    cp "$SCRIPT_DIR/lib/agent_mail_passthrough.py" "$BIN_DIR/lib/agent_mail_passthrough.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
@@ -1527,7 +1570,7 @@ ensure_agent_mail() {
 
   if [[ -f "$MAIL_ENV" ]]; then
     plan "reuse existing agent-mail .env at $MAIL_ENV"
-    if [[ "$DRY_RUN" != true && "$mail_dir_is_ours" == true ]]; then
+    if [[ "$DRY_RUN" != true && "$mail_dir_is_ours" == true && "$PASSTHROUGH_ENABLED" == "1" ]]; then
       set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
     fi
   else
@@ -1535,16 +1578,16 @@ ensure_agent_mail() {
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$(dirname "$MAIL_ENV")"
       umask 077
-      "$PYTHON_BIN" - "$MAIL_ENV" <<'PY'
+      "$PYTHON_BIN" - "$MAIL_ENV" "$PASSTHROUGH_ENABLED" "$mail_dir_is_ours" <<'PY'
 import pathlib
 import secrets
 import sys
 path = pathlib.Path(sys.argv[1])
 token = secrets.token_urlsafe(32)
-path.write_text(
-    f"HTTP_BEARER_TOKEN={token}\nAGENT_NAME_ENFORCEMENT_MODE=passthrough\n",
-    encoding="utf-8",
-)
+lines = [f"HTTP_BEARER_TOKEN={token}"]
+if sys.argv[2:] == ["1", "true"]:
+    lines.append("AGENT_NAME_ENFORCEMENT_MODE=passthrough")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 path.chmod(0o600)
 PY
     fi
@@ -1860,7 +1903,7 @@ write_manifest() {
   local mail_service_path="${4:-}"
   local tmp="$MANIFEST.tmp"
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
-    "$mail_service_kind" "$mail_service_path" <<PY
+    "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" <<PY
 import json
 import os
 import pathlib
@@ -1872,6 +1915,7 @@ service_kind = sys.argv[2]
 service_path = sys.argv[3]
 mail_service_kind = sys.argv[4]
 mail_service_path = sys.argv[5]
+requested_name_honoring = json.loads(sys.argv[6])
 install_dir = pathlib.Path("$INSTALL_DIR")
 claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
@@ -1962,6 +2006,9 @@ manifest = {
     ),
     "settings_merge": settings_merge,
     "claude_mcp_merge": claude_mcp_merge,
+    "agent_mail": {
+        "requested_name_honoring": requested_name_honoring,
+    },
     "env": {
         "AGENTSTACK_PORT": "$PORT",
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
@@ -2050,6 +2097,7 @@ main() {
   install_claude_skill_links
   render_installed_templates
   ensure_agent_mail
+  report_agent_mail_name_capability
   write_env_file
   safe_merge_claude_mcp
   safe_merge_settings

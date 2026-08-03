@@ -36,19 +36,28 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 | installer が clone した checkout（pin した ref） | 3行の passthrough patch を当て、`.env` に `AGENT_NAME_ENFORCEMENT_MODE=passthrough` を書く | **保証する** |
 | 既存サーバーで #140（explicit identity）を含む版 | ハイフンを含む名前をそのまま受け入れる | **保証する** |
 | 既存サーバーで patch を承認した場合 | 承認・再起動の後に受け入れる | 再起動まで無効。**相手の更新で消える** |
-| 既存サーバーで patch を断った・当たらなかった場合 | 版の基準に従う（生成名に置き換わることがある） | 保証しない |
-| package として導入された agent-mail | patch しない | 保証しない |
-| 命名処理を改変した fork | patch しない | 保証しない |
+| 既存サーバーで patch を断った・当たらなかった場合 | #140 があれば受け入れる。既知の旧処理なら生成名に置き換わる | installer の判定を表示 |
+| package として導入された agent-mail | patch しない。source を読めなければ判定しない | `unknown` |
+| 命名処理を改変した fork | 既知の根拠がなければ推測しない | `unknown` |
 
 保証しない環境でもインストール自体は完走します。将来サポートするかどうかは未定です。
 
-自分がどこにいるかは doctor で1行で分かります。
+installer は source を読むだけで次のどれかを1〜2行で表示します。判定のために捨て identity を登録する probe は行いません。
+
+- `honored`: #140 の `validate_explicit_agent_id`、または有効な passthrough を確認できた
+- `replaced`: 既知の旧命名処理であり、要求名は生成名に置き換わる
+- `unknown`: source / 設定を読めない、または改変された処理なので判定できない
+
+`unknown` は `honored` と同じ意味ではありません。分からない環境を対応済みとして扱わないための状態です。実行時の判定は `install-state.json` の `agent_mail.requested_name_honoring` に根拠とともに保存されます。
+
+あとから確認する場合は doctor の隣接する2行を見ます。
 
 ```bash
-~/.agentstack/bin/agentstack-doctor --report | grep -A1 ENFORCEMENT
+~/.agentstack/bin/agentstack-doctor --report \
+  | grep -E 'passthrough patch|requested-name handling'
 ```
 
-`passthrough patch: present` かつ `AGENT_NAME_ENFORCEMENT_MODE: passthrough` なら、要求した名前がそのまま通ります。
+`requested-name handling: honored` のときだけ、この stack が使うハイフン付き要求名がそのまま通ると判定済みです。`passthrough patch` 行はその根拠の一部を別に示す診断情報です。
 
 patch を一切当てずに upstream のままにしたい場合:
 
@@ -83,7 +92,7 @@ installer は次を行います。
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` を生成
 5. Tier 1 では Claude Code の MCP user config、settings、managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
-6. launchd / systemd user / supervised background のいずれかで dashboard を起動し、実際の方式を `install-state.json` に記録
+6. agent-mail の要求名対応を source から非侵襲で判定し、launchd / systemd user / supervised background の実際の方式とともに `install-state.json` に記録
 
 agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
 

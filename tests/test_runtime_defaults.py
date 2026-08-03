@@ -641,6 +641,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
     assert set(sample["env"]) == set(manifest["env"])
+    assert set(sample["agent_mail"]["requested_name_honoring"]) == set(
+        manifest["agent_mail"]["requested_name_honoring"]
+    )
 
     normalized_env = _normalize_sample_paths(manifest["env"], manifest)
     normalized_env["AGENTSTACK_PORT"] = "8770"

@@ -30,6 +30,7 @@ doctor は dashboard service state と mail-watcher health を検査しません
 | agent-mail の commit・origin より何コミット先か | 動いているコードが本当はどれか |
 | `AGENT_NAME_ENFORCEMENT_MODE` | 要求した名前がそのまま通るかどうか |
 | passthrough patch の有無 | 上のモードがそもそも受け付けられる版かどうか |
+| requested-name handling | #140 / passthrough / 旧処理を合わせた最終判定。`unknown` は未判定 |
 | `agents.retired_at` カラムの有無 | dashboard のクエリが成立するかどうか |
 | open file limit | descriptor を使い切って落ちる側かどうか |
 | tmux / python3 / uv / claude / codex の有無と版 | 前提コマンドが揃っているか |
@@ -175,10 +176,13 @@ Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-li
 agent-mail が名前を受け入れず、生成名に置き換えた状態です。エージェントは動き続けるので気づきにくく、他のエージェントから宛先として呼べないことで初めて分かります。
 
 ```bash
-~/.agentstack/bin/agentstack-doctor --report | grep -A1 ENFORCEMENT
+~/.agentstack/bin/agentstack-doctor --report \
+  | grep -E 'passthrough patch|requested-name handling'
 ```
 
-`passthrough patch: absent` なら、その checkout は要求名を受け付けない版です。どの環境まで保証するかは[インストール](install.md#agent-mail-のバージョンと名前の扱いサポート範囲)の表を参照してください。installer を再実行すると、自分が clone した checkout には patch を当て、既存サーバーには承認を求めます。
+`requested-name handling: replaced` なら、要求名を受け付けない既知の旧処理です。installer も事前に「要求した名前が生成名に置き換わる」と警告します。`unknown` は source が読めないか命名処理が既知の形でないため、対応しているとも対応していないとも推測していません。`passthrough patch: absent` でも #140 の `validate_explicit_agent_id` があれば `honored` になるため、patch 行だけで判断しないでください。
+
+install 時の判定と根拠は `install-state.json` の `agent_mail.requested_name_honoring` に残ります。どの環境まで保証するかは[インストール](install.md#agent-mail-のバージョンと名前の扱いサポート範囲)の表を参照してください。installer を再実行すると、自分が clone した checkout には patch を当て、既存サーバーには承認を求めます。
 
 ### 別名で登録されたときに何が起きるか
 

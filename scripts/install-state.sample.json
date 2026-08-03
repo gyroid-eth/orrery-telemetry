@@ -134,6 +134,16 @@
       "target_was_missing": true
     }
   },
+  "agent_mail": {
+    "requested_name_honoring": {
+      "status": "honored",
+      "evidence": "passthrough",
+      "enforcement_mode": "passthrough",
+      "mail_dir": "/home/alice/mcp_agent_mail",
+      "detail": "passthrough patch is present and its mode is selected",
+      "warning": null
+    }
+  },
   "env": {
     "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_LABEL_PREFIX": "org.agentstack",

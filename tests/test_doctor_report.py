@@ -25,8 +25,17 @@ DOCTOR = ROOT / "scripts" / "doctor.sh"
 
 SECRET = "sk-do-not-print-this-anywhere-12345"
 
+FIXTURE = (
+    ROOT / "tests" / "fixtures" / "agent_mail_stock" / "src" / "mcp_agent_mail"
+)
 
-def _run(tmp_path: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+
+def _run(
+    tmp_path: pathlib.Path,
+    *args: str,
+    app_text: str | None = None,
+    include_source: bool = True,
+) -> subprocess.CompletedProcess[str]:
     home = tmp_path / "home"
     mail = home / "mcp_agent_mail"
     mail.mkdir(parents=True)
@@ -35,6 +44,14 @@ def _run(tmp_path: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]
         encoding="utf-8",
     )
     (mail / "pyproject.toml").write_text('version = "0.9.9"\n', encoding="utf-8")
+    if include_source:
+        package = mail / "src" / "mcp_agent_mail"
+        package.mkdir(parents=True)
+        for name in ("app.py", "config.py"):
+            source = (FIXTURE / name).read_text(encoding="utf-8")
+            if name == "app.py" and app_text is not None:
+                source = app_text
+            (package / name).write_text(source, encoding="utf-8")
     (home / ".claude.json").write_text(
         '{"mcpServers": {"mcp-agent-mail": {"type": "http",'
         f' "url": "http://127.0.0.1:8765/mcp", "headers": {{"Authorization": "Bearer {SECRET}"}}}}}}}}',
@@ -69,6 +86,7 @@ def test_the_report_answers_the_questions_we_kept_having_to_ask(tmp_path):
     for field in (
         "AGENT_NAME_ENFORCEMENT_MODE",   # decides whether your name survives
         "passthrough patch",             # decides whether that mode is even legal
+        "requested-name handling",       # combined, fail-closed capability verdict
         "agents.retired_at column",      # decides whether the deck renders
         "open file limit",               # decides whether the server stays up
         "declared version",
@@ -78,6 +96,26 @@ def test_the_report_answers_the_questions_we_kept_having_to_ask(tmp_path):
         assert field in body, f"{field!r} missing from the report"
     assert "coerce" in body
     assert "0.9.9" in body
+
+
+def test_honored_name_capability_is_next_to_the_patch_without_a_warning(tmp_path):
+    """Null case: doctor must not warn when #140 is visible in source."""
+    result = _run(tmp_path, "--report")
+    lines = result.stdout.splitlines()
+    patch_index = next(i for i, line in enumerate(lines) if "passthrough patch:" in line)
+    assert lines[patch_index + 1].startswith("- requested-name handling: honored")
+    assert "requested-name handling" not in result.stderr
+
+
+def test_legacy_and_unreadable_name_capabilities_are_not_rounded_to_honored(tmp_path):
+    app = (FIXTURE / "app.py").read_text(encoding="utf-8").replace(
+        "validate_explicit_agent_id", "legacy_explicit_name_check"
+    )
+    legacy = _run(tmp_path / "legacy", "--report", app_text=app)
+    assert "- requested-name handling: replaced (legacy-naming)" in legacy.stdout
+
+    unreadable = _run(tmp_path / "unreadable", "--report", include_source=False)
+    assert "- requested-name handling: unknown (source-unreadable)" in unreadable.stdout
 
 
 def test_the_report_is_opt_in(tmp_path):

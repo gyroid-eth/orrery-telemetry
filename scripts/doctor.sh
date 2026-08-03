@@ -3,6 +3,8 @@ set -euo pipefail
 
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MANIFEST="$INSTALL_DIR/install-state.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NAME_CAPABILITY_SCRIPT="$SCRIPT_DIR/lib/agent_mail_passthrough.py"
 
 usage() {
   cat <<'EOF'
@@ -467,6 +469,26 @@ if [[ "$REPORT" == "1" ]]; then
   else
     echo '- passthrough patch: unknown (no agent-mail source at that path)'
   fi
+  ags_name_capability_json=""
+  if [[ -x "$PYTHON_BIN" && -f "$NAME_CAPABILITY_SCRIPT" ]]; then
+    ags_name_capability_json="$("$PYTHON_BIN" "$NAME_CAPABILITY_SCRIPT" \
+      --mail-dir "$ags_mail_dir" \
+      --mail-env "${AGENTSTACK_MAIL_ENV:-$ags_mail_dir/.env}" \
+      --name-capability 2>/dev/null || true)"
+  fi
+  ags_name_capability_summary="$("$PYTHON_BIN" - "$ags_name_capability_json" <<'PYEOF' 2>/dev/null || true
+import json
+import sys
+
+try:
+    result = json.loads(sys.argv[1])
+except (IndexError, TypeError, ValueError):
+    result = {"status": "unknown", "evidence": "classifier-unavailable"}
+print(f"{result.get('status', 'unknown')} ({result.get('evidence', 'classifier-unavailable')})")
+PYEOF
+)"
+  printf -- '- requested-name handling: %s\n' \
+    "${ags_name_capability_summary:-unknown (classifier-unavailable)}"
   printf -- '- endpoint: %s\n' "${AGENTSTACK_MCP_URL:-unset}"
   ags_mail_db="${AGENTSTACK_MAIL_DB:-$ags_mail_dir/storage.sqlite3}"
   if [[ -f "$ags_mail_db" ]] && [[ -x "$PYTHON_BIN" ]]; then

@@ -27,6 +27,7 @@ the right place is how a server starts behaving in a way nobody can reproduce.
 
 Usage:
     agent_mail_passthrough.py --mail-dir DIR [--apply] [--result-json PATH]
+    agent_mail_passthrough.py --mail-dir DIR --name-capability [--mail-env PATH]
 
 Without ``--apply`` nothing is written and the verdict is printed, which is what
 ``--dry-run`` installs use.
@@ -123,6 +124,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="write the edits; without it, only report what would happen",
     )
     parser.add_argument("--result-json", help="write a machine-readable verdict here")
+    parser.add_argument(
+        "--name-capability",
+        action="store_true",
+        help="classify requested-name handling without registering a probe identity",
+    )
+    parser.add_argument(
+        "--mail-env",
+        help="agent-mail .env used to resolve AGENT_NAME_ENFORCEMENT_MODE",
+    )
     return parser.parse_args(argv)
 
 
@@ -190,6 +200,174 @@ def inspect(mail_dir: pathlib.Path) -> dict:
     }
 
 
+def _enforcement_mode(
+    mail_dir: pathlib.Path, mail_env: pathlib.Path | None
+) -> tuple[str | None, str | None]:
+    """Return the configured mode and an error, without consulting this process.
+
+    The installer may be running under a different environment from the
+    agent-mail service.  Reading our own ``os.environ`` here would turn that
+    difference into a false claim about the server.
+    """
+    path = mail_env if mail_env is not None else mail_dir / ".env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return "coerce", None
+    except OSError as exc:
+        return None, f"cannot read {path}: {exc}"
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == ENV_KEY:
+            mode = value.strip().strip("'\"").lower()
+            return (mode or None), None if mode else f"{ENV_KEY} is empty"
+    return "coerce", None
+
+
+def _capability(
+    mail_dir: pathlib.Path,
+    *,
+    status: str,
+    evidence: str,
+    mode: str | None,
+    warning: str | None,
+    detail: str,
+) -> dict:
+    return {
+        "status": status,
+        "evidence": evidence,
+        "enforcement_mode": mode or "unknown",
+        "mail_dir": str(mail_dir),
+        "detail": detail,
+        "warning": warning,
+    }
+
+
+def inspect_name_capability(
+    mail_dir: pathlib.Path, *, mail_env: pathlib.Path | None = None
+) -> dict:
+    """Classify whether this checkout honours the stack's hyphenated names.
+
+    This is deliberately passive.  A disposable ``register_agent`` call would
+    answer the question, but it would also leave a durable garbage identity in
+    the user's server.  Positive answers therefore require readable source and
+    one of two known code paths: #140's explicit-identity validator, or the
+    passthrough patch with its mode selected.  Anything unfamiliar is
+    ``unknown`` rather than optimistic.
+    """
+    mail_dir = pathlib.Path(mail_dir)
+    app_path = mail_dir / "src" / "mcp_agent_mail" / "app.py"
+    try:
+        app_text = _read(app_path)
+    except PatchError as exc:
+        return _capability(
+            mail_dir,
+            status="unknown",
+            evidence="source-unreadable",
+            mode=None,
+            warning="requested-name handling is unknown because agent-mail source is unreadable",
+            detail=str(exc),
+        )
+
+    mode, mode_error = _enforcement_mode(mail_dir, mail_env)
+    if mode_error or mode not in {"strict", "coerce", "always_auto", "passthrough"}:
+        return _capability(
+            mail_dir,
+            status="unknown",
+            evidence="mode-unknown",
+            mode=mode,
+            warning="requested-name handling is unknown because the enforcement mode is unreadable or unsupported",
+            detail=mode_error or f"unsupported {ENV_KEY}={mode}",
+        )
+
+    if mode == "always_auto":
+        return _capability(
+            mail_dir,
+            status="replaced",
+            evidence="always-auto",
+            mode=mode,
+            warning="requested names will be replaced by generated names",
+            detail=f"{ENV_KEY}=always_auto ignores caller-supplied names",
+        )
+
+    # A configured passthrough value is only positive evidence when the source
+    # accepts and implements it.  Otherwise that value may make the server fail
+    # at startup; #140 elsewhere in app.py must not hide the mismatch.
+    if mode == "passthrough":
+        try:
+            patch_state = inspect(mail_dir)["state"]
+        except PatchError as exc:
+            return _capability(
+                mail_dir,
+                status="unknown",
+                evidence="source-unreadable",
+                mode=mode,
+                warning="requested-name handling is unknown because agent-mail source is unreadable",
+                detail=str(exc),
+            )
+        if patch_state == "already":
+            return _capability(
+                mail_dir,
+                status="honored",
+                evidence="passthrough",
+                mode=mode,
+                warning=None,
+                detail="passthrough patch is present and its mode is selected",
+            )
+        return _capability(
+            mail_dir,
+            status="unknown",
+            evidence="passthrough-unavailable",
+            mode=mode,
+            warning="requested-name handling is unknown because passthrough is configured but unavailable",
+            detail=f"passthrough inspection state: {patch_state}",
+        )
+
+    # Calls, rather than a comment or import, are the evidence that #140 is on
+    # the registration path.  One call is enough across versions; the pinned
+    # checkout currently has two.
+    if "validate_explicit_agent_id(" in app_text:
+        return _capability(
+            mail_dir,
+            status="honored",
+            evidence="validate_explicit_agent_id",
+            mode=mode,
+            warning=None,
+            detail="#140 explicit identity validation is present",
+        )
+
+    try:
+        patch_state = inspect(mail_dir)["state"]
+    except PatchError as exc:
+        return _capability(
+            mail_dir,
+            status="unknown",
+            evidence="source-unreadable",
+            mode=mode,
+            warning="requested-name handling is unknown because agent-mail source is unreadable",
+            detail=str(exc),
+        )
+
+    if patch_state in {"applicable", "already"} and mode in {"coerce", "strict"}:
+        return _capability(
+            mail_dir,
+            status="replaced",
+            evidence="legacy-naming",
+            mode=mode,
+            warning="requested names will be replaced by generated names",
+            detail="known legacy naming path lacks explicit identity support",
+        )
+
+    return _capability(
+        mail_dir,
+        status="unknown",
+        evidence="source-unrecognised",
+        mode=mode,
+        warning="requested-name handling is unknown because the naming source is not recognised",
+        detail=f"passthrough inspection state: {patch_state}",
+    )
+
+
 def apply(mail_dir: pathlib.Path) -> dict:
     """Apply every edit, or none of them."""
     verdict = inspect(mail_dir)
@@ -230,6 +408,17 @@ def apply(mail_dir: pathlib.Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     mail_dir = pathlib.Path(args.mail_dir).expanduser()
+    if args.name_capability:
+        if args.apply:
+            raise SystemExit("--name-capability and --apply are mutually exclusive")
+        mail_env = pathlib.Path(args.mail_env).expanduser() if args.mail_env else None
+        verdict = inspect_name_capability(mail_dir, mail_env=mail_env)
+        if args.result_json:
+            pathlib.Path(args.result_json).write_text(
+                json.dumps(verdict, indent=2) + "\n", encoding="utf-8"
+            )
+        print(json.dumps(verdict, separators=(",", ":"), sort_keys=True))
+        return 0
     try:
         verdict = apply(mail_dir) if args.apply else inspect(mail_dir)
     except PatchError as exc:
