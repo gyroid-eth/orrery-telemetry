@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 
 DRY_RUN=false
+ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
@@ -32,13 +33,15 @@ Usage: install.sh [--dry-run] [--dashboard-only|--scoped] [options]
 
 Core install only. This creates ~/.agentstack, installs hooks/skills/dashboard assets,
 creates env.sh and service files, and writes install-state.json. Tier1 shows a
-Claude Code user-settings dry-run diff and only merges after explicit approval.
+Claude Code user-settings dry-run diff and only merges after explicit approval
+(an interactive yes, or a user-selected --assume-yes).
 It does not modify ~/.claude.json or shell dotfiles. After Tier1 preview and
 explicit approval, only the managed marker block in project/global CLAUDE.md
 may be updated; other project files are not changed.
 
 Options:
   --dry-run              Print planned actions without writing files
+  -y, --assume-yes       Pre-approve settings and managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
   --scoped               Tier2 placeholder; no user-settings merge
   --install-dir PATH     Default: ~/.agentstack
@@ -47,6 +50,10 @@ Options:
   --label-prefix PREFIX  Default: org.agentstack
   --terminal MODE        auto, ghostty, iterm, terminal, or none
   -h, --help             Show this help
+
+--assume-yes is not --force: validation and safety errors remain fatal. It must
+be selected explicitly by the user; an agent or automation must not add it on
+the user's behalf. AGENTSTACK_ASSUME_YES=1 provides the same explicit opt-in.
 EOF
 }
 
@@ -54,6 +61,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    -y|--assume-yes)
+      ASSUME_YES=1
       shift
       ;;
     --dashboard-only)
@@ -139,6 +150,11 @@ AGENT_MAIL_LISTENER_CWD=""
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+validate_assume_yes() {
+  [[ "$ASSUME_YES" == "0" || "$ASSUME_YES" == "1" ]] || \
+    die "AGENTSTACK_ASSUME_YES must be 0 or 1"
+}
 
 plan() {
   if [[ "$DRY_RUN" == true ]]; then
@@ -418,6 +434,9 @@ existing_mail_db_candidates() {
 }
 
 confirm_existing_agent_mail() {
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return 0
+  fi
   if [[ ! -t 0 ]]; then
     say "non-interactive install: using the detected existing agent-mail server"
     return 0
@@ -484,6 +503,9 @@ resolve_agent_mail_connection() {
     say "existing agent-mail database: $resolved_db"
     if [[ "$DRY_RUN" != true ]] && ! confirm_existing_agent_mail; then
       die "existing agent-mail connection declined; set AGENTSTACK_MCP_URL and AGENTSTACK_MAIL_DB explicitly, then re-run"
+    fi
+    if [[ "$DRY_RUN" != true && "$ASSUME_YES" == "1" ]]; then
+      say "assume-yes: approved existing agent-mail server at $MCP_URL"
     fi
     MAIL_DB="$resolved_db"
     EXISTING_AGENT_MAIL_SERVER=true
@@ -834,6 +856,9 @@ PY
 }
 
 confirm_safe_merge() {
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return 0
+  fi
   if [[ ! -t 0 ]]; then
     warn "non-interactive shell; skipping Tier1 user-settings merge"
     return 1
@@ -872,6 +897,9 @@ safe_merge_settings() {
   "$PYTHON_BIN" "${merge_args[@]}" --dry-run
   if confirm_safe_merge; then
     "$PYTHON_BIN" "${merge_args[@]}" --result-json "$SAFE_MERGE_RESULT_FILE"
+    if [[ "$ASSUME_YES" == "1" ]]; then
+      say "assume-yes: applied Tier1 settings merge to $CLAUDE_SETTINGS"
+    fi
   else
     say "Skipped Tier1 user-settings merge."
   fi
@@ -879,6 +907,9 @@ safe_merge_settings() {
 
 confirm_managed_setup() {
   local label="$1"
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return 0
+  fi
   if [[ ! -t 0 ]]; then
     warn "non-interactive shell; skipping $label managed setup"
     return 1
@@ -908,6 +939,9 @@ run_managed_setup() {
 
   if confirm_managed_setup "$label"; then
     AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path"
+    if [[ "$ASSUME_YES" == "1" ]]; then
+      say "assume-yes: applied $label managed setup"
+    fi
   else
     say "Skipped $label managed setup."
   fi
@@ -1421,6 +1455,7 @@ main() {
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  validate_assume_yes
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show a user-settings dry-run diff before any merge."
   elif [[ "$TIER" == "tier2" ]]; then

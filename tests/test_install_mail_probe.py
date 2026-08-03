@@ -107,12 +107,19 @@ def test_explicit_database_survives_a_listener_the_probe_cannot_read(tmp_path):
             home,
             tmp_path,
             server.server_port,
-            {"AGENTSTACK_MAIL_DB": str(external_db)},
+            {
+                "AGENTSTACK_MAIL_DB": str(external_db),
+                "AGENTSTACK_ASSUME_YES": "1",
+            },
         )
     finally:
         server.shutdown()
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "assume-yes: approved existing agent-mail server at "
+        f"http://127.0.0.1:{server.server_port}/mcp"
+    ) in result.stdout
     manifest = json.loads(
         (install_dir / "install-state.json").read_text(encoding="utf-8")
     )

@@ -277,6 +277,147 @@ def test_install_tier_options_are_mutually_exclusive(tmp_path):
         assert not (tmp_path / ".agentstack").exists()
 
 
+def test_install_help_keeps_assume_yes_inside_approval_boundary():
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "install.sh"), "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "-y, --assume-yes" in result.stdout
+    assert "is not --force" in result.stdout
+    assert "agent or automation must not add it" in result.stdout
+    assert "AGENTSTACK_ASSUME_YES=1" in result.stdout
+
+
+def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
+    home = tmp_path / "home"
+    env = _clean_env(home)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "systemctl": _fake_systemctl(),
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    install_dir = home / ".agentstack"
+    project = tmp_path / "project"
+    project.mkdir()
+    mail_dir = home / "mcp_agent_mail"
+    (mail_dir / ".git").mkdir(parents=True)
+    mail_db = mail_dir / "storage.sqlite3"
+    mail_db.touch()
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    original_settings = '{"permissions":{"allow":["User(existing)"]}}\n'
+    settings.write_text(original_settings, encoding="utf-8")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_DB": str(mail_db),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_TERMINAL": "none",
+        "AGENTSTACK_TEST_PYTHON": sys.executable,
+        "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
+    })
+    command = ["bash", str(ROOT / "scripts" / "install.sh")]
+
+    without_approval = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    try:
+        assert "non-interactive shell; skipping Tier1 user-settings merge" in (
+            without_approval.stderr
+        )
+        assert "non-interactive shell; skipping Codex AGENTS.md managed setup" in (
+            without_approval.stderr
+        )
+        assert "non-interactive shell; skipping Claude CLAUDE.md managed setup" in (
+            without_approval.stderr
+        )
+        assert settings.read_text(encoding="utf-8") == original_settings
+        assert not (home / ".codex" / "AGENTS.md").exists()
+        assert not (project / "CLAUDE.md").exists()
+    finally:
+        _stop_fake_dashboard(env)
+
+    env["AGENTSTACK_ASSUME_YES"] = "1"
+    from_environment = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    try:
+        assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
+            from_environment.stdout
+        )
+        assert "assume-yes: applied Codex AGENTS.md managed setup" in (
+            from_environment.stdout
+        )
+        assert "assume-yes: applied Claude CLAUDE.md managed setup" in (
+            from_environment.stdout
+        )
+        assert settings.read_text(encoding="utf-8") != original_settings
+        assert "<!-- >>> claude-agent-stack" in (
+            home / ".codex" / "AGENTS.md"
+        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in (
+            project / "CLAUDE.md"
+        ).read_text(encoding="utf-8")
+        assert any((install_dir / "backups").iterdir())
+    finally:
+        _stop_fake_dashboard(env)
+
+    # The explicit flag wins over even a malformed environment value.
+    settings.write_text(original_settings, encoding="utf-8")
+    (home / ".codex" / "AGENTS.md").unlink()
+    (project / "CLAUDE.md").unlink()
+    env["AGENTSTACK_ASSUME_YES"] = "not-a-boolean"
+    from_flag = subprocess.run(
+        [*command, "--assume-yes"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    try:
+        assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
+            from_flag.stdout
+        )
+        assert "<!-- >>> claude-agent-stack" in (
+            home / ".codex" / "AGENTS.md"
+        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in (
+            project / "CLAUDE.md"
+        ).read_text(encoding="utf-8")
+    finally:
+        _stop_fake_dashboard(env)
+
+
 def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp_path):
     env = _clean_env(tmp_path / "home")
     fake_bin = tmp_path / "fake-bin"

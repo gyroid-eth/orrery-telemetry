@@ -35,13 +35,23 @@ cd claude-agent-stack
 ./scripts/install.sh
 ```
 
+非対話実行では、既定のままなら Tier 1 settings merge と Codex / Claude managed block を警告付きでスキップします。repository と preview 内容を確認した**ユーザー本人**が、これらの承認を事前に明示する場合だけ次を使えます。
+
+```bash
+./scripts/install.sh --assume-yes
+```
+
+`--assume-yes` は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、agent-mail DB の未解決・不存在・稼働 server との不一致は従来どおり停止します。自動承認した settings merge、managed block、既存 agent-mail server の利用は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を追加してはいけません。
+
+環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ明示 opt-in です。command-line の `--assume-yes`（短縮 `-y`）は環境変数より優先されます。この installer 選択は生成する `env.sh` には永続化しません。
+
 installer は次を行います。
 
 1. dependency、dashboard port、agent-mail endpoint を検査
 2. 稼働中の agent-mail server があれば再利用を確認し、その server の実 DB path を health response、listener process、既存 DB 候補から解決。server がなければ実在する DB を探索してから upstream clone を検証
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` を生成
-5. Tier 1 では Claude Code settings と managed instructions の差分を preview し、明示的な `yes` の後だけ merge
+5. Tier 1 では Claude Code settings と managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
 6. launchd / systemd user / supervised background のいずれかで dashboard を起動し、実際の方式を `install-state.json` に記録
 
 agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
@@ -84,6 +94,7 @@ agent-start /path/to/project
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
 --terminal MODE         auto | ghostty | iterm | terminal | none
+-y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 
 `--bin-dir` は installer の公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。

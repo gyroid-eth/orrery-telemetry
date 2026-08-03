@@ -239,7 +239,8 @@ def test_installer_rejects_explicit_python_39_before_writing(tmp_path):
     result = subprocess.run(
         [
             "bash", str(ROOT / "scripts" / "install.sh"),
-            "--dashboard-only", "--dry-run", "--install-dir", str(install_dir),
+            "--assume-yes", "--dashboard-only", "--dry-run",
+            "--install-dir", str(install_dir),
         ],
         cwd=ROOT,
         env=env,
@@ -596,6 +597,7 @@ def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
         [
             "bash",
             str(ROOT / "scripts" / "install.sh"),
+            "--assume-yes",
             "--dashboard-only",
         ],
         cwd=ROOT,
