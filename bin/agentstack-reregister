@@ -97,5 +97,9 @@ export CHILD_REGISTRATION_TOKEN
 if ags_register_session "$project_key" "$program" "$model" "$prefix" "${PWD:-$project_key}" "$agent_name" "reserved" >/dev/null 2>&1; then
   printf 'agentstack-reregister: registered %s\n' "${AGS_REGISTERED_AGENT_NAME:-$agent_name}"
 else
+  register_status=$?
+  if [[ "$register_status" == "2" && "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+    die "register_agent changed reserved identity '$agent_name' to '${AGS_SERVER_RETURNED_AGENT_NAME:-unknown}'; refusing to continue under a replacement name"
+  fi
   die "register_agent failed for $agent_name"
 fi

@@ -3374,7 +3374,8 @@ function bay(a,i){
   if(a.model) chips.push(`<span class="chip" title="${esc(a.model_raw||a.model)}">${esc(a.model)}</span>`);
   if(a.ctx_window) chips.push(`<span class="chip win" title="context window">◷ ${esc(a.ctx_window)}</span>`);
   if(+a.deliv>0) chips.push(`<span class="chip dv" title="output logs: ${+a.deliv}">¶ ${+a.deliv}</span>`);
-  if(a.attached) chips.push(`<span class="chip att">◉ LINKED</span>`);
+  if(a.mail_linked) chips.push(`<span class="chip att" title="tmux session name matches an agent-mail identity">◉ LINKED</span>`);
+  if(a.attached) chips.push(`<span class="chip att" title="a terminal client is attached to this tmux session">◉ ATTACHED</span>`);
   // 'agent' は section header(ACTIVE AGENTS) と冗長なので省略
   if(a.category==='finished')
     chips.push(`<span class="chip imp">◢ EXITED</span>`);
@@ -7281,10 +7282,12 @@ async function submitSpawn(){
     }
     clearSpawnTaskDraft(payload.dir);
     spmDraftRestored=false;
-    setSpawnStat('▸ SPAWNED '+(j.child_name||'')+
+    const adjusted=j.name_substituted
+      ? ' · identity changed from '+(j.requested_name||'?') : '';
+    setSpawnStat('▸ SPAWNED '+(j.child_name||'')+adjusted+
       (j.worktree?' · worktree exp/'+j.child_name:''),'ok');
-    toast('▸ SPAWNED','> '+(j.child_name||'')+
-      ' :: tmux session opening');
+    toast(j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
+      '> '+(j.child_name||'')+adjusted+' :: tmux session opening');
     // 1.2s 余韻を見せてから自動クローズ
     setTimeout(()=>{
       updateSpawnButton();

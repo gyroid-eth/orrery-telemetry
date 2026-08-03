@@ -131,13 +131,26 @@ ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
 
 # 3. ensure_project + register_agent (reuse a child's reserved name if present).
 REGISTERED_AGENT_NAME=""
-if [[ "$TMUX_PREFLIGHT_CONFLICT" != "1" ]] && \
-   ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
-  REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
+REGISTER_STATUS=1
+if [[ "$TMUX_PREFLIGHT_CONFLICT" != "1" ]]; then
+  if ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
+    REGISTER_STATUS=0
+    REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
+  else
+    REGISTER_STATUS=$?
+  fi
+fi
+
+if [[ "$REGISTER_STATUS" == "2" && "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+  echo "⚠️  agent-mail changed reserved identity '${AGS_REQUESTED_AGENT_NAME:-$CANDIDATE_AGENT_NAME}' to '${AGS_SERVER_RETURNED_AGENT_NAME:-unknown}'; refusing to rename this child/resumed session away from its existing inbox." >&2
+  return 1 2>/dev/null || exit 1
 fi
 
 if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
   AGENT_NAME="$REGISTERED_AGENT_NAME"
+  if [[ "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+    echo "⚠️  agent-mail changed requested identity '${AGS_REQUESTED_AGENT_NAME:-$CANDIDATE_AGENT_NAME}' to '$REGISTERED_AGENT_NAME'; reconciling the current tmux session to the server-returned name." >&2
+  fi
 elif [[ "$TMUX_PREFLIGHT_CONFLICT" == "1" ]]; then
   echo "⚠️  agent registration skipped because the target tmux session name is already in use." >&2
 else

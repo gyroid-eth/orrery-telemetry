@@ -36,7 +36,13 @@ ags_mcp_call() {
   case "$1" in
     register_agent)
       for arg in "$@"; do
-        case "$arg" in name=*) printf '{"name":"%s"}\n' "${arg#name=}" ;; esac
+        case "$arg" in
+          name=*)
+            returned_name="${arg#name=}"
+            [[ -n "${FAKE_RETURNED_NAME:-}" ]] && returned_name="$FAKE_RETURNED_NAME"
+            printf '{"name":"%s"}\n' "$returned_name"
+            ;;
+        esac
       done
       ;;
     *) printf '{}\n' ;;
@@ -104,6 +110,17 @@ def test_on_list_name_passes_silently():
     assert result.returncode == 0, result.stderr
     assert "does not end in a known scientist" not in result.stderr
     assert result.stdout.strip() == "Curious-Curie"
+
+
+def test_server_substitution_is_reported_and_returned_name_is_authoritative():
+    result = _run(
+        ["--name", "Zesty-Einstein", "--program", "claude-code", "--model", "m"],
+        {"FAKE_RETURNED_NAME": "MossyEagle"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "MossyEagle"
+    assert "changed requested identity 'Zesty-Einstein' to 'MossyEagle'" in result.stderr
+    assert "tmux session must use the server-returned name" in result.stderr
 
 
 def test_delegate_skill_no_longer_tells_callers_to_hand_pick_a_name():

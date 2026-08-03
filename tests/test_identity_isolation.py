@@ -127,14 +127,127 @@ ags_store_registration_token() {{ printf '%s|%s\\n' "$1" "$2"; }}
 ags_apply_contact_policy() {{ :; }}
 for _ in 1 2; do
   ags_register_session /project codex model cx /work Frosty-Pasteur candidate >/dev/null
-  printf 'registered=%s token=%s\\n' "$AGS_REGISTERED_AGENT_NAME" "$AGS_REGISTERED_REGISTRATION_TOKEN"
+  printf 'registered=%s token=%s substituted=%s requested=%s returned=%s\\n' \
+    "$AGS_REGISTERED_AGENT_NAME" "$AGS_REGISTERED_REGISTRATION_TOKEN" \
+    "$AGS_AGENT_NAME_SUBSTITUTED" "$AGS_REQUESTED_AGENT_NAME" \
+    "$AGS_SERVER_RETURNED_AGENT_NAME"
 done
 '''
     result = _run_bash(script)
     assert result.stdout.splitlines() == [
-        "registered=FrostyPasteur token=stable-owner-token",
-        "registered=FrostyPasteur token=stable-owner-token",
+        "registered=FrostyPasteur token=stable-owner-token substituted=1 "
+        "requested=Frosty-Pasteur returned=FrostyPasteur",
+        "registered=FrostyPasteur token=stable-owner-token substituted=1 "
+        "requested=Frosty-Pasteur returned=FrostyPasteur",
     ]
+
+
+def test_reserved_identity_refuses_a_server_substitution():
+    """A child/resume already has inbox and tmux state under its requested name."""
+    register_lib = _ROOT / "bin" / "lib" / "agentstack-register.sh"
+    script = f'''
+source "{register_lib}"
+ags_mcp_call() {{
+  if [[ "$1" == "register_agent" ]]; then
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"OtherAgent","registration_token":"other-token"}}}}}}'
+  else
+    printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
+  fi
+}}
+CHILD_REGISTRATION_TOKEN=reserved-owner-token
+export CHILD_REGISTRATION_TOKEN
+set +e
+ags_register_session /project codex model cx /work Reserved-Curie reserved >/dev/null
+status=$?
+printf 'status=%s registered=%s substituted=%s requested=%s returned=%s\\n' \
+  "$status" "$AGS_REGISTERED_AGENT_NAME" "$AGS_AGENT_NAME_SUBSTITUTED" \
+  "$AGS_REQUESTED_AGENT_NAME" "$AGS_SERVER_RETURNED_AGENT_NAME"
+'''
+    result = _run_bash(script)
+    assert result.stdout.strip() == (
+        "status=2 registered= substituted=1 requested=Reserved-Curie "
+        "returned=OtherAgent"
+    )
+
+
+def _run_root_claude_substitution(*, collision: bool):
+    temp = tempfile.TemporaryDirectory()
+    tmpdir = pathlib.Path(temp.name)
+    bindir = tmpdir / "bin"
+    libdir = bindir / "lib"
+    libdir.mkdir(parents=True)
+    launcher = bindir / "agent-start"
+    launcher.write_text(_read("bin/agent-start"), encoding="utf-8")
+    launcher.chmod(0o755)
+    tmux_log = tmpdir / "tmux.log"
+    tmux_state = tmpdir / "tmux.state"
+    fake_tmux = tmpdir / "tmux"
+    fake_tmux.write_text(
+        "#!/bin/bash\n"
+        f'printf "%s\\n" "$*" >> "{tmux_log}"\n'
+        'case "$1" in\n'
+        f'  display-message) [[ -f "{tmux_state}" ]] && cat "{tmux_state}" || echo RootBefore ;;\n'
+        f'  has-session) exit {0 if collision else 1} ;;\n'
+        f'  rename-session) printf "%s\\n" "$2" > "{tmux_state}" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_tmux.chmod(0o755)
+    fake_claude = tmpdir / "claude"
+    fake_claude.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_claude.chmod(0o755)
+    (libdir / "agentstack-launch.sh").write_text(
+        'ags_die() { printf "%s: %s\\n" "$AGS_PROG" "$*" >&2; exit 1; }\n'
+        "ags_load_env() { :; }\n"
+        'ags_resolve_tmux() { printf "%s\\n" "$FAKE_TMUX"; }\n'
+        'ags_choose_dir() { printf "%s\\n" "$1"; }\n',
+        encoding="utf-8",
+    )
+    (libdir / "agentstack-register.sh").write_text(
+        'ags_pick_adjective_scientist_name() { printf "Zesty-Einstein\\n"; }\n'
+        "ags_mail_load_token() { :; }\n"
+        "ags_mcp_call() { :; }\n"
+        "ags_start_mail_watcher() { :; }\n"
+        "ags_register_session() {\n"
+        '  AGS_REGISTERED_AGENT_NAME="MossyEagle"\n'
+        '  AGS_REQUESTED_AGENT_NAME="Zesty-Einstein"\n'
+        "  AGS_AGENT_NAME_SUBSTITUTED=1\n"
+        "  return 0\n"
+        "}\n"
+        "ags_record_managed_agent() { :; }\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update({
+        "TMUX": "/tmp/fake,1,0",
+        "FAKE_TMUX": str(fake_tmux),
+        "AGENTSTACK_CLAUDE_BIN": str(fake_claude),
+        "AGENTSTACK_PROJECT_KEY": "/project",
+        "AGENTSTACK_MANAGED_AGENTS_FILE": str(tmpdir / "managed"),
+        "AGENTSTACK_HOOKS_DIR": str(tmpdir),
+    })
+    result = subprocess.run(
+        [str(launcher), str(tmpdir)],
+        env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        check=False,
+    )
+    calls = tmux_log.read_text(encoding="utf-8") if tmux_log.exists() else ""
+    temp.cleanup()
+    return result, calls
+
+
+def test_root_claude_renames_tmux_to_the_server_returned_identity():
+    result, calls = _run_root_claude_substitution(collision=False)
+    assert result.returncode == 0, result.stderr
+    assert "changed requested identity 'Zesty-Einstein' to 'MossyEagle'" in result.stderr
+    assert "rename-session MossyEagle" in calls
+
+
+def test_root_claude_stops_when_the_returned_tmux_name_is_occupied():
+    result, calls = _run_root_claude_substitution(collision=True)
+    assert result.returncode != 0
+    assert "tmux session already exists" in result.stderr
+    assert "rename-session" not in calls
 
 
 def test_reserved_child_marker_and_rename_failure_are_explicit():
@@ -143,7 +256,10 @@ def test_reserved_child_marker_and_rename_failure_are_explicit():
     launcher = _read("bin/agent-start-codex")
     assert spawn.count('-e "AGENTSTACK_RESERVED_IDENTITY=1"') >= 2
     assert 'rename-session "$AGENT_NAME" 2>/dev/null || true' not in bootstrap
+    assert 'rename-session "$AGENT_NAME" 2>/dev/null || true' not in _read("bin/agent-start")
+    assert "refusing an identity split" in _read("bin/agent-start")
     assert "refusing identity registration" in bootstrap
+    assert "changed reserved identity" in bootstrap
     assert "agent registration skipped" in bootstrap
     assert "tmux rename-session failed: current session" in bootstrap
     assert '"$TMUX_IDENTITY_MATCHED" == "1"' in bootstrap

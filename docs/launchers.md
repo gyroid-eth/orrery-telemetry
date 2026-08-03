@@ -41,7 +41,7 @@ terminal process が終了した後も shell を残すため、調査や scrollb
 
 ## 科学者名
 
-top-level launcher の新規 identity は要求時 `Adjective-Scientist`（ハイフン形、たとえば `Windy-Fermi`）です。**実際の登録名は `register_agent` 応答の read-back が正**で、サーバーが separator を除去する環境では `WindyFermi` 形に落ちます。launcher は read-back した実登録名を tmux session 名・token・state に採用します（要求名前提にしない）。
+top-level launcher の新規 identity は要求時 `Adjective-Scientist`（ハイフン形、たとえば `Windy-Fermi`）です。**実際の登録名は `register_agent` 応答の read-back が正**で、サーバーが separator を除去したり別名へ coerce する環境もあります。要求名と read-back が違う場合、launcher は差し替えを明示的に報告し、まだ起動前の top-level session は read-back 名へ揃えます。既に task・token・inbox が結び付いた reserved / resumed identity は別名を採用せず停止します。
 
 - adjective は `bin/lib/agentstack-scientists.sh` の134語
 - scientist は `dashboard/scientist_portraits.json`
@@ -74,7 +74,7 @@ launcher は CLI を起動する前に agent-mail へ identity を登録しま�
 2. candidate name を生成
 3. agent-mail health を確認
 4. project key、program、model、task metadata で登録
-5. 返された canonical name を tmux session と `AGENT_NAME` に設定
+5. 要求名と返された canonical name を比較。不一致なら top-level は明示して tmux session を返却名へ rename、reserved identity は停止
 6. managed agent list と clipboard を更新
 
 `AGENTSTACK_PROJECT_KEY` が未設定、または agent-mail が到達不能でも CLI 自体は preselected name で起動します。ただし mail、reservation、project-scoped dashboard 機能は使えません。

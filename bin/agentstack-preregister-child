@@ -138,6 +138,10 @@ fi
 
 registered="$(printf '%s' "$register_result" | ags_extract_agent_name)"
 [[ -n "$registered" ]] || die "could not read registered child name"
+if [[ "$registered" != "$agent_name" ]]; then
+  printf "%s: agent-mail changed requested identity '%s' to '%s'; the child tmux session must use the server-returned name\n" \
+    "$PROG" "$agent_name" "$registered" >&2
+fi
 
 # The token the child must present is the one the SERVER persisted, not the one
 # we sent. Stock mcp-agent-mail ignores the client-supplied registration_token

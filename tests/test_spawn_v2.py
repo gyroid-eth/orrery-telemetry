@@ -254,6 +254,9 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": "gpt-5.6-sol", "effort": "high"})
 
     assert result["ok"] is True
+    assert result["requested_name"] == "Sunny-Curie"
+    assert result["child_name"] == "SunnyCurie"
+    assert result["name_substituted"] is True
     # The request stays in stock-safe hyphen spelling; only the registration
     # response's actual name is used by the launcher/token path below.
     assert calls[0][1]["name"] == "Sunny-Curie"
@@ -299,6 +302,8 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     result = server.do_spawn({"parent": "Parent", "task": "work", "dir": str(tmp_path)})
 
     assert result["ok"] is True
+    assert result["requested_name"] == "Zesty-Curie"
+    assert result["name_substituted"] is False
     assert calls[0] == ("register_agent", {
         "project_key": "/project", "program": "claude-code", "model": "claude-sonnet-5",
         "task_description": "work", "registration_token": calls[0][1]["registration_token"],

@@ -63,6 +63,9 @@ if [[ -n "$PROJECT_KEY" ]]; then
     if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
       AGENT_NAME="$REGISTERED_AGENT_NAME"
       SESSION="$AGENT_NAME"
+      if [[ "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+        echo "warning: agent-mail changed requested identity '${AGS_REQUESTED_AGENT_NAME:-$CANDIDATE_AGENT_NAME}' to '$REGISTERED_AGENT_NAME'; the tmux session will use the server-returned name" >&2
+      fi
     else
       echo "warning: agent registration failed; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
     fi
@@ -82,7 +85,19 @@ fi
 # Already inside a real tmux pane: register + run in place.
 if [[ -n "${TMUX:-}" ]]; then
   if [[ -n "${AGENT_NAME:-}" ]]; then
-    "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null || true
+    CURRENT_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+    if [[ "$CURRENT_TMUX_SESSION" != "$AGENT_NAME" ]]; then
+      if "$TMUX_BIN" has-session -t "=$AGENT_NAME" 2>/dev/null; then
+        ags_die "agent-mail registered as '$AGENT_NAME', but that tmux session already exists; refusing to continue as '$CURRENT_TMUX_SESSION'"
+      fi
+      if ! "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null; then
+        ags_die "agent-mail registered as '$AGENT_NAME', but tmux could not rename session '${CURRENT_TMUX_SESSION:-unknown}'; refusing an identity split"
+      fi
+      RENAMED_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+      if [[ "$RENAMED_TMUX_SESSION" != "$AGENT_NAME" ]]; then
+        ags_die "tmux rename reported success but session is '${RENAMED_TMUX_SESSION:-unknown}', not registered identity '$AGENT_NAME'"
+      fi
+    fi
     export AGENT_NAME
   fi
   cd "$DIR"

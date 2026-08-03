@@ -13,6 +13,7 @@ PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 SHELL_REGISTERED_AGENT=""
+SHELL_REGISTRATION_ERROR=""
 
 if [ -z "$HEALTH_URL" ]; then
     case "$MCP_URL" in
@@ -77,7 +78,14 @@ shell_register_resolved_agent() {
     export CHILD_REGISTRATION_TOKEN
     work_dir="${PWD:-$PROJECT_KEY}"
     model="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
-    ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1 || return 1
+    ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1
+    register_status=$?
+    if [ "$register_status" -ne 0 ]; then
+        if [ "$register_status" -eq 2 ] && [ "${AGS_AGENT_NAME_SUBSTITUTED:-0}" = "1" ]; then
+            SHELL_REGISTRATION_ERROR="agent-mail changed reserved identity '$RESOLVED_AGENT' to '${AGS_SERVER_RETURNED_AGENT_NAME:-unknown}'"
+        fi
+        return 1
+    fi
     SHELL_REGISTERED_AGENT="${AGS_REGISTERED_AGENT_NAME:-$RESOLVED_AGENT}"
     return 0
 }
@@ -111,8 +119,12 @@ if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
         fi
     elif [ -n "$RESOLVED_AGENT" ]; then
         echo "mcp-agent-mail server is running. Register this session before working."
-        echo "あなたの名前は「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。新しい名前を生成せず、必ず name=\"${RESOLVED_AGENT}\" で register_agent してください。"
-        echo "1. ensure_project -> 2. register_agent (name=\"$RESOLVED_AGENT\") -> 3. fetch_inbox"
+        if [ -n "$SHELL_REGISTRATION_ERROR" ]; then
+            echo "ERROR: $SHELL_REGISTRATION_ERROR。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
+        else
+            echo "あなたの名前は「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。新しい名前を生成せず、必ず name=\"${RESOLVED_AGENT}\" で register_agent してください。"
+            echo "1. ensure_project -> 2. register_agent (name=\"$RESOLVED_AGENT\") -> 3. fetch_inbox"
+        fi
     else
         echo "mcp-agent-mail server is running. Register this session before working."
         echo "1. ensure_project -> 2. register_agent (new AdjectiveScientist name if needed) -> 3. fetch_inbox"

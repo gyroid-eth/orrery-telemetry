@@ -575,6 +575,10 @@ def build_agents() -> list[dict]:
                 "category": cat,
                 "running": running,
                 "attached": s["attached"],
+                # Exact same-name presence in agent-mail is the identity link.
+                # tmux client attachment is a separate UI/safety signal and
+                # must never imply that registration succeeded.
+                "mail_linked": m is not None,
                 "cmd": s["cmd"],
                 "live": live,
                 # pane のステータスバー由来を優先（warm pool claim で DB
@@ -633,7 +637,8 @@ def build_agents() -> list[dict]:
                 row = {
                     "name": r["name"],
                     "category": "retired" if r["retired"] else "gone",
-                    "running": False, "attached": False, "cmd": "", "live": "",
+                    "running": False, "attached": False, "mail_linked": False,
+                    "cmd": "", "live": "",
                     "model": _display_model(r["model"]), "model_raw": r["model"],
                     "provider": _provider_of(r["model"]),
                     "ctx_window": _ctx_window(r["model"]),
@@ -3476,7 +3481,8 @@ def do_spawn(payload: dict) -> dict:
     if not isinstance(server_token, str):
         server_token = ""
     effective_child_token = server_token.strip() or child_token
-    if requested_name and child_name != requested_name:
+    name_substituted = child_name != requested_name
+    if name_substituted:
         logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
 
     # 2) role/emoji/group annotation (best-effort, failure is non-fatal)
@@ -3503,6 +3509,8 @@ def do_spawn(payload: dict) -> dict:
                 "the dashboard server has no permission to delete it"
             ),
             "child_name": child_name,
+            "requested_name": requested_name,
+            "name_substituted": name_substituted,
             "annot": annot_status,
             "registration_retained": True,
         }
@@ -3718,6 +3726,8 @@ def do_spawn(payload: dict) -> dict:
     return {
         "ok": True,
         "child_name": child_name,
+        "requested_name": requested_name,
+        "name_substituted": name_substituted,
         "tmux_session": child_name,
         "annot": annot_status,
         "worktree": worktree,

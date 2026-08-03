@@ -376,6 +376,9 @@ ags_register_session() {
   local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}" requested_mode="${7:-reserved}"
   AGS_REGISTERED_AGENT_NAME=""
   AGS_REGISTERED_REGISTRATION_TOKEN=""
+  AGS_REQUESTED_AGENT_NAME=""
+  AGS_SERVER_RETURNED_AGENT_NAME=""
+  AGS_AGENT_NAME_SUBSTITUTED=0
 
   local task_description="Agent session in $work_dir"
   case "$program" in
@@ -389,6 +392,7 @@ ags_register_session() {
   elif [[ "$requested_mode" == "candidate" ]]; then
     agent_name="$(ags_pick_available_agent_name "$project_key" "$prefix" "$agent_name")" || return 1
   fi
+  AGS_REQUESTED_AGENT_NAME="$agent_name"
 
   ags_mcp_call "ensure_project" "human_key=$project_key" >/dev/null
 
@@ -425,6 +429,18 @@ ags_register_session() {
   fi
   registered="$(printf '%s' "$result" | ags_extract_agent_name)"
   [[ -n "$registered" ]] || return 1
+  AGS_SERVER_RETURNED_AGENT_NAME="$registered"
+  if [[ "$registered" != "$agent_name" ]]; then
+    AGS_AGENT_NAME_SUBSTITUTED=1
+    # A reserved identity already has a parent task, owner token, tmux metadata,
+    # and inbox addressed to the requested name. Adopting a replacement here
+    # would strand all of those under the old name. Candidate/top-level launch
+    # paths may reconcile their not-yet-started tmux session to the read-back,
+    # but an existing identity must fail closed.
+    if [[ "$requested_mode" == "reserved" ]]; then
+      return 2
+    fi
+  fi
   registered_token="$(printf '%s' "$result" | ags_extract_registration_token)"
   [[ -n "$registered_token" ]] || registered_token="$registration_token"
   if [[ -n "$registered_token" ]]; then
