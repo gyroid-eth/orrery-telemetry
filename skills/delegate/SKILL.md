@@ -120,6 +120,12 @@ Preferred flow: do the coordination through MCP tools first, then let `spawn_chi
 4. Ensure the child can receive the first task message. The stack registration helper sets the child's `contact_policy` to `open` by default. If `AGENTSTACK_CONTACT_POLICY` disables that default, complete a contact handshake or approval before `send_message`.
 5. Reserve file paths if the task edits shared resources.
 6. `send_message(project_key, sender_name=<parent>, to=[<child>], subject=..., body_md=..., importance="high")`.
+   In that message, tell the child to send its **completion report** at `importance="high"` too, and to leave
+   everything else — progress notes, questions that can wait — at the default. A notification is typed
+   straight into the recipient's prompt, so an operator may have set
+   `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high` to stop routine chatter from interrupting a conversation.
+   Under that setting a report sent at the default still reaches the inbox but does not announce itself, and
+   the parent goes on waiting for something that already happened.
 
 Then spawn the pre-registered child:
 

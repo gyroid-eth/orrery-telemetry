@@ -23,6 +23,24 @@ WATCH_FIFO=""
 WATCH_BACKEND_PID=""
 LOCK_ACQUIRED=0
 
+# 通知として割り込ませる下限。low|normal|high|urgent。既定 low = 従来どおり全通。
+NOTIFY_MIN_IMPORTANCE="${AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE:-low}"
+
+# importance を順序に写す。未知の値は normal 扱い: agent-mail は importance を
+# 自由文字列として受けるので、知らない語を落とすと配送が黙って止まる。
+importance_rank() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        low) printf '0' ;;
+        high) printf '2' ;;
+        urgent) printf '3' ;;
+        *) printf '1' ;;
+    esac
+}
+
+importance_at_least() {
+    [ "$(importance_rank "$1")" -ge "$(importance_rank "$2")" ]
+}
+
 # 2026-05-20 SilverEuler 設計の non-destructive 通知パイプライン:
 #   - signal file は server-owned dirty bit (rename/delete しない)
 #   - notify-state.json で「(agent, msg_id) → 配送結果」を永続キャッシュ
@@ -277,6 +295,19 @@ handle_signal_file() {
     # 関数が non-zero で抜け、呼び出し元の while ループが止まる。
     # 早期スキップは `return 0` を明示してスクリプト継続を保証する。
     state_should_attempt "$agent_name" "$msg_key" || return 0
+
+    # 割り込みの閾値。既定は low = 従来どおり全部通す。
+    #
+    # 通知は相手の入力欄に直接タイプされるので、人間が親と会話している最中に子の
+    # 進捗報告が挟まる。「子を何体も抱えている親」ほど会話が細切れになる、という
+    # 報告がテスターから届いた。ここで落としても**メールは消えない**: signal を
+    # 消費しないまま state に記録するだけなので、次に fetch_inbox を呼べば普通に
+    # 読める。奪うのは割り込む権利であって、届く権利ではない。
+    if ! importance_at_least "$importance" "$NOTIFY_MIN_IMPORTANCE"; then
+        state_mark_result "$agent_name" "$msg_key" "below_min_importance" "watcher"
+        return 0
+    fi
+
     acquire_delivery_lease "$agent_name" "$msg_key" || return 0
 
     log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
