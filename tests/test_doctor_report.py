@@ -34,6 +34,7 @@ def _run(
     tmp_path: pathlib.Path,
     *args: str,
     app_text: str | None = None,
+    config_text: str | None = None,
     include_source: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     home = tmp_path / "home"
@@ -51,6 +52,8 @@ def _run(
             source = (FIXTURE / name).read_text(encoding="utf-8")
             if name == "app.py" and app_text is not None:
                 source = app_text
+            if name == "config.py" and config_text is not None:
+                source = config_text
             (package / name).write_text(source, encoding="utf-8")
     (home / ".claude.json").write_text(
         '{"mcpServers": {"mcp-agent-mail": {"type": "http",'
@@ -105,6 +108,21 @@ def test_honored_name_capability_is_next_to_the_patch_without_a_warning(tmp_path
     patch_index = next(i for i, line in enumerate(lines) if "passthrough patch:" in line)
     assert lines[patch_index + 1].startswith("- requested-name handling: honored")
     assert "requested-name handling" not in result.stderr
+
+
+def test_patch_report_ignores_markers_in_comments(tmp_path):
+    app = (FIXTURE / "app.py").read_text(encoding="utf-8") + (
+        "\n# mode == \"passthrough\" or validate_agent_name_format(sanitized)\n"
+        "# mode == \"passthrough\" or validate_agent_name_format(sanitized)\n"
+    )
+    config = (FIXTURE / "config.py").read_text(encoding="utf-8") + (
+        '\n# "always_auto", "passthrough"\n'
+    )
+    result = _run(
+        tmp_path, "--report", app_text=app, config_text=config
+    )
+    assert "- passthrough patch: absent" in result.stdout
+    assert "- passthrough patch: present" not in result.stdout
 
 
 def test_legacy_and_unreadable_name_capabilities_are_not_rounded_to_honored(tmp_path):

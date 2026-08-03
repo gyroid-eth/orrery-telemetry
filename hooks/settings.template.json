@@ -26,11 +26,7 @@
     "deny": [
       "mcp__mcp-agent-mail__hard_delete_agent",
       "mcp__mcp-agent-mail__hard_delete_project",
-      "mcp__mcp-agent-mail__archive_project",
-      "mcp__mcp-agent-mail__purge_old_messages",
-      "mcp__mcp-agent-mail__force_release_file_reservation",
-      "mcp__mcp-agent-mail__retire_agent",
-      "mcp__mcp-agent-mail__deregister_agent"
+      "mcp__mcp-agent-mail__purge_old_messages"
     ]
   },
   "hooks": {

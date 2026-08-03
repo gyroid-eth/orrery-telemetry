@@ -59,9 +59,27 @@ def test_template_ships_a_permissions_block():
     # The startup calls the tester saw prompting every time.
     for tool in ("ensure_project", "register_agent", "fetch_inbox"):
         assert f"mcp__mcp-agent-mail__{tool}" in permissions["allow"], tool
-    # Destructive coordination tools stay denied rather than pre-approved.
-    for tool in ("hard_delete_project", "retire_agent", "purge_old_messages"):
-        assert f"mcp__mcp-agent-mail__{tool}" in permissions["deny"], tool
+    # Only irreversible tools without a recovery path are denied outright.
+    denied = {
+        rule.removeprefix("mcp__mcp-agent-mail__") for rule in permissions["deny"]
+    }
+    assert denied == {
+        "hard_delete_agent",
+        "hard_delete_project",
+        "purge_old_messages",
+    }
+    # Recoverable destructive tools are neither pre-approved nor denied: the
+    # runtime must ask the human. A deny is also pointless when an allowed tool
+    # can reach the same state (set_contact_policy can reproduce deregister).
+    for tool in (
+        "archive_project",
+        "deregister_agent",
+        "force_release_file_reservation",
+        "retire_agent",
+    ):
+        rule = f"mcp__mcp-agent-mail__{tool}"
+        assert rule not in permissions["deny"], tool
+        assert rule not in permissions["allow"], tool
     # No blanket approvals.
     assert "Bash(:*)" not in permissions["allow"]
     assert not any(rule.strip() in ("*", "Bash", "Bash(*)") for rule in permissions["allow"])
@@ -74,7 +92,11 @@ def test_merge_installs_permissions_into_fresh_settings():
         assert rc == 0, detail
         allow = written["permissions"]["allow"]
         assert "mcp__mcp-agent-mail__register_agent" in allow
-        assert "mcp__mcp-agent-mail__retire_agent" in written["permissions"]["deny"]
+        assert written["permissions"]["deny"] == [
+            "mcp__mcp-agent-mail__hard_delete_agent",
+            "mcp__mcp-agent-mail__hard_delete_project",
+            "mcp__mcp-agent-mail__purge_old_messages",
+        ]
         # The Bash rule is rendered with the real bin directory, not the token.
         assert any(str(tmpdir / "bin") in rule for rule in allow), allow
         assert "__AGENTSTACK_BIN_DIR__" not in json.dumps(written)

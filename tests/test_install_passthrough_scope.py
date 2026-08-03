@@ -4,8 +4,8 @@
 The naming patch is three lines and inert until the mode selects it, which is
 what makes it reasonable to offer at all. It is still somebody's source tree.
 The line this draws: a checkout this installer created is configured without
-asking; anything else is left exactly as it was found unless a human says
-otherwise, and a non-interactive run has no human to say it.
+asking; anything else is left exactly as it was found unless the dedicated
+existing-checkout opt-in is set. General install approvals are not that opt-in.
 
 Runnable two ways:
     python3 tests/test_install_passthrough_scope.py
@@ -13,6 +13,7 @@ Runnable two ways:
 """
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import pathlib
@@ -20,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -42,6 +44,14 @@ def _fake_bin(tmp_path: pathlib.Path) -> pathlib.Path:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir(exist_ok=True)
     for name, body in {
+        "lsof": """#!/bin/sh
+if [ -z "$AGENTSTACK_TEST_LISTENER_PID" ]; then exit 1; fi
+case " $* " in
+  *" -d cwd "*) printf 'n%s\n' "$AGENTSTACK_TEST_LISTENER_CWD" ;;
+  *" -iTCP:"*" -t "*) printf '%s\n' "$AGENTSTACK_TEST_LISTENER_PID" ;;
+  *) exit 1 ;;
+esac
+""",
         "systemctl": "#!/bin/sh\nexit 1\n",
         "tmux": "#!/bin/sh\nexit 0\n",
     }.items():
@@ -67,8 +77,14 @@ def _stock_checkout(root: pathlib.Path, *, remote: str) -> pathlib.Path:
     return root
 
 
-def _run_installer(home: pathlib.Path, tmp_path: pathlib.Path, mail_dir: pathlib.Path,
-                   extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_installer(
+    home: pathlib.Path,
+    tmp_path: pathlib.Path,
+    mail_dir: pathlib.Path,
+    extra_env: dict[str, str],
+    *,
+    mail_port: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     project = tmp_path / "project"
     project.mkdir(exist_ok=True)
     env = os.environ.copy()
@@ -80,7 +96,7 @@ def _run_installer(home: pathlib.Path, tmp_path: pathlib.Path, mail_dir: pathlib
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_MAIL_DB": str(mail_dir / "storage.sqlite3"),
-        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{_free_port()}/mcp",
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port or _free_port()}/mcp",
         "AGENTSTACK_PORT": str(_free_port()),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
@@ -100,6 +116,22 @@ def _run_installer(home: pathlib.Path, tmp_path: pathlib.Path, mail_dir: pathlib
         )
     finally:
         stop_dashboard(home)
+
+
+class _SilentAgentMail(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_POST(self):
+        self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def _serve_silent_agent_mail():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SilentAgentMail)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def _patched(mail_dir: pathlib.Path) -> bool:
@@ -196,6 +228,76 @@ def test_the_patch_can_be_declined_for_our_own_clone(tmp_path):
     assert "AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0" in result.stdout
     env_text = (mail_dir / ".env").read_text(encoding="utf-8")
     assert "AGENT_NAME_ENFORCEMENT_MODE=passthrough" not in env_text
+
+
+def test_an_unpatchable_owned_checkout_does_not_select_passthrough(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(tmp_path / "mail", remote=UPSTREAM)
+    app = mail_dir / "src" / "mcp_agent_mail" / "app.py"
+    app.write_text(
+        app.read_text(encoding="utf-8").replace(
+            "validate_agent_name_format(sanitized)", "fork_name_check(sanitized)"
+        ),
+        encoding="utf-8",
+    )
+    result = _run_installer(home, tmp_path, mail_dir, {})
+    assert result.returncode == 0, result.stdout + result.stderr
+    env_text = (mail_dir / ".env").read_text(encoding="utf-8")
+    assert "AGENT_NAME_ENFORCEMENT_MODE=passthrough" not in env_text
+
+
+def test_assume_yes_does_not_patch_an_existing_server_checkout(tmp_path):
+    """Null case: general approvals never authorize third-party source edits."""
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(tmp_path / "mail", remote=UPSTREAM)
+    server = _serve_silent_agent_mail()
+    try:
+        result = _run_installer(
+            home,
+            tmp_path,
+            mail_dir,
+            {
+                "AGENTSTACK_TEST_LISTENER_PID": str(os.getpid()),
+                "AGENTSTACK_TEST_LISTENER_CWD": str(mail_dir),
+            },
+            mail_port=server.server_port,
+        )
+    finally:
+        server.shutdown()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not _patched(mail_dir)
+    assert "assume-yes: approved existing agent-mail server" in result.stdout
+    assert "AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1" in result.stdout + result.stderr
+    assert "explicit opt-in:" not in result.stdout
+
+
+def test_dedicated_opt_in_patches_an_existing_server_checkout(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    mail_dir = _stock_checkout(tmp_path / "mail", remote=UPSTREAM)
+    (mail_dir / ".env").write_text("HTTP_BEARER_TOKEN=test-only\n", encoding="utf-8")
+    server = _serve_silent_agent_mail()
+    try:
+        result = _run_installer(
+            home,
+            tmp_path,
+            mail_dir,
+            {
+                "AGENTSTACK_PATCH_EXISTING_AGENT_MAIL": "1",
+                "AGENTSTACK_TEST_LISTENER_PID": str(os.getpid()),
+                "AGENTSTACK_TEST_LISTENER_CWD": str(mail_dir),
+            },
+            mail_port=server.server_port,
+        )
+    finally:
+        server.shutdown()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _patched(mail_dir)
+    assert "explicit opt-in: AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1" in result.stdout
+    env_text = (mail_dir / ".env").read_text(encoding="utf-8")
+    assert "AGENT_NAME_ENFORCEMENT_MODE=passthrough" in env_text
 
 
 def test_our_own_clone_is_configured_without_asking(tmp_path):

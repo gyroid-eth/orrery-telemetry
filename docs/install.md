@@ -35,7 +35,7 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 |---|---|---|
 | installer が clone した checkout（pin した ref） | 3行の passthrough patch を当て、`.env` に `AGENT_NAME_ENFORCEMENT_MODE=passthrough` を書く | **保証する** |
 | 既存サーバーで #140（explicit identity）を含む版 | ハイフンを含む名前をそのまま受け入れる | **保証する** |
-| 既存サーバーで patch を承認した場合 | 承認・再起動の後に受け入れる | 再起動まで無効。**相手の更新で消える** |
+| 既存サーバーで専用 opt-in を指定した場合 | patch 適用・再起動の後に受け入れる | 再起動まで無効。**相手の更新で消える** |
 | 既存サーバーで patch を断った・当たらなかった場合 | #140 があれば受け入れる。既知の旧処理なら生成名に置き換わる | installer の判定を表示 |
 | package として導入された agent-mail | patch しない。source を読めなければ判定しない | `unknown` |
 | 命名処理を改変した fork | 既知の根拠がなければ推測しない | `unknown` |
@@ -63,6 +63,12 @@ patch を一切当てずに upstream のままにしたい場合:
 
 ```bash
 AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0 ./scripts/install.sh
+```
+
+稼働中の既存 agent-mail checkout は `--assume-yes` の対象外です。source 変更を確認したユーザーが、その checkout への3行 patch を別に承認する場合だけ次を指定します。installer は適用前に `explicit opt-in:` の監査行を出し、patch が AST 検査で適用済みと確認できた場合だけ `.env` に passthrough mode を書きます。
+
+```bash
+AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 ./scripts/install.sh
 ```
 
 この patch は `mode == "passthrough"` の条件の後ろにあるだけなので、モードを選ばない限り**挙動は変わりません**。取り消しは `git -C <checkout> checkout -- src/mcp_agent_mail` です。
@@ -154,6 +160,8 @@ Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベ�
 - 追加した entry と変更結果を manifest に記録
 - managed block は marker 間だけを idempotent に更新
 - `install-state.json` を uninstall の削除範囲の正本にする
+
+permissions の `deny` は、**不可逆で復旧手段がない操作だけ**に限定します。破壊的でも復旧できる操作は allow にも deny にも入れず、実行時の人間による確認に委ねます。また、allow 済みの別 tool で同じ状態へ到達できる場合は、deny に追加しても安全上の意味がないため追加しません。現在 deny するのは `hard_delete_agent`、`hard_delete_project`、`purge_old_messages` の3つです。
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
 

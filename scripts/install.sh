@@ -39,6 +39,9 @@ UPSTREAM_AGENT_MAIL_REF="${AGENTSTACK_AGENT_MAIL_REF:-5e481834ff1c373acda804d28c
 # accept them. Set to 0 to leave agent-mail's naming exactly as upstream ships
 # it, and to be handed generated names instead.
 PASSTHROUGH_ENABLED="${AGENTSTACK_AGENT_MAIL_PASSTHROUGH:-1}"
+# Source owned by a running, pre-existing agent-mail is outside --assume-yes.
+# Patching it requires a separate, auditable opt-in.
+PATCH_EXISTING_AGENT_MAIL="${AGENTSTACK_PATCH_EXISTING_AGENT_MAIL:-0}"
 
 usage() {
   cat <<'EOF'
@@ -67,6 +70,8 @@ Options:
 --assume-yes is not --force: validation and safety errors remain fatal. It must
 be selected explicitly by the user; an agent or automation must not add it on
 the user's behalf. AGENTSTACK_ASSUME_YES=1 provides the same explicit opt-in.
+It never authorizes edits to an existing agent-mail checkout. That separate
+operation requires AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1.
 EOF
 }
 
@@ -167,6 +172,7 @@ AGENT_MAIL_PIDFILE="$MAIL_HOME/agent-mail.pid"
 AGENT_MAIL_LOG="$MAIL_HOME/agent-mail.log"
 AGENT_MAIL_SERVICE_KIND=""
 AGENT_MAIL_SERVICE_PATH=""
+AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected agent-mail naming source","warning":"requested-name handling is unknown"}'
 
 say() { printf '%s\n' "$*"; }
@@ -264,17 +270,14 @@ PY
 # A server this installer created is ours to configure. One it merely found is
 # not: it may serve other projects, and patching it costs a restart.
 confirm_patch_existing_agent_mail() {
-  if [[ "$ASSUME_YES" == "1" ]]; then
+  local dir="$1"
+  if [[ "$PATCH_EXISTING_AGENT_MAIL" == "1" ]]; then
+    say "explicit opt-in: AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 approved patching existing agent-mail at $dir"
     return 0
   fi
-  if [[ ! -t 0 ]]; then
-    warn "non-interactive shell; leaving the existing agent-mail source untouched"
-    return 1
-  fi
-  printf 'Patch that agent-mail checkout so it can accept the names this stack asks for? Type yes to continue: ' >&2
-  local reply
-  read -r reply
-  [[ "$reply" == "yes" ]]
+  warn "existing agent-mail source requires separate opt-in; leaving it untouched"
+  warn "  re-run with AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 after reviewing the patch plan"
+  return 1
 }
 
 offer_passthrough_to_existing_server() {
@@ -321,7 +324,7 @@ offer_passthrough_to_existing_server() {
     plan "offer to patch existing agent-mail at $dir (skipped by --dry-run)"
     return 0
   fi
-  if ! confirm_patch_existing_agent_mail; then
+  if ! confirm_patch_existing_agent_mail "$dir"; then
     say "left the existing agent-mail source untouched"
     return 0
   fi
@@ -342,6 +345,8 @@ offer_passthrough_to_existing_server() {
 validate_assume_yes() {
   [[ "$ASSUME_YES" == "0" || "$ASSUME_YES" == "1" ]] || \
     die "AGENTSTACK_ASSUME_YES must be 0 or 1"
+  [[ "$PATCH_EXISTING_AGENT_MAIL" == "0" || "$PATCH_EXISTING_AGENT_MAIL" == "1" ]] || \
+    die "AGENTSTACK_PATCH_EXISTING_AGENT_MAIL must be 0 or 1"
 }
 
 plan() {
@@ -1499,6 +1504,7 @@ start_new_agent_mail() {
 }
 
 ensure_agent_mail() {
+  AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
   if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
     plan "reuse existing agent-mail server at $MCP_URL"
     if [[ -f "$MAIL_ENV" ]]; then
@@ -1554,10 +1560,17 @@ ensure_agent_mail() {
       local state
       state="$(passthrough_state "$MAIL_DIR")"
       case "$state" in
-        already) say "agent-mail already accepts explicit names" ;;
+        already)
+          AGENT_MAIL_PASSTHROUGH_CONFIRMED=true
+          say "agent-mail already accepts explicit names"
+          ;;
         applicable)
           apply_passthrough "$MAIL_DIR" || \
             die "the agent-mail naming patch did not apply to $MAIL_DIR. Remove that checkout and re-run to get the pinned version, or set AGENTSTACK_AGENT_MAIL_REF to the ref you want."
+          if [[ "$(passthrough_state "$MAIL_DIR")" != "already" ]]; then
+            die "the agent-mail naming patch returned success but passthrough could not be verified in $MAIL_DIR"
+          fi
+          AGENT_MAIL_PASSTHROUGH_CONFIRMED=true
           say "patched agent-mail to accept explicit names"
           ;;
         *)
@@ -1570,7 +1583,7 @@ ensure_agent_mail() {
 
   if [[ -f "$MAIL_ENV" ]]; then
     plan "reuse existing agent-mail .env at $MAIL_ENV"
-    if [[ "$DRY_RUN" != true && "$mail_dir_is_ours" == true && "$PASSTHROUGH_ENABLED" == "1" ]]; then
+    if [[ "$DRY_RUN" != true && "$AGENT_MAIL_PASSTHROUGH_CONFIRMED" == true ]]; then
       set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
     fi
   else
@@ -1578,14 +1591,14 @@ ensure_agent_mail() {
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$(dirname "$MAIL_ENV")"
       umask 077
-      "$PYTHON_BIN" - "$MAIL_ENV" "$PASSTHROUGH_ENABLED" "$mail_dir_is_ours" <<'PY'
+      "$PYTHON_BIN" - "$MAIL_ENV" "$AGENT_MAIL_PASSTHROUGH_CONFIRMED" <<'PY'
 import pathlib
 import secrets
 import sys
 path = pathlib.Path(sys.argv[1])
 token = secrets.token_urlsafe(32)
 lines = [f"HTTP_BEARER_TOKEN={token}"]
-if sys.argv[2:] == ["1", "true"]:
+if sys.argv[2] == "true":
     lines.append("AGENT_NAME_ENFORCEMENT_MODE=passthrough")
 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 path.chmod(0o600)

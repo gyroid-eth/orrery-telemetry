@@ -445,30 +445,21 @@ if [[ "$REPORT" == "1" ]]; then
   printf -- '- AGENT_NAME_ENFORCEMENT_MODE: %s\n' \
     "$(grep -m1 '^AGENT_NAME_ENFORCEMENT_MODE=' "${AGENTSTACK_MAIL_ENV:-$ags_mail_dir/.env}" 2>/dev/null \
        | cut -d= -f2- || echo 'unset (default)')"
-  # The mode above only does anything if the checkout can accept it: a stock
-  # server rejects the value outright at startup. Reporting them together turns
-  # "my agent registered under a different name" into one line. Checked by
-  # reading the source rather than by calling the installer's patch tool, which
-  # is not copied to an installed doctor.
-  ags_passthrough_hits=0
-  if [[ -f "$ags_mail_dir/src/mcp_agent_mail/app.py" ]]; then
-    # grep -c prints its count and still exits 1 when the count is zero, so the
-    # usual `|| echo 0` fallback appends a second number and the comparison
-    # below stops being arithmetic.
-    ags_passthrough_hits="$(grep -c 'mode == "passthrough" or' \
-      "$ags_mail_dir/src/mcp_agent_mail/app.py" 2>/dev/null || true)"
-    [[ "$ags_passthrough_hits" =~ ^[0-9]+$ ]] || ags_passthrough_hits=0
+  # Use the installed syntax-aware inspector. Grep sees markers in comments and
+  # reference strings as code, which can turn an inert checkout into a false
+  # "present" report.
+  ags_patch_state=""
+  if [[ -x "$PYTHON_BIN" && -f "$NAME_CAPABILITY_SCRIPT" ]]; then
+    ags_patch_state="$("$PYTHON_BIN" "$NAME_CAPABILITY_SCRIPT" \
+      --mail-dir "$ags_mail_dir" 2>/dev/null || true)"
   fi
-  if [[ "$ags_passthrough_hits" -ge 2 ]] \
-     && grep -q '"passthrough"' "$ags_mail_dir/src/mcp_agent_mail/config.py" 2>/dev/null; then
-    echo '- passthrough patch: present'
-  elif [[ "$ags_passthrough_hits" -gt 0 ]]; then
-    echo '- passthrough patch: partial (the mode may be refused at startup)'
-  elif [[ -f "$ags_mail_dir/src/mcp_agent_mail/app.py" ]]; then
-    echo '- passthrough patch: absent'
-  else
-    echo '- passthrough patch: unknown (no agent-mail source at that path)'
-  fi
+  case "$ags_patch_state" in
+    already) echo '- passthrough patch: present' ;;
+    partial) echo '- passthrough patch: partial (the mode may be refused at startup)' ;;
+    applicable) echo '- passthrough patch: absent' ;;
+    unsupported) echo '- passthrough patch: absent (source not recognised)' ;;
+    *) echo '- passthrough patch: unknown (source or inspector unavailable)' ;;
+  esac
   ags_name_capability_json=""
   if [[ -x "$PYTHON_BIN" && -f "$NAME_CAPABILITY_SCRIPT" ]]; then
     ags_name_capability_json="$("$PYTHON_BIN" "$NAME_CAPABILITY_SCRIPT" \

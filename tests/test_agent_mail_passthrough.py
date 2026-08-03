@@ -55,6 +55,37 @@ def test_a_pinned_checkout_is_applicable():
         assert patcher.inspect(root)["state"] == "applicable"
 
 
+def test_comments_that_repeat_every_marker_are_not_applied_code():
+    app = APP_PY + (
+        "\n# mode == \"passthrough\" or validate_agent_name_format(sanitized)\n"
+        "# mode == \"passthrough\" or validate_agent_name_format(sanitized)\n"
+    )
+    config = CONFIG_PY + '\n# "always_auto", "passthrough"\n'
+    with tempfile.TemporaryDirectory() as directory:
+        root = _checkout(pathlib.Path(directory), app=app, config=config)
+        assert patcher.inspect(root)["state"] == "applicable"
+
+
+def test_a_reference_string_is_not_an_applicable_callsite():
+    changed = APP_PY.replace(
+        "validate_agent_name_format(sanitized)", "fork_name_check(sanitized)"
+    )
+    reference = "\nPATCH_REFERENCE = " + repr("\n\n".join(
+        edit.before for edit in patcher.EDITS if edit.relative_path.endswith("app.py")
+    )) + "\n"
+    with tempfile.TemporaryDirectory() as directory:
+        root = _checkout(pathlib.Path(directory), app=changed + reference)
+        before = _texts(root)
+        assert patcher.inspect(root)["state"] == "unsupported"
+        try:
+            patcher.apply(root)
+        except PatchError:
+            pass
+        else:
+            raise AssertionError("apply() rewrote a reference string instead of code")
+        assert _texts(root) == before
+
+
 def test_inspect_writes_nothing():
     """--dry-run must be able to ask without changing the answer."""
     with tempfile.TemporaryDirectory() as directory:
