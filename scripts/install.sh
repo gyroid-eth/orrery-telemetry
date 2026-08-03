@@ -215,11 +215,31 @@ inspect_agent_mail_name_capability() {
     --mail-dir "$dir" --mail-env "$MAIL_ENV" --name-capability
 }
 
+# Where a server we did not start keeps its source. The listener's working
+# directory is the direct answer, but reading it needs lsof or /proc, and a
+# machine with neither would report every existing server as unreadable
+# forever. The database we already resolved sits in that same checkout, so fall
+# back to its directory when it looks like one.
+existing_agent_mail_source_dir() {
+  local candidate
+  for candidate in "$AGENT_MAIL_LISTENER_CWD" \
+                   "${MAIL_DB:+$(dirname "$MAIL_DB")}"; do
+    # Judge each candidate by what is in it, not by where it came from. A
+    # server started from somewhere other than its checkout has a working
+    # directory that is real, readable, and the wrong answer.
+    if [[ -n "$candidate" && -d "$candidate/src/mcp_agent_mail" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s' ""
+}
+
 report_agent_mail_name_capability() {
   local source_dir="$MAIL_DIR"
   local summary status evidence
-  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true && -n "$AGENT_MAIL_LISTENER_CWD" ]]; then
-    source_dir="$AGENT_MAIL_LISTENER_CWD"
+  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
+    source_dir="$(existing_agent_mail_source_dir)"
   fi
   AGENT_MAIL_NAME_CAPABILITY_JSON="$(inspect_agent_mail_name_capability "$source_dir")"
   summary="$("$PYTHON_BIN" - "$AGENT_MAIL_NAME_CAPABILITY_JSON" <<'PY'
@@ -284,7 +304,8 @@ offer_passthrough_to_existing_server() {
   if [[ "$PASSTHROUGH_ENABLED" != "1" ]]; then
     return 0
   fi
-  local dir="$AGENT_MAIL_LISTENER_CWD"
+  local dir
+  dir="$(existing_agent_mail_source_dir)"
   if [[ -z "$dir" || ! -d "$dir" ]]; then
     say "agent-mail naming mode: source directory unknown; leaving it untouched"
     return 0
