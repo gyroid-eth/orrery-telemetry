@@ -189,6 +189,10 @@ git pull
 
 installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。既存 clone の `mcp_agent_mail` は remote URL を確認して再利用します。
 
+**in-place upgrade 中も agent-mail server は稼働させたまま**にしてください。稼働 listener から解決した実 DB path は filesystem の候補探索より優先されます。agent-mail を先に止めると候補探索へフォールバックし、複数の DB がある環境では誤選択を避けるため installer が停止します。
+
+dashboard port を現在の AgentStack launchd job または supervised-background pidfile 配下のプロセスが保持している場合、installer は所有者を照合してその dashboard を新しい payload で置換します。同じ port を無関係なプロセスが保持している場合は、従来どおり停止します。
+
 service の environment は install 時に plist / unit へ書き込まれます。`~/.agentstack/env.sh` を変更しただけでは既存 service に反映されないため、installer を再実行するか service definition も更新してください。
 
 ## Uninstall

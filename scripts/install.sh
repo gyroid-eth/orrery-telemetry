@@ -596,8 +596,110 @@ finally:
 PY
 }
 
+listener_pids() {
+  local lsof_bin
+  lsof_bin="$(command -v lsof 2>/dev/null || true)"
+  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
+    lsof_bin=/usr/sbin/lsof
+  fi
+  [[ -n "$lsof_bin" ]] || return 1
+  "$lsof_bin" -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null |
+    sed -n '/^[0-9][0-9]*$/p' | sort -u
+}
+
+process_parent_pid() {
+  local pid="$1" lsof_bin
+  if [[ -r "/proc/$pid/stat" ]]; then
+    "$PYTHON_BIN" - "$pid" <<'PY'
+import pathlib
+import sys
+
+try:
+    fields = pathlib.Path(f"/proc/{sys.argv[1]}/stat").read_text().rsplit(")", 1)[1].split()
+    parent = int(fields[1])
+except (IndexError, OSError, ValueError):
+    raise SystemExit(1)
+print(parent)
+PY
+    return
+  fi
+
+  lsof_bin="$(command -v lsof 2>/dev/null || true)"
+  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
+    lsof_bin=/usr/sbin/lsof
+  fi
+  if [[ -n "$lsof_bin" ]]; then
+    "$lsof_bin" -a -p "$pid" -FpR 2>/dev/null |
+      sed -n 's/^R//p' | sed -n '1p'
+    return
+  fi
+
+  ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+}
+
+pid_is_same_or_descendant() {
+  local candidate="$1" root="$2" parent attempts=0
+  [[ "$candidate" =~ ^[0-9]+$ && "$root" =~ ^[0-9]+$ ]] || return 1
+  while [[ "$candidate" -gt 1 && "$attempts" -lt 64 ]]; do
+    [[ "$candidate" == "$root" ]] && return 0
+    parent="$(process_parent_pid "$candidate" || true)"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$candidate" ]] || return 1
+    candidate="$parent"
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+launchd_dashboard_pid() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  command -v launchctl >/dev/null 2>&1 || return 1
+  launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null |
+    sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\).*$/\1/p' | sed -n '1p'
+}
+
+supervised_dashboard_pid() {
+  local pidfile="$RUNTIME_DIR/dashboard.pid" pid
+  pid="$(sed -n '1p' "$pidfile" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s\n' "$pid"
+}
+
+MANAGED_SUPERVISED_PID=""
+
+listener_is_managed_dashboard() {
+  local listener_pid="$1" manager_pid
+  manager_pid="$(launchd_dashboard_pid || true)"
+  if [[ -n "$manager_pid" ]] && pid_is_same_or_descendant "$listener_pid" "$manager_pid"; then
+    return 0
+  fi
+
+  manager_pid="$(supervised_dashboard_pid || true)"
+  if [[ -n "$manager_pid" ]] && pid_is_same_or_descendant "$listener_pid" "$manager_pid"; then
+    MANAGED_SUPERVISED_PID="$manager_pid"
+    return 0
+  fi
+  return 1
+}
+
 check_port() {
   if port_in_use; then
+    local listeners listener all_managed=true
+    listeners="$(listener_pids || true)"
+    if [[ -z "$listeners" ]]; then
+      all_managed=false
+    else
+      while IFS= read -r listener; do
+        if ! listener_is_managed_dashboard "$listener"; then
+          all_managed=false
+          break
+        fi
+      done <<< "$listeners"
+    fi
+    if [[ "$all_managed" == true ]]; then
+      say "managed dashboard owns port $PORT; replacing it during this install"
+      return
+    fi
     if [[ "$DRY_RUN" == true ]]; then
       warn "port $PORT is already in use; live install would stop before service registration"
     else
@@ -1235,15 +1337,7 @@ start_supervised_background() {
     return 0
   fi
   mkdir -p "$RUNTIME_DIR"
-  if [[ -f "$SERVICE_PATH" ]]; then
-    local previous_pid
-    previous_pid="$(sed -n '1p' "$SERVICE_PATH" 2>/dev/null || true)"
-    if [[ "$previous_pid" =~ ^[0-9]+$ ]] && kill -0 "$previous_pid" 2>/dev/null; then
-      warn "supervised background process is already running with pid $previous_pid"
-      return 0
-    fi
-    rm -f "$SERVICE_PATH"
-  fi
+  stop_supervised_background || return 1
   (
     # shellcheck disable=SC1090
     . "$ENV_FILE"
@@ -1260,6 +1354,58 @@ start_supervised_background() {
     SERVICE_PATH=""
     return 1
   fi
+}
+
+supervised_pid_matches_state() {
+  local pid="$1" state_file="$RUNTIME_DIR/dashboard-service.json"
+  [[ -f "$state_file" ]] || return 1
+  "$PYTHON_BIN" - "$state_file" "$pid" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    state = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    recorded = int(state.get("supervisor_pid", 0))
+    expected = int(sys.argv[2])
+except (AttributeError, json.JSONDecodeError, OSError, TypeError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if recorded == expected else 1)
+PY
+}
+
+stop_supervised_background() {
+  local pid attempts=0
+  pid="$(sed -n '1p' "$RUNTIME_DIR/dashboard.pid" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    if [[ "$pid" != "$MANAGED_SUPERVISED_PID" ]] && ! supervised_pid_matches_state "$pid"; then
+      warn "refusing to stop unverified process $pid from $RUNTIME_DIR/dashboard.pid"
+      ACTIVE_SERVICE_KIND="manual"
+      SERVICE_PATH=""
+      return 1
+    fi
+    say "stopping supervised background dashboard with pid $pid before replacement"
+    kill "$pid" 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null && [[ "$attempts" -lt 50 ]]; do
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    attempts=0
+    while port_in_use && [[ "$attempts" -lt 50 ]]; do
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
+    if port_in_use; then
+      warn "supervised background dashboard did not release port $PORT"
+      ACTIVE_SERVICE_KIND="manual"
+      SERVICE_PATH=""
+      return 1
+    fi
+  fi
+  rm -f "$RUNTIME_DIR/dashboard.pid"
 }
 
 verify_dashboard_service() {

@@ -9,6 +9,7 @@ import pathlib
 import plistlib
 import pty
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -49,6 +50,110 @@ def _runner_env(tmp_path: pathlib.Path) -> dict[str, str]:
         "AGENTSTACK_DASHBOARD_RESTART_DELAY": "0",
     })
     return env
+
+
+def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
+    repo = tmp_path / "installer-repo"
+    repo.mkdir()
+    for directory in ("bin", "dashboard", "scripts"):
+        shutil.copytree(ROOT / directory, repo / directory)
+    shutil.copy2(ROOT / "VERSION", repo / "VERSION")
+    return repo
+
+
+def _write_marker_dashboard(path: pathlib.Path, marker: str) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import http.server
+import json
+import os
+
+MARKER = %r
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        body = json.dumps({"marker": MARKER}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+http.server.ThreadingHTTPServer(
+    ("127.0.0.1", int(os.environ["AGENTSTACK_PORT"])), Handler
+).serve_forever()
+""" % marker,
+        encoding="utf-8",
+    )
+
+
+def _wait_for_marker(port: int, marker: str, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/agents", timeout=0.5
+            ) as response:
+                payload = json.loads(response.read())
+            if payload.get("marker") == marker:
+                return
+        except Exception as exc:  # The process may still be starting or replacing.
+            last_error = exc
+        time.sleep(0.05)
+    raise AssertionError(
+        f"dashboard marker {marker!r} did not appear on port {port}: {last_error}"
+    )
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_for_pid_exit(pid: int, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_is_alive(pid):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"process {pid} did not exit")
+
+
+def _installer_upgrade_env(
+    tmp_path: pathlib.Path,
+    fake_bin: pathlib.Path,
+    port: int,
+) -> tuple[dict[str, str], pathlib.Path]:
+    home = tmp_path / "home"
+    install_dir = home / ".agentstack"
+    project = tmp_path / "project"
+    project.mkdir()
+    mail_dir = home / "mcp_agent_mail"
+    (mail_dir / ".git").mkdir(parents=True)
+    mail_db = mail_dir / "storage.sqlite3"
+    mail_db.touch()
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_DB": str(mail_db),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+    return env, install_dir
 
 
 def _fake_python_39() -> str:
@@ -130,6 +235,226 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
     kickstart = output.index("launchctl kickstart gui/")
     health = output.index("verify dashboard API responds")
     assert bootstrap < enable < kickstart < health
+
+
+def test_launchd_in_place_upgrade_replaces_its_own_listener_with_new_code(
+    tmp_path,
+):
+    repo = _isolated_installer_repo(tmp_path)
+    _write_marker_dashboard(repo / "dashboard" / "server.py", "new-launchd")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    new_pidfile = tmp_path / "new-launchd.pid"
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+        "launchctl": """#!/bin/sh
+case "$1" in
+  print)
+    printf '{\n    pid = %s\n}\n' "$AGENTSTACK_TEST_OLD_PID"
+    ;;
+  bootout)
+    if kill -0 "$AGENTSTACK_TEST_OLD_PID" 2>/dev/null; then
+      kill "$AGENTSTACK_TEST_OLD_PID" 2>/dev/null || true
+      attempts=0
+      while kill -0 "$AGENTSTACK_TEST_OLD_PID" 2>/dev/null && [ "$attempts" -lt 50 ]; do
+        sleep 0.1
+        attempts=$((attempts + 1))
+      done
+    fi
+    ;;
+  bootstrap)
+    nohup "$AGENTSTACK_PYTHON" \
+      "$AGENTSTACK_HOME/dashboard/service_runner.py" >/dev/null 2>&1 &
+    echo $! > "$AGENTSTACK_TEST_NEW_PIDFILE"
+    ;;
+esac
+exit 0
+""",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
+    old_server = tmp_path / "old-dashboard.py"
+    _write_marker_dashboard(old_server, "old-launchd")
+    old_process = subprocess.Popen(
+        [sys.executable, str(old_server)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    env.update({
+        "AGENTSTACK_TEST_OLD_PID": str(old_process.pid),
+        "AGENTSTACK_TEST_NEW_PIDFILE": str(new_pidfile),
+    })
+    try:
+        _wait_for_marker(port, "old-launchd")
+        result = subprocess.run(
+            [
+                "bash",
+                str(repo / "scripts" / "install.sh"),
+                "--dashboard-only",
+            ],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert old_process.wait(timeout=5) == -signal.SIGTERM
+        _wait_for_marker(port, "new-launchd")
+        new_pid = int(new_pidfile.read_text(encoding="utf-8").strip())
+        assert new_pid != old_process.pid
+        assert _pid_is_alive(new_pid)
+        assert "managed dashboard owns port" in result.stdout
+        assert "replacing it during this install" in result.stdout
+        manifest = json.loads(
+            (install_dir / "install-state.json").read_text(encoding="utf-8")
+        )
+        assert manifest["services"][0]["kind"] == "launchd"
+    finally:
+        if new_pidfile.exists():
+            try:
+                os.kill(int(new_pidfile.read_text().strip()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if _pid_is_alive(old_process.pid):
+            old_process.terminate()
+        old_process.wait(timeout=5)
+
+
+def test_installer_still_rejects_an_unmanaged_listener(tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    listener = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import socket,sys,time; "
+                "s=socket.socket(); s.bind(('127.0.0.1',int(sys.argv[1]))); "
+                "s.listen(); time.sleep(30)"
+            ),
+            str(port),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("foreign listener did not start")
+
+    install_dir = tmp_path / "home" / ".agentstack"
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(tmp_path / "home"),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.foreign-listener-test",
+        "AGENTSTACK_PROJECT_KEY": str(tmp_path / "project"),
+        "AGENTSTACK_TERMINAL": "none",
+    })
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "install.sh"),
+                "--assume-yes",
+                "--dashboard-only",
+                "--install-dir",
+                str(install_dir),
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 1
+        assert f"port {port} is already in use" in result.stderr
+        assert "managed dashboard owns port" not in result.stdout
+        assert not install_dir.exists()
+    finally:
+        listener.terminate()
+        listener.wait(timeout=5)
+
+
+def test_supervised_in_place_upgrade_stops_old_pid_and_runs_new_code(tmp_path):
+    repo = _isolated_installer_repo(tmp_path)
+    _write_marker_dashboard(repo / "dashboard" / "server.py", "supervised-v1")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+        "launchctl": """#!/bin/sh
+case "$1" in
+  print) exit 1 ;;
+  bootstrap) exit 125 ;;
+esac
+exit 0
+""",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
+    command = [
+        "bash",
+        str(repo / "scripts" / "install.sh"),
+        "--dashboard-only",
+    ]
+    first = subprocess.run(
+        command,
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    pidfile = install_dir / "runtime" / "dashboard.pid"
+    old_pid = int(pidfile.read_text(encoding="utf-8").strip())
+    try:
+        assert "falling back to supervised background mode" in first.stderr
+        _wait_for_marker(port, "supervised-v1")
+        _write_marker_dashboard(repo / "dashboard" / "server.py", "supervised-v2")
+        second = subprocess.run(
+            command,
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        new_pid = int(pidfile.read_text(encoding="utf-8").strip())
+        assert new_pid != old_pid
+        _wait_for_pid_exit(old_pid)
+        assert _pid_is_alive(new_pid)
+        _wait_for_marker(port, "supervised-v2")
+        assert "managed dashboard owns port" in second.stdout
+        assert "stopping supervised background dashboard" in second.stdout
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text().strip()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 
 def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
