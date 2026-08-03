@@ -31,6 +31,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.parse
 import urllib.request
 from urllib.parse import urlparse, parse_qs
 
@@ -470,6 +471,34 @@ def _retired_at_select(alias: str = "a") -> str:
     return f"{alias}.retired_at" if _has_retired_at() else "NULL AS retired_at"
 
 
+def _retired_names(project_key: str) -> set[str]:
+    """agent-mail が retired と見なしている名前。列が無い版では空集合。
+
+    agent-mail は 24 時間無活動で agent を retire する。終了した session を
+    片付けるぶんには妥当だが、**生きたまま idle だった常駐 agent** も巻き込む。
+    そして retired agent は送信も自分の inbox 読取も素通りし、受信だけが黙って
+    拒否されるので、当人も人間も気づけない。他 agent のメールが bounce して
+    初めて分かる。
+    """
+    if not project_key or not _has_retired_at():
+        return set()
+    con = None
+    try:
+        con = _db()
+        return {
+            r[0] for r in con.execute(
+                "SELECT a.name FROM agents a JOIN projects p ON p.id = a.project_id "
+                "WHERE p.human_key = ? AND a.retired_at IS NOT NULL",
+                (project_key,),
+            )
+        }
+    except Exception:
+        return set()
+    finally:
+        if con is not None:
+            con.close()
+
+
 def agentmail_state() -> tuple[dict, dict]:
     """(agents_by_name, last_instruction_by_name)。DB が無くても空で返す。"""
     agents: dict[str, dict] = {}
@@ -584,6 +613,7 @@ def build_agents() -> list[dict]:
     codex_apps = _codex_app_runtimes()
     now = int(time.time())
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
+    retired_names = _retired_names(_project_key())
     rows = []
     for name, s in sessions.items():
         m = mail_agents.get(name)
@@ -628,6 +658,12 @@ def build_agents() -> list[dict]:
                 # tmux client attachment is a separate UI/safety signal and
                 # must never imply that registration succeeded.
                 "mail_linked": m is not None,
+                # Alive here, retired over there. The sweep cannot see tmux;
+                # this side can, so this side is where the contradiction shows
+                # up. Reported, never repaired on its own — the agent is still
+                # having a conversation, and silently changing its state is
+                # how "it looked fine" happens.
+                "retired_but_alive": name in retired_names,
                 "cmd": s["cmd"],
                 "live": live,
                 # pane のステータスバー由来を優先（warm pool claim で DB
@@ -3064,7 +3100,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
             actions.append("retire-already")
         else:
             req = urllib.request.Request(
-                "http://127.0.0.1:8765/mail/api/retire-agent",
+                _mail_web_url("/mail/api/retire-agent"),
                 data=json.dumps({"agent_id": row["id"]}).encode(),
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -4353,7 +4389,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path not in ("/api/jump", "/api/kill", "/api/exit",
-                        "/api/annotate", "/api/spawn"):
+                        "/api/annotate", "/api/spawn", "/api/reactivate"):
             self._send(404, b"not found", "text/plain")
             return
 
@@ -4423,6 +4459,8 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("group", ""))
         elif path == "/api/spawn":
             result = do_spawn(body)
+        elif path == "/api/reactivate":
+            result = do_reactivate(session)
         else:
             mode = body.get("mode", "both")
             result = do_kill(session, mode)
@@ -4431,6 +4469,87 @@ class Handler(BaseHTTPRequestHandler):
             json.dumps(result, ensure_ascii=False).encode(),
             "application/json; charset=utf-8",
         )
+
+
+# --------------------------------------------------------------------------- #
+# do_reactivate — 生きているのに retired にされた agent を受信可能に戻す。
+#
+# agent-mail は 24 時間無活動の agent を毎時 retire する。終了した session に
+# は妥当な掃除だが、**生きたまま idle だった常駐 agent**（司令塔・監視役）も
+# 一緒に retire される。そして retired agent は送信と自分の inbox 読取は
+# 素通りし、**受信だけが黙って拒否される** ので、本人も人間も気づけない。
+# 他 agent のメールが bounce して初めて分かる。
+#
+# resume はこれを直せない。resume は「tmux が無い = 終了済み」を前提にした
+# 復元路で、生きた session に当てても attach するだけで再登録は走らない。
+# 直すには会話を捨てて再起動するしかなかった。
+#
+# ここは dashboard にしかできない仕事である。tmux が生きているかどうかを
+# 知っているのは agent-mail ではなくこちら側だから。自動では戻さない:
+# 黙って直すのは、今日一日で 4 つの形で踏んだ失敗そのものなので。
+# --------------------------------------------------------------------------- #
+def _mail_web_url(path: str) -> str:
+    """agent-mail の web API を、設定済み endpoint と同じ host:port で叩く。
+
+    ここは `http://127.0.0.1:8765` を直書きしていた。既定ポートで動いている
+    限り正しく、それ以外では retire が黙って失敗する——「動いている環境では
+    気づけない」種類の前提で、今日直したものと同じ形である。MCP endpoint が
+    どこを指しているかは分かっているので、そこから導く。
+    """
+    base = MCP_HTTP_URL or "http://127.0.0.1:8765/mcp"
+    parts = urllib.parse.urlsplit(base)
+    return urllib.parse.urlunsplit((parts.scheme or "http", parts.netloc, path, "", ""))
+
+
+def do_reactivate(session: str) -> dict:
+    if not _valid(session):
+        return {"ok": False, "error": "invalid session name"}
+    if not _has_retired_at():
+        return {"ok": False,
+                "error": "this agent-mail has no retired_at column; "
+                         "nothing can be retired on it"}
+    project_key = _project_key()
+    if not project_key:
+        return {"ok": False,
+                "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
+    if not _has_session(session):
+        return {"ok": False,
+                "error": f"agent '{session}' has no live tmux session; "
+                         "use resume to restore a finished one"}
+    con = None
+    try:
+        con = _db()
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT a.id, a.retired_at FROM agents a "
+            "JOIN projects p ON a.project_id=p.id "
+            "WHERE a.name=? AND p.human_key=?",
+            (session, project_key),
+        ).fetchone()
+    except Exception as e:
+        return {"ok": False, "error": f"failed to read agent record: {e}"}
+    finally:
+        if con is not None:
+            con.close()
+    if row is None:
+        return {"ok": False, "error": f"agent '{session}' not found in agent-mail"}
+    if not row["retired_at"]:
+        return {"ok": False, "error": f"agent '{session}' is not retired"}
+
+    req = urllib.request.Request(
+        _mail_web_url("/mail/api/unretire-agent"),
+        data=json.dumps({"agent_id": row["id"]}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            payload = json.loads(r.read())
+    except Exception as e:
+        return {"ok": False, "error": f"unretire request failed: {e}"}
+    if not payload.get("success"):
+        return {"ok": False, "error": f"unretire refused: {payload}"}
+    return {"ok": True, "session": session, "action": "reactivated"}
 
 
 def _start_supervisor_watchdog():
