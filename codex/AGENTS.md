@@ -128,6 +128,23 @@ Failure handling:
   registration/token problem to recover first; a response for the wrong name is
   an identity split, so stop and do not register under another alias.
 
+## Canonical coordination paths are fail-closed
+
+- If a documented AgentStack tool, helper, transport, or workflow is missing or
+  fails, use only the recovery steps explicitly documented above. If they do
+  not restore the canonical path, report the exact failure and stop the affected
+  coordination action. Do not invent a substitute merely to make the task look
+  successful.
+- Never replace `fetch_inbox` or another agent-mail tool with direct reads of
+  mailbox directories, message files, or `storage.sqlite3`; ad hoc `find`
+  loops; `while true` polling; direct database queries; raw tmux prompt
+  injection; or a newly written watcher. Those paths bypass authentication,
+  read/ack semantics, wake delivery, and the configured project identity.
+- Delegation is one instance of the rule. Use the `delegate` skill and its
+  documented pre-registration flow. If its agent-mail tools are unavailable,
+  report that failure and stop the delegation attempt. Do not substitute a
+  built-in child, direct-mode launcher, or other improvised workflow.
+
 ## File reservations — REQUIRED before editing (Codex is not auto-guarded)
 
 Claude agents are hard-blocked by a PreToolUse hook from editing shared files

@@ -116,14 +116,22 @@ The installed skill sources live under `__AGENTSTACK_HOME__/skills`.
 - `delegate`: `__AGENTSTACK_HOME__/skills/delegate/SKILL.md`
 - `log`: `__AGENTSTACK_HOME__/skills/log/SKILL.md`
 
-## Delegation Must Stay On AgentStack
+## Canonical Coordination Paths Are Fail-Closed
 
-- When the user asks you to create, spawn, or delegate to a child agent, use
-  `/delegate`. Do not substitute Claude Code's built-in Agent or Task tool;
-  those children have no AgentStack identity, inbox, reservation, dedicated
-  tmux session, or dashboard telemetry even when their work appears to finish.
-- `/delegate` requires the `mcp__mcp-agent-mail__*` tools. If those tools are
-  unavailable, report that agent-mail is not registered as a Claude Code MCP
-  server and stop the delegation attempt. Do not silently switch to a built-in
-  agent, direct-mode launcher, or any other path that can turn this integration
-  failure into an apparent success.
+- If a documented AgentStack tool, helper, transport, or workflow is missing or
+  fails, follow only the recovery steps explicitly documented above. If those
+  steps do not restore the canonical path, report the exact failure and stop
+  the affected coordination action. Do not invent a substitute merely to make
+  the task appear successful.
+- In particular, do not replace `fetch_inbox` or another agent-mail tool with
+  direct reads of mailbox directories, message files, or `storage.sqlite3`;
+  ad hoc `find` loops; `while true` polling; direct database queries; raw tmux
+  prompt injection; or a newly written watcher. These bypass authentication,
+  read/ack semantics, wake delivery, and the configured project identity.
+- Delegation is one instance of this general rule. When the user asks to create,
+  spawn, or delegate to a child, use `/delegate`. Do not substitute Claude
+  Code's built-in Agent or Task tool: those children have no AgentStack
+  identity, inbox, reservation, dedicated tmux session, or dashboard telemetry.
+  If `/delegate` cannot see the `mcp__mcp-agent-mail__*` tools, report that the
+  fixed-name MCP server is unavailable and stop the delegation attempt. Do not
+  switch to a built-in agent, direct-mode launcher, or another improvised path.

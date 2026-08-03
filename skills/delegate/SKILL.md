@@ -97,6 +97,14 @@ Use generic task examples such as code review, API migration, test-suite repair,
 
 Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
 
+This is the canonical flow, not one option among interchangeable transports.
+If the required agent-mail tools or preregistration helper are unavailable, use
+only the documented registration recovery path. If it cannot restore the flow,
+report the exact failure and stop delegation. Do not inspect mailbox files or
+the agent-mail database, start an ad hoc watcher/poll loop, inject the task into
+tmux, use a built-in child tool, or invoke the launcher's direct mode as a
+substitute.
+
 1. Verify `AGENTSTACK_PROJECT_KEY` is set to the shared project key, not a random cwd.
 2. Let the helper name the child. Omit `--name` and it draws a free `Adjective-Scientist` name from the same picker top-level registration uses, so the name always has a dashboard portrait. Only pass `--name` when the caller needs a specific existing identity; an off-list name is accepted with a warning (no portrait), or rejected outright under `AGENTSTACK_STRICT_AGENT_NAMES=1`.
 3. Pre-register the child with a child-owned token and write that token to a temporary 0600 file. Prefer the helper so the parent LLM never sees the token:
@@ -146,14 +154,6 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
 ```
 
 `spawn_child.sh --pre-registered` will refuse to start without a child-owned token file or existing `AGENTSTACK_RUNTIME_DIR/child-agents/<child-name>.json` state. It intentionally ignores any ambient `CHILD_REGISTRATION_TOKEN` from the parent so the parent's owner token is not forwarded to the child.
-
-For fallback direct mode when MCP tools are unavailable:
-
-```bash
-bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
-  --resources "<resource-csv>" \
-  "<task summary>" "<working-directory>"
-```
 
 ## 4. Worktree Mode
 
