@@ -1383,9 +1383,12 @@ def _ownership_score(text: str, name: str) -> int:
     return s
 
 
-def _scan_selfref(files: list[str], name: str, cap: int) -> str | None:
+def _scan_selfref(files: list[str], name: str, cap: int) -> tuple[str | None, int]:
     """files(新しい順)を最大 cap 件、各 3MB まで読み、所有度スコア最大の
-    ファイルを返す。スコア 0 なら None。"""
+    (ファイル, スコア)を返す。スコア 0 なら (None, 0)。
+
+    スコアも返すのは、別エージェントが同じファイルを主張したときに
+    どちらが本人かを比べるため(下の _claim_transcript)。"""
     best, best_s = None, 0
     for f in files[:cap]:
         try:
@@ -1395,7 +1398,36 @@ def _scan_selfref(files: list[str], name: str, cap: int) -> str | None:
             continue
         if sc > best_s:
             best, best_s = f, sc
-    return best if best_s > 0 else None
+    return (best, best_s) if best_s > 0 else (None, 0)
+
+
+# transcript path -> (agent name, score, exact)。
+# 一本の transcript は一人のものである。この登録簿が無いと、子について
+# 多く語る親の transcript が子の小さな transcript を出現数で上回り、
+# 親子のカードに同じ履歴が出る(テスター報告 ⑯: 親子とも 66/66 で
+# 同一 jsonl、内容は親のもの)。名前ごとに独立に解いていたので、
+# 二人が同じ答えに到達しても誰も気づかなかった。
+_TPATH_OWNER: dict[str, tuple[str, int, bool]] = {}
+
+
+def _claim_transcript(path: str, name: str, score: int, *, exact: bool) -> bool:
+    """path を name のものとして主張する。通れば True。
+
+    exact(登録時に焼いた session index)は常に勝ち、決して奪われない。
+    ヒューリスティック同士は所有度スコアで比べ、弱いほうは諦める
+    ——他人の履歴を出すくらいなら、何も出さないほうがよい。
+    """
+    held = _TPATH_OWNER.get(path)
+    if held is not None and held[0] != name:
+        held_name, held_score, held_exact = held
+        if held_exact and not exact:
+            return False
+        if not exact and score <= held_score:
+            return False
+        # こちらの主張のほうが強い: 相手のキャッシュを捨てて奪う。
+        _TPATH_CACHE.pop(held_name, None)
+    _TPATH_OWNER[path] = (name, score, exact)
+    return True
 
 
 def _agent_window(name: str) -> tuple[int, int]:
@@ -1510,10 +1542,12 @@ def _transcript_path(session: str) -> str | None:
     #    同名使い回しの誤マッチをここで根治する。
     indexed = _indexed_transcript(session)
     if indexed:
+        _claim_transcript(indexed, session, 1 << 30, exact=True)
         _TPATH_CACHE[session] = (now, indexed)
         return indexed
 
     chosen: str | None = None
+    chosen_score = 0
 
     # 1) 稼働中: tmux ペイン cwd 由来
     out = subprocess.run(
@@ -1535,7 +1569,7 @@ def _transcript_path(session: str) -> str | None:
                 # (cwd dir の最新へフォールバックしない: `claude --resume`
                 #  を別 cwd から起動した等で cwd が transcript と不一致の
                 #  場合、無関係エージェントの履歴を誤表示するため)
-                chosen = _scan_selfref(js, session, 40)
+                chosen, chosen_score = _scan_selfref(js, session, 40)
 
     # 2) cwd で特定できない(終了済み / resume で cwd 不一致 等):
     #    全 projects 横断 + 活動期間 mtime 絞り込みで自己参照最多。
@@ -1553,9 +1587,16 @@ def _transcript_path(session: str) -> str | None:
             hi = (last or 9_999_999_999) + 172800  # 2d 後
             win = [f for f in files
                    if lo <= _safe_mtime(f) <= hi]
-            chosen = _scan_selfref(win, session, 80)
+            chosen, chosen_score = _scan_selfref(win, session, 80)
         if chosen is None:
-            chosen = _scan_selfref(files, session, 120)
+            chosen, chosen_score = _scan_selfref(files, session, 120)
+
+    if chosen is not None and not _claim_transcript(
+        chosen, session, chosen_score, exact=False
+    ):
+        # 同じファイルを、より強く主張する別エージェントがいる。
+        # 他人の履歴を見せるより空のほうがましなので諦める。
+        chosen = None
 
     _TPATH_CACHE[session] = (now, chosen)
     return chosen
