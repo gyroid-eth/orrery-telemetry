@@ -2653,6 +2653,16 @@ _WORK_RE = re.compile(
     r"|·\s*[↑↓]?\s*[\d.]+k?\s*tokens"
     r"|\(\s*\d+m\s+\d+s\s*·"
 )
+# Claude Code 新TUI (2026-08 実測): タスクwidget 稼働時のスピナー行は
+#   "✽ <進行中タスク名>…" だけになり、esc to interrupt・経過時間・token 数が
+#   一切出ない → _WORK_RE 全滅で work が wait に化ける。グリフ行＋折返し2行以内の
+#   "…" を作業中の証拠にする。タスク名折返しでグリフが単独行になる形も許容。
+#   idle ペインにグリフ開始行が残らないことを Claude 6 ペインで負例確認済み。
+#   "·" は単独行だと汎用的すぎるので "…" 必須側のみに含める。
+_WORK_CLAUDE_TASK_RE = re.compile(
+    r"(?m)"
+    r"^[ \t\xa0]*[✢✳✶✻✽✺·][ \t\xa0]+\S(?:[^\n]*\n){0,2}[^\n]*…"
+    r"|^[ \t\xa0]*[✢✳✶✻✽✺][ \t\xa0]*$")
 # Codex 生成中スピナー行: "• Working (1s • esc to interrupt)" / "• Thinking (…"。
 #   "esc to interrupt" は _WORK_RE でも拾えるが、文言変更に備え spinner+経過尺
 #   (… (Ns) という形)も正本にする。prose 誤マッチを避けるため経過尺を必須化。
@@ -2764,7 +2774,11 @@ def _parse_runtime(text: str) -> dict:
     # バッファ上部の自己マッチ（過去の出力にコードや報告文として regex 自体が
     # 書かれているケース等）を避けるため、末尾 12 行に絞って検出する。
     tail = "\n".join(text.splitlines()[-12:])
-    if _WORK_RE.search(text) or _WORK_CODEX_RE.search(text):
+    # スピナー行はタスクwidget(可変長)の直上に出るため 12 行窓では不足。
+    # スクロールバッファの過去出力への誤マッチは避けたいので 25 行に限定。
+    tail25 = "\n".join(text.splitlines()[-25:])
+    if _WORK_RE.search(text) or _WORK_CODEX_RE.search(text) \
+            or _WORK_CLAUDE_TASK_RE.search(tail25):
         act = "work"
     elif _QUESTION_RE.search(tail):
         act = "question"
