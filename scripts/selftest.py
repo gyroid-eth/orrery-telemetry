@@ -230,15 +230,6 @@ def dashboard(url: str, path: str, timeout: float = 15.0):
         return json.load(response)
 
 
-def names_of(payload) -> set[str]:
-    if isinstance(payload, dict):
-        for key in ("agents", "nodes"):
-            rows = payload.get(key)
-            if isinstance(rows, list):
-                return {r.get("name") for r in rows if isinstance(r, dict)}
-    return set()
-
-
 def register_pair(mail: AgentMail, project_key: str, report: Reporter) -> list[str]:
     """Let the server name them: name rules differ between builds."""
     names = []
@@ -367,19 +358,32 @@ def reservations(mail: AgentMail, project_key: str, pair: list[str], report: Rep
 
 
 def dashboard_sees(url: str, pair: list[str], report: Reporter) -> None:
+    """Does the dashboard read the database agent-mail just wrote to?
+
+    Ask the graph, not the deck. The deck (`/api/agents`) is built from tmux
+    sessions and shows agents that have one; these two were registered over
+    HTTP and have none, so the deck could never list them and this check used
+    to fail on every clean run — while blaming the database, which was fine.
+    A tester diagnosed that for us.
+
+    It is the same mistake this whole exercise is about, made by the thing
+    meant to catch it: the checker held a different model of the system than
+    the system did. The graph is built from the database, so it answers the
+    question that was actually being asked.
+    """
     try:
-        agents = dashboard(url, "/api/agents")
+        graph = dashboard(url, "/api/graph?all=1")
     except (OSError, ValueError) as exc:
         raise Fail(f"the dashboard API at {url} did not answer: {exc}")
-    missing = [name for name in pair if name not in names_of(agents)]
+    known = {node.get("name") for node in (graph.get("nodes") or [])}
+    missing = [name for name in pair if name not in known]
     if missing:
         raise Fail(
-            f"the dashboard does not list {', '.join(missing)} — it is probably "
-            "reading a different database than agent-mail writes to"
+            f"the dashboard graph does not contain {', '.join(missing)} — it is "
+            "probably reading a different database than agent-mail writes to"
         )
-    report.ok("the dashboard lists both agents")
+    report.ok("the dashboard reads the same database agent-mail wrote to")
 
-    graph = dashboard(url, "/api/graph?all=1")
     edges = graph.get("edges") or []
     linked = any(
         {edge.get("source"), edge.get("target")} == set(pair) for edge in edges
