@@ -2,7 +2,7 @@
 
 > English version: planned.
 
-[前: Launcher と identity](launchers.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
+[前: 委任と child agent](delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
 
 `hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper が同居しています。repository の実装ファイルは **11 件**です。内訳は Claude Code event hook が5件、運用 helper が6件です。
 

@@ -2,7 +2,7 @@
 
 > English version: planned.
 
-[前: インストール](install.md) · [README に戻る](../README.md) · [次: Hooks](hooks.md)
+[前: インストール](install.md) · [README に戻る](../README.md) · [次: 委任と child agent](delegation.md)
 
 ## 起動コマンド
 

@@ -99,6 +99,7 @@ murmur は browser の言語から日本語 / 英語を自動選択し、`?lang=
 | --- | --- |
 | [インストール](docs/install.md) | install tier、settings merge、VERSION、TCC、upgrade / uninstall |
 | [Launcher と identity](docs/launchers.md) | `agent-start`、命名、token、fail-closed、`CLAUDECODE` |
+| [委任と child agent](docs/delegation.md) | 組み込み subagent との違い、いまどちらが動いているかの見分け方、使い分け |
 | [Hooks と運用 helper](docs/hooks.md) | Claude event hook 5件、launcher / watcher helper 6件、発火条件、block / cleanup |
 | [Codex App 統合](docs/codex-app.md) | Codex Desktop plugin、Bridge、session-bound MCP、inbox 通知、cold wake |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
