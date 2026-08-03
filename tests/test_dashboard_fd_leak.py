@@ -20,7 +20,8 @@ import dashboard.server as server
 
 
 def _create_mail_db(path: pathlib.Path, project_key: str) -> None:
-    with sqlite3.connect(path) as connection:
+    connection = sqlite3.connect(path)
+    try:
         connection.executescript(
             """
             PRAGMA journal_mode=WAL;
@@ -73,6 +74,9 @@ def _create_mail_db(path: pathlib.Path, project_key: str) -> None:
             VALUES (1, 2, 'to')
             """
         )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _database_fd_count(path: pathlib.Path) -> int:
@@ -163,8 +167,12 @@ def test_failing_queries_do_not_leak_sqlite_descriptors(monkeypatch, tmp_path):
     database = tmp_path / "storage.sqlite3"
     # A real SQLite file with none of the tables the dashboard asks for, so
     # every query raises where the connection is already open.
-    with sqlite3.connect(database) as connection:
+    connection = sqlite3.connect(database)
+    try:
         connection.execute("CREATE TABLE unrelated (id INTEGER)")
+        connection.commit()
+    finally:
+        connection.close()
     monkeypatch.setattr(server, "DB_PATH", str(database))
     monkeypatch.setattr(server, "PROJECT_KEY", str(tmp_path / "project"))
     monkeypatch.setattr(server, "VAULT", "")
