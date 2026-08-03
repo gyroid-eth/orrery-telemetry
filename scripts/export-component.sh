@@ -164,7 +164,9 @@ chmod +x \
   "$DEST/integrations/codex_app/plugin/scripts/run-mcp.sh"
 
 if [[ "$SKIP_INSTALL_CHECK" != true ]]; then
-  gate_home="$(mktemp -d /private/tmp/agentstack-codex-export-home.XXXXXX)"
+  # /private/tmp is macOS-only. On Linux it does not exist, so mktemp failed
+  # and `set -e` ended the export gate with status 1 and nothing to read.
+  gate_home="$(mktemp -d "${TMPDIR:-/tmp}/agentstack-codex-export-home.XXXXXX")"
   mkdir -p "$gate_home/.codex"
   HOME="$gate_home" CODEX_HOME="$gate_home/.codex" \
     AGENTSTACK_CODEX_APP_INSTALL_DIR="$gate_home/.agentstack/integrations/codex_app" \

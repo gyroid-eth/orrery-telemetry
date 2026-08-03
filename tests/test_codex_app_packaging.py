@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import pytest
 import shlex
 import shutil
 import signal
@@ -46,6 +47,33 @@ def _environment(home: Path) -> dict[str, str]:
     return environment
 
 
+# Some of these tests only need a path to hand the installer; others drive the
+# real `codex plugin` registry and mean nothing without it. Keep the two apart:
+# stub the first group so it runs everywhere, and skip the second with a reason
+# that names what is missing. A test that quietly asserts nothing is worse than
+# one that says it did not run.
+HAVE_CODEX_CLI = shutil.which("codex") is not None
+needs_codex_cli = pytest.mark.skipif(
+    not HAVE_CODEX_CLI,
+    reason="requires the Codex CLI on PATH (it drives `codex plugin`)",
+)
+
+
+def _stub_codex(home: Path) -> str:
+    """A stand-in `codex` for machines that do not have the CLI installed.
+
+    These tests only need a path to hand the installer, which records it and
+    (in these dry runs) asks it for a version at most. Requiring the real CLI
+    made five of them fail on every CI run with `assert None is not None` —
+    a machine-shaped requirement stated as an assertion about nothing.
+    """
+    stub = home / "stub-bin" / "codex"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text("#!/bin/sh\necho 'codex-cli 0.0.0-stub'\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return str(stub)
+
+
 def _install_args(
     home: Path,
     *,
@@ -53,8 +81,7 @@ def _install_args(
     agent_mail_url: str = "http://127.0.0.1:8765/api/",
     service: bool = False,
 ) -> list[str]:
-    codex_binary = shutil.which("codex")
-    assert codex_binary is not None
+    codex_binary = shutil.which("codex") or _stub_codex(home)
     args = [
         str(INSTALLER),
         "--project-key",
@@ -111,6 +138,7 @@ def _read_generated_env(path: Path) -> dict[str, str]:
     return values
 
 
+@needs_codex_cli
 def test_installer_dry_run_does_not_write_clean_home(tmp_path):
     home = _prepare_home(tmp_path)
     install_dir = home / ".agentstack" / "integrations" / "codex_app"
@@ -283,6 +311,7 @@ exit 0
                     pass
 
 
+@needs_codex_cli
 def test_clean_home_install_uninstall_reinstall(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
@@ -302,7 +331,11 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     generated_env = _read_generated_env(env_file)
     codex_binary = generated_env["AGENTSTACK_CODEX_BINARY"]
     assert Path(codex_binary).is_absolute()
-    assert Path(codex_binary).samefile(shutil.which("codex"))
+    resolved = shutil.which("codex")
+    if resolved is not None:
+        assert Path(codex_binary).samefile(resolved)
+    else:
+        assert Path(codex_binary).name == "codex" and Path(codex_binary).exists()
     assert generated_env["AGENTSTACK_CODEX_APP_PLUGIN_ID"] == (
         "agentstack-codex-app@agentstack-local"
     )
@@ -837,4 +870,3 @@ def test_export_gate_builds_allowlisted_token_free_artifact(tmp_path):
     assert "/workspace/example" in exported_env.read_text(encoding="utf-8")
     assert not list(destination.rglob("*.sqlite3"))
     assert not list(destination.rglob("__pycache__"))
-    assert shutil.which("codex") is not None
