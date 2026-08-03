@@ -518,6 +518,28 @@ def _dispatch(
     # have to know (or be able to spoof) a session id.
     if "session_id" not in call_arguments and proxy.bound_session_id is not None:
         call_arguments["session_id"] = proxy.bound_session_id
+    # It may also supply one, and a real child does: Codex passes its own thread
+    # id, which can never equal the synthetic `direct-<name>` the launcher bound.
+    # Comparing them made every coordination call fail with "requested runtime
+    # does not match the process binding" — the caller was not asking for another
+    # runtime, it was naming its own. A direct binding is pinned to one agent, so
+    # that agent is the only answer; substitute it. Still refuse an id that names
+    # a different direct binding, which is the one case that really is a request
+    # to act as somebody else.
+    elif proxy.bound_session_id is not None:
+        pinned = proxy.bound_binding
+        supplied_session = str(call_arguments["session_id"])
+        if (
+            pinned is not None
+            and pinned.get("surface") == "direct"
+            and supplied_session != str(proxy.bound_session_id)
+        ):
+            if supplied_session.startswith("direct-"):
+                raise ProxyError(
+                    "session_id names another agent's binding: "
+                    f"this process serves {pinned['agent_name']!r}"
+                )
+            call_arguments["session_id"] = proxy.bound_session_id
     # Agents are told (by CLAUDE.md / AGENTS.md and by habit) to call agent-mail
     # with project_key and agent_name. The proxy takes those from its binding
     # instead, but rejecting the arguments outright turns documented usage into

@@ -43,7 +43,10 @@ class RecordingTransport:
         tool = params["name"]
         arguments = params.get("arguments", {})
         self.calls.append((tool, arguments))
-        if not arguments.get("registration_token"):
+        # The server names the token differently per tool: send_message takes
+        # sender_token, everything else registration_token. Either one present
+        # means the proxy supplied the child's credential.
+        if not (arguments.get("registration_token") or arguments.get("sender_token")):
             return {"result": {"isError": True, "content": [{
                 "type": "text",
                 "text": f"Error calling tool '{tool}': {tool} requires registration_token",
@@ -127,6 +130,57 @@ def test_a_child_cannot_reach_another_agents_binding(tmp_path):
     proxy, _ = _proxy(tmp_path)
     with pytest.raises(ProxyError):
         _dispatch(proxy, "fetch_inbox", {"session_id": "direct-Other-Bohr"})
+
+
+# A real Codex thread id. The launcher binds the synthetic "direct-<name>", so
+# these two can never be equal — which is why every call from a real child
+# failed until this was fixed.
+CODEX_THREAD_ID = "019fc57e-4f21-7c6a-9c3e-2b4d5e6f7a8b"
+
+
+def test_a_child_that_passes_its_own_session_id_is_not_locked_out(tmp_path):
+    """The tester's finding: a Codex child sends its real thread id.
+
+    It is naming itself, not asking for another runtime, and a directly bound
+    process serves one agent anyway. Before the fix this raised "requested
+    runtime does not match the process binding" on every coordination call, so
+    a real child could neither read its inbox nor report back.
+    """
+    proxy, transport = _proxy(tmp_path)
+    result = _dispatch(proxy, "fetch_inbox", {
+        "session_id": CODEX_THREAD_ID, "limit": 5,
+    })
+    assert result == []
+    _, arguments = transport.calls[-1]
+    assert arguments["agent_name"] == AGENT
+    assert arguments["registration_token"] == TOKEN
+
+
+def test_bootstrap_from_a_real_session_id_reports_the_binding(tmp_path):
+    """The child's second symptom: rebinding failed too.
+
+    Told its runtime did not match, a child reasonably tries `bootstrap`, and
+    got "already bound to another runtime" — a dead end. A directly bound
+    process should just report the binding it already has.
+    """
+    proxy, _ = _proxy(tmp_path)
+    status = _dispatch(proxy, "bootstrap", {"session_id": CODEX_THREAD_ID})
+    assert status["agent_name"] == AGENT
+    assert status["project_key"] == PROJECT
+
+
+def test_send_message_works_from_a_real_session_id(tmp_path):
+    """Reading the inbox and reporting back are the two halves that were lost."""
+    proxy, transport = _proxy(tmp_path)
+    _dispatch(proxy, "send_message", {
+        "session_id": CODEX_THREAD_ID,
+        "to": ["Sturdy-Koch"],
+        "subject": "done",
+        "body_md": "finished",
+    })
+    tool, arguments = transport.calls[-1]
+    assert tool == "send_message"
+    assert arguments["sender_name"] == AGENT
 
 
 def test_token_path_defaults_to_the_shared_runtime_layout(tmp_path):
