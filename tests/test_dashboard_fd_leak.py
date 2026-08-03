@@ -149,3 +149,43 @@ def test_messages_since_requests_do_not_leak_sqlite_descriptors(
 
     assert after == before
 
+
+
+def test_failing_queries_do_not_leak_sqlite_descriptors(monkeypatch, tmp_path):
+    """A query that raises must still release the file.
+
+    The first fix moved every ``with _db()`` onto a connection that closes
+    itself, and the remaining callers closed explicitly — but inside the
+    ``try``, so any failing query skipped the close. On a large, busy database
+    that is not hypothetical: a two-second lock timeout is enough, and a tester
+    watched the descriptor table fill until the dashboard stopped answering.
+    """
+    database = tmp_path / "storage.sqlite3"
+    # A real SQLite file with none of the tables the dashboard asks for, so
+    # every query raises where the connection is already open.
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE unrelated (id INTEGER)")
+    monkeypatch.setattr(server, "DB_PATH", str(database))
+    monkeypatch.setattr(server, "PROJECT_KEY", str(tmp_path / "project"))
+    monkeypatch.setattr(server, "VAULT", "")
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        server.agentmail_state()
+        server._agent_window("nobody")
+        server._agent_id_for_name("nobody")
+        before = _database_fd_count(database)
+
+        for _ in range(20):
+            server.agentmail_state()
+            server._agent_window("nobody")
+            server._agent_id_for_name("nobody")
+
+        after = _database_fd_count(database)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+        gc.collect()
+
+    assert after == before

@@ -428,6 +428,7 @@ def agentmail_state() -> tuple[dict, dict]:
     instr: dict[str, dict] = {}
     if not os.path.exists(DB_PATH):
         return agents, instr
+    con = None
     try:
         con = _db()
         con.row_factory = sqlite3.Row
@@ -475,9 +476,11 @@ def agentmail_state() -> tuple[dict, dict]:
                 "importance": r["importance"],
                 "ts": _iso_to_epoch(r["created_ts"]),
             }
-        con.close()
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
     return agents, instr
 
 
@@ -604,6 +607,7 @@ def build_agents() -> list[dict]:
     seen = {r["name"] for r in rows}
     project_key = _project_key()
     if project_key:
+        con = None
         try:
             con = _db()
             con.row_factory = sqlite3.Row
@@ -658,9 +662,11 @@ def build_agents() -> list[dict]:
                     else:
                         row.update(category="finished")
                 rows.append(row)
-            con.close()
         except Exception:
             pass  # 失敗しても tmux ベースの rows は返す
+        finally:
+            if con is not None:
+                con.close()
 
     order = {
         "agent": 0,
@@ -1339,6 +1345,7 @@ def _agent_window(name: str) -> tuple[int, int]:
     """agent-mail DB から (inception_epoch, last_active_epoch)。不明は 0。"""
     if not os.path.exists(DB_PATH):
         return (0, 0)
+    con = None
     try:
         con = _db()
         r = con.execute(
@@ -1346,11 +1353,13 @@ def _agent_window(name: str) -> tuple[int, int]:
             "WHERE name=? ORDER BY last_active_ts DESC LIMIT 1",
             (name,),
         ).fetchone()
-        con.close()
         if r:
             return (_iso_to_epoch(r[0]), _iso_to_epoch(r[1]))
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
     return (0, 0)
 
 
@@ -1378,6 +1387,7 @@ def _agent_id_for_name(name: str) -> int | None:
     プロジェクトをまたぐ同名は last_active 最新を採る。"""
     if not os.path.exists(DB_PATH):
         return None
+    con = None
     try:
         con = _db()
         r = con.execute(
@@ -1385,10 +1395,12 @@ def _agent_id_for_name(name: str) -> int | None:
             "ORDER BY last_active_ts DESC LIMIT 1",
             (name,),
         ).fetchone()
-        con.close()
         return int(r[0]) if r else None
     except Exception:
         return None
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _indexed_transcript(name: str) -> str | None:
