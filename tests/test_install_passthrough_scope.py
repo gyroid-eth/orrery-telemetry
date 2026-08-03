@@ -179,6 +179,22 @@ def test_a_dry_run_writes_nothing(tmp_path):
     assert not _patched(mail_dir), "--dry-run patched the checkout"
 
 
+def test_teardown_works_where_launchd_does_not_exist(tmp_path):
+    """CI is Linux. Calling launchctl unconditionally failed five tests there.
+
+    Reproduces the condition rather than trusting the guard: with no launchctl
+    on the machine, teardown must still complete.
+    """
+    import service_teardown
+
+    original = service_teardown.shutil.which
+    service_teardown.shutil.which = lambda name: None if name == "launchctl" else original(name)
+    try:
+        stop_dashboard(tmp_path / "home", appear_timeout=0.1)
+    finally:
+        service_teardown.shutil.which = original
+
+
 if __name__ == "__main__":
     import tempfile
 

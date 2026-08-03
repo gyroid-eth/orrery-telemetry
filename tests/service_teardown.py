@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import time
@@ -38,7 +39,9 @@ def stop_dashboard(home, *, appear_timeout: float = 8.0,
                    label_prefix: str = TEST_LABEL_PREFIX) -> None:
     """Terminate the dashboard this install started, launchd or supervised."""
     home = pathlib.Path(home)
-    if label_prefix:
+    # launchd is macOS only; on Linux the installer uses systemd or a plain
+    # supervisor, and there is no launchctl to call.
+    if label_prefix and shutil.which("launchctl"):
         subprocess.run(
             ["launchctl", "bootout", f"gui/{os.getuid()}/{label_prefix}.agentdashboard"],
             capture_output=True,
