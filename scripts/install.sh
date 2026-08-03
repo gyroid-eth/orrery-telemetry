@@ -144,8 +144,14 @@ SERVICE_PATH=""
 SERVICE_HEALTHY=false
 SERVICE_FALLBACK_USED=false
 EXISTING_AGENT_MAIL_SERVER=false
+PROVISION_AGENT_MAIL=false
 AGENT_MAIL_LISTENER_PID=""
 AGENT_MAIL_LISTENER_CWD=""
+AGENT_MAIL_RUNNER="$MAIL_HOME/run-agent-mail.sh"
+AGENT_MAIL_PIDFILE="$MAIL_HOME/agent-mail.pid"
+AGENT_MAIL_LOG="$MAIL_HOME/agent-mail.log"
+AGENT_MAIL_SERVICE_KIND=""
+AGENT_MAIL_SERVICE_PATH=""
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -267,6 +273,21 @@ if parsed.scheme not in {"http", "https"} or not parsed.hostname:
     raise SystemExit(1)
 port = parsed.port or (443 if parsed.scheme == "https" else 80)
 print(f"{parsed.hostname}|{port}")
+PY
+}
+
+mcp_local_server_parts() {
+  "$PYTHON_BIN" - "$MCP_URL" <<'PY'
+import sys
+import urllib.parse
+
+parsed = urllib.parse.urlparse(sys.argv[1])
+if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+    raise SystemExit(1)
+host = "127.0.0.1" if parsed.hostname == "localhost" else parsed.hostname
+port = parsed.port or 80
+path = parsed.path or "/mcp"
+print(f"{host}|{port}|{path}")
 PY
 }
 
@@ -546,17 +567,15 @@ resolve_agent_mail_connection() {
   fi
 
   MAIL_DB="$(normalize_path "$MAIL_DIR/storage.sqlite3")"
-  if [[ "$DRY_RUN" == true ]]; then
-    warn "no running agent-mail server or existing database found; live install would stop. Set AGENTSTACK_MAIL_DB or start agent-mail first."
-    return
-  fi
-  die "no running agent-mail server at $MCP_URL and no existing SQLite database was found. Start 'am serve-http --port 8765' or set AGENTSTACK_MAIL_DB to an existing database."
+  mcp_local_server_parts >/dev/null || \
+    die "no running agent-mail server or database was found, and '$MCP_URL' is not a local HTTP endpoint the installer can start. Start agent-mail there or set AGENTSTACK_MCP_URL to a local endpoint."
+  PROVISION_AGENT_MAIL=true
+  say "no running agent-mail server or database found; installer will provision upstream agent-mail at $MCP_URL"
 }
 
 check_dependencies() {
   need_cmd tmux
   need_cmd git
-  need_cmd uv
   if ! command -v fswatch >/dev/null 2>&1; then
     warn "optional dependency 'fswatch' not found; mail watcher will use polling"
   fi
@@ -564,6 +583,12 @@ check_dependencies() {
     if [[ ! -d /Applications/Ghostty.app && ! -d "$HOME/Applications/Ghostty.app" ]] && ! command -v ghostty >/dev/null 2>&1; then
       warn "Ghostty not found; AGENTSTACK_TERMINAL=auto will fall back when possible"
     fi
+  fi
+}
+
+check_agent_mail_provisioning_dependencies() {
+  if [[ "$PROVISION_AGENT_MAIL" == true ]]; then
+    need_cmd uv
   fi
 }
 
@@ -1103,6 +1128,119 @@ path.chmod(0o600)
 PY
 }
 
+render_agent_mail_runner() {
+  local uv_bin="$1" host="$2" port="$3" path="$4"
+  mkdir -p "$MAIL_HOME"
+  "$PYTHON_BIN" - "$AGENT_MAIL_RUNNER" "$uv_bin" "$MAIL_DIR" \
+    "$host" "$port" "$path" <<'PY'
+import pathlib
+import shlex
+import sys
+
+runner, uv_bin, mail_dir, host, port, path = sys.argv[1:]
+command = [
+    uv_bin,
+    "--directory", mail_dir,
+    "run", "--no-dev", "--no-sync",
+    "python", "-m", "mcp_agent_mail.cli", "serve-http",
+    "--host", host, "--port", port, "--path", path,
+]
+text = "\n".join([
+    "#!/usr/bin/env bash",
+    "set -u",
+    "child_pid=''",
+    "stop_runner() {",
+    "  trap - TERM INT",
+    "  if [[ \"$child_pid\" =~ ^[0-9]+$ ]] && kill -0 \"$child_pid\" 2>/dev/null; then",
+    "    kill \"$child_pid\" 2>/dev/null || true",
+    "    wait \"$child_pid\" 2>/dev/null || true",
+    "  fi",
+    "  exit 0",
+    "}",
+    "trap stop_runner TERM INT",
+    f"cd {shlex.quote(mail_dir)} || exit 1",
+    "while true; do",
+    f"  {shlex.join(command)} &",
+    "  child_pid=$!",
+    "  wait \"$child_pid\" || true",
+    "  child_pid=''",
+    "  sleep 5",
+    "done",
+    "",
+])
+target = pathlib.Path(runner)
+target.write_text(text, encoding="utf-8")
+target.chmod(0o700)
+PY
+}
+
+stop_new_agent_mail() {
+  local pid
+  pid="$(sed -n '1p' "$AGENT_MAIL_PIDFILE" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$AGENT_MAIL_PIDFILE"
+}
+
+start_new_agent_mail() {
+  local parts host port path uv_bin pid attempts=0 database_url resolved_db
+  parts="$(mcp_local_server_parts)" || \
+    die "cannot start agent-mail for non-local endpoint $MCP_URL"
+  IFS='|' read -r host port path <<< "$parts"
+  uv_bin="$(command -v uv 2>/dev/null || true)"
+  [[ -n "$uv_bin" ]] || die "uv is required to prepare a new agent-mail clone; install uv and re-run"
+
+  plan "sync agent-mail dependencies in $MAIL_DIR with uv"
+  if [[ "$DRY_RUN" == true ]]; then
+    plan "start agent-mail in supervised background mode at $MCP_URL"
+    return
+  fi
+  if ! "$uv_bin" --directory "$MAIL_DIR" sync --no-dev; then
+    die "agent-mail dependency setup failed in $MAIL_DIR. Check the uv error above, then re-run the installer."
+  fi
+
+  render_agent_mail_runner "$uv_bin" "$host" "$port" "$path"
+  pid="$(sed -n '1p' "$AGENT_MAIL_PIDFILE" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    die "agent-mail endpoint is down, but $AGENT_MAIL_PIDFILE points to live pid $pid. Stop that process or remove the stale setup before re-running."
+  fi
+  rm -f "$AGENT_MAIL_PIDFILE"
+  say "starting agent-mail in supervised background mode at $MCP_URL"
+  nohup /bin/bash "$AGENT_MAIL_RUNNER" </dev/null >> "$AGENT_MAIL_LOG" 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" > "$AGENT_MAIL_PIDFILE"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$AGENT_MAIL_PIDFILE"
+    die "agent-mail supervisor did not start. Inspect $AGENT_MAIL_LOG, fix the reported error, and re-run."
+  fi
+  AGENT_MAIL_SERVICE_KIND="nohup"
+  AGENT_MAIL_SERVICE_PATH="$AGENT_MAIL_PIDFILE"
+
+  while ! mcp_endpoint_listening && [[ "$attempts" -lt 150 ]]; do
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+  if ! mcp_endpoint_listening; then
+    stop_new_agent_mail
+    die "agent-mail did not become reachable at $MCP_URL after dependency setup. Inspect $AGENT_MAIL_LOG, then re-run."
+  fi
+
+  discover_agent_mail_listener_process
+  database_url="$(probe_agent_mail_database_url || true)"
+  resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
+  if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
+    resolved_db="$(listener_open_database || true)"
+  fi
+  if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
+    stop_new_agent_mail
+    die "agent-mail started at $MCP_URL but its SQLite database could not be resolved. Inspect $AGENT_MAIL_LOG and set AGENTSTACK_MAIL_DB before re-running."
+  fi
+  MAIL_DB="$(normalize_path "$resolved_db")"
+  EXISTING_AGENT_MAIL_SERVER=true
+  say "agent-mail ready at $MCP_URL (database: $MAIL_DB)"
+}
+
 ensure_agent_mail() {
   if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
     plan "reuse existing agent-mail server at $MCP_URL"
@@ -1128,7 +1266,9 @@ ensure_agent_mail() {
     fi
   else
     plan "clone agent-mail upstream into $MAIL_DIR"
-    run git clone "$UPSTREAM_AGENT_MAIL_URL" "$MAIL_DIR"
+    if [[ "$DRY_RUN" != true ]] && ! git clone "$UPSTREAM_AGENT_MAIL_URL" "$MAIL_DIR"; then
+      die "failed to clone agent-mail from $UPSTREAM_AGENT_MAIL_URL. Check network access and the repository URL, then re-run."
+    fi
   fi
 
   if [[ -f "$MAIL_ENV" ]]; then
@@ -1148,6 +1288,10 @@ path.write_text(f"HTTP_BEARER_TOKEN={token}\n", encoding="utf-8")
 path.chmod(0o600)
 PY
     fi
+  fi
+
+  if [[ "$PROVISION_AGENT_MAIL" == true ]]; then
+    start_new_agent_mail
   fi
 
 }
@@ -1452,8 +1596,11 @@ write_manifest() {
   fi
   local service_kind="$1"
   local service_path="$2"
+  local mail_service_kind="${3:-}"
+  local mail_service_path="${4:-}"
   local tmp="$MANIFEST.tmp"
-  "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" <<PY
+  "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
+    "$mail_service_kind" "$mail_service_path" <<PY
 import json
 import os
 import pathlib
@@ -1463,6 +1610,8 @@ import sys
 out = pathlib.Path(sys.argv[1])
 service_kind = sys.argv[2]
 service_path = sys.argv[3]
+mail_service_kind = sys.argv[4]
+mail_service_path = sys.argv[5]
 install_dir = pathlib.Path("$INSTALL_DIR")
 claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
@@ -1530,6 +1679,8 @@ elif service_kind == "systemd-user":
     services.append({"kind": "systemd-user", "unit": "$LABEL.service", "path": service_path})
 elif service_kind == "nohup":
     services.append({"kind": "nohup", "pidfile": service_path})
+if mail_service_kind == "nohup" and mail_service_path:
+    services.append({"kind": "nohup", "pidfile": mail_service_path, "role": "agent-mail"})
 manifest = {
     "schema_version": 1,
     "tool": "claude-agent-stack",
@@ -1612,6 +1763,7 @@ main() {
   validate_repo_assets
   check_port
   resolve_agent_mail_connection
+  check_agent_mail_provisioning_dependencies
   local service_kind
   service_kind="$(detect_service_kind)"
   # detect_service_kind knows which manager to try, not whether it will work:
@@ -1624,12 +1776,13 @@ main() {
   install_payload
   install_claude_skill_links
   render_installed_templates
-  write_env_file
   ensure_agent_mail
+  write_env_file
   safe_merge_settings
   safe_managed_doc_setups
   start_service "$service_kind"
-  write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}"
+  write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}" \
+    "${AGENT_MAIL_SERVICE_KIND:-}" "${AGENT_MAIL_SERVICE_PATH:-}"
   verify_dashboard_service
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."

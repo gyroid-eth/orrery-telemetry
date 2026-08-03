@@ -886,7 +886,7 @@ def test_installer_reuses_existing_agent_mail_listener_database(tmp_path):
         mail_thread.join(timeout=5)
 
 
-def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
+def test_installer_refuses_to_record_an_ambiguous_mail_database(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
@@ -900,6 +900,14 @@ def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
 
     home = tmp_path / "home"
     install_dir = home / ".agentstack"
+    mail_dir = home / "not-installed"
+    mail_dir.mkdir(parents=True)
+    (mail_dir / "storage.sqlite3").touch()
+    second_mail_dir = (
+        home / ".local" / "share" / "mcp-agent-mail" / "git_mailbox_repo"
+    )
+    second_mail_dir.mkdir(parents=True)
+    (second_mail_dir / "storage.sqlite3").touch()
     project = tmp_path / "project"
     project.mkdir()
     with socket.socket() as probe:
@@ -911,7 +919,7 @@ def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
-        "AGENTSTACK_MAIL_DIR": str(home / "not-installed"),
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_PORT": str(dashboard_port),
         "AGENTSTACK_PROJECT_KEY": str(project),
@@ -932,7 +940,7 @@ def test_installer_refuses_to_record_an_unresolved_mail_database(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "no existing SQLite database was found" in result.stderr
+    assert "multiple agent-mail databases exist" in result.stderr
     assert "set AGENTSTACK_MAIL_DB" in result.stderr
     assert not (install_dir / "env.sh").exists()
     assert not (install_dir / "install-state.json").exists()
