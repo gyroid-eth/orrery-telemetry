@@ -141,6 +141,10 @@ registered="$(printf '%s' "$register_result" | ags_extract_agent_name)"
 if [[ "$registered" != "$agent_name" ]]; then
   printf "%s: agent-mail changed requested identity '%s' to '%s'; the child tmux session must use the server-returned name\n" \
     "$PROG" "$agent_name" "$registered" >&2
+  # A warning on stderr is read once, by whoever happened to be looking. The
+  # child then runs for hours under a name its parent does not know. Record it
+  # where the dashboard can state it for as long as the agent exists.
+  ags_record_name_substitution "$registered" "$agent_name" || true
 fi
 
 # The token the child must present is the one the SERVER persisted, not the one

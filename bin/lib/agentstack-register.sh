@@ -217,6 +217,40 @@ ags_store_registration_token() {
   chmod 600 "$token_file" 2>/dev/null || true
 }
 
+# Record that agent-mail granted a different identity than the one requested.
+# The dashboard reads this file and says so on the agent, because the only
+# other trace is a missing portrait — which reads as a style, not a fault.
+# Best effort: a spawn that otherwise worked must not fail over bookkeeping.
+ags_record_name_substitution() {
+  local registered="$1" requested="$2" runtime_dir store
+  [[ -n "$registered" && -n "$requested" && "$registered" != "$requested" ]] || return 0
+  runtime_dir="$(ags_registration_runtime_dir)"
+  store="$runtime_dir/name-substitutions.json"
+  mkdir -p "$runtime_dir" || return 1
+  "${AGENTSTACK_PYTHON:-python3}" - "$store" "$registered" "$requested" <<'PY' || return 1
+import json
+import os
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+store, registered, requested = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    data = json.loads(store.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+data[registered] = {
+    "requested": requested,
+    "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+}
+tmp = store.with_name(store.name + f".{os.getpid()}.tmp")
+tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+tmp.replace(store)
+PY
+}
+
 ags_apply_contact_policy() {
   local project_key="$1" agent_name="$2" registration_token="${3:-}" policy
   [[ -n "$project_key" && -n "$agent_name" && -n "$registration_token" ]] || return 0

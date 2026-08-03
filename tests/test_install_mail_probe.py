@@ -15,6 +15,8 @@ import urllib.request
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX, stop_dashboard  # noqa: E402
 
 
 class _SilentListener(http.server.BaseHTTPRequestHandler):
@@ -76,15 +78,20 @@ def _run_installer(home, tmp_path, mail_port, extra_env):
         "AGENTSTACK_PORT": str(_free_port()),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
+        # Never register under the label a real install uses.
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
     })
     env.update(extra_env)
-    result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "install.sh"), "--dashboard-only"],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "install.sh"), "--dashboard-only"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+    finally:
+        stop_dashboard(home)
     return result, install_dir
 
 
@@ -253,6 +260,8 @@ esac
         "AGENTSTACK_PORT": str(_free_port()),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
+        # Never register under the label a real install uses.
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_TEST_UV_LOG": str(uv_log),
         "AGENTSTACK_TEST_UV_SYNCED": str(tmp_path / "uv-synced"),
     })

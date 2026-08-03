@@ -256,6 +256,9 @@
   .port .pna{width:100%;height:100%;display:flex;align-items:center;
     justify-content:center;font-family:"Chakra Petch",sans-serif;
     font-weight:700;font-size:18px;letter-spacing:1px;color:var(--bone-dim)}
+  /* Registered under a name we did not ask for. Marked, not hidden. */
+  .subst-note{font-size:10px;letter-spacing:.4px;color:var(--amber,#ffb454);
+    opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .idcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
   .idrow{display:flex;align-items:center;gap:9px}
   .chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -1041,6 +1044,9 @@
     pointer-events:none}
   .node .annot-lab{fill:var(--bone);font-family:"Chakra Petch",sans-serif;
     font-size:7.5px;font-weight:600;letter-spacing:.3px;pointer-events:none}
+  /* The name agent-mail granted is not the one we asked for. The agent works;
+     only its identity is wrong, so this marks the label rather than the node. */
+  .node .nlab-subst{fill:var(--amber);text-decoration:underline dotted}
   .node.finished .annot-pill,.node.gone .annot-pill{stroke:var(--bone-dim);opacity:.62}
   .node.finished .annot-lab,.node.gone .annot-lab{fill:var(--bone-dim)}
   .node.retired .annot-pill,.node.retired .annot-lab{opacity:.4}
@@ -3456,6 +3462,9 @@ function bay(a,i){
             :`<span class="led ${led}"></span>`}
           <span class="nm">${esc(a.name)}</span>
         </div>
+        ${a.requested_name
+          ? `<div class="subst-note" title="agent-mail registered a different identity than the one requested">↯ asked for ${esc(a.requested_name)}</div>`
+          : ''}
         <div class="chips">${chips.join('')}</div>
       </div>
     </div>
@@ -3679,6 +3688,10 @@ async function netTick(){
         actState:n.act_state||'',ctxWindow:n.ctx_window||'',
         workDisp:n.work_disp||'',workSecs:(+n.work_secs||0),
         lastDisp:n.last_disp||'',annot:n.annot||null,
+        // 要求した名前が通らなかったエージェント。ここで拾い落とすと、server が
+        // 送っていても画面には出ない（この一覧は明示的なコピーなので、payload に
+        // 足しただけでは届かない）。
+        requested_name:n.requested_name||'',
         surface:n.surface||''});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
@@ -3900,6 +3913,15 @@ function buildEls(){
     renderLiveStateBubble(grp,g.actState);
     const tx=svgEl('text',{x:0,y:NR+16,'text-anchor':'middle'});
     tx.textContent=name;
+    if(g.requested_name){
+      // agent-mail が要求とは別の名前で登録した。エージェント自体は動き続ける
+      // ので、言わなければ誰も気づかない（唯一の痕跡が「肖像が出ない」で、
+      // それは不具合ではなく地味なノードにしか見えない）。名指しで出す。
+      tx.setAttribute('class','nlab-subst');
+      const st=svgEl('title');
+      st.textContent='requested '+g.requested_name+', registered as '+name;
+      grp.appendChild(st);
+    }
     grp.appendChild(tx);
     // Role is the only secondary text on the node: quiet mono smallcaps pill.
     const annotLab=g.annot?((g.annot.emoji?g.annot.emoji+' ':'')+(g.annot.role||'')).trim():'';

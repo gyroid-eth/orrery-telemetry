@@ -614,6 +614,7 @@ def build_agents() -> list[dict]:
     now = int(time.time())
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
     retired_names = _retired_names(_project_key())
+    substitutions = _name_substitutions()
     rows = []
     for name, s in sessions.items():
         m = mail_agents.get(name)
@@ -664,6 +665,9 @@ def build_agents() -> list[dict]:
                 # having a conversation, and silently changing its state is
                 # how "it looked fine" happens.
                 "retired_but_alive": name in retired_names,
+                # The name we asked agent-mail for, when it granted a different
+                # one. Empty for everybody else.
+                "requested_name": substitutions.get(name, ""),
                 "cmd": s["cmd"],
                 "live": live,
                 # pane のステータスバー由来を優先（warm pool claim で DB
@@ -1065,6 +1069,84 @@ def _annotations() -> dict:
     return data
 
 
+# --------------------------------------------------------------------------- #
+# Name substitutions
+#   $AGENTSTACK_RUNTIME_DIR/name-substitutions.json =
+#       {registered_name: {"requested": str, "ts": str}}
+#
+#   agent-mail does not always register the name it was asked for; which names
+#   it honours depends on its version. The agent then runs fine under a name
+#   nobody else can address it by, and the only trace is a missing portrait —
+#   a face is easy to read as a style choice, not as a fault. So the fact is
+#   recorded where it is known (at spawn) and stated in the UI, rather than
+#   left to be inferred from an absence.
+# --------------------------------------------------------------------------- #
+SUBST_PATH = os.path.join(RUNTIME_DIR, "name-substitutions.json")
+_SUBST_CACHE: dict = {"mtime": -1.0, "data": {}}
+_SUBST_LOCK = threading.Lock()
+
+
+def _name_substitutions() -> dict:
+    """{registered: requested}. Missing or corrupt file means no claims made."""
+    try:
+        mt = os.path.getmtime(SUBST_PATH)
+    except OSError:
+        _SUBST_CACHE.update(mtime=-1.0, data={})
+        return {}
+    if mt == _SUBST_CACHE["mtime"]:
+        return _SUBST_CACHE["data"]
+    try:
+        with open(SUBST_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return _SUBST_CACHE.get("data") or {}
+    data: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for name, entry in raw.items():
+            if not isinstance(name, str):
+                continue
+            requested = ""
+            if isinstance(entry, dict):
+                requested = str(entry.get("requested", "")).strip()[:128]
+            elif isinstance(entry, str):
+                requested = entry.strip()[:128]
+            if requested and requested != name:
+                data[name] = requested
+    _SUBST_CACHE.update(mtime=mt, data=data)
+    return data
+
+
+def _record_name_substitution(registered: str, requested: str) -> None:
+    """Persist that a requested identity was not the one granted.
+
+    Best effort by design: failing to write this must not fail a spawn that
+    otherwise worked. It is logged either way.
+    """
+    if not registered or not requested or registered == requested:
+        return
+    try:
+        with _SUBST_LOCK:
+            try:
+                with open(SUBST_PATH, "r", encoding="utf-8") as f:
+                    store = json.load(f)
+            except (OSError, ValueError):
+                store = {}
+            if not isinstance(store, dict):
+                store = {}
+            store[registered] = {
+                "requested": requested,
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            os.makedirs(RUNTIME_DIR, exist_ok=True)
+            tmp = f"{SUBST_PATH}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(store, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, SUBST_PATH)
+    except OSError as e:
+        logging.warning("could not record name substitution %r->%r: %s",
+                        requested, registered, e)
+
+
 def _write_annotation(name: str, role: str, emoji: str,
                       group: str = "") -> dict:
     """1 エージェント分の annotation を upsert / 削除。
@@ -1197,10 +1279,14 @@ def graph_payload(days: float, show_all: bool) -> dict:
 
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
     annots = _annotations()       # {agent: {role, emoji, group}}（mtime キャッシュ）
+    substitutions = _name_substitutions()  # {registered: requested}
     fn = [
         {**n, "rel": _rel(n["last_active"], mx) if n["last_active"] else "—",
          "deliv": len(didx.get(n["name"], [])),
          "annot": annots.get(n["name"]),
+         # 要求した名前が通らず別名で登録された場合のみ非空。肖像が出ない
+         # 理由をここで名指しする（顔の不在から察させない）。
+         "requested_name": substitutions.get(n["name"], ""),
          **(lv := live(n["name"], n.get("program"))),
          # 窓: running はペイン直読み(権威)、不在はモデル文字列で補完
          "ctx_window": lv.get("ctx_window") or _ctx_window(n.get("model")),
@@ -3627,6 +3713,9 @@ def do_spawn(payload: dict) -> dict:
     name_substituted = child_name != requested_name
     if name_substituted:
         logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
+        # A log line nobody reads is how this stayed invisible. Persist it so
+        # the agent carries the discrepancy in the UI for as long as it exists.
+        _record_name_substitution(child_name, requested_name)
 
     # 2) role/emoji/group annotation (best-effort, failure is non-fatal)
     annot_status = "skipped"

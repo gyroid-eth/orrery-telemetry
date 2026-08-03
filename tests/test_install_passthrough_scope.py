@@ -21,6 +21,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX, stop_dashboard  # noqa: E402
 INSTALL = ROOT / "scripts" / "install.sh"
 # The installer only treats a checkout as its own when the remote matches
 # exactly, ".git" suffix included.
@@ -81,17 +83,22 @@ def _run_installer(home: pathlib.Path, tmp_path: pathlib.Path, mail_dir: pathlib
         "AGENTSTACK_PORT": str(_free_port()),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
+        # Never register under the label a real install uses.
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_ASSUME_YES": "1",
     })
     env.update(extra_env)
     (mail_dir / "storage.sqlite3").touch()
-    return subprocess.run(
-        ["bash", str(INSTALL), "--dashboard-only"],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        return subprocess.run(
+            ["bash", str(INSTALL), "--dashboard-only"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+    finally:
+        stop_dashboard(home)
 
 
 def _patched(mail_dir: pathlib.Path) -> bool:
@@ -162,6 +169,8 @@ def test_a_dry_run_writes_nothing(tmp_path):
             "AGENTSTACK_PORT": str(_free_port()),
             "AGENTSTACK_PROJECT_KEY": str(tmp_path / "project"),
             "AGENTSTACK_TERMINAL": "none",
+        # Never register under the label a real install uses.
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         }, **env},
         text=True,
         capture_output=True,
