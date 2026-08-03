@@ -21,10 +21,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install pytest
         run: python3 -m pip install pytest
+      # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
+      # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
+      # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。
       - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)
         run: |
           set -euo pipefail
-          PYTHONPATH=. python3 -m pytest -q tests/
+          PYTHONPATH=. python3 -m pytest -q tests/ integrations/
 
   fresh-install-e2e:
     name: fresh install with real upstream agent-mail
