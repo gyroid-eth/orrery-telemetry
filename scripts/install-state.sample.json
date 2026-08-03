@@ -120,6 +120,20 @@
       }
     ]
   },
+  "claude_mcp_merge": {
+    "operation": "merge",
+    "config_path": "/home/alice/.claude.json",
+    "server_name": "mcp-agent-mail",
+    "changed": true,
+    "previous_entry_existed": false,
+    "installed_entry_sha256": "example-agent-mail-entry-sha256",
+    "backup": {
+      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
+      "backup_path": null,
+      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
+      "target_was_missing": true
+    }
+  },
   "env": {
     "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
@@ -140,6 +154,7 @@
     "AGENTSTACK_MAIL_HOME": "/home/alice/.mcp_agent_mail",
     "AGENTSTACK_SIGNALS_DIR": "/home/alice/.mcp_agent_mail/signals",
     "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+    "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
     "AGENTSTACK_TERMINAL": "auto"
   },
   "owned_files": [
@@ -149,6 +164,7 @@
     "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
     "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
     "/home/alice/.agentstack/runtime/settings-merge-result.json",
+    "/home/alice/.agentstack/runtime/claude-mcp-merge-result.json",
     "/home/alice/.claude/skills/delegate",
     "/home/alice/.claude/skills/log",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
@@ -203,6 +219,12 @@
       "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
       "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
       "target_was_missing": false
+    },
+    {
+      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
+      "backup_path": null,
+      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
+      "target_was_missing": true
     }
   ],
   "settings_backups": [
@@ -228,6 +250,6 @@
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
     "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
     "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
-    "Installer does not modify Claude MCP user config."
+    "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
   ]
 }

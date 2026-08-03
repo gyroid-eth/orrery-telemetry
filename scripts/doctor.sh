@@ -87,6 +87,59 @@ else
   status=1
 fi
 
+CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
+CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" <<'PY' 2>/dev/null || true
+import json
+import pathlib
+import sys
+
+try:
+    config = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    entry = config.get("mcpServers", {}).get("mcp-agent-mail")
+except (AttributeError, OSError, ValueError):
+    print("invalid")
+else:
+    bearer = ""
+    try:
+        for line in pathlib.Path(sys.argv[3]).read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == "HTTP_BEARER_TOKEN":
+                bearer = value.strip().strip("'\"")
+                break
+    except OSError:
+        pass
+    authorization = (
+        (entry.get("headers") or {}).get("Authorization")
+        if isinstance(entry, dict)
+        else None
+    )
+    if (
+        isinstance(entry, dict)
+        and entry.get("type") == "http"
+        and entry.get("url") == sys.argv[2]
+        and (not bearer or authorization == f"Bearer {bearer}")
+    ):
+        print("configured")
+    else:
+        print("missing")
+PY
+)"
+if [[ "$CLAUDE_MCP_STATE" == "configured" ]]; then
+  echo "ok: Claude MCP mcp-agent-mail registered in $CLAUDE_JSON"
+else
+  echo "warn: Claude MCP mcp-agent-mail is not registered for $MCP_URL in $CLAUDE_JSON" >&2
+  echo "      /delegate cannot use agent-mail until this fixed-name entry exists." >&2
+  MCP_MERGE_HELPER="$INSTALL_DIR/bin/agentstack-merge-claude-mcp"
+  printf '      preview: %q %q --dry-run --config %q --mcp-url %q --mail-env %q --backup-dir %q\n' \
+    "$PYTHON_BIN" "$MCP_MERGE_HELPER" "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" \
+    "$INSTALL_DIR/backups" >&2
+  printf '      apply:   %q %q --config %q --mcp-url %q --mail-env %q --backup-dir %q --existing-result %q\n' \
+    "$PYTHON_BIN" "$MCP_MERGE_HELPER" "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" \
+    "$INSTALL_DIR/backups" "$INSTALL_DIR/runtime/claude-mcp-merge-result.json" >&2
+fi
+
 if [[ -f "$INSTALL_DIR/dashboard/server.py" && \
       -f "$INSTALL_DIR/dashboard/service_runner.py" ]]; then
   echo "ok: dashboard installed"

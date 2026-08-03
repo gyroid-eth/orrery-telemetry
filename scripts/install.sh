@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
+MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
 ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
@@ -33,15 +34,15 @@ Usage: install.sh [--dry-run] [--dashboard-only|--scoped] [options]
 
 Core install only. This creates ~/.agentstack, installs hooks/skills/dashboard assets,
 creates env.sh and service files, and writes install-state.json. Tier1 shows a
-Claude Code user-settings dry-run diff and only merges after explicit approval
+Claude Code user-settings and MCP dry-run diffs and only merges after explicit approval
 (an interactive yes, or a user-selected --assume-yes).
-It does not modify ~/.claude.json or shell dotfiles. After Tier1 preview and
-explicit approval, only the managed marker block in project/global CLAUDE.md
-may be updated; other project files are not changed.
+It does not modify shell dotfiles. After Tier1 preview and explicit approval,
+it registers the fixed mcp-agent-mail entry in ~/.claude.json and may update
+only the managed marker block in project/global CLAUDE.md.
 
 Options:
   --dry-run              Print planned actions without writing files
-  -y, --assume-yes       Pre-approve settings and managed-block prompts only
+  -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
   --scoped               Tier2 placeholder; no user-settings merge
   --install-dir PATH     Default: ~/.agentstack
@@ -127,8 +128,10 @@ BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
 CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
+MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$MAIL_DIR/.env}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
@@ -605,6 +608,7 @@ validate_repo_assets() {
     [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
+  [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
 }
 
@@ -893,6 +897,7 @@ install_payload() {
     cp "$SCRIPT_DIR/doctor.sh" "$BIN_DIR/agentstack-doctor"
     cp "$SCRIPT_DIR/selftest.py" "$BIN_DIR/agentstack-selftest"
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
+    cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
@@ -906,6 +911,7 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
     chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
       "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
+      "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" \
       "$BIN_DIR/agentstack-preregister-child" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup"
@@ -1035,6 +1041,72 @@ safe_merge_settings() {
   fi
 }
 
+print_claude_mcp_registration_instructions() {
+  local helper="$BIN_DIR/agentstack-merge-claude-mcp"
+  warn "Claude Code cannot use /delegate until the fixed 'mcp-agent-mail' MCP entry is registered."
+  printf 'Preview and apply it manually:\n' >&2
+  printf '  %q %q --dry-run --config %q --mcp-url %q --mail-env %q --backup-dir %q\n' \
+    "$PYTHON_BIN" "$helper" "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$BACKUPS_DIR" >&2
+  printf '  %q %q --config %q --mcp-url %q --mail-env %q --backup-dir %q --existing-result %q\n' \
+    "$PYTHON_BIN" "$helper" "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$BACKUPS_DIR" \
+    "$MCP_MERGE_RESULT_FILE" >&2
+}
+
+confirm_claude_mcp_merge() {
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    warn "non-interactive shell; skipping Claude MCP user-config merge"
+    print_claude_mcp_registration_instructions
+    return 1
+  fi
+  printf "Register the fixed 'mcp-agent-mail' entry in %s? Type yes to continue: " \
+    "$CLAUDE_JSON" >&2
+  local reply
+  read -r reply
+  [[ "$reply" == "yes" ]]
+}
+
+safe_merge_claude_mcp() {
+  if [[ "$TIER" != "tier1" ]]; then
+    return
+  fi
+  local merge_tool="$BIN_DIR/agentstack-merge-claude-mcp"
+  if [[ "$DRY_RUN" == true ]]; then
+    merge_tool="$MERGE_CLAUDE_MCP_SCRIPT"
+  fi
+  local merge_args=(
+    "$merge_tool"
+    --config "$CLAUDE_JSON"
+    --mcp-url "$MCP_URL"
+    --mail-env "$MAIL_ENV"
+    --backup-dir "$BACKUPS_DIR"
+    --existing-result "$MCP_MERGE_RESULT_FILE"
+  )
+
+  local merge_status
+  merge_status="$("$PYTHON_BIN" "${merge_args[@]}" --check)"
+  if [[ "$merge_status" == "configured" ]]; then
+    say "Claude MCP already registered as mcp-agent-mail in $CLAUDE_JSON"
+    return
+  fi
+  say "Claude MCP user-config safe-merge dry-run: $CLAUDE_JSON"
+  "$PYTHON_BIN" "${merge_args[@]}" --dry-run
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+
+  if confirm_claude_mcp_merge; then
+    "$PYTHON_BIN" "${merge_args[@]}" --result-json "$MCP_MERGE_RESULT_FILE"
+    if [[ "$ASSUME_YES" == "1" ]]; then
+      say "assume-yes: registered mcp-agent-mail in $CLAUDE_JSON"
+    fi
+  else
+    say "Skipped Claude MCP user-config merge."
+  fi
+}
+
 confirm_managed_setup() {
   local label="$1"
   if [[ "$ASSUME_YES" == "1" ]]; then
@@ -1105,6 +1177,7 @@ values = {
     "AGENTSTACK_MAIL_HOME": "$MAIL_HOME",
     "AGENTSTACK_SIGNALS_DIR": "$SIGNALS_DIR",
     "AGENTSTACK_MCP_URL": "$MCP_URL",
+    "AGENTSTACK_CLAUDE_JSON": "$CLAUDE_JSON",
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
@@ -1640,6 +1713,13 @@ settings_merge = None
 if merge_result_path.exists():
     settings_merge = json.loads(merge_result_path.read_text(encoding="utf-8"))
     owned_files.append(str(merge_result_path))
+mcp_merge_result_path = pathlib.Path("$MCP_MERGE_RESULT_FILE")
+claude_mcp_merge = None
+if mcp_merge_result_path.exists():
+    claude_mcp_merge = json.loads(
+        mcp_merge_result_path.read_text(encoding="utf-8")
+    )
+    owned_files.append(str(mcp_merge_result_path))
 skill_links = []
 skills_root = install_dir / "skills"
 if skills_root.is_dir():
@@ -1697,6 +1777,7 @@ manifest = {
         and settings_merge.get("changed")
     ),
     "settings_merge": settings_merge,
+    "claude_mcp_merge": claude_mcp_merge,
     "env": {
         "AGENTSTACK_PORT": "$PORT",
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
@@ -1717,13 +1798,18 @@ manifest = {
         "AGENTSTACK_MAIL_HOME": "$MAIL_HOME",
         "AGENTSTACK_SIGNALS_DIR": "$SIGNALS_DIR",
         "AGENTSTACK_MCP_URL": "$MCP_URL",
+        "AGENTSTACK_CLAUDE_JSON": "$CLAUDE_JSON",
         "AGENTSTACK_TERMINAL": "$TERMINAL",
     },
     "owned_files": owned_files,
     "owned_dirs": owned_dirs,
     "skill_links": skill_links,
     "services": services,
-    "backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
+    "backups": [
+        merge.get("backup")
+        for merge in (settings_merge, claude_mcp_merge)
+        if merge and merge.get("backup")
+    ],
     "settings_backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
     "retained_paths": [
         "$MAIL_DIR",
@@ -1741,7 +1827,7 @@ manifest = {
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
         "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
         "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
-        "Installer does not modify Claude MCP user config.",
+        "Claude MCP user config uses an explicit-confirm, fixed-name structural merge.",
     ],
 }
 out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
@@ -1757,7 +1843,7 @@ main() {
   say "project key: $PROJECT_KEY"
   validate_assume_yes
   if [[ "$TIER" == "tier1" ]]; then
-    say "Tier1 will show a user-settings dry-run diff before any merge."
+    say "Tier1 will show MCP and user-settings dry-run diffs before any merge."
   elif [[ "$TIER" == "tier2" ]]; then
     say "Phase 3a note: Tier2 project enable is a placeholder; no project settings are modified."
   fi
@@ -1781,6 +1867,7 @@ main() {
   render_installed_templates
   ensure_agent_mail
   write_env_file
+  safe_merge_claude_mcp
   safe_merge_settings
   safe_managed_doc_setups
   start_service "$service_kind"

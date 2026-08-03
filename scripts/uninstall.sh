@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MANIFEST="$INSTALL_DIR/install-state.json"
 MERGE_TOOL="$INSTALL_DIR/bin/agentstack-merge-settings"
+MCP_MERGE_TOOL="$INSTALL_DIR/bin/agentstack-merge-claude-mcp"
 DRY_RUN=false
 PURGE_DATA=false
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DIR="$2"
       MANIFEST="$INSTALL_DIR/install-state.json"
       MERGE_TOOL="$INSTALL_DIR/bin/agentstack-merge-settings"
+      MCP_MERGE_TOOL="$INSTALL_DIR/bin/agentstack-merge-claude-mcp"
       shift 2
       ;;
     -h|--help)
@@ -55,8 +57,12 @@ fi
 if [[ ! -x "$MERGE_TOOL" && -f "$SCRIPT_DIR/lib/merge_settings.py" ]]; then
   MERGE_TOOL="$SCRIPT_DIR/lib/merge_settings.py"
 fi
+if [[ ! -x "$MCP_MERGE_TOOL" && -f "$SCRIPT_DIR/lib/merge_claude_mcp.py" ]]; then
+  MCP_MERGE_TOOL="$SCRIPT_DIR/lib/merge_claude_mcp.py"
+fi
 
-python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" <<'PY'
+python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
+  "$MCP_MERGE_TOOL" <<'PY'
 import json
 import os
 import pathlib
@@ -69,6 +75,7 @@ manifest_path = pathlib.Path(sys.argv[1]).expanduser()
 dry_run = sys.argv[2] == "true"
 purge_data = sys.argv[3] == "true"
 merge_tool = pathlib.Path(sys.argv[4]).expanduser()
+mcp_merge_tool = pathlib.Path(sys.argv[5]).expanduser()
 
 data = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -134,6 +141,33 @@ def remove_settings_hooks():
         argv.append("--dry-run")
     subprocess.run(argv, check=True)
 
+def remove_claude_mcp():
+    merge = data.get("claude_mcp_merge")
+    if not isinstance(merge, dict) or not merge.get("changed"):
+        return
+    if not mcp_merge_tool.exists():
+        raise RuntimeError(f"missing Claude MCP merge helper: {mcp_merge_tool}")
+    install_dir = pathlib.Path(data.get("install_dir", "")).expanduser()
+    config_path = merge.get("config_path")
+    if not isinstance(config_path, str) or not config_path:
+        raise RuntimeError("manifest claude_mcp_merge is missing config_path")
+    argv = [
+        sys.executable,
+        str(mcp_merge_tool),
+        "--remove",
+        "--config",
+        config_path,
+        "--backup-dir",
+        str(install_dir / "backups"),
+        "--manifest",
+        str(manifest_path),
+        "--result-json",
+        str(install_dir / "runtime" / "claude-mcp-remove-result.json"),
+    ]
+    if dry_run:
+        argv.append("--dry-run")
+    subprocess.run(argv, check=True)
+
 for svc in data.get("services", []):
     kind = svc.get("kind")
     if kind == "launchd":
@@ -161,6 +195,7 @@ for svc in data.get("services", []):
                         except ProcessLookupError:
                             pass
 
+remove_claude_mcp()
 remove_settings_hooks()
 
 owned_files = [safe_path(p) for p in data.get("owned_files", [])]

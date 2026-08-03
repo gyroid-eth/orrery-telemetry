@@ -3002,7 +3002,9 @@ def do_kill(session: str, mode: str = "both") -> dict:
 #   4) spawn_child.sh --pre-registered を background で起動 (tmux + terminal)
 #   観測専用だった dashboard を control plane として完結させる。
 # --------------------------------------------------------------------------- #
-MCP_HTTP_URL = "http://127.0.0.1:8765/mcp"
+MCP_HTTP_URL = _env_text(
+    "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+)
 SPAWN_SCRIPT = _env_path(
     "AGENTSTACK_SPAWN_SCRIPT",
     os.path.join(HOOKS_DIR, "spawn_child.sh"),
@@ -3265,45 +3267,126 @@ def _mcp_bearer() -> str:
     return ""
 
 
-def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
-    """mcp-agent-mail に tools/call を JSON-RPC で投げる。
-
-    Returns: {ok: bool, data?: dict, error?: str}
-    """
+def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
+    """Send one authenticated MCP request and normalize JSON/SSE envelopes."""
     token = _mcp_bearer()
     if not token:
         return {"ok": False, "error": "HTTP_BEARER_TOKEN missing (~/mcp_agent_mail/.env)"}
     payload = json.dumps({
         # MCP servers may cache/replay duplicate JSON-RPC ids.  A fixed id made
         # sequential register/send calls consume an unrelated prior response.
-        "jsonrpc": "2.0", "id": secrets.token_hex(8), "method": "tools/call",
-        "params": {"name": method, "arguments": args},
+        "jsonrpc": "2.0", "id": secrets.token_hex(8), "method": method,
+        "params": params,
     }).encode()
     req = urllib.request.Request(
         MCP_HTTP_URL, data=payload,
         headers={
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json, text/event-stream",
             "Authorization": f"Bearer {token}",
         },
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = json.loads(r.read())
+            raw = r.read().decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    try:
+        body = json.loads(raw)
+    except ValueError as e:
+        return {"ok": False, "error": f"invalid JSON-RPC response: {e}"}
     if isinstance(body, dict) and body.get("error"):
         return {"ok": False, "error": str(body["error"])}
+    if not isinstance(body, dict) or "result" not in body:
+        return {"ok": False, "error": "JSON-RPC response has no result"}
+    return {"ok": True, "result": body["result"]}
+
+
+_MCP_TOOL_PARAMETER_CACHE: dict[tuple[str, str], set[str]] = {}
+
+
+def _mcp_tool_parameters(tool: str) -> set[str] | None:
+    """Read the live tool schema so strict and lenient servers both work."""
+    key = (MCP_HTTP_URL, tool)
+    if key in _MCP_TOOL_PARAMETER_CACHE:
+        return _MCP_TOOL_PARAMETER_CACHE[key]
+    listing = _mcp_jsonrpc("tools/list", {})
+    if not listing["ok"]:
+        return None
+    result = listing.get("result")
+    if not isinstance(result, dict):
+        return None
+    for definition in result.get("tools") or []:
+        if not isinstance(definition, dict) or definition.get("name") != tool:
+            continue
+        properties = (
+            (definition.get("inputSchema") or {}).get("properties") or {}
+        )
+        allowed = set(properties)
+        _MCP_TOOL_PARAMETER_CACHE[key] = allowed
+        return allowed
+    return None
+
+
+def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
+    """Call one agent-mail tool, shaping arguments to its advertised schema."""
+    allowed = _mcp_tool_parameters(method)
+    prepared = args if allowed is None else {
+        key: value for key, value in args.items() if key in allowed
+    }
+    response = _mcp_jsonrpc(
+        "tools/call", {"name": method, "arguments": prepared}, timeout
+    )
+    if not response["ok"]:
+        return response
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "unexpected tools/call result"}
+    if result.get("isError"):
+        text = " ".join(
+            str(block.get("text", ""))
+            for block in result.get("content") or []
+            if isinstance(block, dict)
+        ).strip()
+        return {"ok": False, "error": text or "agent-mail tool failed"}
     # Newer MCP servers expose the decoded payload in structuredContent.
     try:
-        result = body["result"]
         data = result.get("structuredContent")
         if not isinstance(data, dict):
-            data = json.loads(result["content"][0]["text"])
+            text = result["content"][0]["text"]
+            try:
+                data = json.loads(text)
+            except ValueError:
+                lowered = text.lower()
+                if "error calling tool" in lowered or "validation error" in lowered:
+                    return {"ok": False, "error": text.strip()}
+                data = {"text": text}
     except (KeyError, IndexError, TypeError, ValueError) as e:
         return {"ok": False, "error": f"unexpected response shape: {e}"}
     return {"ok": True, "data": data}
+
+
+def _runtime_agent_token(agent_name: str) -> str:
+    """Read one exact runtime owner-token file without following symlinks."""
+    if not _valid(agent_name):
+        return ""
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", agent_name)
+    path = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+        with os.fdopen(fd, encoding="utf-8") as token_file:
+            token = token_file.read(4097).strip()
+    except OSError:
+        return ""
+    return token if token and len(token) <= 4096 else ""
 
 
 def do_spawn(payload: dict) -> dict:
@@ -3384,10 +3467,15 @@ def do_spawn(payload: dict) -> dict:
     if not reg["ok"]:
         return {"ok": False,
                 "error": f"register_agent failed: {reg.get('error')}"}
-    child_name = (reg["data"] or {}).get("name", "")
+    registration = reg["data"] or {}
+    child_name = registration.get("name", "")
     if not child_name or _NAME_RE.fullmatch(child_name) is None:
         return {"ok": False,
                 "error": f"invalid child name from register: {child_name!r}"}
+    server_token = registration.get("registration_token", "")
+    if not isinstance(server_token, str):
+        server_token = ""
+    effective_child_token = server_token.strip() or child_token
     if requested_name and child_name != requested_name:
         logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
 
@@ -3421,10 +3509,28 @@ def do_spawn(payload: dict) -> dict:
         result.update(extra)
         return result
 
+    # Registration defaults are contact-gated on stock agent-mail. Match the
+    # normal launcher path and open the new child before delivering its task.
+    # The live schema removes registration_token for lenient builds that do
+    # not accept it, while strict builds receive the server-issued credential.
+    contact = _mcp_call("set_contact_policy", {
+        "project_key": project_key,
+        "agent_name": child_name,
+        "policy": "open",
+        "registration_token": effective_child_token,
+    })
+    if not contact["ok"]:
+        return retained_registration_error(
+            f"set_contact_policy failed: {contact.get('error')}")
+
     # 3) Normal children receive the task through agent-mail.  Standalone
     # children have no parent/sender, so the launcher receives the full task
     # directly and no synthetic self-mail is created.
     if not standalone:
+        parent_token = _runtime_agent_token(parent)
+        if not parent_token:
+            return retained_registration_error(
+                f"parent registration token unavailable for '{parent}'")
         subject = f"タスク依頼: {task[:50]}"
         body_lines = [
             "> [via dashboard +NEW AGENT]",
@@ -3453,6 +3559,7 @@ def do_spawn(payload: dict) -> dict:
             "subject": subject,
             "body_md": "\n".join(body_lines),
             "importance": "high",
+            "sender_token": parent_token,
         })
         if not snd["ok"]:
             return retained_registration_error(
@@ -3504,7 +3611,7 @@ def do_spawn(payload: dict) -> dict:
         fd = os.open(token_file, open_flags, 0o600)
         token_created = True
         with os.fdopen(fd, "w") as f:
-            f.write(child_token)
+            f.write(effective_child_token)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)

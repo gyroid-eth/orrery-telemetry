@@ -41,7 +41,7 @@ cd claude-agent-stack
 ./scripts/install.sh --assume-yes
 ```
 
-`--assume-yes` は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した settings merge、managed block、既存 agent-mail server の利用は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を追加してはいけません。
+`--assume-yes` は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した Claude MCP 登録、settings merge、managed block、既存 agent-mail server の利用は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を追加してはいけません。
 
 環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ明示 opt-in です。command-line の `--assume-yes`（短縮 `-y`）は環境変数より優先されます。この installer 選択は生成する `env.sh` には永続化しません。
 
@@ -51,7 +51,7 @@ installer は次を行います。
 2. 稼働中の agent-mail server があれば再利用を確認し、その server の実 DB path を health response、listener process、既存 DB 候補から解決。server も DB もなければ upstream を clone し、`uv sync`、supervised background 起動、health/DB 再解決まで実行
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` を生成
-5. Tier 1 では Claude Code settings と managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
+5. Tier 1 では Claude Code の MCP user config、settings、managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
 6. launchd / systemd user / supervised background のいずれかで dashboard を起動し、実際の方式を `install-state.json` に記録
 
 agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
@@ -130,7 +130,41 @@ uninstall は manifest の path と実際の symlink target を照合し、所�
 
 旧 installer が `skillsDirectories` に `~/.agentstack/skills` を追加していた環境では、Tier 1 の settings merge を承認した再インストール時にその旧 AgentStack entry だけを削除します。同じ配列の他の user value と、それ以外の settings は保持します。
 
-installer は `~/.claude.json` と shell dotfile を変更しません。project 内では、Tier 1 の preview 後に承認した場合だけ `CLAUDE.md` の managed marker 間を更新し、それ以外の file は変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
+installer は shell dotfile を変更しません。project 内では、Tier 1 の preview 後に承認した場合だけ `CLAUDE.md` の managed marker 間を更新し、それ以外の file は変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
+
+## Claude Code から agent-mail を使えるようにする
+
+`/delegate` skill は `mcp__mcp-agent-mail__*` という tool 名を許可しています。そのため Claude Code の user-scope MCP server 名は **`mcp-agent-mail` 固定**です。別名で同じ HTTP endpoint を登録しても `/delegate` からは利用できません。
+
+Tier 1 installer は `AGENTSTACK_CLAUDE_JSON`（既定 `~/.claude.json`）の `mcpServers` を構造として読み、既存の他 server と project 設定を保持したまま次の entry だけを追加・更新します。
+
+```json
+{
+  "mcpServers": {
+    "mcp-agent-mail": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {"Authorization": "Bearer <agent-mail bearer token>"}
+    }
+  }
+}
+```
+
+diff preview では bearer token を `<redacted>` に置き換えます。対話で `yes` と答えた場合、またはユーザーが明示した `--assume-yes` の場合だけ mode `0600` で atomic write し、元 file を `~/.agentstack/backups` に保存します。非対話で未承認なら書き込まず、installer と `agentstack-doctor` が安全な preview / apply コマンドを表示します。`agentstack-selftest` は HTTP server の動作だけでなく、この固定名・endpoint・authorization の登録も検査します。
+
+既存 install で登録が無い場合は、まず doctor の出力に従って preview してください。
+
+```bash
+~/.agentstack/bin/agentstack-doctor
+```
+
+Codex child は launcher が child-scoped MCP proxy config を自動生成します。top-level Codex CLI を `agent-start-codex` から使う場合は、`$CODEX_HOME/config.toml` に次を一度設定します。bootstrap が `MCP_AGENT_MAIL_TOKEN` を process environment に読み込むため、token 自体を TOML に保存する必要はありません。
+
+```toml
+[mcp_servers."mcp-agent-mail"]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"
+```
 
 ### Managed instruction helper
 

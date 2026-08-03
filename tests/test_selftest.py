@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import socket
 import sys
@@ -24,18 +25,30 @@ def _unused_port() -> int:
 
 
 def _write_installed_env(
-    tmp_path: pathlib.Path, *, mcp_url: str, dashboard_port: int
+    tmp_path: pathlib.Path,
+    *,
+    mcp_url: str,
+    dashboard_port: int,
+    claude_mcp: bool = True,
 ) -> pathlib.Path:
     install_dir = tmp_path / ".agentstack"
     install_dir.mkdir()
     project = tmp_path / "project"
     project.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    if claude_mcp:
+        claude_json.write_text(json.dumps({
+            "mcpServers": {
+                "mcp-agent-mail": {"type": "http", "url": mcp_url}
+            }
+        }))
     (install_dir / "env.sh").write_text(
         "\n".join(
             (
                 f"export AGENTSTACK_MCP_URL='{mcp_url}'",
                 f"export AGENTSTACK_PROJECT_KEY='{project}'",
                 f"export AGENTSTACK_PORT='{dashboard_port}'",
+                f"export AGENTSTACK_CLAUDE_JSON='{claude_json}'",
                 "",
             )
         ),
@@ -91,6 +104,22 @@ def test_missing_agent_mail_makes_selftest_fail(tmp_path, monkeypatch, capsys):
 
     assert _run_main(monkeypatch, install_dir) == 1
     assert "self-test failed" in capsys.readouterr().err
+
+
+def test_missing_claude_mcp_registration_makes_selftest_fail(
+    tmp_path, monkeypatch, capsys
+):
+    install_dir = _write_installed_env(
+        tmp_path,
+        mcp_url="http://agent-mail.invalid/mcp",
+        dashboard_port=_unused_port(),
+        claude_mcp=False,
+    )
+
+    assert _run_main(monkeypatch, install_dir) == 1
+    stderr = capsys.readouterr().err
+    assert "Claude MCP registration is missing" in stderr
+    assert "agentstack-doctor" in stderr
 
 
 def test_missing_dashboard_makes_selftest_fail(tmp_path, monkeypatch, capsys):

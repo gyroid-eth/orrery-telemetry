@@ -14,6 +14,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -98,10 +100,10 @@ def _load_installed_selftest(path: pathlib.Path):
     return module
 
 
-def _verify_normal_parent_child_messaging(
+def _verify_ui_spawn_parent_child_messaging(
     install_dir: pathlib.Path, project: pathlib.Path, env: dict[str, str]
 ) -> None:
-    """Exercise product registration helpers without selftest's handshake fallback."""
+    """Exercise the installed UI spawn path against the real stock server."""
     env_file = install_dir / "env.sh"
     register_lib = install_dir / "bin" / "lib" / "agentstack-register.sh"
     registered_parent = subprocess.run(
@@ -127,100 +129,158 @@ def _verify_normal_parent_child_messaging(
     parent_token_file = install_dir / "runtime" / f"agent_token_{parent}"
     parent_token = parent_token_file.read_text(encoding="utf-8").strip()
 
-    child_token_file = install_dir / "runtime" / "e2e-child.token"
-    registered_child = subprocess.run(
-        [
-            str(install_dir / "bin" / "agentstack-preregister-child"),
-            "--project-key",
-            str(project),
-            "--program",
-            "codex",
-            "--model",
-            "e2e",
-            "--task-description",
-            "fresh-install product messaging E2E",
-            "--token-file-out",
-            str(child_token_file),
-        ],
-        cwd=project,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=60,
+    # A real model process is deliberately outside this installer E2E. Replace
+    # only the installed launcher with a probe that consumes the one-shot token
+    # exactly like spawn_child.sh and leaves the live tmux session that the
+    # dashboard requires before it reports success.
+    launcher = install_dir / "hooks" / "spawn_child.sh"
+    launcher.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == "--pre-registered" ]]
+child="$2"
+shift 2
+token_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --child-token-file)
+      token_file="$2"
+      shift 2
+      ;;
+    --model|--effort|--worktree-base)
+      shift 2
+      ;;
+    --codex|--worktree|--standalone)
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$token_file" && -s "$token_file" ]]
+runtime="${AGENTSTACK_RUNTIME_DIR:?}"
+mkdir -p "$runtime"
+umask 077
+cp "$token_file" "$runtime/agent_token_$child"
+mv "$token_file" "$runtime/ui-spawn-server-token"
+tmux new-session -d -s "$child" "sleep 300"
+""",
+        encoding="utf-8",
     )
-    assert registered_child.returncode == 0, registered_child.stderr
-    child = registered_child.stdout.strip().splitlines()[-1]
-    child_token = child_token_file.read_text(encoding="utf-8").strip()
+    launcher.chmod(0o755)
 
-    module = _load_installed_selftest(install_dir / "bin" / "agentstack-selftest")
-    installed_env = module.load_env(install_dir)
-    mail = module.AgentMail(
-        installed_env["AGENTSTACK_MCP_URL"], module.read_token(installed_env)
-    )
-    mail.remember_token(parent, parent_token)
-    mail.remember_token(child, child_token)
-
-    # Stock agent-mail defaults new identities to a contact-gated policy. The
-    # normal launch helpers must deliberately open both ends before the first
-    # task message; otherwise this flow is issue 11 even if selftest can repair
-    # it by calling request_contact/respond_contact. Stock whois omits this
-    # field, so inspect its real SQLite source of truth.
-    with sqlite3.connect(installed_env["AGENTSTACK_MAIL_DB"]) as connection:
-        policies = dict(
-            connection.execute(
-                "SELECT a.name, a.contact_policy FROM agents a "
-                "JOIN projects p ON p.id = a.project_id "
-                "WHERE p.human_key = ? AND a.name IN (?, ?)",
-                (str(project), parent, child),
-            )
+    child = ""
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{env['AGENTSTACK_PORT']}/api/spawn",
+            data=json.dumps({
+                "parent": parent,
+                "name": "Fresh-Curie",
+                "task": "fresh-install UI spawn E2E",
+                "dir": str(project),
+                "provider": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
-    assert policies == {parent: "open", child: "open"}
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                spawned = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            pytest.fail(
+                f"installed UI spawn returned HTTP {error.code}: "
+                + error.read().decode("utf-8", errors="replace")
+            )
+        assert spawned["ok"] is True
+        child = spawned["child_name"]
+        child_token = (
+            install_dir / "runtime" / "ui-spawn-server-token"
+        ).read_text(encoding="utf-8").strip()
 
-    mail.call(
-        "send_message",
-        {
-            "project_key": str(project),
-            "sender_name": parent,
-            "to": [child],
-            "subject": "product flow task",
-            "body_md": "parent to child without a selftest contact handshake",
-        },
-        agent=parent,
-    )
-    child_inbox = mail.call(
-        "fetch_inbox",
-        {
-            "project_key": str(project),
-            "agent_name": child,
-            "limit": 10,
-        },
-        agent=child,
-    )
-    child_rows = child_inbox.get("result", child_inbox)
-    assert any(row.get("subject") == "product flow task" for row in child_rows)
+        module = _load_installed_selftest(
+            install_dir / "bin" / "agentstack-selftest"
+        )
+        installed_env = module.load_env(install_dir)
+        mail = module.AgentMail(
+            installed_env["AGENTSTACK_MCP_URL"], module.read_token(installed_env)
+        )
+        mail.remember_token(parent, parent_token)
+        mail.remember_token(child, child_token)
 
-    mail.call(
-        "send_message",
-        {
-            "project_key": str(project),
-            "sender_name": child,
-            "to": [parent],
-            "subject": "product flow reply",
-            "body_md": "child to parent without a selftest contact handshake",
-        },
-        agent=child,
-    )
-    parent_inbox = mail.call(
-        "fetch_inbox",
-        {
-            "project_key": str(project),
-            "agent_name": parent,
-            "limit": 10,
-        },
-        agent=parent,
-    )
-    parent_rows = parent_inbox.get("result", parent_inbox)
-    assert any(row.get("subject") == "product flow reply" for row in parent_rows)
+        # This simultaneously proves that UI spawn handed the launcher the
+        # server-issued token, not its discarded client-side proposal.
+        with sqlite3.connect(installed_env["AGENTSTACK_MAIL_DB"]) as connection:
+            child_db_token = connection.execute(
+                "SELECT a.registration_token FROM agents a "
+                "JOIN projects p ON p.id = a.project_id "
+                "WHERE p.human_key = ? AND a.name = ?",
+                (str(project), child),
+            ).fetchone()
+            policies = dict(
+                connection.execute(
+                    "SELECT a.name, a.contact_policy FROM agents a "
+                    "JOIN projects p ON p.id = a.project_id "
+                    "WHERE p.human_key = ? AND a.name IN (?, ?)",
+                    (str(project), parent, child),
+                )
+            )
+        assert child_db_token == (child_token,)
+        assert policies == {parent: "open", child: "open"}
+
+        # The first message is the task emitted by /api/spawn itself. If the UI
+        # omitted sender_token or contact setup on stock, spawn would already
+        # have returned 400 and this message would be absent.
+        child_inbox = mail.call(
+            "fetch_inbox",
+            {
+                "project_key": str(project),
+                "agent_name": child,
+                "limit": 10,
+            },
+            agent=child,
+        )
+        child_rows = child_inbox.get("result", child_inbox)
+        assert any(
+            row.get("subject") == "タスク依頼: fresh-install UI spawn E2E"
+            for row in child_rows
+        )
+
+        mail.call(
+            "send_message",
+            {
+                "project_key": str(project),
+                "sender_name": child,
+                "to": [parent],
+                "subject": "UI spawn product reply",
+                "body_md": "child to parent using the UI-issued handoff token",
+            },
+            agent=child,
+        )
+        parent_inbox = mail.call(
+            "fetch_inbox",
+            {
+                "project_key": str(project),
+                "agent_name": parent,
+                "limit": 10,
+            },
+            agent=parent,
+        )
+        parent_rows = parent_inbox.get("result", parent_inbox)
+        assert any(
+            row.get("subject") == "UI spawn product reply"
+            for row in parent_rows
+        )
+    finally:
+        if child:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", f"={child}"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
 
 
 def test_real_fresh_install_reaches_selftest_exit_zero(tmp_path):
@@ -237,7 +297,7 @@ def test_real_fresh_install_reaches_selftest_exit_zero(tmp_path):
 
     try:
         installed = subprocess.run(
-            ["bash", str(installer)],
+            ["bash", str(installer), "--assume-yes"],
             cwd=ROOT,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -253,6 +313,7 @@ def test_real_fresh_install_reaches_selftest_exit_zero(tmp_path):
         )
         assert "Install complete:" in installed.stdout
         assert "agent-mail ready at" in installed.stdout
+        assert "assume-yes: registered mcp-agent-mail" in installed.stdout
         assert (mail_dir / ".git").is_dir()
         assert (mail_dir / ".venv").is_dir()
         remote = subprocess.run(
@@ -268,11 +329,19 @@ def test_real_fresh_install_reaches_selftest_exit_zero(tmp_path):
         )
         assert manifest["env"]["AGENTSTACK_MAIL_DB"]
         assert pathlib.Path(manifest["env"]["AGENTSTACK_MAIL_DB"]).is_file()
+        claude_config = json.loads(
+            (home / ".claude.json").read_text(encoding="utf-8")
+        )
+        claude_mail = claude_config["mcpServers"]["mcp-agent-mail"]
+        assert claude_mail["type"] == "http"
+        assert claude_mail["url"] == env["AGENTSTACK_MCP_URL"]
+        assert claude_mail["headers"]["Authorization"].startswith("Bearer ")
+        assert manifest["claude_mcp_merge"]["changed"] is True
 
         selftest = install_dir / "bin" / "agentstack-selftest"
         assert selftest.is_file()
         assert os.access(selftest, os.X_OK)
-        _verify_normal_parent_child_messaging(install_dir, project, env)
+        _verify_ui_spawn_parent_child_messaging(install_dir, project, env)
         verified = subprocess.run(
             [str(selftest), "--install-dir", str(install_dir)],
             cwd=project,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import sqlite3
 import threading
 import urllib.error
@@ -182,6 +183,46 @@ def test_spawn_names_uses_current_codex_defaults(monkeypatch):
     ]
 
 
+def test_mcp_call_shapes_credentials_to_the_live_server_schema(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        server,
+        "_mcp_tool_parameters",
+        lambda _method: {"project_key", "sender_name", "to", "subject", "body_md"},
+    )
+    monkeypatch.setattr(
+        server,
+        "_mcp_jsonrpc",
+        lambda method, params, timeout=15: (
+            calls.append((method, params, timeout))
+            or {
+                "ok": True,
+                "result": {"structuredContent": {"count": 1}},
+            }
+        ),
+    )
+
+    result = server._mcp_call("send_message", {
+        "project_key": "/project",
+        "sender_name": "Parent",
+        "to": ["Child"],
+        "subject": "task",
+        "body_md": "work",
+        "sender_token": "strict-only-owner-token",
+    })
+
+    assert result == {"ok": True, "data": {"count": 1}}
+    assert calls[0][0] == "tools/call"
+    assert calls[0][1]["arguments"] == {
+        "project_key": "/project",
+        "sender_name": "Parent",
+        "to": ["Child"],
+        "subject": "task",
+        "body_md": "work",
+    }
+
+
 def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path):
     launcher = tmp_path / "spawn_child.sh"
     launcher.write_text("#!/bin/bash\n")
@@ -190,10 +231,19 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
 
     def mcp(method, args, timeout=15):
         calls.append((method, args))
-        return {"ok": True, "data": {"name": "SunnyCurie"} if method == "register_agent" else {}}
+        return {
+            "ok": True,
+            "data": {
+                "name": "SunnyCurie",
+                "registration_token": "server-child-token",
+            } if method == "register_agent" else {},
+        }
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
-    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "agent_token_Parent").write_text("parent-owner-token")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
@@ -207,6 +257,12 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     # The request stays in stock-safe hyphen spelling; only the registration
     # response's actual name is used by the launcher/token path below.
     assert calls[0][1]["name"] == "Sunny-Curie"
+    assert [method for method, _ in calls] == [
+        "register_agent", "set_contact_policy", "send_message",
+    ]
+    assert calls[1][1]["registration_token"] == "server-child-token"
+    assert calls[2][1]["sender_token"] == "parent-owner-token"
+    assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", "gpt-5.6-sol", "--effort", "high", "work", str(tmp_path)]
 
 
@@ -219,10 +275,19 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
 
     def mcp(method, args, timeout=15):
         calls.append((method, args))
-        return {"ok": True, "data": {"name": "Zesty-Curie"} if method == "register_agent" else {}}
+        return {
+            "ok": True,
+            "data": {
+                "name": "Zesty-Curie",
+                "registration_token": "server-child-token",
+            } if method == "register_agent" else {},
+        }
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
-    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "agent_token_Parent").write_text("parent-owner-token")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_suggest_any_spawn_name", lambda: "Zesty-Curie")
@@ -239,6 +304,13 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
         "task_description": "work", "registration_token": calls[0][1]["registration_token"],
         "name": "Zesty-Curie",
     })
+    assert calls[1] == ("set_contact_policy", {
+        "project_key": "/project", "agent_name": "Zesty-Curie",
+        "policy": "open", "registration_token": "server-child-token",
+    })
+    assert calls[2][0] == "send_message"
+    assert calls[2][1]["sender_token"] == "parent-owner-token"
+    assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][2] == "Zesty-Curie"
 
 
@@ -253,7 +325,10 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
         calls.append((method, args))
         return {
             "ok": True,
-            "data": {"name": "QuietCurie"} if method == "register_agent" else {},
+            "data": {
+                "name": "QuietCurie",
+                "registration_token": "server-child-token",
+            } if method == "register_agent" else {},
         }
 
     def popen(args, **kwargs):
@@ -282,8 +357,12 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
 
     assert result["ok"] is True
     assert result["standalone"] is True
-    assert [method for method, _ in calls] == ["register_agent"]
+    assert [method for method, _ in calls] == [
+        "register_agent", "set_contact_policy",
+    ]
+    assert calls[1][1]["registration_token"] == "server-child-token"
     args, kwargs = launched[0]
+    assert pathlib.Path(args[4]).read_text() == "server-child-token"
     assert "--standalone" in args
     assert args[-2:] == [task.strip(), str(tmp_path)]
     assert "PARENT_AGENT" not in kwargs["env"]

@@ -115,3 +115,15 @@ The installed skill sources live under `__AGENTSTACK_HOME__/skills`.
 
 - `delegate`: `__AGENTSTACK_HOME__/skills/delegate/SKILL.md`
 - `log`: `__AGENTSTACK_HOME__/skills/log/SKILL.md`
+
+## Delegation Must Stay On AgentStack
+
+- When the user asks you to create, spawn, or delegate to a child agent, use
+  `/delegate`. Do not substitute Claude Code's built-in Agent or Task tool;
+  those children have no AgentStack identity, inbox, reservation, dedicated
+  tmux session, or dashboard telemetry even when their work appears to finish.
+- `/delegate` requires the `mcp__mcp-agent-mail__*` tools. If those tools are
+  unavailable, report that agent-mail is not registered as a Claude Code MCP
+  server and stop the delegation attempt. Do not silently switch to a built-in
+  agent, direct-mode launcher, or any other path that can turn this integration
+  failure into an apparent success.

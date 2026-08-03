@@ -189,6 +189,42 @@ def read_token(env: dict[str, str]) -> str:
     return ""
 
 
+def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> None:
+    """Prove Claude Code can see the fixed tool namespace /delegate allows."""
+    path = pathlib.Path(
+        env.get("AGENTSTACK_CLAUDE_JSON")
+        or os.environ.get("AGENTSTACK_CLAUDE_JSON", "")
+        or pathlib.Path.home() / ".claude.json"
+    ).expanduser()
+    expected_url = env.get("AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp")
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+        entry = config.get("mcpServers", {}).get("mcp-agent-mail")
+    except (AttributeError, OSError, ValueError) as exc:
+        raise Fail(
+            f"Claude MCP registration is missing or unreadable at {path}: {exc}; "
+            "run agentstack-doctor for the safe registration command"
+        ) from exc
+    if not isinstance(entry, dict) or entry.get("type") != "http":
+        raise Fail(
+            f"Claude MCP entry 'mcp-agent-mail' is not an HTTP server in {path}; "
+            "/delegate cannot see its allowed mcp__mcp-agent-mail__* tools"
+        )
+    if entry.get("url") != expected_url:
+        raise Fail(
+            f"Claude MCP entry 'mcp-agent-mail' points to {entry.get('url')!r}, "
+            f"not the installed endpoint {expected_url!r}"
+        )
+    bearer = read_token(env)
+    authorization = (entry.get("headers") or {}).get("Authorization")
+    if bearer and authorization != f"Bearer {bearer}":
+        raise Fail(
+            "Claude MCP entry 'mcp-agent-mail' has missing or stale authorization; "
+            "run agentstack-doctor for the safe registration command"
+        )
+    report.ok("Claude Code has the fixed mcp-agent-mail MCP registration")
+
+
 def dashboard(url: str, path: str, timeout: float = 15.0):
     with urllib.request.urlopen(f"{url}{path}", timeout=timeout) as response:
         return json.load(response)
@@ -410,6 +446,7 @@ def main() -> int:
         if not project_key:
             raise Fail("AGENTSTACK_PROJECT_KEY is not set in the installed env.sh")
         report.ok(f"read the installed environment from {args.install_dir}")
+        verify_claude_mcp_registration(env, report)
 
         mail = AgentMail(mcp_url, read_token(env))
         health = mail.call("health_check", {})

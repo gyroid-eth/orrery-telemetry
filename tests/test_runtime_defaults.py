@@ -314,10 +314,18 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     (mail_dir / ".git").mkdir(parents=True)
     mail_db = mail_dir / "storage.sqlite3"
     mail_db.touch()
+    mail_env = mail_dir / ".env"
+    mail_env.write_text("HTTP_BEARER_TOKEN=installer-test-bearer\n")
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
     original_settings = '{"permissions":{"allow":["User(existing)"]}}\n'
     settings.write_text(original_settings, encoding="utf-8")
+    claude_json = home / ".claude.json"
+    original_claude_json = {
+        "mcpServers": {"user-owned": {"command": "user-command"}},
+        "projects": {str(project): {"trusted": True}},
+    }
+    claude_json.write_text(json.dumps(original_claude_json), encoding="utf-8")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -327,10 +335,12 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_DB": str(mail_db),
+        "AGENTSTACK_MAIL_ENV": str(mail_env),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_CLAUDE_JSON": str(claude_json),
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
@@ -349,6 +359,13 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "non-interactive shell; skipping Tier1 user-settings merge" in (
             without_approval.stderr
         )
+        assert "non-interactive shell; skipping Claude MCP user-config merge" in (
+            without_approval.stderr
+        )
+        assert "agentstack-merge-claude-mcp" in without_approval.stderr
+        assert "installer-test-bearer" not in (
+            without_approval.stdout + without_approval.stderr
+        )
         assert "non-interactive shell; skipping Codex AGENTS.md managed setup" in (
             without_approval.stderr
         )
@@ -356,6 +373,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
             without_approval.stderr
         )
         assert settings.read_text(encoding="utf-8") == original_settings
+        assert json.loads(claude_json.read_text()) == original_claude_json
         assert not (home / ".codex" / "AGENTS.md").exists()
         assert not (project / "CLAUDE.md").exists()
     finally:
@@ -374,6 +392,12 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
             from_environment.stdout
         )
+        assert f"assume-yes: registered mcp-agent-mail in {claude_json}" in (
+            from_environment.stdout
+        )
+        assert "installer-test-bearer" not in (
+            from_environment.stdout + from_environment.stderr
+        )
         assert "assume-yes: applied Codex AGENTS.md managed setup" in (
             from_environment.stdout
         )
@@ -381,6 +405,13 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
             from_environment.stdout
         )
         assert settings.read_text(encoding="utf-8") != original_settings
+        claude_servers = json.loads(claude_json.read_text())["mcpServers"]
+        assert claude_servers["user-owned"] == {"command": "user-command"}
+        assert claude_servers["mcp-agent-mail"] == {
+            "type": "http",
+            "url": "http://127.0.0.1:1/mcp",
+            "headers": {"Authorization": "Bearer installer-test-bearer"},
+        }
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
@@ -393,6 +424,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
 
     # The explicit flag wins over even a malformed environment value.
     settings.write_text(original_settings, encoding="utf-8")
+    claude_json.write_text(json.dumps(original_claude_json), encoding="utf-8")
     (home / ".codex" / "AGENTS.md").unlink()
     (project / "CLAUDE.md").unlink()
     env["AGENTSTACK_ASSUME_YES"] = "not-a-boolean"
@@ -408,6 +440,9 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
             from_flag.stdout
         )
+        assert f"assume-yes: registered mcp-agent-mail in {claude_json}" in (
+            from_flag.stdout
+        )
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
@@ -416,6 +451,22 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         ).read_text(encoding="utf-8")
     finally:
         _stop_fake_dashboard(env)
+
+    uninstalled = subprocess.run(
+        [
+            "bash",
+            str(install_dir / "bin" / "agentstack-uninstall"),
+            "--install-dir",
+            str(install_dir),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "mcp-agent-mail" in uninstalled.stdout
+    assert json.loads(claude_json.read_text()) == original_claude_json
 
 
 def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp_path):
@@ -606,8 +657,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
 
     normalized_owned = set(_normalize_sample_paths(manifest["owned_files"], manifest))
     sample_owned = set(sample["owned_files"])
-    # Tier0 does not perform the sample's Tier1 settings merge.
+    # This non-interactive, unapproved run does not perform Tier1 user merges.
     sample_owned.remove("/home/alice/.agentstack/runtime/settings-merge-result.json")
+    sample_owned.remove("/home/alice/.agentstack/runtime/claude-mcp-merge-result.json")
     assert sample_owned <= normalized_owned
 
     token_path = install_dir / "runtime" / "agent_token_WiseFaraday"
@@ -700,8 +752,11 @@ def test_install_state_sample_settings_merge_matches_generator(tmp_path):
     generated["backup"] = sample["settings_merge"]["backup"]
 
     assert generated == sample["settings_merge"]
-    assert sample["backups"] == [sample["settings_merge"]["backup"]]
-    assert sample["settings_backups"] == sample["backups"]
+    assert sample["backups"] == [
+        sample["settings_merge"]["backup"],
+        sample["claude_mcp_merge"]["backup"],
+    ]
+    assert sample["settings_backups"] == [sample["settings_merge"]["backup"]]
 
 
 def test_installer_preserves_conflicting_user_skill(tmp_path):

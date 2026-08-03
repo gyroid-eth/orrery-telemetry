@@ -680,7 +680,7 @@ exit 0
     )
     os.close(slave_fd)
     try:
-        os.write(master_fd, b"yes\nyes\nyes\n")
+        os.write(master_fd, b"yes\nyes\nyes\nyes\n")
         stdout, stderr = process.communicate(timeout=60)
     finally:
         os.close(master_fd)
