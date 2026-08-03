@@ -6,11 +6,18 @@ MANIFEST="$INSTALL_DIR/install-state.json"
 
 usage() {
   cat <<'EOF'
-Usage: doctor.sh [--install-dir PATH]
+Usage: doctor.sh [--install-dir PATH] [--report]
 
 Checks the core claude-agent-stack install footprint without modifying files.
+
+  --report   Also print a paste-ready environment report for a bug report.
+             Every failure this project has had came from an environment
+             difference, and each one cost several rounds of asking. Values
+             only; no tokens, no Authorization headers.
 EOF
 }
+
+REPORT="${AGENTSTACK_DOCTOR_REPORT:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,6 +25,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DIR="$2"
       MANIFEST="$INSTALL_DIR/install-state.json"
       shift 2
+      ;;
+    --report)
+      REPORT=1
+      shift
       ;;
     -h|--help)
       usage
@@ -370,6 +381,89 @@ if tmux info >/dev/null 2>&1; then
   else
     echo "ok: tmux global environment has no session identity variables"
   fi
+fi
+
+# --- paste-ready environment report -------------------------------------------
+# Every defect this project has had so far came from a difference between the
+# reporter's machine and the developer's, and each one cost several rounds of
+# "which version of that do you have?". These are exactly the fields those
+# rounds asked for. Values only: no tokens, no Authorization headers, no
+# database contents.
+report_tool() {
+  ags_report_path="$(command -v "$1" 2>/dev/null || true)"
+  if [[ -z "$ags_report_path" ]]; then
+    printf -- '- %s: not found\n' "$1"
+    return 0
+  fi
+  ags_report_version="$("$ags_report_path" ${2:---version} 2>&1 | head -n 1 | tr -d '\r')"
+  printf -- '- %s: %s (%s)\n' "$1" "${ags_report_version:-unknown}" "$ags_report_path"
+}
+
+if [[ "$REPORT" == "1" ]]; then
+  echo
+  echo "--- copy from here ---"
+  echo
+  echo '## Environment'
+  echo
+  printf -- '- stack: %s\n' "$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo 'VERSION not installed')"
+  if git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD >/dev/null 2>&1; then
+    printf -- '- stack commit: %s\n' "$(git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD)"
+  fi
+  printf -- '- host: %s %s (%s)\n' "$(uname -s)" "$(uname -r)" "$(uname -m)"
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v sw_vers >/dev/null 2>&1; then
+    printf -- '- macOS: %s\n' "$(sw_vers -productVersion 2>/dev/null || echo unknown)"
+  fi
+  # launchd and a login shell disagree about this by four thousand, and that
+  # gap is what exhausted a tester's descriptors.
+  printf -- '- open file limit (this shell): %s\n' "$(ulimit -n 2>/dev/null || echo unknown)"
+  echo
+  echo '## Tools'
+  echo
+  report_tool python3
+  report_tool tmux -V
+  report_tool git
+  report_tool uv
+  report_tool claude
+  report_tool codex
+  echo
+  echo '## agent-mail'
+  echo
+  ags_mail_dir="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
+  printf -- '- directory: %s\n' "$ags_mail_dir"
+  if git -C "$ags_mail_dir" rev-parse --short HEAD >/dev/null 2>&1; then
+    printf -- '- commit: %s\n' "$(git -C "$ags_mail_dir" rev-parse --short HEAD)"
+    printf -- '- ahead of origin: %s commit(s)\n' \
+      "$(git -C "$ags_mail_dir" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 'unknown')"
+  else
+    echo '- commit: not a git checkout'
+  fi
+  printf -- '- declared version: %s\n' \
+    "$(grep -m1 '^version' "$ags_mail_dir/pyproject.toml" 2>/dev/null | tr -d ' "' || echo unknown)"
+  # The mode decides whether the name you asked for is the name you get.
+  printf -- '- AGENT_NAME_ENFORCEMENT_MODE: %s\n' \
+    "$(grep -m1 '^AGENT_NAME_ENFORCEMENT_MODE=' "${AGENTSTACK_MAIL_ENV:-$ags_mail_dir/.env}" 2>/dev/null \
+       | cut -d= -f2- || echo 'unset (default)')"
+  printf -- '- endpoint: %s\n' "${AGENTSTACK_MCP_URL:-unset}"
+  ags_mail_db="${AGENTSTACK_MAIL_DB:-$ags_mail_dir/storage.sqlite3}"
+  if [[ -f "$ags_mail_db" ]] && [[ -x "$PYTHON_BIN" ]]; then
+    printf -- '- agents.retired_at column: %s\n' \
+      "$("$PYTHON_BIN" - "$ags_mail_db" <<'PYEOF' 2>/dev/null || echo unknown
+import sqlite3, sys
+con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print("present" if any(r[1] == "retired_at"
+      for r in con.execute("PRAGMA table_info(agents)")) else "absent")
+con.close()
+PYEOF
+)"
+  else
+    echo '- agents.retired_at column: database not readable'
+  fi
+  echo
+  echo '## What happened'
+  echo
+  echo '<!-- What you did, what you expected, what you saw. Paste any error text. -->'
+  echo
+  echo "--- copy to here ---"
 fi
 
 exit "$status"

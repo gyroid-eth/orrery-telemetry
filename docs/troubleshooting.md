@@ -15,6 +15,26 @@ core doctor は install footprint、必須 command、managed block、managed age
 
 doctor は dashboard service state と mail-watcher health を検査しません。service は後述の launchd / systemd command、watcher は `/api/mail-watcher-health` で別に確認してください。
 
+## バグを報告するとき
+
+```bash
+~/.agentstack/bin/agentstack-doctor --report
+```
+
+`--- copy from here ---` から `--- copy to here ---` までをそのまま貼ってください。
+
+これまでに見つかった不具合は**すべて「報告者の環境と開発機の違い」**から出ており、その差がどこにあるかを突き止めるまでに毎回何往復もかかりました。この出力は、その往復で実際に聞いた項目だけを並べたものです。
+
+| 項目 | これが分かれば判ること |
+|---|---|
+| agent-mail の commit・origin より何コミット先か | 動いているコードが本当はどれか |
+| `AGENT_NAME_ENFORCEMENT_MODE` | 要求した名前がそのまま通るかどうか |
+| `agents.retired_at` カラムの有無 | dashboard のクエリが成立するかどうか |
+| open file limit | descriptor を使い切って落ちる側かどうか |
+| tmux / python3 / uv / claude / codex の有無と版 | 前提コマンドが揃っているか |
+
+**token や Authorization ヘッダは含みません**（そのままチャットに貼れるように、意図的に値を出さない作りにしてあり、テストで固定しています）。「何をして」「何を期待して」「何が起きたか」を末尾の欄に書き足してください。エラー文はそのまま貼ってもらうのが最も速いです。
+
 ## `NOT CONFIGURED`
 
 原因は dashboard service に `AGENTSTACK_PROJECT_KEY` または `AGENTSTACK_VAULT` がないことです。
