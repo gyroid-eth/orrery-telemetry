@@ -4,6 +4,10 @@ agentstack.toml
 
 # agent-mail is fetched at install time, not vendored
 mcp_agent_mail/
+# ...except the excerpt the naming-patch tests match their anchors against. It
+# has to sit at agent-mail's real path to be a fair test, which this rule would
+# otherwise swallow silently: green here, missing fixture in CI.
+!tests/fixtures/agent_mail_stock/src/mcp_agent_mail/
 
 # runtime / data
 *.sqlite3

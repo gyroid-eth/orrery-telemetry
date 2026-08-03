@@ -35,6 +35,10 @@ UPSTREAM_AGENT_MAIL_URL="${AGENTSTACK_AGENT_MAIL_REPO:-https://github.com/Dickle
 # Pin a ref we have actually run against; `AGENTSTACK_AGENT_MAIL_REF=main`
 # opts out deliberately. Moving this line is how the version changes.
 UPSTREAM_AGENT_MAIL_REF="${AGENTSTACK_AGENT_MAIL_REF:-5e481834ff1c373acda804d28c21d0349a116419}"
+# Names this stack asks for only survive registration on a server configured to
+# accept them. Set to 0 to leave agent-mail's naming exactly as upstream ships
+# it, and to be handed generated names instead.
+PASSTHROUGH_ENABLED="${AGENTSTACK_AGENT_MAIL_PASSTHROUGH:-1}"
 
 usage() {
   cat <<'EOF'
@@ -180,6 +184,118 @@ report_agent_mail_ref() {
     say "agent-mail is at ${head:0:12}; this stack is tested against ${UPSTREAM_AGENT_MAIL_REF:0:12}"
     say "  leaving it as it is — behaviour may differ from the tested version"
   fi
+}
+
+# Which names an agent-mail server honours depends on its version, so a name
+# this stack asks for is not always the name the agent ends up with. The
+# passthrough mode removes the question. It is opt-in: the patch alone changes
+# nothing until AGENT_NAME_ENFORCEMENT_MODE selects it.
+passthrough_state() {
+  local dir="$1"
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
+    --mail-dir "$dir" 2>/dev/null || printf 'error'
+}
+
+apply_passthrough() {
+  local dir="$1"
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
+    --mail-dir "$dir" --apply >/dev/null
+}
+
+set_env_key() {
+  local file="$1" key="$2" value="$3"
+  "$PYTHON_BIN" - "$file" "$key" "$value" <<'PY'
+import pathlib
+import sys
+
+path, key, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+for index, line in enumerate(lines):
+    if line.split("=", 1)[0].strip() == key:
+        lines[index] = f"{key}={value}"
+        break
+else:
+    lines.append(f"{key}={value}")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
+# A server this installer created is ours to configure. One it merely found is
+# not: it may serve other projects, and patching it costs a restart.
+confirm_patch_existing_agent_mail() {
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    warn "non-interactive shell; leaving the existing agent-mail source untouched"
+    return 1
+  fi
+  printf 'Patch that agent-mail checkout so it can accept the names this stack asks for? Type yes to continue: ' >&2
+  local reply
+  read -r reply
+  [[ "$reply" == "yes" ]]
+}
+
+offer_passthrough_to_existing_server() {
+  if [[ "$PASSTHROUGH_ENABLED" != "1" ]]; then
+    return 0
+  fi
+  local dir="$AGENT_MAIL_LISTENER_CWD"
+  if [[ -z "$dir" || ! -d "$dir" ]]; then
+    say "agent-mail naming mode: source directory unknown; leaving it untouched"
+    return 0
+  fi
+  # Editing an installed package is not an option: the next upgrade removes the
+  # change without saying so, and it would affect every project on this machine.
+  if [[ ! -d "$dir/.git" ]]; then
+    say "agent-mail naming mode: $dir is not a git checkout; leaving it untouched"
+    return 0
+  fi
+
+  local state
+  state="$(passthrough_state "$dir")"
+  case "$state" in
+    already)
+      say "agent-mail already accepts explicit names (passthrough patch present)"
+      return 0
+      ;;
+    applicable) ;;
+    *)
+      say "agent-mail naming mode: this version does not match the known patch ($state); leaving it untouched"
+      return 0
+      ;;
+  esac
+
+  say ""
+  say "The agent-mail server at $MCP_URL decides whether the names this stack"
+  say "asks for survive registration. A three-line change lets it accept them."
+  say "  what changes: $dir/src/mcp_agent_mail/{app.py,config.py}"
+  say "  it is inert   until AGENT_NAME_ENFORCEMENT_MODE=passthrough is set"
+  say "  it needs      a restart of that server before it takes effect"
+  say "  it is lost    the next time you update that checkout"
+  say "  to undo       git -C $dir checkout -- src/mcp_agent_mail"
+  say "Declining is fine: the install completes either way."
+
+  if [[ "$DRY_RUN" == true ]]; then
+    plan "offer to patch existing agent-mail at $dir (skipped by --dry-run)"
+    return 0
+  fi
+  if ! confirm_patch_existing_agent_mail; then
+    say "left the existing agent-mail source untouched"
+    return 0
+  fi
+  if ! apply_passthrough "$dir"; then
+    warn "the agent-mail patch did not apply; that checkout is unchanged"
+    return 0
+  fi
+  say "patched $dir"
+  if [[ -n "$MAIL_ENV" && -f "$MAIL_ENV" ]]; then
+    set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
+    say "set AGENT_NAME_ENFORCEMENT_MODE=passthrough in $MAIL_ENV"
+  else
+    say "add AGENT_NAME_ENFORCEMENT_MODE=passthrough to that server's .env"
+  fi
+  say "restart that agent-mail server for it to take effect"
 }
 
 validate_assume_yes() {
@@ -1347,15 +1463,18 @@ ensure_agent_mail() {
     else
       warn "no agent-mail bearer .env was resolved; localhost must allow unauthenticated access"
     fi
+    offer_passthrough_to_existing_server
     return
   fi
 
+  local mail_dir_is_ours=true
   if [[ -e "$MAIL_DIR" ]]; then
     if [[ -d "$MAIL_DIR/.git" ]]; then
       local remote
       remote="$(git -C "$MAIL_DIR" remote get-url origin 2>/dev/null || true)"
       if [[ -n "$remote" && "$remote" != "$UPSTREAM_AGENT_MAIL_URL" ]]; then
         warn "existing agent-mail remote is '$remote' (expected '$UPSTREAM_AGENT_MAIL_URL'); leaving it untouched"
+        mail_dir_is_ours=false
       else
         plan "reuse existing agent-mail clone at $MAIL_DIR"
         report_agent_mail_ref
@@ -1378,8 +1497,39 @@ ensure_agent_mail() {
     fi
   fi
 
+  # A clone this installer made is ours, so its naming behaviour is ours to fix
+  # rather than ask about. Without it, the name an agent registers under depends
+  # on which upstream version happened to be checked out. A checkout pointing
+  # somewhere else was already declared untouched above, and stays that way.
+  if [[ "$PASSTHROUGH_ENABLED" != "1" ]]; then
+    say "agent-mail naming mode: left as it is (AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0)"
+  elif [[ "$mail_dir_is_ours" != true ]]; then
+    say "agent-mail naming mode: left as it is, along with the rest of $MAIL_DIR"
+  else
+    plan "set agent-mail naming mode to passthrough in $MAIL_DIR"
+    if [[ "$DRY_RUN" != true ]]; then
+      local state
+      state="$(passthrough_state "$MAIL_DIR")"
+      case "$state" in
+        already) say "agent-mail already accepts explicit names" ;;
+        applicable)
+          apply_passthrough "$MAIL_DIR" || \
+            die "the agent-mail naming patch did not apply to $MAIL_DIR. Remove that checkout and re-run to get the pinned version, or set AGENTSTACK_AGENT_MAIL_REF to the ref you want."
+          say "patched agent-mail to accept explicit names"
+          ;;
+        *)
+          warn "agent-mail at $MAIL_DIR does not match the known naming patch ($state)"
+          warn "  names this stack asks for may be replaced by generated ones"
+          ;;
+      esac
+    fi
+  fi
+
   if [[ -f "$MAIL_ENV" ]]; then
     plan "reuse existing agent-mail .env at $MAIL_ENV"
+    if [[ "$DRY_RUN" != true && "$mail_dir_is_ours" == true ]]; then
+      set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
+    fi
   else
     plan "create agent-mail .env at $MAIL_ENV (mode 600; token hidden)"
     if [[ "$DRY_RUN" != true ]]; then
@@ -1391,7 +1541,10 @@ import secrets
 import sys
 path = pathlib.Path(sys.argv[1])
 token = secrets.token_urlsafe(32)
-path.write_text(f"HTTP_BEARER_TOKEN={token}\n", encoding="utf-8")
+path.write_text(
+    f"HTTP_BEARER_TOKEN={token}\nAGENT_NAME_ENFORCEMENT_MODE=passthrough\n",
+    encoding="utf-8",
+)
 path.chmod(0o600)
 PY
     fi

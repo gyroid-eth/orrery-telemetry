@@ -29,6 +29,7 @@ doctor は dashboard service state と mail-watcher health を検査しません
 |---|---|
 | agent-mail の commit・origin より何コミット先か | 動いているコードが本当はどれか |
 | `AGENT_NAME_ENFORCEMENT_MODE` | 要求した名前がそのまま通るかどうか |
+| passthrough patch の有無 | 上のモードがそもそも受け付けられる版かどうか |
 | `agents.retired_at` カラムの有無 | dashboard のクエリが成立するかどうか |
 | open file limit | descriptor を使い切って落ちる側かどうか |
 | tmux / python3 / uv / claude / codex の有無と版 | 前提コマンドが揃っているか |
@@ -168,6 +169,16 @@ Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-li
 - `available`: 使用可
 
 `unknown` は使用できません。別名で回避する前に agent-mail と project key を直してください。identity continuity を守るためです。
+
+## 要求した名前と違う名前で登録される
+
+agent-mail が名前を受け入れず、生成名に置き換えた状態です。エージェントは動き続けるので気づきにくく、他のエージェントから宛先として呼べないことで初めて分かります。
+
+```bash
+~/.agentstack/bin/agentstack-doctor --report | grep -A1 ENFORCEMENT
+```
+
+`passthrough patch: absent` なら、その checkout は要求名を受け付けない版です。どの環境まで保証するかは[インストール](install.md#agent-mail-のバージョンと名前の扱いサポート範囲)の表を参照してください。installer を再実行すると、自分が clone した checkout には patch を当て、既存サーバーには承認を求めます。
 
 ## Registration / inbox の認証に失敗する
 

@@ -324,6 +324,17 @@ def test_real_fresh_install_reaches_selftest_exit_zero(tmp_path):
         ).stdout.strip()
         assert remote == UPSTREAM_AGENT_MAIL
 
+        # A clone we made is one we configure: the names this stack asks for
+        # have to survive registration, and on a stock checkout that depends on
+        # which upstream version was pinned.
+        assert "patched agent-mail to accept explicit names" in installed.stdout
+        mail_env = (mail_dir / ".env").read_text(encoding="utf-8")
+        assert "AGENT_NAME_ENFORCEMENT_MODE=passthrough" in mail_env
+        app_py = (mail_dir / "src" / "mcp_agent_mail" / "app.py").read_text(
+            encoding="utf-8"
+        )
+        assert app_py.count('mode == "passthrough" or') == 2
+
         manifest = json.loads(
             (install_dir / "install-state.json").read_text(encoding="utf-8")
         )

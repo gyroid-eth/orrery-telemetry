@@ -27,6 +27,37 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 
 `AGENTSTACK_PYTHON` を指定した場合も Python 3.10 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
+## agent-mail のバージョンと名前の扱い（サポート範囲）
+
+このスタックは agent-mail に**特定の名前**でエージェントを登録します。その名前がそのまま通るかどうかを決めるのは agent-mail 側で、版によって基準が違います。名前が黙って別のものに置き換わると、そのエージェントは動き続けるのに**誰からも宛先として呼べなく**なります。ここで動作を保証する範囲を明示します。
+
+| 環境 | 名前の扱い | 保証 |
+|---|---|---|
+| installer が clone した checkout（pin した ref） | 3行の passthrough patch を当て、`.env` に `AGENT_NAME_ENFORCEMENT_MODE=passthrough` を書く | **保証する** |
+| 既存サーバーで #140（explicit identity）を含む版 | ハイフンを含む名前をそのまま受け入れる | **保証する** |
+| 既存サーバーで patch を承認した場合 | 承認・再起動の後に受け入れる | 再起動まで無効。**相手の更新で消える** |
+| 既存サーバーで patch を断った・当たらなかった場合 | 版の基準に従う（生成名に置き換わることがある） | 保証しない |
+| package として導入された agent-mail | patch しない | 保証しない |
+| 命名処理を改変した fork | patch しない | 保証しない |
+
+保証しない環境でもインストール自体は完走します。将来サポートするかどうかは未定です。
+
+自分がどこにいるかは doctor で1行で分かります。
+
+```bash
+~/.agentstack/bin/agentstack-doctor --report | grep -A1 ENFORCEMENT
+```
+
+`passthrough patch: present` かつ `AGENT_NAME_ENFORCEMENT_MODE: passthrough` なら、要求した名前がそのまま通ります。
+
+patch を一切当てずに upstream のままにしたい場合:
+
+```bash
+AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0 ./scripts/install.sh
+```
+
+この patch は `mode == "passthrough"` の条件の後ろにあるだけなので、モードを選ばない限り**挙動は変わりません**。取り消しは `git -C <checkout> checkout -- src/mcp_agent_mail` です。
+
 ## 基本インストール
 
 ```bash

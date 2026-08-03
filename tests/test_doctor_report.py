@@ -68,6 +68,7 @@ def test_the_report_answers_the_questions_we_kept_having_to_ask(tmp_path):
     # Each of these cost at least one round trip with a tester this week.
     for field in (
         "AGENT_NAME_ENFORCEMENT_MODE",   # decides whether your name survives
+        "passthrough patch",             # decides whether that mode is even legal
         "agents.retired_at column",      # decides whether the deck renders
         "open file limit",               # decides whether the server stays up
         "declared version",
