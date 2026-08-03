@@ -60,10 +60,13 @@ agent-mail の既定 SQLite URL は server の current working directory 相対�
 
 サービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。実際の常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 
+`agentstack-doctor` は必要な file、設定、service endpoint が存在するかを調べる存在確認です。`agentstack-selftest` は実際に2 agent を登録して message 往復と file reservation を行い、同じ結果を dashboard が見ているところまで確かめる機能確認です。install 完了後は self-test も実行してください。
+
 完了後:
 
 ```bash
 ~/.agentstack/bin/agentstack-doctor
+~/.agentstack/bin/agentstack-selftest
 open http://127.0.0.1:8770/
 ```
 

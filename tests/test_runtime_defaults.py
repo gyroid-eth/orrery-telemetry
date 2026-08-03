@@ -484,6 +484,14 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         check=True,
     )
     assert "dashboard healthy:" in install_result.stdout
+    assert f"Verify operation: {install_dir}/bin/agentstack-selftest" in (
+        install_result.stdout
+    )
+    installed_selftest = install_dir / "bin" / "agentstack-selftest"
+    assert installed_selftest.read_bytes() == (
+        ROOT / "scripts" / "selftest.py"
+    ).read_bytes()
+    assert os.access(installed_selftest, os.X_OK)
 
     runtime_path = install_dir / "runtime" / "annotations.json"
     runtime_log = install_dir / "runtime" / "dashboard.log"
@@ -540,6 +548,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     }
     assert expected_payload_files <= set(manifest["owned_files"])
     assert str(install_dir / "VERSION") in manifest["owned_files"]
+    assert str(installed_selftest) in manifest["owned_files"]
     assert str(
         install_dir / "integrations/codex_app/plugin/scripts/run-mcp.sh"
     ) in manifest["owned_files"]

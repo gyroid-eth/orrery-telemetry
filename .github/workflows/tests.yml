@@ -25,3 +25,32 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 -m pytest -q tests/
+
+  fresh-install-e2e:
+    name: fresh install with real upstream agent-mail
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AGENTSTACK_E2E: "1"
+      AGENTSTACK_E2E_CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install system prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          git --version
+          uv --version
+          tmux -V
+      - name: Install pytest
+        run: python3 -m pip install pytest
+      - name: Clone, install, start, and run the functional self-test
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q -s tests/test_fresh_install_e2e.py

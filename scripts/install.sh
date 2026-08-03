@@ -605,6 +605,7 @@ validate_repo_assets() {
     [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
+  [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
 }
 
 port_in_use() {
@@ -890,6 +891,7 @@ install_payload() {
   if [[ "$DRY_RUN" != true ]]; then
     cp "$SCRIPT_DIR/uninstall.sh" "$BIN_DIR/agentstack-uninstall"
     cp "$SCRIPT_DIR/doctor.sh" "$BIN_DIR/agentstack-doctor"
+    cp "$SCRIPT_DIR/selftest.py" "$BIN_DIR/agentstack-selftest"
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
     mkdir -p "$BIN_DIR/lib"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
@@ -902,7 +904,8 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
     cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
     cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
-    chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" "$BIN_DIR/agentstack-merge-settings" \
+    chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
+      "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" \
       "$BIN_DIR/agentstack-preregister-child" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup"
@@ -1791,6 +1794,7 @@ main() {
     say "Manifest: $MANIFEST"
     say "Dashboard log: $DASHBOARD_LOG"
     say "Run doctor: $BIN_DIR/agentstack-doctor"
+    say "Verify operation: $BIN_DIR/agentstack-selftest"
     if [[ "$SERVICE_FALLBACK_USED" == true ]]; then
       say "Service mode: supervised background (launchd/systemd unavailable)"
     fi
