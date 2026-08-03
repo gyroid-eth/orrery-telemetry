@@ -12,6 +12,7 @@ import os
 import pathlib
 import shutil
 import tempfile
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 
@@ -95,6 +96,42 @@ def desired_entry(mcp_url: str, token: str) -> dict[str, Any]:
     if token:
         entry["headers"] = {"Authorization": f"Bearer {token}"}
     return entry
+
+
+# agent-mail mounts its MCP app at both `/api` and `/mcp` no matter which one
+# is configured as the base ("compatibility aliases ... regardless of configured
+# base" in its http.py), so these paths are the same door. Verified against a
+# running server: POST to either returns 200.
+INTERCHANGEABLE_MCP_PATHS = frozenset({"/api", "/mcp"})
+
+
+def _same_endpoint(left: str, right: str) -> bool:
+    a, b = urllib.parse.urlsplit(left), urllib.parse.urlsplit(right)
+    if (a.scheme, a.netloc) != (b.scheme, b.netloc):
+        return False
+    a_path, b_path = a.path.rstrip("/") or "/", b.path.rstrip("/") or "/"
+    if a_path == b_path:
+        return True
+    return {a_path, b_path} <= INTERCHANGEABLE_MCP_PATHS
+
+
+def already_reaches_server(existing: Any, desired: dict[str, Any]) -> bool:
+    """True when the entry already works and rewriting it would only be churn.
+
+    The point of registering the server is that delegation can reach it. An
+    entry that already reaches it is not a problem to be corrected — rewriting
+    a working `/api/` to `/mcp` changes nothing, risks the one thing that was
+    working, and discards whatever reason the user had for writing it that way.
+    Credentials are different: a stale token does not reach the server, so a
+    header mismatch still needs the merge.
+    """
+    if not isinstance(existing, dict):
+        return False
+    if existing.get("type") != desired.get("type"):
+        return False
+    if not _same_endpoint(str(existing.get("url", "")), str(desired.get("url", ""))):
+        return False
+    return existing.get("headers") == desired.get("headers")
 
 
 def entry_hash(entry: Any) -> str:
@@ -205,6 +242,10 @@ def merge(args: argparse.Namespace) -> dict[str, Any]:
     previous = copy.deepcopy(servers.get(SERVER_NAME))
     token_path = pathlib.Path(args.mail_env).expanduser() if args.mail_env else None
     installed = desired_entry(args.mcp_url or "", read_bearer_token(token_path))
+    if already_reaches_server(previous, installed):
+        # Keep the user's spelling. This is the "configured" answer, not a
+        # smaller diff: there is nothing here to fix.
+        installed = copy.deepcopy(previous)
     servers[SERVER_NAME] = installed
     changed = original != merged
     if args.check:

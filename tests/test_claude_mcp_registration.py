@@ -226,3 +226,86 @@ def test_doctor_warns_and_prints_safe_registration_commands(tmp_path):
     assert "/delegate cannot use agent-mail" in result.stderr
     assert "agentstack-merge-claude-mcp" in result.stderr
     assert "--dry-run" in result.stderr
+
+
+def _config_with(url: str, token: str, tmp_path: pathlib.Path) -> pathlib.Path:
+    config = tmp_path / ".claude.json"
+    config.write_text(json.dumps({
+        "mcpServers": {
+            "mcp-agent-mail": {
+                "type": "http",
+                "url": url,
+                "headers": {"Authorization": f"Bearer {token}"},
+            }
+        }
+    }, indent=2) + "\n", encoding="utf-8")
+    return config
+
+
+def _mail_env(token: str, tmp_path: pathlib.Path) -> pathlib.Path:
+    env = tmp_path / "mail.env"
+    env.write_text(f"HTTP_BEARER_TOKEN={token}\n", encoding="utf-8")
+    return env
+
+
+def test_an_entry_already_reaching_the_server_is_left_alone(tmp_path):
+    """`/api` and `/mcp` are the same door; rewriting one to the other is churn.
+
+    agent-mail mounts its MCP app at both paths regardless of the configured
+    base, so an existing `/api/` entry already works. The installer's job is to
+    make delegation reachable, not to restyle a URL — and the live machine this
+    came from had been running happily on `/api/` the whole time.
+    """
+    config = _config_with("http://127.0.0.1:8765/api/", "T", tmp_path)
+    before = config.read_text(encoding="utf-8")
+
+    result = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:8765/mcp",
+        "--mail-env", str(_mail_env("T", tmp_path)),
+        "--backup-dir", str(tmp_path / "backups"),
+        "--check",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "configured"
+
+    merged = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:8765/mcp",
+        "--mail-env", str(_mail_env("T", tmp_path)),
+        "--backup-dir", str(tmp_path / "backups"),
+        "--result-json", str(tmp_path / "result.json"),
+    )
+    assert merged.returncode == 0, merged.stderr
+    assert config.read_text(encoding="utf-8") == before, "the working entry was rewritten"
+
+
+def test_a_stale_token_still_gets_merged(tmp_path):
+    """The null case: equivalence must not become "never update anything".
+
+    A wrong credential does not reach the server, so this one has to change.
+    """
+    config = _config_with("http://127.0.0.1:8765/api/", "OLD", tmp_path)
+
+    result = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:8765/mcp",
+        "--mail-env", str(_mail_env("NEW", tmp_path)),
+        "--backup-dir", str(tmp_path / "backups"),
+        "--check",
+    )
+    assert result.stdout.strip() == "needs-merge"
+
+
+def test_a_different_server_still_gets_merged(tmp_path):
+    """Same shape, different port: not the same door."""
+    config = _config_with("http://127.0.0.1:9999/mcp", "T", tmp_path)
+
+    result = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:8765/mcp",
+        "--mail-env", str(_mail_env("T", tmp_path)),
+        "--backup-dir", str(tmp_path / "backups"),
+        "--check",
+    )
+    assert result.stdout.strip() == "needs-merge"
