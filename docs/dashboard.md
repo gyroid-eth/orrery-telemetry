@@ -50,7 +50,11 @@ mail の `last_active` だけで running と判定せず、tmux process、pane s
 - 成果物数と terminal attach 状態
 - context 残量をカード下端の hairline で表示（緑・橙・赤）
 
-検索と `show all` で対象を絞れます。
+### 検索
+
+上部の `FILTER · name / task` は、名前だけでなく **task description、live pane title、最後に受け取った指示の subject と送信者**も対象にします。何をしていた agent かを覚えていれば、名前を思い出せなくても引けます。
+
+既定では running と finished しか出ません。`show all` を有効にすると直近30日の `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
 
 ### カード操作
 
