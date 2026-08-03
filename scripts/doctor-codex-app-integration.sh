@@ -59,7 +59,11 @@ else
 fi
 
 if [[ -f "$ENV_FILE" ]]; then
-  mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE" 2>/dev/null || true)"
+  # GNU stat's -f means "filesystem status", not "format": it does not fail
+  # on Linux, so a BSD-first fallback never reaches the GNU form and the mode
+  # comes back as nonsense. BSD stat rejects -c outright, so ask GNU first and
+  # let the failure carry us to BSD.
+  mode="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE" 2>/dev/null || true)"
   [[ "$mode" == "600" ]] && ok "env mode 0600" || fail "env mode is ${mode:-unknown}"
   # shellcheck disable=SC1090
   . "$ENV_FILE"
@@ -84,7 +88,7 @@ done
 RUNTIME_DIR="${AGENTSTACK_CODEX_APP_RUNTIME_DIR:-}"
 SOCKET_PATH="${AGENTSTACK_CODEX_APP_SOCKET:-}"
 if [[ -n "$RUNTIME_DIR" && -d "$RUNTIME_DIR" ]]; then
-  mode="$(stat -f '%Lp' "$RUNTIME_DIR" 2>/dev/null || stat -c '%a' "$RUNTIME_DIR" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$RUNTIME_DIR" 2>/dev/null || stat -f '%Lp' "$RUNTIME_DIR" 2>/dev/null || true)"
   [[ "$mode" == "700" ]] && ok "runtime mode 0700" || fail "runtime mode is ${mode:-unknown}"
 else
   fail "runtime directory missing"
@@ -156,7 +160,7 @@ else
 fi
 
 if [[ -n "$SOCKET_PATH" && -S "$SOCKET_PATH" ]]; then
-  mode="$(stat -f '%Lp' "$SOCKET_PATH" 2>/dev/null || stat -c '%a' "$SOCKET_PATH" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$SOCKET_PATH" 2>/dev/null || stat -f '%Lp' "$SOCKET_PATH" 2>/dev/null || true)"
   [[ "$mode" == "600" ]] && ok "Bridge socket mode 0600" || fail "Bridge socket mode is ${mode:-unknown}"
   if python3 - "$SOCKET_PATH" <<'PY'
 import socket
