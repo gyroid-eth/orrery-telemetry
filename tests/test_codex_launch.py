@@ -41,7 +41,8 @@ def _extract(func: str) -> str:
     extracted rather than sourced.
     """
     text = _SPAWN.read_text(encoding="utf-8")
-    start = text.index(f"{func}() {{")
+    marker = f"\n{func}() {{"
+    start = text.index(marker) + 1
     end = text.index("\n}\n", start) + len("\n}\n")
     return text[start:end]
 
@@ -156,8 +157,48 @@ tmux() {
 
     text = _SPAWN.read_text(encoding="utf-8")
     assert text.count('TRUST_MAX=10') == 2
-    assert text.count('TRUST_FAILED=true') == 2
+    # Two Codex paths plus the corresponding Claude trust-gate paths.
+    assert text.count('TRUST_FAILED=true') == 4
     assert text.count('codex_accept_trust_dialog \\') == 2
+
+
+def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
+    ready = _extract("claude_pane_ready")
+    trust = _extract("claude_accept_trust_dialog")
+
+    gated = _run_bash(
+        ready + '\nclaude_pane_ready "$PANE"\n',
+        {"PANE": "Do you trust the files in this folder?\n  Yes\n  No"},
+    )
+    assert gated.returncode != 0
+
+    prompt = _run_bash(
+        ready + '\nclaude_pane_ready "$PANE"\n',
+        {"PANE": "Claude Code\n\n❯ "},
+    )
+    assert prompt.returncode == 0
+
+    accepted = _run_bash(
+        trust + "\ntmux() { printf '%s\\n' \"$*\"; }\n"
+        + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
+    )
+    assert accepted.returncode == 0
+    assert accepted.stdout.strip() == "send-keys -t Child C-m"
+    assert "Claude trust dialog detected" in accepted.stderr
+
+
+def test_readiness_timeouts_fail_instead_of_injecting_into_unknown_ui():
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert "injecting prompt anyway" not in text
+    assert text.count("refusing to inject the task into an unknown screen state") == 4
+    assert text.count("claude_accept_trust_dialog") == 3  # definition + 2 paths
+
+
+def test_optional_terminal_open_is_detached_from_spawn_completion():
+    text = _SPAWN.read_text(encoding="utf-8")
+    helper = _extract("open_child_terminal")
+    assert '(_open_child_terminal "$1") </dev/null >/dev/null 2>&1 &' in helper
+    assert "optional observer side effect" in text
 
 
 def test_preregistered_standalone_contract_is_parentless_and_direct_prompted():

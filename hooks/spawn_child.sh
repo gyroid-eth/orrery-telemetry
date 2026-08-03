@@ -131,7 +131,7 @@ terminal_adapter() {
     esac
 }
 
-open_child_terminal() {
+_open_child_terminal() {
     local child_name="$1"
     local adapter shell_child shell_cmd
     adapter="$(terminal_adapter)"
@@ -179,6 +179,16 @@ open_child_terminal() {
             fi
             ;;
     esac
+    return 0
+}
+
+# Terminal activation is an optional observer side effect, never part of child
+# readiness. On headless macOS, `open` / `osascript` can wait indefinitely for
+# a GUI application, which used to keep a successful spawn_child.sh call stuck
+# after the tmux child was already alive. Detach it from the launcher's critical
+# path; failures remain best-effort diagnostics from the worker above.
+open_child_terminal() {
+    (_open_child_terminal "$1") </dev/null >/dev/null 2>&1 &
     return 0
 }
 
@@ -542,6 +552,32 @@ codex_accept_trust_dialog() {
         return 1
     fi
     echo "[$log_prefix] Trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
+    tmux send-keys -t "$session_name" C-m
+}
+
+# Claude Code shows the same trust gate on a directory it has never opened.
+# A fresh ~/code/<project> therefore cannot reach the normal input prompt until
+# this is accepted. Keep the detector separate from readiness so task text is
+# never injected into a modal dialog.
+claude_pane_ready() {
+    local pane_text="$1" last_lines
+    printf '%s' "$pane_text" | grep -qi "Do you trust" && return 1
+    last_lines="$(printf '%s' "$pane_text" | tail -8)"
+    printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
+    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*' && return 0
+    return 1
+}
+
+claude_accept_trust_dialog() {
+    local session_name="$1"
+    local attempt="$2"
+    local max_attempts="$3"
+    local log_prefix="${4:-spawn_child}"
+    if (( attempt > max_attempts )); then
+        echo "[$log_prefix] Claude trust dialog persisted after ${max_attempts} attempts; aborting" >&2
+        return 1
+    fi
+    echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
     tmux send-keys -t "$session_name" C-m
 }
 
@@ -1126,8 +1162,9 @@ ${TASK}"
             sleep 2
             echo "[spawn_child/pre-reg] Waited ${WAITED}s (+2s); injecting prompt" >&2
         else
-            echo "[spawn_child/pre-reg] Timeout (${WAIT_MAX}s); injecting prompt anyway" >&2
-            sleep 2
+            echo "[spawn_child/pre-reg] Codex readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
+            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+            exit 1
         fi
 
         if [[ "$STANDALONE" == true ]]; then
@@ -1190,11 +1227,24 @@ ${TASK}"
             WAITED=0
             READY=false
             CLAUDE_EXITED=false
+            TRUST_FAILED=false
+            TRUST_ATTEMPTS=0
+            TRUST_MAX=5
             while [[ $WAITED -lt 60 ]]; do
                 sleep 2
                 WAITED=$((WAITED + 2))
                 PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-                if echo "$PANE_TEXT" | grep -qE '(for shortcuts|^❯ )'; then
+                if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+                    TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
+                    if ! claude_accept_trust_dialog \
+                        "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
+                        TRUST_FAILED=true
+                        break
+                    fi
+                    sleep 1
+                    continue
+                fi
+                if claude_pane_ready "$PANE_TEXT"; then
                     READY=true
                     break
                 fi
@@ -1205,8 +1255,15 @@ ${TASK}"
                     break
                 fi
             done
-            if [[ "$CLAUDE_EXITED" == true ]]; then
+            if [[ "$TRUST_FAILED" == true ]]; then
+                echo "[spawn_child/pre-reg] Aborting: unable to accept the Claude trust dialog." >&2
+                exit 1
+            elif [[ "$CLAUDE_EXITED" == true ]]; then
                 echo "[spawn_child/pre-reg] Aborting: Claude terminated before readiness." >&2
+                exit 1
+            elif [[ "$READY" != true ]]; then
+                echo "[spawn_child/pre-reg] Claude readiness timeout (60s); refusing to inject the task into an unknown screen state." >&2
+                printf '%s\n' "$PANE_TEXT" | tail -15 >&2
                 exit 1
             fi
             sleep 1
@@ -1891,8 +1948,9 @@ if [[ "$USE_CODEX" == true ]]; then
         sleep 2
         echo "[spawn_child] Waited ${WAITED}s (+2s); injecting prompt" >&2
     else
-        echo "[spawn_child] Timeout (${WAIT_MAX}s); injecting prompt anyway" >&2
-        sleep 2
+        echo "[spawn_child] Codex readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
+        printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+        exit 1
     fi
 
     # Codex にはタスク概要を含むプロンプトを注入
@@ -1917,11 +1975,24 @@ else
     WAIT_MAX=60
     READY=false
     CLAUDE_EXITED=false
+    TRUST_FAILED=false
+    TRUST_ATTEMPTS=0
+    TRUST_MAX=5
     while [[ $WAITED -lt $WAIT_MAX ]]; do
         sleep 2
         WAITED=$((WAITED + 2))
         PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-        if echo "$PANE_TEXT" | grep -qE '(for shortcuts|^❯ )'; then
+        if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+            TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
+            if ! claude_accept_trust_dialog \
+                "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
+                TRUST_FAILED=true
+                break
+            fi
+            sleep 1
+            continue
+        fi
+        if claude_pane_ready "$PANE_TEXT"; then
             READY=true
             break
         fi
@@ -1932,8 +2003,15 @@ else
             break
         fi
     done
-    if [[ "$CLAUDE_EXITED" == true ]]; then
+    if [[ "$TRUST_FAILED" == true ]]; then
+        echo "[spawn_child] Aborting: unable to accept the Claude trust dialog." >&2
+        exit 1
+    elif [[ "$CLAUDE_EXITED" == true ]]; then
         echo "[spawn_child] Aborting: Claude terminated before readiness." >&2
+        exit 1
+    elif [[ "$READY" != true ]]; then
+        echo "[spawn_child] Claude readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
+        printf '%s\n' "$PANE_TEXT" | tail -15 >&2
         exit 1
     fi
     sleep 1
