@@ -422,6 +422,54 @@ def _db():
     )
 
 
+_RETIRED_AT_CACHE: dict[str, bool] = {}
+
+
+def _has_retired_at() -> bool:
+    """Does this agent-mail's `agents` table have a `retired_at` column?
+
+    The dashboard reads a database it does not own, at whatever version the
+    operator installed. A tester running a forty-day-old agent-mail has no such
+    column, and every query naming it raised `OperationalError: no such column:
+    a.retired_at` — which took out the whole card, and (before the descriptor
+    fix) leaked the connection on the way out.
+
+    Probe the schema rather than infer it from a version string: the column is
+    what we actually depend on, and asking is cheap.
+    """
+    try:
+        stamp = str(os.path.getmtime(DB_PATH))
+    except OSError:
+        return False
+    cached = _RETIRED_AT_CACHE.get(stamp)
+    if cached is not None:
+        return cached
+    con = None
+    present = False
+    try:
+        con = _db()
+        present = any(
+            row[1] == "retired_at" for row in con.execute("PRAGMA table_info(agents)")
+        )
+    except Exception:
+        present = False
+    finally:
+        if con is not None:
+            con.close()
+    _RETIRED_AT_CACHE.clear()
+    _RETIRED_AT_CACHE[stamp] = present
+    return present
+
+
+def _retired_at_select(alias: str = "a") -> str:
+    """`retired_at` where the column exists, a constant NULL where it does not.
+
+    A schema without the column has no notion of retirement, so "nothing is
+    retired" is the truthful answer, and every caller already handles NULL.
+    """
+    return f"{alias}.retired_at" if _has_retired_at() else "NULL AS retired_at"
+
+
 def agentmail_state() -> tuple[dict, dict]:
     """(agents_by_name, last_instruction_by_name)。DB が無くても空で返す。"""
     agents: dict[str, dict] = {}
@@ -434,13 +482,14 @@ def agentmail_state() -> tuple[dict, dict]:
         con.row_factory = sqlite3.Row
         cur = con.cursor()
 
+        retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
         cur.execute(
-            """
+            f"""
             SELECT a.name, a.model, a.program, a.task_description, a.last_active_ts
             FROM agents a
             JOIN (
                 SELECT name, MAX(last_active_ts) m
-                FROM agents WHERE retired_at IS NULL GROUP BY name
+                FROM agents WHERE {retired_filter} GROUP BY name
             ) x ON a.name = x.name AND a.last_active_ts = x.m
             """
         )
@@ -618,10 +667,13 @@ def build_agents() -> list[dict]:
             cur = con.cursor()
             # 過去30日に絞って historical noise を除外（587 件全部出すと deck が
             # 飽和する）。直近 kill した相手を showAll で探す用途には十分。
+            retired_flag = (
+                "a.retired_at IS NOT NULL" if _has_retired_at() else "0"
+            )
             cur.execute(
-                """
+                f"""
                 SELECT a.name, a.model, a.task_description, a.last_active_ts,
-                       a.retired_at IS NOT NULL AS retired
+                       {retired_flag} AS retired
                 FROM agents a
                 JOIN projects p ON a.project_id = p.id
                 WHERE p.human_key = ?
@@ -2249,8 +2301,8 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
             cur = con.cursor()
             for nm in names_list:
                 cur.execute(
-                    """
-                    SELECT a.id, a.inception_ts, a.retired_at
+                    f"""
+                    SELECT a.id, a.inception_ts, {_retired_at_select()}
                     FROM agents a
                     JOIN projects p ON p.id = a.project_id
                     WHERE p.human_key = ? AND a.name = ?
@@ -2957,7 +3009,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
                 with _db() as conn:
                     conn.row_factory = sqlite3.Row
                     row = conn.execute(
-                        "SELECT a.id, a.retired_at FROM agents a "
+                        f"SELECT a.id, {_retired_at_select()} FROM agents a "
                         "JOIN projects p ON a.project_id=p.id "
                         "WHERE a.name=? AND p.human_key=?",
                         (session, project_key),
