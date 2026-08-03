@@ -3927,18 +3927,38 @@ function buildEls(){
   }
   // 稼働中ノードを最後に再append＝最前面（密グラフで埋もれない CK P2）
   runGrps.forEach(el=>gsvg.appendChild(el));
-  // annot pill 幅を実測で再フィット: buildEls 中は grp 未 attach で
-  // getComputedTextLength()=0 → 文字数推定にフォールバックし枠から溢れていた。
-  // 全 grp を gsvg に append し終えた後なら正確に測れるのでここで上書きする。
+  fitAnnotPills();
+  reattachMurmurs();   // 再描画で消えた吹き出しを生かす
+}
+
+// annot pill 幅を実測で再フィット: buildEls 中は grp 未 attach で幅が測れず、
+// 文字推定にフォールバックして枠が文字列からずれる。全 grp を append し終えた
+// 後なら測れるのでここで上書きする。
+//
+// 測るのは getBBox().width であって getComputedTextLength() ではない。後者は
+// 字送りの合計で、.annot-lab の letter-spacing:.13em を勘定に入れない実装が
+// あり、20 字なら 2 割近く足りない枠が出る（実際にテスターの画面で、文字列
+// より内側に囲いが出た）。getBBox は描かれたものそのものを返す。
+//
+// そして webfont が来る前に測ると、答えは別のフォントについてのものになる。
+// 一度きりの計測は「いつ測ったか」を黙って結果に混ぜるので、フォント確定後に
+// もう一度あてる。
+function fitAnnotPills(){
+  const padX=5;
   for(const o of gEls.node.values()){
     const at=o.grp.querySelector('.annot-lab'),pill=o.grp.querySelector('.annot-pill');
     if(!at||!pill)continue;
-    const tw=at.getComputedTextLength();
-    if(tw>0){const padX=5;
+    let tw=0;
+    try{tw=at.getBBox().width;}catch(e){tw=0;}
+    if(!(tw>0))tw=at.getComputedTextLength();
+    if(tw>0){
       pill.setAttribute('x',(-tw/2-padX).toFixed(1));
-      pill.setAttribute('width',(tw+padX*2).toFixed(1));}
+      pill.setAttribute('width',(tw+padX*2).toFixed(1));
+    }
   }
-  reattachMurmurs();   // 再描画で消えた吹き出しを生かす
+}
+if(document.fonts&&document.fonts.ready){
+  document.fonts.ready.then(()=>{try{fitAnnotPills();}catch(e){}});
 }
 
 function focusNode(name){
