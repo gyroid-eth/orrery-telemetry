@@ -27,6 +27,13 @@ PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 UPSTREAM_AGENT_MAIL_URL="${AGENTSTACK_AGENT_MAIL_REPO:-https://github.com/Dicklesworthstone/mcp_agent_mail.git}"
+# agent-mail is somebody else's repository, and an unpinned clone means the
+# version you get depends on the day you installed. Two testers on the same
+# instructions ended up on versions that disagree about whether a hyphenated
+# agent name is legal, which is not a difference either of them could see.
+# Pin a ref we have actually run against; `AGENTSTACK_AGENT_MAIL_REF=main`
+# opts out deliberately. Moving this line is how the version changes.
+UPSTREAM_AGENT_MAIL_REF="${AGENTSTACK_AGENT_MAIL_REF:-5e481834ff1c373acda804d28c21d0349a116419}"
 
 usage() {
   cat <<'EOF'
@@ -159,6 +166,20 @@ AGENT_MAIL_SERVICE_PATH=""
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# An agent-mail the user already had is not ours to move. Say which version is
+# actually in play, so a later "it works on mine" has something to compare.
+report_agent_mail_ref() {
+  local head
+  head="$(git -C "$MAIL_DIR" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$head" ]] || return 0
+  if [[ "$head" == "$UPSTREAM_AGENT_MAIL_REF" ]]; then
+    say "agent-mail is at the pinned ref ${head:0:12}"
+  else
+    say "agent-mail is at ${head:0:12}; this stack is tested against ${UPSTREAM_AGENT_MAIL_REF:0:12}"
+    say "  leaving it as it is — behaviour may differ from the tested version"
+  fi
+}
 
 validate_assume_yes() {
   [[ "$ASSUME_YES" == "0" || "$ASSUME_YES" == "1" ]] || \
@@ -1336,14 +1357,23 @@ ensure_agent_mail() {
         warn "existing agent-mail remote is '$remote' (expected '$UPSTREAM_AGENT_MAIL_URL'); leaving it untouched"
       else
         plan "reuse existing agent-mail clone at $MAIL_DIR"
+        report_agent_mail_ref
       fi
     else
       die "agent-mail path exists but is not a git clone: $MAIL_DIR"
     fi
   else
-    plan "clone agent-mail upstream into $MAIL_DIR"
-    if [[ "$DRY_RUN" != true ]] && ! git clone "$UPSTREAM_AGENT_MAIL_URL" "$MAIL_DIR"; then
-      die "failed to clone agent-mail from $UPSTREAM_AGENT_MAIL_URL. Check network access and the repository URL, then re-run."
+    plan "clone agent-mail upstream into $MAIL_DIR at $UPSTREAM_AGENT_MAIL_REF"
+    if [[ "$DRY_RUN" != true ]]; then
+      if ! git clone "$UPSTREAM_AGENT_MAIL_URL" "$MAIL_DIR"; then
+        die "failed to clone agent-mail from $UPSTREAM_AGENT_MAIL_URL. Check network access and the repository URL, then re-run."
+      fi
+      # Check out the pinned ref rather than whatever the default branch is
+      # today. A clone with no ref makes the install date part of the
+      # configuration, invisibly.
+      if ! git -C "$MAIL_DIR" checkout --quiet "$UPSTREAM_AGENT_MAIL_REF"; then
+        die "agent-mail was cloned but ref '$UPSTREAM_AGENT_MAIL_REF' could not be checked out. Set AGENTSTACK_AGENT_MAIL_REF to a ref that exists in $UPSTREAM_AGENT_MAIL_URL, then re-run."
+      fi
     fi
   fi
 
