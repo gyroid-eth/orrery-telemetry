@@ -1358,8 +1358,26 @@ run_managed_setup() {
   fi
 }
 
+project_key_is_this_checkout() {
+  local resolved
+  resolved="$(cd "$PROJECT_KEY" 2>/dev/null && pwd -P)" || return 1
+  [[ "$resolved" == "$(cd "$REPO_ROOT" && pwd -P)" ]]
+}
+
 safe_managed_doc_setups() {
   if [[ "$TIER" != "tier1" ]]; then
+    return
+  fi
+  # Without --project-key the default is this checkout, and the managed block
+  # would land in the repo's own CLAUDE.md / AGENTS.md. Those files are tracked,
+  # so the write leaves the working tree dirty and `git pull` refuses to update
+  # them on every release. The block is meant for the project an agent works in,
+  # which is not the copy of the stack it installed from.
+  if project_key_is_this_checkout; then
+    say "skip managed CLAUDE.md / AGENTS.md blocks: --project-key is this checkout"
+    say "  The block belongs in the project you will run agents in. To add it:"
+    say "    $BIN_DIR/agentstack-claude-setup   (with AGENTSTACK_PROJECT_KEY set)"
+    say "    $BIN_DIR/agentstack-codex-setup"
     return
   fi
   run_managed_setup "Codex AGENTS.md" "agentstack-codex-setup"
