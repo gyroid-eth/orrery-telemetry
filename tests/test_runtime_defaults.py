@@ -11,6 +11,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
@@ -60,6 +63,24 @@ def _stop_fake_dashboard(env: dict[str, str]) -> None:
                 return
         time.sleep(0.05)
     raise AssertionError(f"fake dashboard did not release port {port}")
+
+
+def _as_production_label(value):
+    """Read a test-run manifest as if it had used the production label.
+
+    The sample records what a real install writes, so it names
+    ``org.agentstack.agentdashboard``. Test installs must not use that label —
+    launchd labels ignore ``HOME``, so a teardown would boot out a dashboard
+    this machine actually depends on. Rename once here rather than at each
+    comparison, so a new assertion cannot forget.
+    """
+    if isinstance(value, str):
+        return value.replace(TEST_LABEL_PREFIX, "org.agentstack")
+    if isinstance(value, list):
+        return [_as_production_label(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _as_production_label(item) for key, item in value.items()}
+    return value
 
 
 def _normalize_sample_paths(value, manifest):
@@ -333,6 +354,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_DB": str(mail_db),
         "AGENTSTACK_MAIL_ENV": str(mail_env),
@@ -513,7 +535,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_MAIL_ENV": str(mail_dir / ".env"),
         "AGENTSTACK_SIGNALS_DIR": str(home / ".mcp_agent_mail" / "signals"),
         "AGENTSTACK_PORT": str(port),
-        "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
         "AGENTSTACK_PROTECTED_ROOTS": str(project_dir),
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
@@ -587,8 +609,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert not legacy_log.exists()
 
-    manifest = json.loads(
-        (install_dir / "install-state.json").read_text(encoding="utf-8")
+    manifest = _as_production_label(
+        json.loads((install_dir / "install-state.json").read_text(encoding="utf-8"))
     )
     assert str(install_dir / "runtime") in manifest["retained_paths"]
     assert str(install_dir / "runtime") in manifest["purge_paths"]
@@ -621,7 +643,11 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         assert record["path"] in manifest["owned_files"]
     assert set(_expected_owned_dirs(install_dir)) <= set(manifest["owned_dirs"])
     systemd_unit = (
-        home / ".config" / "systemd" / "user" / "org.agentstack.agentdashboard.service"
+        home
+        / ".config"
+        / "systemd"
+        / "user"
+        / f"{TEST_LABEL_PREFIX}.agentdashboard.service"
     ).read_text(encoding="utf-8")
     exec_start = next(
         line for line in systemd_unit.splitlines() if line.startswith("ExecStart=")
@@ -793,6 +819,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_PORT": str(port),

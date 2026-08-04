@@ -17,6 +17,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _HELPER = _ROOT / "bin" / "agentstack-preregister-child"
 
@@ -67,6 +70,7 @@ def _run(args: list[str], env: dict[str, str] | None = None
             "AGENTSTACK_REGISTER_LIB": str(lib),
             "AGENTSTACK_ENV_FILE": "",
             "AGENTSTACK_HOME": str(tmpdir),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
             "AGENTSTACK_PROJECT_KEY": "/p",
             "AGENTSTACK_STRICT_AGENT_NAMES": "",
         })

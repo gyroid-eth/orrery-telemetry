@@ -18,6 +18,9 @@ import threading
 import time
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "dashboard" / "service_runner.py"
@@ -145,6 +148,7 @@ def _installer_upgrade_env(
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_DB": str(mail_db),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
@@ -672,6 +676,7 @@ exit 0
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_PORT": str(port),
@@ -838,6 +843,7 @@ def test_installer_reuses_existing_agent_mail_listener_database(tmp_path):
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_MCP_URL": (
@@ -932,6 +938,7 @@ def test_installer_refuses_to_record_an_ambiguous_mail_database(tmp_path):
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
         "AGENTSTACK_PORT": str(dashboard_port),
