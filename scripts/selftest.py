@@ -25,6 +25,11 @@ import time
 import urllib.error
 import urllib.request
 
+# scripts/lib/ in the repo, bin/lib/ once installed — the same relative spot.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
+
+from mcp_endpoint import same_endpoint  # noqa: E402
+
 RESERVED_PATH = ".agentstack-selftest/lock-probe.txt"
 
 
@@ -210,10 +215,11 @@ def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> Non
             f"Claude MCP entry 'mcp-agent-mail' is not an HTTP server in {path}; "
             "/delegate cannot see its allowed mcp__mcp-agent-mail__* tools"
         )
-    if entry.get("url") != expected_url:
+    configured_url = str(entry.get("url", ""))
+    if not same_endpoint(configured_url, expected_url):
         raise Fail(
-            f"Claude MCP entry 'mcp-agent-mail' points to {entry.get('url')!r}, "
-            f"not the installed endpoint {expected_url!r}"
+            f"Claude MCP entry 'mcp-agent-mail' points to {configured_url!r}, "
+            f"which does not reach the installed endpoint {expected_url!r}"
         )
     bearer = read_token(env)
     authorization = (entry.get("headers") or {}).get("Authorization")
@@ -222,6 +228,12 @@ def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> Non
             "Claude MCP entry 'mcp-agent-mail' has missing or stale authorization; "
             "run agentstack-doctor for the safe registration command"
         )
+    if configured_url != expected_url:
+        report.ok(
+            "Claude Code has the fixed mcp-agent-mail MCP registration "
+            f"(at {configured_url}, the same server as {expected_url})"
+        )
+        return
     report.ok("Claude Code has the fixed mcp-agent-mail MCP registration")
 
 

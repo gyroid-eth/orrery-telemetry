@@ -11,10 +11,22 @@ import json
 import os
 import pathlib
 import shutil
+import sys
 import tempfile
-import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
+
+
+# In the repo this file sits beside mcp_endpoint.py in scripts/lib/; once
+# installed it is bin/agentstack-merge-claude-mcp with the module under
+# bin/lib/. Look in both rather than assuming one layout.
+_HERE = pathlib.Path(__file__).resolve().parent
+for _candidate in (_HERE, _HERE / "lib"):
+    if (_candidate / "mcp_endpoint.py").is_file():
+        sys.path.insert(0, str(_candidate))
+        break
+
+from mcp_endpoint import INTERCHANGEABLE_MCP_PATHS, same_endpoint  # noqa: E402,F401
 
 
 SERVER_NAME = "mcp-agent-mail"
@@ -98,23 +110,6 @@ def desired_entry(mcp_url: str, token: str) -> dict[str, Any]:
     return entry
 
 
-# agent-mail mounts its MCP app at both `/api` and `/mcp` no matter which one
-# is configured as the base ("compatibility aliases ... regardless of configured
-# base" in its http.py), so these paths are the same door. Verified against a
-# running server: POST to either returns 200.
-INTERCHANGEABLE_MCP_PATHS = frozenset({"/api", "/mcp"})
-
-
-def _same_endpoint(left: str, right: str) -> bool:
-    a, b = urllib.parse.urlsplit(left), urllib.parse.urlsplit(right)
-    if (a.scheme, a.netloc) != (b.scheme, b.netloc):
-        return False
-    a_path, b_path = a.path.rstrip("/") or "/", b.path.rstrip("/") or "/"
-    if a_path == b_path:
-        return True
-    return {a_path, b_path} <= INTERCHANGEABLE_MCP_PATHS
-
-
 def already_reaches_server(existing: Any, desired: dict[str, Any]) -> bool:
     """True when the entry already works and rewriting it would only be churn.
 
@@ -129,7 +124,7 @@ def already_reaches_server(existing: Any, desired: dict[str, Any]) -> bool:
         return False
     if existing.get("type") != desired.get("type"):
         return False
-    if not _same_endpoint(str(existing.get("url", "")), str(desired.get("url", ""))):
+    if not same_endpoint(str(existing.get("url", "")), str(desired.get("url", ""))):
         return False
     return existing.get("headers") == desired.get("headers")
 

@@ -103,10 +103,20 @@ fi
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
-CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" <<'PY' 2>/dev/null || true
+CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$SCRIPT_DIR/lib" <<'PY' 2>/dev/null || true
 import json
 import pathlib
 import sys
+
+sys.path.insert(0, sys.argv[4])
+try:
+    from mcp_endpoint import same_endpoint
+except ImportError:
+    # Our own file is missing. Say so, rather than blaming the config we read.
+    # (No apostrophes here: bash 3.2 scans this heredoc for the closing paren
+    # of the surrounding command substitution and treats one as a quote.)
+    print("unavailable")
+    raise SystemExit(0)
 
 try:
     config = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -131,7 +141,7 @@ else:
     if (
         isinstance(entry, dict)
         and entry.get("type") == "http"
-        and entry.get("url") == sys.argv[2]
+        and same_endpoint(str(entry.get("url", "")), sys.argv[2])
         and (not bearer or authorization == f"Bearer {bearer}")
     ):
         print("configured")
@@ -141,6 +151,10 @@ PY
 )"
 if [[ "$CLAUDE_MCP_STATE" == "configured" ]]; then
   echo "ok: Claude MCP mcp-agent-mail registered in $CLAUDE_JSON"
+elif [[ "$CLAUDE_MCP_STATE" == "unavailable" ]]; then
+  echo "warn: cannot check the Claude MCP entry: $SCRIPT_DIR/lib/mcp_endpoint.py is missing" >&2
+  echo "      This is an incomplete install, not a problem with $CLAUDE_JSON." >&2
+  status=1
 else
   echo "warn: Claude MCP mcp-agent-mail is not registered for $MCP_URL in $CLAUDE_JSON" >&2
   echo "      /delegate cannot use agent-mail until this fixed-name entry exists." >&2
