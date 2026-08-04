@@ -4313,11 +4313,19 @@ class Handler(BaseHTTPRequestHandler):
                 days = float((q.get("days") or ["4"])[0])
             except ValueError:
                 days = 4.0
+            # spawn_only=1: for callers that only need the parent/child
+            # lineage.  The ORRERY cockpit is one — it was pulling the full
+            # node+edge payload every 6s just to read `spawn` out of it.
+            spawn_only = (q.get("spawn_only") or ["0"])[0] in ("1", "true")
             try:
                 payload = graph_payload(days, show_all)
             except Exception as e:  # noqa: BLE001
                 payload = {"nodes": [], "edges": [], "spawn": [],
                            "error": f"{type(e).__name__}: {e}"}
+            if spawn_only:
+                payload = {"nodes": [], "edges": [],
+                           "spawn": payload.get("spawn", []),
+                           "spawn_only": True}
             payload["ts"] = int(time.time())
             self._send(
                 200,
@@ -4502,7 +4510,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path not in ("/api/jump", "/api/kill", "/api/exit",
-                        "/api/annotate", "/api/spawn", "/api/reactivate"):
+                        "/api/annotate", "/api/spawn", "/api/reactivate",
+                        "/api/jserr"):
             self._send(404, b"not found", "text/plain")
             return
 
@@ -4570,6 +4579,8 @@ class Handler(BaseHTTPRequestHandler):
             result = _write_annotation(
                 nm, body.get("role", ""), body.get("emoji", ""),
                 body.get("group", ""))
+        elif path == "/api/jserr":
+            result = _log_js_error(body)
         elif path == "/api/spawn":
             result = do_spawn(body)
         elif path == "/api/reactivate":
@@ -4692,8 +4703,67 @@ def _start_supervisor_watchdog():
     threading.Thread(target=_watch_supervisor, daemon=True).start()
 
 
+JS_ERROR_LOG = os.path.join(HERE, "logs", "js-errors.log")
+
+
+def _log_js_error(body: dict) -> dict:
+    """Land a JS exception raised inside the UI, one JSON object per line.
+
+    The dashboard is often viewed inside a webview with no devtools (ORRERY),
+    where a thrown exception is invisible: it only shows up as "clicking that
+    does nothing".  This gives such a failure somewhere to land, so a user can
+    hand over one log line instead of a symptom.
+    """
+    try:
+        os.makedirs(os.path.dirname(JS_ERROR_LOG), exist_ok=True)
+        line = json.dumps(
+            {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "where": str(body.get("where", ""))[:80],
+                "msg": str(body.get("msg", ""))[:500],
+                "src": str(body.get("src", ""))[:200],
+                "line": body.get("line"),
+                "col": body.get("col"),
+                "stack": str(body.get("stack", ""))[:1500],
+                "ua": str(body.get("ua", ""))[:120],
+            },
+            ensure_ascii=False,
+        )
+        with open(JS_ERROR_LOG, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _analyze_mail_db() -> None:
+    """Let SQLite build table statistics for the agent-mail DB (once, at start).
+
+    Without `sqlite_stat1` the planner picks a bad join order for the edge
+    aggregation and `build_graph()` takes ~1.9s on a mailbox of only a few
+    thousand messages; after ANALYZE the same call is ~0.05s (measured, 38x).
+    The 8s cache on /api/graph hides this during steady polling, so the
+    symptom is "only the first open after a restart is slow" — which is
+    exactly how it gets misfiled as a UI problem.  Statistics go stale as
+    rows accumulate, so refresh them on every start.  ANALYZE only writes
+    sqlite_stat1; it never touches the data.
+    """
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            con.execute("ANALYZE")
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        print(f"agent-dashboard: ANALYZE skipped ({type(e).__name__}: {e})")
+
+
 def main():
     _start_supervisor_watchdog()
+    threading.Thread(target=_analyze_mail_db, daemon=True).start()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     subprocess.run(

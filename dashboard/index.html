@@ -2801,6 +2801,26 @@ const CATLABEL={agent:"ACTIVE AGENTS",
   warmup:"WARMUP spare",infra:"INFRA",idle:"IDLE",
   gone:"GONE — registered but tmux absent (kill to retire)",
   retired:"RETIRED — soft-deleted (click to resume)"};
+/* ── Report JS exceptions to the server ──────────────────────────────
+   This page is frequently viewed inside a webview with no devtools, where a
+   thrown exception leaves no trace at all — it only ever looks like "clicking
+   that does nothing".  Anything landing here ends up in logs/js-errors.log,
+   so a failure produces a log line instead of a mystery. */
+function reportJsError(where,err,extra){
+  try{
+    const b=Object.assign({where,ua:navigator.userAgent,
+      msg:(err&&err.message)||String(err),
+      stack:(err&&err.stack)||''},extra||{});
+    fetch('/api/jserr',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(b),
+      keepalive:true}).catch(()=>{});
+  }catch(_){/* reporting must never be the thing that throws */}
+}
+window.addEventListener('error',e=>reportJsError('window.onerror',e.error||e,
+  {src:e.filename,line:e.lineno,col:e.colno,msg:e.message}));
+window.addEventListener('unhandledrejection',e=>
+  reportJsError('unhandledrejection',e.reason));
+
 const SHOW_DEFAULT=new Set(["agent","finished","unnamed"]);
 let lastData=[], booted=false;
 const ARM_MS=5000; // kill/exit 両方の確認タイムアウト
@@ -6021,7 +6041,27 @@ function _rbToggleTimeTravel(){
 let panelName=null,panelTab='hist';
 const TM=id=>document.getElementById(id);
 
+/* Open the detail panel first, fill it second.  If preparing the contents
+   throws, the panel still opens and the error is reported, instead of the
+   click appearing to do nothing at all.
+   Deliberately plain getElementById here, not the TM() helper: TM is declared
+   further down with `const`, so if the script died before that point the
+   safeguard itself would fail for the very reason it exists. */
 function openPanel(name){
+  try{
+    const T0=document.getElementById('term');
+    if(T0){T0.classList.add('on');T0.setAttribute('aria-hidden','false');}
+  }catch(_){/* nothing left to fall back to */}
+  try{
+    openPanelInner(name);
+  }catch(err){
+    try{reportJsError('openPanel',err,
+      {msg:`openPanel(${name}): ${err&&err.message}`});}catch(_){}
+    const meta=document.getElementById('tm-meta');
+    if(meta)meta.textContent='could not render some details (see logs/js-errors.log)';
+  }
+}
+function openPanelInner(name){
   panelName=name;
   const a=(lastData||[]).find(x=>x.name===name)||
           (typeof gmap!=='undefined'&&gmap.get(name))||{};
