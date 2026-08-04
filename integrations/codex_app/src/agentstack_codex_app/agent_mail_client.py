@@ -127,7 +127,6 @@ class AgentMailClient:
             "urgent_only": urgent_only,
             "include_bodies": include_bodies,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "since_ts", since_ts)
         _put_optional(arguments, "topic", topic)
         value = self._call_tool("fetch_inbox", arguments)
@@ -184,7 +183,6 @@ class AgentMailClient:
             "agent_name": agent_name,
             "message_id": message_id,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         return self._call_tool_object("acknowledge_message", arguments)
 
     def reserve_files(
@@ -206,7 +204,6 @@ class AgentMailClient:
             "exclusive": exclusive,
             "reason": reason,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         return self._call_tool_object("file_reservation_paths", arguments)
 
     def renew_reservations(
@@ -224,7 +221,6 @@ class AgentMailClient:
             "agent_name": agent_name,
             "extend_seconds": extend_seconds,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("renew_file_reservations", arguments)
@@ -242,7 +238,6 @@ class AgentMailClient:
             "project_key": project_key,
             "agent_name": agent_name,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("release_file_reservations", arguments)
@@ -285,7 +280,6 @@ class AgentMailClient:
             "agent_name": agent_name,
             "include_recent_commits": False,
         }
-        _put_optional(arguments, "registration_token", registration_token)
         profile = self._call_tool_object("whois", arguments)
         returned_name = profile.get("name")
         if returned_name != agent_name:
@@ -303,8 +297,13 @@ class AgentMailClient:
     def _call_tool(
         self, tool_name: str, arguments: Mapping[str, Any]
     ) -> Any:
+        return _decode_tool_response(self._request_tool(tool_name, arguments))
+
+    def _request_tool(
+        self, tool_name: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         self._request_id += 1
-        response = self.transport(
+        return self.transport(
             {
                 "jsonrpc": "2.0",
                 "id": self._request_id,
@@ -312,32 +311,36 @@ class AgentMailClient:
                 "params": {"name": tool_name, "arguments": dict(arguments)},
             }
         )
-        if response.get("error"):
-            raise AgentMailError("agent-mail JSON-RPC call failed")
-        rpc_result = response.get("result")
-        if not isinstance(rpc_result, dict):
-            raise AgentMailError("agent-mail response is missing result")
-        if rpc_result.get("isError") is True:
-            raise AgentMailError("agent-mail tool call failed")
 
-        structured = rpc_result.get("structuredContent")
-        if isinstance(structured, (dict, list)):
-            return structured
-        content = rpc_result.get("content")
-        if isinstance(content, list):
-            for part in content:
-                if not isinstance(part, dict) or part.get("type") != "text":
-                    continue
-                text = part.get("text")
-                if not isinstance(text, str):
-                    continue
-                try:
-                    decoded = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(decoded, (dict, list)):
-                    return decoded
-        raise AgentMailError("agent-mail tool result has an unexpected shape")
+def _decode_tool_response(response: Mapping[str, Any]) -> Any:
+    """Decode safe result shapes while keeping upstream error text private."""
+
+    if response.get("error"):
+        raise AgentMailError("agent-mail JSON-RPC call failed")
+    rpc_result = response.get("result")
+    if not isinstance(rpc_result, dict):
+        raise AgentMailError("agent-mail response is missing result")
+    if rpc_result.get("isError") is True:
+        raise AgentMailError("agent-mail tool call failed")
+
+    structured = rpc_result.get("structuredContent")
+    if isinstance(structured, (dict, list)):
+        return structured
+    content = rpc_result.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "text":
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, (dict, list)):
+                return decoded
+    raise AgentMailError("agent-mail tool result has an unexpected shape")
 
 
 def _put_optional(arguments: dict[str, Any], key: str, value: Any) -> None:

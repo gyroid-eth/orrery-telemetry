@@ -43,13 +43,12 @@ class RecordingTransport:
         tool = params["name"]
         arguments = params.get("arguments", {})
         self.calls.append((tool, arguments))
-        # The server names the token differently per tool: send_message takes
-        # sender_token, everything else registration_token. Either one present
-        # means the proxy supplied the child's credential.
-        if not (arguments.get("registration_token") or arguments.get("sender_token")):
+        # Stock agent-mail authenticates sends with sender_token. Name-scoped
+        # inbox and reservation tools do not accept registration_token.
+        if tool == "send_message" and not arguments.get("sender_token"):
             return {"result": {"isError": True, "content": [{
                 "type": "text",
-                "text": f"Error calling tool '{tool}': {tool} requires registration_token",
+                "text": f"Error calling tool '{tool}': {tool} requires sender_token",
             }]}}
         body: Any = [] if tool == "fetch_inbox" else {"ok": True}
         return {"result": {"content": [{"type": "text", "text": json.dumps(body)}]}}
@@ -108,7 +107,7 @@ def test_directly_bound_tools_need_no_bootstrap_and_no_session_id(tmp_path):
     tool, arguments = transport.calls[-1]
     assert tool == "fetch_inbox"
     assert arguments["agent_name"] == AGENT
-    assert arguments["registration_token"] == TOKEN
+    assert "registration_token" not in arguments
 
 
 def test_an_unbound_proxy_still_refuses(tmp_path):
@@ -153,7 +152,7 @@ def test_a_child_that_passes_its_own_session_id_is_not_locked_out(tmp_path):
     assert result == []
     _, arguments = transport.calls[-1]
     assert arguments["agent_name"] == AGENT
-    assert arguments["registration_token"] == TOKEN
+    assert "registration_token" not in arguments
 
 
 def test_bootstrap_from_a_real_session_id_reports_the_binding(tmp_path):
@@ -181,6 +180,7 @@ def test_send_message_works_from_a_real_session_id(tmp_path):
     tool, arguments = transport.calls[-1]
     assert tool == "send_message"
     assert arguments["sender_name"] == AGENT
+    assert arguments["sender_token"] == TOKEN
 
 
 def test_token_path_defaults_to_the_shared_runtime_layout(tmp_path):
@@ -244,7 +244,7 @@ def test_documented_arguments_are_accepted_when_they_match(tmp_path):
     _, arguments = transport.calls[-1]
     # The binding still decides what goes upstream.
     assert arguments["agent_name"] == AGENT
-    assert arguments["registration_token"] == TOKEN
+    assert "registration_token" not in arguments
 
 
 def test_mismatched_identity_arguments_are_refused(tmp_path):

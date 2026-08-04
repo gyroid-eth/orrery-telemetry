@@ -152,7 +152,10 @@ class AgentStackProxy:
             )
             binding = self.identities.resolve(external_id)
         if binding is None:
-            raise ProxyError("Bridge has not observed this runtime identity")
+            raise ProxyError(
+                "Bridge has not observed this runtime; identity is unavailable. "
+                "Do not infer it from environment or terminal state"
+            )
 
         if agent_id is not None:
             parent = self.identities.resolve(binding["parent_external_id"])
@@ -257,7 +260,7 @@ class AgentStackProxy:
         agent_id: str | None = None,
         ttl_seconds: int = 3600,
         exclusive: bool = True,
-        reason: str = "",
+        reason: str | None = None,
     ) -> dict[str, Any]:
         binding, owner_token = self._resolve(session_id, agent_id)
         safe_paths = _reservation_paths(paths, required=True)
@@ -271,7 +274,7 @@ class AgentStackProxy:
             paths=safe_paths,
             ttl_seconds=ttl_seconds,
             exclusive=_boolean(exclusive, "exclusive"),
-            reason=reason,
+            reason=reason or "",
         )
 
     def renew_reservations(
@@ -514,6 +517,27 @@ def _dispatch(
     if handler is None:
         raise ProxyError("tool is not allowlisted")
     call_arguments = dict(arguments)
+    if name != "bootstrap" and proxy.bound_session_id is None:
+        raise ProxyError(
+            "call bootstrap before using coordination tools; runtime identity "
+            "is unavailable"
+        )
+    binding = proxy.bound_binding
+    if (
+        name != "bootstrap"
+        and binding is not None
+        and binding.get("surface") != "direct"
+    ):
+        supplied_identity = {
+            "session_id",
+            "agent_id",
+            "project_key",
+            "agent_name",
+        }.intersection(call_arguments)
+        if supplied_identity:
+            raise ProxyError(
+                "caller-supplied runtime identity is not accepted after bootstrap"
+            )
     # A directly bound process serves exactly one agent, so the caller does not
     # have to know (or be able to spoof) a session id.
     if "session_id" not in call_arguments and proxy.bound_session_id is not None:
@@ -689,15 +713,13 @@ TOOL_DEFINITIONS = [
         "description": "Fetch this bound agent's inbox without exposing credentials.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "urgent_only": {"type": "boolean"},
                 "include_bodies": {"type": "boolean"},
                 "since_ts": {"type": ["string", "null"]},
                 "topic": {"type": ["string", "null"]},
             },
-            ["session_id"],
+            [],
         ),
     },
     {
@@ -705,8 +727,6 @@ TOOL_DEFINITIONS = [
         "description": "Send an agent-mail message as this bound agent.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "to": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "cc": {"type": ["array", "null"], "items": {"type": "string"}},
                 "bcc": {"type": ["array", "null"], "items": {"type": "string"}},
@@ -717,7 +737,7 @@ TOOL_DEFINITIONS = [
                 "thread_id": {"type": ["string", "null"]},
                 "topic": {"type": ["string", "null"]},
             },
-            ["session_id", "to", "subject", "body_md"],
+            ["to", "subject", "body_md"],
         ),
     },
     {
@@ -725,11 +745,9 @@ TOOL_DEFINITIONS = [
         "description": "Acknowledge an inbox message for this bound agent.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "message_id": {"type": "integer", "minimum": 1},
             },
-            ["session_id", "message_id"],
+            ["message_id"],
         ),
     },
     {
@@ -737,14 +755,12 @@ TOOL_DEFINITIONS = [
         "description": "Reserve project-relative files for this bound agent.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "ttl_seconds": {"type": "integer", "minimum": 60, "maximum": 86400},
                 "exclusive": {"type": "boolean"},
                 "reason": {"type": "string"},
             },
-            ["session_id", "paths"],
+            ["paths"],
         ),
     },
     {
@@ -752,8 +768,6 @@ TOOL_DEFINITIONS = [
         "description": "Renew selected reservations owned by this bound agent.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "extend_seconds": {
                     "type": "integer",
                     "minimum": 60,
@@ -765,7 +779,7 @@ TOOL_DEFINITIONS = [
                     "items": {"type": "integer", "minimum": 1},
                 },
             },
-            ["session_id"],
+            [],
         ),
     },
     {
@@ -773,24 +787,22 @@ TOOL_DEFINITIONS = [
         "description": "Release selected or all reservations owned by this bound agent.",
         "inputSchema": _schema(
             {
-                "session_id": _SESSION,
-                "agent_id": _AGENT,
                 "paths": {"type": ["array", "null"], "items": {"type": "string"}},
                 "file_reservation_ids": {
                     "type": ["array", "null"],
                     "items": {"type": "integer", "minimum": 1},
                 },
             },
-            ["session_id"],
+            [],
         ),
     },
     {
         "name": "runtime_status",
-        "description": "Return sanitized runtime identity, state, and parent lineage.",
-        "inputSchema": _schema(
-            {"session_id": _SESSION, "agent_id": _AGENT},
-            ["session_id"],
+        "description": (
+            "Return this process binding's authoritative runtime identity, state, "
+            "and parent lineage. Takes no caller-supplied identity."
         ),
+        "inputSchema": _schema({}, []),
     },
 ]
 

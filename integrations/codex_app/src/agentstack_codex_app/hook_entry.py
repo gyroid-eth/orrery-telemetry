@@ -296,10 +296,14 @@ def hook_output(
             "hookSpecificOutput": {
                 "hookEventName": hook_name,
                 "additionalContext": (
-                    "AgentStack coordination bootstrap: call "
+                    "AgentStack Codex App identity bootstrap: call "
                     f"agentstack.bootstrap with session_id={session_id} and "
-                    f"agent_id={agent_id} before other agentstack tools. Use "
-                    "exactly this runtime identity for the life of the task."
+                    f"agent_id={agent_id} before other agentstack tools. The "
+                    "returned process binding is the only authoritative identity "
+                    "for the life of the task. Do not infer identity from "
+                    "AGENT_NAME, TMUX, TMUX_PANE, or pane titles. If bootstrap "
+                    "fails, identity is unknown; stop coordination instead of "
+                    "falling back."
                 ),
             }
         }

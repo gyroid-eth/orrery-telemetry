@@ -233,3 +233,6 @@ def test_session_start_response_supplies_exact_proxy_bootstrap_identity():
     assert 'session_id="session-example"' in context
     assert "agent_id=null" in context
     assert "agentstack.bootstrap" in context
+    assert "AGENT_NAME" in context
+    assert "TMUX" in context
+    assert "identity is unknown" in context

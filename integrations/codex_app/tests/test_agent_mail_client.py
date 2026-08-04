@@ -217,3 +217,90 @@ def test_whois_reads_profile_without_commit_history():
         "agent_name": "CalmNoether",
         "include_recent_commits": False,
     }
+
+
+def test_stock_name_scoped_tools_never_receive_owner_token():
+    owner_token = "owner-secret-that-must-not-escape"
+
+    class StockTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def __call__(self, payload):
+            self.payloads.append(payload)
+            tool = payload["params"]["name"]
+            if tool == "fetch_inbox":
+                result = {"result": []}
+            elif tool == "whois":
+                result = {"name": "CalmNoether"}
+            else:
+                result = {"ok": True}
+            return {"result": {"structuredContent": result}}
+
+    transport = StockTransport()
+    client = AgentMailClient(transport)
+
+    assert client.fetch_inbox(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    ) == []
+    client.whois(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+    client.acknowledge_message(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        message_id=7,
+        registration_token=owner_token,
+    )
+    client.reserve_files(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        paths=["src/*.py"],
+        registration_token=owner_token,
+    )
+    client.renew_reservations(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+    client.release_reservations(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+
+    assert len(transport.payloads) == 6
+    for payload in transport.payloads:
+        assert "registration_token" not in payload["params"]["arguments"]
+
+
+def test_agent_mail_tool_errors_never_echo_credential_values():
+    owner_token = "owner-secret-that-must-not-escape"
+    transport = FakeTransport(
+        {
+            "result": {
+                "isError": True,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"unrelated failure input_value={owner_token!r}",
+                    }
+                ],
+            }
+        }
+    )
+    client = AgentMailClient(transport)
+
+    with pytest.raises(AgentMailError) as failure:
+        client.fetch_inbox(
+            project_key="/workspace/example",
+            agent_name="CalmNoether",
+            registration_token=owner_token,
+        )
+
+    assert len(transport.payloads) == 1
+    assert owner_token not in str(failure.value)

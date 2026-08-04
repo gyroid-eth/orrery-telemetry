@@ -11,9 +11,11 @@ import pytest
 from agentstack_codex_app.identity_store import IdentityStore, build_binding
 from agentstack_codex_app.mcp_server import (
     AgentStackProxy,
+    ProxyConfig,
     ProxyError,
     StdioMcpServer,
     TOOL_DEFINITIONS,
+    _dispatch,
 )
 from agentstack_codex_app.snapshot import SnapshotStore, runtime_record
 
@@ -96,6 +98,40 @@ def test_bootstrap_binds_process_and_runtime_status_never_exposes_token(tmp_path
         proxy.bootstrap("other-session")
 
 
+def test_bridge_binding_wins_over_misleading_shell_identity(tmp_path):
+    config = ProxyConfig.from_env(
+        {
+            "AGENTSTACK_MCP_URL": "http://agent-mail.invalid/api/",
+            "AGENTSTACK_RUNTIME_DIR": str(tmp_path),
+            "AGENT_NAME": "CocoaPasteur",
+            "TMUX": "/tmp/tmux/default,1,0",
+            "TMUX_PANE": "%99",
+        }
+    )
+    proxy, _ = _proxy(tmp_path)
+
+    status = proxy.bootstrap("session-example")
+
+    assert not config.is_direct
+    assert status["agent_name"] == "Calm-Noether"
+    assert "CocoaPasteur" not in json.dumps(status)
+
+
+def test_missing_bridge_binding_stops_without_guessing_a_name(tmp_path):
+    proxy = AgentStackProxy(
+        IdentityStore(tmp_path / "identity"),
+        SnapshotStore(tmp_path / "snapshot.json"),
+        FakeAgentMail(),
+        bootstrap_wait_seconds=0,
+    )
+
+    with pytest.raises(ProxyError, match="identity is unavailable") as failure:
+        proxy.bootstrap("missing-session")
+
+    assert proxy.bound_binding is None
+    assert "agent" not in str(failure.value).lower()
+
+
 def test_subagent_bootstrap_waits_for_bridge_observed_pair_and_parent(tmp_path):
     identities = IdentityStore(tmp_path / "identity")
     _save_identity(identities)
@@ -155,6 +191,55 @@ def test_allowlisted_tools_inject_bound_identity_and_owner_token(tmp_path):
     assert send["registration_token"] == "owner-secret"
 
 
+def test_session_bound_surface_needs_no_caller_identity_after_bootstrap(tmp_path):
+    proxy, mail = _proxy(tmp_path)
+    proxy.bootstrap("session-example")
+
+    status = _dispatch(proxy, "runtime_status", {})
+    inbox = _dispatch(proxy, "fetch_inbox", {"include_bodies": True})
+    sent = _dispatch(
+        proxy,
+        "send_message",
+        {"to": ["Quiet-Curie"], "subject": "Result", "body_md": "Done"},
+    )
+    reserved = _dispatch(proxy, "reserve_files", {"paths": ["src/*.py"]})
+
+    assert status["agent_name"] == "Calm-Noether"
+    assert inbox[0]["id"] == 7
+    assert sent == {"count": 1}
+    assert reserved == {"granted": [], "conflicts": []}
+    assert {arguments["agent_name"] for _, arguments in mail.calls} == {
+        "Calm-Noether"
+    }
+
+
+def test_unbound_status_fails_closed_without_identity_candidates(tmp_path):
+    proxy = AgentStackProxy(
+        IdentityStore(tmp_path / "identity"),
+        SnapshotStore(tmp_path / "snapshot.json"),
+        FakeAgentMail(),
+    )
+
+    with pytest.raises(ProxyError, match="bootstrap") as failure:
+        _dispatch(proxy, "runtime_status", {})
+
+    assert "CocoaPasteur" not in str(failure.value)
+
+
+def test_bridge_tools_reject_caller_supplied_identity_after_bootstrap(tmp_path):
+    proxy, _ = _proxy(tmp_path)
+    proxy.bootstrap("session-example")
+
+    for supplied in (
+        {"session_id": "session-example"},
+        {"agent_id": None},
+        {"project_key": "/workspace/example"},
+        {"agent_name": "Calm-Noether"},
+    ):
+        with pytest.raises(ProxyError, match="caller-supplied runtime identity"):
+            _dispatch(proxy, "fetch_inbox", supplied)
+
+
 def test_proxy_rejects_cross_binding_and_unsafe_reservation_paths(tmp_path):
     proxy, _ = _proxy(tmp_path)
     proxy.bootstrap("session-example")
@@ -193,6 +278,19 @@ def test_stdio_server_lists_only_allowlisted_tools_and_rejects_passthrough(tmp_p
     )
     assert response["result"]["isError"] is True
     assert "allowlisted" in response["result"]["content"][0]["text"]
+
+
+def test_only_bootstrap_accepts_caller_supplied_runtime_identity():
+    by_name = {tool["name"]: tool for tool in TOOL_DEFINITIONS}
+
+    assert by_name["bootstrap"]["inputSchema"]["required"] == ["session_id"]
+    assert "session_id" in by_name["bootstrap"]["inputSchema"]["properties"]
+    for name, tool in by_name.items():
+        if name == "bootstrap":
+            continue
+        properties = tool["inputSchema"]["properties"]
+        assert "session_id" not in properties, name
+        assert "agent_id" not in properties, name
 
 
 def test_mcp_server_script_runs_directly_without_plugin_root_env(tmp_path):
