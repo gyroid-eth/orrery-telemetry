@@ -23,11 +23,59 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ## DECK
 
-![DECK view — 稼働中エージェントのカード一覧](img/deck.jpg)
+最初は DECK を開きます。**1エージェントが1枚のカード**として並ぶため、誰が何をしているか、入力待ちで止まっていないかを個別に読めます。
 
-本ページの画面写真は `scripts/dashboard-demo.py` が生成する隔離デモ環境（架空データ）のものです。エージェント名、task、mail、transcript はすべて創作で、実在の作業内容ではありません。
+次の画像では、上部のカウンタが3体、カードも3枚です。カウンタは全体の数、カードは各エージェントの状態を示します。
 
-DECK は agent ごとの運用カードです。
+![DECK の初期状態。3体のエージェントが1枚ずつのカードで表示されている](images/deck_start.png)
+
+本ページの6枚の画面写真は隔離したデモ環境の実画面です。エージェント名、task、mail、transcript はすべて架空で、実在の作業内容ではありません。
+
+### カードを上から読む
+
+| 表示 | 読み方 |
+| --- | --- |
+| 名前の下の `GPT 5.6`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
+| モデルの下の細い横線 | **残りの作業メモリ（context remaining）**。長いほど余裕があり、残り20%未満では赤寄りになります。telemetry を取得できないカードには出ません。 |
+| 黒い帯 | terminal で観測した現在の表示。作業中か待機中かを読む手掛かりです。 |
+| `ORD` | そのエージェントに与えられている直近の指示です。 |
+| `RX` | agent-mail で直近に受信した指示です。送信者、件名、重要度が並びます。まだ受信がなければ行自体がありません。 |
+| `● ONLINE` | agent process が稼働中です。**いま仕事を進めているという意味とは限りません**。 |
+| 右上の状態表示 | 黄色の秒数は作業中、薄い `LAST …` は入力待ち、`?` と `APPROVAL` は人の介入待ちです。 |
+| `↩ EXIT` | 稼働中のエージェントへ graceful な `/exit` を送ります。誤操作防止のため二度押しで確定します。 |
+
+次の画像では12枚に増え、Warm-Lovelace などのカードに `RX` が現れています。`ORD` と見比べると「担当」と「最後に誰から何を受け取ったか」を分けて読めます。
+
+![DECK で12体に増え、複数のカードに ORD と RX が表示されている](images/deck_growing.png)
+
+### ヘッダのカウンタとカードの状態を分ける
+
+ヘッダの3項目は、個々の作業内容ではなく**数**です。
+
+| カウンタ | 数えているもの |
+| --- | --- |
+| `RUNNING` | agent process が稼働しているカード数 |
+| `STANDBY` | process が稼働していない active agent のカード数 |
+| `AGENTS` | active agent の総数 |
+
+したがって、`RUNNING 12` だけを見ても12体すべてが仕事を進めているとは限りません。**全体の数はヘッダ、誰が作業中・待機中・介入待ちかは各カードの右上と枠**で確認します。
+
+### 人の介入待ちを見逃さない
+
+次の画像で見る場所は、Bright-Curie カード右上の `?` と、Swift-Noether カードの赤い枠と `APPROVAL` です。
+
+![DECK の介入待ち。Bright-Curie に質問マーク、Swift-Noether に赤枠の APPROVAL が表示されている](images/deck_humanloop.png)
+
+| 合図 | 意味 | 解除方法 |
+| --- | --- | --- |
+| `?` | エージェントがユーザーへの質問で止まっています。 | terminal で選択肢や回答を入力します。 |
+| 赤枠の `APPROVAL` | permission の承認待ちで止まっています。 | terminal で許可または拒否を選びます。 |
+
+どちらも解除するまで先へ進みません。ただし process 自体は生きているため、この画像でもヘッダは `RUNNING 12` のままです。これが、ヘッダの数とカードの状態を分けて読む理由です。
+
+### 該当 terminal を開く
+
+カードをクリックすると、そのエージェントの詳細パネルが開きます。tmux 型の Claude / Codex CLI agent なら、パネル右上の `OPEN TMUX` をクリックすると対応 terminal を前面化または新しく開いて attach します。NETWORK でも、ノードをクリックした後は同じ手順です。
 
 ### 分類
 
@@ -38,17 +86,6 @@ DECK は agent ごとの運用カードです。
 - `retired`: soft-retire 済み
 
 mail の `last_active` だけで running と判定せず、tmux process、pane state、session state を合わせます。過去 session を現在実行中と誤表示しないためです。
-
-### カード表示
-
-- scientist portrait
-- model と provider logo
-- context window と残量
-- task description と最後の受信指示
-- work / wait / approval / question と経過時間
-- live pane title と agent-mail last active
-- 成果物数と terminal attach 状態
-- context 残量をカード下端の hairline で表示（緑・橙・赤）
 
 ### 検索
 
@@ -97,18 +134,19 @@ Codex App runtime には tmux pane がありません。terminal attach、dashbo
 
 ## NETWORK
 
-![NETWORK view — spawn 系譜と mail 通信の force graph](img/network.jpg)
+NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚の force graph に重ねます。まず、**ノードはエージェント、線は関係**と読んでください。
 
-NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
+次の初期状態では3ノードに対して `0 links · 0 spawn` なので、まだ親子関係も通信もありません。右側には配置を調整する `TUNE` パネルが見えます。
+
+![NETWORK の初期状態。3ノードで通信線と spawn 線はまだない](images/net_start.png)
 
 ### Node
 
-- portrait medallion
-- provider badge
-- running halo と状態 motion ring
-- context 残量を最大270度の外周 arc で表示
-- hover / long press tooltip に task、live state、model、last activity
-- click で詳細 panel
+- 1ノードが1エージェントです。肖像の横の小さな badge は provider を示します。
+- 肖像を囲む**系統色のリング**は spawn 上の立場です。色の対応は左上の `?`（凡例）で parent / child / both と確認できます。`both` は、親から仕事を受け、さらに子へ委任している中間ノードです。
+- 外周の円弧は**残りの作業メモリ（context remaining）**です。最大270度で、短くなるほど残量が少ないことを示します。
+- hover、または touch で長押しすると task、live state、model、last activity が出ます。
+- ノードをクリックすると詳細パネルが開きます。tmux 型 agent は、そこから `OPEN TMUX` をクリックして該当 terminal へ移動できます。
 
 詳細 panel の History は transcript と24時間 event sparkline、Output は project-scoped な成果物です。ROLE ASSIGN では role / group annotation を保存または削除できます。
 
@@ -118,10 +156,19 @@ NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 
 - spawn edge: parent-child lineage
 - communication edge: agent-mail message
-- edge count と direction
+- communication edge 上の数字: その2者間の通信回数
+- communication edge の矢印: 通信方向
 - edge click で二者間 mail drawer
 - drawer に subject、importance、時刻、本文
 - live message は comet animation
+
+次の画像は、12ノードに `6 links · 6 spawn` ができた段階です。系統色のリングで親・子・中間を見分け、線上の `1` からその組み合わせの通信が1回だと読めます。
+
+![NETWORK で12ノードへ増え、親子の spawn 線と通信回数1の線が表示されている](images/net_growing.png)
+
+通信が増えると、同じ2者間の線上の数字も増えます。次の画像では `29 links · 9 spawn` となり、中央付近に `2` や `3` が見えます。数字はノード数や子の数ではなく、**通信回数**です。
+
+![NETWORK の通信が増え、エッジ上に通信回数2や3が表示されている](images/net_humanloop.png)
 
 `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと mail edge と drawer は `NOT CONFIGURED` になります。tmux telemetry は残るため、mail 設定不足と dashboard 全停止を区別できます。
 
@@ -132,7 +179,7 @@ NETWORK は spawn 系譜と agent-mail 通信を force graph に重ねます。
 - time window slider / ALL
 - legend
 - node search
-- TUNE: node size、link distance / width、repel、center、spring
+- TUNE: `NODE SIZE`、`LINK DIST`、`LINK WIDTH`、`REPEL`、`CENTER`、`LINK FORCE`。右側の slider でノード同士の配置を見やすく調整
 - TUNE 値を `localStorage` に保存
 - 300 node 超で dense mode
 
