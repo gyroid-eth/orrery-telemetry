@@ -3841,6 +3841,12 @@ function buildEls(){
   const PAR=new Set(gspawn.map(s=>s.source));
   const CHI=new Set(gspawn.map(s=>s.target));
   const runGrps=[];   // 稼働中ノードは最後に再appendして前面化（CK P2）
+  // 介入待ち (?/!) はさらにその上へ。SVG に z-index は無く描画順=DOM順なので、
+  // 後から描かれた隣接ノードの ctx-arc-glow やラベルが人間を呼ぶ合図を覆い隠す
+  // 事故が実在した（Swift-Noether の `!` が Quiet-Franklin に塗り潰され、
+  // 「昔は出ていたのに消えた」ように見えていた）。レイアウトは force-directed で
+  // 毎回変わるため、この事故は再現したりしなかったりして目視検査をすり抜ける。
+  const attnGrps=[];
   for(const[name,g]of gmap){
     g.role=PAR.has(name)&&CHI.has(name)?'both':
       PAR.has(name)?'parent':CHI.has(name)?'child':'none';
@@ -3859,6 +3865,7 @@ function buildEls(){
       const aw=g.actState||'wait';
       grp.classList.add('act-'+aw);
       runGrps.push(grp);
+      if(aw==='ask'||aw==='question')attnGrps.push(grp);
     }
     // CTX fuel = top-origin clockwise arc, capped at 270°. Unknown values
     // intentionally create no arc. Remaining <20% warms from amber to red.
@@ -3950,6 +3957,8 @@ function buildEls(){
   }
   // 稼働中ノードを最後に再append＝最前面（密グラフで埋もれない CK P2）
   runGrps.forEach(el=>gsvg.appendChild(el));
+  // 人間を呼ぶ合図は常に最前面。どんな配置でも ?/! が隠れないことを保証する。
+  attnGrps.forEach(el=>gsvg.appendChild(el));
   fitAnnotPills();
   reattachMurmurs();   // 再描画で消えた吹き出しを生かす
 }
