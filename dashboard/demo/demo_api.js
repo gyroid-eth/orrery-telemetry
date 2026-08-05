@@ -67,7 +67,7 @@
     { name: 'CedarLovelace', parent: 'AmberKepler', model: 'GPT 5.6',
       model_raw: 'gpt-5.6', provider: 'openai', program: 'codex',
       task: 'Survey the call sites', retired: true, ago: 5400 },
-    { name: 'OchreFranklin', parent: 'AmberKepler', model: 'Sonnet 5',
+    { name: 'OchreCurie', parent: 'AmberKepler', model: 'Sonnet 5',
       model_raw: 'claude-sonnet-5', provider: 'anthropic',
       program: 'claude-code', task: 'Draft the rollback plan',
       retired: true, ago: 9200 },
@@ -471,7 +471,7 @@
       [0, 'assistant', 'text',
        '19 files touch the old schema; 4 of them write. Listed in the report.'],
     ],
-    OchreFranklin: [
+    OchreCurie: [
       [0, 'user', 'text', 'Draft the rollback plan.'],
       [0, 'assistant', 'text',
        'Rollback is a read-side switch, not a data restore — the v2 writer ' +
@@ -524,7 +524,7 @@
     RustPasteur: [['Operator upgrade note', 'docs/upgrade-v2.md', 300]],
     FlintGauss: [['Release check run', 'reports/release-check.txt', 400]],
     CedarLovelace: [['Call-site survey', 'docs/call-sites.md', 5400]],
-    OchreFranklin: [['Rollback plan', 'docs/rollback.md', 9200]],
+    OchreCurie: [['Rollback plan', 'docs/rollback.md', 9200]],
   };
 
   function deliverables(query) {

@@ -21,6 +21,7 @@ mkdir -p "$OUT/demo" "$OUT/assets" "$OUT/portraits_64"
 cp "$DASH/index.html" "$OUT/index.html"
 cp "$HERE/demo_api.js" "$HERE/demo_tour.js" "$OUT/demo/"
 cp "$DASH"/assets/*.svg "$OUT/assets/"
+cp "$HERE/PORTRAITS.txt" "$OUT/PORTRAITS.txt"
 
 # Surnames the cast actually uses. Read them out of the fixture so a rename
 # cannot leave the bundle shipping a portrait nobody sees — or missing one.
