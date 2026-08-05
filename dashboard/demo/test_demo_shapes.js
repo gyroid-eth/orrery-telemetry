@@ -81,9 +81,16 @@ const P = SANDBOX.AGENTSTACK_DEMO.payloads;
    that never advanced. Drive the one the code actually reads. */
 const SANDBOX_DATE = vm.runInContext('Date', SANDBOX);
 const REAL_NOW = SANDBOX_DATE.now;
+const DEMO = SANDBOX.AGENTSTACK_DEMO;
+
+/* `t` here means "this many seconds into the story", not "this long after
+   the page opened" — the demo deliberately starts part-way through, so the
+   two differ. Ask the fixture where it currently is and shift by the gap,
+   rather than assuming the story begins when the clock does. */
 function atSecond(t, fn) {
   const base = REAL_NOW();
-  SANDBOX_DATE.now = () => base + t * 1000;
+  const shift = (t - DEMO.phase() + DEMO.loop) % DEMO.loop;
+  SANDBOX_DATE.now = () => base + shift * 1000;
   try { return fn(); } finally { SANDBOX_DATE.now = REAL_NOW; }
 }
 

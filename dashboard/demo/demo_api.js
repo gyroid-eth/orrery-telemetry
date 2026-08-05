@@ -23,7 +23,12 @@
   if (params.get('demo') !== '1') return;
 
   var LOOP = 240;          // seconds; the story repeats from the top
-  var START = Date.now();
+  /* Enter the story already in progress. Starting at zero means a visitor
+     spends the first quarter-minute looking at two idle agents and an empty
+     history, and decides the product does not do much. At this offset the
+     first thing on screen is four agents, live traffic and a filled chart. */
+  var OPENS_AT = 108;
+  var START = Date.now() - OPENS_AT * 1000;
 
   /* ── the cast ────────────────────────────────────────────────────────
      `born` is when the agent first appears, `dies` when it stops running
@@ -272,6 +277,48 @@
     return { ok: true, ts: epoch(), messages: out };
   }
 
+  /* The per-agent panel draws an activity chart from these, and the edge
+     drawer lists the traffic between a pair. Empty arrays are legal and the
+     page keeps working — it just says NO ACTIVITY and shows an empty band,
+     which reads as "this product has no history" rather than "this is a
+     demo". Answer them from the same script the graph uses. */
+  function agentHistory(query) {
+    var t = phase(), name = query.get('name') || '', events = [], id = 1;
+    SCRIPT.forEach(function (m) {
+      if (m.at <= t && (m.from === name || m.to === name)) {
+        events.push({
+          id: id, ts: epoch() - Math.round(t - m.at),
+          kind: m.from === name ? 'mail_sent' : 'mail_recv',
+          ref: m.from === name ? m.to : m.from, subject: m.subject,
+          importance: 'normal', agent: name, sender: m.from,
+          recipient: m.to, thread_id: null,
+        });
+      }
+      id++;
+    });
+    var start = epoch() - Math.round(t);
+    return { ok: true, hours: null, auto_range: true, since_ts: start,
+             now_ts: epoch(), range: { start_ts: start, end_ts: epoch() },
+             total_raw: events.length, events: events };
+  }
+
+  function edgeMessages(query) {
+    var t = phase(), a = query.get('a') || '', b = query.get('b') || '';
+    var out = [], id = 1;
+    SCRIPT.forEach(function (m) {
+      var between = (m.from === a && m.to === b) || (m.from === b && m.to === a);
+      if (m.at <= t && between) {
+        var ts = epoch() - Math.round(t - m.at);
+        out.push({ id: id, ts: new Date(ts * 1000).toISOString()
+                     .replace('T', ' ').replace('Z', ''),
+                   ts_unix: ts, sender: m.from, recipient: m.to,
+                   subject: m.subject, body: '' });
+      }
+      id++;
+    });
+    return { ok: true, a: a, b: b, count: out.length, messages: out };
+  }
+
   var ROUTES = {
     '/api/agents': agentsPayload,
     '/api/graph': graphPayload,
@@ -283,8 +330,8 @@
                last_success_age_s: 3, recent_results: {}, signal_count: 0,
                daemon_running: true, watcher_running: true, status: 'green' };
     },
-    '/api/agent-history': function () { return { ok: true, items: [] }; },
-    '/api/edge-messages': function () { return { ok: true, messages: [] }; },
+    '/api/agent-history': agentHistory,
+    '/api/edge-messages': edgeMessages,
     '/api/spawn-names': function () { return { ok: true, names: [] }; },
     '/api/fs/dirs': function () { return { ok: true, dirs: [] }; },
   };
@@ -315,7 +362,10 @@
       var m = /[?&]since=(\d+)/.exec(url);
       return Promise.resolve(json(messagesSince(m ? Number(m[1]) : 0)));
     }
-    if (ROUTES[path]) return Promise.resolve(json(ROUTES[path]()));
+    if (ROUTES[path]) {
+      var q = new URLSearchParams(url.split('?')[1] || '');
+      return Promise.resolve(json(ROUTES[path](q)));
+    }
     return realFetch(input, init);
   };
 
@@ -327,7 +377,7 @@
   }
 
   window.AGENTSTACK_DEMO = { loop: LOOP, cast: CAST, script: SCRIPT,
-                             portraitURL: portraitURL,
+                             portraitURL: portraitURL, phase: phase,
                              payloads: { agents: agentsPayload,
                                          graph: graphPayload,
                                          messagesSince: messagesSince } };
