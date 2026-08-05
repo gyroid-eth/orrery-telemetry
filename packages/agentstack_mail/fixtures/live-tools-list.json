@@ -1,0 +1,2386 @@
+{
+  "tools": [
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Return basic readiness information for the Agent Mail server.",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "health_check",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Idempotently create or ensure a project exists for the given human key.\n\nWhen to use\n-----------\n- First call in a workflow targeting a new repo/path identifier.\n- As a guard before registering agents or sending messages.\n\nHow it works\n------------\n- Validates that `human_key` is an absolute directory path (the agent's working directory).\n- Computes a stable slug from `human_key` (lowercased, safe characters) so\n  multiple agents can refer to the same project consistently.\n- Ensures DB row exists and that the on-disk archive is initialized\n  (e.g., `messages/`, `agents/`, `file_reservations/` directories).\n\nCRITICAL: Project Identity Rules\n---------------------------------\n- The `human_key` MUST be the absolute path to the agent's working directory\n- Two agents working in the SAME directory path are working on the SAME project\n- Example: Both agents in /data/projects/smartedgar_mcp \u2192 SAME project\n- Sibling projects are DIFFERENT directories (e.g., /data/projects/smartedgar_mcp\n  vs /data/projects/smartedgar_mcp_frontend)\n\nParameters\n----------\nhuman_key : str\n    The absolute path to the agent's working directory (e.g., \"/data/projects/backend\").\n    This MUST be an absolute path, not a relative path or arbitrary slug.\n    This is the canonical identifier for the project - all agents working in this\n    directory will share the same project identity.\n\nReturns\n-------\ndict\n    Minimal project descriptor: { id, slug, human_key, created_at }.\n\nExamples\n--------\nJSON-RPC:\n```json\n{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"2\",\n  \"method\": \"tools/call\",\n  \"params\": {\"name\": \"ensure_project\", \"arguments\": {\"human_key\": \"/data/projects/backend\"}}\n}\n```\n\nCommon mistakes\n---------------\n- Passing a relative path (e.g., \"./backend\") instead of an absolute path\n- Using arbitrary slugs instead of the actual working directory path\n- Creating separate projects for the same directory with different slugs\n\nIdempotency\n-----------\n- Safe to call multiple times. If the project already exists, the existing\n  record is returned and the archive is ensured on disk (no destructive changes).",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "human_key": {
+            "type": "string"
+          },
+          "identity_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "human_key"
+        ],
+        "type": "object"
+      },
+      "name": "ensure_project",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Create or update an agent identity within a project and persist its profile to Git.\n\nWhen to use\n-----------\n- At the start of a coding session by any automated agent.\n- To update an existing agent's program/model/task metadata and bump last_active.\n\nSemantics\n---------\n- If `name` is omitted, a random adjective+noun name is auto-generated.\n- Reusing the same `name` updates the profile (program/model/task) and\n  refreshes `last_active_ts`.\n- A `profile.json` file is written under `agents/<Name>/` in the project archive.\n\nCRITICAL: Agent Naming Rules\n-----------------------------\n- Agent names MUST be randomly generated adjective+noun combinations\n- Examples: \"GreenLake\", \"BlueDog\", \"RedStone\", \"PurpleBear\"\n- Names should be unique, easy to remember, and NOT descriptive\n- INVALID examples: \"BackendHarmonizer\", \"DatabaseMigrator\", \"UIRefactorer\"\n- The whole point: names should be memorable identifiers, not role descriptions\n- Best practice: Omit the `name` parameter to auto-generate a valid name\n\nParameters\n----------\nproject_key : str\n    The same human key you passed to `ensure_project` (or equivalent identifier).\nprogram : str\n    The agent program (e.g., \"codex-cli\", \"claude-code\").\nmodel : str\n    The underlying model (e.g., \"gpt5-codex\", \"opus-4.1\").\nname : Optional[str]\n    MUST be a valid adjective+noun combination if provided (e.g., \"BlueLake\").\n    If omitted, a random valid name is auto-generated (RECOMMENDED).\n    Names are unique per project; passing the same name updates the profile.\ntask_description : str\n    Short description of current focus (shows up in directory listings).\n\nReturns\n-------\ndict\n    { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }\n\nExamples\n--------\nRegister with auto-generated name (RECOMMENDED):\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"3\",\"method\":\"tools/call\",\"params\":{\"name\":\"register_agent\",\"arguments\":{\n  \"project_key\":\"/data/projects/backend\",\"program\":\"codex-cli\",\"model\":\"gpt5-codex\",\"task_description\":\"Auth refactor\"\n}}}\n```\n\nRegister with explicit valid name:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"4\",\"method\":\"tools/call\",\"params\":{\"name\":\"register_agent\",\"arguments\":{\n  \"project_key\":\"/data/projects/backend\",\"program\":\"claude-code\",\"model\":\"opus-4.1\",\"name\":\"BlueLake\",\"task_description\":\"Navbar redesign\"\n}}}\n```\n\nPitfalls\n--------\n- Names MUST match the adjective+noun format or an error will be raised\n- Names are case-insensitive unique. If you see \"already in use\", pick another or omit `name`.\n- Use the same `project_key` consistently across cooperating agents.",
+      "inputSchema": {
+        "properties": {
+          "attachments_policy": {
+            "default": "auto",
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "program",
+          "model"
+        ],
+        "type": "object"
+      },
+      "name": "register_agent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Remove an agent from a project. Marks the agent as inactive and removes it from the active roster. Messages from/to the agent are preserved for audit but the agent can no longer send or receive new messages.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "deregister_agent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Soft-delete an agent: mark it as retired so it stops accepting new messages while preserving message history. Retired agents are hidden from active agent lists but visible in 'all agents' views.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "retire_agent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Restore a retired agent back to active status. The agent will resume accepting new messages.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "unretire_agent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Soft-delete a project: mark it as archived so it is hidden from active project lists. All messages are preserved and the project can be restored with unarchive_project.",
+      "inputSchema": {
+        "properties": {
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "archive_project",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Restore an archived project back to active status.",
+      "inputSchema": {
+        "properties": {
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "unarchive_project",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "IRREVERSIBLY delete an agent and ALL associated data: messages sent by the agent, message recipient records, file reservations, agent links, window identities, and on-disk archive files (inbox, outbox, attachments). This is NOT soft-delete \u2014 data is permanently destroyed and cannot be recovered. Requires the confirmation parameter to be exactly 'I UNDERSTAND'.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "confirmation": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "confirmation"
+        ],
+        "type": "object"
+      },
+      "name": "hard_delete_agent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "IRREVERSIBLY delete a project and ALL associated data: every agent, message, message recipient, file reservation, agent link, window identity, message summary, sibling suggestion, product link, and the entire on-disk project archive directory. This is NOT soft-delete \u2014 data is permanently destroyed and cannot be recovered. Requires the confirmation parameter to be exactly 'I UNDERSTAND'.",
+      "inputSchema": {
+        "properties": {
+          "confirmation": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "confirmation"
+        ],
+        "type": "object"
+      },
+      "name": "hard_delete_project",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Return enriched profile details for an agent, optionally including recent archive commits.\n\nDiscovery\n---------\nTo discover available agent names, use: resource://agents/{project_key}\nAgent names are NOT the same as program names or user names.\n\nParameters\n----------\nproject_key : str\n    Project slug or human key.\nagent_name : str\n    Agent name to look up (use resource://agents/{project_key} to discover names).\ninclude_recent_commits : bool\n    If true, include latest commits touching the project archive authored by the configured git author.\ncommit_limit : int\n    Maximum number of recent commits to include.\n\nReturns\n-------\ndict\n    Agent profile augmented with { recent_commits: [{hexsha, summary, authored_ts}] } when requested.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "commit_limit": {
+            "default": 5,
+            "type": "integer"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_recent_commits": {
+            "default": true,
+            "type": "boolean"
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "whois",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Create a new, unique agent identity and persist its profile to Git.\n\nHow this differs from `register_agent`\n--------------------------------------\n- Always creates a new identity with a fresh unique name (never updates an existing one).\n- `name_hint`, if provided, MUST be a valid adjective+noun combination and must be available,\n  otherwise an error is raised. Without a hint, a random adjective+noun name is generated.\n\nCRITICAL: Agent Naming Rules\n-----------------------------\n- Agent names MUST be randomly generated adjective+noun combinations\n- Examples: \"GreenCastle\", \"BlueLake\", \"RedStone\", \"PurpleBear\"\n- Names should be unique, easy to remember, and NOT descriptive\n- INVALID examples: \"BackendHarmonizer\", \"DatabaseMigrator\", \"UIRefactorer\"\n- Best practice: Omit `name_hint` to auto-generate a valid name (RECOMMENDED)\n\nWhen to use\n-----------\n- Spawning a brand new worker agent that should not overwrite an existing profile.\n- Temporary task-specific identities (e.g., short-lived refactor assistants).\n\nReturns\n-------\ndict\n    { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }\n\nExamples\n--------\nAuto-generate name (RECOMMENDED):\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"c2\",\"method\":\"tools/call\",\"params\":{\"name\":\"create_agent_identity\",\"arguments\":{\n  \"project_key\":\"/data/projects/backend\",\"program\":\"claude-code\",\"model\":\"opus-4.1\"\n}}}\n```\n\nWith valid name hint:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"c1\",\"method\":\"tools/call\",\"params\":{\"name\":\"create_agent_identity\",\"arguments\":{\n  \"project_key\":\"/data/projects/backend\",\"program\":\"codex-cli\",\"model\":\"gpt5-codex\",\"name_hint\":\"GreenCastle\",\n  \"task_description\":\"DB migration spike\"\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "attachments_policy": {
+            "default": "auto",
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "type": "string"
+          },
+          "name_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "program",
+          "model"
+        ],
+        "type": "object"
+      },
+      "name": "create_agent_identity",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "List active window identities for a project.\n\nReturns all non-expired window identities with their display names,\nlast activity timestamps, and age.\n\nParameters\n----------\nproject_key : str\n    Project identifier.\n\nReturns\n-------\ndict\n    { identities: [{ id, window_uuid, display_name, created_ts, last_active_ts, expires_ts }] }",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "list_window_identities",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Update the display name of a window identity.\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nwindow_uuid : str\n    The UUID of the window identity to rename.\nnew_display_name : str\n    New display name (must be a valid adjective+noun agent name).\n\nReturns\n-------\ndict\n    Updated window identity record.",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "new_display_name": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "window_uuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "window_uuid",
+          "new_display_name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_window",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Mark a window identity as expired.\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nwindow_uuid : str\n    The UUID of the window identity to expire.\n\nReturns\n-------\ndict\n    { window_uuid, expired: bool, expired_at }",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "window_uuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "window_uuid"
+        ],
+        "type": "object"
+      },
+      "name": "expire_window",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.\n\nDiscovery\n---------\nTo discover available agent names for recipients, use: resource://agents/{project_key}\nAgent names are NOT the same as program names or user names.\n\nWhat this does\n--------------\n- Stores message (and recipients) in the database; updates sender's activity\n- Writes a canonical `.md` under `messages/YYYY/MM/`\n- Writes sender outbox and per-recipient inbox copies\n- Optionally converts referenced images to WebP and embeds small images inline\n- Supports explicit attachments via `attachment_paths` in addition to inline references\n\nParameters\n----------\nproject_key : str\n    Project identifier (same used with `ensure_project`/`register_agent`).\nsender_name : str\n    Must match an agent registered in the project.\nto : list[str]\n    Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.\nsubject : str\n    Short subject line that will be visible in inbox/outbox and search results.\nbody_md : str\n    GitHub-Flavored Markdown body. Image references can be file paths or data URIs.\ncc, bcc : Optional[list[str]]\n    Additional recipients by name.\nattachment_paths : Optional[list[str]]\n    Extra file paths to include as attachments; will be converted to WebP and stored.\nconvert_images : Optional[bool]\n    Overrides server default for image conversion/inlining. If None, server settings apply.\n    Note: sender attachments_policy \"inline\"/\"file\" always forces conversion/inlining.\nimportance : str\n    One of {\"low\",\"normal\",\"high\",\"urgent\"} (free form tolerated; used by filters).\nack_required : bool\n    If true, recipients should call `acknowledge_message` after reading.\nthread_id : Optional[str]\n    If provided, message will be associated with an existing thread.\nbroadcast : bool\n    If true and `to` is empty, expand recipients to all registered agents in the\n    project (excluding the sender). Mutually exclusive with explicit `to` recipients.\n    Respects contact_policy settings \u2014 agents with block_all are skipped.\ntopic : Optional[str]\n    Optional topic tag (alphanumeric + hyphens, max 64 chars). Stored on the message\n    for topic-based filtering via fetch_inbox(topic=...) or fetch_topic().\n\nReturns\n-------\ndict\n    {\n      \"deliveries\": [ { \"project\": str, \"payload\": { ... message payload ... } } ],\n      \"count\": int\n    }\n\nEdge cases\n----------\n- If no recipients are given, the call fails.\n- Unknown recipient names fail fast; register them first.\n- Non-absolute attachment paths are resolved relative to the project archive root.\n\nDo / Don't\n----------\nDo:\n- Keep subjects concise and specific (aim for \u2264 80 characters).\n- Use `thread_id` (or `reply_message`) to keep related discussion in a single thread.\n- Address only relevant recipients; use CC/BCC sparingly and intentionally.\n- Prefer Markdown links; attach images only when they materially aid understanding. The server\n  auto-converts images to WebP and may inline small images depending on policy.\n\nDon't:\n- Send large, repeated binaries\u2014reuse prior attachments via `attachment_paths` when possible.\n- Change topics mid-thread\u2014start a new thread for a new subject.\n- Broadcast to \"all\" agents unnecessarily\u2014target just the agents who need to act.\n\nExamples\n--------\n1) Simple message:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"method\":\"tools/call\",\"params\":{\"name\":\"send_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"sender_name\":\"GreenCastle\",\"to\":[\"BlueLake\"],\n  \"subject\":\"Plan for /api/users\",\"body_md\":\"See below.\"\n}}}\n```\n\n2) Inline image (auto-convert to WebP and inline if small):\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"6a\",\"method\":\"tools/call\",\"params\":{\"name\":\"send_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"sender_name\":\"GreenCastle\",\"to\":[\"BlueLake\"],\n  \"subject\":\"Diagram\",\"body_md\":\"![diagram](docs/flow.png)\",\"convert_images\":true\n}}}\n```\n\n3) Explicit attachments:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"6b\",\"method\":\"tools/call\",\"params\":{\"name\":\"send_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"sender_name\":\"GreenCastle\",\"to\":[\"BlueLake\"],\n  \"subject\":\"Screenshots\",\"body_md\":\"Please review.\",\"attachment_paths\":[\"shots/a.png\",\"shots/b.png\"]\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "ack_required": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attachment_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "auto_contact_if_blocked": {
+            "default": false,
+            "type": "boolean"
+          },
+          "bcc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "body_md": {
+            "type": "string"
+          },
+          "broadcast": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "convert_images": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "importance": {
+            "default": "normal",
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "sender_name": {
+            "type": "string"
+          },
+          "sender_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "subject": {
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "sender_name",
+          "to",
+          "subject",
+          "body_md"
+        ],
+        "type": "object"
+      },
+      "name": "send_message",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Delete messages older than the configured retention period. Defaults to retention_max_age_days from config (180 days). Returns count of messages purged.",
+      "inputSchema": {
+        "properties": {
+          "dry_run": {
+            "default": true,
+            "type": "boolean"
+          },
+          "max_age_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "purge_old_messages",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Reply to an existing message, preserving or establishing a thread.\n\nBehavior\n--------\n- Inherits original `importance` and `ack_required` flags\n- `thread_id` is taken from the original message if present; otherwise, the original id is used\n- Subject is prefixed with `subject_prefix` if not already present\n- Defaults `to` to the original sender if not explicitly provided\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nmessage_id : int\n    The id of the message you are replying to.\nsender_name : str\n    Your agent name (must be registered in the project).\nbody_md : str\n    Reply body in Markdown.\nto, cc, bcc : Optional[list[str]]\n    Recipients by agent name. If omitted, `to` defaults to original sender.\nsubject_prefix : str\n    Prefix to apply (default \"Re:\"). Case-insensitive idempotent.\n\nDo / Don't\n----------\nDo:\n- Keep the subject focused; avoid topic drift within a thread.\n- Reply to the original sender unless new stakeholders are strictly required.\n- Preserve importance/ack flags from the original unless there is a clear reason to change.\n- Use CC for FYI only; BCC sparingly and with intention.\n\nDon't:\n- Change `thread_id` when continuing the same discussion.\n- Escalate to many recipients; prefer targeted replies and start a new thread for new topics.\n- Attach large binaries in replies unless essential; reference prior attachments where possible.\n\nReturns\n-------\ndict\n    Message payload including `thread_id` and `reply_to`.\n\nExamples\n--------\nMinimal reply to original sender:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"method\":\"tools/call\",\"params\":{\"name\":\"reply_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"message_id\":1234,\"sender_name\":\"BlueLake\",\n  \"body_md\":\"Questions about the migration plan...\"\n}}}\n```\n\nReply with explicit recipients and CC:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"6c\",\"method\":\"tools/call\",\"params\":{\"name\":\"reply_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"message_id\":1234,\"sender_name\":\"BlueLake\",\n  \"body_md\":\"Looping ops.\",\"to\":[\"GreenCastle\"],\"cc\":[\"RedCat\"],\"subject_prefix\":\"RE:\"\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "bcc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "body_md": {
+            "type": "string"
+          },
+          "cc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "sender_name": {
+            "type": "string"
+          },
+          "subject_prefix": {
+            "default": "Re:",
+            "type": "string"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key",
+          "message_id",
+          "sender_name",
+          "body_md"
+        ],
+        "type": "object"
+      },
+      "name": "reply_message",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Request contact approval to message another agent.\n\nCreates (or refreshes) a pending AgentLink and sends a small ack_required intro message.\n\nDiscovery\n---------\nTo discover available agent names, use: resource://agents/{project_key}\nAgent names are NOT the same as program names or user names.\n\nParameters\n----------\nproject_key : str\n    Project slug or human key.\nfrom_agent : str\n    Your agent name (must be registered in the project).\nto_agent : str\n    Target agent name (use resource://agents/{project_key} to discover names).\nto_project : Optional[str]\n    Target project if different from your project (cross-project coordination).\nreason : str\n    Optional explanation for the contact request.\nttl_seconds : int\n    Time to live for the contact approval request (default: 7 days).",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "register_if_missing": {
+            "default": true,
+            "type": "boolean"
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "type": "string"
+          },
+          "to_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ttl_seconds": {
+            "default": 604800,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_key",
+          "from_agent",
+          "to_agent"
+        ],
+        "type": "object"
+      },
+      "name": "request_contact",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Approve or deny a contact request.",
+      "inputSchema": {
+        "properties": {
+          "accept": {
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "type": "string"
+          },
+          "from_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "to_agent": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 2592000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_key",
+          "to_agent",
+          "from_agent",
+          "accept"
+        ],
+        "type": "object"
+      },
+      "name": "respond_contact",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "List contact links for an agent in a project.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "list_contacts",
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Set contact policy for an agent: open | auto | contacts_only | block_all.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "policy": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "name": "set_contact_policy",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Retrieve recent messages for an agent without mutating read/ack state.\n\nFilters\n-------\n- `urgent_only`: only messages with importance in {high, urgent}\n- `since_ts`: ISO-8601 timestamp string; messages strictly newer than this are returned\n- `limit`: max number of messages (default 20)\n- `include_bodies`: include full Markdown bodies in the payloads\n- `topic`: filter to messages with this topic tag\n\nUsage patterns\n--------------\n- Poll after each editing step in an agent loop to pick up coordination messages.\n- Use `since_ts` with the timestamp from your last poll for efficient incremental fetches.\n- Combine with `acknowledge_message` if `ack_required` is true.\n\nReturns\n-------\nlist[dict]\n    Each message includes: { id, subject, from, created_ts, importance, ack_required, kind, [body_md] }\n\nExample\n-------\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"7\",\"method\":\"tools/call\",\"params\":{\"name\":\"fetch_inbox\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"BlueLake\",\"since_ts\":\"2025-10-23T00:00:00+00:00\"\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "urgent_only": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "fetch_inbox",
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Fetch all messages in a project with a given topic tag, regardless of recipient.\n\nParameters\n----------\nproject_key : str\n    Project identifier.\ntopic_name : str\n    The topic tag to filter by (case-insensitive).\nlimit : int\n    Max number of messages to return (default 50).\ninclude_bodies : bool\n    Include full Markdown bodies in the payloads (default true).\nsince_ts : Optional[str]\n    ISO-8601 timestamp; only messages newer than this are returned.\n\nReturns\n-------\nlist[dict]\n    Each message includes: { id, subject, from, created_ts, importance, topic, [body_md] }",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "default": true,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "topic_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "topic_name"
+        ],
+        "type": "object"
+      },
+      "name": "fetch_topic",
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Mark a specific message as read for the given agent.\n\nNotes\n-----\n- Read receipts are per-recipient; this only affects the specified agent.\n- This does not send an acknowledgement; use `acknowledge_message` for that.\n- Safe to call multiple times; later calls return the original timestamp.\n\nIdempotency\n-----------\n- If `mark_message_read` has already been called earlier for the same (agent, message),\n  the original timestamp is returned and no error is raised.\n\nReturns\n-------\ndict\n    { message_id, read: bool, read_at: iso8601 | null }\n\nExample\n-------\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"8\",\"method\":\"tools/call\",\"params\":{\"name\":\"mark_message_read\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"BlueLake\",\"message_id\":1234\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "message_id"
+        ],
+        "type": "object"
+      },
+      "name": "mark_message_read",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Acknowledge a message addressed to an agent (and mark as read).\n\nBehavior\n--------\n- Sets both read_ts and ack_ts for the (agent, message) pairing\n- Safe to call multiple times; subsequent calls will return the prior timestamps\n\nIdempotency\n-----------\n- If acknowledgement already exists, the previous timestamps are preserved and returned.\n\nWhen to use\n-----------\n- Respond to messages with `ack_required=true` to signal explicit receipt.\n- Agents can treat an acknowledgement as a lightweight, non-textual reply.\n\nReturns\n-------\ndict\n    { message_id, acknowledged: bool, acknowledged_at: iso8601 | null, read_at: iso8601 | null }\n\nExample\n-------\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"9\",\"method\":\"tools/call\",\"params\":{\"name\":\"acknowledge_message\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"BlueLake\",\"message_id\":1234\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "message_id"
+        ],
+        "type": "object"
+      },
+      "name": "acknowledge_message",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Macro helper that boots a project session: ensure project, register agent,\noptionally file_reservation paths, and fetch the latest inbox snapshot.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_reason": {
+            "default": "macro-session",
+            "type": "string"
+          },
+          "file_reservation_ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "human_key": {
+            "type": "string"
+          },
+          "inbox_limit": {
+            "default": 10,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "human_key",
+          "program",
+          "model"
+        ],
+        "type": "object"
+      },
+      "name": "macro_start_session",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Macro helper that aligns an agent with an existing thread by ensuring registration,\nsummarising the thread, and fetching recent inbox context.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "inbox_limit": {
+            "default": 10,
+            "type": "integer"
+          },
+          "include_examples": {
+            "default": true,
+            "type": "boolean"
+          },
+          "include_inbox_bodies": {
+            "default": false,
+            "type": "boolean"
+          },
+          "llm_mode": {
+            "default": true,
+            "type": "boolean"
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "register_if_missing": {
+            "default": true,
+            "type": "boolean"
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "thread_id",
+          "program",
+          "model"
+        ],
+        "type": "object"
+      },
+      "name": "macro_prepare_thread",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Reserve a set of file paths and optionally release them at the end of the workflow.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "auto_release": {
+            "default": false,
+            "type": "boolean"
+          },
+          "exclusive": {
+            "default": true,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "reason": {
+            "default": "macro-file_reservation",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "paths"
+        ],
+        "type": "object"
+      },
+      "name": "macro_file_reservation_cycle",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Request contact permissions and optionally auto-approve plus send a welcome message.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "auto_accept": {
+            "default": false,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "register_if_missing": {
+            "default": true,
+            "type": "boolean"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ttl_seconds": {
+            "default": 604800,
+            "type": "integer"
+          },
+          "welcome_body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "welcome_subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "macro_contact_handshake",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Full-text search over subject and body for a project.\n\nTips\n----\n- SQLite FTS5 syntax supported: phrases (\"build plan\"), prefix (mig*), boolean (plan AND users)\n- Results are ordered by bm25 score (best matches first)\n- Limit defaults to 20; raise for broad queries\n\nQuery examples\n---------------\n- Phrase search: `\"build plan\"`\n- Prefix: `migrat*`\n- Boolean: `plan AND users`\n- Require urgent: `urgent AND deployment`\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nquery : str\n    FTS5 query string.\nlimit : int\n    Max results to return.\n\nReturns\n-------\nlist[dict]\n    Each entry: { id, subject, importance, ack_required, created_ts, thread_id, from }\n\nExample\n-------\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"10\",\"method\":\"tools/call\",\"params\":{\"name\":\"search_messages\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"query\":\"\"build plan\" AND users\", \"limit\": 50\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search_messages"
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Extract participants, key points, and action items for one or more threads.\n\nSingle-thread mode (thread_id is a single ID):\n- Returns detailed summary with optional example messages\n- Response: { thread_id, summary: {participants[], key_points[], action_items[]}, examples[] }\n\nMulti-thread mode (thread_id is comma-separated IDs like \"TKT-1,TKT-2,TKT-3\"):\n- Returns aggregate digest across all threads\n- Response: { threads: [{thread_id, summary}], aggregate: {top_mentions[], key_points[], action_items[]} }\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nthread_id : str\n    Single thread ID for detailed summary, OR comma-separated IDs for aggregate digest.\ninclude_examples : bool\n    If true (single-thread mode only), include up to 3 sample messages.\nllm_mode : bool\n    If true and LLM is enabled, refine the summary with AI.\nllm_model : Optional[str]\n    Override model name for the LLM call.\nper_thread_limit : int\n    Max messages to consider per thread (multi-thread mode).\n\nExamples\n--------\nSingle thread:\n```json\n{\"thread_id\": \"TKT-123\", \"include_examples\": true}\n```\n\nMultiple threads:\n```json\n{\"thread_id\": \"TKT-1,TKT-2,TKT-3\"}\n```",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_examples": {
+            "default": false,
+            "type": "boolean"
+          },
+          "llm_mode": {
+            "default": true,
+            "type": "boolean"
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "per_thread_limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "thread_id"
+        ],
+        "type": "object"
+      },
+      "name": "summarize_thread",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Summarize all recent project messages within a time window.\n\nFetches messages from the last ``since_hours`` hours, groups them by\nthread, and produces a combined project-wide summary.  Results are\nstored in the ``message_summaries`` table for fast retrieval via\n``fetch_summary``.\n\nIdempotent: if a summary already exists for the same time window\n(within 5-minute tolerance) it is returned from cache.\n\nParameters\n----------\nproject_key : str\n    Project identifier (slug or human key).\nsince_hours : float\n    How far back to look (default 1 hour).\nllm_mode : bool\n    Use LLM to refine the summary (default True).\nllm_model : str, optional\n    Override LLM model name.\nmax_messages : int\n    Maximum messages to include (default 500, capped at 500).\nformat : str, optional\n    Output format (json or toon).",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "llm_mode": {
+            "default": true,
+            "type": "boolean"
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_messages": {
+            "default": 500,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "since_hours": {
+            "default": 1.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "summarize_recent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Retrieve stored project-wide summaries.\n\nParameters\n----------\nproject_key : str\n    Project identifier.\nsince_hours : float\n    Return summaries whose end_ts is within this window (default 24h).\nlimit : int\n    Maximum summaries to return (default 5).\nformat : str, optional\n    Output format.",
+      "inputSchema": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 5,
+            "type": "integer"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "since_hours": {
+            "default": 24.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "project_key"
+        ],
+        "type": "object"
+      },
+      "name": "fetch_summary",
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "inputSchema": {
+        "properties": {
+          "code_repo_path": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "code_repo_path"
+        ],
+        "type": "object"
+      },
+      "name": "install_precommit_guard",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "inputSchema": {
+        "properties": {
+          "code_repo_path": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "code_repo_path"
+        ],
+        "type": "object"
+      },
+      "name": "uninstall_precommit_guard",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Request advisory file reservations (leases) on project-relative paths/globs.\n\nSemantics\n---------\n- Conflicts are reported if an overlapping active exclusive reservation exists held by another agent\n- Glob matching is symmetric (`fnmatchcase(a,b)` or `fnmatchcase(b,a)`), including exact matches\n- When granted, a JSON artifact is written under `file_reservations/<sha1(path)>.json` and the DB is updated\n- TTL must be >= 60 seconds (enforced by the server settings/policy)\n- Server-side enforcement (if enabled) only checks reservations that target mail archive paths\n  such as `agents/`, `messages/`, or `attachments/`; code repo enforcement is via the pre-commit guard\n\nDo / Don't\n----------\nDo:\n- Reserve files before starting edits to signal intent to other agents.\n- Use specific, minimal patterns (e.g., `app/api/*.py`) instead of broad globs.\n- Set a realistic TTL and renew with `renew_file_reservations` if you need more time.\n\nDon't:\n- Reserve the entire repository or very broad patterns (e.g., `**/*`) unless absolutely necessary.\n- Hold long-lived exclusive reservations when you are not actively editing.\n- Ignore conflicts; resolve them by coordinating with holders or waiting for expiry.\n\nParameters\n----------\nproject_key : str\nagent_name : str\npaths : list[str]\n    File paths or glob patterns relative to the project workspace (e.g., \"app/api/*.py\").\nttl_seconds : int\n    Time to live for the file_reservation; expired file_reservations are auto-released.\nexclusive : bool\n    If true, exclusive intent; otherwise shared/observe-only.\nreason : str\n    Optional explanation (helps humans reviewing Git artifacts).\n\nReturns\n-------\ndict\n    { granted: [{id, path_pattern, exclusive, reason, expires_ts}], conflicts: [{path, holders: [...]}] }\n\nExample\n-------\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"12\",\"method\":\"tools/call\",\"params\":{\"name\":\"file_reservation_paths\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"GreenCastle\",\"paths\":[\"app/api/*.py\"],\n  \"ttl_seconds\":7200,\"exclusive\":true,\"reason\":\"migrations\"\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "exclusive": {
+            "default": true,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "paths"
+        ],
+        "type": "object"
+      },
+      "name": "file_reservation_paths",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Release active file reservations held by an agent.\n\nBehavior\n--------\n- If both `paths` and `file_reservation_ids` are omitted, all active reservations for the agent are released\n- Otherwise, restricts release to matching ids and/or path patterns\n- JSON artifacts stay in Git for audit; DB records get `released_ts`\n\nReturns\n-------\ndict\n    { released: int, released_at: iso8601 }\n\nIdempotency\n-----------\n- Safe to call repeatedly. Releasing an already-released (or non-existent) reservation is a no-op.\n\nExamples\n--------\nRelease all active reservations for agent:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"13\",\"method\":\"tools/call\",\"params\":{\"name\":\"release_file_reservations\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"GreenCastle\"\n}}}\n```\n\nRelease by ids:\n```json\n{\"jsonrpc\":\"2.0\",\"id\":\"14\",\"method\":\"tools/call\",\"params\":{\"name\":\"release_file_reservations\",\"arguments\":{\n  \"project_key\":\"/abs/path/backend\",\"agent_name\":\"GreenCastle\",\"file_reservation_ids\":[101,102]\n}}}\n```",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "release_file_reservations",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Force-release a stale file reservation held by another agent after inactivity heuristics.\n\nThe tool validates that the reservation appears abandoned (agent inactive beyond threshold and\nno recent mail/filesystem/git activity). When released, an optional notification is sent to the\nprevious holder summarizing the heuristics.",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "file_reservation_id": {
+            "type": "integer"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "note": {
+            "default": "",
+            "type": "string"
+          },
+          "notify_previous": {
+            "default": true,
+            "type": "boolean"
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name",
+          "file_reservation_id"
+        ],
+        "type": "object"
+      },
+      "name": "force_release_file_reservation",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "_meta": {
+        "_fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Extend expiry for active file reservations held by an agent without reissuing them.\n\nParameters\n----------\nproject_key : str\n    Project slug or human key.\nagent_name : str\n    Agent identity who owns the reservations.\nextend_seconds : int\n    Seconds to extend from the later of now or current expiry (min 60s).\npaths : Optional[list[str]]\n    Restrict renewals to matching path patterns.\nfile_reservation_ids : Optional[list[int]]\n    Restrict renewals to matching reservation ids.\n\nReturns\n-------\ndict\n    { renewed: int, file_reservations: [{id, path_pattern, old_expires_ts, new_expires_ts}] }",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "extend_seconds": {
+            "default": 1800,
+            "type": "integer"
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_key",
+          "agent_name"
+        ],
+        "type": "object"
+      },
+      "name": "renew_file_reservations",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      }
+    }
+  ]
+}
