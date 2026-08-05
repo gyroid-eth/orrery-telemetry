@@ -139,6 +139,10 @@
     return Math.round(sec / 3600) + '時間前';
   }
 
+  function delivCount(name) {
+    return (DELIVERABLES[name] || []).length;
+  }
+
   function lastSpokeAt(name, t) {
     var last = null;
     for (var i = 0; i < SCRIPT.length; i++) {
@@ -164,7 +168,7 @@
       last_active: epoch() - Math.round(since),
       last_active_rel: relOf(since),
       created: epoch() - Math.round(t - a.born) - 600,
-      task: a.task, instruction: null, deliv: 0,
+      task: a.task, instruction: null, deliv: delivCount(a.name),
     };
   }
 
@@ -176,7 +180,7 @@
       work_disp: null, last_disp: relOf(p.ago),
       last_active: epoch() - p.ago, last_active_rel: relOf(p.ago),
       created: epoch() - p.ago - 3600, task: p.task, instruction: null,
-      deliv: 0,
+      deliv: delivCount(p.name),
     };
   }
 
@@ -200,7 +204,8 @@
     return {
       name: a.name, model: a.model, program: a.program, provider: a.provider,
       task: a.task, retired: false, last_active: epoch() - Math.round(since),
-      act: actState(a, t) === 'work' ? 1 : 0, rel: relOf(since), deliv: 0,
+      act: actState(a, t) === 'work' ? 1 : 0, rel: relOf(since),
+      deliv: delivCount(a.name),
       annot: annotOf(a), present: live, running: live,
       state: live ? 'run' : 'finished', act_state: actState(a, t),
       ctx_used: ctxOf(a, t), ctx_window: '', attached: live,
@@ -213,7 +218,8 @@
     return {
       name: p.name, model: p.model, program: p.program, provider: p.provider,
       task: p.task, retired: true, last_active: epoch() - p.ago, act: 0,
-      rel: relOf(p.ago), deliv: 0, annot: null, present: false,
+      rel: relOf(p.ago), deliv: delivCount(p.name), annot: null,
+      present: false,
       running: false, state: 'gone', act_state: '', ctx_used: null,
       ctx_window: '', attached: false, work_disp: null, work_secs: 0,
       last_disp: relOf(p.ago), live: '', pane_model: p.model, sig: '',
@@ -319,12 +325,222 @@
     return { ok: true, a: a, b: b, count: out.length, messages: out };
   }
 
+  /* ── the transcripts ─────────────────────────────────────────────────
+     Opening a pane is how anyone finds out what an agent is actually
+     doing, so an empty one reads as "there is nothing to see in this
+     product". These are the same six jobs the mail script describes, told
+     from the inside. `at` is seconds into the loop; lines past the current
+     moment have not been said yet, so a pane opened late shows more than
+     one opened early — which is the behaviour of the real thing.
+
+     tool_use text is "name  args", two spaces, the way the page splits it. */
+  var TRANSCRIPTS = {
+    AmberKepler: [
+      [0, 'user', 'text',
+       'Move the store onto the v2 schema. Nothing ships until the mapping ' +
+       'is covered by tests.'],
+      [4, 'assistant', 'thinking',
+       'Three pieces: the mapping, the tests over it, and the note operators ' +
+       'read. Only the tests depend on the mapping, so the note can start ' +
+       'whenever someone is free.'],
+      [6, 'assistant', 'text',
+       'Plan: one child reads the old schema and writes the mapping, a ' +
+       'second covers it with tests, a third drafts the upgrade note. I hold ' +
+       'the release until the second one is green.'],
+      [13, 'assistant', 'tool_use', 'Bash  agentstack spawn --role schema'],
+      [14, 'assistant', 'tool_result', 'started SlateHooke (gpt-5.6)'],
+      [16, 'assistant', 'tool_use',
+       'SendMessage  to=SlateHooke "map the old schema field by field"'],
+      [36, 'assistant', 'tool_result',
+       'SlateHooke: three fields have no counterpart — listing them'],
+      [38, 'assistant', 'thinking',
+       'Three unmapped fields is the whole risk. Get them asserted before ' +
+       'anything is written.'],
+      [40, 'assistant', 'tool_use', 'Bash  agentstack spawn --role tests'],
+      [41, 'assistant', 'tool_result', 'started IvoryNoether (gpt-5.6)'],
+      [95, 'assistant', 'tool_use', 'Bash  agentstack spawn --role docs'],
+      [96, 'assistant', 'tool_result', 'started RustPasteur (claude-sonnet-5)'],
+      [131, 'assistant', 'text',
+       'Release is held on the other rail until the mapping lands. That is ' +
+       'the right order — nothing to unwind here.'],
+      [147, 'assistant', 'text',
+       'Tests green, including the field with two writers. That was the one ' +
+       'I was worried about.'],
+      [205, 'assistant', 'text',
+       'Mapping covered, note drafted, gate released. Handing back.'],
+    ],
+    SlateHooke: [
+      [15, 'user', 'text', 'Map the old schema field by field.'],
+      [19, 'assistant', 'tool_use', 'Read  store/schema_v1.py'],
+      [20, 'assistant', 'tool_result', '412 lines, 38 fields'],
+      [22, 'assistant', 'tool_use', 'Read  store/schema_v2.py'],
+      [23, 'assistant', 'tool_result', '297 lines, 31 fields'],
+      [26, 'assistant', 'thinking',
+       'Fewer fields on the far side, so some collapse and some are gone. ' +
+       'The gone ones are the only ones worth a message.'],
+      [30, 'assistant', 'tool_use', 'Write  docs/mapping.md'],
+      [31, 'assistant', 'tool_result', 'wrote 38 rows'],
+      [34, 'assistant', 'text',
+       'Three fields have no counterpart: legacy_ref, shard_hint, and ' +
+       'retry_budget. The first two are dead. retry_budget is still written ' +
+       'in two places, which is the one that will bite.'],
+      [90, 'assistant', 'text',
+       'Answered the tests child: assert retry_budget first, it has two ' +
+       'writers.'],
+      [219, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
+      [220, 'assistant', 'tool_result', '24 passed'],
+      [222, 'assistant', 'text',
+       'Mapping complete, nothing unresolved. Report sent.'],
+    ],
+    IvoryNoether: [
+      [40, 'user', 'text', 'Cover the mapping before anything is moved.'],
+      [44, 'assistant', 'tool_use', 'Read  docs/mapping.md'],
+      [45, 'assistant', 'tool_result', '38 rows, 3 marked unmapped'],
+      [48, 'assistant', 'thinking',
+       'A test per row is cheap and proves nothing interesting. The three ' +
+       'unmapped rows are where the behaviour is undecided.'],
+      [76, 'assistant', 'text',
+       'Asking the schema child which of the three to assert first rather ' +
+       'than guessing the intent.'],
+      [92, 'assistant', 'tool_use', 'Write  tests/mapping/test_retry_budget.py'],
+      [93, 'assistant', 'tool_result', 'wrote 3 cases'],
+      [112, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
+      [113, 'assistant', 'tool_result', '1 failed, 23 passed'],
+      [116, 'assistant', 'thinking',
+       'The failure is the second writer overwriting a value the first one ' +
+       'set. That is the bug the mapping was hiding, not a bad test.'],
+      [128, 'assistant', 'tool_use', 'Edit  store/migrate.py'],
+      [129, 'assistant', 'tool_result', 'applied'],
+      [143, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
+      [144, 'assistant', 'tool_result', '24 passed'],
+      [146, 'assistant', 'text',
+       'Green, including the two-writer case. Reporting back.'],
+      [181, 'assistant', 'text', 'Done. Handing back.'],
+    ],
+    RustPasteur: [
+      [95, 'user', 'text', 'Write the upgrade note the way an operator reads it.'],
+      [99, 'assistant', 'thinking',
+       'An operator wants to know what breaks and what to do about it, in ' +
+       'that order. The schema detail belongs underneath, not on top.'],
+      [104, 'assistant', 'tool_use', 'Read  docs/mapping.md'],
+      [105, 'assistant', 'tool_result', '38 rows'],
+      [122, 'assistant', 'tool_use', 'Write  docs/upgrade-v2.md'],
+      [123, 'assistant', 'tool_result', 'wrote 96 lines'],
+      [140, 'assistant', 'text',
+       'Draft is up. One thing I cannot decide alone: whether the defaults ' +
+       'for the dropped fields should be documented or removed outright.'],
+      [168, 'assistant', 'text', 'Question sent up with the draft.'],
+    ],
+    MossSomerville: [
+      [0, 'user', 'text',
+       'Hold the release rail. Nothing goes out while the schema work is ' +
+       'open.'],
+      [3, 'assistant', 'text',
+       'Understood. I will run the checks so we know where we stand, but the ' +
+       'gate stays shut.'],
+      [58, 'assistant', 'tool_use', 'Bash  agentstack spawn --role release'],
+      [59, 'assistant', 'tool_result', 'started FlintGauss (gpt-5.6)'],
+      [120, 'assistant', 'thinking',
+       'A failing check during a migration is usually the migration. Worth ' +
+       'confirming before it is called a flake and retried away.'],
+      [126, 'assistant', 'text',
+       'The failing check is the gate itself, not a flaky test. Telling the ' +
+       'other rail we are holding.'],
+      [204, 'assistant', 'text',
+       'Mapping is covered upstream. Opening the gate.'],
+    ],
+    FlintGauss: [
+      [60, 'user', 'text', 'Run the release checks on the current branch.'],
+      [64, 'assistant', 'tool_use', 'Bash  ./scripts/release-check.sh'],
+      [92, 'assistant', 'tool_result',
+       '7 checks · 6 ok · 1 failed (schema-compat)'],
+      [96, 'assistant', 'tool_use', 'Bash  ./scripts/release-check.sh --only schema-compat -v'],
+      [110, 'assistant', 'tool_result',
+       'schema-compat: v1 payload rejected by v2 reader'],
+      [114, 'assistant', 'thinking',
+       'It fails the same way twice, so it is not timing. This is the check ' +
+       'doing its job.'],
+      [118, 'assistant', 'text',
+       'One check fails and it reproduces. It is the gate, not a flake — ' +
+       'a v1 payload is rejected by the v2 reader.'],
+    ],
+    CedarLovelace: [
+      [0, 'user', 'text', 'Survey the call sites before we plan anything.'],
+      [0, 'assistant', 'tool_use', 'Grep  schema_v1\\.'],
+      [0, 'assistant', 'tool_result', '61 matches in 19 files'],
+      [0, 'assistant', 'text',
+       '19 files touch the old schema; 4 of them write. Listed in the report.'],
+    ],
+    OchreFranklin: [
+      [0, 'user', 'text', 'Draft the rollback plan.'],
+      [0, 'assistant', 'text',
+       'Rollback is a read-side switch, not a data restore — the v2 writer ' +
+       'keeps the v1 columns populated for one release. Written up.'],
+    ],
+    UmberBohr: [
+      [0, 'user', 'text', 'Reproduce the reported failure.'],
+      [0, 'assistant', 'tool_use', 'Bash  python -m pytest tests/store -k retry'],
+      [0, 'assistant', 'tool_result', '1 failed'],
+      [0, 'assistant', 'text', 'Reproduces every run. Not a flake.'],
+    ],
+  };
+
+  function castOf(name) {
+    for (var i = 0; i < CAST.length; i++)
+      if (CAST[i].name === name) return CAST[i];
+    for (var j = 0; j < PAST.length; j++)
+      if (PAST[j].name === name) return PAST[j];
+    return null;
+  }
+
+  function historyPayload(query) {
+    var name = query.get('session') || '';
+    var rows = TRANSCRIPTS[name], who = castOf(name);
+    if (!rows || !who) {
+      return { ok: false,
+               error: 'no transcript on disk for this agent' };
+    }
+    var t = phase(), gone = who.retired === true, events = [];
+    rows.forEach(function (r) {
+      if (!gone && r[0] > t) return;
+      var ts = gone ? epoch() - who.ago : epoch() - Math.round(t - r[0]);
+      events.push({ role: r[1], kind: r[2], text: r[3],
+                    ts: new Date(ts * 1000).toISOString() });
+    });
+    var codex = who.program === 'codex';
+    return { ok: true, session: name,
+             file: (codex ? 'rollout-' : '') + name.toLowerCase() + '.jsonl',
+             source: codex ? 'codex' : 'claude',
+             total: events.length, shown: events.length, events: events };
+  }
+
+  /* What an agent left behind. The real server links these into a vault;
+     there is none here, so they render as plain rows rather than links
+     that would open nothing. */
+  var DELIVERABLES = {
+    SlateHooke: [['Field-by-field mapping, v1 to v2', 'docs/mapping.md', 1500]],
+    IvoryNoether: [['Mapping test suite', 'tests/mapping/', 900],
+                   ['Note on the two-writer failure', 'docs/two-writers.md', 600]],
+    RustPasteur: [['Operator upgrade note', 'docs/upgrade-v2.md', 300]],
+    FlintGauss: [['Release check run', 'reports/release-check.txt', 400]],
+    CedarLovelace: [['Call-site survey', 'docs/call-sites.md', 5400]],
+    OchreFranklin: [['Rollback plan', 'docs/rollback.md', 9200]],
+  };
+
+  function deliverables(query) {
+    var ag = query.get('agent') || '', rows = DELIVERABLES[ag] || [];
+    return { ok: true, agent: ag, vault: '',
+             items: rows.map(function (r) {
+               return { title: r[0], rel: r[1],
+                        mtime: epoch() - r[2], vault: '' };
+             }) };
+  }
+
   var ROUTES = {
     '/api/agents': agentsPayload,
     '/api/graph': graphPayload,
-    '/api/deliverables': function () {
-      return { ok: true, agent: '', items: [] };
-    },
+    '/api/history': historyPayload,
+    '/api/deliverables': deliverables,
     '/api/mail-watcher-health': function () {
       return { ok: true, ts: epoch(), last_success_ts: epoch() - 3,
                last_success_age_s: 3, recent_results: {}, signal_count: 0,
@@ -380,5 +596,7 @@
                              portraitURL: portraitURL, phase: phase,
                              payloads: { agents: agentsPayload,
                                          graph: graphPayload,
+                                         history: historyPayload,
+                                         deliverables: deliverables,
                                          messagesSince: messagesSince } };
 })();

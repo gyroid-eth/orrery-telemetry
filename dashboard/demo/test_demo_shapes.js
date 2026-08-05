@@ -31,6 +31,12 @@ const REAL_NODE_KEYS = [
 const REAL_EDGE_KEYS = ['count', 'kind', 'last_ts', 'source', 'target'];
 const REAL_SPAWN_KEYS = ['source', 'target', 'type'];
 const REAL_GRAPH_KEYS = ['edges', 'nodes', 'shown', 'spawn', 'total', 'ts'];
+const REAL_HISTORY_KEYS = [
+  'ok', 'session', 'file', 'source', 'total', 'shown', 'events',
+];
+const REAL_EVENT_KEYS = ['role', 'kind', 'text', 'ts'];
+const REAL_DELIV_KEYS = ['ok', 'agent', 'vault', 'items'];
+const REAL_DELIV_ITEM_KEYS = ['title', 'rel', 'vault', 'mtime'];
 
 let failures = 0;
 function check(name, fn) {
@@ -160,6 +166,68 @@ check('messages-since never returns the future, and honours the cursor', () => {
     if (fresh.length) throw new Error('returned mail at or before the cursor');
     const later = P.messagesSince(newest - 60).messages;
     if (!later.length) throw new Error('cursor 60s back returned nothing');
+  });
+});
+
+/* The pane is where a visitor finds out what an agent does. An empty one
+   renders as "comm failed" or a blank column — the page survives, and the
+   product looks like it has no transcript feature at all. */
+check('every agent on screen has a transcript, shaped like the server’s', () => {
+  const q = (n) => new URLSearchParams('session=' + encodeURIComponent(n));
+  P.graph().nodes.forEach((n) => {
+    const h = P.history(q(n.name));
+    if (!h.ok) throw new Error(n.name + ': ' + h.error);
+    sameKeys(h, REAL_HISTORY_KEYS, 'history ' + n.name);
+    if (!h.events.length) throw new Error(n.name + ' has an empty transcript');
+    h.events.forEach((e) => {
+      sameKeys(e, REAL_EVENT_KEYS, 'event in ' + n.name);
+      if (Number.isNaN(Date.parse(e.ts)))
+        throw new Error(n.name + ': unparseable ts ' + e.ts);
+      if (!['text', 'thinking', 'tool_use', 'tool_result'].includes(e.kind))
+        throw new Error(n.name + ': unknown kind ' + e.kind);
+    });
+    if (h.shown !== h.events.length || h.total < h.shown)
+      throw new Error(n.name + ': counts disagree with the events');
+  });
+});
+
+/* Checking only the current moment would pass for most of the loop and fail
+   for whoever opens it during the two seconds after an agent spawns. Sweep. */
+check('no moment in the loop shows a present agent with nothing said', () => {
+  for (let t = 0; t < DEMO.loop; t += 1) {
+    atSecond(t, () => {
+      P.graph().nodes.forEach((n) => {
+        const h = P.history(
+          new URLSearchParams('session=' + encodeURIComponent(n.name)));
+        if (!h.ok || !h.events.length)
+          throw new Error(`t=${t} ${n.name}: empty pane`);
+      });
+    });
+  }
+});
+
+check('an unknown agent gets the server’s refusal, not a blank transcript', () => {
+  const h = P.history(new URLSearchParams('session=NobodyHere'));
+  if (h.ok) throw new Error('invented a transcript for an agent that is gone');
+  if (!h.error) throw new Error('refused without saying why');
+});
+
+check('the transcript grows as the story does', () => {
+  const q = new URLSearchParams('session=AmberKepler');
+  const early = atSecond(20, () => P.history(q).events.length);
+  const late = atSecond(210, () => P.history(q).events.length);
+  if (late <= early) throw new Error(`frozen at ${early} → ${late}`);
+});
+
+check('deliverables match the server’s shape and the badge count', () => {
+  P.graph().nodes.forEach((n) => {
+    const d = P.deliverables(
+      new URLSearchParams('agent=' + encodeURIComponent(n.name)));
+    sameKeys(d, REAL_DELIV_KEYS, 'deliverables ' + n.name);
+    d.items.forEach((it) => sameKeys(it, REAL_DELIV_ITEM_KEYS, 'item'));
+    if (d.items.length !== n.deliv)
+      throw new Error(`${n.name}: badge says ${n.deliv}, list has ` +
+        d.items.length);
   });
 });
 
