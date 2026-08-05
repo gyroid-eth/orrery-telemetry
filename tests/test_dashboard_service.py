@@ -27,6 +27,35 @@ RUNNER = ROOT / "dashboard" / "service_runner.py"
 PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
 
 
+class _DashboardVersionHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        if self.path != "/api/version":
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps(self.server.version_payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _start_dashboard_version_server():
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), _DashboardVersionHandler
+    )
+    server.version_payload = {
+        "name": "claude-agent-stack", "version": "test", "api": 1,
+    }
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
 def _wait_for(path: pathlib.Path, needle: str, timeout: float = 10.0) -> str:
     deadline = time.monotonic() + timeout
     text = ""
@@ -468,6 +497,7 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
     database = tmp_path / "storage.sqlite3"
     project = tmp_path / "project"
     fake_bin = tmp_path / "fake-bin"
+    version_server, version_thread = _start_dashboard_version_server()
     for directory in (
         install_dir / "dashboard",
         install_dir / "hooks",
@@ -490,6 +520,7 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
         f"export AGENTSTACK_MAIL_DB={database}\n"
         f"export AGENTSTACK_RUNTIME_DIR={runtime}\n"
         f"export AGENTSTACK_DASHBOARD_LOG={runtime / 'dashboard.log'}\n"
+        f"export AGENTSTACK_PORT={version_server.server_port}\n"
         f"export AGENTSTACK_PROJECT_KEY={project}\n",
         encoding="utf-8",
     )
@@ -520,40 +551,92 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
         "PATH": f"{fake_bin}:{env['PATH']}",
     })
 
-    result = subprocess.run(
-        [
-            "bash",
-            str(ROOT / "scripts" / "doctor.sh"),
-            "--install-dir",
-            str(install_dir),
-        ],
-        env=env,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "doctor.sh"),
+                "--install-dir",
+                str(install_dir),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
 
-    assert result.returncode == 1
-    assert "launchd job is loaded but not running" in result.stdout
-    assert "ok: dashboard service mode launchd" not in result.stdout
+        assert result.returncode == 1
+        assert "dashboard endpoint serving" in result.stdout
+        assert "launchd job is loaded but not running" in result.stdout
+        assert "actual mode is unmanaged-background" in result.stdout
+        assert "ok: dashboard service mode launchd" not in result.stdout
 
-    (fake_bin / "launchctl").write_text(
-        "#!/bin/sh\nprintf '%s\\n' '{' '    state = running' '    pid = 4321' '}'\n",
-        encoding="utf-8",
-    )
-    running = subprocess.run(
-        [
-            "bash",
-            str(ROOT / "scripts" / "doctor.sh"),
-            "--install-dir",
-            str(install_dir),
-        ],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert "dashboard service mode launchd" in running.stdout
-    assert "running" in running.stdout
+        (fake_bin / "launchctl").write_text(
+            "#!/bin/sh\nexit 1\n",
+            encoding="utf-8",
+        )
+        unmanaged = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "doctor.sh"),
+                "--install-dir",
+                str(install_dir),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert unmanaged.returncode == 1  # manager drift remains actionable
+        assert "dashboard endpoint serving" in unmanaged.stdout
+        assert "is not loaded" in unmanaged.stdout
+        assert "actual mode is unmanaged-background" in unmanaged.stdout
+        assert "dashboard endpoint is not serving" not in unmanaged.stdout
+
+        (fake_bin / "launchctl").write_text(
+            "#!/bin/sh\nprintf '%s\\n' '{' '    state = running' '    pid = 4321' '}'\n",
+            encoding="utf-8",
+        )
+        version_server.version_payload = {
+            "name": "some-other-service", "version": "test", "api": 1,
+        }
+        wrong_endpoint = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "doctor.sh"),
+                "--install-dir",
+                str(install_dir),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert wrong_endpoint.returncode == 1
+        assert "dashboard endpoint is not serving" in wrong_endpoint.stdout
+        assert (
+            "service manager is running but the dashboard endpoint is unavailable"
+            in wrong_endpoint.stdout
+        )
+
+        version_server.version_payload = {
+            "name": "claude-agent-stack", "version": "test", "api": 1,
+        }
+        running = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "doctor.sh"),
+                "--install-dir",
+                str(install_dir),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert "dashboard endpoint serving" in running.stdout
+        assert "dashboard service mode launchd" in running.stdout
+        assert "running" in running.stdout
+    finally:
+        version_server.shutdown()
+        version_thread.join()
 
 
 def test_installer_rejects_explicit_python_39_before_writing(tmp_path):

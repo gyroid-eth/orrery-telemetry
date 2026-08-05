@@ -387,6 +387,24 @@ def dashboard_sees(url: str, pair: list[str], report: Reporter) -> None:
         graph = dashboard(url, "/api/graph?all=1")
     except (OSError, ValueError) as exc:
         raise Fail(f"the dashboard API at {url} did not answer: {exc}")
+    if not isinstance(graph, dict):
+        raise Fail(f"the dashboard graph returned an invalid response: {graph!r}")
+    if graph.get("error"):
+        raise Fail(f"the dashboard graph failed: {graph['error']}")
+    diagnostics = graph.get("timestamp_diagnostics") or {}
+    try:
+        invalid_timestamps = int(diagnostics.get("invalid_count") or 0)
+    except (AttributeError, TypeError, ValueError):
+        raise Fail(
+            "the dashboard graph returned invalid timestamp diagnostics: "
+            f"{diagnostics!r}"
+        )
+    if invalid_timestamps or graph.get("degraded"):
+        fields = diagnostics.get("fields") if isinstance(diagnostics, dict) else {}
+        raise Fail(
+            "the dashboard graph degraded while normalizing timestamps: "
+            f"invalid_count={invalid_timestamps}, fields={fields or {}}"
+        )
     known = {node.get("name") for node in (graph.get("nodes") or [])}
     missing = [name for name in pair if name not in known]
     if missing:

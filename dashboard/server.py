@@ -863,8 +863,7 @@ _GRAPH_CACHE: dict = {"ts": 0, "data": None}
 def _raw_graph() -> dict:
     """graph_data.build_graph() を遅延 import + 8 秒キャッシュ。
 
-    build_graph はエージェント数ぶんクエリを撃つため、ポーリングで
-    毎回叩かないようにキャッシュする。"""
+    build_graph の集計をポーリングのたびに繰り返さないようにする。"""
     now = time.time()
     if _GRAPH_CACHE["data"] is not None and now - _GRAPH_CACHE["ts"] < 8:
         return _GRAPH_CACHE["data"]
@@ -1194,13 +1193,21 @@ def _write_annotation(name: str, role: str, emoji: str,
 def graph_payload(days: float, show_all: bool) -> dict:
     """recency で間引いた {nodes, edges, spawn} + tmux ライブ状態。
 
-    graph_data の epoch は strptime().timestamp()（ローカル時刻解釈）で
-    server.py の UTC 換算と桁がズレるが、フィルタは全ノードの
-    max(last_active) からの相対距離で行うので tz ズレは相殺される。"""
+    graph_data normalizes both Rust INTEGER microseconds and legacy ISO TEXT
+    to UTC epoch seconds before this recency filter runs."""
     g = _raw_graph()
+    graph_health = {
+        "timestamp_diagnostics": g.get(
+            "timestamp_diagnostics", {"invalid_count": 0, "fields": {}}
+        ),
+        "degraded": bool(g.get("degraded")),
+    }
     nodes = g.get("nodes", [])
     if not nodes:
-        return {"nodes": [], "edges": [], "spawn": [], "total": 0}
+        return {
+            "nodes": [], "edges": [], "spawn": [], "total": 0,
+            **graph_health,
+        }
 
     mx = max((n["last_active"] for n in nodes if n["last_active"]), default=0)
     win = days * 86400
@@ -1314,6 +1321,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
         "spawn": fs,
         "total": len(nodes),
         "shown": len(fn),
+        **graph_health,
     }
 
 
@@ -4321,11 +4329,22 @@ class Handler(BaseHTTPRequestHandler):
                 payload = graph_payload(days, show_all)
             except Exception as e:  # noqa: BLE001
                 payload = {"nodes": [], "edges": [], "spawn": [],
-                           "error": f"{type(e).__name__}: {e}"}
+                           "error": f"{type(e).__name__}: {e}",
+                           "timestamp_diagnostics": {
+                               "invalid_count": 0, "fields": {},
+                           },
+                           "degraded": True}
             if spawn_only:
                 payload = {"nodes": [], "edges": [],
                            "spawn": payload.get("spawn", []),
-                           "spawn_only": True}
+                           "spawn_only": True,
+                           **({"error": payload["error"]}
+                              if payload.get("error") else {}),
+                           "timestamp_diagnostics": payload.get(
+                               "timestamp_diagnostics",
+                               {"invalid_count": 0, "fields": {}},
+                           ),
+                           "degraded": bool(payload.get("degraded"))}
             payload["ts"] = int(time.time())
             self._send(
                 200,
@@ -4736,34 +4755,8 @@ def _log_js_error(body: dict) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def _analyze_mail_db() -> None:
-    """Let SQLite build table statistics for the agent-mail DB (once, at start).
-
-    Without `sqlite_stat1` the planner picks a bad join order for the edge
-    aggregation and `build_graph()` takes ~1.9s on a mailbox of only a few
-    thousand messages; after ANALYZE the same call is ~0.05s (measured, 38x).
-    The 8s cache on /api/graph hides this during steady polling, so the
-    symptom is "only the first open after a restart is slow" — which is
-    exactly how it gets misfiled as a UI problem.  Statistics go stale as
-    rows accumulate, so refresh them on every start.  ANALYZE only writes
-    sqlite_stat1; it never touches the data.
-    """
-    if not os.path.exists(DB_PATH):
-        return
-    try:
-        con = sqlite3.connect(DB_PATH, timeout=10)
-        try:
-            con.execute("ANALYZE")
-            con.commit()
-        finally:
-            con.close()
-    except Exception as e:  # noqa: BLE001
-        print(f"agent-dashboard: ANALYZE skipped ({type(e).__name__}: {e})")
-
-
 def main():
     _start_supervisor_watchdog()
-    threading.Thread(target=_analyze_mail_db, daemon=True).start()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     subprocess.run(

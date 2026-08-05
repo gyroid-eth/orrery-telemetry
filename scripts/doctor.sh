@@ -184,9 +184,46 @@ else
   status=1
 fi
 
+dashboard_endpoint_serving() {
+  local python_bin="$1"
+  local port="$2"
+  "$python_bin" - "$port" <<'PY' >/dev/null 2>&1
+import json
+import sys
+import urllib.request
+
+try:
+    port = int(sys.argv[1])
+    if not 1 <= port <= 65535:
+        raise ValueError("port out of range")
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{port}/api/version", timeout=1
+    ) as response:
+        payload = json.load(response)
+    healthy = (
+        response.status == 200
+        and isinstance(payload, dict)
+        and payload.get("name") == "claude-agent-stack"
+        and payload.get("api") == 1
+    )
+except (OSError, ValueError, TypeError):
+    healthy = False
+raise SystemExit(0 if healthy else 1)
+PY
+}
+
 report_dashboard_service() {
   local python_bin="${AGENTSTACK_PYTHON:-python3}"
+  local port="${AGENTSTACK_PORT:-8770}"
   local record kind identity service_path pid launchd_record
+  local endpoint_serving=0 manager_running=0
+  if dashboard_endpoint_serving "$python_bin" "$port"; then
+    endpoint_serving=1
+    echo "ok: dashboard endpoint serving (http://127.0.0.1:$port/api/version)"
+  else
+    echo "warn: dashboard endpoint is not serving a claude-agent-stack API at http://127.0.0.1:$port/api/version"
+    status=1
+  fi
   record="$("$python_bin" - "$MANIFEST" <<'PY' 2>/dev/null || true
 import json
 import pathlib
@@ -215,6 +252,7 @@ PY
         if printf '%s\n' "$launchd_record" | grep -Eq \
           '^[[:space:]]*(state[[:space:]]*=[[:space:]]*running|pid[[:space:]]*=[[:space:]]*[1-9][0-9]*)[[:space:]]*$'
         then
+          manager_running=1
           echo "ok: dashboard service mode launchd (gui/$(id -u)/$identity, running)"
         else
           echo "warn: dashboard service mode launchd, but its launchd job is loaded but not running: gui/$(id -u)/$identity"
@@ -229,6 +267,7 @@ PY
       if command -v systemctl >/dev/null 2>&1 && \
          systemctl --user is-active --quiet "$identity" >/dev/null 2>&1
       then
+        manager_running=1
         echo "ok: dashboard service mode systemd-user ($identity)"
       else
         echo "warn: dashboard service mode systemd-user, but $identity is not active"
@@ -238,6 +277,7 @@ PY
     nohup)
       pid="$(sed -n '1p' "$service_path" 2>/dev/null || true)"
       if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        manager_running=1
         echo "ok: dashboard service mode supervised-background (pid $pid)"
       else
         echo "warn: dashboard service mode supervised-background, but its pidfile is stale or missing: $service_path"
@@ -248,6 +288,11 @@ PY
       echo "warn: dashboard service mode manual; no active service manager is recorded"
       ;;
   esac
+  if [[ "$endpoint_serving" == 1 && "$manager_running" != 1 ]]; then
+    echo "warn: dashboard is serving but is not managed by the recorded service; actual mode is unmanaged-background"
+  elif [[ "$endpoint_serving" != 1 && "$manager_running" == 1 ]]; then
+    echo "warn: dashboard service manager is running but the dashboard endpoint is unavailable"
+  fi
 }
 
 if [[ -f "$MANIFEST" ]]; then

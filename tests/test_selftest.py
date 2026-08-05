@@ -8,6 +8,8 @@ import pathlib
 import socket
 import sys
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location(
@@ -161,3 +163,48 @@ def test_dashboard_on_different_database_makes_selftest_fail(
     assert all(name in stderr for name in pair)
     assert "different database" in stderr
     assert "self-test failed" in stderr
+
+
+def test_dashboard_graph_error_precedes_database_mismatch(monkeypatch):
+    pair = ["ProbeSender", "ProbeRecipient"]
+    monkeypatch.setattr(
+        SELFTEST,
+        "dashboard",
+        lambda _url, _path: {
+            "nodes": [],
+            "edges": [],
+            "error": "TypeError: strptime expected str",
+        },
+    )
+
+    with pytest.raises(SELFTEST.Fail) as raised:
+        SELFTEST.dashboard_sees("http://dashboard.invalid", pair, SELFTEST.Reporter())
+
+    message = str(raised.value)
+    assert "TypeError: strptime expected str" in message
+    assert "different database" not in message
+
+
+def test_dashboard_timestamp_diagnostics_precede_database_mismatch(monkeypatch):
+    pair = ["ProbeSender", "ProbeRecipient"]
+    monkeypatch.setattr(
+        SELFTEST,
+        "dashboard",
+        lambda _url, _path: {
+            "nodes": [],
+            "edges": [],
+            "timestamp_diagnostics": {
+                "invalid_count": 2,
+                "fields": {"messages.created_ts": 2},
+            },
+            "degraded": True,
+        },
+    )
+
+    with pytest.raises(SELFTEST.Fail) as raised:
+        SELFTEST.dashboard_sees("http://dashboard.invalid", pair, SELFTEST.Reporter())
+
+    message = str(raised.value)
+    assert "invalid_count=2" in message
+    assert "messages.created_ts" in message
+    assert "different database" not in message

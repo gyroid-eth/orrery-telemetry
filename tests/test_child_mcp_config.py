@@ -263,8 +263,15 @@ def test_launcher_passes_the_config_to_claude_only_when_present():
     assert 'CHILD_MCP_CONFIG="$(write_child_mcp_config' in text
     assert '-e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG"' in text
     # Empty config must not turn into a bare `--mcp-config` with no value.
-    assert 'MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG")' in text
+    assert (
+        'MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config)'
+        in text
+    )
     assert '[[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]]' in text
+    # --strict-mcp-config keeps the child on its own proxy. Without it the child
+    # also inherits the user's top-level mcpServers, ends up talking to a second
+    # copy of agent-mail, and carries a standing authentication notice.
+    assert text.count("--strict-mcp-config") == 2
 
 
 def _extract_install_fn(func: str) -> str:

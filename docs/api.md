@@ -35,7 +35,7 @@ response body は、画像と HTML を除き JSON です。dashboard 自体に l
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | なし | `{ts, agents}` |
-| GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, ts}` |
+| GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` または `names`, `hours`, `include_pane_states` | agent event timeline |
 | GET | `/api/edge-messages` | `a`, `b`, `limit` | 二者間 messages |
@@ -222,11 +222,15 @@ response:
   "nodes":[{"id":"WindyFermi","name":"WindyFermi"}],
   "edges":[{"source":"Parent","target":"WindyFermi","count":3}],
   "spawn":[{"parent":"Parent","child":"WindyFermi"}],
+  "timestamp_diagnostics":{"invalid_count":0,"fields":{}},
+  "degraded":false,
   "ts":1785480000
 }
 ```
 
-data source が読めない場合も HTTP 200 で空の `nodes / edges / spawn` と `error` を返し、DECK 全体を巻き込まないようにします。
+agent-mail の timestamp は、legacy の ISO 8601 text と Rust 実装の integer microseconds のどちらも epoch seconds に正規化してから比較します。NULL と空文字以外の解釈不能値がある場合は `timestamp_diagnostics.invalid_count` と該当する `fields` を返し、`degraded` を `true` にします。解釈不能値を epoch 0 として扱うことはありません。
+
+data source が読めない場合も HTTP 200 で空の `nodes / edges / spawn` と `error`、`degraded: true` を返し、DECK 全体を巻き込まないようにします。
 
 ## GET `/api/history`
 
