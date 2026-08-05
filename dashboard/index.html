@@ -3491,7 +3491,7 @@ function bay(a,i){
       <div class="idcol">
         <div class="idrow">
           ${a.provider==='anthropic'||a.provider==='openai'
-            ?`<img class="prov-logo prov-${a.provider} ${led}" src="/assets/${a.provider}.svg?v=${_ASSET_V}" alt="${a.provider}" title="${a.provider}">`
+            ?`<img class="prov-logo prov-${a.provider} ${led}" src="${assetURL(a.provider)}" alt="${a.provider}" title="${a.provider}">`
             :`<span class="led ${led}"></span>`}
           <span class="nm">${esc(a.name)}</span>
         </div>
@@ -3776,6 +3776,14 @@ const _PROVIDER_ASPECT = {
 // asset の更新が SVG <image> 要素のキャッシュに引っかかるため、ページごとに
 // 一意な version 文字列を付けて確実に最新を取得する（page load ごとに 1 回）。
 const _ASSET_V = Date.now().toString(36);
+// Asset paths are absolute so the dashboard works wherever the server maps
+// it. A static demo build has no server and may sit in a subdirectory, so it
+// is allowed to resolve them itself — same hook shape as portURL.
+function assetURL(name){
+  if(window.AGENTSTACK_DEMO&&window.AGENTSTACK_DEMO.assetURL)
+    return window.AGENTSTACK_DEMO.assetURL(name,_ASSET_V);
+  return `/assets/${name}.svg?v=${_ASSET_V}`;
+}
 function providerKeyFor(g){
   const raw=String((g&&g.provider)||'').toLowerCase();
   if(_PROVIDER_ASPECT[raw])return raw;
@@ -3792,7 +3800,7 @@ function providerBadge(provider,x,y,size=14){
   badge.appendChild(svgEl('circle',{class:'provider-seat',r:(size/2).toFixed(2)}));
   const h=size*.58,w=h*ar;
   badge.appendChild(svgEl('image',{class:'provider-logo','data-provider':provider,
-    href:`/assets/${provider}.svg?v=${_ASSET_V}`,
+    href:assetURL(provider),
     x:(-w/2).toFixed(2), y:(-h/2).toFixed(2),
     width:w.toFixed(2), height:h.toFixed(2),
     preserveAspectRatio:'xMidYMid meet'}));

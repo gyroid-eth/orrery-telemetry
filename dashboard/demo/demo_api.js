@@ -592,8 +592,15 @@
     return 'portraits_64/' + encodeURIComponent(sci) + '.png';
   }
 
+  /* Provider logos are absolute on a served dashboard. The static build has
+     to work wherever it is uploaded, including a subdirectory, so keep them
+     relative to the page. */
+  function assetURL(name, v) {
+    return 'assets/' + encodeURIComponent(name) + '.svg?v=' + v;
+  }
+
   window.AGENTSTACK_DEMO = { loop: LOOP, cast: CAST, script: SCRIPT,
-                             portraitURL: portraitURL, phase: phase,
+                             portraitURL: portraitURL, assetURL: assetURL, phase: phase,
                              payloads: { agents: agentsPayload,
                                          graph: graphPayload,
                                          history: historyPayload,
