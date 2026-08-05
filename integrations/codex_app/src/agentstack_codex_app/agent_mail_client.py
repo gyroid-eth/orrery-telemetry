@@ -127,6 +127,7 @@ class AgentMailClient:
             "urgent_only": urgent_only,
             "include_bodies": include_bodies,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "since_ts", since_ts)
         _put_optional(arguments, "topic", topic)
         value = self._call_tool("fetch_inbox", arguments)
@@ -183,6 +184,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "message_id": message_id,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         return self._call_tool_object("acknowledge_message", arguments)
 
     def reserve_files(
@@ -204,6 +206,7 @@ class AgentMailClient:
             "exclusive": exclusive,
             "reason": reason,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         return self._call_tool_object("file_reservation_paths", arguments)
 
     def renew_reservations(
@@ -221,6 +224,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "extend_seconds": extend_seconds,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("renew_file_reservations", arguments)
@@ -238,6 +242,7 @@ class AgentMailClient:
             "project_key": project_key,
             "agent_name": agent_name,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("release_file_reservations", arguments)
@@ -280,6 +285,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "include_recent_commits": False,
         }
+        _put_optional(arguments, "registration_token", registration_token)
         profile = self._call_tool_object("whois", arguments)
         returned_name = profile.get("name")
         if returned_name != agent_name:

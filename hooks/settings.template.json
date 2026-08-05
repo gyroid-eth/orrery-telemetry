@@ -2,6 +2,7 @@
   "permissions": {
     "allow": [
       "mcp__mcp-agent-mail__health_check",
+      "mcp__mcp-agent-mail__runtime_status",
       "mcp__mcp-agent-mail__ensure_project",
       "mcp__mcp-agent-mail__register_agent",
       "mcp__mcp-agent-mail__whois",

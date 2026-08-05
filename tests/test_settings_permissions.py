@@ -56,8 +56,15 @@ def test_template_ships_a_permissions_block():
     permissions = template["permissions"]
     assert permissions["allow"], "no allow rules"
     assert permissions["deny"], "no deny rules"
-    # The startup calls the tester saw prompting every time.
-    for tool in ("ensure_project", "register_agent", "fetch_inbox"):
+    # The startup calls the tester saw prompting every time.  runtime_status is
+    # the first call a child's proxy makes, so omitting it stops the child
+    # before any of the others is ever reached.
+    for tool in (
+        "ensure_project",
+        "register_agent",
+        "fetch_inbox",
+        "runtime_status",
+    ):
         assert f"mcp__mcp-agent-mail__{tool}" in permissions["allow"], tool
     # Only irreversible tools without a recovery path are denied outright.
     denied = {
