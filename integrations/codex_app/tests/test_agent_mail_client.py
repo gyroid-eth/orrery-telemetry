@@ -17,6 +17,88 @@ class FakeTransport:
         return self.response
 
 
+NAME_SCOPED_TOOLS = (
+    "fetch_inbox",
+    "whois",
+    "acknowledge_message",
+    "file_reservation_paths",
+    "renew_file_reservations",
+    "release_file_reservations",
+)
+
+
+class SchemaTransport:
+    """Advertise a selected token contract and record the resulting calls."""
+
+    def __init__(self, token_tools=()) -> None:
+        self.token_tools = frozenset(token_tools)
+        self.payloads = []
+
+    def __call__(self, payload):
+        self.payloads.append(payload)
+        if payload["method"] == "tools/list":
+            return {
+                "result": {
+                    "tools": [
+                        {
+                            "name": tool,
+                            "inputSchema": {
+                                "properties": (
+                                    {"registration_token": {}}
+                                    if tool in self.token_tools
+                                    else {}
+                                )
+                            },
+                        }
+                        for tool in NAME_SCOPED_TOOLS
+                    ]
+                }
+            }
+        tool = payload["params"]["name"]
+        if tool == "fetch_inbox":
+            result = {"result": []}
+        elif tool == "whois":
+            result = {"name": "CalmNoether"}
+        else:
+            result = {"ok": True}
+        return {"result": {"structuredContent": result}}
+
+
+def _exercise_name_scoped_tools(client, owner_token):
+    assert client.fetch_inbox(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    ) == []
+    client.whois(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+    client.acknowledge_message(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        message_id=7,
+        registration_token=owner_token,
+    )
+    client.reserve_files(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        paths=["src/*.py"],
+        registration_token=owner_token,
+    )
+    client.renew_reservations(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+    client.release_reservations(
+        project_key="/workspace/example",
+        agent_name="CalmNoether",
+        registration_token=owner_token,
+    )
+
+
 def test_register_agent_uses_injected_transport_and_caller_owner_token():
     transport = FakeTransport(
         {
@@ -219,80 +301,75 @@ def test_whois_reads_profile_without_commit_history():
     }
 
 
-def test_stock_name_scoped_tools_never_receive_owner_token():
+@pytest.mark.parametrize(
+    ("advertised_tools", "expects_token"),
+    [
+        pytest.param(NAME_SCOPED_TOOLS, True, id="pinned-token-schema"),
+        pytest.param((), False, id="legacy-tokenless-schema"),
+    ],
+)
+def test_name_scoped_tools_follow_the_advertised_owner_token_schema(
+    advertised_tools, expects_token
+):
     owner_token = "owner-secret-that-must-not-escape"
+    transport = SchemaTransport(advertised_tools)
+    _exercise_name_scoped_tools(AgentMailClient(transport), owner_token)
 
-    class StockTransport:
-        def __init__(self):
-            self.payloads = []
+    calls = [
+        payload for payload in transport.payloads
+        if payload["method"] == "tools/call"
+    ]
+    assert [payload["params"]["name"] for payload in calls] == list(
+        NAME_SCOPED_TOOLS
+    )
+    assert sum(
+        payload["method"] == "tools/list" for payload in transport.payloads
+    ) == 1
+    for payload in calls:
+        arguments = payload["params"]["arguments"]
+        if expects_token:
+            assert arguments["registration_token"] == owner_token
+        else:
+            assert "registration_token" not in arguments
 
-        def __call__(self, payload):
-            self.payloads.append(payload)
-            tool = payload["params"]["name"]
-            if tool == "fetch_inbox":
-                result = {"result": []}
-            elif tool == "whois":
-                result = {"name": "CalmNoether"}
-            else:
-                result = {"ok": True}
-            return {"result": {"structuredContent": result}}
 
-    transport = StockTransport()
-    client = AgentMailClient(transport)
+def test_each_name_scoped_tool_uses_its_own_advertised_schema():
+    owner_token = "owner-secret-that-must-not-escape"
+    transport = SchemaTransport({"fetch_inbox"})
+    _exercise_name_scoped_tools(AgentMailClient(transport), owner_token)
 
-    assert client.fetch_inbox(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        registration_token=owner_token,
-    ) == []
-    client.whois(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        registration_token=owner_token,
-    )
-    client.acknowledge_message(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        message_id=7,
-        registration_token=owner_token,
-    )
-    client.reserve_files(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        paths=["src/*.py"],
-        registration_token=owner_token,
-    )
-    client.renew_reservations(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        registration_token=owner_token,
-    )
-    client.release_reservations(
-        project_key="/workspace/example",
-        agent_name="CalmNoether",
-        registration_token=owner_token,
-    )
-
-    assert len(transport.payloads) == 6
-    for payload in transport.payloads:
-        assert "registration_token" not in payload["params"]["arguments"]
+    calls = {
+        payload["params"]["name"]: payload["params"]["arguments"]
+        for payload in transport.payloads
+        if payload["method"] == "tools/call"
+    }
+    assert calls["fetch_inbox"]["registration_token"] == owner_token
+    for tool in set(NAME_SCOPED_TOOLS) - {"fetch_inbox"}:
+        assert "registration_token" not in calls[tool]
 
 
 def test_agent_mail_tool_errors_never_echo_credential_values():
     owner_token = "owner-secret-that-must-not-escape"
-    transport = FakeTransport(
-        {
-            "result": {
-                "isError": True,
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"unrelated failure input_value={owner_token!r}",
-                    }
-                ],
-            }
+    error_response = {
+        "result": {
+            "isError": True,
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"unrelated failure input_value={owner_token!r}",
+                }
+            ],
         }
-    )
+    }
+
+    class ToolErrorTransport(SchemaTransport):
+        def __call__(self, payload):
+            if payload["method"] == "tools/list":
+                return super().__call__(payload)
+            self.payloads.append(payload)
+            return error_response
+
+    transport = ToolErrorTransport({"fetch_inbox"})
     client = AgentMailClient(transport)
 
     with pytest.raises(AgentMailError) as failure:
@@ -302,5 +379,7 @@ def test_agent_mail_tool_errors_never_echo_credential_values():
             registration_token=owner_token,
         )
 
-    assert len(transport.payloads) == 1
+    assert len(transport.payloads) == 2
+    assert transport.payloads[0]["method"] == "tools/list"
+    assert transport.payloads[1]["method"] == "tools/call"
     assert owner_token not in str(failure.value)

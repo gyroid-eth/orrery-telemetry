@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Every authenticated call must carry the token to the server, not just accept it.
+"""Whether a call carries the owner token is the server's decision, not ours.
 
 The proxy client took `registration_token` on nine methods and forwarded it on
-three. The six that dropped it looked correct from the outside — the parameter
-was there, callers passed it, nothing raised — and the server simply refused
-every read and reservation call. A pre-registered child could `send_message`
-but never `fetch_inbox`, so it never read its own task and stalled at startup.
+three. On the pinned upstream that meant every read and reservation call was
+unauthenticated and refused: a pre-registered child could `send_message` but
+never `fetch_inbox`, so it never read its own task and stalled at startup.
 
-Accepting a credential and not sending it is invisible to types, to linters and
-to the caller. The only thing that catches it is asserting on what reaches the
-wire, which is what this does: drive each method against a fake transport and
-look at the arguments dict it produced.
+Sending it unconditionally is not the fix. Builds disagree — the pinned
+upstream declares `registration_token` on these tools, older and locally
+patched builds reject that same argument — so a client that hardcodes either
+answer breaks the other. `scripts/selftest.py` had already settled this by
+reading the advertised schema; the client now does the same.
+
+Two fixtures, one per server generation, and the assertions run against what
+reaches the transport rather than against the method signature. Accepting a
+credential and not sending it is invisible to types, to linters and to the
+caller — the wire is the only place it shows.
 
 Runnable two ways:
     python3 tests/test_agent_mail_client_token.py
@@ -40,82 +45,137 @@ client_mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = client_mod
 _spec.loader.exec_module(client_mod)
 
-TOKEN = "test-token-0123456789"
-PROJECT = "/tmp/project"
-AGENT = "TestAgent"
+TOKEN = "owner-secret-that-must-not-escape"
+PROJECT = "/workspace/example"
+AGENT = "CalmNoether"
 
-# The server field each method is expected to put the token in. send_message
-# uses sender_token because it authenticates the sender rather than the caller.
-TOKEN_FIELD = {
-    "fetch_inbox": "registration_token",
-    "acknowledge_message": "registration_token",
-    "reserve_files": "registration_token",
-    "renew_reservations": "registration_token",
-    "release_reservations": "registration_token",
-    "whois": "registration_token",
-    "send_message": "sender_token",
-    "retire_agent": "registration_token",
+# The six name-scoped tools whose token handling differs between builds.
+NAME_SCOPED = (
+    "fetch_inbox",
+    "acknowledge_message",
+    "reserve_files",
+    "renew_reservations",
+    "release_reservations",
+    "whois",
+)
+# Method name -> the tool name it calls on the server.
+SERVER_TOOL = {
+    "fetch_inbox": "fetch_inbox",
+    "acknowledge_message": "acknowledge_message",
+    "reserve_files": "file_reservation_paths",
+    "renew_reservations": "renew_file_reservations",
+    "release_reservations": "release_file_reservations",
+    "whois": "whois",
+}
+CALL_ARGS = {
+    "acknowledge_message": {"message_id": 7},
+    "reserve_files": {"paths": ["src/*.py"]},
 }
 
 
-class _Recorder:
-    """Stands in for the transport and keeps what each call was given."""
+class _Server:
+    """Answers tools/list with one generation's schema and records tools/call."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, advertises_token: bool) -> None:
+        self.advertises_token = advertises_token
+        self.listings = 0
         self.calls: list[tuple[str, dict]] = []
 
-    def _call_tool(self, name, arguments):
-        self.calls.append((name, dict(arguments)))
-        # Shapes the callers validate before returning.
-        if name == "fetch_inbox":
-            return []
-        if name == "whois":
-            return {"name": AGENT}
-        return {}
-
-    _call_tool_object = _call_tool
-
-
-def _client() -> tuple[object, _Recorder]:
-    client = client_mod.AgentMailClient.__new__(client_mod.AgentMailClient)
-    recorder = _Recorder()
-    client._call_tool = recorder._call_tool
-    client._call_tool_object = recorder._call_tool_object
-    return client, recorder
-
-
-def _invoke(client, method: str) -> None:
-    common = {"project_key": PROJECT, "agent_name": AGENT, "registration_token": TOKEN}
-    extra = {
-        "acknowledge_message": {"message_id": 1},
-        "reserve_files": {"paths": ["a.py"]},
-        "send_message": {"to": [AGENT], "subject": "s", "body_md": "b"},
-    }.get(method, {})
-    getattr(client, method)(**common, **extra)
+    def __call__(self, payload):
+        if payload.get("method") == "tools/list":
+            self.listings += 1
+            base = ["project_key", "agent_name"]
+            extra = ["registration_token"] if self.advertises_token else []
+            return {
+                "result": {
+                    "tools": [
+                        {
+                            "name": tool,
+                            "inputSchema": {
+                                "properties": {k: {} for k in base + extra}
+                            },
+                        }
+                        for tool in SERVER_TOOL.values()
+                    ]
+                }
+            }
+        tool = payload["params"]["name"]
+        self.calls.append((tool, dict(payload["params"]["arguments"])))
+        result = {"result": []} if tool == "fetch_inbox" else {"ok": True}
+        if tool == "whois":
+            result = {"name": AGENT}
+        return {"result": {"structuredContent": result}}
 
 
-def test_every_authenticated_method_sends_its_token():
-    missing = []
-    for method, field in TOKEN_FIELD.items():
-        client, recorder = _client()
-        _invoke(client, method)
-        assert recorder.calls, f"{method} made no call"
-        _, arguments = recorder.calls[-1]
-        if arguments.get(field) != TOKEN:
-            missing.append(f"{method} -> {field}={arguments.get(field)!r}")
+def _drive(server) -> object:
+    client = client_mod.AgentMailClient(server)
+    for method in NAME_SCOPED:
+        getattr(client, method)(
+            project_key=PROJECT,
+            agent_name=AGENT,
+            registration_token=TOKEN,
+            **CALL_ARGS.get(method, {}),
+        )
+    return client
+
+
+def test_a_server_that_advertises_the_token_field_receives_it():
+    server = _Server(advertises_token=True)
+    _drive(server)
+    assert len(server.calls) == len(NAME_SCOPED)
+    missing = [
+        tool for tool, args in server.calls if args.get("registration_token") != TOKEN
+    ]
     assert not missing, "token never reached the server for: " + ", ".join(missing)
 
 
-def test_absent_token_is_omitted_rather_than_sent_as_none():
-    """A missing token must not become an explicit null the server has to reject."""
+def test_a_server_that_does_not_advertise_it_is_never_sent_one():
+    server = _Server(advertises_token=False)
+    _drive(server)
+    assert len(server.calls) == len(NAME_SCOPED)
+    leaked = [tool for tool, args in server.calls if "registration_token" in args]
+    assert not leaked, "token sent to a server that rejects it: " + ", ".join(leaked)
 
-    for method in ("fetch_inbox", "reserve_files", "release_reservations", "whois"):
-        client, recorder = _client()
-        common = {"project_key": PROJECT, "agent_name": AGENT}
-        extra = {"reserve_files": {"paths": ["a.py"]}}.get(method, {})
-        getattr(client, method)(**common, **extra)
-        _, arguments = recorder.calls[-1]
-        assert "registration_token" not in arguments, method
+
+def test_the_schema_is_read_once_no_matter_how_many_calls_follow():
+    server = _Server(advertises_token=True)
+    _drive(server)
+    assert server.listings == 1, server.listings
+
+
+def test_an_unusable_listing_fails_before_any_tool_is_called():
+    class Broken:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, payload):
+            if payload.get("method") == "tools/list":
+                return {"result": {"tools": "not-a-list"}}
+            self.calls.append(payload)
+            return {"result": {"structuredContent": {"result": []}}}
+
+    server = Broken()
+    client = client_mod.AgentMailClient(server)
+    try:
+        client.fetch_inbox(
+            project_key=PROJECT, agent_name=AGENT, registration_token=TOKEN
+        )
+    except client_mod.AgentMailError as exc:
+        assert TOKEN not in str(exc), "the token must not appear in the error"
+    else:
+        raise AssertionError("a broken listing must not fall through to tools/call")
+    assert not server.calls, "no tool may run on an undiscovered schema"
+
+
+def test_no_token_means_no_listing_and_no_token_argument():
+    """Without a credential there is nothing to shape, so do not go ask."""
+
+    server = _Server(advertises_token=True)
+    client = client_mod.AgentMailClient(server)
+    client.fetch_inbox(project_key=PROJECT, agent_name=AGENT)
+    assert server.listings == 0
+    _, arguments = server.calls[-1]
+    assert "registration_token" not in arguments
 
 
 if __name__ == "__main__":

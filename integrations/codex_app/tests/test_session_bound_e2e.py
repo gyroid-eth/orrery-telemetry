@@ -12,6 +12,14 @@ from agentstack_codex_app.mcp_server import AgentStackProxy, StdioMcpServer
 
 SESSION_ID = "session-e2e"
 PROJECT_KEY = "/workspace/example"
+NAME_SCOPED_TOOLS = {
+    "fetch_inbox",
+    "whois",
+    "acknowledge_message",
+    "file_reservation_paths",
+    "renew_file_reservations",
+    "release_file_reservations",
+}
 
 
 class RecordingAgentMailTransport:
@@ -19,6 +27,20 @@ class RecordingAgentMailTransport:
         self.calls: list[tuple[str, dict]] = []
 
     def __call__(self, payload):
+        if payload["method"] == "tools/list":
+            return {
+                "result": {
+                    "tools": [
+                        {
+                            "name": tool,
+                            "inputSchema": {
+                                "properties": {"registration_token": {}}
+                            },
+                        }
+                        for tool in NAME_SCOPED_TOOLS
+                    ]
+                }
+            }
         tool = payload["params"]["name"]
         arguments = dict(payload["params"]["arguments"])
         self.calls.append((tool, arguments))
@@ -172,8 +194,9 @@ def test_codex_app_session_start_reaches_agentstack_without_raw_agent_mail(
         "send_message",
         "file_reservation_paths",
     }
-    assert "registration_token" not in calls["fetch_inbox"]
-    assert "registration_token" not in calls["file_reservation_paths"]
+    owner_token = calls["register_agent"]["registration_token"]
+    assert calls["fetch_inbox"]["registration_token"] == owner_token
+    assert calls["file_reservation_paths"]["registration_token"] == owner_token
     assert "sender_token" in calls["send_message"]
     assert all(
         "session_id" not in arguments and "agent_id" not in arguments

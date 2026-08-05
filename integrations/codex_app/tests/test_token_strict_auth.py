@@ -1,16 +1,17 @@
-"""Owner credentials stay out of stock name-scoped agent-mail calls.
+"""Owner credentials follow the live name-scoped agent-mail schema.
 
 The Bridge proxy resolves each agent's owner token out-of-band. Stock
-agent-mail accepts that credential only on registration, retirement, and as
-``sender_token`` for sends. Inbox, whois, acknowledgement, and reservation
-schemas do not accept ``registration_token`` at all, so the client must not
-forward it even when the proxy has resolved it.
+agent-mail builds disagree on whether inbox, whois, acknowledgement, and
+reservation tools accept ``registration_token``. The client must obey the
+schema advertised by the server that actually answers.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any, Mapping
+
+import pytest
 
 from agentstack_codex_app.agent_mail_client import AgentMailClient
 
@@ -29,19 +30,55 @@ NAME_SCOPED_TOOLS = {
 }
 
 
-class StockTransport:
-    """Reject credentials that stock name-scoped tool schemas do not accept."""
+class VersionedTransport:
+    """Model either generation and reject calls that violate its schema."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, advertises_owner_token: bool = False) -> None:
+        self.advertises_owner_token = advertises_owner_token
         self.seen: list[tuple[str, Mapping[str, Any]]] = []
 
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if payload["method"] == "tools/list":
+            properties = (
+                {"registration_token": {}}
+                if self.advertises_owner_token
+                else {}
+            )
+            return {
+                "result": {
+                    "tools": [
+                        {
+                            "name": tool,
+                            "inputSchema": {"properties": properties},
+                        }
+                        for tool in NAME_SCOPED_TOOLS
+                    ]
+                }
+            }
         params = payload["params"]
         tool = params["name"]
         arguments = params.get("arguments", {})
         self.seen.append((tool, arguments))
 
-        if tool in NAME_SCOPED_TOOLS and "registration_token" in arguments:
+        if (
+            tool in NAME_SCOPED_TOOLS
+            and self.advertises_owner_token
+            and arguments.get("registration_token") != OWNER_TOKEN
+        ):
+            return {
+                "result": {
+                    "isError": True,
+                    "content": [{
+                        "type": "text",
+                        "text": "registration_token required",
+                    }],
+                }
+            }
+        if (
+            tool in NAME_SCOPED_TOOLS
+            and not self.advertises_owner_token
+            and "registration_token" in arguments
+        ):
             return {
                 "result": {
                     "isError": True,
@@ -65,8 +102,19 @@ class StockTransport:
         }
 
 
-def test_name_scoped_paths_do_not_forward_the_resolved_owner_token():
-    transport = StockTransport()
+@pytest.mark.parametrize(
+    "advertises_owner_token",
+    [
+        pytest.param(True, id="pinned-token-schema"),
+        pytest.param(False, id="legacy-tokenless-schema"),
+    ],
+)
+def test_name_scoped_paths_follow_the_advertised_owner_token_schema(
+    advertises_owner_token
+):
+    transport = VersionedTransport(
+        advertises_owner_token=advertises_owner_token
+    )
     client = AgentMailClient(transport)
 
     assert client.fetch_inbox(
@@ -111,11 +159,14 @@ def test_name_scoped_paths_do_not_forward_the_resolved_owner_token():
         "release_file_reservations",
     ]
     for _, arguments in transport.seen:
-        assert "registration_token" not in arguments
+        if advertises_owner_token:
+            assert arguments["registration_token"] == OWNER_TOKEN
+        else:
+            assert "registration_token" not in arguments
 
 
 def test_registration_send_and_retirement_keep_their_required_credentials():
-    transport = StockTransport()
+    transport = VersionedTransport()
     client = AgentMailClient(transport)
 
     client.register_agent(

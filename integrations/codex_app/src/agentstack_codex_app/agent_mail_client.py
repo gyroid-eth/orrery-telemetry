@@ -73,9 +73,68 @@ class HttpJsonRpcTransport:
 class AgentMailClient:
     """Perform the allowlisted Codex App operations through agent-mail."""
 
+    # Builds disagree about whether a name-scoped tool takes an owner token.
+    # The pinned upstream declares registration_token on fetch_inbox and the
+    # reservation tools; older and locally-patched builds reject that same
+    # argument outright. Sending it unconditionally breaks one, omitting it
+    # breaks the other, and an error string is the wrong thing to branch on —
+    # scripts/selftest.py already settled this by reading the schema the
+    # server advertises. This does the same, once, and caches it.
+    _TOKEN_PARAMS = ("registration_token", "sender_token", "agent_token")
+
     def __init__(self, transport: JsonRpcTransport) -> None:
         self.transport = transport
         self._request_id = 0
+        self._tool_params: dict[str, frozenset[str]] | None = None
+
+    def _advertised_parameters(self, tool_name: str) -> frozenset[str]:
+        """Parameters the answering server says this tool accepts."""
+
+        if self._tool_params is None:
+            self._request_id += 1
+            response = self.transport(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._request_id,
+                    "method": "tools/list",
+                    "params": {},
+                }
+            )
+            if response.get("error"):
+                raise AgentMailError("agent-mail tool schema discovery failed")
+            result = response.get("result")
+            tools = result.get("tools") if isinstance(result, dict) else None
+            if not isinstance(tools, list):
+                raise AgentMailError("agent-mail tool schema discovery failed")
+            params: dict[str, frozenset[str]] = {}
+            for tool in tools:
+                if not isinstance(tool, dict):
+                    continue
+                name = tool.get("name")
+                schema = tool.get("inputSchema")
+                properties = schema.get("properties") if isinstance(schema, dict) else None
+                if isinstance(name, str) and isinstance(properties, dict):
+                    params[name] = frozenset(properties)
+            self._tool_params = params
+        return self._tool_params.get(tool_name, frozenset())
+
+    def _with_owner_token(
+        self, tool_name: str, arguments: dict[str, Any], token: str | None
+    ) -> dict[str, Any]:
+        """Attach the owner token under whichever name this tool advertises.
+
+        A server that does not advertise a token field on this tool is one that
+        rejects it, so the argument is left off rather than guessed at.
+        """
+
+        if not token:
+            return arguments
+        allowed = self._advertised_parameters(tool_name)
+        for field in self._TOKEN_PARAMS:
+            if field in allowed:
+                arguments[field] = token
+                break
+        return arguments
 
     def register_agent(
         self,
@@ -127,7 +186,7 @@ class AgentMailClient:
             "urgent_only": urgent_only,
             "include_bodies": include_bodies,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("fetch_inbox", arguments, registration_token)
         _put_optional(arguments, "since_ts", since_ts)
         _put_optional(arguments, "topic", topic)
         value = self._call_tool("fetch_inbox", arguments)
@@ -184,7 +243,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "message_id": message_id,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("acknowledge_message", arguments, registration_token)
         return self._call_tool_object("acknowledge_message", arguments)
 
     def reserve_files(
@@ -206,7 +265,7 @@ class AgentMailClient:
             "exclusive": exclusive,
             "reason": reason,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("file_reservation_paths", arguments, registration_token)
         return self._call_tool_object("file_reservation_paths", arguments)
 
     def renew_reservations(
@@ -224,7 +283,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "extend_seconds": extend_seconds,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("renew_file_reservations", arguments, registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("renew_file_reservations", arguments)
@@ -242,7 +301,7 @@ class AgentMailClient:
             "project_key": project_key,
             "agent_name": agent_name,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("release_file_reservations", arguments, registration_token)
         _put_optional(arguments, "paths", paths)
         _put_optional(arguments, "file_reservation_ids", file_reservation_ids)
         return self._call_tool_object("release_file_reservations", arguments)
@@ -285,7 +344,7 @@ class AgentMailClient:
             "agent_name": agent_name,
             "include_recent_commits": False,
         }
-        _put_optional(arguments, "registration_token", registration_token)
+        self._with_owner_token("whois", arguments, registration_token)
         profile = self._call_tool_object("whois", arguments)
         returned_name = profile.get("name")
         if returned_name != agent_name:

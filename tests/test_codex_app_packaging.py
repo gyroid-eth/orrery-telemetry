@@ -700,25 +700,36 @@ def test_doctor_cleanup_retires_orphan_before_local_purge(tmp_path):
         def do_POST(self):
             length = int(self.headers["Content-Length"])
             payload = json.loads(self.rfile.read(length))
-            calls.append(payload)
-            tool_name = payload["params"]["name"]
-            if tool_name == "whois":
-                structured = {
-                    "name": "CalmNoether",
-                    "program": "codex-app",
+            if payload["method"] == "tools/list":
+                result = {
+                    "tools": [{
+                        "name": "whois",
+                        "inputSchema": {
+                            "properties": {"registration_token": {}}
+                        },
+                    }]
                 }
             else:
-                structured = {
-                    "status": "retired",
-                    "agent_name": "CalmNoether",
-                    "project_key": str(home / "project"),
+                calls.append(payload)
+                tool_name = payload["params"]["name"]
+                if tool_name == "whois":
+                    structured = {
+                        "name": "CalmNoether",
+                        "program": "codex-app",
+                    }
+                else:
+                    structured = {
+                        "status": "retired",
+                        "agent_name": "CalmNoether",
+                        "project_key": str(home / "project"),
+                    }
+                result = {
+                    "structuredContent": structured,
                 }
             response = {
                 "jsonrpc": "2.0",
                 "id": payload["id"],
-                "result": {
-                    "structuredContent": structured,
-                },
+                "result": result,
             }
             body = json.dumps(response).encode()
             self.send_response(200)
@@ -807,6 +818,7 @@ SnapshotStore(runtime / "snapshot.json").upsert(
             "whois",
             "retire_agent",
         ]
+        assert calls[0]["params"]["arguments"]["registration_token"] == "owner-token"
         assert calls[1]["params"]["arguments"]["registration_token"] == "owner-token"
         assert not list((runtime_dir / "identity" / "bindings").glob("*.json"))
         assert not list((runtime_dir / "identity" / "secrets").glob("*.token"))

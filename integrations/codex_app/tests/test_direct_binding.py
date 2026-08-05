@@ -32,23 +32,56 @@ from agentstack_codex_app.agent_mail_client import AgentMailClient
 AGENT = "Red-Euler"
 PROJECT = "/workspace/example"
 TOKEN = "child-owner-token"
+NAME_SCOPED_TOOLS = {
+    "fetch_inbox",
+    "whois",
+    "acknowledge_message",
+    "file_reservation_paths",
+    "renew_file_reservations",
+    "release_file_reservations",
+}
 
 
 class RecordingTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, advertises_owner_token: bool) -> None:
+        self.advertises_owner_token = advertises_owner_token
         self.calls: list[tuple[str, Mapping[str, Any]]] = []
 
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if payload["method"] == "tools/list":
+            properties = (
+                {"registration_token": {}}
+                if self.advertises_owner_token
+                else {}
+            )
+            return {
+                "result": {
+                    "tools": [
+                        {
+                            "name": tool,
+                            "inputSchema": {"properties": properties},
+                        }
+                        for tool in NAME_SCOPED_TOOLS
+                    ]
+                }
+            }
         params = payload["params"]
         tool = params["name"]
         arguments = params.get("arguments", {})
         self.calls.append((tool, arguments))
-        # Stock agent-mail authenticates sends with sender_token. Name-scoped
-        # inbox and reservation tools do not accept registration_token.
         if tool == "send_message" and not arguments.get("sender_token"):
             return {"result": {"isError": True, "content": [{
                 "type": "text",
                 "text": f"Error calling tool '{tool}': {tool} requires sender_token",
+            }]}}
+        if (
+            self.advertises_owner_token
+            and tool in NAME_SCOPED_TOOLS
+            and arguments.get("registration_token") != TOKEN
+        ):
+            return {"result": {"isError": True, "content": [{
+                "type": "text",
+                "text": f"Error calling tool '{tool}': owner token required",
             }]}}
         body: Any = [] if tool == "fetch_inbox" else {"ok": True}
         return {"result": {"content": [{"type": "text", "text": json.dumps(body)}]}}
@@ -58,7 +91,8 @@ def _proxy(tmp_path: Path) -> tuple[AgentStackProxy, RecordingTransport]:
     from agentstack_codex_app.identity_store import IdentityStore
     from agentstack_codex_app.snapshot import SnapshotStore
 
-    transport = RecordingTransport()
+    # The installer-pinned server advertises owner tokens on name-scoped tools.
+    transport = RecordingTransport(advertises_owner_token=True)
     proxy = AgentStackProxy(
         IdentityStore(tmp_path / "identity"),
         SnapshotStore(tmp_path / "snapshot.json"),
@@ -107,7 +141,7 @@ def test_directly_bound_tools_need_no_bootstrap_and_no_session_id(tmp_path):
     tool, arguments = transport.calls[-1]
     assert tool == "fetch_inbox"
     assert arguments["agent_name"] == AGENT
-    assert "registration_token" not in arguments
+    assert arguments["registration_token"] == TOKEN
 
 
 def test_an_unbound_proxy_still_refuses(tmp_path):
@@ -118,7 +152,7 @@ def test_an_unbound_proxy_still_refuses(tmp_path):
     proxy = AgentStackProxy(
         IdentityStore(tmp_path / "identity"),
         SnapshotStore(tmp_path / "snapshot.json"),
-        AgentMailClient(RecordingTransport()),
+        AgentMailClient(RecordingTransport(advertises_owner_token=True)),
     )
     assert proxy.bound_session_id is None
     with pytest.raises((ProxyError, TypeError)):
@@ -152,7 +186,7 @@ def test_a_child_that_passes_its_own_session_id_is_not_locked_out(tmp_path):
     assert result == []
     _, arguments = transport.calls[-1]
     assert arguments["agent_name"] == AGENT
-    assert "registration_token" not in arguments
+    assert arguments["registration_token"] == TOKEN
 
 
 def test_bootstrap_from_a_real_session_id_reports_the_binding(tmp_path):
@@ -244,7 +278,7 @@ def test_documented_arguments_are_accepted_when_they_match(tmp_path):
     _, arguments = transport.calls[-1]
     # The binding still decides what goes upstream.
     assert arguments["agent_name"] == AGENT
-    assert "registration_token" not in arguments
+    assert arguments["registration_token"] == TOKEN
 
 
 def test_mismatched_identity_arguments_are_refused(tmp_path):
