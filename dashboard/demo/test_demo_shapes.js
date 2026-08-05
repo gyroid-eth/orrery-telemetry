@@ -232,13 +232,47 @@ check('deliverables match the server’s shape and the badge count', () => {
 });
 
 check('nothing in the fixture came from a real mailbox', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
   /* Names of things that exist on the author’s machine. If one of these
      ever appears here, someone exported instead of writing. */
-  ['Syncthing', '<vault-directory>', 'mcp_agent_mail', '/Users/',
-   'ProOpus', 'PluckyEinstein', 'biomatterlab',
-  ].forEach((needle) => {
-    if (src.includes(needle)) throw new Error('leaked reference: ' + needle);
+  ['demo_api.js', 'demo_tour.js'].forEach((f) => {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    ['Syncthing', '<vault-directory>', 'mcp_agent_mail', '/Users/',
+     'ProOpus', 'PluckyEinstein', 'biomatterlab',
+    ].forEach((needle) => {
+      if (src.includes(needle))
+        throw new Error(f + ' leaked reference: ' + needle);
+    });
+  });
+});
+
+/* The narration rings whatever it is talking about. A ring that points at
+   nothing is worse than no ring — it says the demo has drifted from the
+   page. Renaming an agent is the way that happens. */
+check('the narration points at agents that exist', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'demo_tour.js'), 'utf8');
+  const win = {
+    location: { search: '?demo=1' },
+    URLSearchParams,
+    document: { readyState: 'loading', addEventListener: () => {} },
+    addEventListener: () => {},
+  };
+  win.window = win;
+  vm.createContext(win);
+  vm.runInContext(src, win);      // build() waits for DOMContentLoaded here
+  const beats = win.AGENTSTACK_TOUR && win.AGENTSTACK_TOUR.beats;
+  if (!beats || !beats.length) throw new Error('no beats');
+
+  const cast = new Set(DEMO.cast.map((c) => c.name));
+  let prev = -1;
+  beats.forEach((b) => {
+    if (!b.text) throw new Error('beat at ' + b.at + ' says nothing');
+    if (b.at <= prev) throw new Error('beats out of order at ' + b.at);
+    if (b.at < 0 || b.at >= DEMO.loop)
+      throw new Error('beat at ' + b.at + ' falls outside the loop');
+    prev = b.at;
+    const m = /\.bay\[data-name="([^"]+)"\]/.exec(b.look || '');
+    if (m && !cast.has(m[1]))
+      throw new Error('rings an agent that is not in the cast: ' + m[1]);
   });
 });
 
