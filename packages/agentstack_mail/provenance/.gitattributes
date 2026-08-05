@@ -1,0 +1,2 @@
+# Preserve the source snapshot byte-for-byte; whitespace belongs to the patch.
+working-tree-tracked.patch -text whitespace=-blank-at-eol,-blank-at-eof

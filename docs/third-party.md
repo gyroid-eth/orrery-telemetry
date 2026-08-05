@@ -16,9 +16,13 @@ claude-agent-stack は [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp
 
 dashboard や launcher が独自の mail registry を持たないのは、UI や tmux session の寿命と協調データの寿命を分離するためです。
 
-## 非同梱
+## 現行 release: 非同梱
 
-`mcp_agent_mail` の source はこの repository に同梱しません。
+現行 installer は、この repository 内の provenance snapshot を runtime
+source として deploy しません。通常の install では外部 clone を取得します。
+`packages/agentstack_mail/provenance/` の Git bundle と dirty patch は
+承認済みの機能抽出 baseline を再現するための開発・監査 artifact であり、
+現行 service からは実行されません。
 
 installer は:
 
@@ -30,6 +34,18 @@ installer は:
 します。
 
 uninstall でも agent-mail clone、DB、`.env` は既定で保持します。AgentStack の UI を消しても協調履歴を失わないためです。削除する場合だけ `agentstack-uninstall --purge-data` を使い、事前に `--dry-run` で exact path を確認してください。
+
+## 目標 architecture: `agentstack-mail`
+
+承認済みの移行先は、live Python AgentMail から AgentStack が利用する
+contract と依存 closure を抽出し、`agentstack-mail` として改名・同梱する
+構成です。現在は `packages/agentstack_mail` に contract/provenance だけを
+固定しており、production server でも installer の既定値でもありません。
+
+新しい AgentStack-authored files は repository の PolyForm license、
+AgentMail からコピーまたは意味的に派生した部分は原 copyright と rider を
+含む upstream license を保持します。package の `NOTICE.md` と2つの
+license file が per-component boundary の正本です。
 
 ## License
 
