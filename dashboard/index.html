@@ -2351,6 +2351,12 @@
     .tm-ident{min-width:0;max-width:calc(100% - 92px);flex:1}
     .tm-tabs{order:5;width:100%}.tm-tabs button{flex:1}}
 </style>
+<!-- Demo mode. Answers the read endpoints from a script so the page runs
+     with nothing behind it, and refuses the write endpoints. Inert unless
+     the URL carries ?demo=1, and loaded here on purpose: it has to replace
+     fetch before the page below starts polling. Classic script, no defer —
+     the ordering is the whole point. -->
+<script src="demo/demo_api.js"></script>
 </head>
 <body data-view="deck">
 <div class="fx scan"></div>
@@ -3113,6 +3119,12 @@ function reattachMurmurs(){
   }
 }
 function portURL(sci,hi){
+  /* Portraits come from the server, which resolves a name to a file. A
+     static build has no server, and <img src> never reaches the demo's
+     fetch shim, so without this hook every face falls back to initials —
+     the page still works and quietly looks like a different product. */
+  if(window.AGENTSTACK_DEMO&&window.AGENTSTACK_DEMO.portraitURL)
+    return window.AGENTSTACK_DEMO.portraitURL(sci,hi);
   return `/portrait?name=${encodeURIComponent(sci)}${hi?'&hi=1':''}`;
 }
 function portraitFallback(el){
