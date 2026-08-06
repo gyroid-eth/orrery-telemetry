@@ -3112,6 +3112,7 @@ async def _get_or_create_agent(
     model: str,
     task_description: str,
     settings: Settings,
+    registration_token: Optional[str] = None,
 ) -> Agent:
     if project.id is None:
         raise ValueError("Project must have an id before creating agents.")
@@ -3193,6 +3194,11 @@ async def _get_or_create_agent(
             )
             agent = result.scalars().first()
             if agent:
+                if registration_token is not None:
+                    _resolve_registration_token(
+                        getattr(agent, "registration_token", None),
+                        registration_token,
+                    )
                 agent.program = program
                 agent.model = model
                 agent.task_description = task_description
@@ -3231,6 +3237,11 @@ async def _get_or_create_agent(
                     agent = result.scalars().first()
                     if agent is None:
                         raise
+                    if registration_token is not None:
+                        _resolve_registration_token(
+                            getattr(agent, "registration_token", None),
+                            registration_token,
+                        )
                     agent.program = program
                     agent.model = model
                     agent.task_description = task_description
@@ -4961,7 +4972,15 @@ def build_mcp_server() -> FastMCP:
         ap = (attachments_policy or "auto").lower()
         if ap not in {"auto", "inline", "file"}:
             ap = "auto"
-        agent = await _get_or_create_agent(project, name, program, model, task_description, settings)
+        agent = await _get_or_create_agent(
+            project,
+            name,
+            program,
+            model,
+            task_description,
+            settings,
+            registration_token=registration_token,
+        )
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
             async with get_session() as session:
