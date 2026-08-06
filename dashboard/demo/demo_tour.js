@@ -264,6 +264,11 @@
     card.querySelector('.go').addEventListener('click', function () {
       card.remove();
       strip.classList.add('on');
+      /* Rewind to the opening so the story starts when watching does. */
+      if (window.AGENTSTACK_DEMO && window.AGENTSTACK_DEMO.restart) {
+        window.AGENTSTACK_DEMO.restart();
+        tick();
+      }
     });
     card.querySelector('.pick').addEventListener('click', function (e) {
       var b = e.target.closest('button[data-lang]');

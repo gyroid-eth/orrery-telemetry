@@ -37,6 +37,17 @@ const REAL_HISTORY_KEYS = [
 const REAL_EVENT_KEYS = ['role', 'kind', 'text', 'ts'];
 const REAL_DELIV_KEYS = ['ok', 'agent', 'vault', 'items'];
 const REAL_DELIV_ITEM_KEYS = ['title', 'rel', 'vault', 'mtime'];
+/* edge_messages_payload / messages_since_payload row shapes. */
+const REAL_EDGEMSG_KEYS = [
+  'id', 'ts', 'ts_unix', 'sender', 'recipient', 'subject', 'body',
+  'importance', 'thread_id', 'topic', 'ack_required', 'kind',
+  'read_ts', 'ack_ts',
+];
+const REAL_SINCE_KEYS = [
+  'id', 'ts', 'sender', 'recipient', 'subject', 'excerpt', 'importance',
+  'kind', 'thread_id',
+];
+const REAL_SINCE_TOP_KEYS = ['ok', 'now', 'since', 'messages'];
 
 let failures = 0;
 function check(name, fn) {
@@ -144,6 +155,34 @@ check('the story actually moves — cast and edges grow through the loop', () =>
   if (last.edges <= first.edges) {
     throw new Error('nothing is ever said: ' + JSON.stringify(seen));
   }
+});
+
+/* What the product is about is a parent handing work to a child. If the
+   entry point sits past every spawn, a visitor sees a busy screen and none
+   of the thing that makes it busy — the first version opened 147 seconds
+   after the last spawn, which is most of a loop spent waiting. */
+check('a visitor sees a child spawned soon after they start watching', () => {
+  const open = DEMO.opensAt;
+  const at = (t) => atSecond(t, () => P.graph().nodes.length);
+  const start = at(open);
+  let sawGrowth = 0;
+  for (let d = 1; d <= 20; d += 1) {
+    if (at(open + d) > start) { sawGrowth = d; break; }
+  }
+  if (!sawGrowth) {
+    throw new Error(`no agent appears in the 20s after landing at t=${open}`);
+  }
+});
+
+check('the opening is not an empty screen', () => {
+  atSecond(DEMO.opensAt, () => {
+    const g = P.graph();
+    const live = g.nodes.filter((n) => n.running);
+    if (live.length < 2) throw new Error('landed on ' + live.length + ' running');
+    live.forEach((n) => {
+      if (!n.task) throw new Error(n.name + ' has nothing to show for itself');
+    });
+  });
 });
 
 check('an agent that finishes stops running but stays on screen', () => {
@@ -261,6 +300,99 @@ check('deliverables match the server’s shape and the badge count', () => {
    tell whether the English line is untranslated or deliberately verbatim.
    So every string that reaches a reader must have an entry, and switching
    the language must actually change what the payloads carry. */
+/* The drawer is opened to read the exchange. A row with an empty body is
+   a header with nothing under it, which reads as "this product does not
+   keep message contents" rather than "this is a demo". */
+check('the drawer has something to read, in both languages', () => {
+  const q = new URLSearchParams('a=AmberKepler&b=SlateHooke');
+  ['en', 'ja'].forEach((l) => {
+    DEMO.setLang(l);
+    const j = atSecond(230, () => P.edgeMessages(q));
+    if (j.count < 2) throw new Error(l + ': ' + j.count + ' messages on the edge');
+    j.messages.forEach((m) => {
+      sameKeys(m, REAL_EDGEMSG_KEYS, 'edge message');
+      /* Japanese says the same thing in fewer characters, so count what
+         actually matters: more than a header, and more than one line. */
+      const body = m.body || '';
+      if (body.length < 50 || body.indexOf('\n') === -1)
+        throw new Error(l + ': body is a one-liner (' + body.length + ' chars)');
+      if (l === 'ja' && !/[\u3040-\u30ff\u4e00-\u9faf]/.test(m.body))
+        throw new Error('ja body is still English');
+    });
+    if (j.messages[0].ts_unix < j.messages[j.messages.length - 1].ts_unix)
+      throw new Error('oldest first; the server sends newest first');
+  });
+  DEMO.setLang('en');
+});
+
+check('every message was written in both languages', () => {
+  DEMO.script.forEach((m) => {
+    if (!m.body) throw new Error('at ' + m.at + ' has no body');
+    if (!m.body_ja) throw new Error('at ' + m.at + ' has no Japanese body');
+    if (!/[\u3040-\u30ff\u4e00-\u9faf]/.test(m.body_ja))
+      throw new Error('at ' + m.at + ' left English in body_ja');
+  });
+});
+
+/* The page advances its comet cursor from `now`. Returning `ts` instead
+   left it pinned at zero and only the seen-key set stopped the replay. */
+check('messages-since carries the cursor the page reads', () => {
+  atSecond(120, () => {
+    const j = P.messagesSince(0);
+    sameKeys(j, REAL_SINCE_TOP_KEYS, 'messages-since payload');
+    if (!Number(j.now)) throw new Error('no now for the page to advance to');
+    j.messages.forEach((m) => {
+      sameKeys(m, REAL_SINCE_KEYS, 'comet');
+      if (!m.excerpt) throw new Error('comet with nothing to say');
+    });
+  });
+});
+
+/* Replay asks with `names=A,B,C`. The fixture read `name` only, so Replay
+   opened on an empty timeline and had nothing to play — and an empty event
+   list is a legal answer, so nothing anywhere said so. */
+check('replay gets a timeline, not an empty one', () => {
+  atSecond(210, () => {
+    const q = new URLSearchParams(
+      'names=AmberKepler,SlateHooke,IvoryNoether&include_pane_states=1');
+    const j = P.agentHistory(q);
+    if (!j.ok) throw new Error('refused');
+    if (j.events.length < 6)
+      throw new Error('only ' + j.events.length + ' events to replay');
+    const kinds = new Set(j.events.map((e) => e.kind));
+    ['mail_sent', 'spawn', 'retire'].forEach((k) => {
+      if (!kinds.has(k)) throw new Error('no ' + k + ' in the playback');
+    });
+    /* One message must not appear twice when both ends are selected. */
+    const sent = j.events.filter((e) => e.kind === 'mail_sent').map((e) => e.id);
+    const recv = j.events.filter((e) => e.kind === 'mail_recv').map((e) => e.id);
+    const both = sent.filter((i) => recv.includes(i));
+    if (both.length) throw new Error('message ' + both[0] + ' played twice');
+
+    if (!j.names || !j.agents) throw new Error('multi payload is missing names');
+    if (!j.initial_state || !j.initial_state.alive_agents)
+      throw new Error('no starting state for the graph to rewind to');
+    if (!(j.range.start_ts < j.range.end_ts))
+      throw new Error('the scrubber has no range to move along');
+    j.events.forEach((e) => {
+      if (e.ts < j.range.start_ts || e.ts > j.range.end_ts)
+        throw new Error('an event falls outside the scrubber range');
+    });
+  });
+});
+
+check('the single-agent chart still answers name=', () => {
+  atSecond(210, () => {
+    const j = P.agentHistory(new URLSearchParams('name=SlateHooke'));
+    if (!j.ok || !j.events.length) throw new Error('no history for one agent');
+    if (j.name !== 'SlateHooke') throw new Error('did not name the agent');
+    j.events.forEach((e) => {
+      if (e.agent !== 'SlateHooke')
+        throw new Error('someone else’s event: ' + e.agent);
+    });
+  });
+});
+
 check('every reader-facing string exists in both languages', () => {
   DEMO.setLang('ja');
   const missing = DEMO.translatable().filter((s) => DEMO.translate(s) === s);
@@ -273,28 +405,24 @@ check('every reader-facing string exists in both languages', () => {
 
 check('switching language changes what the payloads say', () => {
   const q = new URLSearchParams('session=SlateHooke');
+  /* Pinned to a moment when this agent exists. Reading "now" passed only
+     because the demo used to open late enough that everyone was born. */
+  const sample = () => atSecond(150, () => ({
+    task: P.agents().agents.find((r) => r.name === 'SlateHooke').task,
+    subject: P.messagesSince(0).messages.map((m) => m.subject).join('|'),
+    said: P.history(q).events.filter((e) => e.kind === 'text')
+            .map((e) => e.text).join('|'),
+    cmd: P.history(q).events.filter((e) => e.kind === 'tool_use')
+           .map((e) => e.text).join('|'),
+  }));
   DEMO.setLang('en');
-  const en = {
-    task: P.agents().agents.find((r) => r.name === 'SlateHooke').task,
-    subject: P.messagesSince(0).messages.map((m) => m.subject).join('|'),
-    said: P.history(q).events.filter((e) => e.kind === 'text')
-            .map((e) => e.text).join('|'),
-    cmd: P.history(q).events.filter((e) => e.kind === 'tool_use')
-           .map((e) => e.text).join('|'),
-  };
+  const en = sample();
   DEMO.setLang('ja');
-  const ja = {
-    task: P.agents().agents.find((r) => r.name === 'SlateHooke').task,
-    subject: P.messagesSince(0).messages.map((m) => m.subject).join('|'),
-    said: P.history(q).events.filter((e) => e.kind === 'text')
-            .map((e) => e.text).join('|'),
-    cmd: P.history(q).events.filter((e) => e.kind === 'tool_use')
-           .map((e) => e.text).join('|'),
-  };
+  const ja = sample();
   DEMO.setLang('en');
   ['task', 'subject', 'said'].forEach((k) => {
     if (en[k] === ja[k]) throw new Error(k + ' did not change with the language');
-    if (!/[ぁ-んァ-ン一-龯]/.test(ja[k]))
+    if (!/[\u3040-\u30ff\u4e00-\u9faf]/.test(ja[k]))
       throw new Error(k + ' has no Japanese in it: ' + ja[k].slice(0, 60));
   });
   /* Commands are deliberately not translated — a terminal prints English. */
