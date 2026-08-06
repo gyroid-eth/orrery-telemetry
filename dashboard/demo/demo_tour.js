@@ -22,60 +22,6 @@
   if (new URLSearchParams(location.search).get('demo') !== '1' &&
       !window.AGENTSTACK_DEMO_FORCE) return;
 
-  /* `at` is seconds into the loop; a beat runs until the next one starts.
-     `look` is the thing being described — missing is fine.
-     `view` names the view the beat is about, for the hint on the right.
-     Both languages sit on the same beat so one cannot drift from the other. */
-  var BEATS = [
-    { at: 0, look: '.gauge.run',
-      en: 'Two orchestrators, nothing delegated yet. Every number on this ' +
-          'strip is read from the machines, not reported by the agents.',
-      ja: '親エージェントが2体、まだ何も委任していません。上の数字はエージェントの' +
-          '自己申告ではなく、実機から読んだ値です。' },
-    { at: 14, look: '.bay[data-name="SlateHooke"]',
-      en: 'The first orchestrator starts a child. A card appears the moment ' +
-          'the process does — nothing had to announce itself.',
-      ja: '1体目の親が子を起動しました。プロセスが立った瞬間にカードが現れます。' +
-          '何かが名乗り出る必要はありません。' },
-    { at: 33, look: '#v-net', view: 'net',
-      en: 'The child answers its parent. In Network view that reply is a ' +
-          'line between them.',
-      ja: '子が親に返信しました。Network 表示では、その返信が2体を結ぶ線になります。' },
-    { at: 40, look: '.bay[data-name="IvoryNoether"]',
-      en: 'A second child, for tests. The ring on each card is its context ' +
-          'window filling up.',
-      ja: '2体目の子はテスト担当です。カードのリングは、その子のコンテキスト窓が' +
-          '埋まっていく様子を示します。' },
-    { at: 60, look: '.bay[data-name="FlintGauss"]',
-      en: 'A third child on the other rail. Running versus standby is the ' +
-          'one number worth watching on a busy day.',
-      ja: 'もう一方の系統で3体目が動き出しました。忙しい日に見るべき数字は、' +
-          '稼働中と待機中の比です。' },
-    { at: 95, look: '.bay[data-name="RustPasteur"]',
-      en: 'Four children now. Click any card to read what that agent is ' +
-          'actually doing, line by line.',
-      ja: '子が4体になりました。カードを押すと、そのエージェントが実際に何をしているかを' +
-          '1行ずつ読めます。' },
-    { at: 118, look: '#v-net', view: 'net',
-      en: 'A release check fails and the second orchestrator holds the gate. ' +
-          'The traffic that decided it is on the graph.',
-      ja: 'リリース検査が1件落ち、2体目の親がゲートを閉じました。その判断に至った' +
-          'やり取りはグラフ上に残っています。' },
-    { at: 146, look: '.bay[data-name="IvoryNoether"]',
-      en: 'Tests come back green. The context rings show which agents have ' +
-          'room left and which are nearly full.',
-      ja: 'テストが緑で返ってきました。リングを見れば、どの子にまだ余裕があり、' +
-          'どの子がもう一杯かが分かります。' },
-    { at: 182, look: '.bay[data-name="IvoryNoether"]',
-      en: 'A child finishes. It stops running but stays on screen — what it ' +
-          'did is still there to read.',
-      ja: '子が1体終わりました。稼働は止まりますが画面には残り、何をしたかは' +
-          'あとから読めます。' },
-    { at: 203, look: '.gauge.tot',
-      en: 'The gate opens and the work lands. In a moment this starts over.',
-      ja: 'ゲートが開き、作業が入りました。まもなく最初から繰り返します。' },
-  ];
-
   var CARD = {
     en: '<h2>This is a demo — no machines behind it</h2>' +
         '<p>Nine agents, a four-minute story on a loop. The data is written, ' +
@@ -158,9 +104,17 @@
     return n;
   }
 
+  /* Beats come from the active story, so switching story re-narrates. */
+  function beats() {
+    var d = window.AGENTSTACK_DEMO;
+    return (d && d.beats && d.beats()) || [];
+  }
+
   function beatAt(t) {
-    var cur = BEATS[BEATS.length - 1];
-    for (var i = 0; i < BEATS.length; i++) if (BEATS[i].at <= t) cur = BEATS[i];
+    var b = beats();
+    if (!b.length) return null;
+    var cur = b[b.length - 1];
+    for (var i = 0; i < b.length; i++) if (b[i].at <= t) cur = b[i];
     return cur;
   }
 
@@ -197,7 +151,8 @@
     var d = window.AGENTSTACK_DEMO;
     if (!d) return;
     var t = d.phase(), b = beatAt(t), l = lang();
-    bar.style.width = (t / d.loop * 100).toFixed(2) + '%';
+    bar.style.width = (t / d.loop() * 100).toFixed(2) + '%';
+    if (!b) return;
     if (b !== shown || l !== shownLang) {
       shown = b; shownLang = l; txt.textContent = b[l];
     }
@@ -292,6 +247,6 @@
     document.addEventListener('DOMContentLoaded', build);
   else build();
 
-  window.AGENTSTACK_TOUR = { beats: BEATS, beatAt: beatAt,
+  window.AGENTSTACK_TOUR = { beats: beats, beatAt: beatAt,
                              card: CARD, switchTo: switchTo };
 })();

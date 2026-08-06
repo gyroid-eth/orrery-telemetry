@@ -70,12 +70,18 @@ function sameKeys(actual, expected, what) {
   }
 }
 
-/* Load the demo the way a browser would, with ?demo=1 present. */
-function loadDemo() {
-  const src = fs.readFileSync(
-    path.join(__dirname, 'demo_api.js'), 'utf8');
+/* Load the demo the way a browser would: every story file first, then the
+   fixture, with the story selected on the query string. The suite then runs
+   once per registered story — a second story that answers half the endpoints
+   is exactly the failure this is here to catch. */
+function storyFiles() {
+  return fs.readdirSync(__dirname)
+    .filter((f) => /^story_.*\.js$/.test(f)).sort();
+}
+
+function loadDemo(storyId) {
   const win = {
-    location: { search: '?demo=1' },
+    location: { search: '?demo=1&story=' + storyId },
     fetch: () => Promise.reject(new Error('no network in this test')),
     dispatchEvent: () => true,
     URLSearchParams,
@@ -84,54 +90,58 @@ function loadDemo() {
   };
   win.window = win;
   vm.createContext(win);
-  vm.runInContext(src, win);
+  storyFiles().forEach((f) => {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, f), 'utf8'), win);
+  });
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8'), win);
   if (!win.AGENTSTACK_DEMO) throw new Error('demo did not install itself');
+  if (win.AGENTSTACK_DEMO.story().id !== storyId) {
+    throw new Error('asked for story ' + storyId + ', got ' +
+      win.AGENTSTACK_DEMO.story().id);
+  }
   return win;
 }
 
-const SANDBOX = loadDemo();
-const P = SANDBOX.AGENTSTACK_DEMO.payloads;
+let SANDBOX, P, SANDBOX_DATE, REAL_NOW, DEMO, STORY_ID;
 
 /* The fixture reads the clock from inside the sandbox, which has its own
    Date. Overriding Date.now out here would move a clock nobody is looking
    at — the first version of this test did exactly that and reported a story
-   that never advanced. Drive the one the code actually reads. */
-const SANDBOX_DATE = vm.runInContext('Date', SANDBOX);
-const REAL_NOW = SANDBOX_DATE.now;
-const DEMO = SANDBOX.AGENTSTACK_DEMO;
+   that never advanced. Drive the one the code actually reads.
 
-/* `t` here means "this many seconds into the story", not "this long after
-   the page opened" — the demo deliberately starts part-way through, so the
-   two differ. Ask the fixture where it currently is and shift by the gap,
-   rather than assuming the story begins when the clock does. */
+   `t` means "this many seconds into the story", not "this long after the
+   page opened" — a story deliberately starts part-way through, so the two
+   differ. Ask the fixture where it is and shift by the gap. */
 function atSecond(t, fn) {
   const base = REAL_NOW();
-  const shift = (t - DEMO.phase() + DEMO.loop) % DEMO.loop;
+  const shift = (t - DEMO.phase() + DEMO.loop()) % DEMO.loop();
   SANDBOX_DATE.now = () => base + shift * 1000;
   try { return fn(); } finally { SANDBOX_DATE.now = REAL_NOW; }
 }
 
-check('agents rows carry exactly the fields the server sends', () => {
+function suite() {
+check('[' + STORY_ID + '] agents rows carry exactly the fields the server sends', () => {
   const rows = P.agents().agents;
   if (!rows.length) throw new Error('no agents at t=0');
   rows.forEach((r) => sameKeys(r, REAL_AGENT_KEYS, 'agent ' + r.name));
 });
 
-check('graph has the server’s top-level shape', () => {
+check('[' + STORY_ID + '] graph has the server’s top-level shape', () => {
   sameKeys(P.graph(), REAL_GRAPH_KEYS, 'graph payload');
 });
 
-check('graph nodes carry exactly the fields the server sends', () => {
+check('[' + STORY_ID + '] graph nodes carry exactly the fields the server sends', () => {
   P.graph().nodes.forEach((n) => sameKeys(n, REAL_NODE_KEYS, 'node ' + n.name));
 });
 
-check('edges and spawn rows match the server’s shape', () => {
+check('[' + STORY_ID + '] edges and spawn rows match the server’s shape', () => {
   const g = P.graph();
   g.edges.forEach((e) => sameKeys(e, REAL_EDGE_KEYS, 'edge'));
   g.spawn.forEach((s) => sameKeys(s, REAL_SPAWN_KEYS, 'spawn'));
 });
 
-check('no edge or lineage points at an agent that is not on screen', () => {
+check('[' + STORY_ID + '] no edge or lineage points at an agent that is not on screen', () => {
   const g = P.graph();
   const present = new Set(g.nodes.map((n) => n.name));
   g.edges.concat(g.spawn).forEach((e) => {
@@ -141,7 +151,7 @@ check('no edge or lineage points at an agent that is not on screen', () => {
   });
 });
 
-check('the story actually moves — cast and edges grow through the loop', () => {
+check('[' + STORY_ID + '] the story actually moves — cast and edges grow through the loop', () => {
   /* Sampling the same builders the page calls, at points across the loop.
      The builders read the wall clock, so drive them by faking it. */
   const seen = [1, 50, 100, 150, 200, 235].map((t) => atSecond(t, () => {
@@ -161,8 +171,8 @@ check('the story actually moves — cast and edges grow through the loop', () =>
    entry point sits past every spawn, a visitor sees a busy screen and none
    of the thing that makes it busy — the first version opened 147 seconds
    after the last spawn, which is most of a loop spent waiting. */
-check('a visitor sees a child spawned soon after they start watching', () => {
-  const open = DEMO.opensAt;
+check('[' + STORY_ID + '] a visitor sees a child spawned soon after they start watching', () => {
+  const open = DEMO.opensAt();
   const at = (t) => atSecond(t, () => P.graph().nodes.length);
   const start = at(open);
   let sawGrowth = 0;
@@ -174,8 +184,8 @@ check('a visitor sees a child spawned soon after they start watching', () => {
   }
 });
 
-check('the opening is not an empty screen', () => {
-  atSecond(DEMO.opensAt, () => {
+check('[' + STORY_ID + '] the opening is not an empty screen', () => {
+  atSecond(DEMO.opensAt(), () => {
     const g = P.graph();
     const live = g.nodes.filter((n) => n.running);
     if (live.length < 2) throw new Error('landed on ' + live.length + ' running');
@@ -185,7 +195,7 @@ check('the opening is not an empty screen', () => {
   });
 });
 
-check('an agent that finishes stops running but stays on screen', () => {
+check('[' + STORY_ID + '] an agent that finishes stops running but stays on screen', () => {
   const before = atSecond(150,
     () => P.graph().nodes.find((n) => n.name === 'IvoryNoether'));
   const after = atSecond(200,
@@ -196,7 +206,7 @@ check('an agent that finishes stops running but stays on screen', () => {
   if (after.state !== 'finished') throw new Error('state is ' + after.state);
 });
 
-check('messages-since never returns the future, and honours the cursor', () => {
+check('[' + STORY_ID + '] messages-since never returns the future, and honours the cursor', () => {
   atSecond(120, () => {
     const all = P.messagesSince(0).messages;
     if (!all.length) throw new Error('nothing delivered by t=120');
@@ -211,7 +221,7 @@ check('messages-since never returns the future, and honours the cursor', () => {
 /* The pane is where a visitor finds out what an agent does. An empty one
    renders as "comm failed" or a blank column — the page survives, and the
    product looks like it has no transcript feature at all. */
-check('every agent on screen has a transcript, shaped like the server’s', () => {
+check('[' + STORY_ID + '] every agent on screen has a transcript, shaped like the server’s', () => {
   const q = (n) => new URLSearchParams('session=' + encodeURIComponent(n));
   P.graph().nodes.forEach((n) => {
     const h = P.history(q(n.name));
@@ -232,8 +242,8 @@ check('every agent on screen has a transcript, shaped like the server’s', () =
 
 /* Checking only the current moment would pass for most of the loop and fail
    for whoever opens it during the two seconds after an agent spawns. Sweep. */
-check('no moment in the loop shows a present agent with nothing said', () => {
-  for (let t = 0; t < DEMO.loop; t += 1) {
+check('[' + STORY_ID + '] no moment in the loop shows a present agent with nothing said', () => {
+  for (let t = 0; t < DEMO.loop(); t += 1) {
     atSecond(t, () => {
       P.graph().nodes.forEach((n) => {
         const h = P.history(
@@ -248,7 +258,7 @@ check('no moment in the loop shows a present agent with nothing said', () => {
 /* The static bundle has no server to fall back to, so it turns the demo on
    itself rather than relying on a query string nobody types. If that flag
    stops working the bare URL renders a dashboard waiting forever on /api. */
-check('the build-time flag turns the demo on without ?demo=1', () => {
+check('[' + STORY_ID + '] the build-time flag turns the demo on without ?demo=1', () => {
   const src = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
   const win = {
     location: { search: '' }, AGENTSTACK_DEMO_FORCE: 1,
@@ -271,20 +281,20 @@ check('the build-time flag turns the demo on without ?demo=1', () => {
     throw new Error('installed itself on a page that asked for neither');
 });
 
-check('an unknown agent gets the server’s refusal, not a blank transcript', () => {
+check('[' + STORY_ID + '] an unknown agent gets the server’s refusal, not a blank transcript', () => {
   const h = P.history(new URLSearchParams('session=NobodyHere'));
   if (h.ok) throw new Error('invented a transcript for an agent that is gone');
   if (!h.error) throw new Error('refused without saying why');
 });
 
-check('the transcript grows as the story does', () => {
+check('[' + STORY_ID + '] the transcript grows as the story does', () => {
   const q = new URLSearchParams('session=AmberKepler');
   const early = atSecond(20, () => P.history(q).events.length);
   const late = atSecond(210, () => P.history(q).events.length);
   if (late <= early) throw new Error(`frozen at ${early} → ${late}`);
 });
 
-check('deliverables match the server’s shape and the badge count', () => {
+check('[' + STORY_ID + '] deliverables match the server’s shape and the badge count', () => {
   P.graph().nodes.forEach((n) => {
     const d = P.deliverables(
       new URLSearchParams('agent=' + encodeURIComponent(n.name)));
@@ -303,7 +313,7 @@ check('deliverables match the server’s shape and the badge count', () => {
 /* The drawer is opened to read the exchange. A row with an empty body is
    a header with nothing under it, which reads as "this product does not
    keep message contents" rather than "this is a demo". */
-check('the drawer has something to read, in both languages', () => {
+check('[' + STORY_ID + '] the drawer has something to read, in both languages', () => {
   const q = new URLSearchParams('a=AmberKepler&b=SlateHooke');
   ['en', 'ja'].forEach((l) => {
     DEMO.setLang(l);
@@ -325,8 +335,8 @@ check('the drawer has something to read, in both languages', () => {
   DEMO.setLang('en');
 });
 
-check('every message was written in both languages', () => {
-  DEMO.script.forEach((m) => {
+check('[' + STORY_ID + '] every message was written in both languages', () => {
+  DEMO.script().forEach((m) => {
     if (!m.body) throw new Error('at ' + m.at + ' has no body');
     if (!m.body_ja) throw new Error('at ' + m.at + ' has no Japanese body');
     if (!/[\u3040-\u30ff\u4e00-\u9faf]/.test(m.body_ja))
@@ -336,7 +346,7 @@ check('every message was written in both languages', () => {
 
 /* The page advances its comet cursor from `now`. Returning `ts` instead
    left it pinned at zero and only the seen-key set stopped the replay. */
-check('messages-since carries the cursor the page reads', () => {
+check('[' + STORY_ID + '] messages-since carries the cursor the page reads', () => {
   atSecond(120, () => {
     const j = P.messagesSince(0);
     sameKeys(j, REAL_SINCE_TOP_KEYS, 'messages-since payload');
@@ -351,7 +361,7 @@ check('messages-since carries the cursor the page reads', () => {
 /* Replay asks with `names=A,B,C`. The fixture read `name` only, so Replay
    opened on an empty timeline and had nothing to play — and an empty event
    list is a legal answer, so nothing anywhere said so. */
-check('replay gets a timeline, not an empty one', () => {
+check('[' + STORY_ID + '] replay gets a timeline, not an empty one', () => {
   atSecond(210, () => {
     const q = new URLSearchParams(
       'names=AmberKepler,SlateHooke,IvoryNoether&include_pane_states=1');
@@ -381,7 +391,7 @@ check('replay gets a timeline, not an empty one', () => {
   });
 });
 
-check('the single-agent chart still answers name=', () => {
+check('[' + STORY_ID + '] the single-agent chart still answers name=', () => {
   atSecond(210, () => {
     const j = P.agentHistory(new URLSearchParams('name=SlateHooke'));
     if (!j.ok || !j.events.length) throw new Error('no history for one agent');
@@ -393,7 +403,7 @@ check('the single-agent chart still answers name=', () => {
   });
 });
 
-check('every reader-facing string exists in both languages', () => {
+check('[' + STORY_ID + '] every reader-facing string exists in both languages', () => {
   DEMO.setLang('ja');
   const missing = DEMO.translatable().filter((s) => DEMO.translate(s) === s);
   DEMO.setLang('en');
@@ -403,7 +413,7 @@ check('every reader-facing string exists in both languages', () => {
   }
 });
 
-check('switching language changes what the payloads say', () => {
+check('[' + STORY_ID + '] switching language changes what the payloads say', () => {
   const q = new URLSearchParams('session=SlateHooke');
   /* Pinned to a moment when this agent exists. Reading "now" passed only
      because the demo used to open late enough that everyone was born. */
@@ -429,7 +439,7 @@ check('switching language changes what the payloads say', () => {
   if (en.cmd !== ja.cmd) throw new Error('tool calls were translated');
 });
 
-check('relative times match the format the server writes', () => {
+check('[' + STORY_ID + '] relative times match the format the server writes', () => {
   /* server.py _rel: "21s 前" / "3m 前" / "2h 前" / "1d 前". */
   P.graph().nodes.forEach((n) => {
     if (!/^(—|\d+[smhd] 前)$/.test(n.rel))
@@ -437,10 +447,10 @@ check('relative times match the format the server writes', () => {
   });
 });
 
-check('nothing in the fixture came from a real mailbox', () => {
+check('[' + STORY_ID + '] nothing in the fixture came from a real mailbox', () => {
   /* Names of things that exist on the author’s machine. If one of these
      ever appears here, someone exported instead of writing. */
-  ['demo_api.js', 'demo_tour.js'].forEach((f) => {
+  ['demo_api.js', 'demo_tour.js'].concat(storyFiles()).forEach((f) => {
     const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
     ['Syncthing', '<vault-directory>', 'mcp_agent_mail', '/Users/',
      'ProOpus', 'PluckyEinstein', 'biomatterlab',
@@ -452,39 +462,58 @@ check('nothing in the fixture came from a real mailbox', () => {
 });
 
 /* The narration rings whatever it is talking about. A ring that points at
-   nothing is worse than no ring — it says the demo has drifted from the
+   nothing is worse than no ring — it says the story has drifted from the
    page. Renaming an agent is the way that happens. */
-check('the narration points at agents that exist', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'demo_tour.js'), 'utf8');
-  const win = {
-    location: { search: '?demo=1' },
-    URLSearchParams,
-    document: { readyState: 'loading', addEventListener: () => {} },
-    addEventListener: () => {},
-  };
-  win.window = win;
-  vm.createContext(win);
-  vm.runInContext(src, win);      // build() waits for DOMContentLoaded here
-  const beats = win.AGENTSTACK_TOUR && win.AGENTSTACK_TOUR.beats;
+check('[' + STORY_ID + '] the narration points at agents that exist', () => {
+  const beats = DEMO.beats();
   if (!beats || !beats.length) throw new Error('no beats');
-  const card = win.AGENTSTACK_TOUR.card;
-  if (!card.en || !card.ja) throw new Error('the opening card is one-sided');
-
-  const cast = new Set(DEMO.cast.map((c) => c.name));
+  const cast = new Set(DEMO.cast().map((c) => c.name));
   let prev = -1;
   beats.forEach((b) => {
     if (!b.en) throw new Error('beat at ' + b.at + ' says nothing');
     if (!b.ja) throw new Error('beat at ' + b.at + ' has no Japanese');
-    if (!/[ぁ-んァ-ン一-龯]/.test(b.ja))
+    if (!/[\u3040-\u30ff\u4e00-\u9faf]/.test(b.ja))
       throw new Error('beat at ' + b.at + ' left English in the ja slot');
     if (b.at <= prev) throw new Error('beats out of order at ' + b.at);
-    if (b.at < 0 || b.at >= DEMO.loop)
+    if (b.at < 0 || b.at >= DEMO.loop())
       throw new Error('beat at ' + b.at + ' falls outside the loop');
     prev = b.at;
     const m = /\.bay\[data-name="([^"]+)"\]/.exec(b.look || '');
     if (m && !cast.has(m[1]))
       throw new Error('rings an agent that is not in the cast: ' + m[1]);
   });
+});
+
+}
+
+/* Every registered story, not just the default one. */
+const IDS = ['migration'].concat(
+  storyFiles().map((f) => f.replace(/^story_|\.js$/g, ''))
+).filter((v, i, a) => a.indexOf(v) === i);
+
+for (const id of IDS) {
+  STORY_ID = id;
+  SANDBOX = loadDemo(id);
+  P = SANDBOX.AGENTSTACK_DEMO.payloads;
+  DEMO = SANDBOX.AGENTSTACK_DEMO;
+  SANDBOX_DATE = vm.runInContext('Date', SANDBOX);
+  REAL_NOW = SANDBOX_DATE.now;
+  suite();
+}
+
+/* The opening card belongs to the tour, not to a story. */
+check('the opening card is written in both languages', () => {
+  const win = {
+    location: { search: '?demo=1' }, URLSearchParams,
+    document: { readyState: 'loading', addEventListener: () => {} },
+    addEventListener: () => {},
+  };
+  win.window = win;
+  vm.createContext(win);
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, 'demo_tour.js'), 'utf8'), win);
+  const card = win.AGENTSTACK_TOUR && win.AGENTSTACK_TOUR.card;
+  if (!card || !card.en || !card.ja) throw new Error('the card is one-sided');
 });
 
 console.log('');

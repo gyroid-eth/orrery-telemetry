@@ -45,29 +45,11 @@
   function lang() { return LANG; }
   function tx(s) { return LANG === 'ja' && JA[s] ? JA[s] : s; }
 
-  var LOOP = 240;          // seconds; the story repeats from the top
-
-  /* Where a visitor comes in. This was 108 — far enough along that all four
-     children already existed, the screen looked busy, and the one thing the
-     product is actually about, a parent handing work to a child, was 147
-     seconds away. Busy is not the point; watching the delegation happen is.
-
-     So land just before the first spawn. The two orchestrators are already
-     on screen with tasks and a transcript, so it is not an empty page, and
-     the first child appears six seconds later. */
-  var OPENS_AT = 9;
-  var START = Date.now() - OPENS_AT * 1000;
-
-  /* The clock starts when someone starts watching, not when the page loads.
-     Otherwise time spent reading the opening card comes out of the opening
-     of the story, and a slow reader lands after the spawns they came to see. */
-  function restart() { START = Date.now() - OPENS_AT * 1000; return OPENS_AT; }
-
   /* ── the cast ────────────────────────────────────────────────────────
      `born` is when the agent first appears, `dies` when it stops running
      (it stays on screen as a finished husk, which is what a real one does).
      Times are seconds into the loop. */
-  var CAST = [
+  var CAST_MIGRATION = [
     { name: 'AmberKepler', role: 'orchestrator', emoji: '🎯', group: 'demo',
       model: 'Opus 5', model_raw: 'claude-opus-5', provider: 'anthropic',
       program: 'claude-code', born: 0, dies: null, ctx0: 38, ctxRate: 0.045,
@@ -96,7 +78,7 @@
 
   /* Agents that finished before the loop starts. They give the graph a past,
      which is most of what the view is for. */
-  var PAST = [
+  var PAST_MIGRATION = [
     { name: 'CedarLovelace', parent: 'AmberKepler', model: 'GPT 5.6',
       model_raw: 'gpt-5.6', provider: 'openai', program: 'codex',
       task: 'Survey the call sites', retired: true, ago: 5400 },
@@ -112,7 +94,7 @@
   /* ── what gets said ──────────────────────────────────────────────────
      One entry per message. `at` is seconds into the loop. Subjects are the
      only text a visitor reads, so they carry the explanation. */
-  var SCRIPT = [
+  var SCRIPT_MIGRATION = [
     { at: 16, from: 'AmberKepler', to: 'SlateHooke',
       subject: 'Task: map the old schema field by field',
       importance: 'high',
@@ -300,6 +282,68 @@
         '\n' +
         'pytest tests/mapping: 完成した表に対して24件パス。' },
   ];
+
+  /* ── the narration ───────────────────────────────────────────────────
+     What the strip says, and what it rings while saying it. `at` is seconds
+     into the loop; a beat runs until the next one starts. `look` is a CSS
+     selector for the thing being described — one that matches nothing costs
+     the ring, not the caption. Beats belong to the story, not to the tour,
+     so a second story narrates itself. */
+  var BEATS_MIGRATION = [
+    { at: 0, look: '.gauge.run',
+      en: 'Two orchestrators, nothing delegated yet. Every number on this ' +
+          'strip is read from the machines, not reported by the agents.',
+      ja: '親エージェントが2体、まだ何も委任していません。上の数字はエージェントの' +
+          '自己申告ではなく、実機から読んだ値です。' },
+    { at: 14, look: '.bay[data-name="SlateHooke"]',
+      en: 'The first orchestrator starts a child. A card appears the moment ' +
+          'the process does — nothing had to announce itself.',
+      ja: '1体目の親が子を起動しました。プロセスが立った瞬間にカードが現れます。' +
+          '何かが名乗り出る必要はありません。' },
+    { at: 33, look: '#v-net', view: 'net',
+      en: 'The child answers its parent. In Network view that reply is a ' +
+          'line between them.',
+      ja: '子が親に返信しました。Network 表示では、その返信が2体を結ぶ線になります。' },
+    { at: 40, look: '.bay[data-name="IvoryNoether"]',
+      en: 'A second child, for tests. The ring on each card is its context ' +
+          'window filling up.',
+      ja: '2体目の子はテスト担当です。カードのリングは、その子のコンテキスト窓が' +
+          '埋まっていく様子を示します。' },
+    { at: 60, look: '.bay[data-name="FlintGauss"]',
+      en: 'A third child on the other rail. Running versus standby is the ' +
+          'one number worth watching on a busy day.',
+      ja: 'もう一方の系統で3体目が動き出しました。忙しい日に見るべき数字は、' +
+          '稼働中と待機中の比です。' },
+    { at: 95, look: '.bay[data-name="RustPasteur"]',
+      en: 'Four children now. Click any card to read what that agent is ' +
+          'actually doing, line by line.',
+      ja: '子が4体になりました。カードを押すと、そのエージェントが実際に何をしているかを' +
+          '1行ずつ読めます。' },
+    { at: 118, look: '#v-net', view: 'net',
+      en: 'A release check fails and the second orchestrator holds the gate. ' +
+          'The traffic that decided it is on the graph.',
+      ja: 'リリース検査が1件落ち、2体目の親がゲートを閉じました。その判断に至った' +
+          'やり取りはグラフ上に残っています。' },
+    { at: 146, look: '.bay[data-name="IvoryNoether"]',
+      en: 'Tests come back green. The context rings show which agents have ' +
+          'room left and which are nearly full.',
+      ja: 'テストが緑で返ってきました。リングを見れば、どの子にまだ余裕があり、' +
+          'どの子がもう一杯かが分かります。' },
+    { at: 182, look: '.bay[data-name="IvoryNoether"]',
+      en: 'A child finishes. It stops running but stays on screen — what it ' +
+          'did is still there to read.',
+      ja: '子が1体終わりました。稼働は止まりますが画面には残り、何をしたかは' +
+          'あとから読めます。' },
+    { at: 203, look: '.gauge.tot',
+      en: 'The gate opens and the work lands. In a moment this starts over.',
+      ja: 'ゲートが開き、作業が入りました。まもなく最初から繰り返します。' },
+  ];
+
+  /* ── stories ─────────────────────────────────────────────────────────
+     A story is one self-contained cast, script and set of transcripts.
+     Others register themselves on window.AGENTSTACK_STORIES before this
+     file loads; the contract they write to is demo/STORY_CONTRACT.md. */
+  var STORIES = window.AGENTSTACK_STORIES = window.AGENTSTACK_STORIES || {};
 
   function now() { return (Date.now() - START) / 1000; }
   function phase() { return now() % LOOP; }
@@ -670,7 +714,7 @@
      one opened early — which is the behaviour of the real thing.
 
      tool_use text is "name  args", two spaces, the way the page splits it. */
-  var TRANSCRIPTS = {
+  var TRANSCRIPTS_MIGRATION = {
     AmberKepler: [
       [0, 'user', 'text',
        'Move the store onto the v2 schema. Nothing ships until the mapping ' +
@@ -857,7 +901,7 @@
   /* What an agent left behind. The real server links these into a vault;
      there is none here, so they render as plain rows rather than links
      that would open nothing. */
-  var DELIVERABLES = {
+  var DELIVERABLES_MIGRATION = {
     SlateHooke: [['Field-by-field mapping, v1 to v2', 'docs/mapping.md', 1500]],
     IvoryNoether: [['Mapping test suite', 'tests/mapping/', 900],
                    ['Note on the two-writer failure', 'docs/two-writers.md', 600]],
@@ -884,7 +928,7 @@
 
      Built from pairs rather than an object literal because the English side
      is often a concatenation, which is not a legal key. */
-  var JA = (function () {
+  var JA_MIGRATION = (function () {
     var t = {};
     [
       ['Read the old schema and write the field-by-field mapping',
@@ -1068,6 +1112,47 @@
     return out;
   }
 
+  /* Registered here rather than beside the declarations above: `var` hoists
+     the name but not the value, so a story assembled before its transcripts
+     and deliverables exist gets undefined for both — and useStory would then
+     hand the payload builders nothing at all. */
+  STORIES.migration = {
+    id: 'migration',
+    label: { en: 'Schema migration', ja: 'スキーマ移行' },
+    loop: 240,
+    /* Where a visitor comes in. This was 108 — far enough along that all
+       four children already existed, the screen looked busy, and the one
+       thing the product is about, a parent handing work to a child, was 147
+       seconds away. Land just before the first spawn instead: the two
+       orchestrators are already working, so it is not an empty page. */
+    opensAt: 9,
+    cast: CAST_MIGRATION, past: PAST_MIGRATION, script: SCRIPT_MIGRATION,
+    transcripts: TRANSCRIPTS_MIGRATION, deliverables: DELIVERABLES_MIGRATION,
+    beats: BEATS_MIGRATION, ja: JA_MIGRATION,
+  };
+
+  var STORY, CAST, PAST, SCRIPT, TRANSCRIPTS, DELIVERABLES, JA, BEATS;
+  var LOOP, OPENS_AT, START;
+
+  function useStory(id) {
+    var st = STORIES[id] || STORIES.migration;
+    STORY = st;
+    CAST = st.cast; PAST = st.past; SCRIPT = st.script;
+    TRANSCRIPTS = st.transcripts; DELIVERABLES = st.deliverables;
+    BEATS = st.beats; JA = st.ja;
+    LOOP = st.loop; OPENS_AT = st.opensAt;
+    restart();
+    return st.id;
+  }
+
+
+  /* The clock starts when someone starts watching, not when the page loads.
+     Otherwise time spent reading the opening card comes out of the opening
+     of the story, and a slow reader lands after the spawns they came to see. */
+  function restart() { START = Date.now() - OPENS_AT * 1000; return OPENS_AT; }
+
+  useStory(params.get('story') || 'migration');
+
   var ROUTES = {
     '/api/agents': agentsPayload,
     '/api/graph': graphPayload,
@@ -1131,9 +1216,15 @@
     return 'assets/' + encodeURIComponent(name) + '.svg?v=' + v;
   }
 
-  window.AGENTSTACK_DEMO = { loop: LOOP, cast: CAST, script: SCRIPT,
+  window.AGENTSTACK_DEMO = { loop: function () { return LOOP; },
+                             cast: function () { return CAST; },
+                             script: function () { return SCRIPT; },
                              lang: lang, setLang: setLang, translate: tx,
-                             restart: restart, opensAt: OPENS_AT,
+                             restart: restart,
+                             opensAt: function () { return OPENS_AT; },
+                             beats: function () { return BEATS; },
+                             stories: STORIES, story: function () { return STORY; },
+                             useStory: useStory,
                              translatable: translatable,
                              portraitURL: portraitURL, assetURL: assetURL, phase: phase,
                              payloads: { agents: agentsPayload,
