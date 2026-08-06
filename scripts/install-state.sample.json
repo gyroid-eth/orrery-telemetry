@@ -185,6 +185,7 @@
     "/home/alice/.agentstack/codex",
     "/home/alice/.agentstack/dashboard",
     "/home/alice/.agentstack/dashboard/assets",
+    "/home/alice/.agentstack/dashboard/demo",
     "/home/alice/.agentstack/dashboard/portraits_64",
     "/home/alice/.agentstack/dashboard/portraits_pixel",
     "/home/alice/.agentstack/dashboard/providers",
