@@ -1145,7 +1145,7 @@
      literally rather than as --alert/--cyan because the warm theme aliases
      cyan to amber, which would erase the distinction exactly here. */
   .node .bubo{fill:none;stroke:var(--amber);stroke-width:1.1;
-    stroke-dasharray:24 76;opacity:.72;
+    opacity:.72;
     transform-box:fill-box;transform-origin:center}
   .node .askbub .bubo{stroke:#ff6a5d;opacity:1;stroke-width:1.6}
   .node .qbub .bubo{stroke:#36e8ff;opacity:.95;stroke-width:1.6}
@@ -3861,23 +3861,24 @@ function renderLiveStateBubble(grp,actState){
     role:'img',
     'aria-label':question?'agent question':'approval requested'
   });
-  // 破線の軌道環はノードを囲む。字はその右上、環の外周に載せる。
-  // Outside the context arc, not inside it. At NR*1.18 the ring sat at 15.3
-  // against a context arc at NR+5 = 18 — a signal that a human is blocked,
-  // drawn underneath the gauge that is always on. NR+8 puts it in the clear
-  // band between the context arc and the halo at NR+11.
+  // 軌道環はノードを囲む。字はその右上、環の外周に載せる。
   //
-  // The clearance is 0.1px and that is not a typo: .ctx-arc-glow is 4.2 wide
-  // at r=18, so it reaches 20.1, and this ring is 1.6 wide at 21, so it
-  // starts at 20.2. They read as separate only because the glow is at
-  // opacity .16. Change the width of either one and look at both — measured
-  // on screen, not recomputed from these numbers.
+  // This ring sits at NR*1.18 = 15.3, inside the context arc at NR+5 = 18,
+  // and that is correct. It was moved out to NR+8 for a while on the theory
+  // that the gauge was burying it; the theory was wrong. The ring was hard
+  // to see because it was dashed and drew 24% of its circumference, not
+  // because anything covered it. Drawn as a full circle it reads clearly
+  // from inside the gauge, so the radius came back.
+  //
+  // The lesson is the cheap test that was skipped: remove the dash and look.
+  // Two numbers agreeing with a story is not the same as the story being
+  // true.
   bubble.appendChild(svgEl('circle',{
-    class:'bubo',cx:0,cy:0,r:(NR+8).toFixed(2),pathLength:'100'
+    class:'bubo',cx:0,cy:0,r:(NR*1.18).toFixed(2),pathLength:'100'
   }));
   const glyph=svgEl('text',{
     class:question?'bq':'bx',
-    x:(NR*1.19).toFixed(2),y:(-NR*1.19).toFixed(2),'text-anchor':'middle'
+    x:(NR*.84).toFixed(2),y:(-NR*.84).toFixed(2),'text-anchor':'middle'
   });
   glyph.textContent=question?'?':'!';
   bubble.appendChild(glyph);
