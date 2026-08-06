@@ -53,334 +53,9 @@
     return (JA && JA[s]) || CORE_JA[s] || s;
   }
 
-  /* ── the cast ────────────────────────────────────────────────────────
-     `born` is when the agent first appears, `dies` when it stops running
-     (it stays on screen as a finished husk, which is what a real one does).
-     Times are seconds into the loop. */
-  var CAST_MIGRATION = [
-    { name: 'AmberKepler', role: 'orchestrator', emoji: '🎯', group: 'demo',
-      model: 'Opus 5', model_raw: 'claude-opus-5', provider: 'anthropic',
-      program: 'claude-code', born: 0, dies: null, ctx0: 38, ctxRate: 0.045,
-      task: 'Plan the migration and hand each piece to a child' },
-    { name: 'SlateHooke', parent: 'AmberKepler', role: 'schema', emoji: '🧩',
-      model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
-      program: 'codex', born: 15, dies: null, ctx0: 12, ctxRate: 0.12,
-      task: 'Read the old schema and write the field-by-field mapping' },
-    { name: 'IvoryNoether', parent: 'AmberKepler', role: 'tests', emoji: '🧪',
-      model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
-      program: 'codex', born: 40, dies: 182, ctx0: 9, ctxRate: 0.2,
-      states: [[124, 144, 'ask']],
-      task: 'Cover the mapping with tests before anything is moved' },
-    { name: 'RustPasteur', parent: 'AmberKepler', role: 'docs', emoji: '📄',
-      model: 'Sonnet 5', model_raw: 'claude-sonnet-5', provider: 'anthropic',
-      program: 'claude-code', born: 95, dies: null, ctx0: 7, ctxRate: 0.09,
-      states: [[140, 168, 'question']],
-      task: 'Write the upgrade note the way an operator would read it' },
-    { name: 'MossSomerville', role: 'orchestrator', emoji: '🎯', group: 'demo',
-      model: 'Opus 5', model_raw: 'claude-opus-5', provider: 'anthropic',
-      program: 'claude-code', born: 0, dies: null, ctx0: 55, ctxRate: 0.03,
-      task: 'Watch the release rail and hold the gate' },
-    { name: 'FlintGauss', parent: 'MossSomerville', role: 'release', emoji: '🚦',
-      model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
-      program: 'codex', born: 60, dies: null, ctx0: 14, ctxRate: 0.1,
-      task: 'Run the release checks and report what fails' },
-  ];
 
-  /* Agents that finished before the loop starts. They give the graph a past,
-     which is most of what the view is for. */
-  var PAST_MIGRATION = [
-    { name: 'CedarLovelace', parent: 'AmberKepler', model: 'GPT 5.6',
-      model_raw: 'gpt-5.6', provider: 'openai', program: 'codex',
-      task: 'Survey the call sites', retired: true, ago: 5400 },
-    { name: 'OchreCurie', parent: 'AmberKepler', model: 'Sonnet 5',
-      model_raw: 'claude-sonnet-5', provider: 'anthropic',
-      program: 'claude-code', task: 'Draft the rollback plan',
-      retired: true, ago: 9200 },
-    { name: 'UmberBohr', parent: 'MossSomerville', model: 'GPT 5.6',
-      model_raw: 'gpt-5.6', provider: 'openai', program: 'codex',
-      task: 'Reproduce the reported failure', retired: true, ago: 14400 },
-  ];
 
-  /* ── what gets said ──────────────────────────────────────────────────
-     One entry per message. `at` is seconds into the loop. Subjects are the
-     only text a visitor reads, so they carry the explanation. */
-  var SCRIPT_MIGRATION = [
-    { at: 16, from: 'AmberKepler', to: 'SlateHooke',
-      subject: 'Task: map the old schema field by field',
-      importance: 'high',
-      body:
-        'Read store/schema_v1.py against store/schema_v2.py and write docs/mapping.md, one row per field.\n' +
-        '\n' +
-        'What I want back is the list of fields with no counterpart — not the ones that map cleanly. Change no code: the tests go in before anything moves.\n' +
-        '\n' +
-        'Reserve docs/mapping.md so the docs child cannot write over you.',
-      body_ja:
-        'store/schema_v1.py と store/schema_v2.py を突き合わせて、docs/mapping.md にフィールド1行ずつの対応表を書いてください。\n' +
-        '\n' +
-        '欲しいのは、きれいに対応する側ではなく「対応先が無いフィールド」の一覧です。コードは変更しないこと。データを動かす前にテストを入れます。\n' +
-        '\n' +
-        'docs/mapping.md は予約してください。ドキュメント担当と衝突します。' },
-    { at: 34, from: 'SlateHooke', to: 'AmberKepler',
-      subject: 'RE: three fields have no counterpart — listing them',
-      importance: 'normal',
-      body:
-        'legacy_ref — dropped. No reader since the v1.4 cleanup. Safe.\n' +
-        'shard_hint — dropped. Only the old partitioner read it. Safe.\n' +
-        'retry_budget — no counterpart, but still written from two places: store/migrate.py and the queue consumer. Whichever runs second wins.\n' +
-        '\n' +
-        'The third is the risk. The other two are bookkeeping.',
-      body_ja:
-        'legacy_ref — 廃止。v1.4 の整理以降、読み手はいません。安全です。\n' +
-        'shard_hint — 廃止。旧パーティショナだけが読んでいました。安全です。\n' +
-        'retry_budget — 対応先が無いのに、store/migrate.py とキューのコンシューマの2箇所から今も書かれています。後に走った方が勝ちます。\n' +
-        '\n' +
-        'リスクは3つ目です。前の2つは帳簿上の処理にすぎません。' },
-    { at: 41, from: 'AmberKepler', to: 'IvoryNoether',
-      subject: 'Task: cover the mapping before anything moves',
-      importance: 'high', ack: true,
-      body:
-        'docs/mapping.md is up — 38 rows, 3 without a counterpart.\n' +
-        '\n' +
-        'Assert the three unmapped ones first. Ask the schema child which to start with rather than guessing; it has read both sides.\n' +
-        '\n' +
-        'Green tests are the gate for the release on the other rail, so this is on the critical path.',
-      body_ja:
-        'docs/mapping.md ができました。38行、うち3つが対応先なしです。\n' +
-        '\n' +
-        'まず対応先の無い3つを assert してください。どれから始めるかは推測せず、両側を読んでいるスキーマ担当に聞くこと。\n' +
-        '\n' +
-        'テストが緑になることが、もう一方の系統のリリース条件です。クリティカルパス上にあります。' },
-    { at: 62, from: 'MossSomerville', to: 'FlintGauss',
-      subject: 'Task: run the release checks on the current branch',
-      importance: 'high',
-      body:
-        'Run ./scripts/release-check.sh and report what fails.\n' +
-        '\n' +
-        'Do not retry a failure to see whether it goes away. If something fails, run it again with -v and tell me whether it reproduces. A migration is in flight, so a failing check is more likely real than flaky.',
-      body_ja:
-        './scripts/release-check.sh を回して、落ちた項目を報告してください。\n' +
-        '\n' +
-        '落ちたものを「消えるかどうか」再実行で確かめるのは禁止です。落ちたら -v を付けてもう一度回し、再現するかどうかを報告すること。移行の最中なので、落ちた検査は flake より本物である確率の方が高い。' },
-    { at: 78, from: 'IvoryNoether', to: 'SlateHooke',
-      subject: 'Which of the three do you want asserted first?',
-      importance: 'normal',
-      body:
-        'You listed legacy_ref, shard_hint and retry_budget. I can cover all three, but the order decides what the parent sees first if I run short.\n' +
-        '\n' +
-        'My read is retry_budget, because it is the only one with live writers. Confirm or correct me.',
-      body_ja:
-        'legacy_ref・shard_hint・retry_budget の3つを挙げてもらいました。全部やりますが、順序次第で親が最初に見るものが変わります。\n' +
-        '\n' +
-        '私の読みは retry_budget です。生きた書き手があるのはこれだけなので。合っていれば確認を、違えば訂正をください。' },
-    { at: 88, from: 'SlateHooke', to: 'IvoryNoether',
-      subject: 'RE: the one with two writers — that is where it breaks',
-      importance: 'normal',
-      body:
-        'retry_budget, yes.\n' +
-        '\n' +
-        'store/migrate.py sets it from the v1 column; the queue consumer sets it from its own default. Neither knows about the other. Under v1 that was harmless because the reader took whichever was non-null.\n' +
-        '\n' +
-        'Assert that a value written by the migration survives a consumer pass.',
-      body_ja:
-        'retry_budget です。\n' +
-        '\n' +
-        'store/migrate.py は v1 のカラムから、キューのコンシューマは自前の既定値から、それぞれ書きます。互いを知りません。v1 では読み手が non-null の方を採っていたので無害でした。\n' +
-        '\n' +
-        '「移行が書いた値がコンシューマを1周しても残る」ことを assert してください。' },
-    { at: 96, from: 'AmberKepler', to: 'RustPasteur',
-      subject: 'Task: write the upgrade note for operators',
-      importance: 'normal',
-      body:
-        'docs/mapping.md has the field-level detail. Write docs/upgrade-v2.md for someone running the upgrade at 2am.\n' +
-        '\n' +
-        'What breaks and what to do about it, in that order. The schema table belongs at the bottom.\n' +
-        '\n' +
-        'Three fields are being dropped; say what happens to their values.',
-      body_ja:
-        'フィールド単位の詳細は docs/mapping.md にあります。深夜2時に作業する人向けに docs/upgrade-v2.md を書いてください。\n' +
-        '\n' +
-        '「何が壊れるか」「どうすればいいか」の順で。スキーマの表は末尾に置くこと。\n' +
-        '\n' +
-        '廃止するフィールドが3つあります。その値がどうなるかを明記してください。' },
-    { at: 118, from: 'FlintGauss', to: 'MossSomerville',
-      subject: 'RE: one check fails — it is the gate, not a flake',
-      importance: 'high',
-      body:
-        '7 checks, 6 ok, 1 failed: schema-compat.\n' +
-        '\n' +
-        'Re-ran with -v. Same failure both times: a v1 payload is rejected by the v2 reader. Not timing, not ordering.\n' +
-        '\n' +
-        'This is the check doing its job — the migration is not finished. I would not release on this.',
-      body_ja:
-        '検査7件、6件 ok、1件 fail: schema-compat。\n' +
-        '\n' +
-        '-v を付けて再実行しました。2回とも同じ落ち方です。v1 のペイロードが v2 のリーダーに弾かれています。タイミングでも順序でもありません。\n' +
-        '\n' +
-        '検査が仕事をしている状態です。移行が終わっていません。この状態ではリリースしません。' },
-    { at: 129, from: 'MossSomerville', to: 'AmberKepler',
-      subject: 'Holding the release until the mapping lands',
-      importance: 'normal',
-      body:
-        'schema-compat fails and reproduces, so the gate stays shut on my side.\n' +
-        '\n' +
-        'No action needed from you — this is the correct order. Tell me when the mapping is covered and I will re-run.',
-      body_ja:
-        'schema-compat が落ち、再現もするので、こちら側のゲートは閉じたままにします。\n' +
-        '\n' +
-        'そちらの対応は不要です。順序としてこれで正しい。対応表がテストで固まったら教えてください、再実行します。' },
-    { at: 160, from: 'IvoryNoether', to: 'AmberKepler',
-      subject: 'RE: tests are green, including the two-writer case',
-      importance: 'high',
-      body:
-        '24 passed, including the two-writer case.\n' +
-        '\n' +
-        'One real bug on the way: the consumer overwrote a value the migration had set. Fixed in store/migrate.py by writing retry_budget last. The test that caught it is tests/mapping/test_retry_budget.py.\n' +
-        '\n' +
-        'That failure belonged to the mapping, not to the test.',
-      body_ja:
-        '24件パス。書き手が2つあるケースも含みます。\n' +
-        '\n' +
-        '途中で本物のバグが1件出ました。コンシューマが、移行の書いた値を上書きしていました。retry_budget を最後に書くよう store/migrate.py を修正済みです。捕まえたテストは tests/mapping/test_retry_budget.py。\n' +
-        '\n' +
-        'あの fail はテストの問題ではなく、対応表の問題でした。' },
-    { at: 168, from: 'RustPasteur', to: 'AmberKepler',
-      subject: 'RE: draft is up — one open question about defaults',
-      importance: 'normal',
-      body:
-        'docs/upgrade-v2.md, 96 lines. Structure: what changes, what to do, then the field table.\n' +
-        '\n' +
-        'One thing I cannot decide alone — the defaults for the three dropped fields. Document them as historical, or remove them outright? Documenting is safer for anyone reading an old dump; removing is cleaner.\n' +
-        '\n' +
-        'I have left them in, marked.',
-      body_ja:
-        'docs/upgrade-v2.md、96行です。構成は「何が変わるか」「何をするか」、そのあとにフィールドの表。\n' +
-        '\n' +
-        '1点だけ独断できません。廃止する3フィールドの既定値を、履歴として文書に残すか、消し切るか。残す方が古いダンプを読む人には安全で、消す方が読み物としてはきれいです。\n' +
-        '\n' +
-        'いまは印を付けて残してあります。' },
-    { at: 181, from: 'IvoryNoether', to: 'AmberKepler',
-      subject: 'Done. Handing back.',
-      importance: 'normal',
-      body:
-        'Nothing outstanding. tests/mapping/ is committed, and docs/two-writers.md explains the failure for whoever reads it next.\n' +
-        '\n' +
-        'Exiting.',
-      body_ja:
-        '未処理はありません。tests/mapping/ はコミット済み、docs/two-writers.md に次に読む人向けの説明を残しました。\n' +
-        '\n' +
-        '終了します。' },
-    { at: 203, from: 'AmberKepler', to: 'MossSomerville',
-      subject: 'Mapping is covered — the gate can open',
-      importance: 'high',
-      body:
-        '38 rows mapped, the three unmapped ones asserted, 24 tests green. The two-writer bug is fixed rather than worked around.\n' +
-        '\n' +
-        'Safe to re-run schema-compat.',
-      body_ja:
-        '38行を対応付け、対応先の無い3つも assert 済み、テスト24件が緑です。書き手が2つある問題は回避ではなく修正しました。\n' +
-        '\n' +
-        'schema-compat を再実行して大丈夫です。' },
-    { at: 221, from: 'SlateHooke', to: 'AmberKepler',
-      subject: 'RE: mapping is complete, nothing unresolved',
-      importance: 'normal',
-      body:
-        'docs/mapping.md is final. Nothing unresolved on my side.\n' +
-        '\n' +
-        'pytest tests/mapping: 24 passed against the finished table.',
-      body_ja:
-        'docs/mapping.md は確定です。こちら側に未解決はありません。\n' +
-        '\n' +
-        'pytest tests/mapping: 完成した表に対して24件パス。' },
-  ];
 
-  /* ── the narration ───────────────────────────────────────────────────
-     What the strip says, and what it rings while saying it. `at` is seconds
-     into the loop; a beat runs until the next one starts. `look` is a CSS
-     selector for the thing being described — one that matches nothing costs
-     the ring, not the caption. Beats belong to the story, not to the tour,
-     so a second story narrates itself. */
-  var BEATS_MIGRATION = [
-    { at: 0, look: '.gauge.run',
-      en: 'AmberKepler and MossSomerville are orchestrating, with nothing ' +
-          'delegated yet. Every number here comes from the machines.',
-      ja: 'AmberKepler と MossSomerville が親として動き、まだ委任はありません。' +
-          'ここにある数字はすべて実機から読んだ値です。' },
-    { at: 14, look: '.bay[data-name="SlateHooke"]',
-      en: 'AmberKepler starts SlateHooke to map the schema. SlateHooke’s ' +
-          'card appears the moment its process starts.',
-      ja: 'AmberKepler がスキーマ対応表のため SlateHooke を起動します。SlateHooke の' +
-          'プロセスが立った瞬間にカードが現れます。' },
-    { at: 33, look: '#v-net', view: 'net',
-      en: 'SlateHooke answers AmberKepler. In Network view, that reply is ' +
-          'the line connecting their two names.',
-      ja: 'SlateHooke が AmberKepler に返信します。Network 表示では、その返信が' +
-          '2つの名前を結ぶ線になります。' },
-    { at: 40, look: '.bay[data-name="IvoryNoether"]',
-      en: 'IvoryNoether starts the tests. The ring on IvoryNoether’s card ' +
-          'shows its context window filling up.',
-      ja: 'IvoryNoether がテストを始めます。IvoryNoether のカードのリングは、' +
-          'コンテキスト窓が埋まっていく様子です。' },
-    { at: 60, look: '.bay[data-name="FlintGauss"]',
-      en: 'FlintGauss joins MossSomerville’s release rail. Its card makes ' +
-          'clear whether the release check is running or waiting.',
-      ja: 'FlintGauss が MossSomerville のリリース系統に加わります。FlintGauss の' +
-          'カードで、検査が稼働中か待機中か分かります。' },
-    { at: 95, look: '.bay[data-name="RustPasteur"]',
-      en: 'RustPasteur starts the operator note. Open RustPasteur’s card to ' +
-          'read what it is doing, line by line.',
-      ja: 'RustPasteur が運用者向け手順を始めます。RustPasteur のカードを開くと、' +
-          '実際の作業を1行ずつ読めます。' },
-    { at: 118, look: '#v-net', view: 'net',
-      en: 'FlintGauss reports a failed release check, so MossSomerville keeps ' +
-          'the gate closed. Their exchange remains on the graph.',
-      ja: 'FlintGauss がリリース検査の失敗を報告し、MossSomerville がゲートを' +
-          '閉じたままにします。そのやり取りはグラフに残ります。' },
-    { at: 124, look: '.bay[data-name="IvoryNoether"]',
-      en: 'IvoryNoether has stopped before editing store/migrate.py and is ' +
-          'asking a human for permission. The red APPROVAL LED is not a crash.',
-      ja: 'IvoryNoether は store/migrate.py の編集前で止まり、人間に許可を求めています。' +
-          '赤い APPROVAL LED はクラッシュではありません。',
-      net: {
-        en: 'IvoryNoether has stopped before editing store/migrate.py and is ' +
-            'asking a human for permission. A ! sits over its portrait until a person answers.',
-        ja: 'IvoryNoether は store/migrate.py の編集前で止まり、人間に許可を求めています。' +
-            '人が答えるまで、肖像の上に ! が出ます。' } },
-    { at: 144, look: '.bay[data-name="IvoryNoether"]',
-      en: 'IvoryNoether receives permission and resumes the edit. Its blocked ' +
-          'state was visible without looking like a failure.',
-      ja: 'IvoryNoether が許可を受け取り、編集を再開します。ブロック中も、故障に見せず' +
-          '状態を表示できました。' },
-    { at: 151, look: '.bay[data-name="RustPasteur"]',
-      en: 'RustPasteur is asking a human whether historical defaults should ' +
-          'stay in the upgrade note. The cyan ? marks that unanswered choice.',
-      ja: 'RustPasteur は、過去の既定値を移行手順に残すかどうか人間に尋ねています。' +
-          'シアンの ? は、その選択が未回答である印です。',
-      net: {
-        en: 'RustPasteur is asking whether historical defaults should stay in ' +
-            'the upgrade note. A ? sits over its portrait until a person chooses.',
-        ja: 'RustPasteur は、過去の既定値を移行手順に残すかどうか尋ねています。' +
-            '人が選ぶまで、肖像の上に ? が出ます。' } },
-    { at: 160, look: '.bay[data-name="IvoryNoether"]',
-      en: 'IvoryNoether’s tests are green. Its context ring shows how much ' +
-          'room remains after finding and fixing the two-writer bug.',
-      ja: 'IvoryNoether のテストが緑になりました。コンテキストのリングは、書き手が' +
-          '2つあるバグを直したあとに残る余裕を示します。' },
-    { at: 168, look: '#v-net', view: 'net',
-      en: 'RustPasteur sends both choices to AmberKepler’s inbox. The graph ' +
-          'preserves who asked whom while the answer is still needed.',
-      ja: 'RustPasteur が両方の選択肢を AmberKepler の inbox に送ります。答えが必要な間、' +
-          '誰が誰に尋ねたかをグラフが残します。' },
-    { at: 182, look: '.bay[data-name="IvoryNoether"]',
-      en: 'IvoryNoether finishes and stops running, but its card remains so ' +
-          'the tests and the fix are still available to read.',
-      ja: 'IvoryNoether は終了して稼働を止めますが、カードは残り、テストと修正を' +
-          'あとから読めます。' },
-    { at: 203, look: '.gauge.tot',
-      en: 'AmberKepler tells MossSomerville the mapping is covered, so the ' +
-          'release gate opens. In a moment the story starts over.',
-      ja: 'AmberKepler が対応表のテスト完了を MossSomerville に伝え、リリースゲートが' +
-          '開きます。まもなく物語は最初から繰り返します。' },
-  ];
 
   /* ── stories ─────────────────────────────────────────────────────────
      A story is one self-contained cast, script and set of transcripts.
@@ -759,168 +434,6 @@
     return { ok: true, a: a, b: b, count: out.length, messages: out };
   }
 
-  /* ── the transcripts ─────────────────────────────────────────────────
-     Opening a pane is how anyone finds out what an agent is actually
-     doing, so an empty one reads as "there is nothing to see in this
-     product". These are the same six jobs the mail script describes, told
-     from the inside. `at` is seconds into the loop; lines past the current
-     moment have not been said yet, so a pane opened late shows more than
-     one opened early — which is the behaviour of the real thing.
-
-     tool_use text is "name  args", two spaces, the way the page splits it. */
-  var TRANSCRIPTS_MIGRATION = {
-    AmberKepler: [
-      [0, 'user', 'text',
-       'Move the store onto the v2 schema. Nothing ships until the mapping ' +
-       'is covered by tests.'],
-      [4, 'assistant', 'thinking',
-       'Three pieces: the mapping, the tests over it, and the note operators ' +
-       'read. Only the tests depend on the mapping, so the note can start ' +
-       'whenever someone is free.'],
-      [6, 'assistant', 'text',
-       'Plan: one child reads the old schema and writes the mapping, a ' +
-       'second covers it with tests, a third drafts the upgrade note. I hold ' +
-       'the release until the second one is green.'],
-      [13, 'assistant', 'tool_use', 'Bash  agentstack spawn --role schema'],
-      [14, 'assistant', 'tool_result', 'started SlateHooke (gpt-5.6)'],
-      [16, 'assistant', 'tool_use',
-       'SendMessage  to=SlateHooke "map the old schema field by field"'],
-      [36, 'assistant', 'tool_result',
-       'SlateHooke: three fields have no counterpart — listing them'],
-      [38, 'assistant', 'thinking',
-       'Three unmapped fields is the whole risk. Get them asserted before ' +
-       'anything is written.'],
-      [40, 'assistant', 'tool_use', 'Bash  agentstack spawn --role tests'],
-      [41, 'assistant', 'tool_result', 'started IvoryNoether (gpt-5.6)'],
-      [95, 'assistant', 'tool_use', 'Bash  agentstack spawn --role docs'],
-      [96, 'assistant', 'tool_result', 'started RustPasteur (claude-sonnet-5)'],
-      [131, 'assistant', 'text',
-       'Release is held on the other rail until the mapping lands. That is ' +
-       'the right order — nothing to unwind here.'],
-      [161, 'assistant', 'text',
-       'Tests green, including the field with two writers. That was the one ' +
-       'I was worried about.'],
-      [205, 'assistant', 'text',
-       'Mapping covered, note drafted, gate released. Handing back.'],
-    ],
-    SlateHooke: [
-      [15, 'user', 'text', 'Map the old schema field by field.'],
-      [19, 'assistant', 'tool_use', 'Read  store/schema_v1.py'],
-      [20, 'assistant', 'tool_result', '412 lines, 38 fields'],
-      [22, 'assistant', 'tool_use', 'Read  store/schema_v2.py'],
-      [23, 'assistant', 'tool_result', '297 lines, 31 fields'],
-      [26, 'assistant', 'thinking',
-       'Fewer fields on the far side, so some collapse and some are gone. ' +
-       'The gone ones are the only ones worth a message.'],
-      [30, 'assistant', 'tool_use', 'Write  docs/mapping.md'],
-      [31, 'assistant', 'tool_result', 'wrote 38 rows'],
-      [34, 'assistant', 'text',
-       'Three fields have no counterpart: legacy_ref, shard_hint, and ' +
-       'retry_budget. The first two are dead. retry_budget is still written ' +
-       'in two places, which is the one that will bite.'],
-      [90, 'assistant', 'text',
-       'Answered the tests child: assert retry_budget first, it has two ' +
-       'writers.'],
-      [219, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
-      [220, 'assistant', 'tool_result', '24 passed'],
-      [222, 'assistant', 'text',
-       'Mapping complete, nothing unresolved. Report sent.'],
-    ],
-    IvoryNoether: [
-      [40, 'user', 'text', 'Cover the mapping before anything is moved.'],
-      [44, 'assistant', 'tool_use', 'Read  docs/mapping.md'],
-      [45, 'assistant', 'tool_result', '38 rows, 3 marked unmapped'],
-      [48, 'assistant', 'thinking',
-       'A test per row is cheap and proves nothing interesting. The three ' +
-       'unmapped rows are where the behaviour is undecided.'],
-      [76, 'assistant', 'text',
-       'Asking the schema child which of the three to assert first rather ' +
-       'than guessing the intent.'],
-      [92, 'assistant', 'tool_use', 'Write  tests/mapping/test_retry_budget.py'],
-      [93, 'assistant', 'tool_result', 'wrote 3 cases'],
-      [112, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
-      [113, 'assistant', 'tool_result', '1 failed, 23 passed'],
-      [116, 'assistant', 'thinking',
-       'The failure is the second writer overwriting a value the first one ' +
-       'set. That is the bug the mapping was hiding, not a bad test.'],
-      [124, 'assistant', 'text',
-       'The fix is clear, but editing store/migrate.py requires approval. ' +
-       'Waiting at the permission boundary.'],
-      [144, 'assistant', 'tool_use', 'Edit  store/migrate.py'],
-      [145, 'assistant', 'tool_result', 'applied'],
-      [157, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
-      [158, 'assistant', 'tool_result', '24 passed'],
-      [160, 'assistant', 'text',
-       'Green, including the two-writer case. Reporting back.'],
-      [181, 'assistant', 'text', 'Done. Handing back.'],
-    ],
-    RustPasteur: [
-      [95, 'user', 'text', 'Write the upgrade note the way an operator reads it.'],
-      [99, 'assistant', 'thinking',
-       'An operator wants to know what breaks and what to do about it, in ' +
-       'that order. The schema detail belongs underneath, not on top.'],
-      [104, 'assistant', 'tool_use', 'Read  docs/mapping.md'],
-      [105, 'assistant', 'tool_result', '38 rows'],
-      [122, 'assistant', 'tool_use', 'Write  docs/upgrade-v2.md'],
-      [123, 'assistant', 'tool_result', 'wrote 96 lines'],
-      [140, 'assistant', 'text',
-       'Draft is up. One thing I cannot decide alone: whether the defaults ' +
-       'for the dropped fields should be documented or removed outright.'],
-      [168, 'assistant', 'text', 'Question sent up with the draft.'],
-    ],
-    MossSomerville: [
-      [0, 'user', 'text',
-       'Hold the release rail. Nothing goes out while the schema work is ' +
-       'open.'],
-      [3, 'assistant', 'text',
-       'Understood. I will run the checks so we know where we stand, but the ' +
-       'gate stays shut.'],
-      [58, 'assistant', 'tool_use', 'Bash  agentstack spawn --role release'],
-      [59, 'assistant', 'tool_result', 'started FlintGauss (gpt-5.6)'],
-      [120, 'assistant', 'thinking',
-       'A failing check during a migration is usually the migration. Worth ' +
-       'confirming before it is called a flake and retried away.'],
-      [126, 'assistant', 'text',
-       'The failing check is the gate itself, not a flaky test. Telling the ' +
-       'other rail we are holding.'],
-      [204, 'assistant', 'text',
-       'Mapping is covered upstream. Opening the gate.'],
-    ],
-    FlintGauss: [
-      [60, 'user', 'text', 'Run the release checks on the current branch.'],
-      [64, 'assistant', 'tool_use', 'Bash  ./scripts/release-check.sh'],
-      [92, 'assistant', 'tool_result',
-       '7 checks · 6 ok · 1 failed (schema-compat)'],
-      [96, 'assistant', 'tool_use', 'Bash  ./scripts/release-check.sh --only schema-compat -v'],
-      [110, 'assistant', 'tool_result',
-       'schema-compat: v1 payload rejected by v2 reader'],
-      [114, 'assistant', 'thinking',
-       'It fails the same way twice, so it is not timing. This is the check ' +
-       'doing its job.'],
-      [118, 'assistant', 'text',
-       'One check fails and it reproduces. It is the gate, not a flake — ' +
-       'a v1 payload is rejected by the v2 reader.'],
-    ],
-    CedarLovelace: [
-      [0, 'user', 'text', 'Survey the call sites before we plan anything.'],
-      [0, 'assistant', 'tool_use', 'Grep  schema_v1\\.'],
-      [0, 'assistant', 'tool_result', '61 matches in 19 files'],
-      [0, 'assistant', 'text',
-       '19 files touch the old schema; 4 of them write. Listed in the report.'],
-    ],
-    OchreCurie: [
-      [0, 'user', 'text', 'Draft the rollback plan.'],
-      [0, 'assistant', 'text',
-       'Rollback is a read-side switch, not a data restore — the v2 writer ' +
-       'keeps the v1 columns populated for one release. Written up.'],
-    ],
-    UmberBohr: [
-      [0, 'user', 'text', 'Reproduce the reported failure.'],
-      [0, 'assistant', 'tool_use', 'Bash  python -m pytest tests/store -k retry'],
-      [0, 'assistant', 'tool_result', '1 failed'],
-      [0, 'assistant', 'text', 'Reproduces every run. Not a flake.'],
-    ],
-  };
 
   /* Commands and their output are left alone; only what an agent says or
      thinks is translated. */
@@ -955,18 +468,6 @@
              total: events.length, shown: events.length, events: events };
   }
 
-  /* What an agent left behind. The real server links these into a vault;
-     there is none here, so they render as plain rows rather than links
-     that would open nothing. */
-  var DELIVERABLES_MIGRATION = {
-    SlateHooke: [['Field-by-field mapping, v1 to v2', 'docs/mapping.md', 1500]],
-    IvoryNoether: [['Mapping test suite', 'tests/mapping/', 900],
-                   ['Note on the two-writer failure', 'docs/two-writers.md', 600]],
-    RustPasteur: [['Operator upgrade note', 'docs/upgrade-v2.md', 300]],
-    FlintGauss: [['Release check run', 'reports/release-check.txt', 400]],
-    CedarLovelace: [['Call-site survey', 'docs/call-sites.md', 5400]],
-    OchreCurie: [['Rollback plan', 'docs/rollback.md', 9200]],
-  };
 
   function deliverables(query) {
     var ag = query.get('agent') || '', rows = DELIVERABLES[ag] || [];
@@ -977,182 +478,6 @@
              }) };
   }
 
-  /* ── the translation ─────────────────────────────────────────────────
-     Keyed by the English string. `translatable()` below enumerates every
-     string that reaches a reader, and a test asserts each one has an entry
-     here — so a line added to the fixture cannot quietly ship English to a
-     Japanese visitor.
-
-     Built from pairs rather than an object literal because the English side
-     is often a concatenation, which is not a legal key. */
-  var JA_MIGRATION = (function () {
-    var t = {};
-    [
-      ['Read the old schema and write the field-by-field mapping',
-       '旧スキーマを読み、フィールド単位の対応表を書く'],
-      ['Cover the mapping with tests before anything is moved',
-       'データを動かす前に対応表をテストで固める'],
-      ['Write the upgrade note the way an operator would read it',
-       '運用者が読む形で移行手順を書く'],
-      ['Watch the release rail and hold the gate',
-       'リリース系統を監視し、ゲートを閉じておく'],
-      ['Run the release checks and report what fails',
-       'リリース検査を回し、落ちた項目を報告する'],
-      ['Survey the call sites',
-       '呼び出し箇所を洗い出す'],
-      ['Draft the rollback plan',
-       'ロールバック手順を起草する'],
-      ['Reproduce the reported failure',
-       '報告された不具合を再現する'],
-      ['RE: three fields have no counterpart — listing them',
-       'RE: 対応先が無いフィールドが3つ。列挙します'],
-      ['Task: cover the mapping before anything moves',
-       '依頼: 何かを動かす前に対応表をテストで固める'],
-      ['Task: run the release checks on the current branch',
-       '依頼: 現ブランチでリリース検査を回す'],
-      ['Which of the three do you want asserted first?',
-       '3つのうち、どれから assert しますか'],
-      ['RE: the one with two writers — that is where it breaks',
-       'RE: 書き手が2つあるやつ。壊れるのはそこ'],
-      ['Task: write the upgrade note for operators',
-       '依頼: 運用者向けの移行手順を書く'],
-      ['RE: one check fails — it is the gate, not a flake',
-       'RE: 1件落ちました。flake ではなくゲートです'],
-      ['Holding the release until the mapping lands',
-       '対応表が入るまでリリースを止めます'],
-      ['RE: tests are green, including the two-writer case',
-       'RE: テスト全緑。書き手が2つあるケースも通りました'],
-      ['RE: draft is up — one open question about defaults',
-       'RE: 草稿できました。既定値について1点未決です'],
-      ['Done. Handing back.',
-       '完了しました。引き継ぎます。'],
-      ['Mapping is covered — the gate can open',
-       '対応表はテスト済みです。ゲートを開けて大丈夫です'],
-      ['RE: mapping is complete, nothing unresolved',
-       'RE: 対応表は完成、未解決はありません'],
-      ['Mapping test suite',
-       '対応表のテスト一式'],
-      ['Note on the two-writer failure',
-       '書き手が2つある不具合のメモ'],
-      ['Operator upgrade note',
-       '運用者向け移行手順'],
-      ['Release check run',
-       'リリース検査の実行結果'],
-      ['Call-site survey',
-       '呼び出し箇所の調査'],
-      ['Rollback plan',
-       'ロールバック手順'],
-      ['Three pieces: the mapping, the tests over it, and the note ' +
-         'operators read. Only the tests depend on the mapping, so the note ' +
-         'can start whenever someone is free.',
-       '仕事は3つ。対応表、その上のテスト、運用者が読む手順。対応表に依存するのはテストだけなので、手順は手が空いた時点で始められる。'],
-      ['Plan: one child reads the old schema and writes the mapping, a ' +
-         'second covers it with tests, a third drafts the upgrade note. I ' +
-         'hold the release until the second one is green.',
-       '方針: 1体が旧スキーマを読んで対応表を書き、2体目がテストで固め、3体目が移行手順を起草する。2体目が緑になるまでリリースは止める。'],
-      ['Release is held on the other rail until the mapping lands. That is' +
-         ' the right order — nothing to unwind here.',
-       '対応表が入るまで、もう一方の系統でリリースを止めてもらっている。順序としては正しく、巻き戻すものは無い。'],
-      ['Tests green, including the field with two writers. That was the ' +
-         'one I was worried about.',
-       'テスト全緑。書き手が2つあるフィールドも通った。心配していたのはそこだった。'],
-      ['Mapping covered, note drafted, gate released. Handing back.',
-       '対応表はテスト済み、手順も草稿ができ、ゲートも開いた。引き継ぎます。'],
-      ['Map the old schema field by field.',
-       '旧スキーマをフィールド単位で対応付けてください。'],
-      ['Fewer fields on the far side, so some collapse and some are gone. ' +
-         'The gone ones are the only ones worth a message.',
-       '移行先の方がフィールドが少ない。統合されたものと消えたものがある。報告に値するのは消えた方だけ。'],
-      ['Three fields have no counterpart: legacy_ref, shard_hint, and ' +
-         'retry_budget. The first two are dead. retry_budget is still ' +
-         'written in two places, which is the one that will bite.',
-       '対応先が無いのは legacy_ref・shard_hint・retry_budget ' +
-         'の3つ。前の2つは死んでいる。retry_budget はまだ2箇所から書かれていて、危ないのはこれ。'],
-      ['Answered the tests child: assert retry_budget first, it has two ' +
-         'writers.',
-       'テスト担当に回答: retry_budget から assert してほしい。書き手が2つある。'],
-      ['Mapping complete, nothing unresolved. Report sent.',
-       '対応表は完成、未解決なし。報告を送った。'],
-      ['Cover the mapping before anything is moved.',
-       'データを動かす前に対応表をテストで固めてください。'],
-      ['A test per row is cheap and proves nothing interesting. The three ' +
-         'unmapped rows are where the behaviour is undecided.',
-       '1行1テストは安いが、面白いことは何も証明しない。挙動が未決なのは対応先の無い3行だ。'],
-      ['Asking the schema child which of the three to assert first rather ' +
-         'than guessing the intent.',
-       '意図を推測せず、3つのどれから assert するかスキーマ担当に聞く。'],
-      ['The failure is the second writer overwriting a value the first one' +
-         ' set. That is the bug the mapping was hiding, not a bad test.',
-       '落ちたのは、2つ目の書き手が1つ目の値を上書きしているから。テストが悪いのではなく、対応表が隠していたバグ。'],
-      ['The fix is clear, but editing store/migrate.py requires approval. ' +
-         'Waiting at the permission boundary.',
-       '修正方針は明確だが、store/migrate.py の編集には承認が必要。権限境界で待機する。'],
-      ['Green, including the two-writer case. Reporting back.',
-       '書き手が2つあるケースも含めて全緑。報告する。'],
-      ['Write the upgrade note the way an operator reads it.',
-       '運用者が読む順序で移行手順を書いてください。'],
-      ['An operator wants to know what breaks and what to do about it, in ' +
-         'that order. The schema detail belongs underneath, not on top.',
-       '運用者が知りたいのは「何が壊れるか」「どうすればいいか」の順。スキーマの詳細はその下に置くもので、先頭ではない。'],
-      ['Draft is up. One thing I cannot decide alone: whether the defaults' +
-         ' for the dropped fields should be documented or removed outright.',
-       '草稿ができた。1点だけ独断できない: 廃止するフィールドの既定値を、文書に残すか消し切るか。'],
-      ['Question sent up with the draft.',
-       '草稿と一緒に質問を上げた。'],
-      ['Hold the release rail. Nothing goes out while the schema work is ' +
-         'open.',
-       'リリース系統を止めてください。スキーマ作業が開いている間は何も出しません。'],
-      ['Understood. I will run the checks so we know where we stand, but ' +
-         'the gate stays shut.',
-       '了解。現状把握のために検査は回すが、ゲートは閉じたままにする。'],
-      ['A failing check during a migration is usually the migration. Worth' +
-         ' confirming before it is called a flake and retried away.',
-       '移行中に落ちた検査は、たいてい移行そのものが原因。flake 扱いで再実行に流す前に確かめる価値がある。'],
-      ['The failing check is the gate itself, not a flaky test. Telling ' +
-         'the other rail we are holding.',
-       '落ちた検査は flake ではなくゲートそのもの。止める旨をもう一方の系統に伝える。'],
-      ['Mapping is covered upstream. Opening the gate.',
-       '上流で対応表がテスト済みになった。ゲートを開ける。'],
-      ['Run the release checks on the current branch.',
-       '現ブランチでリリース検査を回してください。'],
-      ['It fails the same way twice, so it is not timing. This is the ' +
-         'check doing its job.',
-       '2回とも同じ落ち方なのでタイミングではない。検査が仕事をしている。'],
-      ['One check fails and it reproduces. It is the gate, not a flake — a' +
-         ' v1 payload is rejected by the v2 reader.',
-       '1件落ちて、再現もする。flake ではなくゲート。v1 のペイロードが v2 のリーダーに弾かれている。'],
-      ['Survey the call sites before we plan anything.',
-       '設計に入る前に呼び出し箇所を洗い出してください。'],
-      ['19 files touch the old schema; 4 of them write. Listed in the ' +
-         'report.',
-       '旧スキーマに触れているのは19ファイル、うち4つが書き込み。報告に列挙した。'],
-      ['Draft the rollback plan.',
-       'ロールバック手順を起草してください。'],
-      ['Rollback is a read-side switch, not a data restore — the v2 writer' +
-         ' keeps the v1 columns populated for one release. Written up.',
-       'ロールバックはデータ復元ではなく読み側の切り替え。v2 の書き手が1リリースの間 v1 のカラムも埋め続ける。文書化した。'],
-      ['Reproduce the reported failure.',
-       '報告された不具合を再現してください。'],
-      ['Reproduces every run. Not a flake.',
-       '毎回再現する。flake ではない。'],
-      ['demo mode — nothing was started, stopped or changed',
-       'デモです。何も起動・停止・変更されていません'],
-      ['Plan the migration and hand each piece to a child',
-       '移行を設計し、各パートを子エージェントに渡す'],
-      ['Task: map the old schema field by field',
-       '依頼: 旧スキーマをフィールド単位で対応付ける'],
-      ['Move the store onto the v2 schema. Nothing ships until the ' +
-       'mapping is covered by tests.',
-       'ストアを v2 スキーマに移してください。対応表がテストで固まるまで出荷はしません。'],
-      ['Three unmapped fields is the whole risk. Get them asserted ' +
-       'before anything is written.',
-       'リスクは対応先の無い3フィールドに集中している。何かを書く前に assert させる。'],
-      ['Field-by-field mapping, v1 to v2', 'v1→v2 フィールド対応表'],
-      ['no transcript on disk for this agent',
-       'このエージェントの会話ログはディスク上にありません'],
-    ].forEach(function (pair) { t[pair[0]] = pair[1]; });
-    return t;
-  })();
 
   /* Everything a reader can end up looking at. The tests walk this. */
   function translatable() {
@@ -1173,30 +498,12 @@
     return out;
   }
 
-  /* Registered here rather than beside the declarations above: `var` hoists
-     the name but not the value, so a story assembled before its transcripts
-     and deliverables exist gets undefined for both — and useStory would then
-     hand the payload builders nothing at all. */
-  STORIES.migration = {
-    id: 'migration',
-    label: { en: 'Schema migration', ja: 'スキーマ移行' },
-    loop: 240,
-    /* Where a visitor comes in. This was 108 — far enough along that all
-       four children already existed, the screen looked busy, and the one
-       thing the product is about, a parent handing work to a child, was 147
-       seconds away. Land just before the first spawn instead: the two
-       orchestrators are already working, so it is not an empty page. */
-    opensAt: 9,
-    cast: CAST_MIGRATION, past: PAST_MIGRATION, script: SCRIPT_MIGRATION,
-    transcripts: TRANSCRIPTS_MIGRATION, deliverables: DELIVERABLES_MIGRATION,
-    beats: BEATS_MIGRATION, ja: JA_MIGRATION,
-  };
 
   var STORY, CAST, PAST, SCRIPT, TRANSCRIPTS, DELIVERABLES, JA, BEATS;
   var LOOP, OPENS_AT, START;
 
   function useStory(id) {
-    var st = STORIES[id] || STORIES.migration;
+    var st = STORIES[id] || STORIES[DEFAULT_STORY];
     STORY = st;
     CAST = st.cast; PAST = st.past; SCRIPT = st.script;
     TRANSCRIPTS = st.transcripts; DELIVERABLES = st.deliverables;
@@ -1212,7 +519,21 @@
      of the story, and a slow reader lands after the spawns they came to see. */
   function restart() { START = Date.now() - OPENS_AT * 1000; return OPENS_AT; }
 
-  useStory(params.get('story') || 'migration');
+  /* No story lives in this file any more. The engine plays whatever the
+     story files registered; the default is the first one they declare as
+     `preferred`, falling back to whichever sorts first so the page never
+     opens on nothing. */
+  var DEFAULT_STORY = (function () {
+    var ids = Object.keys(STORIES);
+    for (var i = 0; i < ids.length; i++)
+      if (STORIES[ids[i]].preferred) return ids[i];
+    return ids.sort()[0];
+  })();
+  /* Nothing to play. Leave fetch alone and let the page be an ordinary
+     dashboard rather than throwing on the way up — a bundle built without
+     its story files should degrade, not break. */
+  if (!DEFAULT_STORY) return;
+  useStory(params.get('story') || DEFAULT_STORY);
 
   /* ── launch modal fixtures ───────────────────────────────────────────
      These mirror server.py's successful response shapes. Every scientist
@@ -1385,6 +706,24 @@
     return 'assets/' + encodeURIComponent(name) + '.svg?v=' + v;
   }
 
+  /* Every surname the bundle has to carry: the cast of every story, plus the
+     scientists the launch form offers. This used to be re-derived by regex in
+     three places — build.sh, the tests, and by eye — and they disagreed: a
+     story's cast shipped no portraits at all, and the launch form offered a
+     name whose picture was not in the bundle. One list, three readers. */
+  function bundleSurnames() {
+    var out = {};
+    Object.keys(STORIES).forEach(function (id) {
+      var st = STORIES[id];
+      st.cast.concat(st.past || []).forEach(function (a) {
+        var m = /^[A-Z][a-z]+([A-Z][A-Za-z]+)$/.exec(a.name);
+        if (m) out[m[1]] = true;
+      });
+    });
+    DEMO_SPAWN_SCIENTISTS.forEach(function (n) { out[n] = true; });
+    return Object.keys(out).sort();
+  }
+
   window.AGENTSTACK_DEMO = { loop: function () { return LOOP; },
                              cast: function () { return CAST; },
                              script: function () { return SCRIPT; },
@@ -1393,6 +732,7 @@
                              opensAt: function () { return OPENS_AT; },
                              beats: function () { return BEATS; },
                              stories: STORIES, story: function () { return STORY; },
+                             bundleSurnames: bundleSurnames,
                              useStory: useStory,
                              translatable: translatable,
                              portraitURL: portraitURL, assetURL: assetURL, phase: phase,

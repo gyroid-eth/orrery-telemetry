@@ -54,26 +54,22 @@ PY
 # it drops a final line with no newline, which is how Bohr went missing from
 # the first build without a word.
 SCI="$(node -e '
-  const fs = require("fs"), path = require("path");
+  const fs = require("fs"), path = require("path"), vm = require("vm");
   const dir = "'"$HERE"'";
-  /* Every story, not just the default one. Reading demo_api.js alone shipped
-     the migration cast and left the agents of a second story with a blank
-     square where a portrait belongs — the page renders fine, so nothing
-     said so until someone looked at the screen. */
-  const files = ["demo_api.js"].concat(
-    fs.readdirSync(dir).filter((f) => /^story_.*\.js$/.test(f)));
-  const names = [];
-  for (const f of files) {
-    const src = fs.readFileSync(path.join(dir, f), "utf8");
-    /* Tolerant of quoting and spacing: a story written with double quotes
-       slipped past the first version of this and shipped no portrait for its
-       cast, silently. \u0027 is a single quote, spelled that way so this can
-       live inside a single-quoted shell argument. */
-    names.push(...[...src.matchAll(
-      /name:\s*[\u0022\u0027]([A-Z][a-z]+)([A-Z][A-Za-z]+)[\u0022\u0027]/g)]
-      .map((m) => m[2]));
-  }
-  for (const n of new Set(names)) console.log(n);
+  /* Ask the fixture rather than re-deriving its cast with a regex out here.
+     The regex version disagreed with the page twice: it read demo_api.js
+     only, so a story file\u0027s cast shipped no portraits, and it never saw
+     the launch form\u0027s own list of scientists. */
+  const win = { location: { search: "?demo=1" }, URLSearchParams,
+                fetch: () => {}, dispatchEvent: () => true,
+                CustomEvent: function () {}, Response: class {} };
+  win.window = win; vm.createContext(win);
+  for (const f of fs.readdirSync(dir).filter((f) => /^story_.*[.]js$/.test(f)))
+    vm.runInContext(fs.readFileSync(path.join(dir, f), "utf8"), win);
+  vm.runInContext(fs.readFileSync(path.join(dir, "demo_api.js"), "utf8"), win);
+  const d = win.AGENTSTACK_DEMO;
+  if (!d || !d.bundleSurnames) throw new Error("fixture did not load");
+  for (const n of d.bundleSurnames()) console.log(n);
 ')"
 [ -n "$SCI" ] || { echo "no cast found in demo_api.js" >&2; exit 1; }
 

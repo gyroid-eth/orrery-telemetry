@@ -321,26 +321,45 @@ check('[' + STORY_ID + '] no moment in the loop shows a present agent with nothi
    itself rather than relying on a query string nobody types. If that flag
    stops working the bare URL renders a dashboard waiting forever on /api. */
 check('[' + STORY_ID + '] the build-time flag turns the demo on without ?demo=1', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
+  const mk = (extra) => {
+    const win = Object.assign({
+      location: { search: '' },
+      fetch: () => Promise.reject(new Error('no network in this test')),
+      dispatchEvent: () => true, URLSearchParams,
+      CustomEvent: function () {}, Response: class {},
+    }, extra);
+    win.window = win;
+    vm.createContext(win);
+    /* A real bundle always ships its stories alongside the fixture. */
+    storyFiles().forEach((f) => vm.runInContext(
+      fs.readFileSync(path.join(__dirname, f), 'utf8'), win));
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8'), win);
+    return win;
+  };
+  if (!mk({ AGENTSTACK_DEMO_FORCE: 1 }).AGENTSTACK_DEMO)
+    throw new Error('flag did not install the fixture');
+  if (mk({}).AGENTSTACK_DEMO)
+    throw new Error('installed itself on a page that asked for neither');
+});
+
+/* A bundle assembled without its story files should be an ordinary dashboard,
+   not a page that throws on the way up. Removing the last built-in story made
+   this reachable for the first time. */
+check('[' + STORY_ID + '] no stories means no fixture, not a crash', () => {
   const win = {
-    location: { search: '' }, AGENTSTACK_DEMO_FORCE: 1,
-    fetch: () => Promise.reject(new Error('no network in this test')),
+    location: { search: '?demo=1' }, AGENTSTACK_DEMO_FORCE: 1,
+    fetch: () => Promise.reject(new Error('untouched')),
     dispatchEvent: () => true, URLSearchParams,
     CustomEvent: function () {}, Response: class {},
   };
   win.window = win;
+  const originalFetch = win.fetch;
   vm.createContext(win);
-  vm.runInContext(src, win);
-  if (!win.AGENTSTACK_DEMO) throw new Error('flag did not install the fixture');
-
-  const off = { location: { search: '' }, URLSearchParams,
-                fetch: () => {}, dispatchEvent: () => true,
-                CustomEvent: function () {}, Response: class {} };
-  off.window = off;
-  vm.createContext(off);
-  vm.runInContext(src, off);
-  if (off.AGENTSTACK_DEMO)
-    throw new Error('installed itself on a page that asked for neither');
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8'), win);
+  if (win.AGENTSTACK_DEMO) throw new Error('installed a fixture with no story');
+  if (win.fetch !== originalFetch) throw new Error('replaced fetch anyway');
 });
 
 check('[' + STORY_ID + '] an unknown agent gets the server’s refusal, not a blank transcript', () => {
@@ -407,9 +426,10 @@ check('[' + STORY_ID + '] launch picker endpoints match server.py response shape
 
 check('[' + STORY_ID + '] every launch scientist has a bundled portrait', () => {
   const portraitDir = path.join(__dirname, '..', 'portraits_64');
-  const fixture = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
-  const bundled = new Set([...fixture.matchAll(
-    /name: .([A-Z][a-z]+)([A-Z][A-Za-z]+)./g)].map((match) => match[2]));
+  /* Same list the build ships, asked of the fixture rather than re-derived
+     here — the regex version read demo_api.js only and disagreed with what
+     actually ends up in the bundle. */
+  const bundled = new Set(DEMO.bundleSurnames());
   P.spawnNames().names.forEach((row) => {
     if (!row.portrait) throw new Error(row.name + ' says it has no portrait');
     if (!fs.existsSync(path.join(portraitDir, row.name + '.png')))
@@ -608,9 +628,8 @@ check('[' + STORY_ID + '] the narration points at agents that exist', () => {
 }
 
 /* Every registered story, not just the default one. */
-const IDS = ['migration'].concat(
-  storyFiles().map((f) => f.replace(/^story_|\.js$/g, ''))
-).filter((v, i, a) => a.indexOf(v) === i);
+const IDS = storyFiles().map((f) => f.replace(/^story_|\.js$/g, ''));
+if (!IDS.length) throw new Error('no stories to test');
 
 for (const id of IDS) {
   STORY_ID = id;
