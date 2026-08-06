@@ -656,6 +656,34 @@ check('the opening card is written in both languages', () => {
   if (!card || !card.en || !card.ja) throw new Error('the card is one-sided');
 });
 
+/* The card counts the cast in front of the reader. It used to say "nine
+   agents" from a constant, which was true of one story and wrong about the
+   one the demo now opens on — a claim the visitor can disprove by counting. */
+check('the opening card counts the story it is opening', () => {
+  for (const id of IDS) {
+    const win = loadDemo(id);
+    win.document = { readyState: 'loading', addEventListener: () => {} };
+    win.addEventListener = () => {};
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, 'demo_tour.js'), 'utf8'), win);
+    const html = win.AGENTSTACK_TOUR.cardHTML;
+    if (!html) throw new Error('the card does not render');
+    const cast = win.AGENTSTACK_DEMO.cast().length;
+    const min = Math.round(win.AGENTSTACK_DEMO.loop() / 60);
+    for (const l of ['en', 'ja']) {
+      const s = html(l);
+      if (/\{n\}|\{min\}/.test(s))
+        throw new Error('[' + id + '/' + l + '] card left a placeholder in');
+      if (!s.includes(String(cast)))
+        throw new Error('[' + id + '/' + l + '] card does not say ' + cast +
+          ' agents');
+      if (!s.includes(String(min)))
+        throw new Error('[' + id + '/' + l + '] card does not say ' + min +
+          ' minutes');
+    }
+  }
+});
+
 console.log('');
 console.log(failures ? failures + ' FAILED' : 'all passed');
 process.exit(failures ? 1 : 0);

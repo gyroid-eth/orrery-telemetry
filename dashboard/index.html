@@ -1159,11 +1159,16 @@
     filter:drop-shadow(0 0 5px rgba(54,232,255,.65))}
 
   /* A spring bounce, restored: it reads from across the room, where a slow
-     fade in opacity does not. Both states bounce; colour tells them apart. */
-  .node.act-question .qbub,
-  .node.act-ask .askbub{animation:statebounce 1.25s cubic-bezier(.3,1.5,.5,1) infinite;
+     fade in opacity does not. Both states bounce; colour tells them apart.
+     It scales the character and not the group: the group's fill-box is
+     dominated by the ring, which is centred on the node, so scaling the group
+     drags the `!` inward — at scale(.45) its centre sits 10px from the node
+     centre against a 24px portrait radius, i.e. on the face, at the bottom of
+     every bounce. Scaling the glyph about its own centre keeps it outside. */
+  .node.act-question .qbub .bq,
+  .node.act-ask .askbub .bx{animation:statebounce 1.25s cubic-bezier(.3,1.5,.5,1) infinite;
     transform-box:fill-box;transform-origin:center}
-  .node.act-question .qbub{animation-duration:1.6s}
+  .node.act-question .qbub .bq{animation-duration:1.6s}
   @keyframes statebounce{
     0%{transform:scale(.45) translateY(4px);opacity:.35}
     35%{transform:scale(1.22) translateY(-3px);opacity:1}
@@ -1743,10 +1748,12 @@
     .node.act-wait .hp{animation:none;opacity:.9}
     .node.act-wait .zsleep .z{animation:none;opacity:.85}
     .node.act-wait .zsleep .z1{opacity:0}
-    .node.act-ask .askbub{animation:none;opacity:1}
+    .node.act-ask .askbub,
+    .node.act-ask .askbub .bx{animation:none;opacity:1}
     .node.act-ask .bubo{animation:none}
     .node.act-ask .hp{animation:none}
-    .node.act-question .qbub{animation:none;opacity:1}
+    .node.act-question .qbub,
+    .node.act-question .qbub .bq{animation:none;opacity:1}
     .node.act-question .hp{animation:none}
     .node.run .etime{animation:none;opacity:.9}
     .node .murmur{animation:none;opacity:1}}

@@ -22,9 +22,26 @@
   if (new URLSearchParams(location.search).get('demo') !== '1' &&
       !window.AGENTSTACK_DEMO_FORCE) return;
 
+  /* The count and the running time come from the story, because there is more
+     than one story and the card is where a visitor is choosing between them.
+     Written as a constant, it said "nine agents" over a cast of six — a demo
+     that miscounts what is on the screen behind it is worse than one that
+     says nothing. */
+  function facts() {
+    var d = window.AGENTSTACK_DEMO;
+    var n = (d && d.cast && d.cast().length) || 0;
+    var min = Math.max(1, Math.round(((d && d.loop && d.loop()) || 240) / 60));
+    return { n: n, min: min };
+  }
+
+  function cardHTML(l) {
+    var f = facts();
+    return CARD[l].replace('{n}', f.n).replace('{min}', f.min);
+  }
+
   var CARD = {
     en: '<h2>This is a demo — no machines behind it</h2>' +
-        '<p>Nine agents, a four-minute story on a loop. The data is written, ' +
+        '<p>{n} agents, a {min}-minute story on a loop. The data is written, ' +
         'not recorded from anyone’s laptop, and every control is live but ' +
         'inert: pressing one changes nothing.</p><ul>' +
         '<li><b>Click a card</b> to read what that agent is doing, line by line.</li>' +
@@ -32,7 +49,7 @@
         '<li><b>▸ NEW</b> opens the form you would really start an agent with.</li>' +
         '</ul>',
     ja: '<h2>これはデモです — 後ろに実機はありません</h2>' +
-        '<p>エージェント9体、4分で一周する台本です。データは書き下ろしたもので、' +
+        '<p>エージェント{n}体、{min}分で一周する台本です。データは書き下ろしたもので、' +
         '誰かの端末から採ったものではありません。操作はすべて生きていますが、' +
         '押しても何も起きません。</p><ul>' +
         '<li><b>カードを押す</b>と、そのエージェントの作業を1行ずつ読めます。</li>' +
@@ -248,7 +265,7 @@
 
   function paintCard(card) {
     var l = lang();
-    card.querySelector('.copy').innerHTML = CARD[l];
+    card.querySelector('.copy').innerHTML = cardHTML(l);
     card.querySelector('.go').textContent = START_BTN[l];
     paintCardChoice(card);
     paintToggle();
@@ -328,5 +345,6 @@
   else build();
 
   window.AGENTSTACK_TOUR = { beats: beats, beatAt: beatAt,
-                             card: CARD, switchTo: switchTo };
+                             card: CARD, cardHTML: cardHTML,
+                             switchTo: switchTo };
 })();
