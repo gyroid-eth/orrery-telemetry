@@ -2378,6 +2378,15 @@
     .tm-portrait{width:38px;height:38px;flex-basis:38px}
     .tm-ident{min-width:0;max-width:calc(100% - 92px);flex:1}
     .tm-tabs{order:5;width:100%}.tm-tabs button{flex:1}}
+  /* On a phone the three actions took the whole bar and the agent's name was
+     ellipsised to a single letter — the pane still said EXIT, OPEN TMUX and
+     Close, but no longer said whose pane it was. The name gets the first row;
+     the actions drop below the tabs and share the width. */
+  @media (max-width:560px){
+    .tm-ident{max-width:none;flex:1 1 auto}
+    .tm-grow{display:none}
+    .tm-exit-btn,.tm-open,.tm-x{order:6;flex:1 1 auto;
+      padding:8px 6px;font-size:11px}}
 </style>
 <!-- Demo mode. Answers the read endpoints from a script so the page runs
      with nothing behind it, and refuses the write endpoints. Inert unless
@@ -4640,7 +4649,12 @@ function initNetCtl(){
   const panel=document.getElementById('nctl');
   if(!panel)return;
   const hd=document.getElementById('nctl-hd');
-  if(localStorage.getItem('agentdash.netctl.col')==='1')panel.classList.add('col');
+  // On a phone the open panel covers most of the graph it is tuning, so it
+  // starts collapsed there — the header is still tappable. A stored choice
+  // still wins in both directions; this only decides the first visit.
+  const stored=localStorage.getItem('agentdash.netctl.col');
+  const narrow=matchMedia('(max-width:640px)').matches;
+  if(stored==='1'||(stored===null&&narrow))panel.classList.add('col');
   hd.addEventListener('click',()=>{
     const col=panel.classList.toggle('col');
     try{localStorage.setItem('agentdash.netctl.col',col?'1':'0');}catch(e){}

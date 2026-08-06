@@ -123,6 +123,24 @@
     '#demo-strip .story button.on,#demo-strip .lang button.on,',
     '#demo-card .pick button.on{color:#0d0f13;',
     '  background:rgba(212,168,84,.85);border-color:rgba(212,168,84,.85)}',
+
+    /* On a phone the row layout fails twice at once: the caption is squeezed
+       into a column a few words wide and grows to a third of the screen,
+       while the story and language buttons are pushed off the right edge
+       where nothing can reach them. Stack instead — caption first, controls
+       under it — and sit on the bottom edge rather than floating above it. */
+    '@media (max-width:640px){',
+    '  #demo-strip{left:8px;right:8px;bottom:8px;transform:none;',
+    '    max-width:none;flex-wrap:wrap;align-items:flex-start;gap:8px;',
+    '    padding:10px 12px 11px;font-size:12.5px}',
+    '  #demo-strip .txt{flex:1 1 100%;order:2}',
+    '  #demo-strip .tag{order:1}',
+    '  #demo-strip .hint{order:3;flex:1 1 auto}',
+    '  #demo-strip .story{order:4;flex:0 1 auto;flex-wrap:wrap}',
+    '  #demo-strip .lang{order:5;margin-left:auto}',
+    '  #demo-strip .story button,#demo-strip .lang button{padding:6px 9px}',
+    '  #demo-card .box{padding:18px 16px}',
+    '}',
   ].join('\n');
 
   function el(tag, attrs, html) {
