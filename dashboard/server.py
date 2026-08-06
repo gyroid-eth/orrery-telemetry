@@ -307,6 +307,50 @@ def _is_activity_glyph(ch: str) -> bool:
         or ch in "·•∗*✢◐◓◑◒"
     )
 
+
+def _stable_live(live: str) -> str:
+    """先頭の回転グリフを除き、状態変化の署名に使える live 文言を返す。"""
+    text = live.lstrip()
+    while text and _is_activity_glyph(text[0]):
+        text = text[1:].lstrip()
+    return text
+
+
+_OBSERVED_LIMIT = 4096
+_observed: dict[str, tuple[tuple[object, ...], float | None]] = {}
+_observed_lock = threading.Lock()
+
+
+def _observe_activity(
+    name: str, signature: tuple[object, ...], now: float,
+) -> float | None:
+    """署名が前回から変わった時刻を返す。初回観測は活動として数えない。"""
+    with _observed_lock:
+        previous = _observed.get(name)
+        if previous is None:
+            _observed[name] = (signature, None)
+            return None
+        previous_signature, changed_at = previous
+        if previous_signature != signature:
+            changed_at = now
+            _observed[name] = (signature, changed_at)
+        return changed_at
+
+
+def _prune_observed(current_names: set[str]) -> None:
+    """消滅した行を落とし、観測キャッシュに明示的な上限を設ける。"""
+    with _observed_lock:
+        for name in set(_observed) - current_names:
+            _observed.pop(name, None)
+        overflow = len(_observed) - _OBSERVED_LIMIT
+        if overflow > 0:
+            oldest = sorted(
+                _observed,
+                key=lambda name: _observed[name][1] or 0,
+            )[:overflow]
+            for name in oldest:
+                _observed.pop(name, None)
+
 # 実エージェントではないインフラ/プールセッション
 INFRA_NAMES = {"mail-watcher"}
 WARMUP_NAMES = {"warm-opus", "warm-sonnet"}
@@ -688,6 +732,7 @@ def build_agents() -> list[dict]:
                 "task": (m or {}).get("task", ""),
                 "instruction": mail_instr.get(name),
                 "deliv": len(didx.get(name, [])),
+                "mail_active": m["last_active"] if m else None,
                 "last_active": last_active,
                 "last_active_rel": _rel(last_active, now),
                 "created": s["created"],
@@ -739,6 +784,7 @@ def build_agents() -> list[dict]:
                     "task": r["task_description"] or "",
                     "instruction": None,
                     "deliv": len(didx.get(r["name"], [])),
+                    "mail_active": la,
                     "last_active": la, "last_active_rel": _rel(la, now),
                     "created": 0, "retired": bool(r["retired"]),
                     "surface": "tmux",
@@ -764,6 +810,18 @@ def build_agents() -> list[dict]:
         finally:
             if con is not None:
                 con.close()
+
+    observed_now = time.time()
+    for row in rows:
+        signature = (
+            row.get("act_state"),
+            row.get("ctx_used"),
+            _stable_live(row.get("live") or ""),
+        )
+        row["observed_active"] = _observe_activity(
+            row["name"], signature, observed_now,
+        )
+    _prune_observed({row["name"] for row in rows})
 
     order = {
         "agent": 0,
