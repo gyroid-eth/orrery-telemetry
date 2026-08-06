@@ -1239,6 +1239,11 @@
     border-color:var(--amber);box-shadow:var(--glow-a)}
   .sel-toggle.on .gl{color:var(--void)}
   /* SELECT モード ON 時の SVG ヒント */
+  /* The graph handles its own panning and pinching. Left to the browser,
+     a two-finger gesture zooms the whole page — including the header and
+     the panels — instead of the graph, and the pointer events we need to
+     do it properly never arrive. */
+  #gsvg{touch-action:none}
   #net.sel-mode #gsvg{cursor:crosshair}
   #net.sel-mode .node{cursor:pointer}
   /* 選択中ノード: amber リング + 細線フレーム */
@@ -4356,7 +4361,44 @@ gsvg.addEventListener('wheel',ev=>{
   viewUserAdjusted=true;
   applyView();
 },{passive:false});
+/* ── ピンチ拡縮（touch） ──────────────────────────────────────────────
+   wheel は指のない端末には無いので、touch では倍率を変える手段が
+   まったく無かった。2本目の指が降りたらピンチに入り、pan とノード
+   drag はその場で降ろす（1本目が何の上で降りたかに関わらず、2本指は
+   拡縮の意図とみなす）。基準は「最初の 2 指の中点にあった world 点」で、
+   これを現在の中点に留めるので、つまんだ場所が動かない。 */
+const touches=new Map();
+let pinch=null;
+function pinchGeom(){
+  const [a,b]=[...touches.values()];
+  return {d:Math.hypot(a.x-b.x,a.y-b.y),
+          mx:(a.x+b.x)/2, my:(a.y+b.y)/2};
+}
+function pinchStart(){
+  const g=pinchGeom(), r=gsvg.getBoundingClientRect();
+  pinch={d0:g.d, k0:gView.k,
+         wx:gView.vx+(g.mx-r.left)/gView.k,
+         wy:gView.vy+(g.my-r.top)/gView.k};
+  pan=null;
+  if(drag){ if(drag.lpTimer)clearTimeout(drag.lpTimer); drag=null; }
+  tipHide&&tipHide();
+}
+function pinchMove(){
+  const g=pinchGeom(), r=gsvg.getBoundingClientRect();
+  if(!pinch.d0)return;
+  const k2=Math.max(K_MIN,Math.min(K_MAX,pinch.k0*(g.d/pinch.d0)));
+  gView.k=k2;
+  gView.vx=pinch.wx-(g.mx-r.left)/k2;
+  gView.vy=pinch.wy-(g.my-r.top)/k2;
+  viewUserAdjusted=true;
+  applyView();
+}
 gsvg.addEventListener('pointerdown',ev=>{
+  if(ev.pointerType==='touch'){
+    touches.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(touches.size===2){pinchStart();return;}
+    if(touches.size>2)return;
+  }
   if(ev.target.closest('.node'))return;       // ノード drag に譲る
   if(ev.target.classList.contains('edge-hit'))return; // edge click に譲る
   if(selectMode){
@@ -4374,6 +4416,10 @@ gsvg.addEventListener('pointerdown',ev=>{
   gsvg.setPointerCapture(ev.pointerId);
 });
 gsvg.addEventListener('pointermove',ev=>{
+  if(ev.pointerType==='touch'&&touches.has(ev.pointerId)){
+    touches.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(pinch&&touches.size===2){pinchMove();return;}
+  }
   if(selRect&&ev.pointerId===selRect.id){
     const w=screenToWorld(ev.clientX,ev.clientY);
     selRect.x1=w.x;selRect.y1=w.y;
@@ -4399,6 +4445,11 @@ gsvg.addEventListener('pointermove',ev=>{
   applyView();
 });
 const _panEnd=ev=>{
+  if(touches.delete(ev.pointerId)&&pinch&&touches.size<2){
+    // 指が1本になっても pan には戻さない。戻すと、離した瞬間に残った指の
+    // 位置へ画面が飛ぶ（pan の原点が無いため）。次の押下から再開する。
+    pinch=null;pan=null;return;
+  }
   if(selRect&&ev.pointerId===selRect.id){
     try{gsvg.releasePointerCapture(ev.pointerId);}catch(_){}
     // 最終座標で一度評価 (pointermove が一度も来ない高速ドラッグでも確実に拾う)
