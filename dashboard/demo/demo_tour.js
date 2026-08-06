@@ -24,38 +24,79 @@
 
   /* `at` is seconds into the loop; a beat runs until the next one starts.
      `look` is the thing being described — missing is fine.
-     `view` names the view the beat is about, for the hint on the right. */
+     `view` names the view the beat is about, for the hint on the right.
+     Both languages sit on the same beat so one cannot drift from the other. */
   var BEATS = [
     { at: 0, look: '.gauge.run',
-      text: 'Two orchestrators, nothing delegated yet. Every number on this ' +
-            'strip is read from the machines, not reported by the agents.' },
+      en: 'Two orchestrators, nothing delegated yet. Every number on this ' +
+          'strip is read from the machines, not reported by the agents.',
+      ja: '親エージェントが2体、まだ何も委任していません。上の数字はエージェントの' +
+          '自己申告ではなく、実機から読んだ値です。' },
     { at: 14, look: '.bay[data-name="SlateHooke"]',
-      text: 'The first orchestrator starts a child. A card appears the moment ' +
-            'the process does — nothing had to announce itself.' },
+      en: 'The first orchestrator starts a child. A card appears the moment ' +
+          'the process does — nothing had to announce itself.',
+      ja: '1体目の親が子を起動しました。プロセスが立った瞬間にカードが現れます。' +
+          '何かが名乗り出る必要はありません。' },
     { at: 33, look: '#v-net', view: 'net',
-      text: 'The child answers its parent. In Network view that reply is a ' +
-            'line between them.' },
+      en: 'The child answers its parent. In Network view that reply is a ' +
+          'line between them.',
+      ja: '子が親に返信しました。Network 表示では、その返信が2体を結ぶ線になります。' },
     { at: 40, look: '.bay[data-name="IvoryNoether"]',
-      text: 'A second child, for tests. The ring on each card is its context ' +
-            'window filling up.' },
+      en: 'A second child, for tests. The ring on each card is its context ' +
+          'window filling up.',
+      ja: '2体目の子はテスト担当です。カードのリングは、その子のコンテキスト窓が' +
+          '埋まっていく様子を示します。' },
     { at: 60, look: '.bay[data-name="FlintGauss"]',
-      text: 'A third child on the other rail. Running versus standby is the ' +
-            'one number worth watching on a busy day.' },
+      en: 'A third child on the other rail. Running versus standby is the ' +
+          'one number worth watching on a busy day.',
+      ja: 'もう一方の系統で3体目が動き出しました。忙しい日に見るべき数字は、' +
+          '稼働中と待機中の比です。' },
     { at: 95, look: '.bay[data-name="RustPasteur"]',
-      text: 'Four children now. Click any card to read what that agent is ' +
-            'actually doing, line by line.' },
+      en: 'Four children now. Click any card to read what that agent is ' +
+          'actually doing, line by line.',
+      ja: '子が4体になりました。カードを押すと、そのエージェントが実際に何をしているかを' +
+          '1行ずつ読めます。' },
     { at: 118, look: '#v-net', view: 'net',
-      text: 'A release check fails and the second orchestrator holds the gate. ' +
-            'The traffic that decided it is on the graph.' },
+      en: 'A release check fails and the second orchestrator holds the gate. ' +
+          'The traffic that decided it is on the graph.',
+      ja: 'リリース検査が1件落ち、2体目の親がゲートを閉じました。その判断に至った' +
+          'やり取りはグラフ上に残っています。' },
     { at: 146, look: '.bay[data-name="IvoryNoether"]',
-      text: 'Tests come back green. The context rings show which agents have ' +
-            'room left and which are nearly full.' },
+      en: 'Tests come back green. The context rings show which agents have ' +
+          'room left and which are nearly full.',
+      ja: 'テストが緑で返ってきました。リングを見れば、どの子にまだ余裕があり、' +
+          'どの子がもう一杯かが分かります。' },
     { at: 182, look: '.bay[data-name="IvoryNoether"]',
-      text: 'A child finishes. It stops running but stays on screen — what it ' +
-            'did is still there to read.' },
+      en: 'A child finishes. It stops running but stays on screen — what it ' +
+          'did is still there to read.',
+      ja: '子が1体終わりました。稼働は止まりますが画面には残り、何をしたかは' +
+          'あとから読めます。' },
     { at: 203, look: '.gauge.tot',
-      text: 'The gate opens and the work lands. In a moment this starts over.' },
+      en: 'The gate opens and the work lands. In a moment this starts over.',
+      ja: 'ゲートが開き、作業が入りました。まもなく最初から繰り返します。' },
   ];
+
+  var CARD = {
+    en: '<h2>This is a demo — no machines behind it</h2>' +
+        '<p>Nine agents, a four-minute story on a loop. The data is written, ' +
+        'not recorded from anyone’s laptop, and every control is live but ' +
+        'inert: pressing one changes nothing.</p><ul>' +
+        '<li><b>Click a card</b> to read what that agent is doing, line by line.</li>' +
+        '<li><b>⊹ Network</b> shows who spawned whom and what they said.</li>' +
+        '<li><b>▸ NEW</b> opens the form you would really start an agent with.</li>' +
+        '</ul>',
+    ja: '<h2>これはデモです — 後ろに実機はありません</h2>' +
+        '<p>エージェント9体、4分で一周する台本です。データは書き下ろしたもので、' +
+        '誰かの端末から採ったものではありません。操作はすべて生きていますが、' +
+        '押しても何も起きません。</p><ul>' +
+        '<li><b>カードを押す</b>と、そのエージェントの作業を1行ずつ読めます。</li>' +
+        '<li><b>⊹ Network</b> で、誰が誰を起動し何を言ったかが見えます。</li>' +
+        '<li><b>▸ NEW</b> は実際にエージェントを起動するときのフォームです。</li>' +
+        '</ul>',
+  };
+  var START_BTN = { en: 'START WATCHING', ja: '見てみる' };
+  var BLOCKED = { en: 'nothing was started, stopped or changed',
+                  ja: '何も起動・停止・変更されていません' };
 
   var CSS = [
     /* Clear of #toast, which the page parks at bottom:30px — the two
@@ -99,6 +140,15 @@
     '  padding:8px 18px;font:12px/1 "IBM Plex Mono",monospace;',
     '  letter-spacing:.12em;cursor:pointer}',
     '#demo-card button:hover{background:rgba(212,168,84,.28)}',
+    '#demo-card .row{display:flex;align-items:center;justify-content:space-between;',
+    '  gap:14px}',
+    '#demo-strip .lang,#demo-card .pick{flex:none;display:flex;gap:4px}',
+    '#demo-strip .lang button,#demo-card .pick button{appearance:none;',
+    '  border:1px solid rgba(212,168,84,.28);background:none;color:#9a9081;',
+    '  border-radius:4px;padding:4px 8px;cursor:pointer;',
+    '  font:10.5px/1 "IBM Plex Mono",monospace;letter-spacing:.08em}',
+    '#demo-strip .lang button.on,#demo-card .pick button.on{color:#0d0f13;',
+    '  background:rgba(212,168,84,.85);border-color:rgba(212,168,84,.85)}',
   ].join('\n');
 
   function el(tag, attrs, html) {
@@ -114,7 +164,8 @@
     return cur;
   }
 
-  var strip, bar, txt, hint, ringEl, shown = null, lookSel = null;
+  var strip, bar, txt, hint, toggle, ringEl;
+  var shown = null, shownLang = null, lookSel = null;
 
   /* The ring is its own box laid over the target rather than a class on it.
      The deck reassigns its own className on every poll, so a class set here
@@ -137,15 +188,49 @@
     ringEl.style.height = (r.height + 8) + 'px';
   }
 
+  function lang() {
+    var d = window.AGENTSTACK_DEMO;
+    return d && d.lang() === 'ja' ? 'ja' : 'en';
+  }
+
   function tick() {
     var d = window.AGENTSTACK_DEMO;
     if (!d) return;
-    var t = d.phase(), b = beatAt(t);
+    var t = d.phase(), b = beatAt(t), l = lang();
     bar.style.width = (t / d.loop * 100).toFixed(2) + '%';
-    if (b !== shown) { shown = b; txt.textContent = b.text; }
+    if (b !== shown || l !== shownLang) {
+      shown = b; shownLang = l; txt.textContent = b[l];
+    }
     var here = document.body.dataset.view || 'deck';
     hint.textContent = b.view && b.view !== here ? '⊹ NETWORK →' : '';
     ring(b.look);
+  }
+
+  /* Switching language re-labels the toggle and the caption immediately; the
+     deck and graph pick it up on their next poll, and a pane on its next
+     open. Nothing is reloaded, so the story keeps its place. */
+  function switchTo(l) {
+    var d = window.AGENTSTACK_DEMO;
+    if (!d) return;
+    d.setLang(l);
+    paintToggle();
+    tick();
+    var card = document.getElementById('demo-card');
+    if (card) paintCard(card);
+  }
+
+  function paintToggle() {
+    if (!toggle) return;
+    var cur = lang();
+    Array.prototype.forEach.call(toggle.querySelectorAll('button'),
+      function (b) { b.classList.toggle('on', b.dataset.lang === cur); });
+  }
+
+  function paintCard(card) {
+    var l = lang();
+    card.querySelector('.copy').innerHTML = CARD[l];
+    card.querySelector('.go').textContent = START_BTN[l];
+    paintToggle();
   }
 
   function build() {
@@ -153,7 +238,10 @@
 
     strip = el('div', { id: 'demo-strip' },
       '<span class="tag">DEMO</span><span class="txt"></span>' +
-      '<span class="hint"></span><i id="demo-bar"></i>');
+      '<span class="hint"></span>' +
+      '<span class="lang"><button type="button" data-lang="en">EN</button>' +
+      '<button type="button" data-lang="ja">日本語</button></span>' +
+      '<i id="demo-bar"></i>');
     document.body.appendChild(strip);
     ringEl = el('div', { id: 'demo-ring' });
     ringEl.style.display = 'none';
@@ -162,25 +250,30 @@
     bar = strip.querySelector('#demo-bar');
     txt = strip.querySelector('.txt');
     hint = strip.querySelector('.hint');
+    toggle = strip.querySelector('.lang');
+    toggle.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-lang]');
+      if (b) switchTo(b.dataset.lang);
+    });
 
     var card = el('div', { id: 'demo-card' },
-      '<div class="box"><h2>This is a demo — no machines behind it</h2>' +
-      '<p>Nine agents, a four-minute story on a loop. The data is written, ' +
-      'not recorded from anyone’s laptop, and every control is live but ' +
-      'inert: pressing one changes nothing.</p><ul>' +
-      '<li><b>Click a card</b> to read what that agent is doing, line by line.</li>' +
-      '<li><b>⊹ Network</b> shows who spawned whom and what they said.</li>' +
-      '<li><b>▸ NEW</b> opens the form you would really start an agent with.</li>' +
-      '</ul><button type="button">START WATCHING</button></div>');
-    card.querySelector('button').addEventListener('click', function () {
+      '<div class="box"><div class="copy"></div>' +
+      '<div class="row"><button type="button" class="go"></button>' +
+      '<span class="pick"><button type="button" data-lang="en">EN</button>' +
+      '<button type="button" data-lang="ja">日本語</button></span></div></div>');
+    card.querySelector('.go').addEventListener('click', function () {
       card.remove();
       strip.classList.add('on');
     });
+    card.querySelector('.pick').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-lang]');
+      if (b) switchTo(b.dataset.lang);
+    });
     document.body.appendChild(card);
+    paintCard(card);
 
     window.addEventListener('demo:blocked', function () {
-      if (typeof toast === 'function')
-        toast('◦ DEMO', 'nothing was started, stopped or changed');
+      if (typeof toast === 'function') toast('◦ DEMO', BLOCKED[lang()]);
     });
 
     addEventListener('scroll', place, true);
@@ -194,5 +287,6 @@
     document.addEventListener('DOMContentLoaded', build);
   else build();
 
-  window.AGENTSTACK_TOUR = { beats: BEATS, beatAt: beatAt };
+  window.AGENTSTACK_TOUR = { beats: BEATS, beatAt: beatAt,
+                             card: CARD, switchTo: switchTo };
 })();

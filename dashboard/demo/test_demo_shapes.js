@@ -257,6 +257,58 @@ check('deliverables match the server’s shape and the badge count', () => {
   });
 });
 
+/* A half-translated demo is worse than an English one: the reader cannot
+   tell whether the English line is untranslated or deliberately verbatim.
+   So every string that reaches a reader must have an entry, and switching
+   the language must actually change what the payloads carry. */
+check('every reader-facing string exists in both languages', () => {
+  DEMO.setLang('ja');
+  const missing = DEMO.translatable().filter((s) => DEMO.translate(s) === s);
+  DEMO.setLang('en');
+  if (missing.length) {
+    throw new Error(missing.length + ' untranslated, first: ' +
+      JSON.stringify(missing[0].slice(0, 60)));
+  }
+});
+
+check('switching language changes what the payloads say', () => {
+  const q = new URLSearchParams('session=SlateHooke');
+  DEMO.setLang('en');
+  const en = {
+    task: P.agents().agents.find((r) => r.name === 'SlateHooke').task,
+    subject: P.messagesSince(0).messages.map((m) => m.subject).join('|'),
+    said: P.history(q).events.filter((e) => e.kind === 'text')
+            .map((e) => e.text).join('|'),
+    cmd: P.history(q).events.filter((e) => e.kind === 'tool_use')
+           .map((e) => e.text).join('|'),
+  };
+  DEMO.setLang('ja');
+  const ja = {
+    task: P.agents().agents.find((r) => r.name === 'SlateHooke').task,
+    subject: P.messagesSince(0).messages.map((m) => m.subject).join('|'),
+    said: P.history(q).events.filter((e) => e.kind === 'text')
+            .map((e) => e.text).join('|'),
+    cmd: P.history(q).events.filter((e) => e.kind === 'tool_use')
+           .map((e) => e.text).join('|'),
+  };
+  DEMO.setLang('en');
+  ['task', 'subject', 'said'].forEach((k) => {
+    if (en[k] === ja[k]) throw new Error(k + ' did not change with the language');
+    if (!/[ぁ-んァ-ン一-龯]/.test(ja[k]))
+      throw new Error(k + ' has no Japanese in it: ' + ja[k].slice(0, 60));
+  });
+  /* Commands are deliberately not translated — a terminal prints English. */
+  if (en.cmd !== ja.cmd) throw new Error('tool calls were translated');
+});
+
+check('relative times match the format the server writes', () => {
+  /* server.py _rel: "21s 前" / "3m 前" / "2h 前" / "1d 前". */
+  P.graph().nodes.forEach((n) => {
+    if (!/^(—|\d+[smhd] 前)$/.test(n.rel))
+      throw new Error(n.name + ' rel is ' + JSON.stringify(n.rel));
+  });
+});
+
 check('nothing in the fixture came from a real mailbox', () => {
   /* Names of things that exist on the author’s machine. If one of these
      ever appears here, someone exported instead of writing. */
@@ -287,11 +339,16 @@ check('the narration points at agents that exist', () => {
   vm.runInContext(src, win);      // build() waits for DOMContentLoaded here
   const beats = win.AGENTSTACK_TOUR && win.AGENTSTACK_TOUR.beats;
   if (!beats || !beats.length) throw new Error('no beats');
+  const card = win.AGENTSTACK_TOUR.card;
+  if (!card.en || !card.ja) throw new Error('the opening card is one-sided');
 
   const cast = new Set(DEMO.cast.map((c) => c.name));
   let prev = -1;
   beats.forEach((b) => {
-    if (!b.text) throw new Error('beat at ' + b.at + ' says nothing');
+    if (!b.en) throw new Error('beat at ' + b.at + ' says nothing');
+    if (!b.ja) throw new Error('beat at ' + b.at + ' has no Japanese');
+    if (!/[ぁ-んァ-ン一-龯]/.test(b.ja))
+      throw new Error('beat at ' + b.at + ' left English in the ja slot');
     if (b.at <= prev) throw new Error('beats out of order at ' + b.at);
     if (b.at < 0 || b.at >= DEMO.loop)
       throw new Error('beat at ' + b.at + ' falls outside the loop');
