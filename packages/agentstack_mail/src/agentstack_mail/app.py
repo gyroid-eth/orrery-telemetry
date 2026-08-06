@@ -3105,6 +3105,27 @@ async def _create_agent_record(
         return agent
 
 
+async def _claim_null_registration_token(
+    session: Any,
+    agent_id: int,
+    registration_token: str,
+    values: dict[str, Any],
+) -> bool:
+    """Atomically claim a null registration token with the accepted metadata."""
+    claimed = await session.execute(
+        update(Agent)
+        .where(
+            cast(Any, Agent.id == agent_id),
+            cast(Any, Agent.registration_token).is_(None),
+        )
+        .values(
+            **values,
+            registration_token=registration_token,
+        )
+    )
+    return claimed.rowcount == 1
+
+
 async def _get_or_create_agent(
     project: Project,
     name: Optional[str],
@@ -3113,6 +3134,9 @@ async def _get_or_create_agent(
     task_description: str,
     settings: Settings,
     registration_token: Optional[str] = None,
+    *,
+    manage_registration_token: bool = False,
+    attachments_policy: Optional[str] = None,
 ) -> Agent:
     if project.id is None:
         raise ValueError("Project must have an id before creating agents.")
@@ -3121,6 +3145,7 @@ async def _get_or_create_agent(
     window_uuid = getattr(settings, "window_identity_uuid", "") or ""
     ttl_days = getattr(settings, "window_identity_ttl_days", 30)
     window_identity: Optional[WindowIdentity] = None
+    touch_window_identity_after_auth = False
 
     # Priority chain per bead bd-1tz:
     # 1. Explicit agent_name parameter -> use as-is (highest priority)
@@ -3172,7 +3197,7 @@ async def _get_or_create_agent(
                 # Priority 2: existing window identity -> reuse its display_name
                 desired_name = window_identity.display_name
                 explicit_name_used = True  # treat as explicit to avoid collision retries
-                await _touch_window_identity(window_identity, ttl_days)
+                touch_window_identity_after_auth = True
             else:
                 # Priority 3: new window identity -> generate name and create identity
                 desired_name = await _generate_unique_agent_name(project, settings, None)
@@ -3182,6 +3207,71 @@ async def _get_or_create_agent(
     else:
         # Priority 4: no name, no window ID -> auto-generate
         desired_name = await _generate_unique_agent_name(project, settings, None)
+
+    async def update_existing_agent(session: Any, agent: Agent) -> Agent:
+        """Authenticate and update one existing row without a token TOCTOU."""
+        values: dict[str, Any] = {
+            "program": program,
+            "model": model,
+            "task_description": task_description,
+            "last_active_ts": _naive_utc(),
+        }
+        if attachments_policy is not None:
+            values["attachments_policy"] = attachments_policy
+
+        agent_id = agent.id
+        if agent_id is None:
+            raise RuntimeError("Registered agent has no database id.")
+        existing_token = getattr(agent, "registration_token", None)
+        if manage_registration_token and existing_token is None:
+            requested_registration_token = _resolve_registration_token(
+                None,
+                registration_token,
+            )
+            claimed = await _claim_null_registration_token(
+                session,
+                agent_id,
+                requested_registration_token,
+                values,
+            )
+            if claimed:
+                await session.commit()
+                refreshed = await session.get(
+                    Agent,
+                    agent_id,
+                    populate_existing=True,
+                )
+                if refreshed is None:
+                    raise RuntimeError("Registered agent disappeared after token claim.")
+                return refreshed
+
+            # A concurrent caller claimed the null token first. Re-read the
+            # authority row before deciding whether this request is same-token
+            # idempotence, omitted-token compatibility, or an explicit conflict.
+            await session.rollback()
+            current = await session.get(
+                Agent,
+                agent_id,
+                populate_existing=True,
+            )
+            if current is None:
+                raise RuntimeError("Registered agent disappeared during token claim.")
+            if registration_token is not None:
+                _resolve_registration_token(
+                    getattr(current, "registration_token", None),
+                    registration_token,
+                )
+            agent = current
+        elif registration_token is not None:
+            _resolve_registration_token(existing_token, registration_token)
+
+        for field, value in values.items():
+            setattr(agent, field, value)
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+        return agent
+
     await ensure_schema()
     async with get_session() as session:
         for _attempt in range(5):
@@ -3194,18 +3284,7 @@ async def _get_or_create_agent(
             )
             agent = result.scalars().first()
             if agent:
-                if registration_token is not None:
-                    _resolve_registration_token(
-                        getattr(agent, "registration_token", None),
-                        registration_token,
-                    )
-                agent.program = program
-                agent.model = model
-                agent.task_description = task_description
-                agent.last_active_ts = _naive_utc()
-                session.add(agent)
-                await session.commit()
-                await session.refresh(agent)
+                agent = await update_existing_agent(session, agent)
                 break
 
             candidate = Agent(
@@ -3214,6 +3293,12 @@ async def _get_or_create_agent(
                 program=program,
                 model=model,
                 task_description=task_description,
+                attachments_policy=attachments_policy or "auto",
+                registration_token=(
+                    _resolve_registration_token(None, registration_token)
+                    if manage_registration_token
+                    else None
+                ),
             )
             session.add(candidate)
             try:
@@ -3237,18 +3322,7 @@ async def _get_or_create_agent(
                     agent = result.scalars().first()
                     if agent is None:
                         raise
-                    if registration_token is not None:
-                        _resolve_registration_token(
-                            getattr(agent, "registration_token", None),
-                            registration_token,
-                        )
-                    agent.program = program
-                    agent.model = model
-                    agent.task_description = task_description
-                    agent.last_active_ts = _naive_utc()
-                    session.add(agent)
-                    await session.commit()
-                    await session.refresh(agent)
+                    agent = await update_existing_agent(session, agent)
                     break
 
                 # Auto-generated name collision under concurrency: pick a new name and retry.
@@ -3269,6 +3343,8 @@ async def _get_or_create_agent(
             )
         else:
             await _touch_window_identity(window_identity, ttl_days)
+    if touch_window_identity_after_auth and window_identity is not None:
+        await _touch_window_identity(window_identity, ttl_days)
 
     archive = await ensure_archive(settings, project.slug)
     agent_dict = _agent_to_dict(agent)
@@ -4980,9 +5056,12 @@ def build_mcp_server() -> FastMCP:
             task_description,
             settings,
             registration_token=registration_token,
+            manage_registration_token=True,
+            attachments_policy=ap if registration_token is not None else None,
         )
-        # Persist attachment policy if changed
-        if getattr(agent, "attachments_policy", None) != ap:
+        # Preserve legacy omitted-token ordering until D6/D7 are adjudicated:
+        # the profile commit happens first, then attachment policy changes in DB.
+        if registration_token is None and getattr(agent, "attachments_policy", None) != ap:
             async with get_session() as session:
                 db_agent = await session.get(Agent, agent.id)
                 if db_agent:
@@ -4991,18 +5070,6 @@ def build_mcp_server() -> FastMCP:
                     await session.commit()
                     await session.refresh(db_agent)
                     agent = db_agent
-        # Persist registration token for sender verification.
-        # Re-registering the same identity preserves its existing token unless the
-        # caller explicitly reasserts the same token.
-        token = _resolve_registration_token(getattr(agent, "registration_token", None), registration_token)
-        async with get_session() as session:
-            db_agent = await session.get(Agent, agent.id)
-            if db_agent and db_agent.registration_token != token:
-                db_agent.registration_token = token
-                session.add(db_agent)
-                await session.commit()
-                await session.refresh(db_agent)
-                agent = db_agent
         await ctx.info(f"Registered agent '{agent.name}' for project '{project.human_key}'.")
         result = _agent_to_dict(agent)
         # NOTE: registration_token is intentionally NOT included in the response.
