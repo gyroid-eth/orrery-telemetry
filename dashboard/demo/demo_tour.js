@@ -19,7 +19,8 @@
  */
 (function () {
   'use strict';
-  if (new URLSearchParams(location.search).get('demo') !== '1') return;
+  if (new URLSearchParams(location.search).get('demo') !== '1' &&
+      !window.AGENTSTACK_DEMO_FORCE) return;
 
   /* `at` is seconds into the loop; a beat runs until the next one starts.
      `look` is the thing being described — missing is fine.

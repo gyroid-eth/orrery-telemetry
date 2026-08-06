@@ -206,6 +206,32 @@ check('no moment in the loop shows a present agent with nothing said', () => {
   }
 });
 
+/* The static bundle has no server to fall back to, so it turns the demo on
+   itself rather than relying on a query string nobody types. If that flag
+   stops working the bare URL renders a dashboard waiting forever on /api. */
+check('the build-time flag turns the demo on without ?demo=1', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
+  const win = {
+    location: { search: '' }, AGENTSTACK_DEMO_FORCE: 1,
+    fetch: () => Promise.reject(new Error('no network in this test')),
+    dispatchEvent: () => true, URLSearchParams,
+    CustomEvent: function () {}, Response: class {},
+  };
+  win.window = win;
+  vm.createContext(win);
+  vm.runInContext(src, win);
+  if (!win.AGENTSTACK_DEMO) throw new Error('flag did not install the fixture');
+
+  const off = { location: { search: '' }, URLSearchParams,
+                fetch: () => {}, dispatchEvent: () => true,
+                CustomEvent: function () {}, Response: class {} };
+  off.window = off;
+  vm.createContext(off);
+  vm.runInContext(src, off);
+  if (off.AGENTSTACK_DEMO)
+    throw new Error('installed itself on a page that asked for neither');
+});
+
 check('an unknown agent gets the server’s refusal, not a blank transcript', () => {
   const h = P.history(new URLSearchParams('session=NobodyHere'));
   if (h.ok) throw new Error('invented a transcript for an agent that is gone');

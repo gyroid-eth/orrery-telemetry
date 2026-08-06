@@ -18,7 +18,18 @@ OUT="${1:-$HERE/dist}"
 rm -rf "$OUT"
 mkdir -p "$OUT/demo" "$OUT/assets" "$OUT/portraits_64"
 
-cp "$DASH/index.html" "$OUT/index.html"
+# Turn the demo on in the bundle itself. Without this the bare URL loads a
+# dashboard with no server behind it and sits on ACQUIRING TELEMETRY —
+# and a demo whose front door has to be typed with ?demo=1 is not one.
+python3 - "$DASH/index.html" "$OUT/index.html" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+anchor = '<script src="demo/demo_api.js"></script>'
+assert s.count(anchor) == 1, "demo loader moved; build needs updating"
+s = s.replace(anchor, "<script>window.AGENTSTACK_DEMO_FORCE=1</script>\n" + anchor, 1)
+open(dst, "w", encoding="utf-8").write(s)
+PY
 cp "$HERE/demo_api.js" "$HERE/demo_tour.js" "$OUT/demo/"
 cp "$DASH"/assets/*.svg "$OUT/assets/"
 cp "$HERE/PORTRAITS.txt" "$OUT/PORTRAITS.txt"
@@ -47,15 +58,6 @@ while IFS= read -r sci; do
   n=$((n + 1))
 done <<< "$SCI"
 echo "portraits: $n"
-
-# The demo only runs with ?demo=1, and nobody types that. Land them on it.
-cat > "$OUT/demo.html" <<'HTML'
-<!doctype html><meta charset="utf-8">
-<title>agentstack telemetry — demo</title>
-<meta http-equiv="refresh" content="0; url=index.html?demo=1">
-<link rel="canonical" href="index.html?demo=1">
-<p>Loading the demo… <a href="index.html?demo=1">continue</a></p>
-HTML
 
 echo "built $OUT"
 du -sh "$OUT"

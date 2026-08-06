@@ -19,8 +19,11 @@
  */
 (function () {
   'use strict';
+  /* The query switch is for trying demo mode against a real dashboard. The
+     flag is for the static bundle, where there is no server to fall back to
+     and a bare URL must not render a dashboard waiting forever on /api. */
   var params = new URLSearchParams(location.search);
-  if (params.get('demo') !== '1') return;
+  if (params.get('demo') !== '1' && !window.AGENTSTACK_DEMO_FORCE) return;
 
   var LOOP = 240;          // seconds; the story repeats from the top
   /* Enter the story already in progress. Starting at zero means a visitor
