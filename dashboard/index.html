@@ -3852,6 +3852,12 @@ function renderLiveStateBubble(grp,actState){
   // against a context arc at NR+5 = 18 — a signal that a human is blocked,
   // drawn underneath the gauge that is always on. NR+8 puts it in the clear
   // band between the context arc and the halo at NR+11.
+  //
+  // The clearance is 0.1px and that is not a typo: .ctx-arc-glow is 4.2 wide
+  // at r=18, so it reaches 20.1, and this ring is 1.6 wide at 21, so it
+  // starts at 20.2. They read as separate only because the glow is at
+  // opacity .16. Change the width of either one and look at both — measured
+  // on screen, not recomputed from these numbers.
   bubble.appendChild(svgEl('circle',{
     class:'bubo',cx:0,cy:0,r:(NR+8).toFixed(2),pathLength:'100'
   }));
