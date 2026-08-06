@@ -1,0 +1,14 @@
+# Surnames whose Wikimedia Commons portrait is verified public domain.
+# build.sh refuses any cast surname not on this list. Re-verify with the
+# Commons API before adding one; do not add a surname because the file
+# happens to exist in portraits_64/.
+Bohr
+Curie
+Faraday
+Gauss
+Hooke
+Kepler
+Lovelace
+Noether
+Pasteur
+Somerville

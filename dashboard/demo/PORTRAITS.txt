@@ -1,21 +1,44 @@
 Portraits used by the demo
 ==========================
 
-Nine 64px portraits ship with this bundle, one per agent in the fixture.
-All are from Wikimedia Commons and all are in the public domain — checked
-against the Commons API, not assumed. A tenth (Rosalind Franklin, MRC LMB)
-was dropped rather than shipped: it is CC BY-SA 4.0, and a cropped 64px
+One 64px portrait per agent, across every story. All are from Wikimedia
+Commons and all are in the public domain — checked against the Commons API,
+not assumed. build.sh refuses to ship a surname that is not listed in
+PORTRAITS_CLEARED.txt, so the licence check is a build step rather than
+something someone has to remember.
+
+Rosalind Franklin (MRC LMB) was dropped: CC BY-SA 4.0, and a cropped 64px
 derivative would carry the ShareAlike obligation into a product demo.
 
-Each line is: surname · Commons file · licence · credit
+Each entry is: surname · Commons file · licence · credit
+
+Bohr        Niels_Bohr.jpg
+            Public domain · The American Institute of Physics credits the photo [1] to AB Lagreliu
+            https://commons.wikimedia.org/wiki/File:Niels_Bohr.jpg
+
+Curie       Marie_Curie_c._1920s.jpg
+            Public domain · Henri Manuel
+            https://commons.wikimedia.org/wiki/File:Marie_Curie_c._1920s.jpg
+
+Faraday     Michael_Faraday_sitting_crop.jpg
+            Public domain · Unknown authorUnknown author
+            https://commons.wikimedia.org/wiki/File:Michael_Faraday_sitting_crop.jpg
+
+Gauss       Carl_Friedrich_Gauss_1840_by_Jensen.jpg
+            Public domain · Christian Albrecht Jensen
+            https://commons.wikimedia.org/wiki/File:Carl_Friedrich_Gauss_1840_by_Jensen.jpg
+
+Hooke       Portrait_of_a_Mathematician_1680c.jpg
+            Public domain · Mary Beale
+            https://commons.wikimedia.org/wiki/File:Portrait_of_a_Mathematician_1680c.jpg
 
 Kepler      JKepler.jpg
             Public domain · August Köhler [1]
             https://commons.wikimedia.org/wiki/File:JKepler.jpg
 
-Hooke       Portrait_of_a_Mathematician_1680c.jpg
-            Public domain · Mary Beale
-            https://commons.wikimedia.org/wiki/File:Portrait_of_a_Mathematician_1680c.jpg
+Lovelace    Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png
+            Public domain · Antoine Claudet
+            https://commons.wikimedia.org/wiki/File:Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png
 
 Noether     Emmy_Noether_(3x4_cropped).jpg
             Public domain · Unknown authorUnknown author
@@ -30,19 +53,3 @@ Pasteur     Louis_Pasteur,_foto_av_Paul_Nadar,_Crisco_edit.jpg
 Somerville  Thomas_Phillips_-_Mary_Fairfax,_Mrs_William_Somerville,_1780_-_1872._Writer_on_science_-_Google_Art_Project.jpg
             Public domain · Thomas Phillips
             https://commons.wikimedia.org/wiki/File:Thomas_Phillips_-_Mary_Fairfax%2C_Mrs_William_Somerville%2C_1780_-_1872._Writer_on_science_-_Google_Art_Project.jpg
-
-Gauss       Carl_Friedrich_Gauss_1840_by_Jensen.jpg
-            Public domain · Christian Albrecht Jensen
-            https://commons.wikimedia.org/wiki/File:Carl_Friedrich_Gauss_1840_by_Jensen.jpg
-
-Lovelace    Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png
-            Public domain · Antoine Claudet
-            https://commons.wikimedia.org/wiki/File:Ada_Lovelace_daguerreotype_by_Antoine_Claudet_1843_-_cropped.png
-
-Curie       Marie_Curie_c._1920s.jpg
-            Public domain · Henri Manuel
-            https://commons.wikimedia.org/wiki/File:Marie_Curie_c._1920s.jpg
-
-Bohr        Niels_Bohr.jpg
-            Public domain · The American Institute of Physics credits the photo [1] to AB Lagreliu
-            https://commons.wikimedia.org/wiki/File:Niels_Bohr.jpg

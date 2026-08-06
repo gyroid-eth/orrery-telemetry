@@ -55,9 +55,24 @@ PY
 # the first build without a word.
 SCI="$(node -e '
   const fs = require("fs"), path = require("path");
-  const src = fs.readFileSync(path.join("'"$HERE"'", "demo_api.js"), "utf8");
-  const names = [...src.matchAll(/name: .([A-Z][a-z]+)([A-Z][A-Za-z]+)./g)]
-    .map((m) => m[2]);
+  const dir = "'"$HERE"'";
+  /* Every story, not just the default one. Reading demo_api.js alone shipped
+     the migration cast and left the agents of a second story with a blank
+     square where a portrait belongs — the page renders fine, so nothing
+     said so until someone looked at the screen. */
+  const files = ["demo_api.js"].concat(
+    fs.readdirSync(dir).filter((f) => /^story_.*\.js$/.test(f)));
+  const names = [];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(dir, f), "utf8");
+    /* Tolerant of quoting and spacing: a story written with double quotes
+       slipped past the first version of this and shipped no portrait for its
+       cast, silently. \u0027 is a single quote, spelled that way so this can
+       live inside a single-quoted shell argument. */
+    names.push(...[...src.matchAll(
+      /name:\s*[\u0022\u0027]([A-Z][a-z]+)([A-Z][A-Za-z]+)[\u0022\u0027]/g)]
+      .map((m) => m[2]));
+  }
   for (const n of new Set(names)) console.log(n);
 ')"
 [ -n "$SCI" ] || { echo "no cast found in demo_api.js" >&2; exit 1; }
@@ -67,6 +82,13 @@ while IFS= read -r sci; do
   [ -n "$sci" ] || continue
   [ -f "$DASH/portraits_64/$sci.png" ] || {
     echo "missing portrait: $sci" >&2; exit 1; }
+  # The licence check used to live in someone's head, and that is where it
+  # failed: a story added an agent whose Commons portrait is CC BY-SA, the
+  # build shipped it, and only a screenshot showed anything was wrong.
+  grep -qx "$sci" "$HERE/PORTRAITS_CLEARED.txt" || {
+    echo "portrait not cleared for publication: $sci" >&2
+    echo "  verify its Commons licence, then add it to PORTRAITS_CLEARED.txt" >&2
+    exit 1; }
   cp "$DASH/portraits_64/$sci.png" "$OUT/portraits_64/"
   n=$((n + 1))
 done <<< "$SCI"
