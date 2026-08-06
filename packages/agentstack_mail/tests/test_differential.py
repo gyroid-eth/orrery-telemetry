@@ -167,13 +167,18 @@ _DATETIME_RE = re.compile(
     r"(?<!\d)(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}:\d{2}"
     r"(?:\.\d+)?(Z|[+-]\d{2}:\d{2})?(?!\d)"
 )
-_DURATION_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?ms(?!\w)")
+_RICH_TOOL_CALL_PANEL_RE = re.compile(
+    r"^╔═+ ✅ MCP TOOL CALL COMPLETED ═+╗ .* "
+    r"╚═+ (?:⚡ Lightning Fast!|✓ Fast|Completed) ═+╝$",
+    re.MULTILINE,
+)
 _RICH_DURATION_RE = re.compile(
     r"(⏱ Duration\s+│ )(?:⚡|⏱|🐌) \d+(?:\.\d+)?ms\s+(║)"
 )
 _RICH_COMPLETION_FOOTER_RE = re.compile(
     r"╚═+ (?:⚡ Lightning Fast!|✓ Fast|Completed) ═+╝"
 )
+_RICH_TIMING_LOG_PATH = ("durable", "git", "log")
 _ARCHIVE_DATE_PATH_RE = re.compile(r"/(\d{4})/(\d{2})/<TIME:FILE_Z>")
 _RAW_ARCHIVE_PATH_RE = re.compile(
     r"/(?P<directory_year>\d{4})/(?P<directory_month>\d{2})/"
@@ -186,6 +191,20 @@ _THREAD_ENTRY_RE = re.compile(
     r"^## ([^\n]+) — [^\n]+\n\n\[View canonical\]\(([^)]+)\)",
     re.MULTILINE,
 )
+
+
+def _normalize_rich_timing_presentation(value: str) -> str:
+    def normalize_panel(match: re.Match[str]) -> str:
+        panel = _RICH_DURATION_RE.sub(
+            r"\1<DURATION:PRESENTATION> \2",
+            match.group(0),
+        )
+        return _RICH_COMPLETION_FOOTER_RE.sub(
+            "╚<COMPLETION:PRESENTATION>╝",
+            panel,
+        )
+
+    return _RICH_TOOL_CALL_PANEL_RE.sub(normalize_panel, value)
 
 
 @pytest.fixture(scope="session")
@@ -858,17 +877,11 @@ class _TemporalNormalizer:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
-    def _string(self, value: str) -> str:
+    def _string(self, value: str, *, normalize_rich_timing: bool = False) -> str:
         normalized = value.replace(self.state_root, "<WORKER_STATE>")
         normalized = _ARCHIVE_TIME_RE.sub("<TIME:FILE_Z>", normalized)
-        normalized = _RICH_DURATION_RE.sub(
-            r"\1<DURATION:PRESENTATION> \2",
-            normalized,
-        )
-        normalized = _RICH_COMPLETION_FOOTER_RE.sub(
-            "╚<COMPLETION:PRESENTATION>╝",
-            normalized,
-        )
+        if normalize_rich_timing:
+            normalized = _normalize_rich_timing_presentation(normalized)
 
         def replace_datetime(match: re.Match[str]) -> str:
             suffix = match.group(2)
@@ -882,17 +895,26 @@ class _TemporalNormalizer:
             return f"<TIME:{kind}:{rank:04d}>"
 
         normalized = _DATETIME_RE.sub(replace_datetime, normalized)
-        normalized = _DURATION_RE.sub("<DURATION:MS>", normalized)
         return _ARCHIVE_DATE_PATH_RE.sub(
             "/<YEAR>/<MONTH>/<TIME:FILE_Z>",
             normalized,
         )
 
-    def normalize(self, value: Any) -> Any:
+    def normalize(
+        self,
+        value: Any,
+        path: tuple[str | int, ...] = (),
+    ) -> Any:
         if isinstance(value, str):
-            return self._string(value)
+            return self._string(
+                value,
+                normalize_rich_timing=path[-3:] == _RICH_TIMING_LOG_PATH,
+            )
         if isinstance(value, list):
-            return [self.normalize(item) for item in value]
+            return [
+                self.normalize(item, (*path, index))
+                for index, item in enumerate(value)
+            ]
         if isinstance(value, Mapping):
             normalized: dict[str, Any] = {}
             for key, item in value.items():
@@ -902,7 +924,10 @@ class _TemporalNormalizer:
                         "normalization collapsed distinct mapping keys onto "
                         f"{normalized_key!r}"
                     )
-                normalized[normalized_key] = self.normalize(item)
+                normalized[normalized_key] = self.normalize(
+                    item,
+                    (*path, str(key)),
+                )
             return normalized
         return value
 
@@ -998,23 +1023,37 @@ def test_rich_timing_presentation_normalization_is_narrow(
     footer: str,
     tmp_path: Path,
 ) -> None:
-    source = (
-        "--COMMIT--\n"
-        "subject: Completed migration\n"
-        "body: literal ✓ Fast and ⚡ Lightning Fast! stay\n"
-        f"║ ⏱ Duration      │ {icon} 157.97ms      ║\n"
+    rich_panel = (
+        "╔════════ ✅ MCP TOOL CALL COMPLETED ════════╗ "
+        f"║ ⏱ Duration      │ {icon} 157.97ms      ║ "
         f"╚════════ {footer} ════════╝"
     )
+    source = [
+        {
+            "result": {"body_md": rich_panel},
+            "durable": {
+                "git": {"log": rich_panel},
+                "archive": {
+                    "files": {"message.md": {"text": rich_panel}},
+                },
+                "mapping": {rich_panel: "preserved key"},
+            },
+        }
+    ]
 
     normalized = _TemporalNormalizer(source, tmp_path).normalize(source)
 
-    assert normalized == (
-        "--COMMIT--\n"
-        "subject: Completed migration\n"
-        "body: literal ✓ Fast and ⚡ Lightning Fast! stay\n"
-        "║ ⏱ Duration      │ <DURATION:PRESENTATION> ║\n"
+    assert normalized[0]["durable"]["git"]["log"] == (
+        "╔════════ ✅ MCP TOOL CALL COMPLETED ════════╗ "
+        "║ ⏱ Duration      │ <DURATION:PRESENTATION> ║ "
         "╚<COMPLETION:PRESENTATION>╝"
     )
+    assert normalized[0]["result"]["body_md"] == rich_panel
+    assert (
+        normalized[0]["durable"]["archive"]["files"]["message.md"]["text"]
+        == rich_panel
+    )
+    assert normalized[0]["durable"]["mapping"] == {rich_panel: "preserved key"}
 
 
 def test_differential_scenarios_cover_exact_compatibility_surface() -> None:
