@@ -98,7 +98,16 @@ tools/concrete resources/resource templates/prompts publication surfaces of
 live 40/0/21/0 versus Core 22/0/0/0, renamed/isolation defaults, provenance and
 lazy-LLM boundary, and the three roster-resource description rewrites. The
 manifest's `pending_product_decisions` array is the single normative source for
-all unresolved cutover decisions (currently D1–D12); this document deliberately
-does not duplicate their titles. Every entry is `pending_no_go` with
+all unresolved cutover decisions; this document deliberately does not duplicate
+their identifiers or titles. Every entry is `pending_no_go` with
 `comparator_disposition: fail`. The gate therefore proves copied live parity
 for the exercised success paths but does not authorize authority cutover.
+
+## Pending decision material
+
+- [Product decision packet](agentstack-mail-decision-packet.md) records the
+  observed live/Core edge behavior, incompatible goals, option impacts, and
+  post-decision tests without selecting an option.
+- [Performance gate design](agentstack-mail-performance-gate.md) specifies the
+  separate measurement boundary needed to close the timing-normalization blind
+  spot. It is a design, not an implemented budget or release gate.
