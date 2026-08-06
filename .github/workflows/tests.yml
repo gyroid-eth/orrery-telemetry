@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install test and package-build tools
-        run: python3 -m pip install pytest build
+        run: python3 -m pip install pytest build -e ./packages/agentstack_mail
       # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
       # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
       # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。

@@ -13,6 +13,21 @@ license-files = ["AGENTSTACK_LICENSE", "UPSTREAM_LICENSE"]
 authors = [
   { name = "AgentStack contributors" },
 ]
+dependencies = [
+  "fastmcp==2.13.0.2",
+  "PyYAML>=6.0.2",
+  "pathspec>=0.12.1",
+  "python-decouple>=3.8",
+  "sqlmodel>=0.0.16",
+  "sqlalchemy[asyncio]>=2.0.35",
+  "aiosqlite>=0.20.0",
+  "rich>=13.9.1",
+  "pillow>=10.4.0",
+  "GitPython>=3.1.43",
+  "filelock>=3.16.0",
+  "psutil>=6.1.1",
+]
+
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Programming Language :: Python :: 3.10",
@@ -20,6 +35,12 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+]
+
+[project.optional-dependencies]
+legacy-llm = [
+  "litellm>=1.40.0,<2",
+  "structlog>=24.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]

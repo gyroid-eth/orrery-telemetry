@@ -37,3 +37,21 @@ The old `mcp-agent-mail` MCP key is not registered as an alias by default,
 because doing so would recreate the collision this package is intended to
 remove. Existing record compatibility is a data/schema requirement, separate
 from tool-prefix compatibility.
+
+## Current core boundary
+
+The core train copies the live data/archive/tool-body seam into the renamed
+package and publishes exactly the 22 versioned tools through a fail-closed
+FastMCP subclass. MCP resources and the 18 non-compatibility tools are not
+published. Their bodies remain internal only until the differential train can
+prove that pruning them does not break macro or storage dependencies.
+
+All production settings use the `AGENTSTACK_MAIL_*` namespace. With no new
+settings present, the resolved port is `18765` and database, archive, and
+signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
+`.env` are ignored. The package intentionally has no HTTP/CLI entrypoint,
+supervisor, migration command, or installer switch yet.
+
+The behavior train must explicitly decide the owner-token, failed-registration
+atomicity, contact expiry, cross-project reply identity, DB-to-Git recovery,
+receipt atomicity, and signal-cleanup semantics before authority can move.

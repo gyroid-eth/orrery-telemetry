@@ -1,6 +1,6 @@
 # Source provenance
 
-This package contains or will contain portions derived from MCP Agent Mail:
+This package contains portions derived from MCP Agent Mail:
 
 - repository: `https://github.com/Dicklesworthstone/mcp_agent_mail`
 - original copyright: Copyright (c) 2026 Jeffrey Emanuel
@@ -22,18 +22,28 @@ The repository preserves a complete-history Git bundle through live HEAD and
 the tracked dirty patch under `provenance/`; its README gives the verified
 reconstruction procedure.
 
-Planned changes include:
+Implemented in the core extraction:
 
 - distribution and import namespace renamed to `agentstack-mail` and
   `agentstack_mail`;
 - MCP server key, service labels, environment namespace, port, database,
   archive, and signal roots isolated from AgentMail defaults;
-- only AgentStack's audited compatibility surface and its transitive runtime
-  dependencies retained;
-- machine-specific daemons and model-display code that AgentStack already owns
-  excluded;
+- only AgentStack's audited 22-tool compatibility surface is published;
+- live-derived tool bodies remain temporarily internal until differential
+  tests permit removal of the non-compatibility bodies;
+- machine-specific daemons, HTTP UI, and presentation policy are excluded;
+- model normalization remains temporarily because it affects compatibility
+  responses from registration, whois, and session macros;
 - live per-message notification and runtime-stability fixes preserved with new
   acceptance tests.
+
+The initial derived module snapshot comprises `app.py`, `config.py`, `db.py`,
+`models.py`, `storage.py`, `utils.py`, `rich_logger.py`,
+`model_normalize.py`, `guard.py`, and `llm.py`. Changes made during the initial
+copy are limited to provenance pointers, the Python namespace rename, isolated
+configuration/defaults, fail-closed tool/resource publication, and lazy loading
+of the temporarily retained non-compatibility LLM helper. Behavioral changes to
+the 22 compatibility tools require a later differential-test manifest.
 
 License boundaries are per component:
 
