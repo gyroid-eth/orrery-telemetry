@@ -39,6 +39,7 @@ EXPECTED_DIVERGENCES = (
 )
 
 _SCENARIOS = ("identity", "lifecycle", "reservation_signal")
+_RICH_TIMING_PANEL_SCENARIOS = frozenset({"identity", "reservation_signal"})
 _EXPECTED_EVENTS = {
     "identity": (
         "01_ensure_project",
@@ -193,18 +194,24 @@ _THREAD_ENTRY_RE = re.compile(
 )
 
 
-def _normalize_rich_timing_presentation(value: str) -> str:
+def _normalize_rich_timing_presentation(value: str) -> tuple[str, int]:
     def normalize_panel(match: re.Match[str]) -> str:
-        panel = _RICH_DURATION_RE.sub(
+        panel, duration_replacements = _RICH_DURATION_RE.subn(
             r"\1<DURATION:PRESENTATION> \2",
             match.group(0),
         )
-        return _RICH_COMPLETION_FOOTER_RE.sub(
+        panel, footer_replacements = _RICH_COMPLETION_FOOTER_RE.subn(
             "╚<COMPLETION:PRESENTATION>╝",
             panel,
         )
+        if duration_replacements != 1 or footer_replacements != 1:
+            raise AssertionError(
+                "recognized Rich tool-call panel did not contain exactly one "
+                "duration row and completion footer"
+            )
+        return panel
 
-    return _RICH_TOOL_CALL_PANEL_RE.sub(normalize_panel, value)
+    return _RICH_TOOL_CALL_PANEL_RE.subn(normalize_panel, value)
 
 
 @pytest.fixture(scope="session")
@@ -860,6 +867,7 @@ class _TemporalNormalizer:
 
     def __init__(self, value: Any, state_root: Path) -> None:
         self.state_root = str(state_root)
+        self.rich_timing_panel_replacements = 0
         instants = {
             self._instant(match.group(0))
             for text in _walk_strings(value)
@@ -881,7 +889,10 @@ class _TemporalNormalizer:
         normalized = value.replace(self.state_root, "<WORKER_STATE>")
         normalized = _ARCHIVE_TIME_RE.sub("<TIME:FILE_Z>", normalized)
         if normalize_rich_timing:
-            normalized = _normalize_rich_timing_presentation(normalized)
+            normalized, replacements = _normalize_rich_timing_presentation(
+                normalized
+            )
+            self.rich_timing_panel_replacements += replacements
 
         def replace_datetime(match: re.Match[str]) -> str:
             suffix = match.group(2)
@@ -930,6 +941,19 @@ class _TemporalNormalizer:
                 )
             return normalized
         return value
+
+
+def _assert_rich_timing_normalization_observed(
+    normalizer: _TemporalNormalizer,
+    *,
+    namespace: str,
+    scenario: str,
+) -> None:
+    assert normalizer.rich_timing_panel_replacements > 0, (
+        f"{namespace} {scenario} durable Git log contained no recognized Rich "
+        "tool-call timing panel; the differential normalizer may have become "
+        "a silent no-op"
+    )
 
 
 def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
@@ -1004,14 +1028,27 @@ def test_frozen_live_behavior_matches_core(
 
     assert live["tools_used"] == core["tools_used"]
     assert live["tool_trace"] == core["tool_trace"]
-    normalized_live = _TemporalNormalizer(
+    live_normalizer = _TemporalNormalizer(
         live["checkpoints"],
         live_state_root,
-    ).normalize(live["checkpoints"])
-    normalized_core = _TemporalNormalizer(
+    )
+    normalized_live = live_normalizer.normalize(live["checkpoints"])
+    core_normalizer = _TemporalNormalizer(
         core["checkpoints"],
         core_state_root,
-    ).normalize(core["checkpoints"])
+    )
+    normalized_core = core_normalizer.normalize(core["checkpoints"])
+    if scenario in _RICH_TIMING_PANEL_SCENARIOS:
+        _assert_rich_timing_normalization_observed(
+            live_normalizer,
+            namespace=LIVE_NAMESPACE,
+            scenario=scenario,
+        )
+        _assert_rich_timing_normalization_observed(
+            core_normalizer,
+            namespace=CORE_NAMESPACE,
+            scenario=scenario,
+        )
     difference = _first_difference(normalized_live, normalized_core)
     assert difference is None, difference
 
@@ -1041,8 +1078,10 @@ def test_rich_timing_presentation_normalization_is_narrow(
         }
     ]
 
-    normalized = _TemporalNormalizer(source, tmp_path).normalize(source)
+    normalizer = _TemporalNormalizer(source, tmp_path)
+    normalized = normalizer.normalize(source)
 
+    assert normalizer.rich_timing_panel_replacements == 1
     assert normalized[0]["durable"]["git"]["log"] == (
         "╔════════ ✅ MCP TOOL CALL COMPLETED ════════╗ "
         "║ ⏱ Duration      │ <DURATION:PRESENTATION> ║ "
@@ -1054,6 +1093,20 @@ def test_rich_timing_presentation_normalization_is_narrow(
         == rich_panel
     )
     assert normalized[0]["durable"]["mapping"] == {rich_panel: "preserved key"}
+
+
+def test_rich_timing_normalization_rejects_silent_noop(tmp_path: Path) -> None:
+    source = [{"durable": {"git": {"log": "plain Git log"}}}]
+    normalizer = _TemporalNormalizer(source, tmp_path)
+
+    normalizer.normalize(source)
+
+    with pytest.raises(AssertionError, match="silent no-op"):
+        _assert_rich_timing_normalization_observed(
+            normalizer,
+            namespace=CORE_NAMESPACE,
+            scenario="synthetic",
+        )
 
 
 def test_differential_scenarios_cover_exact_compatibility_surface() -> None:

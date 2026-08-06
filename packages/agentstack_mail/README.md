@@ -61,8 +61,8 @@ surface versus Core 22-tool surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
 and Core 22/0/0/0. Service namespace/default isolation is also an exact,
 versioned allowance. The manifest's `pending_product_decisions`
-array is the sole normative list of unresolved cutover decisions (currently
-D1–D12); prose lists are non-normative. These are not accepted behavior
+array is the sole normative list of unresolved cutover decisions; prose does
+not duplicate their identifiers or titles. These are not accepted behavior
 differences, so observing one still fails the gate.
 
 Run the focused gate from the repository root with:
