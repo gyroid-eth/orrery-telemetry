@@ -1,5 +1,9 @@
 """Crash observations for unresolved AgentStack Mail decisions D8 and D9.
 
+These probes freeze today's behavior as evidence for a pending decision, not as
+an assertion that the behavior is correct. Rewrite them to encode the chosen
+requirement after the decision.
+
 These tests record current frozen-live and Core durability; passing is not an
 approval of the behavior.  Each operation runs in a worker-private subprocess
 and is terminated by a literal ``SIGKILL`` at a test-installed seam.

@@ -1,5 +1,9 @@
 """Hermetic executable evidence for pending product decisions D11 and D12.
 
+These probes freeze today's behavior as evidence for a pending decision, not as
+an assertion that the behavior is correct. Rewrite them to encode the chosen
+requirement after the decision.
+
 D11 runs the frozen, authenticated live source and AgentStack Mail Core in
 secret-free subprocesses with worker-owned database, archive, and signal roots.
 The injected barriers alter scheduling only; production retirement, reservation,

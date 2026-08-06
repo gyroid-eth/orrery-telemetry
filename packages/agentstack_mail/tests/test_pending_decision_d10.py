@@ -1,5 +1,9 @@
 """Hermetic evidence for pending decision D10.
 
+These probes freeze today's behavior as evidence for a pending decision, not as
+an assertion that the behavior is correct. Rewrite them to encode the chosen
+requirement after the decision.
+
 The production SQLite connection and ``PRAGMA busy_timeout`` are both 60 seconds.
 Waiting that long in the default suite would obscure the semantic boundary rather
 than strengthen it, so the lock probe first records the production value and then
