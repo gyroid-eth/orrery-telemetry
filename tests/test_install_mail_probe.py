@@ -241,6 +241,18 @@ esac
         command.write_text(body, encoding="utf-8")
         command.chmod(0o755)
 
+    # install.sh starts the mail server as `uv run … python -m …`, and real uv
+    # guarantees an interpreter named `python` inside the environment it
+    # creates. The fake uv above only execs, so `python` had to come from the
+    # host — which meant this test passed or failed on whether the machine
+    # happened to carry a bare `python` on PATH. It does under conda and does
+    # not under a plain macOS PATH, where it failed as "python: not found" and
+    # read like a regression in whichever branch happened to run it.
+    python_shim = fake_bin / "python"
+    python_shim.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    python_shim.chmod(0o755)
+
     install_dir = home / ".agentstack"
     mail_dir = home / "mcp_agent_mail"
     mail_home = home / ".mcp_agent_mail"
