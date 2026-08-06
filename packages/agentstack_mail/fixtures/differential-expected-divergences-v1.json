@@ -1,0 +1,315 @@
+{
+  "manifest_version": 1,
+  "contract_version": 1,
+  "comparison_policy": {
+    "default": "fail_on_difference",
+    "allowlist": "intentional_differences.allowlisted_entries_only",
+    "unresolved_product_decisions": "fail_on_observation"
+  },
+  "baselines": {
+    "live": {
+      "python_namespace": "mcp_agent_mail",
+      "source_head": "ad0e4788967d809979fa25004cf52545fdcd888a",
+      "bundle_sha256": "55f03ea48a3279f090c4b93436af1d55f912c75c3f985e4ba06a8b95d39f7670",
+      "tracked_patch_sha256": "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac",
+      "tool_fixture": "live-tools-list.json"
+    },
+    "core": {
+      "python_namespace": "agentstack_mail",
+      "approved_base": "de625ed1928fec533a85700b9f1b2892b5a61dc5",
+      "contract_fixture": "compatibility-tools-v1.json"
+    }
+  },
+  "intentional_differences": {
+    "server_topology": {
+      "live": {
+        "tool_count": 40,
+        "resource_count": 0
+      },
+      "core": {
+        "tool_count": 22,
+        "resource_count": 0
+      }
+    },
+    "allowlisted_entries": [
+    {
+      "id": "description.request_contact",
+      "category": "tool_description",
+      "selector": "tools.request_contact.description",
+      "comparator_disposition": "allow",
+      "live": {
+        "utf8_bytes": 791,
+        "sha256": "b57583329712bdd01168c3c576957b049518c0270b0cc5730728eca3ead52b38"
+      },
+      "core": {
+        "utf8_bytes": 736,
+        "sha256": "25e18aad7eaa21282480539b393cb96abdd9f1a7a8ebb7fc6d0b266f114c5db4"
+      },
+      "reason": "The unpublished roster resource was replaced by runtime-assigned or register_agent identities plus whois verification. Input and output schemas are not allowlisted to differ."
+    },
+    {
+      "id": "description.send_message",
+      "category": "tool_description",
+      "selector": "tools.send_message.description",
+      "comparator_disposition": "allow",
+      "live": {
+        "utf8_bytes": 4235,
+        "sha256": "f1c3a155cf961241cd218796c5fcb14082bce82a418c8a0124599a8d7e59fe14"
+      },
+      "core": {
+        "utf8_bytes": 4221,
+        "sha256": "9f2e73cf925371ada7b6d168d8c4b8a7075edd2dca295b44a37f0e444c1f08c1"
+      },
+      "reason": "The unpublished roster resource was replaced by runtime-assigned or register_agent identities plus whois verification. Input and output schemas are not allowlisted to differ."
+    },
+    {
+      "id": "description.whois",
+      "category": "tool_description",
+      "selector": "tools.whois.description",
+      "comparator_disposition": "allow",
+      "live": {
+        "utf8_bytes": 742,
+        "sha256": "139e1ee3071c20421acbda81699f182e6946663e7b61f856ae11bb04fba0ad2c"
+      },
+      "core": {
+        "utf8_bytes": 687,
+        "sha256": "1b1404e6ec24c23b390f37d5e243327df6f15769963a5c7d457aa87828468c65"
+      },
+      "reason": "The unpublished roster resource was replaced by lookup of a known runtime-assigned or register_agent identity. Input and output schemas are not allowlisted to differ."
+    },
+    {
+      "id": "topology.publication_surface",
+      "category": "server_topology",
+      "selector": "server",
+      "comparator_disposition": "allow",
+      "live": {
+        "tool_count": 40,
+        "resource_count": 0,
+        "tool_names": [
+          "acknowledge_message",
+          "archive_project",
+          "create_agent_identity",
+          "deregister_agent",
+          "ensure_project",
+          "expire_window",
+          "fetch_inbox",
+          "fetch_summary",
+          "fetch_topic",
+          "file_reservation_paths",
+          "force_release_file_reservation",
+          "hard_delete_agent",
+          "hard_delete_project",
+          "health_check",
+          "install_precommit_guard",
+          "list_contacts",
+          "list_window_identities",
+          "macro_contact_handshake",
+          "macro_file_reservation_cycle",
+          "macro_prepare_thread",
+          "macro_start_session",
+          "mark_message_read",
+          "purge_old_messages",
+          "register_agent",
+          "release_file_reservations",
+          "rename_window",
+          "renew_file_reservations",
+          "reply_message",
+          "request_contact",
+          "respond_contact",
+          "retire_agent",
+          "search_messages",
+          "send_message",
+          "set_contact_policy",
+          "summarize_recent",
+          "summarize_thread",
+          "unarchive_project",
+          "uninstall_precommit_guard",
+          "unretire_agent",
+          "whois"
+        ]
+      },
+      "core": {
+        "tool_count": 22,
+        "resource_count": 0,
+        "tool_names": [
+          "acknowledge_message",
+          "ensure_project",
+          "fetch_inbox",
+          "fetch_summary",
+          "fetch_topic",
+          "file_reservation_paths",
+          "health_check",
+          "list_contacts",
+          "macro_contact_handshake",
+          "macro_file_reservation_cycle",
+          "macro_start_session",
+          "mark_message_read",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "reply_message",
+          "request_contact",
+          "respond_contact",
+          "retire_agent",
+          "send_message",
+          "set_contact_policy",
+          "whois"
+        ]
+      },
+      "reason": "Core publishes the exact v1 compatibility union and suppresses the 18 non-compatibility live tools. Neither baseline publishes resources."
+    },
+    {
+      "id": "isolation.namespace",
+      "category": "service_isolation",
+      "selector": "service.namespace",
+      "comparator_disposition": "allow",
+      "live": {
+        "distribution": "mcp-agent-mail",
+        "python_package": "mcp_agent_mail",
+        "mcp_server_key": "mcp-agent-mail"
+      },
+      "core": {
+        "distribution": "agentstack-mail",
+        "python_package": "agentstack_mail",
+        "mcp_server_key": "agentstack-mail"
+      },
+      "reason": "The renamed service must coexist with live AgentMail without import or MCP-key collision."
+    },
+    {
+      "id": "isolation.environment",
+      "category": "service_isolation",
+      "selector": "configuration.environment",
+      "comparator_disposition": "allow",
+      "live": {
+        "variable_prefix": "",
+        "default_env_file": ".env"
+      },
+      "core": {
+        "variable_prefix": "AGENTSTACK_MAIL_",
+        "default_env_file": "~/.agentstack/mail/.env",
+        "legacy_unprefixed_fallback": false
+      },
+      "reason": "Core configuration is isolated from legacy variables and a working-directory .env. Differential workers translate equivalent settings into each namespace."
+    },
+    {
+      "id": "isolation.default_paths",
+      "category": "service_isolation",
+      "selector": "configuration.defaults",
+      "comparator_disposition": "allow",
+      "live": {
+        "port": 8765,
+        "database": "./storage.sqlite3",
+        "archive": "~/.mcp_agent_mail_git_mailbox_repo",
+        "signals": "~/.mcp_agent_mail/signals"
+      },
+      "core": {
+        "port": 18765,
+        "database": "~/.agentstack/mail/storage.sqlite3",
+        "archive": "~/.agentstack/mail/archive",
+        "signals": "~/.agentstack/mail/signals"
+      },
+      "reason": "Core defaults are intentionally non-colliding. Differential durable snapshots normalize worker-private absolute roots before comparison."
+    },
+    {
+      "id": "isolation.provenance",
+      "category": "source_provenance",
+      "selector": "source.baseline",
+      "comparator_disposition": "allow",
+      "live": {
+        "kind": "authenticated_git_bundle_plus_tracked_patch",
+        "repository_audit_payload": true
+      },
+      "core": {
+        "kind": "derived_agentstack_distribution",
+        "repository_audit_payload_in_distribution": false,
+        "distribution_evidence": [
+          "NOTICE.md",
+          "AGENTSTACK_LICENSE",
+          "UPSTREAM_LICENSE",
+          "fixtures"
+        ]
+      },
+      "reason": "The bundle and patch reconstruct the frozen live source but are repository-only audit inputs; wheel and sdist retain notices, licenses, and fixtures instead."
+    },
+    {
+      "id": "dependency.lazy_legacy_llm",
+      "category": "dependency_boundary",
+      "selector": "runtime.llm_import",
+      "comparator_disposition": "allow",
+      "live": {
+        "legacy_llm_dependency": "runtime_baseline"
+      },
+      "core": {
+        "legacy_llm_dependency": "optional_extra",
+        "load_policy": "lazy_on_non_compatibility_llm_use"
+      },
+      "reason": "Compatibility tools must boot without the retained non-compatibility LiteLLM seam; entering that seam remains a differential failure."
+    }
+    ]
+  },
+  "pending_product_decisions": [
+    {
+      "id": "D1",
+      "title": "conflicting token registration mutation",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D2",
+      "title": "expired contact link accepted",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D3",
+      "title": "cross-project intro/reply identity",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D4",
+      "title": "accept response without pending",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D5",
+      "title": "invalid contact policy coerced auto",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D6",
+      "title": "missing sender token succeeds",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D7",
+      "title": "owner tools name-only auth",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D8",
+      "title": "DB persists after archive failure",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D9",
+      "title": "read/ack partial commit",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    }
+  ]
+}

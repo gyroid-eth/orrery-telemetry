@@ -42,6 +42,30 @@ are retained internally only until the differential suite proves they can be
 removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
 trains.
 
+The Behavior differential reconstructs the frozen live source only from the
+authenticated repository bundle plus tracked working-tree patch. Live and Core
+then run in separate Python processes with disjoint 0700 state roots, private
+inputs/outputs, fixed import origins, equivalent explicit configuration, and no
+mutable-checkout or network fallback. Three ordered scenarios cover the exact
+22-tool union across identity/contact/message/receipt, reservation/signal, and
+macro/lifecycle behavior. Every checkpoint compares the public MCP
+serialization and durable SQLite, archive, signal, and Git state after raw
+integrity, relationship, TTL, receipt-idempotency, archive-derivation, and
+credential-leak checks.
+
+Expected differences are fail-closed in
+`fixtures/differential-expected-divergences-v1.json`. The only tool-description
+allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
+surface versus Core 22-tool surface and service namespace/default isolation are
+also exact, versioned allowances. D1–D9 remain unresolved product decisions,
+not accepted behavior differences, so observing one still fails the gate.
+
+Run the focused gate from the repository root with:
+
+```console
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q packages/agentstack_mail/tests/test_differential.py -p no:cacheprovider
+```
+
 The 22-tool contract does not expose an MCP roster resource. Callers obtain
 their own assigned identity from the AgentStack runtime, `register_agent`, or
 `macro_start_session`; `list_contacts` returns known contact links and `whois`

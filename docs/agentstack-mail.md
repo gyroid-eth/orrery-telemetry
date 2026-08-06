@@ -64,6 +64,42 @@ and are excluded from wheels and source distributions. Distribution gates
 verify both artifact types still contain the runtime modules, NOTICE, both
 licenses, and the versioned fixtures.
 
+## Behavior differential gate
+
+The approved Core base is `de625ed`. Behavior tests authenticate and reconstruct
+the frozen live baseline from the checked-in Git bundle and dirty patch, then
+start live and Core in separate subprocesses. Worker environments inherit only
+an OS bootstrap allowlist; database, archive, signals, home, temporary files,
+Git identity, port, and import roots are explicitly isolated. Test inputs and
+outputs are private, symlink escape and source-origin drift fail closed, and no
+developer AgentMail checkout is consulted.
+
+The ordered scenarios are:
+
+1. identity, contact, messaging, topic/inbox, mark-read, acknowledgement replay,
+   and reply;
+2. Unicode reservation idempotency/conflict/renew/release plus per-message
+   signals and BCC privacy;
+3. health, start-session, reservation-cycle, contact-handshake, summary fetch,
+   and retirement lifecycle.
+
+Their union is exactly the versioned 22 tools. Each operation records a call
+window so 300/900/604800-second TTL behavior can be checked without a flaky
+wall-clock estimate. The oracle validates public structured/text projections,
+SQLite integrity and foreign keys, schema identity, relational IDs, Git fsck
+and cleanliness, archive filename/frontmatter/copy/thread derivation, signal
+recipients, token non-disclosure, and receipt idempotency before normalizing
+absolute clock values. Timestamp normalization preserves chronological order
+and equality classes rather than replacing every timestamp with one wildcard.
+
+The versioned divergence manifest is packaged into wheel and sdist and is
+validated against the live fixture and Core source. It permits only the exact
+40/0 versus 22/0 publication surface, renamed/isolation defaults, provenance and
+lazy-LLM boundary, and the three roster-resource description rewrites. D1–D9
+are recorded as `pending_no_go` with `comparator_disposition: fail`; this gate
+therefore proves copied live parity for the exercised success paths but does
+not authorize authority cutover.
+
 The behavior train must explicitly decide the owner-token, failed-registration
 atomicity, contact expiry, cross-project reply identity, DB-to-Git recovery,
 receipt atomicity, and signal-cleanup semantics before authority can move.
