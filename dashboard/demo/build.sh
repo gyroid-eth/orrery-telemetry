@@ -36,14 +36,28 @@ cp "$HERE/PORTRAITS.txt" "$OUT/PORTRAITS.txt"
 # dashboard with no server behind it and sits on ACQUIRING TELEMETRY —
 # and a demo whose front door has to be typed with ?demo=1 is not one.
 python3 - "$DASH/index.html" "$OUT/index.html" "$STORIES" <<'PY'
-import sys
+import os, sys
 src, dst = sys.argv[1], sys.argv[2]
 stories = [l.strip() for l in (sys.argv[3] if len(sys.argv) > 3 else "").split("\n") if l.strip()]
 s = open(src, encoding="utf-8").read()
 anchor = '<script src="demo/demo_api.js"></script>'
 assert s.count(anchor) == 1, "demo loader moved; build needs updating"
 tags = "".join('<script src="demo/%s"></script>\n' % f for f in stories)
-s = s.replace(anchor, "<script>window.AGENTSTACK_DEMO_FORCE=1</script>\n" + tags + anchor, 1)
+# Fingerprint every demo script. A CDN can serve a stale copy of an
+# unversioned file for a while after a deploy — measured at roughly 1 request
+# in 12 — which pairs new HTML with old JS and breaks the page in a way that
+# looks like our bug. A content hash makes that pairing impossible: the old
+# cache entry is a different URL and is simply never asked for.
+import hashlib, re as _re
+def stamp(rel):
+    data = open(os.path.join(os.path.dirname(dst), rel), "rb").read()
+    return rel + "?v=" + hashlib.sha256(data).hexdigest()[:12]
+tags = "".join('<script src="%s"></script>\n' % stamp("demo/" + f) for f in stories)
+anchor_stamped = '<script src="%s"></script>' % stamp("demo/demo_api.js")
+s = s.replace(anchor, "<script>window.AGENTSTACK_DEMO_FORCE=1</script>\n"
+              + tags + anchor_stamped, 1)
+s = s.replace('<script src="demo/demo_tour.js" defer></script>',
+              '<script src="%s" defer></script>' % stamp("demo/demo_tour.js"), 1)
 open(dst, "w", encoding="utf-8").write(s)
 PY
 
@@ -100,6 +114,11 @@ grep -q 'AGENTSTACK_DEMO_FORCE' "$OUT/index.html" \
 want=0
 for f in "$OUT"/demo/story_*.js; do [ -e "$f" ] && want=$((want + 1)); done
 got=$(grep -c 'script src="demo/story_' "$OUT/index.html" || true)
+# Every demo script must be fingerprinted, or a stale CDN copy can pair with
+# fresh HTML. Four tags: the two engine files and however many stories.
+stamped=$(grep -c 'script src="demo/[^"]*?v=' "$OUT/index.html" || true)
+[ "$stamped" = "$((want + 2))" ] \
+  || { echo "$stamped of $((want + 2)) demo scripts carry a version" >&2; exit 1; }
 [ "$want" = "$got" ] \
   || { echo "$want story files copied but $got loaded by index.html" >&2; exit 1; }
 echo "stories: $want"
