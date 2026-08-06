@@ -130,7 +130,7 @@
   }
 
   var strip, bar, txt, hint, toggle, ringEl;
-  var shown = null, shownLang = null, lookSel = null;
+  var shown = null, shownLang = null, lookSel = null;   // shown = rendered text
 
   /* The ring is its own box laid over the target rather than a class on it.
      The deck reassigns its own className on every poll, so a class set here
@@ -164,10 +164,15 @@
     var t = d.phase(), b = beatAt(t), l = lang();
     bar.style.width = (t / d.loop() * 100).toFixed(2) + '%';
     if (!b) return;
-    if (b !== shown || l !== shownLang) {
-      shown = b; shownLang = l; txt.textContent = b[l];
-    }
     var here = document.body.dataset.view || 'deck';
+    /* The two views show the same state differently — a red APPROVAL badge on
+       a deck card, a ! over the portrait on the graph. A caption that names
+       one of them is wrong half the time, and the reader cannot tell which
+       half they are in. A beat may carry `net` wording for when the graph is
+       showing; without it the default text is used in both. */
+    var say = (here === 'net' && b.net && b.net[l]) ? b.net[l] : b[l];
+    if (say !== shown) { shown = say; txt.textContent = say; }
+    shownLang = l;
     hint.textContent = b.view && b.view !== here ? '⊹ NETWORK →' : '';
     ring(b.look);
   }

@@ -137,8 +137,19 @@ The narration strip, one entry per moment worth pointing at:
 ```
 { at: 0, look: '.gauge.run', view: 'net',    // look/view optional
   en: 'What is happening, and where to look.',
-  ja: '同じ内容の日本語。' }
+  ja: '同じ内容の日本語。',
+  net: {                                     // optional: wording for the graph
+    en: 'The same moment, described as the graph shows it.',
+    ja: 'グラフ表示での見え方に合わせた文。' } }
 ```
+
+**A caption must describe the view the reader is actually in.** The two views
+show the same state differently: a blocked agent is a red `APPROVAL` badge on
+its deck card, and a `!` over its portrait on the graph. A caption that names
+one of them is wrong half the time, and the reader has no way to know which
+half they are in — they did not necessarily choose the view they are looking
+at. Add `net` wording to any beat that describes something the graph draws
+differently; beats about counts, tasks or timing usually need only one.
 
 `look` is a CSS selector for the thing being described. `.bay[data-name="X"]`
 rings a specific agent's card; `#v-net`, `.gauge.run`, `.gauge.tot` also work.
