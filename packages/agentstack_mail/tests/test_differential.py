@@ -169,7 +169,10 @@ _DATETIME_RE = re.compile(
 )
 _DURATION_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?ms(?!\w)")
 _RICH_DURATION_RE = re.compile(
-    r"(⏱ Duration\s+│ ⚡ )\d+(?:\.\d+)?ms\s+(║)"
+    r"(⏱ Duration\s+│ )(?:⚡|⏱|🐌) \d+(?:\.\d+)?ms\s+(║)"
+)
+_RICH_COMPLETION_FOOTER_RE = re.compile(
+    r"╚═+ (?:⚡ Lightning Fast!|✓ Fast|Completed) ═+╝"
 )
 _ARCHIVE_DATE_PATH_RE = re.compile(r"/(\d{4})/(\d{2})/<TIME:FILE_Z>")
 _RAW_ARCHIVE_PATH_RE = re.compile(
@@ -859,7 +862,11 @@ class _TemporalNormalizer:
         normalized = value.replace(self.state_root, "<WORKER_STATE>")
         normalized = _ARCHIVE_TIME_RE.sub("<TIME:FILE_Z>", normalized)
         normalized = _RICH_DURATION_RE.sub(
-            r"\1<DURATION:MS> \2",
+            r"\1<DURATION:PRESENTATION> \2",
+            normalized,
+        )
+        normalized = _RICH_COMPLETION_FOOTER_RE.sub(
+            "╚<COMPLETION:PRESENTATION>╝",
             normalized,
         )
 
@@ -982,6 +989,32 @@ def test_frozen_live_behavior_matches_core(
     ).normalize(core["checkpoints"])
     difference = _first_difference(normalized_live, normalized_core)
     assert difference is None, difference
+
+
+@pytest.mark.parametrize("icon", ("⚡", "⏱", "🐌"))
+@pytest.mark.parametrize("footer", ("⚡ Lightning Fast!", "✓ Fast", "Completed"))
+def test_rich_timing_presentation_normalization_is_narrow(
+    icon: str,
+    footer: str,
+    tmp_path: Path,
+) -> None:
+    source = (
+        "--COMMIT--\n"
+        "subject: Completed migration\n"
+        "body: literal ✓ Fast and ⚡ Lightning Fast! stay\n"
+        f"║ ⏱ Duration      │ {icon} 157.97ms      ║\n"
+        f"╚════════ {footer} ════════╝"
+    )
+
+    normalized = _TemporalNormalizer(source, tmp_path).normalize(source)
+
+    assert normalized == (
+        "--COMMIT--\n"
+        "subject: Completed migration\n"
+        "body: literal ✓ Fast and ⚡ Lightning Fast! stay\n"
+        "║ ⏱ Duration      │ <DURATION:PRESENTATION> ║\n"
+        "╚<COMPLETION:PRESENTATION>╝"
+    )
 
 
 def test_differential_scenarios_cover_exact_compatibility_surface() -> None:
