@@ -1138,18 +1138,39 @@
      ORRERY 側 `.orrery-state-glyph` と同じ言語なので、両方の画面で同じ意味に見える。 */
   .node .askbub,.node .qbub{pointer-events:none;
     transform-box:fill-box;transform-origin:center}
+  /* The shape and the italic stay; only the colour changes. Both glyphs were
+     bone, so they were hard to see over a portrait and identical to each
+     other — the graph said "someone wants you" without saying which kind.
+     Red and cyan are the same two meanings the deck already uses. Written
+     literally rather than as --alert/--cyan because the warm theme aliases
+     cyan to amber, which would erase the distinction exactly here. */
   .node .bubo{fill:none;stroke:var(--amber);stroke-width:1.1;
     stroke-dasharray:24 76;opacity:.72;
     transform-box:fill-box;transform-origin:center}
+  .node .askbub .bubo{stroke:#ff6a5d;opacity:.85}
+  .node .qbub .bubo{stroke:#36e8ff;opacity:.8}
   .node .askbub .bx,.node .qbub .bq{
-    font:italic 600 15px var(--serif);letter-spacing:-.04em;
-    fill:var(--ink);filter:drop-shadow(0 0 4px rgba(236,229,214,.45))}
-  .node.act-question .qbub{animation:glyphbreathe 3.6s ease-in-out infinite}
-  .node.act-ask .askbub{animation:glyphbreathe 2.2s ease-in-out infinite}
-  .node.act-ask .bubo{animation:glyphorbit 7s linear infinite;opacity:.9}
-  /* 呼吸の下限は 0.55。人間を呼ぶ合図なので、消えかけには見せない */
-  @keyframes glyphbreathe{0%,100%{opacity:.55}50%{opacity:1}}
-  @keyframes glyphorbit{to{transform:rotate(360deg)}}
+    font:italic 600 16px var(--serif);letter-spacing:-.04em;
+    paint-order:stroke;stroke:rgba(8,6,5,.9);stroke-width:2.6px;
+    stroke-linejoin:round}
+  .node .askbub .bx{fill:#ff8a7d;
+    filter:drop-shadow(0 0 5px rgba(255,106,93,.7))}
+  .node .qbub .bq{fill:#7ceeff;
+    filter:drop-shadow(0 0 5px rgba(54,232,255,.65))}
+
+  /* A spring bounce, restored: it reads from across the room, where a slow
+     fade in opacity does not. Both states bounce; colour tells them apart. */
+  .node.act-question .qbub,
+  .node.act-ask .askbub{animation:statebounce 1.25s cubic-bezier(.3,1.5,.5,1) infinite;
+    transform-box:fill-box;transform-origin:center}
+  .node.act-question .qbub{animation-duration:1.6s}
+  @keyframes statebounce{
+    0%{transform:scale(.45) translateY(4px);opacity:.35}
+    35%{transform:scale(1.22) translateY(-3px);opacity:1}
+    52%{transform:scale(.92) translateY(0)}
+    66%{transform:scale(1.08)}
+    80%{transform:scale(.98)}
+    100%{transform:scale(1);opacity:1}}
   .node.act-ask .hp{animation:askflash 1.6s ease-in-out infinite}
   @keyframes askflash{50%{stroke:var(--alert);opacity:.5}}
   /* 稼働経過時間（work のみ）。詠唱時計風の淡いモノスペース */
