@@ -144,6 +144,17 @@ The narration strip, one entry per moment worth pointing at:
 rings a specific agent's card; `#v-net`, `.gauge.run`, `.gauge.tot` also work.
 A selector that matches nothing costs the ring, not the caption.
 
+**Name the agent.** Write "IvoryNoether has stopped and is asking to
+overwrite derived data", not "an analysis child is waiting for approval".
+The agents are named after scientists and those names are on the cards; a
+caption that says "the second child" makes the reader search the screen for
+whoever that is, and when a cyan `?` appears they cannot tell who it belongs
+to or what it means. The name is the link between the sentence and the card.
+
+The same goes for the state itself: say what the agent is waiting for in
+plain words. `APPROVAL` and `?` are glyphs — the caption is where they get
+explained, once, in terms anyone can follow.
+
 ### ja
 
 One table keyed by the **exact English string**, covering every `task`,
