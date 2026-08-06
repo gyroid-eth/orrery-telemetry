@@ -21,3 +21,6 @@ __pycache__/
 
 # built demo bundle (regenerate with dashboard/demo/build.sh)
 dashboard/demo/dist/
+
+# wrangler local state
+.wrangler/
