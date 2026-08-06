@@ -169,6 +169,21 @@ EXPECTED_LIVE_RESOURCE_TEMPLATE_URIS = [
     "resource://views/urgent-unread/{agent}{?project,limit,format}",
 ]
 
+EXPECTED_NORMALIZATION_BLIND_SPOTS = [
+    {
+        "id": "rich_tool_call_timing_presentation",
+        "scope": "durable Git log Rich tool-call panels only",
+        "ignored": [
+            "measured duration in milliseconds",
+            "duration-derived speed icon and completion footer",
+        ],
+        "consequence": (
+            "This behavior differential cannot detect live/Core performance-class "
+            "regressions; performance must be measured by a separate gate."
+        ),
+    }
+]
+
 REQUIRED_RUNTIME_MODULES = {
     "__init__.py",
     "app.py",
@@ -383,9 +398,14 @@ def _assert_expected_divergences_manifest(
     intentional = manifest["intentional_differences"]
     if not isinstance(intentional, dict) or set(intentional) != {
         "server_topology",
+        "normalization_blind_spots",
         "allowlisted_entries",
     }:
-        raise SystemExit(f"{artifact} divergence manifest allowlist shape is invalid")
+        raise SystemExit(
+            f"{artifact} divergence manifest intentional-differences shape is invalid"
+        )
+    if intentional["normalization_blind_spots"] != EXPECTED_NORMALIZATION_BLIND_SPOTS:
+        raise SystemExit(f"{artifact} normalization blind spots changed")
     entries = intentional["allowlisted_entries"]
     if not isinstance(entries, list) or not all(isinstance(item, dict) for item in entries):
         raise SystemExit(f"{artifact} divergence manifest allowlist must be a list")

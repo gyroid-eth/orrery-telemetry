@@ -35,6 +35,17 @@
         "prompt_count": 0
       }
     },
+    "normalization_blind_spots": [
+      {
+        "id": "rich_tool_call_timing_presentation",
+        "scope": "durable Git log Rich tool-call panels only",
+        "ignored": [
+          "measured duration in milliseconds",
+          "duration-derived speed icon and completion footer"
+        ],
+        "consequence": "This behavior differential cannot detect live/Core performance-class regressions; performance must be measured by a separate gate."
+      }
+    ],
     "allowlisted_entries": [
     {
       "id": "description.request_contact",
