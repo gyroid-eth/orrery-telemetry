@@ -1,7 +1,7 @@
 """AgentStack-owned coordination mail service.
 
-The package is contract-only until the live compatibility fixtures and
-source-attribution gates pass. It must not be used as a production server yet.
+The first bootable core is available for differential testing. Transport,
+migration, supervision, and consumer cutover are intentionally not shipped yet.
 """
 
 from .contract import ISOLATION_DEFAULTS, SERVICE_IDENTITY

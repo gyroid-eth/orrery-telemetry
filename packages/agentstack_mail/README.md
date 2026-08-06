@@ -1,7 +1,7 @@
 # agentstack-mail
 
-This subtree is the contract and provenance boundary for an AgentStack-owned
-coordination mail service. It is not a production server yet.
+This subtree contains the contract, provenance, and first bootable core for an
+AgentStack-owned coordination mail service. It is not a production server yet.
 
 The implementation will be a semantic extraction from the live Python
 AgentMail checkout that AgentStack currently uses. It will preserve the
@@ -28,6 +28,13 @@ The first release must satisfy these invariants:
   portions retain the original license and copyright notice;
 - every wheel and source distribution carries both license texts and the
   versioned compatibility fixtures.
+
+The current core copies the live data, archive, and tool-body seam so it can be
+compared without translating behavior. A fail-closed FastMCP boundary publishes
+exactly the 22 compatibility tools and no resources. Non-compatibility bodies
+are retained internally only until the differential suite proves they can be
+removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
+trains.
 
 See `NOTICE.md` for the exact source baseline. The checked-in live tool-schema
 fixture is evidence, not an instruction to expose every upstream tool.
