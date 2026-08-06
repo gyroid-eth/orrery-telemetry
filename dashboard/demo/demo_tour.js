@@ -86,6 +86,14 @@
     '  padding:8px 18px;font:12px/1 "IBM Plex Mono",monospace;',
     '  letter-spacing:.12em;cursor:pointer}',
     '#demo-card button:hover{background:rgba(212,168,84,.28)}',
+    '#demo-card .choose{margin:0 0 18px}',
+    '#demo-card .choose .ct{margin:0 0 8px;font-size:12.5px;color:#9a9081}',
+    '#demo-card .choose .cs{display:flex;gap:8px;flex-wrap:wrap}',
+    '#demo-card .choose button{appearance:none;border:1px solid rgba(212,168,84,.28);',
+    '  background:none;color:#e8e2d4;border-radius:6px;padding:8px 14px;',
+    '  cursor:pointer;font:12px/1.2 ui-sans-serif,system-ui,sans-serif}',
+    '#demo-card .choose button.on{background:rgba(212,168,84,.85);color:#0d0f13;',
+    '  border-color:rgba(212,168,84,.85)}',
     '#demo-card .row{display:flex;align-items:center;justify-content:space-between;',
     '  gap:14px}',
     '#demo-strip .lang,#demo-card .pick,#demo-strip .story{flex:none;',
@@ -211,10 +219,33 @@
     });
   }
 
+  var CHOOSE = { en: 'Which story would you like to watch?',
+                 ja: 'どちらの台本を見ますか' };
+
+  /* The picker on the strip is easy to miss, and by the time anyone reads it
+     they have already started watching one story. The choice belongs where
+     the visitor is when they make it. */
+  function paintCardChoice(card) {
+    var box = card.querySelector('.choose');
+    var d = window.AGENTSTACK_DEMO;
+    if (!box || !d || !d.stories) return;
+    var ids = Object.keys(d.stories).sort();
+    if (ids.length < 2) { box.innerHTML = ''; return; }
+    var cur = d.story().id, l = lang();
+    box.innerHTML = '<p class="ct">' + CHOOSE[l] + '</p>' +
+      '<div class="cs">' + ids.map(function (id) {
+        var st = d.stories[id];
+        var name = (st.label && (st.label[l] || st.label.en)) || id;
+        return '<button type="button" data-story="' + id + '"' +
+          (id === cur ? ' class="on"' : '') + '>' + name + '</button>';
+      }).join('') + '</div>';
+  }
+
   function paintCard(card) {
     var l = lang();
     card.querySelector('.copy').innerHTML = CARD[l];
     card.querySelector('.go').textContent = START_BTN[l];
+    paintCardChoice(card);
     paintToggle();
   }
 
@@ -245,6 +276,7 @@
 
     var card = el('div', { id: 'demo-card' },
       '<div class="box"><div class="copy"></div>' +
+      '<div class="choose"></div>' +
       '<div class="row"><button type="button" class="go"></button>' +
       '<span class="pick"><button type="button" data-lang="en">EN</button>' +
       '<button type="button" data-lang="ja">日本語</button></span></div></div>');
@@ -260,6 +292,17 @@
     card.querySelector('.pick').addEventListener('click', function (e) {
       var b = e.target.closest('button[data-lang]');
       if (b) switchTo(b.dataset.lang);
+    });
+    /* Nothing has been watched yet, so this one can swap in place instead of
+       reloading — the graph has no nodes from the other story to strand. */
+    card.querySelector('.choose').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-story]');
+      if (!b) return;
+      window.AGENTSTACK_DEMO.useStory(b.dataset.story);
+      paintCard(card);
+      buildStoryPicker(strip.querySelector('.story'));
+      shown = null;
+      tick();
     });
     document.body.appendChild(card);
     paintCard(card);
