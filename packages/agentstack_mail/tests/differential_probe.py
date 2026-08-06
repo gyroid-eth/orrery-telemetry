@@ -341,6 +341,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     server = build_mcp_server()
     available_tools = await server.get_tools()
     available_resources = await server.get_resources()
+    available_resource_templates = await server.get_resource_templates()
+    available_prompts = await server.get_prompts()
     missing_tools = scenario_tools - set(available_tools)
     if missing_tools:
         raise AssertionError(f"scenario tools missing from server: {sorted(missing_tools)}")
@@ -419,8 +421,14 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         "namespace": args.namespace,
         "scenario": args.scenario,
         "server": {
+            "tool_count": len(available_tools),
             "tool_names": sorted(available_tools),
             "resource_count": len(available_resources),
+            "resource_names": sorted(available_resources),
+            "resource_template_count": len(available_resource_templates),
+            "resource_template_uris": sorted(available_resource_templates),
+            "prompt_count": len(available_prompts),
+            "prompt_names": sorted(available_prompts),
         },
         "tool_trace": tools_used,
         "tools_used": sorted(used),

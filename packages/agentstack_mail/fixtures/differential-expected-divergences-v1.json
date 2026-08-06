@@ -24,11 +24,15 @@
     "server_topology": {
       "live": {
         "tool_count": 40,
-        "resource_count": 0
+        "resource_count": 0,
+        "resource_template_count": 21,
+        "prompt_count": 0
       },
       "core": {
         "tool_count": 22,
-        "resource_count": 0
+        "resource_count": 0,
+        "resource_template_count": 0,
+        "prompt_count": 0
       }
     },
     "allowlisted_entries": [
@@ -85,6 +89,33 @@
       "live": {
         "tool_count": 40,
         "resource_count": 0,
+        "resource_names": [],
+        "resource_template_count": 21,
+        "resource_template_uris": [
+          "resource://agents/{project_key}{?format}",
+          "resource://config/environment{?format}",
+          "resource://file_reservations/{slug}{?active_only,format}",
+          "resource://inbox/{agent}{?project,since_ts,urgent_only,include_bodies,limit,format}",
+          "resource://mailbox-with-commits/{agent}{?project,limit,format}",
+          "resource://mailbox/{agent}{?project,limit,format}",
+          "resource://message/{message_id}{?project,format}",
+          "resource://outbox/{agent}{?project,limit,include_bodies,since_ts,format}",
+          "resource://project/{slug}{?format}",
+          "resource://projects{?format}",
+          "resource://thread/{thread_id}{?project,include_bodies,format}",
+          "resource://tooling/capabilities/{agent}{?project,format}",
+          "resource://tooling/directory{?format}",
+          "resource://tooling/locks{?format}",
+          "resource://tooling/metrics{?format}",
+          "resource://tooling/recent/{window_seconds}{?agent,project,format}",
+          "resource://tooling/schemas{?format}",
+          "resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit,format}",
+          "resource://views/ack-required/{agent}{?project,limit,format}",
+          "resource://views/acks-stale/{agent}{?project,ttl_seconds,limit,format}",
+          "resource://views/urgent-unread/{agent}{?project,limit,format}"
+        ],
+        "prompt_count": 0,
+        "prompt_names": [],
         "tool_names": [
           "acknowledge_message",
           "archive_project",
@@ -131,6 +162,11 @@
       "core": {
         "tool_count": 22,
         "resource_count": 0,
+        "resource_names": [],
+        "resource_template_count": 0,
+        "resource_template_uris": [],
+        "prompt_count": 0,
+        "prompt_names": [],
         "tool_names": [
           "acknowledge_message",
           "ensure_project",
@@ -156,7 +192,7 @@
           "whois"
         ]
       },
-      "reason": "Core publishes the exact v1 compatibility union and suppresses the 18 non-compatibility live tools. Neither baseline publishes resources."
+      "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union while suppressing the 18 non-compatibility live tools and all 21 live resource templates; Core publishes zero concrete resources and zero prompts."
     },
     {
       "id": "isolation.namespace",
@@ -307,6 +343,27 @@
     {
       "id": "D9",
       "title": "read/ack partial commit",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D10",
+      "title": "concurrent reservation winner and SQLite lock semantics",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D11",
+      "title": "retire with active reservations or unread messages",
+      "status": "pending_no_go",
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D12",
+      "title": "signal cleanup after crash, retirement, or stale consumer",
       "status": "pending_no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"

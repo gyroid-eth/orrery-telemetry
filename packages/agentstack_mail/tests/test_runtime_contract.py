@@ -126,21 +126,27 @@ def test_only_agentstack_prefixed_environment_names_override_defaults(
         _require_attr(config, "clear_settings_cache")()
 
 
-def test_mcp_server_exposes_exactly_the_22_compatibility_tools_and_no_resources() -> None:
+def test_mcp_server_exposes_only_the_22_compatibility_tools() -> None:
     app = _require_module("agentstack_mail.app")
     build_mcp_server = _require_attr(app, "build_mcp_server")
 
-    async def inspect_server() -> tuple[set[str], Any]:
+    async def inspect_server() -> tuple[set[str], Any, Any, Any]:
         mcp = build_mcp_server()
         tools = await mcp.get_tools()
         resources = await mcp.get_resources()
-        return set(tools), resources
+        resource_templates = await mcp.get_resource_templates()
+        prompts = await mcp.get_prompts()
+        return set(tools), resources, resource_templates, prompts
 
-    tool_names, resources = asyncio.run(inspect_server())
+    tool_names, resources, resource_templates, prompts = asyncio.run(
+        inspect_server()
+    )
 
     assert len(tool_names) == 22
     assert tool_names == COMPATIBILITY_TOOLS
     assert not resources
+    assert not resource_templates
+    assert not prompts
 
 
 def test_actual_tool_schemas_match_the_frozen_live_contract() -> None:

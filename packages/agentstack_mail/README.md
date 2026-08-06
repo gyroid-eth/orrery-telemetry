@@ -37,8 +37,9 @@ tests.
 
 The current core copies the live data, archive, and tool-body seam so it can be
 compared without translating behavior. A fail-closed FastMCP boundary publishes
-exactly the 22 compatibility tools and no resources. Non-compatibility bodies
-are retained internally only until the differential suite proves they can be
+exactly the 22 compatibility tools, zero concrete resources, zero resource
+templates, and zero prompts. Non-compatibility bodies are retained internally
+only until the differential suite proves they can be
 removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
 trains.
 
@@ -56,9 +57,13 @@ credential-leak checks.
 Expected differences are fail-closed in
 `fixtures/differential-expected-divergences-v1.json`. The only tool-description
 allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
-surface versus Core 22-tool surface and service namespace/default isolation are
-also exact, versioned allowances. D1–D9 remain unresolved product decisions,
-not accepted behavior differences, so observing one still fails the gate.
+surface versus Core 22-tool surface is pinned across all four MCP publication
+axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
+and Core 22/0/0/0. Service namespace/default isolation is also an exact,
+versioned allowance. The manifest's `pending_product_decisions`
+array is the sole normative list of unresolved cutover decisions (currently
+D1–D12); prose lists are non-normative. These are not accepted behavior
+differences, so observing one still fails the gate.
 
 Run the focused gate from the repository root with:
 

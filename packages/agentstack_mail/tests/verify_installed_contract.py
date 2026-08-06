@@ -30,6 +30,8 @@ async def verify() -> None:
     server = build_mcp_server()
     tools = await server.get_tools()
     resources = await server.get_resources()
+    resource_templates = await server.get_resource_templates()
+    prompts = await server.get_prompts()
     actual: dict[str, dict[str, Any]] = {}
     for name, tool in tools.items():
         dumped = tool.to_mcp_tool().model_dump(
@@ -50,7 +52,11 @@ async def verify() -> None:
             f"extra={sorted(set(tools) - COMPATIBILITY_TOOLS)}"
         )
     if resources:
-        raise SystemExit("installed wheel must publish zero MCP resources")
+        raise SystemExit("installed wheel must publish zero concrete MCP resources")
+    if resource_templates:
+        raise SystemExit("installed wheel must publish zero MCP resource templates")
+    if prompts:
+        raise SystemExit("installed wheel must publish zero MCP prompts")
     if actual != expected:
         mismatched = sorted(
             name for name in expected if actual.get(name) != expected[name]

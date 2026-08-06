@@ -315,8 +315,13 @@ def _expected_topology(side: str) -> dict[str, Any]:
         for entry in intentional["allowlisted_entries"]
         if entry["id"] == "topology.publication_surface"
     )[side]
-    assert surface["tool_count"] == summary["tool_count"]
-    assert surface["resource_count"] == summary["resource_count"]
+    for count_name in (
+        "tool_count",
+        "resource_count",
+        "resource_template_count",
+        "prompt_count",
+    ):
+        assert surface[count_name] == summary[count_name]
     return surface
 
 
@@ -446,9 +451,19 @@ def _assert_raw_integrity(
 
     side = "live" if namespace == LIVE_NAMESPACE else "core"
     topology = _expected_topology(side)
+    assert output["server"]["tool_count"] == topology["tool_count"]
     assert len(output["server"]["tool_names"]) == topology["tool_count"]
     assert output["server"]["resource_count"] == topology["resource_count"]
+    assert output["server"]["resource_template_count"] == topology[
+        "resource_template_count"
+    ]
+    assert output["server"]["prompt_count"] == topology["prompt_count"]
     assert output["server"]["tool_names"] == topology["tool_names"]
+    assert output["server"]["resource_names"] == topology["resource_names"]
+    assert output["server"]["resource_template_uris"] == topology[
+        "resource_template_uris"
+    ]
+    assert output["server"]["prompt_names"] == topology["prompt_names"]
     if namespace == CORE_NAMESPACE:
         assert frozenset(output["server"]["tool_names"]) == COMPATIBILITY_TOOLS
 

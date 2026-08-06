@@ -140,7 +140,34 @@ EXPECTED_PENDING_DECISIONS = {
     "D7": "owner tools name-only auth",
     "D8": "DB persists after archive failure",
     "D9": "read/ack partial commit",
+    "D10": "concurrent reservation winner and SQLite lock semantics",
+    "D11": "retire with active reservations or unread messages",
+    "D12": "signal cleanup after crash, retirement, or stale consumer",
 }
+
+EXPECTED_LIVE_RESOURCE_TEMPLATE_URIS = [
+    "resource://agents/{project_key}{?format}",
+    "resource://config/environment{?format}",
+    "resource://file_reservations/{slug}{?active_only,format}",
+    "resource://inbox/{agent}{?project,since_ts,urgent_only,include_bodies,limit,format}",
+    "resource://mailbox-with-commits/{agent}{?project,limit,format}",
+    "resource://mailbox/{agent}{?project,limit,format}",
+    "resource://message/{message_id}{?project,format}",
+    "resource://outbox/{agent}{?project,limit,include_bodies,since_ts,format}",
+    "resource://project/{slug}{?format}",
+    "resource://projects{?format}",
+    "resource://thread/{thread_id}{?project,include_bodies,format}",
+    "resource://tooling/capabilities/{agent}{?project,format}",
+    "resource://tooling/directory{?format}",
+    "resource://tooling/locks{?format}",
+    "resource://tooling/metrics{?format}",
+    "resource://tooling/recent/{window_seconds}{?agent,project,format}",
+    "resource://tooling/schemas{?format}",
+    "resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit,format}",
+    "resource://views/ack-required/{agent}{?project,limit,format}",
+    "resource://views/acks-stale/{agent}{?project,ttl_seconds,limit,format}",
+    "resource://views/urgent-unread/{agent}{?project,limit,format}",
+]
 
 REQUIRED_RUNTIME_MODULES = {
     "__init__.py",
@@ -429,11 +456,21 @@ def _assert_expected_divergences_manifest(
     expected_live_topology = {
         "tool_count": 40,
         "resource_count": 0,
+        "resource_names": [],
+        "resource_template_count": 21,
+        "resource_template_uris": EXPECTED_LIVE_RESOURCE_TEMPLATE_URIS,
+        "prompt_count": 0,
+        "prompt_names": [],
         "tool_names": sorted(live_by_name),
     }
     expected_core_topology = {
         "tool_count": 22,
         "resource_count": 0,
+        "resource_names": [],
+        "resource_template_count": 0,
+        "resource_template_uris": [],
+        "prompt_count": 0,
+        "prompt_names": [],
         "tool_names": sorted(compatibility_names),
     }
     if topology_entry["category"] != "server_topology" or topology_entry[
@@ -445,8 +482,18 @@ def _assert_expected_divergences_manifest(
     if topology_entry["core"] != expected_core_topology:
         raise SystemExit(f"{artifact} core topology allowance changed")
     expected_topology_summary = {
-        "live": {"tool_count": 40, "resource_count": 0},
-        "core": {"tool_count": 22, "resource_count": 0},
+        "live": {
+            "tool_count": 40,
+            "resource_count": 0,
+            "resource_template_count": 21,
+            "prompt_count": 0,
+        },
+        "core": {
+            "tool_count": 22,
+            "resource_count": 0,
+            "resource_template_count": 0,
+            "prompt_count": 0,
+        },
     }
     if intentional["server_topology"] != expected_topology_summary:
         raise SystemExit(f"{artifact} topology summary changed")

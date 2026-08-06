@@ -94,12 +94,11 @@ and equality classes rather than replacing every timestamp with one wildcard.
 
 The versioned divergence manifest is packaged into wheel and sdist and is
 validated against the live fixture and Core source. It permits only the exact
-40/0 versus 22/0 publication surface, renamed/isolation defaults, provenance and
-lazy-LLM boundary, and the three roster-resource description rewrites. D1–D9
-are recorded as `pending_no_go` with `comparator_disposition: fail`; this gate
-therefore proves copied live parity for the exercised success paths but does
-not authorize authority cutover.
-
-The behavior train must explicitly decide the owner-token, failed-registration
-atomicity, contact expiry, cross-project reply identity, DB-to-Git recovery,
-receipt atomicity, and signal-cleanup semantics before authority can move.
+tools/concrete resources/resource templates/prompts publication surfaces of
+live 40/0/21/0 versus Core 22/0/0/0, renamed/isolation defaults, provenance and
+lazy-LLM boundary, and the three roster-resource description rewrites. The
+manifest's `pending_product_decisions` array is the single normative source for
+all unresolved cutover decisions (currently D1–D12); this document deliberately
+does not duplicate their titles. Every entry is `pending_no_go` with
+`comparator_disposition: fail`. The gate therefore proves copied live parity
+for the exercised success paths but does not authorize authority cutover.
