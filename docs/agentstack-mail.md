@@ -46,11 +46,23 @@ FastMCP subclass. MCP resources and the 18 non-compatibility tools are not
 published. Their bodies remain internal only until the differential train can
 prove that pruning them does not break macro or storage dependencies.
 
+Because no roster resource is published, tool descriptions direct callers to
+the identity assigned by the AgentStack runtime or returned by
+`register_agent`/`macro_start_session`. `list_contacts` returns known links,
+`whois` verifies a known identity, and broadcast delivery does not require a
+roster response. Tool filtering cannot reduce the public surface: a profile
+that removes any contract tool makes server construction fail closed.
+
 All production settings use the `AGENTSTACK_MAIL_*` namespace. With no new
 settings present, the resolved port is `18765` and database, archive, and
 signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
 `.env` are ignored. The package intentionally has no HTTP/CLI entrypoint,
 supervisor, migration command, or installer switch yet.
+
+The provenance Git bundle and dirty patch remain repository-only audit inputs
+and are excluded from wheels and source distributions. Distribution gates
+verify both artifact types still contain the runtime modules, NOTICE, both
+licenses, and the versioned fixtures.
 
 The behavior train must explicitly decide the owner-token, failed-registration
 atomicity, contact expiry, cross-project reply identity, DB-to-Git recovery,

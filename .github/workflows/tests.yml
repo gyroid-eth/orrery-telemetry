@@ -33,6 +33,9 @@ jobs:
           set -euo pipefail
           python3 -m build packages/agentstack_mail --outdir /tmp/agentstack-mail-dist
           python3 packages/agentstack_mail/tests/verify_artifact.py /tmp/agentstack-mail-dist/agentstack_mail-0.0.0-py3-none-any.whl
+          python3 packages/agentstack_mail/tests/verify_artifact.py /tmp/agentstack-mail-dist/agentstack_mail-0.0.0.tar.gz
+          python3 -m pip install --force-reinstall --no-deps /tmp/agentstack-mail-dist/agentstack_mail-0.0.0-py3-none-any.whl
+          python3 packages/agentstack_mail/tests/verify_installed_contract.py
 
   fresh-install-e2e:
     name: fresh install with real upstream agent-mail
