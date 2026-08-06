@@ -2,13 +2,46 @@
 # build.sh refuses any cast surname not on this list. Re-verify with the
 # Commons API before adding one; do not add a surname because the file
 # happens to exist in portraits_64/.
+#
+# Excluded on purpose (not public domain): Bell (CC0), Einstein (?), Euler (?), Feynman (?), Franklin (CC BY-SA 4.0), Guericke (?), Linnaeus (?), Pauling (CC BY-SA 2.0), Ramanujan (CC BY 4.0)
+Archimedes
+Arrhenius
 Bohr
+Boltzmann
+Bose
+Copernicus
 Curie
+Darwin
+Dirac
+Edison
+Fabre
 Faraday
+Fermi
+Galileo
 Gauss
+Goodall
 Hooke
+Hopper
+Hubble
 Kepler
+Koch
+Lamarr
+Langmuir
+Lavoisier
+Leeuwenhoek
 Lovelace
+Maxwell
+Mendel
+Mendeleev
+Newton
 Noether
+Ostwald
+Pascal
 Pasteur
+Planck
 Somerville
+Tesla
+Turing
+Vesalius
+Watt
+Yukawa
