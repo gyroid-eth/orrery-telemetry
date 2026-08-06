@@ -362,16 +362,21 @@ survive, Git HEAD does not advance, no message commit exists, and no signal is
 emitted. This is pinned for frozen live and Core in
 `packages/agentstack_mail/tests/test_pending_decision_d8_d9.py`.
 
-Still unknown: deterministic death after only a subset of bundle writes or
-inside Git's native commit. Neither boundary is exposed without adding a
-production hook, so the committed probe records post-write/post-stage/pre-commit
-as the strongest non-invasive seam. Other archive-writing tools were not
-dynamically proven.
+The same committed probe wraps the existing `_write_text` seam and kills after
+the first or second successful bundle write. The first case leaves only the
+canonical file; the second leaves canonical plus outbox, with no inbox copy.
+Both retain the DB message/recipient, leave Git HEAD unchanged with no staging
+or message commit, and emit no signal.
+
+Still unknown: instruction-level death inside Git's native commit, where no
+direct Python seam exists. Other archive-writing tools were not dynamically
+proven.
 
 ### 2. Current Core behavior
 
-Identical injected results, SIGKILL result, and ordering around Core
-`app.py:3214–3268` and `:3469–3507`/`:4699–4707`.
+Identical injected results, complete and partial-bundle SIGKILL results, and
+ordering around Core `app.py:3214–3268` and
+`:3469–3507`/`:4699–4707`.
 
 ### 3. Why it is pending
 

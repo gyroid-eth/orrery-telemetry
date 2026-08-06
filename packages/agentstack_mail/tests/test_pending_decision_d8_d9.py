@@ -8,12 +8,12 @@ These tests record current frozen-live and Core durability; passing is not an
 approval of the behavior.  Each operation runs in a worker-private subprocess
 and is terminated by a literal ``SIGKILL`` at a test-installed seam.
 
-D8 uses the last deterministic Python seam before Git commit: all canonical,
-outbox, and inbox bundle files have been written and GitPython has staged them,
-but ``IndexFile.commit`` has not run.  Without a production hook, a repeatable
-kill after only a subset of bundle copies (or inside Git's native commit) is not
-observable.  The staged/pre-commit seam is therefore the strongest
-non-invasive probe available.
+D8 probes two deterministic Python seams.  A test-only ``_write_text`` wrapper
+kills immediately after the first or second successful canonical/outbox/inbox
+write, fixing the observable partial-bundle subsets.  The existing later seam
+kills after all three files are written and GitPython stages them, but before
+``IndexFile.commit`` runs.  Only an instruction-level crash inside Git's native
+commit remains without a direct test seam.
 
 D9 wraps the existing timestamp helper, lets its ``read_ts`` transaction
 commit, then kills the process before control returns to
@@ -45,6 +45,7 @@ TESTS_ROOT = Path(__file__).resolve().parent
 CORE_SOURCE = PACKAGE_ROOT / "src"
 _NAMESPACES = (LIVE_NAMESPACE, CORE_NAMESPACE)
 _D8_SUBJECT = "D8 crash before Git commit"
+_D8_SUBSET_SUBJECT = "D8 crash after bundle subset"
 _D9_SUBJECT = "D9 crash between read and ack"
 
 
@@ -146,6 +147,125 @@ async def main():
             )
         finally:
             IndexFile.commit = original_commit
+
+
+asyncio.run(main())
+"""
+
+
+_D8_SUBSET_WORKER = r"""
+import asyncio
+import importlib
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+
+from differential_probe import _install_llm_stub
+
+
+namespace, root_text, kill_after_text = sys.argv[1:4]
+kill_after = int(kill_after_text)
+root = Path(root_text)
+project_key = str(root / "project")
+marker = root / f"d8-subset-after-{kill_after}.json"
+Path(project_key).mkdir(parents=True, exist_ok=True)
+
+
+def write_marker(payload):
+    with marker.open("w", encoding="utf-8") as output:
+        json.dump(payload, output, sort_keys=True)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+
+
+_install_llm_stub(namespace)
+app = importlib.import_module(f"{namespace}.app")
+storage = importlib.import_module(f"{namespace}.storage")
+
+
+async def main():
+    from fastmcp import Client
+    from git import Repo
+
+    async with Client(app.build_mcp_server()) as client:
+        async def call(name, arguments):
+            result = await client.call_tool(name, arguments, raise_on_error=False)
+            if result.is_error:
+                raise AssertionError(f"setup tool {name} failed: {result.data!r}")
+            return result.data
+
+        await call("ensure_project", {"human_key": project_key, "format": "json"})
+        for agent_name, token in (
+            ("GreenCastle", "d8-subset-green-owner-token"),
+            ("BlueLake", "d8-subset-blue-owner-token"),
+        ):
+            await call(
+                "register_agent",
+                {
+                    "project_key": project_key,
+                    "program": "pending-decision-crash-probe",
+                    "model": "fixture-model",
+                    "name": agent_name,
+                    "task_description": "D8 subset-write crash probe",
+                    "registration_token": token,
+                    "format": "json",
+                },
+            )
+        await call(
+            "set_contact_policy",
+            {
+                "project_key": project_key,
+                "agent_name": "BlueLake",
+                "policy": "open",
+                "format": "json",
+            },
+        )
+
+        repo = Repo(str(root / "archive"))
+        try:
+            head_before = repo.head.commit.hexsha
+        finally:
+            repo.close()
+
+        original_write_text = storage._write_text
+        successful_paths = []
+
+        async def kill_after_successful_subset(path, content):
+            await original_write_text(path, content)
+            if "__d8-crash-after-bundle-subset__" not in path.name:
+                return
+            successful_paths.append(path.relative_to(root / "archive").as_posix())
+            if len(successful_paths) == kill_after:
+                write_marker(
+                    {
+                        "seam": "successful_bundle_write_before_next_copy",
+                        "successful_write_count": len(successful_paths),
+                        "successful_paths": successful_paths,
+                        "head_before": head_before,
+                    }
+                )
+                os.kill(os.getpid(), signal.SIGKILL)
+                raise AssertionError("SIGKILL unexpectedly returned")
+
+        storage._write_text = kill_after_successful_subset
+        try:
+            await call(
+                "send_message",
+                {
+                    "project_key": project_key,
+                    "sender_name": "GreenCastle",
+                    "sender_token": "d8-subset-green-owner-token",
+                    "to": ["BlueLake"],
+                    "subject": "D8 crash after bundle subset",
+                    "body_md": "Only the completed bundle subset may survive.",
+                    "format": "json",
+                },
+            )
+        finally:
+            storage._write_text = original_write_text
 
 
 asyncio.run(main())
@@ -305,6 +425,7 @@ def _run_until_sigkill(
     source: Path,
     root: Path,
     program: str,
+    extra_arguments: tuple[str, ...] = (),
 ) -> tuple[WorkerStateRoots, subprocess.CompletedProcess[str]]:
     roots = WorkerStateRoots.under(
         root,
@@ -312,7 +433,14 @@ def _run_until_sigkill(
     )
     environment = isolated_worker_env(os.environ, namespace, roots)
     completed = subprocess.run(
-        [sys.executable, "-c", program, namespace, str(root)],
+        [
+            sys.executable,
+            "-c",
+            program,
+            namespace,
+            str(root),
+            *extra_arguments,
+        ],
         cwd=roots.cwd,
         env=environment,
         text=True,
@@ -452,6 +580,85 @@ def test_d8_observes_database_and_staged_bundle_after_precommit_sigkill(
         "--fixed-strings",
         "--grep",
         _D8_SUBJECT,
+        "--format=%H",
+    )
+    assert committed.returncode == 0, committed.stderr
+    assert committed.stdout.strip() == ""
+    assert not any(path.is_file() for path in roots.signals.rglob("*"))
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"),
+    reason="literal SIGKILL durability probes require a POSIX signal",
+)
+@pytest.mark.parametrize("kill_after", (1, 2))
+@pytest.mark.parametrize("namespace", _NAMESPACES)
+def test_d8_observes_only_completed_bundle_subset_after_write_sigkill(
+    namespace: str,
+    kill_after: int,
+    frozen_live_checkout: Path,
+    tmp_path: Path,
+) -> None:
+    """Observe the exact D8 subset that survives a post-write SIGKILL."""
+
+    root = tmp_path / f"{namespace}-{kill_after}"
+    roots, _completed = _run_until_sigkill(
+        namespace=namespace,
+        source=_source_for(namespace, frozen_live_checkout),
+        root=root,
+        program=_D8_SUBSET_WORKER,
+        extra_arguments=(str(kill_after),),
+    )
+
+    marker = _read_marker(root / f"d8-subset-after-{kill_after}.json")
+    assert marker["seam"] == "successful_bundle_write_before_next_copy"
+    assert marker["successful_write_count"] == kill_after
+
+    recipient = _read_recipient_state(roots.database, _D8_SUBSET_SUBJECT)
+    assert recipient["recipient_name"] == "BlueLake"
+    assert recipient["recipient_kind"] == "to"
+    assert recipient["read_ts"] is None
+    assert recipient["ack_ts"] is None
+
+    bundle_paths = sorted(
+        path
+        for path in roots.storage.rglob("*__d8-crash-after-bundle-subset__*.md")
+        if path.is_file()
+    )
+    relative_bundle_paths = [
+        path.relative_to(roots.storage).as_posix() for path in bundle_paths
+    ]
+    successful_paths = marker["successful_paths"]
+    assert set(relative_bundle_paths) == set(successful_paths)
+    assert len(relative_bundle_paths) == kill_after
+    assert "/messages/" in f"/{successful_paths[0]}"
+    if kill_after == 1:
+        assert not any(
+            "/GreenCastle/outbox/" in f"/{path}" for path in relative_bundle_paths
+        )
+    else:
+        assert "/GreenCastle/outbox/" in f"/{successful_paths[1]}"
+    assert not any("/BlueLake/inbox/" in f"/{path}" for path in relative_bundle_paths)
+    for path in bundle_paths:
+        content = path.read_text(encoding="utf-8")
+        assert _D8_SUBSET_SUBJECT in content
+        assert "Only the completed bundle subset may survive." in content
+
+    head = _git(roots.storage, "rev-parse", "HEAD")
+    assert head.returncode == 0, head.stderr
+    assert head.stdout.strip() == marker["head_before"]
+
+    staged = _git(roots.storage, "diff", "--cached", "--name-only")
+    assert staged.returncode == 0, staged.stderr
+    assert staged.stdout.strip() == ""
+
+    committed = _git(
+        roots.storage,
+        "log",
+        "--all",
+        "--fixed-strings",
+        "--grep",
+        _D8_SUBSET_SUBJECT,
         "--format=%H",
     )
     assert committed.returncode == 0, committed.stderr
