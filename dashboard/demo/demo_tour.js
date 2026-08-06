@@ -88,12 +88,15 @@
     '#demo-card button:hover{background:rgba(212,168,84,.28)}',
     '#demo-card .row{display:flex;align-items:center;justify-content:space-between;',
     '  gap:14px}',
-    '#demo-strip .lang,#demo-card .pick{flex:none;display:flex;gap:4px}',
-    '#demo-strip .lang button,#demo-card .pick button{appearance:none;',
+    '#demo-strip .lang,#demo-card .pick,#demo-strip .story{flex:none;',
+    '  display:flex;gap:4px}',
+    '#demo-strip .story button,#demo-strip .lang button,',
+    '#demo-card .pick button{appearance:none;',
     '  border:1px solid rgba(212,168,84,.28);background:none;color:#9a9081;',
     '  border-radius:4px;padding:4px 8px;cursor:pointer;',
     '  font:10.5px/1 "IBM Plex Mono",monospace;letter-spacing:.08em}',
-    '#demo-strip .lang button.on,#demo-card .pick button.on{color:#0d0f13;',
+    '#demo-strip .story button.on,#demo-strip .lang button.on,',
+    '#demo-card .pick button.on{color:#0d0f13;',
     '  background:rgba(212,168,84,.85);border-color:rgba(212,168,84,.85)}',
   ].join('\n');
 
@@ -169,6 +172,7 @@
     if (!d) return;
     d.setLang(l);
     paintToggle();
+    buildStoryPicker(strip.querySelector('.story'));
     tick();
     var card = document.getElementById('demo-card');
     if (card) paintCard(card);
@@ -179,6 +183,32 @@
     var cur = lang();
     Array.prototype.forEach.call(toggle.querySelectorAll('button'),
       function (b) { b.classList.toggle('on', b.dataset.lang === cur); });
+  }
+
+  /* Switching story reloads rather than swapping in place. A story is a
+     different cast, and the graph keeps nodes it has seen — swapping live
+     would leave the previous story's agents floating in the new one. The
+     language travels in the URL so the choice survives the trip. */
+  function buildStoryPicker(box) {
+    var d = window.AGENTSTACK_DEMO;
+    if (!box || !d || !d.stories) return;
+    var ids = Object.keys(d.stories).sort();
+    if (ids.length < 2) return;                 // nothing to choose between
+    var cur = d.story().id, l = lang();
+    box.innerHTML = ids.map(function (id) {
+      var st = d.stories[id];
+      var name = (st.label && (st.label[l] || st.label.en)) || id;
+      return '<button type="button" data-story="' + id + '"' +
+        (id === cur ? ' class="on"' : '') + '>' + name + '</button>';
+    }).join('');
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-story]');
+      if (!b || b.dataset.story === d.story().id) return;
+      var u = new URL(location.href);
+      u.searchParams.set('story', b.dataset.story);
+      u.searchParams.set('lang', lang());
+      location.href = u.toString();
+    });
   }
 
   function paintCard(card) {
@@ -194,6 +224,7 @@
     strip = el('div', { id: 'demo-strip' },
       '<span class="tag">DEMO</span><span class="txt"></span>' +
       '<span class="hint"></span>' +
+      '<span class="story"></span>' +
       '<span class="lang"><button type="button" data-lang="en">EN</button>' +
       '<button type="button" data-lang="ja">日本語</button></span>' +
       '<i id="demo-bar"></i>');
@@ -210,6 +241,7 @@
       var b = e.target.closest('button[data-lang]');
       if (b) switchTo(b.dataset.lang);
     });
+    buildStoryPicker(strip.querySelector('.story'));
 
     var card = el('div', { id: 'demo-card' },
       '<div class="box"><div class="copy"></div>' +

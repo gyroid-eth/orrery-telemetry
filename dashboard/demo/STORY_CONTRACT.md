@@ -58,6 +58,42 @@ available ones, and `build.sh` fails if a cast surname has no file. Every
 portrait shipped must be public domain — see `PORTRAITS.txt`. If a surname
 you want is not there, pick another; do not add image files.
 
+### states — waiting on a human
+
+The product distinguishes four live states, and two of them are the ones an
+operator actually watches for:
+
+| `act_state` | what the page shows | what it means |
+|---|---|---|
+| `work`     | amber LED, elapsed time | generating |
+| `wait`     | faint "last Ns"         | idle, waiting for input |
+| `ask`      | **red LED, APPROVAL**, `!` ring on the graph | blocked on a permission prompt |
+| `question` | **cyan `?`** ring, pulled into the attention group | asking the operator to choose between options |
+
+A story that only ever shows `work` and `wait` leaves out the reason anyone
+watches this screen. Put the two blocked states on the timeline explicitly:
+
+```
+{ name: 'IvoryNoether', …,
+  states: [ [120, 128, 'ask'],        // from, to, state — seconds into the loop
+            [140, 168, 'question'] ] }
+```
+
+Outside those windows the agent alternates work/wait on its own. Give at
+least one agent an `ask` and one a `question`, and point a beat at each —
+the narration is what tells a visitor that the red LED is the product doing
+its job rather than something broken.
+
+**A window must be at least 15 seconds, and it must cover the beat that
+describes it.** A realistic human answers an approval prompt in a few
+seconds, but a 7-second window in a 240-second loop is on screen 3% of the
+time: a visitor watching for half a minute never sees it, which is the
+complaint this whole section exists to answer. Worse, a caption that says
+"the red APPROVAL state is deliberate" while the state has already cleared
+points at nothing. Make the human take their time, and move the reply in the
+transcript to match — the transcript and the state have to tell the same
+story.
+
 ### script
 
 ```
