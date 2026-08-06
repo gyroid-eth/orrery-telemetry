@@ -4,7 +4,8 @@
   "comparison_policy": {
     "default": "fail_on_difference",
     "allowlist": "intentional_differences.allowlisted_entries_only",
-    "unresolved_product_decisions": "fail_on_observation"
+    "unresolved_product_decisions": "fail_on_observation",
+    "resolved_product_decisions": "assert_selected_behavior"
   },
   "baselines": {
     "live": {
@@ -294,14 +295,29 @@
     }
     ]
   },
-  "pending_product_decisions": [
+  "resolved_product_decisions": [
     {
       "id": "D1",
       "title": "conflicting token registration mutation",
-      "status": "pending_no_go",
+      "status": "resolved",
+      "resolution": "reject_explicit_conflicting_token_before_mutation",
+      "scope": {
+        "explicit_conflicting_token": "reject_without_durable_mutation",
+        "same_token": "metadata_refresh_with_exactly_one_git_commit",
+        "omitted_token": "credential_retention_and_authority_semantics_unchanged_pending_D6_D7",
+        "concurrent_conflicting_tokens_on_null_identity": "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
+      },
       "allowlisted": false,
-      "comparator_disposition": "fail"
-    },
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d1.py::test_conflicting_explicit_token_is_rejected_without_durable_change",
+        "tests/test_pending_decision_d1.py::test_same_explicit_token_updates_metadata_with_exactly_one_git_commit",
+        "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
+        "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner"
+      ]
+    }
+  ],
+  "pending_product_decisions": [
     {
       "id": "D2",
       "title": "expired contact link accepted",

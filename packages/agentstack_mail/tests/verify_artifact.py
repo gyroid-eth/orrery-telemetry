@@ -131,7 +131,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_PENDING_DECISIONS = {
-    "D1": "conflicting token registration mutation",
     "D2": "expired contact link accepted",
     "D3": "cross-project intro/reply identity",
     "D4": "accept response without pending",
@@ -144,6 +143,35 @@ EXPECTED_PENDING_DECISIONS = {
     "D11": "retire with active reservations or unread messages",
     "D12": "signal cleanup after crash, retirement, or stale consumer",
 }
+
+EXPECTED_RESOLVED_DECISIONS = {
+    "D1": {
+        "id": "D1",
+        "title": "conflicting token registration mutation",
+        "status": "resolved",
+        "resolution": "reject_explicit_conflicting_token_before_mutation",
+        "scope": {
+            "explicit_conflicting_token": "reject_without_durable_mutation",
+            "same_token": "metadata_refresh_with_exactly_one_git_commit",
+            "omitted_token": (
+                "credential_retention_and_authority_semantics_unchanged_pending_D6_D7"
+            ),
+            "concurrent_conflicting_tokens_on_null_identity": (
+                "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
+            ),
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d1.py::test_conflicting_explicit_token_is_rejected_without_durable_change",
+            "tests/test_pending_decision_d1.py::test_same_explicit_token_updates_metadata_with_exactly_one_git_commit",
+            "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
+            "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner",
+        ],
+    }
+}
+
+EXPECTED_DECISION_IDS = {f"D{index}" for index in range(1, 13)}
 
 EXPECTED_LIVE_RESOURCE_TEMPLATE_URIS = [
     "resource://agents/{project_key}{?format}",
@@ -218,6 +246,8 @@ SDIST_REQUIRED_SUFFIXES = {
     f"/fixtures/{DIVERGENCE_MANIFEST}",
     "/fixtures/live-tools-list.json",
     "/pyproject.toml",
+    "/tests/test_decision_manifest.py",
+    "/tests/test_pending_decision_d1.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",
 } | {f"/src/agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
@@ -377,6 +407,7 @@ def _assert_expected_divergences_manifest(
         "comparison_policy",
         "baselines",
         "intentional_differences",
+        "resolved_product_decisions",
         "pending_product_decisions",
     }
     if set(manifest) != expected_top_level:
@@ -389,6 +420,7 @@ def _assert_expected_divergences_manifest(
         "default": "fail_on_difference",
         "allowlist": "intentional_differences.allowlisted_entries_only",
         "unresolved_product_decisions": "fail_on_observation",
+        "resolved_product_decisions": "assert_selected_behavior",
     }
     if manifest["comparison_policy"] != expected_policy:
         raise SystemExit(f"{artifact} divergence manifest is not fail-closed")
@@ -412,6 +444,67 @@ def _assert_expected_divergences_manifest(
     entries_by_id = {item.get("id"): item for item in entries}
     if len(entries_by_id) != len(entries):
         raise SystemExit(f"{artifact} divergence manifest has duplicate allowlist ids")
+
+    pending = manifest["pending_product_decisions"]
+    if not isinstance(pending, list) or not all(
+        isinstance(item, dict) for item in pending
+    ):
+        raise SystemExit(f"{artifact} pending product decisions must be a list")
+    pending_by_id = {item.get("id"): item for item in pending}
+    if len(pending_by_id) != len(pending):
+        raise SystemExit(f"{artifact} pending product decisions contain duplicate ids")
+
+    resolved = manifest["resolved_product_decisions"]
+    if not isinstance(resolved, list) or not all(
+        isinstance(item, dict) for item in resolved
+    ):
+        raise SystemExit(f"{artifact} resolved product decisions must be a list")
+    resolved_by_id = {item.get("id"): item for item in resolved}
+    if len(resolved_by_id) != len(resolved):
+        raise SystemExit(f"{artifact} resolved product decisions contain duplicate ids")
+
+    pending_ids = set(pending_by_id)
+    resolved_ids = set(resolved_by_id)
+    overlap = sorted(pending_ids & resolved_ids)
+    if overlap:
+        raise SystemExit(f"{artifact} product decision ledgers overlap: {overlap}")
+    ledger_ids = pending_ids | resolved_ids
+    if ledger_ids != EXPECTED_DECISION_IDS:
+        missing = sorted(EXPECTED_DECISION_IDS - ledger_ids)
+        extra = sorted(ledger_ids - EXPECTED_DECISION_IDS)
+        raise SystemExit(
+            f"{artifact} product decision ledger ids changed: "
+            f"missing={missing}, extra={extra}"
+        )
+    resolved_allowlisted = sorted(resolved_ids & set(entries_by_id))
+    if resolved_allowlisted:
+        raise SystemExit(
+            f"{artifact} resolved product decisions must not be allowlisted: "
+            f"{resolved_allowlisted}"
+        )
+
+    if pending_ids != set(EXPECTED_PENDING_DECISIONS):
+        raise SystemExit(f"{artifact} pending product decision ids changed")
+    for decision_id, title in EXPECTED_PENDING_DECISIONS.items():
+        if pending_by_id[decision_id] != {
+            "id": decision_id,
+            "title": title,
+            "status": "pending_no_go",
+            "allowlisted": False,
+            "comparator_disposition": "fail",
+        }:
+            raise SystemExit(
+                f"{artifact} pending decision {decision_id} is not fail-closed"
+            )
+
+    if resolved_ids != set(EXPECTED_RESOLVED_DECISIONS):
+        raise SystemExit(f"{artifact} resolved product decision ids changed")
+    for decision_id, expected in EXPECTED_RESOLVED_DECISIONS.items():
+        if resolved_by_id[decision_id] != expected:
+            raise SystemExit(
+                f"{artifact} resolved product decision {decision_id} changed"
+            )
+
     expected_allowed_ids = {
         *(f"description.{name}" for name in EXPECTED_DESCRIPTION_DIGESTS),
         "topology.publication_surface",
@@ -556,27 +649,6 @@ def _assert_expected_divergences_manifest(
                 raise SystemExit(
                     f"{artifact} static divergence allowance changed for {entry_id}"
                 )
-
-    pending = manifest["pending_product_decisions"]
-    if not isinstance(pending, list) or not all(isinstance(item, dict) for item in pending):
-        raise SystemExit(f"{artifact} pending product decisions must be a list")
-    pending_by_id = {item.get("id"): item for item in pending}
-    if len(pending_by_id) != len(pending) or set(pending_by_id) != set(
-        EXPECTED_PENDING_DECISIONS
-    ):
-        raise SystemExit(f"{artifact} pending product decision ids changed")
-    for decision_id, title in EXPECTED_PENDING_DECISIONS.items():
-        if pending_by_id[decision_id] != {
-            "id": decision_id,
-            "title": title,
-            "status": "pending_no_go",
-            "allowlisted": False,
-            "comparator_disposition": "fail",
-        }:
-            raise SystemExit(
-                f"{artifact} pending decision {decision_id} is not fail-closed"
-            )
-
 
 def verify_wheel(path: Path) -> None:
     with zipfile.ZipFile(path) as archive:

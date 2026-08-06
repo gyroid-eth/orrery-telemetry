@@ -1,9 +1,10 @@
-# AgentStack Mail pending product decisions
+# AgentStack Mail product decision evidence
 
-Status: decision packet, not a decision record. Every item below remains
-`pending_no_go`; none is allowlisted, implemented, or approved for authority
-cutover by this document. The normative list and status remain in
+Status: evidence packet, not the normative decision record. Items may move from
+pending to resolved as choices are implemented and verified. The authoritative
+status, selected scope, and verification remain in
 `packages/agentstack_mail/fixtures/differential-expected-divergences-v1.json`.
+No entry in this document approves authority cutover.
 
 ## Observation method and limits
 
@@ -24,14 +25,15 @@ After a product choice, that recipe must become a committed test before the
 manifest entry can change. The prevalence of these states in production data is
 unknown because inspecting the running database was intentionally out of scope.
 
-All dynamically proven cases matched between frozen live and Core. Matching an
-unsafe or ambiguous live behavior is evidence, not acceptance.
+All dynamically proven cases originally matched between frozen live and Core.
+A selected resolution may intentionally make Core diverge; matching an unsafe
+or ambiguous live behavior is evidence, not acceptance.
 
 ## One-line summary
 
-| ID | Observed behavior in frozen live and Core | Decision tension | Principal impact |
+| ID | Observed or selected behavior | Decision tension | Principal impact |
 |---|---|---|---|
-| D1 | A conflicting re-registration token is rejected only after metadata, profile, and Git mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
+| D1 | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
 | D2 | Expired pending links can be accepted and expired approved links still authorize delivery | continuity versus TTL as a real authorization boundary | contact-controlled and cross-project senders/recipients; stale grants |
 | D3 | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local alias and replies stay there | project-local schema versus authentic routable origin identity | replies, audit, same-name agents, existing aliases/messages |
 | D4 | Accepting without a pending request creates an approved link | out-of-order convenience versus consent/audit provenance | contact owners and any caller who knows both names |
@@ -55,18 +57,29 @@ the database has already changed `program`, `model`, `task_description`,
 rewritten and a Git commit is added; the profile contains the new
 program/model/task but the old attachment policy, so DB and archive diverge.
 
-Reproduction seam: frozen `app.py` updates the existing row around
-`_get_or_create_agent` lines 3161–3239, then `register_agent` validates the
-requested token only around line 4941. The committed Core has the corresponding
-ordering in `packages/agentstack_mail/src/agentstack_mail/app.py:3184` and
-`:4964`.
+Reproduction seam: frozen `app.py` updates the existing row in
+`_get_or_create_agent`, then `register_agent` validates the requested token.
+Core now authenticates and persists registration state inside
+`_get_or_create_agent`; `register_agent` selects that managed-token path.
 
 ### 2. Current Core behavior
 
-Identical dynamic result and durable side effects. The token mismatch is not a
-rollback boundary.
+Core now validates an explicitly supplied token against an existing identity
+before changing metadata, touching a window identity, or writing the profile.
+A conflict returns the chosen authentication error with byte-identical
+DB/profile/archive/Git state and no commit; a same-token metadata refresh
+creates exactly one Git commit. For a legacy null-token row, a conditional
+SQLite update makes one concurrent registration the atomic writer; a different
+token arriving after that write is a conflict and cannot add metadata or a Git
+commit. The current first-DB-writer outcome is retained unsafe compatibility
+arbitration, not accepted ownership proof. This serialization does not decide
+who is entitled to claim the row: the D6/D7 authority behavior remains pending,
+and its eventual decision may replace this arbitration and its regression test.
+The committed requirement tests are in
+`packages/agentstack_mail/tests/test_pending_decision_d1.py`; the manifest
+remains authoritative for selected scope and status.
 
-### 3. Why it is pending
+### 3. Why it was pending
 
 Live-compatible re-registration permits restart metadata refresh, but owner
 authentication and the normal meaning of a rejected call require zero durable
@@ -81,17 +94,31 @@ the tokenless recovery cases in D6 and D7.
 | Prevalidate only an explicitly conflicting token before any mutation | Only clients relying on rejected calls to mutate state break; omitted-token semantics remain as today | None; historical divergence still needs audit if desired |
 | Require valid owner credentials for every existing-name re-registration; use a separate rotate/recovery operation | Tokenless legacy launchers and identities with unavailable generated tokens cannot refresh until claimed | Rows without usable credentials need claim/backfill/recovery |
 
-Non-binding lean: prevalidating an explicit conflict is the narrow D1 closure;
-the broader omitted-token policy should be decided with D6 and D7.
+The selected narrow closure prevalidates an explicit conflict. The broader
+omitted-token policy remains separate with D6 and D7; this prose does not replace
+the manifest's normative resolution record.
 
 ### 5. Test that fixes the choice
 
-Snapshot the complete row, token, timestamps, profile bytes, archive HEAD/log,
-and Git status after token A registration. Attempt token B with every mutable
-field changed. Strict choices must return the selected auth error with byte-for-
-byte unchanged DB/profile/Git state and no commit; same-token update must commit
-exactly once. Preserving live must instead pin the exact partial mutation and
-DB/archive mismatch. Omitted-token behavior belongs in the D6 matrix.
+The committed selected-requirement tests snapshot SQLite bytes, profile bytes,
+the complete archive worktree, and Git internals after token A registration.
+Token B with changed program/model/task/attachment metadata must return the
+selected auth error with byte-for-byte unchanged durable state and no commit;
+the existing-window route is exercised separately. A same-token update refreshes
+all metadata and commits exactly once. The omitted-token case preserves the
+legacy credential/authority semantics, one profile commit, and the existing
+profile-before-DB attachment ordering; it serves only as a compatibility
+regression for pending D6/D7. A deterministic
+two-client rendezvous against a legacy null-token row proves exactly one atomic
+winner, one selected auth error, one Git commit, winner-only metadata, and no
+credential disclosure in either result under the retained compatibility path.
+It does not prove that the winner is an authorized claimant and must be revised
+with the D6/D7 test matrix when claim authority is selected.
+
+The result/profile assertions above are not an end-to-end secret logging gate.
+The current Rich request instrumentation can still receive raw credential
+arguments; redaction or proxy injection remains an explicit, unimplemented
+requirement in the claim/enrollment design.
 
 ## D2 — expired contact link accepted
 
@@ -273,7 +300,7 @@ around `app.py:6192–6199`.
 
 ### 2. Current Core behavior
 
-Identical at `packages/agentstack_mail/src/agentstack_mail/app.py:6221`. The
+Identical in the `send_message` conditional sender-token verification. The
 proven DB contains only the successful omitted-token message when a wrong-token
 control is also attempted.
 
@@ -316,8 +343,9 @@ not all dynamically probed.
 
 ### 2. Current Core behavior
 
-Identical for the published `retire_agent` path, around Core `app.py:7896` and
-`:5064`. Broader owner-tool behavior remains unproven dynamically.
+Identical for the published `retire_agent` path and the macro's direct
+`_get_or_create_agent` call. Broader owner-tool behavior remains unproven
+dynamically.
 
 ### 3. Why it is pending
 
