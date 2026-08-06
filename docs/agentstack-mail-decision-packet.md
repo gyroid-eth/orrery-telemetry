@@ -355,14 +355,23 @@ and recipient rows, with no corresponding archive message. Frozen source
 commits agent/message state before profile/bundle writes around
 `app.py:3191–3239` and `:3446–3484`/`:4676–4683`.
 
-Unknown: mid-bundle partial files, a process crash rather than a raised
-exception, Git failure after files exist, and other archive-writing tools were
-not dynamically proven.
+A committed literal-SIGKILL probe now kills the worker after the canonical,
+outbox, and inbox files are written and staged but immediately before
+`IndexFile.commit`. The DB message and recipient plus all three staged files
+survive, Git HEAD does not advance, no message commit exists, and no signal is
+emitted. This is pinned for frozen live and Core in
+`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py`.
+
+Still unknown: deterministic death after only a subset of bundle writes or
+inside Git's native commit. Neither boundary is exposed without adding a
+production hook, so the committed probe records post-write/post-stage/pre-commit
+as the strongest non-invasive seam. Other archive-writing tools were not
+dynamically proven.
 
 ### 2. Current Core behavior
 
-Identical injected results and ordering around Core `app.py:3214–3268` and
-`:3469–3507`/`:4699–4707`.
+Identical injected results, SIGKILL result, and ordering around Core
+`app.py:3214–3268` and `:3469–3507`/`:4699–4707`.
 
 ### 3. Why it is pending
 
@@ -401,14 +410,17 @@ degraded DB success.
 `acknowledge_message` calls the read and ack timestamp helpers sequentially;
 each helper opens and commits its own session. Inject failure before the second
 helper: the tool errors, while SQLite durably retains `read_ts != NULL` and
-`ack_ts = NULL`. Frozen seams are around `app.py:4416–4444` and `:7817–7818`.
-A literal SIGKILL in that interval was not run; the independently committed
-state was proven by injected failure.
+`ack_ts = NULL`. A committed worker probe now uses literal SIGKILL after the
+read transaction commits but before the ack helper is called; reopening SQLite
+retains `read_ts != NULL, ack_ts = NULL`. Frozen seams are around
+`app.py:4416–4444` and `:7817–7818`, and the probe is in
+`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py`.
 
 ### 2. Current Core behavior
 
-Identical at Core `app.py:4439–4467` and `:7849–7850`. Existing Behavior tests
-cover success and replay, not this failure seam.
+Identical at Core `app.py:4439–4467` and `:7849–7850`. The committed probe pins
+this failure seam in addition to existing Behavior coverage of success and
+replay.
 
 ### 3. Why it is pending
 
@@ -446,14 +458,27 @@ frozen `app.py:9084–9205` and `storage.py:645–780`/`:974–997`.
 
 With one DB but different archive roots, each process takes a different lock;
 both pass their conflict read and SQLite serializes two inserts, leaving two
-active logically conflicting rows. SQLite is WAL with a 60-second timeout and
-busy timeout. Fairness and an external write lock held beyond that timeout were
-not exercised.
+active logically conflicting rows.
+
+A committed probe records the production `PRAGMA busy_timeout` as 60,000 ms,
+then uses the same checkout/commit path with a test-local 75 ms timeout and an
+external `BEGIN IMMEDIATE` writer. The public call returns the sanitized generic
+DB `ToolError`; no reservation row or archive projection is written. After the
+writer rolls back, retry grants exactly one reservation. Four bounded
+shared-root races per implementation each produced one grant and one conflict,
+without naming a winner. The probe is
+`packages/agentstack_mail/tests/test_pending_decision_d10.py`.
+
+Exact wall time with the unscaled 60-second setting remains unmeasured because
+multiple connection/check-in waits may accumulate. Finite black-box races
+cannot prove FIFO order, winner balance, starvation freedom, or fairness over
+all schedules; the committed test explicitly records those non-claims.
 
 ### 2. Current Core behavior
 
-Identical shared-root and split-root results; corresponding Core reservation
-and SQLite seams are `app.py:9116–9236` and `db.py:319–477`.
+Identical shared-root, split-root, scaled lock-timeout/recovery, and bounded-race
+results; corresponding Core reservation and SQLite seams are
+`app.py:9116–9236` and `db.py:319–477`.
 
 ### 3. Why it is pending
 
@@ -492,11 +517,19 @@ then retire it. `retired_at` is set, while the reservation, unread receipt, and
 signals remain. A retired Blue can still `fetch_inbox`; `limit=1` returns the
 pending message and clears both signals. New sends to the retired recipient are
 rejected. Frozen retirement only sets the tombstone around `app.py:5020–5057`.
-Send/reservation racing retirement was not exercised.
+
+The committed race probe adds two stronger observations. A reservation for
+Blue succeeds and remains active whether retirement pauses the call immediately
+before or immediately after reservation creation. A send paused after recipient
+validation succeeds after Blue retires, persists both its direct and BCC
+recipient, and emits only Blue's signal; the same send paused before validation
+is rejected after retirement with no message or signal. Frozen live and Core
+match in `packages/agentstack_mail/tests/test_pending_decision_d11_d12.py`.
 
 ### 2. Current Core behavior
 
-Identical around Core `app.py:5043–5080`, `:6360–6367`, and `:7563–7638`.
+Identical around Core `app.py:5043–5080`, `:6360–6367`, and `:7563–7638`,
+including the committed reservation/send races.
 
 ### 3. Why it is pending
 
@@ -537,15 +570,26 @@ returned one item and deleted both files. Frozen seams are around
 `app.py:4524–4702`/`:7531–7606` and `storage.py:3113–3242`.
 
 The shell watcher retries failed work after 30 seconds and stale leases after
-120 seconds. Its crash windows around external injection were source-inspected,
-not run against tmux: crash before success recording may duplicate; crash after
-recording but before unlink may leave a permanently skipped file. There is no
-server-side TTL cleanup for pending signals.
+120 seconds. A committed hermetic probe executes the exact watcher functions
+with a fake external command and literal SIGKILL at four boundaries. Death after
+the fake injection but before success recording leaves signal and lease; after
+lease expiry it injects again, demonstrating the duplicate window. Death after
+success recording leaves a signal that `state_should_attempt` permanently
+skips; lease presence distinguishes death before versus after lease release.
+Normal completion removes both signal and lease. The production source order
+`submit < success record < lease release < unlink` is pinned in
+`packages/agentstack_mail/tests/test_pending_decision_d11_d12.py`.
+
+The remaining unobservable boundary is whether a real tmux-like external system
+has applied submitted bytes immediately before process death. A successful
+command return is the strongest hermetic boundary; no local watcher state can
+prove the external side effect's instant. There is no server-side TTL cleanup
+for pending signals.
 
 ### 2. Current Core behavior
 
-Identical crash and cleanup result around Core `app.py:4547–4725`/`:7631–7638`
-and `storage.py:3115–3244`.
+Identical crash, cleanup, and hermetic watcher-state results around Core
+`app.py:4547–4725`/`:7631–7638` and `storage.py:3115–3244`.
 
 ### 3. Why it is pending
 
