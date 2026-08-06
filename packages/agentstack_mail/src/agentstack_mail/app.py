@@ -2527,8 +2527,8 @@ def _detect_agent_name_mistake(value: str) -> tuple[str, str] | None:
             f"'{value}' looks like a Unix username (possibly from $USER environment variable). "
             f"Agent names must be adjective+noun combinations like 'BlueLake' or 'GreenCastle'. "
             f"When you called register_agent, the system likely auto-generated a valid name for you. "
-            f"To find your actual agent name, check the response from register_agent or use "
-            f"resource://agents/{{project_key}} to list all registered agents in this project."
+            f"To find your actual agent name, use the identity assigned by the AgentStack "
+            f"runtime or the name returned by register_agent."
         )
     return None
 
@@ -5596,17 +5596,17 @@ def build_mcp_server() -> FastMCP:
         """
         Return enriched profile details for an agent, optionally including recent archive commits.
 
-        Discovery
-        ---------
-        To discover available agent names, use: resource://agents/{project_key}
-        Agent names are NOT the same as program names or user names.
+        Identity lookup
+        ---------------
+        Agent names are assigned by the AgentStack runtime or returned by
+        register_agent. Use whois to verify a known name.
 
         Parameters
         ----------
         project_key : str
             Project slug or human key.
         agent_name : str
-            Agent name to look up (use resource://agents/{project_key} to discover names).
+            Known agent name to look up.
         include_recent_commits : bool
             If true, include latest commits touching the project archive authored by the configured git author.
         commit_limit : int
@@ -5949,10 +5949,10 @@ def build_mcp_server() -> FastMCP:
         """
         Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.
 
-        Discovery
-        ---------
-        To discover available agent names for recipients, use: resource://agents/{project_key}
-        Agent names are NOT the same as program names or user names.
+        Recipient identity
+        ------------------
+        Use an identity assigned by the AgentStack runtime or returned by
+        register_agent. Use whois to verify a known name.
 
         What this does
         --------------
@@ -6130,7 +6130,13 @@ def build_mcp_server() -> FastMCP:
                     mistake[0],
                     f"Unknown recipient '{recipient}': {mistake[1]}",
                     recoverable=True,
-                    data={"recipient": recipient, "hint": "Use a registered agent name; discover via resource://agents/{project_key}"},
+                    data={
+                        "recipient": recipient,
+                        "hint": (
+                            "Use an identity assigned by the AgentStack runtime or "
+                            "returned by register_agent; use whois to verify a known name."
+                        ),
+                    },
                 )
 
         # Normalize cc/bcc inputs and validate types for friendlier UX
@@ -6179,8 +6185,8 @@ def build_mcp_server() -> FastMCP:
             await ctx.info(
                 f"[note] You ({sender_name}) are sending a message to yourself. "
                 f"This is allowed but usually not intended. To communicate with other agents, "
-                f"use their agent names (e.g., 'BlueLake'). To discover agents, "
-                f"use resource://agents/{project_key}."
+                f"use an identity assigned by the AgentStack runtime or returned "
+                f"by register_agent (e.g., 'BlueLake')."
             )
 
         # Subject length warning: warn if subject is too long (will be truncated in DB)
@@ -6823,7 +6829,10 @@ def build_mcp_server() -> FastMCP:
                 if still_unknown and attempted_external:
                     data_payload["auto_contact_attempted_external"] = attempted_external
                 if still_unknown:
-                    hint = f"Use resource://agents/{project.slug} to list registered agents or register new identities."
+                    hint = (
+                        "Use an identity assigned by the AgentStack runtime or returned "
+                        "by register_agent; use whois to verify a known name."
+                    )
                     parts.append(hint)
                     message = "Unable to send message — " + "; ".join(parts)
                     data_payload["hint"] = hint
@@ -7267,10 +7276,10 @@ def build_mcp_server() -> FastMCP:
 
         Creates (or refreshes) a pending AgentLink and sends a small ack_required intro message.
 
-        Discovery
-        ---------
-        To discover available agent names, use: resource://agents/{project_key}
-        Agent names are NOT the same as program names or user names.
+        Target identity
+        ---------------
+        Use an identity assigned by the AgentStack runtime or returned by
+        register_agent. Use whois to verify a known name.
 
         Parameters
         ----------
@@ -7279,7 +7288,7 @@ def build_mcp_server() -> FastMCP:
         from_agent : str
             Your agent name (must be registered in the project).
         to_agent : str
-            Target agent name (use resource://agents/{project_key} to discover names).
+            Known target agent name.
         to_project : Optional[str]
             Target project if different from your project (cross-project coordination).
         reason : str
@@ -11940,10 +11949,13 @@ def build_mcp_server() -> FastMCP:
     # -------------------------------------------------------------------------------------------------
     # Tool Filtering: Remove tools that shouldn't be exposed based on settings
     # -------------------------------------------------------------------------------------------------
-    mcp.assert_contract_boundary()
-
     if settings.tool_filter.enabled:
         _apply_tool_filter(mcp, settings)
+
+    # This must remain the final registry mutation gate. A subset filter is
+    # incompatible with the frozen compatibility contract and therefore makes
+    # construction fail rather than silently publishing fewer than 22 tools.
+    mcp.assert_contract_boundary()
 
     return mcp
 

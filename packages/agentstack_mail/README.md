@@ -29,12 +29,25 @@ The first release must satisfy these invariants:
 - every wheel and source distribution carries both license texts and the
   versioned compatibility fixtures.
 
+The reconstructible live Git bundle and dirty patch under `provenance/` are
+repository-only audit inputs. They are intentionally excluded from both wheel
+and source distributions; the package distributions retain `NOTICE.md`, both
+license texts, the compatibility fixtures, runtime source, and verification
+tests.
+
 The current core copies the live data, archive, and tool-body seam so it can be
 compared without translating behavior. A fail-closed FastMCP boundary publishes
 exactly the 22 compatibility tools and no resources. Non-compatibility bodies
 are retained internally only until the differential suite proves they can be
 removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
 trains.
+
+The 22-tool contract does not expose an MCP roster resource. Callers obtain
+their own assigned identity from the AgentStack runtime, `register_agent`, or
+`macro_start_session`; `list_contacts` returns known contact links and `whois`
+verifies a known name. `send_message(..., to=[], broadcast=true)` is the
+roster-free broadcast path. Enabling an upstream subset tool-filter profile
+fails server construction instead of weakening the exact contract.
 
 See `NOTICE.md` for the exact source baseline. The checked-in live tool-schema
 fixture is evidence, not an instruction to expose every upstream tool.

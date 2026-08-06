@@ -15,6 +15,9 @@ authors = [
 ]
 dependencies = [
   "fastmcp==2.13.0.2",
+  # FastMCP's generated outputSchema changed in Pydantic 2.13.  The live
+  # behavior source uses 2.12.5, so pin it until a versioned schema migration.
+  "pydantic==2.12.5",
   "PyYAML>=6.0.2",
   "pathspec>=0.12.1",
   "python-decouple>=3.8",
@@ -49,6 +52,12 @@ packages = ["src/agentstack_mail"]
 [tool.hatch.build.targets.wheel.force-include]
 "fixtures" = "agentstack_mail/fixtures"
 "NOTICE.md" = "agentstack_mail/NOTICE.md"
+
+[tool.hatch.build.targets.sdist]
+# The reconstructible live Git bundle and dirty patch are repository audit
+# inputs, not runtime source-distribution payloads. NOTICE, both licenses,
+# fixtures, source, and tests remain in the sdist.
+exclude = ["/provenance"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

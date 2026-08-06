@@ -8,7 +8,7 @@ resource from becoming reachable by accident.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastmcp import FastMCP
@@ -73,14 +73,33 @@ class CompatibilityFastMCP(FastMCP):
         return decorator
 
     def assert_contract_boundary(self) -> None:
-        """Fail server construction if any compatibility tool is missing."""
+        """Fail if the actual FastMCP registry is not the exact contract.
 
-        missing = COMPATIBILITY_TOOLS - self._agentstack_published_tools
-        extra = self._agentstack_published_tools - COMPATIBILITY_TOOLS
-        if missing or extra:
+        The decorator bookkeeping is useful for provenance, but it is not an
+        enforcement boundary: FastMCP can add or remove tools after decoration.
+        Inspect the pinned FastMCP registry itself so post-registration filters
+        and direct base-class registration cannot bypass the exact-22 contract.
+        """
+
+        manager = getattr(self, "_tool_manager", None)
+        registry = getattr(manager, "_tools", None)
+        if not isinstance(registry, Mapping):
+            raise RuntimeError(
+                "AgentStack Mail cannot inspect the FastMCP tool registry; "
+                "refusing to construct a server without an exact boundary check"
+            )
+
+        actual = frozenset(registry)
+        missing = COMPATIBILITY_TOOLS - actual
+        extra = actual - COMPATIBILITY_TOOLS
+        recorded_missing = COMPATIBILITY_TOOLS - self._agentstack_published_tools
+        recorded_extra = self._agentstack_published_tools - COMPATIBILITY_TOOLS
+        if missing or extra or recorded_missing or recorded_extra:
             raise RuntimeError(
                 "AgentStack Mail tool boundary mismatch: "
-                f"missing={sorted(missing)}, extra={sorted(extra)}"
+                f"missing={sorted(missing)}, extra={sorted(extra)}, "
+                f"recorded_missing={sorted(recorded_missing)}, "
+                f"recorded_extra={sorted(recorded_extra)}"
             )
 
     @property

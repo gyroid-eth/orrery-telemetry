@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-
 from agentstack_mail.contract import COMPATIBILITY_TOOLS, ISOLATION_DEFAULTS
-
 
 LEGACY_ENV = {
     "PORT": "8765",
@@ -142,6 +141,110 @@ def test_mcp_server_exposes_exactly_the_22_compatibility_tools_and_no_resources(
     assert len(tool_names) == 22
     assert tool_names == COMPATIBILITY_TOOLS
     assert not resources
+
+
+def test_actual_tool_schemas_match_the_frozen_live_contract() -> None:
+    app = _require_module("agentstack_mail.app")
+    build_mcp_server = _require_attr(app, "build_mcp_server")
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "live-tools-list.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    expected = {
+        tool["name"]: {
+            "inputSchema": tool["inputSchema"],
+            "outputSchema": tool["outputSchema"],
+            "_meta": tool["_meta"],
+        }
+        for tool in fixture["tools"]
+        if tool["name"] in COMPATIBILITY_TOOLS
+    }
+
+    async def inspect_server() -> dict[str, dict[str, Any]]:
+        tools = await build_mcp_server().get_tools()
+        return {
+            name: {
+                "inputSchema": dumped["inputSchema"],
+                "outputSchema": dumped["outputSchema"],
+                "_meta": dumped["_meta"],
+            }
+            for name, tool in tools.items()
+            if (
+                dumped := tool.to_mcp_tool().model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+            )
+        }
+
+    actual = asyncio.run(inspect_server())
+
+    assert actual == expected
+
+
+def test_published_tool_descriptions_do_not_reference_suppressed_resources() -> None:
+    app = _require_module("agentstack_mail.app")
+    build_mcp_server = _require_attr(app, "build_mcp_server")
+
+    async def descriptions() -> list[str]:
+        tools = await build_mcp_server().get_tools()
+        assert {
+            "register_agent",
+            "macro_start_session",
+            "list_contacts",
+            "whois",
+            "send_message",
+        } <= set(tools)
+        return [tool.description or "" for tool in tools.values()]
+
+    assert all("resource://agents" not in text for text in asyncio.run(descriptions()))
+
+
+def test_boundary_checks_the_actual_registry_after_mutation() -> None:
+    app = _require_module("agentstack_mail.app")
+    build_mcp_server = _require_attr(app, "build_mcp_server")
+    mcp = build_mcp_server()
+
+    mcp.remove_tool("whois")
+
+    assert mcp.published_tool_names == COMPATIBILITY_TOOLS
+    with pytest.raises(RuntimeError, match=r"missing=\['whois'\]"):
+        mcp.assert_contract_boundary()
+
+
+def test_boundary_rejects_a_tool_added_through_the_fastmcp_base_class() -> None:
+    from fastmcp import FastMCP
+
+    app = _require_module("agentstack_mail.app")
+    build_mcp_server = _require_attr(app, "build_mcp_server")
+    mcp = build_mcp_server()
+
+    def rogue() -> None:
+        return None
+
+    FastMCP.tool(mcp, rogue, name="rogue")
+
+    with pytest.raises(RuntimeError, match=r"extra=\['rogue'\]"):
+        mcp.assert_contract_boundary()
+
+
+def test_subset_tool_filter_fails_server_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSTACK_MAIL_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.setenv("AGENTSTACK_MAIL_TOOLS_FILTER_ENABLED", "true")
+    monkeypatch.setenv("AGENTSTACK_MAIL_TOOLS_FILTER_PROFILE", "minimal")
+    config = _require_module("agentstack_mail.config")
+    clear_settings_cache = _require_attr(config, "clear_settings_cache")
+    app = _require_module("agentstack_mail.app")
+    build_mcp_server = _require_attr(app, "build_mcp_server")
+    clear_settings_cache()
+
+    try:
+        with pytest.raises(RuntimeError, match="tool boundary mismatch"):
+            build_mcp_server()
+    finally:
+        clear_settings_cache()
 
 
 def test_signals_are_per_message_debounced_by_message_id_and_fully_cleared(
