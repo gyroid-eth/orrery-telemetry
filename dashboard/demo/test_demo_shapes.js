@@ -48,6 +48,21 @@ const REAL_SINCE_KEYS = [
   'kind', 'thread_id',
 ];
 const REAL_SINCE_TOP_KEYS = ['ok', 'now', 'since', 'messages'];
+const REAL_SPAWN_NAMES_KEYS = [
+  'names', 'adjectives', 'naming', 'dirs', 'models', 'default_model',
+  'providers',
+];
+const REAL_SPAWN_NAME_KEYS = ['name', 'portrait', 'status'];
+const REAL_SPAWN_PROVIDER_KEYS = [
+  'id', 'label', 'program', 'models', 'default_model', 'efforts',
+];
+const REAL_SPAWN_CODEX_PROVIDER_KEYS = REAL_SPAWN_PROVIDER_KEYS.concat([
+  'effort_default',
+]);
+const REAL_SUGGEST_NAME_KEYS = ['name'];
+const REAL_SPAWN_DIR_KEYS = ['path', 'dirs', 'truncated'];
+const REAL_SPAWN_DIR_ROW_KEYS = ['name', 'path'];
+const REAL_NAME_STATUS_KEYS = ['name', 'status'];
 
 let failures = 0;
 function check(name, fn) {
@@ -206,6 +221,53 @@ check('[' + STORY_ID + '] an agent that finishes stops running but stays on scre
   if (after.state !== 'finished') throw new Error('state is ' + after.state);
 });
 
+check('[' + STORY_ID + '] every human-blocked window lasts 15s and covers its beat', () => {
+  const beats = DEMO.beats();
+  DEMO.cast().forEach((agent) => {
+    (agent.states || []).forEach((window) => {
+      if (!Array.isArray(window) || window.length !== 3)
+        throw new Error(agent.name + ' has a malformed states window');
+      const [from, to, state] = window;
+      if (!['ask', 'question'].includes(state))
+        throw new Error(agent.name + ' has unsupported state ' + state);
+      if (to - from < 15)
+        throw new Error(`${agent.name} ${state} lasts only ${to - from}s`);
+      const selector = `.bay[data-name="${agent.name}"]`;
+      const beat = beats.find((beat) =>
+        beat.at >= from && beat.at < to && beat.look === selector);
+      if (!beat)
+        throw new Error(`${agent.name} ${state} has no matching beat in its window`);
+      if (!beat.net || !beat.net.en || !beat.net.ja)
+        throw new Error(`${agent.name} ${state} has no Network narration`);
+      if (!beat.net.en.includes(agent.name) || !beat.net.ja.includes(agent.name))
+        throw new Error(`${agent.name} ${state} Network narration omits its name`);
+    });
+  });
+});
+
+check('[' + STORY_ID + '] ask and question both surface while their agents are running', () => {
+  const seen = new Set();
+  for (let t = 0; t < DEMO.loop(); t += 1) {
+    atSecond(t, () => {
+      const agents = new Map(P.agents().agents.map((row) => [row.name, row]));
+      P.graph().nodes.forEach((node) => {
+        if (node.act_state !== 'ask' && node.act_state !== 'question') return;
+        const agent = agents.get(node.name);
+        if (!node.running || !agent || !agent.running) {
+          throw new Error(`t=${t} ${node.name} is ${node.act_state} but not running`);
+        }
+        if (agent.act_state !== node.act_state) {
+          throw new Error(`t=${t} ${node.name} disagrees across payloads`);
+        }
+        seen.add(node.act_state);
+      });
+    });
+  }
+  ['ask', 'question'].forEach((state) => {
+    if (!seen.has(state)) throw new Error('loop never emits ' + state);
+  });
+});
+
 check('[' + STORY_ID + '] messages-since never returns the future, and honours the cursor', () => {
   atSecond(120, () => {
     const all = P.messagesSince(0).messages;
@@ -303,6 +365,57 @@ check('[' + STORY_ID + '] deliverables match the server’s shape and the badge 
     if (d.items.length !== n.deliv)
       throw new Error(`${n.name}: badge says ${n.deliv}, list has ` +
         d.items.length);
+  });
+});
+
+check('[' + STORY_ID + '] launch picker endpoints match server.py response shapes', () => {
+  const catalog = P.spawnNames();
+  sameKeys(catalog, REAL_SPAWN_NAMES_KEYS, 'spawn-names payload');
+  if (!catalog.names.length || !catalog.adjectives.length || !catalog.dirs.length)
+    throw new Error('launch picker is empty');
+  catalog.names.forEach((row) =>
+    sameKeys(row, REAL_SPAWN_NAME_KEYS, 'spawn scientist'));
+  catalog.providers.forEach((provider) => {
+    const keys = provider.id === 'codex'
+      ? REAL_SPAWN_CODEX_PROVIDER_KEYS : REAL_SPAWN_PROVIDER_KEYS;
+    sameKeys(provider, keys, 'spawn provider ' + provider.id);
+  });
+
+  const scientist = catalog.names[0].name;
+  const suggested = P.suggestName(
+    new URLSearchParams('scientist=' + encodeURIComponent(scientist)));
+  sameKeys(suggested, REAL_SUGGEST_NAME_KEYS, 'suggest-name payload');
+  if (!suggested.name.endsWith('-' + scientist))
+    throw new Error('suggested name lost the selected scientist');
+
+  const root = P.spawnDirectories(new URLSearchParams());
+  sameKeys(root, REAL_SPAWN_DIR_KEYS, 'fs/dirs payload');
+  if (!root.path || !root.dirs.length) throw new Error('directory picker is empty');
+  root.dirs.forEach((row) =>
+    sameKeys(row, REAL_SPAWN_DIR_ROW_KEYS, 'directory suggestion'));
+  const nested = P.spawnDirectories(new URLSearchParams(
+    'path=' + encodeURIComponent(root.dirs[0].path)));
+  sameKeys(nested, REAL_SPAWN_DIR_KEYS, 'fs/dirs ?path= payload');
+  if (!nested.dirs.length) throw new Error('?path= has no child directories');
+
+  const status = P.nameStatus(new URLSearchParams(
+    'name=' + encodeURIComponent(suggested.name)));
+  sameKeys(status, REAL_NAME_STATUS_KEYS, 'name-status payload');
+  if (status.status !== 'available')
+    throw new Error('suggested name is ' + status.status);
+});
+
+check('[' + STORY_ID + '] every launch scientist has a bundled portrait', () => {
+  const portraitDir = path.join(__dirname, '..', 'portraits_64');
+  const fixture = fs.readFileSync(path.join(__dirname, 'demo_api.js'), 'utf8');
+  const bundled = new Set([...fixture.matchAll(
+    /name: .([A-Z][a-z]+)([A-Z][A-Za-z]+)./g)].map((match) => match[2]));
+  P.spawnNames().names.forEach((row) => {
+    if (!row.portrait) throw new Error(row.name + ' says it has no portrait');
+    if (!fs.existsSync(path.join(portraitDir, row.name + '.png')))
+      throw new Error(row.name + ' is missing from portraits_64');
+    if (!bundled.has(row.name))
+      throw new Error(row.name + ' would be omitted from the static bundle');
   });
 });
 
@@ -479,8 +592,16 @@ check('[' + STORY_ID + '] the narration points at agents that exist', () => {
       throw new Error('beat at ' + b.at + ' falls outside the loop');
     prev = b.at;
     const m = /\.bay\[data-name="([^"]+)"\]/.exec(b.look || '');
-    if (m && !cast.has(m[1]))
-      throw new Error('rings an agent that is not in the cast: ' + m[1]);
+    if (m) {
+      if (!cast.has(m[1]))
+        throw new Error('rings an agent that is not in the cast: ' + m[1]);
+      if (!b.en.includes(m[1]) || !b.ja.includes(m[1]))
+        throw new Error('beat at ' + b.at + ' does not name ' + m[1] +
+          ' in both languages');
+      if (b.net && (!b.net.en.includes(m[1]) || !b.net.ja.includes(m[1])))
+        throw new Error('Network beat at ' + b.at + ' does not name ' + m[1] +
+          ' in both languages');
+    }
   });
 });
 

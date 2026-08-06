@@ -41,9 +41,17 @@
     }) ? 'ja' : 'en';
   })();
 
+  var CORE_JA = {
+    'demo mode — launch stopped here; no agent was started':
+      'デモです。起動はここで停止し、エージェントは開始されていません',
+  };
+
   function setLang(l) { LANG = l === 'ja' ? 'ja' : 'en'; return LANG; }
   function lang() { return LANG; }
-  function tx(s) { return LANG === 'ja' && JA[s] ? JA[s] : s; }
+  function tx(s) {
+    if (LANG !== 'ja') return s;
+    return (JA && JA[s]) || CORE_JA[s] || s;
+  }
 
   /* ── the cast ────────────────────────────────────────────────────────
      `born` is when the agent first appears, `dies` when it stops running
@@ -61,10 +69,12 @@
     { name: 'IvoryNoether', parent: 'AmberKepler', role: 'tests', emoji: '🧪',
       model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
       program: 'codex', born: 40, dies: 182, ctx0: 9, ctxRate: 0.2,
+      states: [[124, 144, 'ask']],
       task: 'Cover the mapping with tests before anything is moved' },
     { name: 'RustPasteur', parent: 'AmberKepler', role: 'docs', emoji: '📄',
       model: 'Sonnet 5', model_raw: 'claude-sonnet-5', provider: 'anthropic',
       program: 'claude-code', born: 95, dies: null, ctx0: 7, ctxRate: 0.09,
+      states: [[140, 168, 'question']],
       task: 'Write the upgrade note the way an operator would read it' },
     { name: 'MossSomerville', role: 'orchestrator', emoji: '🎯', group: 'demo',
       model: 'Opus 5', model_raw: 'claude-opus-5', provider: 'anthropic',
@@ -218,7 +228,7 @@
         'schema-compat が落ち、再現もするので、こちら側のゲートは閉じたままにします。\n' +
         '\n' +
         'そちらの対応は不要です。順序としてこれで正しい。対応表がテストで固まったら教えてください、再実行します。' },
-    { at: 146, from: 'IvoryNoether', to: 'AmberKepler',
+    { at: 160, from: 'IvoryNoether', to: 'AmberKepler',
       subject: 'RE: tests are green, including the two-writer case',
       importance: 'high',
       body:
@@ -291,52 +301,85 @@
      so a second story narrates itself. */
   var BEATS_MIGRATION = [
     { at: 0, look: '.gauge.run',
-      en: 'Two orchestrators, nothing delegated yet. Every number on this ' +
-          'strip is read from the machines, not reported by the agents.',
-      ja: '親エージェントが2体、まだ何も委任していません。上の数字はエージェントの' +
-          '自己申告ではなく、実機から読んだ値です。' },
+      en: 'AmberKepler and MossSomerville are orchestrating, with nothing ' +
+          'delegated yet. Every number here comes from the machines.',
+      ja: 'AmberKepler と MossSomerville が親として動き、まだ委任はありません。' +
+          'ここにある数字はすべて実機から読んだ値です。' },
     { at: 14, look: '.bay[data-name="SlateHooke"]',
-      en: 'The first orchestrator starts a child. A card appears the moment ' +
-          'the process does — nothing had to announce itself.',
-      ja: '1体目の親が子を起動しました。プロセスが立った瞬間にカードが現れます。' +
-          '何かが名乗り出る必要はありません。' },
+      en: 'AmberKepler starts SlateHooke to map the schema. SlateHooke’s ' +
+          'card appears the moment its process starts.',
+      ja: 'AmberKepler がスキーマ対応表のため SlateHooke を起動します。SlateHooke の' +
+          'プロセスが立った瞬間にカードが現れます。' },
     { at: 33, look: '#v-net', view: 'net',
-      en: 'The child answers its parent. In Network view that reply is a ' +
-          'line between them.',
-      ja: '子が親に返信しました。Network 表示では、その返信が2体を結ぶ線になります。' },
+      en: 'SlateHooke answers AmberKepler. In Network view, that reply is ' +
+          'the line connecting their two names.',
+      ja: 'SlateHooke が AmberKepler に返信します。Network 表示では、その返信が' +
+          '2つの名前を結ぶ線になります。' },
     { at: 40, look: '.bay[data-name="IvoryNoether"]',
-      en: 'A second child, for tests. The ring on each card is its context ' +
-          'window filling up.',
-      ja: '2体目の子はテスト担当です。カードのリングは、その子のコンテキスト窓が' +
-          '埋まっていく様子を示します。' },
+      en: 'IvoryNoether starts the tests. The ring on IvoryNoether’s card ' +
+          'shows its context window filling up.',
+      ja: 'IvoryNoether がテストを始めます。IvoryNoether のカードのリングは、' +
+          'コンテキスト窓が埋まっていく様子です。' },
     { at: 60, look: '.bay[data-name="FlintGauss"]',
-      en: 'A third child on the other rail. Running versus standby is the ' +
-          'one number worth watching on a busy day.',
-      ja: 'もう一方の系統で3体目が動き出しました。忙しい日に見るべき数字は、' +
-          '稼働中と待機中の比です。' },
+      en: 'FlintGauss joins MossSomerville’s release rail. Its card makes ' +
+          'clear whether the release check is running or waiting.',
+      ja: 'FlintGauss が MossSomerville のリリース系統に加わります。FlintGauss の' +
+          'カードで、検査が稼働中か待機中か分かります。' },
     { at: 95, look: '.bay[data-name="RustPasteur"]',
-      en: 'Four children now. Click any card to read what that agent is ' +
-          'actually doing, line by line.',
-      ja: '子が4体になりました。カードを押すと、そのエージェントが実際に何をしているかを' +
-          '1行ずつ読めます。' },
+      en: 'RustPasteur starts the operator note. Open RustPasteur’s card to ' +
+          'read what it is doing, line by line.',
+      ja: 'RustPasteur が運用者向け手順を始めます。RustPasteur のカードを開くと、' +
+          '実際の作業を1行ずつ読めます。' },
     { at: 118, look: '#v-net', view: 'net',
-      en: 'A release check fails and the second orchestrator holds the gate. ' +
-          'The traffic that decided it is on the graph.',
-      ja: 'リリース検査が1件落ち、2体目の親がゲートを閉じました。その判断に至った' +
-          'やり取りはグラフ上に残っています。' },
-    { at: 146, look: '.bay[data-name="IvoryNoether"]',
-      en: 'Tests come back green. The context rings show which agents have ' +
-          'room left and which are nearly full.',
-      ja: 'テストが緑で返ってきました。リングを見れば、どの子にまだ余裕があり、' +
-          'どの子がもう一杯かが分かります。' },
+      en: 'FlintGauss reports a failed release check, so MossSomerville keeps ' +
+          'the gate closed. Their exchange remains on the graph.',
+      ja: 'FlintGauss がリリース検査の失敗を報告し、MossSomerville がゲートを' +
+          '閉じたままにします。そのやり取りはグラフに残ります。' },
+    { at: 124, look: '.bay[data-name="IvoryNoether"]',
+      en: 'IvoryNoether has stopped before editing store/migrate.py and is ' +
+          'asking a human for permission. The red APPROVAL LED is not a crash.',
+      ja: 'IvoryNoether は store/migrate.py の編集前で止まり、人間に許可を求めています。' +
+          '赤い APPROVAL LED はクラッシュではありません。',
+      net: {
+        en: 'IvoryNoether has stopped before editing store/migrate.py and is ' +
+            'asking a human for permission. A ! sits over its portrait until a person answers.',
+        ja: 'IvoryNoether は store/migrate.py の編集前で止まり、人間に許可を求めています。' +
+            '人が答えるまで、肖像の上に ! が出ます。' } },
+    { at: 144, look: '.bay[data-name="IvoryNoether"]',
+      en: 'IvoryNoether receives permission and resumes the edit. Its blocked ' +
+          'state was visible without looking like a failure.',
+      ja: 'IvoryNoether が許可を受け取り、編集を再開します。ブロック中も、故障に見せず' +
+          '状態を表示できました。' },
+    { at: 151, look: '.bay[data-name="RustPasteur"]',
+      en: 'RustPasteur is asking a human whether historical defaults should ' +
+          'stay in the upgrade note. The cyan ? marks that unanswered choice.',
+      ja: 'RustPasteur は、過去の既定値を移行手順に残すかどうか人間に尋ねています。' +
+          'シアンの ? は、その選択が未回答である印です。',
+      net: {
+        en: 'RustPasteur is asking whether historical defaults should stay in ' +
+            'the upgrade note. A ? sits over its portrait until a person chooses.',
+        ja: 'RustPasteur は、過去の既定値を移行手順に残すかどうか尋ねています。' +
+            '人が選ぶまで、肖像の上に ? が出ます。' } },
+    { at: 160, look: '.bay[data-name="IvoryNoether"]',
+      en: 'IvoryNoether’s tests are green. Its context ring shows how much ' +
+          'room remains after finding and fixing the two-writer bug.',
+      ja: 'IvoryNoether のテストが緑になりました。コンテキストのリングは、書き手が' +
+          '2つあるバグを直したあとに残る余裕を示します。' },
+    { at: 168, look: '#v-net', view: 'net',
+      en: 'RustPasteur sends both choices to AmberKepler’s inbox. The graph ' +
+          'preserves who asked whom while the answer is still needed.',
+      ja: 'RustPasteur が両方の選択肢を AmberKepler の inbox に送ります。答えが必要な間、' +
+          '誰が誰に尋ねたかをグラフが残します。' },
     { at: 182, look: '.bay[data-name="IvoryNoether"]',
-      en: 'A child finishes. It stops running but stays on screen — what it ' +
-          'did is still there to read.',
-      ja: '子が1体終わりました。稼働は止まりますが画面には残り、何をしたかは' +
+      en: 'IvoryNoether finishes and stops running, but its card remains so ' +
+          'the tests and the fix are still available to read.',
+      ja: 'IvoryNoether は終了して稼働を止めますが、カードは残り、テストと修正を' +
           'あとから読めます。' },
     { at: 203, look: '.gauge.tot',
-      en: 'The gate opens and the work lands. In a moment this starts over.',
-      ja: 'ゲートが開き、作業が入りました。まもなく最初から繰り返します。' },
+      en: 'AmberKepler tells MossSomerville the mapping is covered, so the ' +
+          'release gate opens. In a moment the story starts over.',
+      ja: 'AmberKepler が対応表のテスト完了を MossSomerville に伝え、リリースゲートが' +
+          '開きます。まもなく物語は最初から繰り返します。' },
   ];
 
   /* ── stories ─────────────────────────────────────────────────────────
@@ -361,9 +404,18 @@
     return Math.min(96, Math.round(a.ctx0 + (end - a.born) * a.ctxRate));
   }
 
-  /* Working vs waiting, so the arcs are not all doing the same thing. */
+  /* A story may pin the human-blocked states to explicit windows. Outside
+     them, keep the synthetic work/wait rhythm so every card still moves. */
   function actState(a, t) {
     if (!alive(a, t)) return '';
+    var states = Array.isArray(a.states) ? a.states : [];
+    for (var i = 0; i < states.length; i++) {
+      var window = states[i];
+      if (Array.isArray(window) && t >= window[0] && t < window[1] &&
+          (window[2] === 'ask' || window[2] === 'question')) {
+        return window[2];
+      }
+    }
     var swing = Math.sin((t + a.name.length * 7) / 11);
     return swing > 0.2 ? 'work' : 'wait';
   }
@@ -397,13 +449,14 @@
     var live = alive(a, t);
     var spoke = lastSpokeAt(a.name, t);
     var since = spoke === null ? t - a.born : t - spoke;
+    var state = actState(a, t);
     return {
       name: a.name, category: 'agent', running: live, attached: live,
       cmd: live ? (a.program === 'codex' ? 'codex' : 'claude') : 'zsh',
       live: live ? 'agentstack-demo' : '', model: a.model,
       model_raw: a.model_raw, provider: a.provider, ctx_window: '',
-      ctx_used: ctxOf(a, t), act_state: actState(a, t),
-      work_disp: actState(a, t) === 'work' ? Math.round(since) + 's' : null,
+      ctx_used: ctxOf(a, t), act_state: state,
+      work_disp: state === 'work' ? Math.round(since) + 's' : null,
       last_disp: Math.round(since) + 's',
       last_active: epoch() - Math.round(since),
       last_active_rel: relOf(since),
@@ -441,13 +494,14 @@
     var live = alive(a, t);
     var spoke = lastSpokeAt(a.name, t);
     var since = spoke === null ? t - a.born : t - spoke;
+    var state = actState(a, t);
     return {
       name: a.name, model: a.model, program: a.program, provider: a.provider,
       task: tx(a.task), retired: false, last_active: epoch() - Math.round(since),
-      act: actState(a, t) === 'work' ? 1 : 0, rel: relOf(since),
+      act: state === 'work' ? 1 : 0, rel: relOf(since),
       deliv: delivCount(a.name),
       annot: annotOf(a), present: live, running: live,
-      state: live ? 'run' : 'finished', act_state: actState(a, t),
+      state: live ? 'run' : 'finished', act_state: state,
       ctx_used: ctxOf(a, t), ctx_window: '', attached: live,
       work_disp: null, work_secs: 0, last_disp: Math.round(since) + 's',
       live: live ? 'agentstack-demo' : '', pane_model: a.model, sig: '',
@@ -743,7 +797,7 @@
       [131, 'assistant', 'text',
        'Release is held on the other rail until the mapping lands. That is ' +
        'the right order — nothing to unwind here.'],
-      [147, 'assistant', 'text',
+      [161, 'assistant', 'text',
        'Tests green, including the field with two writers. That was the one ' +
        'I was worried about.'],
       [205, 'assistant', 'text',
@@ -789,11 +843,14 @@
       [116, 'assistant', 'thinking',
        'The failure is the second writer overwriting a value the first one ' +
        'set. That is the bug the mapping was hiding, not a bad test.'],
-      [128, 'assistant', 'tool_use', 'Edit  store/migrate.py'],
-      [129, 'assistant', 'tool_result', 'applied'],
-      [143, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
-      [144, 'assistant', 'tool_result', '24 passed'],
-      [146, 'assistant', 'text',
+      [124, 'assistant', 'text',
+       'The fix is clear, but editing store/migrate.py requires approval. ' +
+       'Waiting at the permission boundary.'],
+      [144, 'assistant', 'tool_use', 'Edit  store/migrate.py'],
+      [145, 'assistant', 'tool_result', 'applied'],
+      [157, 'assistant', 'tool_use', 'Bash  python -m pytest tests/mapping'],
+      [158, 'assistant', 'tool_result', '24 passed'],
+      [160, 'assistant', 'text',
        'Green, including the two-writer case. Reporting back.'],
       [181, 'assistant', 'text', 'Done. Handing back.'],
     ],
@@ -1027,6 +1084,9 @@
       ['The failure is the second writer overwriting a value the first one' +
          ' set. That is the bug the mapping was hiding, not a bad test.',
        '落ちたのは、2つ目の書き手が1つ目の値を上書きしているから。テストが悪いのではなく、対応表が隠していたバグ。'],
+      ['The fix is clear, but editing store/migrate.py requires approval. ' +
+         'Waiting at the permission boundary.',
+       '修正方針は明確だが、store/migrate.py の編集には承認が必要。権限境界で待機する。'],
       ['Green, including the two-writer case. Reporting back.',
        '書き手が2つあるケースも含めて全緑。報告する。'],
       ['Write the upgrade note the way an operator reads it.',
@@ -1109,6 +1169,7 @@
     });
     out.push('no transcript on disk for this agent');
     out.push('demo mode — nothing was started, stopped or changed');
+    out.push('demo mode — launch stopped here; no agent was started');
     return out;
   }
 
@@ -1153,6 +1214,102 @@
 
   useStory(params.get('story') || 'migration');
 
+  /* ── launch modal fixtures ───────────────────────────────────────────
+     These mirror server.py's successful response shapes. Every scientist
+     has a bundled portrait, and the directory tree is deliberately invented:
+     it looks like a workstation without disclosing or probing this one. */
+  var DEMO_SPAWN_ADJECTIVES = [
+    'Loyal', 'Vivid', 'Copper', 'Swift', 'Quiet', 'Mossy', 'Bright', 'Nimble',
+  ];
+  var DEMO_SPAWN_SCIENTISTS = [
+    'Bohr', 'Curie', 'Gauss', 'Hooke', 'Kepler', 'Lovelace', 'Noether',
+    'Pasteur', 'Somerville',
+  ];
+  var DEMO_SPAWN_ROOT = '/workspaces';
+  var DEMO_SPAWN_PROJECTS = [
+    'meridian-console', 'orbit-ledger', 'signal-garden',
+  ];
+
+  function demoSpawnNameStatusValue(name) {
+    var value = String(name || '').trim();
+    var match = /^([A-Z][A-Za-z]*)-([A-Z][A-Za-z]*)$/.exec(value);
+    if (!match || DEMO_SPAWN_ADJECTIVES.indexOf(match[1]) === -1 ||
+        DEMO_SPAWN_SCIENTISTS.indexOf(match[2]) === -1) return 'unknown';
+    var key = value.replace(/-/g, '').toLowerCase();
+    var occupied = CAST.concat(PAST).some(function (a) {
+      return a.name.replace(/-/g, '').toLowerCase() === key;
+    });
+    return occupied ? 'occupied' : 'available';
+  }
+
+  function spawnNamesPayload() {
+    var claudeModels = [
+      'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001',
+    ];
+    var codexModels = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'];
+    return {
+      names: DEMO_SPAWN_SCIENTISTS.map(function (name) {
+        return { name: name, portrait: true, status: 'available' };
+      }),
+      adjectives: DEMO_SPAWN_ADJECTIVES.slice(),
+      naming: 'adjective-scientist',
+      dirs: DEMO_SPAWN_PROJECTS.map(function (name) {
+        return DEMO_SPAWN_ROOT + '/' + name;
+      }),
+      models: claudeModels.slice(),
+      default_model: 'claude-sonnet-5',
+      providers: [
+        { id: 'claude', label: 'Claude', program: 'claude-code',
+          models: claudeModels.slice(), default_model: 'claude-sonnet-5',
+          efforts: null },
+        { id: 'codex', label: 'Codex', program: 'codex-cli',
+          models: codexModels, default_model: 'gpt-5.6-sol',
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          effort_default: 'xhigh' },
+      ],
+    };
+  }
+
+  function suggestSpawnName(query) {
+    var scientist = query.get('scientist') || '';
+    var scientistIndex = DEMO_SPAWN_SCIENTISTS.indexOf(scientist);
+    if (scientistIndex === -1) return { error: 'no available name found' };
+    for (var i = 0; i < DEMO_SPAWN_ADJECTIVES.length; i++) {
+      var adjective = DEMO_SPAWN_ADJECTIVES[
+        (scientistIndex + i) % DEMO_SPAWN_ADJECTIVES.length];
+      var candidate = adjective + '-' + scientist;
+      if (demoSpawnNameStatusValue(candidate) === 'available') {
+        return { name: candidate };
+      }
+    }
+    return { error: 'no available name found' };
+  }
+
+  function spawnDirectorySuggestions(query) {
+    var requested = String(query.get('path') || '').trim();
+    var target = requested || DEMO_SPAWN_ROOT;
+    var dirs = [];
+    if (target === DEMO_SPAWN_ROOT) {
+      dirs = DEMO_SPAWN_PROJECTS.map(function (name) {
+        return { name: name, path: DEMO_SPAWN_ROOT + '/' + name };
+      });
+    } else if (DEMO_SPAWN_PROJECTS.some(function (name) {
+      return target === DEMO_SPAWN_ROOT + '/' + name;
+    })) {
+      dirs = ['docs', 'src', 'tests'].map(function (name) {
+        return { name: name, path: target + '/' + name };
+      });
+    } else if (target.indexOf(DEMO_SPAWN_ROOT + '/') !== 0) {
+      return { path: null, dirs: [] };
+    }
+    return { path: target, dirs: dirs, truncated: false };
+  }
+
+  function spawnNameStatus(query) {
+    var name = query.get('name') || '';
+    return { name: name, status: demoSpawnNameStatusValue(name) };
+  }
+
   var ROUTES = {
     '/api/agents': agentsPayload,
     '/api/graph': graphPayload,
@@ -1165,19 +1322,20 @@
     },
     '/api/agent-history': agentHistory,
     '/api/edge-messages': edgeMessages,
-    '/api/spawn-names': function () { return { ok: true, names: [] }; },
-    '/api/fs/dirs': function () { return { ok: true, dirs: [] }; },
+    '/api/spawn-names': spawnNamesPayload,
+    '/api/fs/dirs': spawnDirectorySuggestions,
+    '/api/name-status': spawnNameStatus,
   };
 
   /* Anything that would change the machine answers politely and does
      nothing. The buttons stay live on purpose — the page is here to show
      how it is used, and a control you cannot press teaches nothing. */
   var WRITES = ['/api/spawn', '/api/exit', '/api/kill', '/api/jump',
-                '/api/annotate', '/api/jserr', '/api/suggest-name'];
+                '/api/annotate', '/api/jserr'];
 
-  function json(body) {
+  function json(body, status) {
     return new Response(JSON.stringify(body), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
+      status: status || 200, headers: { 'Content-Type': 'application/json' },
     });
   }
 
@@ -1188,8 +1346,19 @@
 
     if (WRITES.indexOf(path) !== -1) {
       window.dispatchEvent(new CustomEvent('demo:blocked', { detail: path }));
+      if (path === '/api/spawn') {
+        return Promise.resolve(json({ ok: false, demo: true,
+          error: tx('demo mode — launch stopped here; no agent was started') },
+        400));
+      }
       return Promise.resolve(json({ ok: false, demo: true,
-        error: tx('demo mode — nothing was started, stopped or changed') }));
+        error: tx('demo mode — nothing was started, stopped or changed') },
+      400));
+    }
+    if (path === '/api/suggest-name') {
+      var sq = new URLSearchParams(url.split('?')[1] || '');
+      var suggestion = suggestSpawnName(sq);
+      return Promise.resolve(json(suggestion, suggestion.name ? 200 : 409));
     }
     if (path === '/api/messages-since') {
       var m = /[?&]since=(\d+)/.exec(url);
@@ -1233,5 +1402,9 @@
                                          deliverables: deliverables,
                                          edgeMessages: edgeMessages,
                                          agentHistory: agentHistory,
-                                         messagesSince: messagesSince } };
+                                         messagesSince: messagesSince,
+                                         spawnNames: spawnNamesPayload,
+                                         suggestName: suggestSpawnName,
+                                         spawnDirectories: spawnDirectorySuggestions,
+                                         nameStatus: spawnNameStatus } };
 })();

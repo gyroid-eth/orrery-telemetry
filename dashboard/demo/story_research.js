@@ -1,5 +1,5 @@
-/* Decision: follow one claim from literature through a meeting, raw-data QC,
- * manuscript revision, and collaborator handoff so the four-minute loop stays legible. */
+/* Decision: keep one four-minute story so five parallel literature pipelines feed
+ * the same meeting, analysis, manuscript revision, and collaborator handoff. */
 (function () {
   'use strict';
 
@@ -17,7 +17,23 @@
     { name: 'SlateHooke', parent: 'AmberKepler', role: 'literature', emoji: '📚',
       model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
       program: 'codex', born: 15, dies: null, ctx0: 10, ctxRate: 0.13,
-      task: 'Find the closest primary evidence and record where it stops' },
+      task: 'Survey recovery mechanisms and mark the boundary of each claim' },
+    { name: 'TealLamarr', parent: 'AmberKepler', role: 'forcing literature', emoji: '🌊',
+      model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
+      program: 'codex', born: 15, dies: 50, ctx0: 9, ctxRate: 0.16,
+      task: 'Compare steady and pulsed forcing across primary studies' },
+    { name: 'VioletDarwin', parent: 'AmberKepler', role: 'artifact literature', emoji: '🔎',
+      model: 'Sonnet 5', model_raw: 'claude-sonnet-5', provider: 'anthropic',
+      program: 'claude-code', born: 15, dies: 54, ctx0: 8, ctxRate: 0.15,
+      task: 'Audit acquisition artifacts and normalization methods in the literature' },
+    { name: 'CopperBose', parent: 'AmberKepler', role: 'methods literature', emoji: '🧪',
+      model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
+      program: 'codex', born: 15, dies: 58, ctx0: 11, ctxRate: 0.14,
+      task: 'Trace measurement techniques and their documented failure modes' },
+    { name: 'SaffronPlanck', parent: 'AmberKepler', role: 'kinetics literature', emoji: '⏱️',
+      model: 'Sonnet 5', model_raw: 'claude-sonnet-5', provider: 'anthropic',
+      program: 'claude-code', born: 15, dies: 62, ctx0: 9, ctxRate: 0.14,
+      task: 'Map recovery timescales without importing unsupported causality' },
     { name: 'IvoryNoether', parent: 'AmberKepler', role: 'analysis', emoji: '📈',
       model: 'GPT 5.6', model_raw: 'gpt-5.6', provider: 'openai',
       program: 'codex', born: 44, dies: 182, ctx0: 8, ctxRate: 0.24,
@@ -48,25 +64,146 @@
 
   var SCRIPT = [
     { at: 16, from: 'AmberKepler', to: 'SlateHooke',
-      subject: 'Task: build an evidence map for the recovery claim',
+      subject: 'Task: survey recovery mechanisms',
       importance: 'high', ack: true,
       body:
-        'Find primary studies that bear on recovery after flow is pulsed, then write notes/evidence-map.md.\n' +
+        'Own the mechanism track. Search primary studies on recovery after forcing stops, then download the strongest papers, convert them to Markdown, extract figures, and write lit/mechanism-recovery.md.\n' +
         '\n' +
-        'For each study, separate what was measured from what the authors inferred. I need the nearest evidence and the boundary beyond which it stops supporting us. Do not turn a related mechanism into direct precedent.',
+        'Separate what was measured from what the authors inferred. Register the final note in the shared reference library, but coordinate the lease by mail instead of retrying against another child.',
       body_ja:
-        '流れをパルス状に与えた後の回復に関係する一次研究を探し、notes/evidence-map.md にまとめてください。\n' +
+        '機構のトラックを担当します。負荷停止後の回復に関する一次研究を探し、最も強い論文のダウンロード、Markdown 変換、図版抽出を行い、lit/mechanism-recovery.md を書いてください。\n' +
         '\n' +
-        '各研究について、測定されたことと著者の推論を分けます。欲しいのは最も近い根拠と、それ以上は支えられない境界です。関連する機構を直接の先行例にすり替えないこと。' },
-    { at: 35, from: 'SlateHooke', to: 'AmberKepler',
-      subject: 'RE: six studies mapped, one supports only the mechanism',
+        '測定されたことと著者の推論を分けます。最終ノートは共有文献ライブラリに登録しますが、他の子がリース中なら再試行せず、mail で調整してください。' },
+    { at: 17, from: 'AmberKepler', to: 'TealLamarr',
+      subject: 'Task: compare forcing regimes',
+      importance: 'high', ack: true,
+      body:
+        'Own the forcing-regime track. Find primary studies that distinguish steady, stopped, and pulsed forcing, then run the full PDF-to-Lit-note pipeline into lit/forcing-regimes.md.\n' +
+        '\n' +
+        'Report which comparisons are direct and which are analogies. If another child holds the shared reference library, negotiate priority by mail and wait for a handoff.',
+      body_ja:
+        '負荷条件のトラックを担当します。定常、停止、パルス状の負荷を区別する一次研究を探し、PDF から Lit ノートまでの全工程を実行して lit/forcing-regimes.md へまとめてください。\n' +
+        '\n' +
+        'どの比較が直接的で、どれが類推かを報告します。他の子が共有文献ライブラリを押さえている場合は、mail で順番を交渉し、引き継ぎを待ちます。' },
+    { at: 18, from: 'AmberKepler', to: 'VioletDarwin',
+      subject: 'Task: audit acquisition artifacts in prior work',
+      importance: 'high', ack: true,
+      body:
+        'Own the acquisition-artifact track. Search for exposure changes, detector correction, and normalization failures, then download, convert, extract figures, and write lit/acquisition-artifacts.md.\n' +
+        '\n' +
+        'Flag whether each paper detected the artifact from raw data or only after normalization. Keep local work moving while the shared reference library is leased elsewhere.',
+      body_ja:
+        '取得アーティファクトのトラックを担当します。露光変更、検出器補正、正規化の失敗を探し、ダウンロード、変換、図版抽出を行って lit/acquisition-artifacts.md を書いてください。\n' +
+        '\n' +
+        '各論文がアーティファクトを生データから検出したのか、正規化後に初めて検出したのかを明示します。共有文献ライブラリが別の子にリースされている間も、ローカル作業を進めます。' },
+    { at: 19, from: 'AmberKepler', to: 'CopperBose',
+      subject: 'Task: trace measurement failure modes',
+      importance: 'high', ack: true,
+      body:
+        'Own the measurement-methods track. Find primary methods papers on signal drift, missing frames, and calibration boundaries, then build lit/measurement-failures.md through the complete document pipeline.\n' +
+        '\n' +
+        'Extract the diagnostic figures, not just abstracts. Return checks that analysis can apply to raw measurements and use the negotiated library handoff.',
+      body_ja:
+        '測定手法のトラックを担当します。信号ドリフト、欠損フレーム、較正境界に関する一次の手法論文を探し、文書処理の全工程で lit/measurement-failures.md を作ってください。\n' +
+        '\n' +
+        '抄録だけでなく診断図も抽出します。解析が生の測定値に適用できる検査を返し、交渉済みのライブラリ引き継ぎを使います。' },
+    { at: 20, from: 'AmberKepler', to: 'SaffronPlanck',
+      subject: 'Task: map recovery timescales',
+      importance: 'high', ack: true,
+      body:
+        'Own the recovery-timescale track. Search primary kinetics studies, download the best matches, convert them to Markdown, extract figures, and write lit/recovery-timescales.md.\n' +
+        '\n' +
+        'Record the observation window and uncertainty for every timescale. Do not import a cause from a paper that only measured timing; wait for your turn at the shared reference library.',
+      body_ja:
+        '回復時間スケールのトラックを担当します。一次の動態研究を探し、最も近い論文をダウンロードし、Markdown 変換と図版抽出を行って lit/recovery-timescales.md を書いてください。\n' +
+        '\n' +
+        '各時間スケールの観察窓と不確かさを記録します。時間しか測定していない論文から原因を持ち込まず、共有文献ライブラリの順番を待ちます。' },
+    { at: 28, from: 'TealLamarr', to: 'SlateHooke',
+      subject: 'Could I register the comparison paper first?',
+      importance: 'high',
+      body:
+        'I can finish the forcing-regime track if I register one comparison paper now, but the shared reference library reports your active lease. I am waiting rather than retrying.\n' +
+        '\n' +
+        'Could you checkpoint and let this one metadata row go first? I will import it, release immediately, and hand the lease to the artifact track.',
+      body_ja:
+        '比較論文1本を今登録できれば負荷条件トラックを完了できますが、共有文献ライブラリはあなたがリース中と表示しています。再試行せず待っています。\n' +
+        '\n' +
+        '一度チェックポイントを作り、このメタデータ1行を先に入れさせてもらえますか。インポート後すぐ解放し、リースをアーティファクト担当へ渡します。' },
+    { at: 30, from: 'SlateHooke', to: 'TealLamarr',
+      subject: 'RE: yes — checkpointing for your priority row',
+      importance: 'high',
+      body:
+        'Yes. My local Lit note and extracted figures are complete, so I am checkpointing the mechanism batch without committing its library rows.\n' +
+        '\n' +
+        'I will release at second 32. Take the lease next, register your comparison row, then mail the handoff instead of leaving the others to poll.',
+      body_ja:
+        'はい。ローカルの Lit ノートと抽出図版は完了したので、機構バッチのライブラリ行をコミットせずにチェックポイント化します。\n' +
+        '\n' +
+        '32秒で解放します。次にリースを取得し、比較行を登録したら、他の担当をポーリングさせず mail で引き継いでください。' },
+    { at: 33, from: 'SlateHooke', to: 'TealLamarr',
+      subject: 'Handoff: the shared reference library is released',
+      importance: 'high',
+      body:
+        'The mechanism batch is checkpointed locally and the shared reference library lease is released. Your comparison row has priority now.\n' +
+        '\n' +
+        'Nothing was overwritten and no second writer was opened. Please pass the lease to VioletDarwin when your import is visible.',
+      body_ja:
+        '機構バッチはローカルにチェックポイント化し、共有文献ライブラリのリースを解放しました。現在はあなたの比較行が優先です。\n' +
+        '\n' +
+        '何も上書きされず、2人目の書き込み者も開いていません。インポートが見えたら、リースを VioletDarwin に渡してください。' },
+    { at: 35, from: 'TealLamarr', to: 'VioletDarwin',
+      subject: 'Handoff: artifact batch may use the shared library',
       importance: 'normal',
       body:
-        'Six primary studies mapped. Two report recovery under steady forcing; only one separates signal loss from redistribution.\n' +
+        'My priority row is registered and verified. I released the shared reference library after one import, exactly as negotiated.\n' +
+        '\n' +
+        'Your artifact batch is next. The forcing note remains local and no pending write is attached to the lease.',
+      body_ja:
+        '優先行の登録と確認が終わりました。交渉どおり1回のインポート後に共有文献ライブラリを解放しました。\n' +
+        '\n' +
+        '次はあなたのアーティファクトバッチです。負荷ノートはローカルに残り、リースに保留中の書き込みはありません。' },
+    { at: 37, from: 'VioletDarwin', to: 'CopperBose',
+      subject: 'Handoff: measurement batch is next',
+      importance: 'normal',
+      body:
+        'The artifact records are committed and the shared reference library is released cleanly. The extracted diagnostic figures remain in my Lit-note folder.\n' +
+        '\n' +
+        'Take the lease for the measurement batch, verify your rows, then hand it to SaffronPlanck for the final literature import.',
+      body_ja:
+        'アーティファクトのレコードをコミットし、共有文献ライブラリを正常に解放しました。抽出した診断図は私の Lit ノートフォルダに残っています。\n' +
+        '\n' +
+        '測定バッチのリースを取得して行を確認し、最後の文献インポート用に SaffronPlanck へ渡してください。' },
+    { at: 39, from: 'CopperBose', to: 'SaffronPlanck',
+      subject: 'Handoff: final literature import is ready',
+      importance: 'normal',
+      body:
+        'The measurement-method rows pass validation, so I released the shared reference library. No repair or conflict resolution was needed.\n' +
+        '\n' +
+        'You have the final lease for the recovery-timescale batch. Please release it after verification so SlateHooke can consolidate the evidence map later.',
+      body_ja:
+        '測定手法の行が検証を通過したので、共有文献ライブラリを解放しました。修復も衝突解決も必要ありませんでした。\n' +
+        '\n' +
+        '回復時間スケールバッチ用の最後のリースです。確認後に解放し、後で SlateHooke が根拠対応表を統合できるようにしてください。' },
+    { at: 40, from: 'SaffronPlanck', to: 'CopperBose',
+      subject: 'RE: received — one import, then release',
+      importance: 'normal',
+      body:
+        'Received. My PDF, Markdown, figures, and Lit note are already local, so the shared reference library is the only remaining step.\n' +
+        '\n' +
+        'I will import once, verify the recovery-window fields, release the lease, and report directly to the parent.',
+      body_ja:
+        '受け取りました。PDF、Markdown、図版、Lit ノートはすでにローカルにあり、残るのは共有文献ライブラリだけです。\n' +
+        '\n' +
+        '1回インポートし、回復窓のフィールドを確認してリースを解放し、親へ直接報告します。' },
+    { at: 42, from: 'SlateHooke', to: 'AmberKepler',
+      subject: 'RE: mechanism track mapped with a hard boundary',
+      importance: 'normal',
+      body:
+        'Three primary mechanism studies completed the full document pipeline. Two report recovery under steady forcing; only one separates signal loss from redistribution.\n' +
         '\n' +
         'None uses a pulsed exposure sequence like ours. The closest paper supports a possible mechanism, not our measured plateau. I marked that boundary in every row of the evidence map.',
       body_ja:
-        '一次研究6本を対応付けました。定常的な負荷の下で回復を報告するものが2本あり、信号低下と再分布を分けているのは1本だけです。\n' +
+        '一次の機構研究3本で文書処理の全工程を完了しました。定常的な負荷の下で回復を報告するものが2本あり、信号低下と再分布を分けているのは1本だけです。\n' +
         '\n' +
         'こちらのようなパルス露光系列を使った研究はありません。最も近い論文が支えるのは機構の可能性で、測定したプラトーそのものではありません。根拠の境界を対応表の各行に記しました。' },
     { at: 45, from: 'AmberKepler', to: 'IvoryNoether',
@@ -80,6 +217,50 @@
         'runs/pulse-set/*.csv と取得メタデータから Figure 3 を作り直してください。プロット済みの表ではなく、生値から始めます。\n' +
         '\n' +
         '欠損フレーム、露光変更、正規化の境界を監査してください。執筆担当がどの比較なら残せるか分かるよう、図の横に analysis/curve-audit.md を置きます。' },
+    { at: 46, from: 'TealLamarr', to: 'AmberKepler',
+      subject: 'RE: forcing track distinguishes direct tests from analogies',
+      importance: 'normal',
+      body:
+        'Four forcing studies completed the PDF, Markdown, figure, and Lit-note pipeline. Steady-stop experiments are informative analogies; none directly tests alternating pulses.\n' +
+        '\n' +
+        'The one priority library row is registered and the lease was handed onward. I marked every comparison as direct, partial, or contextual.',
+      body_ja:
+        '負荷条件の研究4本で、PDF、Markdown、図版、Lit ノートの工程を完了しました。定常負荷停止の実験は有用な類推ですが、交互パルスを直接試験したものはありません。\n' +
+        '\n' +
+        '優先したライブラリ行は登録済みで、リースも次へ引き継ぎました。各比較を直接、部分的、文脈的に分けています。' },
+    { at: 50, from: 'VioletDarwin', to: 'AmberKepler',
+      subject: 'RE: artifact track found the raw-versus-normalized warning',
+      importance: 'high',
+      body:
+        'Three acquisition studies completed the full pipeline. Two show that an exposure step can survive normalization and resemble a response change unless raw frames are inspected.\n' +
+        '\n' +
+        'I extracted the diagnostic panels and recorded their checks in the Lit note. The shared reference library was released before I reported.',
+      body_ja:
+        '取得研究3本で全工程を完了しました。2本は、生フレームを確認しないと、露光の段差が正規化後も残り、応答変化に見え得ると示しています。\n' +
+        '\n' +
+        '診断パネルを抽出し、その検査を Lit ノートに記録しました。報告前に共有文献ライブラリを解放済みです。' },
+    { at: 54, from: 'CopperBose', to: 'AmberKepler',
+      subject: 'RE: methods track returned three raw-data checks',
+      importance: 'normal',
+      body:
+        'The methods track completed three primary papers and extracted their failure-diagnostic figures. The reusable checks are exposure-boundary alignment, dropped-frame masking, and per-run uncertainty.\n' +
+        '\n' +
+        'All checks are written in lit/measurement-failures.md. The library rows validate and the lease is already with the final literature child.',
+      body_ja:
+        '手法トラックで一次論文3本を完了し、それぞれの失敗診断図を抽出しました。再利用できる検査は、露光境界との対応、欠損フレームのマスク、run ごとの不確かさです。\n' +
+        '\n' +
+        'すべての検査を lit/measurement-failures.md に書きました。ライブラリ行は検証済みで、リースはすでに最後の文献担当へ渡しています。' },
+    { at: 58, from: 'SaffronPlanck', to: 'AmberKepler',
+      subject: 'RE: timescale track keeps timing separate from cause',
+      importance: 'normal',
+      body:
+        'Three kinetics studies completed the full pipeline. Their recovery windows overlap ours, but none identifies the cause under a pulsed acquisition sequence.\n' +
+        '\n' +
+        'The final library import is verified and the lease is released for consolidation. My Lit note preserves observation windows, uncertainty, and the causal boundary separately.',
+      body_ja:
+        '動態研究3本で全工程を完了しました。回復窓はこちらと重なりますが、パルス状の取得系列で原因を特定したものはありません。\n' +
+        '\n' +
+        '最後のライブラリインポートを確認し、統合用にリースを解放しました。Lit ノートには観察窓、不確かさ、因果の境界を分けて残しています。' },
     { at: 65, from: 'MossSomerville', to: 'CoralFaraday',
       subject: 'Task: accompany the meeting and keep claims bounded',
       importance: 'high',
@@ -273,11 +454,15 @@
     AmberKepler: [
       [0, 'user', 'text', 'Prepare today\'s collaborator update. Connect literature, meeting questions, raw analysis, and the manuscript without letting causal language outrun the evidence.'],
       [4, 'assistant', 'thinking', 'The dependency is evidence first, raw-data audit second, writing last. The meeting can run alongside them if every claim keeps its source boundary.'],
-      [7, 'assistant', 'text', 'I will give literature, analysis, and writing to separate children. The second parent owns the live meeting and the final collaborator brief.'],
-      [13, 'assistant', 'tool_use', 'Bash  agentstack spawn --role literature'],
-      [14, 'assistant', 'tool_result', 'started SlateHooke (gpt-5.6)'],
-      [16, 'assistant', 'tool_use', 'SendMessage  to=SlateHooke "build an evidence map"'],
-      [37, 'assistant', 'thinking', 'The literature makes a mechanism plausible but does not validate this pulse sequence. Keep that boundary visible while analysis checks the number.'],
+      [7, 'assistant', 'text', 'I will split literature into five fields and start them together. Analysis and writing stay separate; the second parent owns the live meeting and final brief.'],
+      [13, 'assistant', 'tool_use', 'Bash  agentstack spawn --roles mechanism,forcing,artifacts,methods,kinetics --parallel'],
+      [14, 'assistant', 'tool_result', 'started SlateHooke, TealLamarr, VioletDarwin, CopperBose, SaffronPlanck'],
+      [16, 'assistant', 'tool_use', 'SendMessage  to=SlateHooke "survey recovery mechanisms"'],
+      [17, 'assistant', 'tool_use', 'SendMessage  to=TealLamarr "compare forcing regimes"'],
+      [18, 'assistant', 'tool_use', 'SendMessage  to=VioletDarwin "audit acquisition artifacts"'],
+      [19, 'assistant', 'tool_use', 'SendMessage  to=CopperBose "trace measurement failure modes"'],
+      [20, 'assistant', 'tool_use', 'SendMessage  to=SaffronPlanck "map recovery timescales"'],
+      [41, 'assistant', 'thinking', 'Five literature tracks are returning bounded notes in sequence. Their library access was negotiated, so consolidation starts from intact work instead of repaired conflicts.'],
       [42, 'assistant', 'tool_use', 'Bash  agentstack spawn --role analysis'],
       [43, 'assistant', 'tool_result', 'started IvoryNoether (gpt-5.6)'],
       [45, 'assistant', 'tool_use', 'SendMessage  to=IvoryNoether "rebuild the curve from raw measurements"'],
@@ -306,15 +491,24 @@
       [226, 'assistant', 'text', 'Brief sent: known, changed after QC, unresolved, and next experiment.'],
     ],
     SlateHooke: [
-      [15, 'user', 'text', 'Find the closest primary evidence and record where it stops.'],
-      [18, 'assistant', 'tool_use', 'Search  query="pulsed flow recovery measurement artifact"'],
-      [21, 'assistant', 'tool_result', '27 candidates · 6 primary studies retained'],
-      [23, 'assistant', 'tool_use', 'Read  papers/candidate-04.pdf'],
-      [26, 'assistant', 'tool_result', 'steady flow · redistribution measured after stop'],
-      [29, 'assistant', 'thinking', 'The closest experiment changes the forcing, not the exposure. It supports a mechanism comparison but cannot predict the pulse-specific plateau.'],
-      [31, 'assistant', 'tool_use', 'Write  notes/evidence-map.md'],
-      [32, 'assistant', 'tool_result', 'wrote 6 rows with claim boundaries'],
-      [35, 'assistant', 'text', 'Six studies mapped. The closest supports only a possible mechanism, not the measured plateau.'],
+      [15, 'user', 'text', 'Survey recovery mechanisms and mark the boundary of each claim.'],
+      [17, 'assistant', 'tool_use', 'WebSearch  query="recovery after forcing stops primary study"'],
+      [19, 'assistant', 'tool_result', '18 candidates · 3 primary mechanism studies retained'],
+      [20, 'assistant', 'tool_use', 'Bash  curl -o papers/mechanism-recovery.pdf https://archive.invalid/mechanism-recovery.pdf'],
+      [21, 'assistant', 'tool_result', 'downloaded 2.4 MB PDF'],
+      [22, 'assistant', 'tool_use', 'Bash  pdf-to-md papers/mechanism-recovery.pdf --output papers/mechanism-recovery.md'],
+      [23, 'assistant', 'tool_result', 'converted 14 pages · references preserved'],
+      [24, 'assistant', 'tool_use', 'Bash  extract-figures papers/mechanism-recovery.pdf --output figures/mechanism-recovery/'],
+      [25, 'assistant', 'tool_result', 'extracted 5 figures · 2 diagnostic panels'],
+      [26, 'assistant', 'tool_use', 'Write  lit/mechanism-recovery.md'],
+      [27, 'assistant', 'tool_result', 'wrote observations, inference, and claim boundary'],
+      [27, 'assistant', 'tool_use', 'Bash  ref-library acquire --collection evidence-map'],
+      [28, 'assistant', 'tool_result', 'lease acquired · TealLamarr requested one priority row'],
+      [29, 'assistant', 'thinking', 'TealLamarr can close a comparison track with one row. Checkpointing locally and handing over is safer than making four children poll the same writer.'],
+      [30, 'assistant', 'tool_use', 'SendMessage  to=TealLamarr "checkpointing for your priority row"'],
+      [32, 'assistant', 'tool_use', 'Bash  ref-library release --collection evidence-map'],
+      [33, 'assistant', 'tool_result', 'lease released · handoff mailed to TealLamarr'],
+      [35, 'assistant', 'text', 'Three mechanism studies are mapped. The closest supports only a possible mechanism, not the measured plateau.'],
       [76, 'assistant', 'tool_result', 'CoralFaraday: which source supports recovery after a pulse?'],
       [78, 'assistant', 'thinking', 'Answer with what was imposed and measured, then state the mismatch before the sentence can grow stronger in the meeting.'],
       [80, 'assistant', 'tool_use', 'SendMessage  to=CoralFaraday "closest study used steady flow, not pulses"'],
@@ -323,12 +517,94 @@
       [227, 'assistant', 'tool_result', '12 claims linked · 0 unbounded'],
       [229, 'assistant', 'text', 'Evidence map final. The limitation carried through to the collaborator brief.'],
     ],
+    TealLamarr: [
+      [15, 'user', 'text', 'Compare steady and pulsed forcing across primary studies.'],
+      [17, 'assistant', 'tool_use', 'WebSearch  query="steady stopped pulsed forcing primary comparison"'],
+      [19, 'assistant', 'tool_result', '22 candidates · 4 primary comparisons retained'],
+      [20, 'assistant', 'tool_use', 'Bash  curl -o papers/forcing-regimes.pdf https://archive.invalid/forcing-regimes.pdf'],
+      [21, 'assistant', 'tool_result', 'downloaded 3.1 MB PDF'],
+      [22, 'assistant', 'tool_use', 'Bash  pdf-to-md papers/forcing-regimes.pdf --output papers/forcing-regimes.md'],
+      [23, 'assistant', 'tool_result', 'converted 18 pages · tables preserved'],
+      [24, 'assistant', 'tool_use', 'Bash  extract-figures papers/forcing-regimes.pdf --output figures/forcing-regimes/'],
+      [25, 'assistant', 'tool_result', 'extracted 6 figures · forcing timeline found'],
+      [26, 'assistant', 'tool_use', 'Write  lit/forcing-regimes.md'],
+      [27, 'assistant', 'tool_result', 'wrote direct, partial, and contextual comparisons'],
+      [28, 'assistant', 'tool_use', 'SendMessage  to=SlateHooke "could I register the comparison paper first?"'],
+      [30, 'assistant', 'tool_result', 'SlateHooke: checkpointing; lease will be released'],
+      [32, 'assistant', 'tool_use', 'Bash  ref-library acquire --collection evidence-map'],
+      [33, 'assistant', 'tool_result', 'lease acquired after explicit handoff'],
+      [34, 'assistant', 'tool_use', 'Bash  ref-library import lit/forcing-regimes.md --release'],
+      [35, 'assistant', 'tool_result', '1 priority row registered · lease released'],
+      [36, 'assistant', 'tool_use', 'SendMessage  to=VioletDarwin "artifact batch may use the shared library"'],
+      [41, 'assistant', 'text', 'The forcing track separates direct tests from analogies, and the shared library handoff is complete.'],
+    ],
+    VioletDarwin: [
+      [15, 'user', 'text', 'Audit acquisition artifacts and normalization methods in the literature.'],
+      [17, 'assistant', 'tool_use', 'WebSearch  query="exposure step normalization artifact primary methods"'],
+      [19, 'assistant', 'tool_result', '16 candidates · 3 acquisition studies retained'],
+      [20, 'assistant', 'tool_use', 'Bash  curl -o papers/acquisition-artifacts.pdf https://archive.invalid/acquisition-artifacts.pdf'],
+      [21, 'assistant', 'tool_result', 'downloaded 2.8 MB PDF'],
+      [22, 'assistant', 'tool_use', 'Bash  pdf-to-md papers/acquisition-artifacts.pdf --output papers/acquisition-artifacts.md'],
+      [23, 'assistant', 'tool_result', 'converted 12 pages · methods headings preserved'],
+      [24, 'assistant', 'tool_use', 'Bash  extract-figures papers/acquisition-artifacts.pdf --output figures/acquisition-artifacts/'],
+      [25, 'assistant', 'tool_result', 'extracted 4 figures · raw/normalized pair found'],
+      [26, 'assistant', 'tool_use', 'Write  lit/acquisition-artifacts.md'],
+      [27, 'assistant', 'tool_result', 'wrote raw-data and post-normalization warnings'],
+      [31, 'assistant', 'tool_result', 'shared reference library held elsewhere · local note remains writable'],
+      [35, 'assistant', 'tool_result', 'TealLamarr: artifact batch may use the shared library'],
+      [36, 'assistant', 'tool_use', 'Bash  ref-library import lit/acquisition-artifacts.md --acquire --release'],
+      [37, 'assistant', 'tool_result', 'artifact rows registered · lease released'],
+      [38, 'assistant', 'tool_use', 'SendMessage  to=CopperBose "measurement batch is next"'],
+      [47, 'assistant', 'text', 'The artifact track found why raw frames must stay beside normalized results.'],
+    ],
+    CopperBose: [
+      [15, 'user', 'text', 'Trace measurement techniques and their documented failure modes.'],
+      [17, 'assistant', 'tool_use', 'WebSearch  query="signal drift missing frames calibration boundary primary methods"'],
+      [19, 'assistant', 'tool_result', '20 candidates · 3 methods papers retained'],
+      [20, 'assistant', 'tool_use', 'Bash  curl -o papers/measurement-failures.pdf https://archive.invalid/measurement-failures.pdf'],
+      [21, 'assistant', 'tool_result', 'downloaded 3.5 MB PDF'],
+      [22, 'assistant', 'tool_use', 'Bash  pdf-to-md papers/measurement-failures.pdf --output papers/measurement-failures.md'],
+      [23, 'assistant', 'tool_result', 'converted 21 pages · equations preserved'],
+      [24, 'assistant', 'tool_use', 'Bash  extract-figures papers/measurement-failures.pdf --output figures/measurement-failures/'],
+      [25, 'assistant', 'tool_result', 'extracted 7 figures · 3 failure diagnostics'],
+      [26, 'assistant', 'tool_use', 'Write  lit/measurement-failures.md'],
+      [27, 'assistant', 'tool_result', 'wrote exposure, frame, and uncertainty checks'],
+      [37, 'assistant', 'tool_result', 'VioletDarwin: measurement batch is next'],
+      [38, 'assistant', 'tool_use', 'Bash  ref-library import lit/measurement-failures.md --acquire --release'],
+      [39, 'assistant', 'tool_result', 'methods rows validated · lease released'],
+      [39, 'assistant', 'tool_use', 'SendMessage  to=SaffronPlanck "final literature import is ready"'],
+      [53, 'assistant', 'text', 'The methods track returned three checks that analysis can apply directly to raw measurements.'],
+    ],
+    SaffronPlanck: [
+      [15, 'user', 'text', 'Map recovery timescales without importing unsupported causality.'],
+      [17, 'assistant', 'tool_use', 'WebSearch  query="recovery kinetics observation window primary study"'],
+      [19, 'assistant', 'tool_result', '14 candidates · 3 kinetics studies retained'],
+      [20, 'assistant', 'tool_use', 'Bash  curl -o papers/recovery-timescales.pdf https://archive.invalid/recovery-timescales.pdf'],
+      [21, 'assistant', 'tool_result', 'downloaded 2.2 MB PDF'],
+      [22, 'assistant', 'tool_use', 'Bash  pdf-to-md papers/recovery-timescales.pdf --output papers/recovery-timescales.md'],
+      [23, 'assistant', 'tool_result', 'converted 11 pages · intervals preserved'],
+      [24, 'assistant', 'tool_use', 'Bash  extract-figures papers/recovery-timescales.pdf --output figures/recovery-timescales/'],
+      [25, 'assistant', 'tool_result', 'extracted 5 figures · 3 recovery curves'],
+      [26, 'assistant', 'tool_use', 'Write  lit/recovery-timescales.md'],
+      [27, 'assistant', 'tool_result', 'wrote observation windows, uncertainty, and causal limits'],
+      [39, 'assistant', 'tool_result', 'CopperBose: final literature import is ready'],
+      [40, 'assistant', 'tool_use', 'SendMessage  to=CopperBose "received; one import, then release"'],
+      [41, 'assistant', 'tool_use', 'Bash  ref-library import lit/recovery-timescales.md --acquire --release'],
+      [42, 'assistant', 'tool_result', 'final literature rows verified · lease released'],
+      [57, 'assistant', 'text', 'The timescale track preserves timing as evidence without turning it into a cause.'],
+    ],
     IvoryNoether: [
       [44, 'user', 'text', 'Rebuild the response curve from raw measurements and audit anomalies.'],
-      [48, 'assistant', 'tool_use', 'Read  runs/pulse-set/acquisition.json'],
-      [49, 'assistant', 'tool_result', '12 runs · 960 frames · 2 exposure segments'],
-      [53, 'assistant', 'tool_use', 'Bash  python analysis/rebuild_curve.py --raw'],
-      [72, 'assistant', 'tool_result', 'figure written · 3 dropped frames flagged'],
+      [48, 'assistant', 'tool_use', 'Computer  open the analysis suite'],
+      [49, 'assistant', 'tool_result', 'analysis suite opened · no dataset loaded'],
+      [52, 'assistant', 'tool_use', 'Computer  open "Raw measurements" from the dataset dialog'],
+      [53, 'assistant', 'tool_result', '12 runs · 960 frames · 2 exposure segments'],
+      [56, 'assistant', 'tool_use', 'Computer  click "Baseline correction"'],
+      [57, 'assistant', 'tool_result', 'dialog opened · global mean selected from prior session'],
+      [60, 'assistant', 'tool_use', 'Computer  select "Preview without writing" and click "Run"'],
+      [71, 'assistant', 'tool_result', 'preview complete · 3 dropped frames flagged'],
+      [73, 'assistant', 'tool_use', 'Screenshot  analysis suite raw curve with exposure timeline'],
+      [74, 'assistant', 'tool_result', 'curve step aligns with exposure change at frame 480'],
       [117, 'assistant', 'thinking', 'The curve step and the exposure step share frame 480. A global mean has made the two acquisition regimes look directly comparable.'],
       [121, 'assistant', 'tool_use', 'Write  analysis/curve-audit.md'],
       [122, 'assistant', 'text', 'The reported effect contains an exposure boundary. I am stopping the manuscript number and reporting the anomaly first.'],
@@ -386,7 +662,12 @@
   var DELIVERABLES = {
     AmberKepler: [['Decision trail for the claim', 'notes/decision-trail.md', 120]],
     MossSomerville: [['Collaborator brief', 'reports/collaborator-brief.md', 30]],
-    SlateHooke: [['Evidence map with claim boundaries', 'notes/evidence-map.md', 240]],
+    SlateHooke: [['Mechanism Lit note with claim boundaries', 'lit/mechanism-recovery.md', 240],
+                 ['Evidence map with claim boundaries', 'notes/evidence-map.md', 220]],
+    TealLamarr: [['Forcing-regime Lit note', 'lit/forcing-regimes.md', 210]],
+    VioletDarwin: [['Acquisition-artifact Lit note', 'lit/acquisition-artifacts.md', 200]],
+    CopperBose: [['Measurement-failure Lit note', 'lit/measurement-failures.md', 190]],
+    SaffronPlanck: [['Recovery-timescale Lit note', 'lit/recovery-timescales.md', 180]],
     IvoryNoether: [['Raw-to-corrected curve audit', 'analysis/curve-audit.md', 90],
                    ['Audited Figure 3 inputs', 'figures/figure-3-data/', 80]],
     CoralFaraday: [['Meeting decisions and open questions', 'meetings/question-log.md', 60]],
@@ -400,48 +681,63 @@
     { at: 0, look: '.gauge.run',
       en: 'Two research leads begin with one rule: the claim can only be as strong as the weakest evidence beneath it.',
       ja: '2体の研究リードが、主張の強さはその下にある最も弱い根拠を超えない、という1つのルールから始めます。' },
-    { at: 14, look: '.bay[data-name="SlateHooke"]',
-      en: 'The first child maps primary literature. It records not just what supports the claim, but where that support ends.',
-      ja: '最初の子が一次文献を対応付けます。主張を支える内容だけでなく、その支えがどこで終わるかも記録します。' },
+    { at: 14, look: '#v-net', view: 'net',
+      en: 'AmberKepler starts five literature specialists together. In Network, their portraits fan out from one parent so the parallel work is visible at a glance.',
+      ja: 'AmberKepler が5体の文献専門担当を同時に起動します。Network では1体の親から肖像が扇状に広がり、並列作業がひと目で分かります。' },
+    { at: 22, look: '.bay[data-name="VioletDarwin"]',
+      en: 'VioletDarwin shows the real literature pipeline: web search, PDF download, Markdown conversion, figure extraction, then a Lit note.',
+      ja: 'VioletDarwin は、web 検索、PDF ダウンロード、Markdown 変換、図版抽出、Lit ノート作成という実際の文献工程を進めます。' },
+    { at: 28, look: '#v-net', view: 'net',
+      en: 'TealLamarr needs one library row first while SlateHooke holds the shared reference library. They negotiate priority by mail, then pass one writer lease down the fan.',
+      ja: 'SlateHooke が共有文献ライブラリを押さえている間に、TealLamarr は1行だけ先に登録する必要があります。mail で順番を交渉し、1つの書き込みリースを扇の先へ渡します。' },
     { at: 35, look: '#v-net', view: 'net',
       en: 'The literature answer comes back bounded: a mechanism is plausible, but this pulse-specific result has no direct precedent.',
       ja: '文献担当の回答には境界があります。機構はあり得ますが、このパルス固有の結果に直接の先行例はありません。' },
     { at: 44, look: '.bay[data-name="IvoryNoether"]',
-      en: 'An analysis child starts from raw measurements while the manuscript still waits for a defensible number.',
-      ja: '解析担当が生の測定値から始めます。論文側は、守れる数値が出るまで待ちます。' },
+      en: 'IvoryNoether opens the analysis application and starts from raw measurements while the manuscript waits for a defensible number.',
+      ja: 'IvoryNoether が解析アプリケーションを開き、生の測定値から始めます。論文側は、守れる数値が出るまで待ちます。' },
+    { at: 58, look: '.bay[data-name="SaffronPlanck"]',
+      en: 'SaffronPlanck sends the fifth bounded report. The parallel specialists finish in sequence, leaving mergeable Lit notes rather than a damaged shared library.',
+      ja: 'SaffronPlanck が5件目の境界付き報告を返します。並列した専門担当は順次完了し、壊れた共有ライブラリではなく、統合可能な Lit ノートを残します。' },
     { at: 64, look: '.bay[data-name="CoralFaraday"]',
-      en: 'A meeting companion follows the live discussion and asks the literature child for evidence before a repeated phrase hardens into fact.',
-      ja: 'ミーティング伴走役が議論を追い、繰り返された言葉が事実として固まる前に文献担当へ根拠を尋ねます。' },
+      en: 'CoralFaraday follows the live discussion and asks SlateHooke for evidence before a repeated phrase hardens into fact.',
+      ja: 'CoralFaraday がライブの議論を追い、繰り返された言葉が事実として固まる前に SlateHooke へ根拠を尋ねます。' },
     { at: 96, look: '.bay[data-name="RustPasteur"]',
-      en: 'The writing child drafts structure, not certainty. Numeric slots stay empty until the audit returns.',
-      ja: '執筆担当が起草するのは構造で、確信ではありません。監査結果が戻るまで数値欄は空のままです。' },
+      en: 'RustPasteur drafts structure, not certainty. Numeric slots stay empty until IvoryNoether returns the audit.',
+      ja: 'RustPasteur が起草するのは構造で、確信ではありません。IvoryNoether の監査が戻るまで数値欄は空のままです。' },
     { at: 111, look: '#v-net', view: 'net',
       en: 'The meeting produces a useful open question: does the plateau survive the camera correction?',
       ja: 'ミーティングから有用な未決の問いが生まれます。カメラ補正後もプラトーは残るのでしょうか。' },
     { at: 122, look: '.bay[data-name="IvoryNoether"]',
-      en: 'Analysis finds the apparent effect begins exactly at an exposure change. The anomaly is reported before anyone edits the paper.',
-      ja: '解析担当は、見かけの効果が露光変更と同時に始まると気づきます。論文を直す前に異常を報告します。' },
+      en: 'IvoryNoether finds that the apparent effect begins exactly at an exposure change and reports the anomaly before anyone edits the paper.',
+      ja: 'IvoryNoether は、見かけの効果が露光変更と同時に始まると気づき、論文を直す前に異常を報告します。' },
     { at: 125, look: '.bay[data-name="IvoryNoether"]',
-      en: 'The red APPROVAL state is deliberate: analysis has stopped before overwriting derived data and is waiting for a human permission boundary.',
-      ja: '赤い APPROVAL 状態は意図的です。解析担当は派生データを上書きする前で止まり、人間の許可境界を待っています。' },
+      en: 'IvoryNoether has stopped before overwriting derived data. Its card shows red APPROVAL until a person gives permission.',
+      ja: 'IvoryNoether が派生データの上書き前で止まっています。人が許可するまで、カードに赤い APPROVAL が出ます。',
+      net: {
+        en: 'IvoryNoether has stopped before overwriting derived data. A ! sits over its portrait until a person gives permission.',
+        ja: 'IvoryNoether が派生データの上書き前で止まっています。人が許可するまで、肖像の上に ! が出ます。' } },
     { at: 151, look: '.bay[data-name="IvoryNoether"]',
-      en: 'A human approves after 26 seconds. The red state clears, and only now does analysis regenerate the derived figure inputs.',
-      ja: '26秒後に人間が承認します。赤い状態が消え、ここで初めて解析担当が派生図入力を再生成します。' },
+      en: 'IvoryNoether receives permission after 26 seconds. Only now does it regenerate the derived figure inputs.',
+      ja: 'IvoryNoether は26秒後に許可を受け取り、ここで初めて派生図入力を再生成します。' },
     { at: 172, look: '.bay[data-name="IvoryNoether"]',
-      en: 'The corrected effect survives, but shrinks from 18% to 7%. Direction remains; magnitude and cause do not.',
-      ja: '補正後も効果は残りますが、18% から 7% へ縮みます。方向は残り、大きさと原因は残りません。' },
+      en: 'IvoryNoether finds that the corrected effect survives but shrinks from 18% to 7%. Direction remains; magnitude and cause do not.',
+      ja: 'IvoryNoether は、補正後も効果は残るものの、18% から 7% へ縮むと確認します。方向は残り、大きさと原因は残りません。' },
     { at: 175, look: '.bay[data-name="RustPasteur"]',
-      en: 'The cyan question state asks a human to choose: replace the figure and withdraw 18%, or leave the old panel with a warning.',
-      ja: 'シアンの question 状態が人間へ選択を求めます。図を差し替えて 18% を撤回するか、旧パネルへ警告を付けて残すか。' },
+      en: 'RustPasteur is asking whether to replace Figure 3 and withdraw 18%, or keep the old panel with a warning. Its card shows a cyan ? until a person chooses.',
+      ja: 'RustPasteur は、Figure 3 を差し替えて 18% を撤回するか、警告付きで旧パネルを残すかを尋ねています。人が選ぶまで、カードにシアンの ? が出ます。',
+      net: {
+        en: 'RustPasteur is asking whether to replace Figure 3 and withdraw 18%, or keep the old panel with a warning. A cyan ? sits over its portrait until a person chooses.',
+        ja: 'RustPasteur は、Figure 3 を差し替えて 18% を撤回するか、警告付きで旧パネルを残すかを尋ねています。人が選ぶまで、肖像の上にシアンの ? が出ます。' } },
     { at: 182, look: '.bay[data-name="IvoryNoether"]',
-      en: 'The analysis child finishes and stays visible with its audit, figure inputs, and checks still attached.',
-      ja: '解析担当は終了しても画面に残り、監査、図の入力、検査結果を引き続き確認できます。' },
+      en: 'IvoryNoether finishes and stays visible with its audit, figure inputs, and checks still attached.',
+      ja: 'IvoryNoether は終了しても画面に残り、監査、図の入力、検査結果を引き続き確認できます。' },
     { at: 194, look: '.bay[data-name="RustPasteur"]',
-      en: 'After 19 seconds, the human chooses replacement. The cyan question clears and the writer edits the figure with an explicit decision behind it.',
-      ja: '19秒後、人間が差し替えを選びます。シアンの question が消え、執筆担当は明示的な判断を根拠に図を編集します。' },
+      en: 'RustPasteur receives the choice after 19 seconds and replaces the figure with an explicit human decision behind the edit.',
+      ja: 'RustPasteur は19秒後に選択を受け取り、明示的な人間の判断を根拠に図を差し替えます。' },
     { at: 214, look: '.bay[data-name="MossSomerville"]',
-      en: 'The final handoff separates what is known, what changed after QC, what is unresolved, and what experiment comes next.',
-      ja: '最後の引き継ぎでは、分かったこと、QC 後に変わったこと、未決のこと、次の実験を分けます。' },
+      en: 'MossSomerville makes the final handoff separate what is known, what changed after QC, what is unresolved, and what experiment comes next.',
+      ja: 'MossSomerville は最後の引き継ぎで、分かったこと、QC 後に変わったこと、未決のこと、次の実験を分けます。' },
     { at: 226, look: '.gauge.tot',
       en: 'The collaborator receives a smaller claim with a complete trail. That is progress the whole team can inspect.',
       ja: '共同研究者には、完全な履歴を伴う、より狭い主張が届きます。チーム全体が検証できる進展です。' },
@@ -451,8 +747,16 @@
   [
     ['Turn today\'s evidence into a claim the manuscript can defend', '今日の根拠を、論文が守れる主張へ変える'],
     ['Accompany the meeting and own the collaborator handoff', 'ミーティングに伴走し、共同研究者への引き継ぎを担う'],
-    ['Find the closest primary evidence and record where it stops', '最も近い一次根拠を探し、どこまでしか支えないか記録する'],
-    ['Find the closest primary evidence and record where it stops.', '最も近い一次根拠を探し、どこまでしか支えないか記録してください。'],
+    ['Survey recovery mechanisms and mark the boundary of each claim', '回復機構を調査し、各主張の境界を示す'],
+    ['Survey recovery mechanisms and mark the boundary of each claim.', '回復機構を調査し、各主張の境界を示してください。'],
+    ['Compare steady and pulsed forcing across primary studies', '一次研究の定常負荷とパルス負荷を比較する'],
+    ['Compare steady and pulsed forcing across primary studies.', '一次研究の定常負荷とパルス負荷を比較してください。'],
+    ['Audit acquisition artifacts and normalization methods in the literature', '文献中の取得アーティファクトと正規化手法を監査する'],
+    ['Audit acquisition artifacts and normalization methods in the literature.', '文献中の取得アーティファクトと正規化手法を監査してください。'],
+    ['Trace measurement techniques and their documented failure modes', '測定技術と文書化された失敗モードを追跡する'],
+    ['Trace measurement techniques and their documented failure modes.', '測定技術と文書化された失敗モードを追跡してください。'],
+    ['Map recovery timescales without importing unsupported causality', '根拠のない因果を持ち込まず、回復時間スケールを対応付ける'],
+    ['Map recovery timescales without importing unsupported causality.', '根拠のない因果を持ち込まず、回復時間スケールを対応付けてください。'],
     ['Rebuild the response curve from raw measurements and audit anomalies', '生の測定値から応答曲線を再構築し、異常を監査する'],
     ['Rebuild the response curve from raw measurements and audit anomalies.', '生の測定値から応答曲線を再構築し、異常を監査してください。'],
     ['Track the live discussion and surface evidence without inventing conclusions', 'ライブ議論を追い、結論を捏造せず根拠を提示する'],
@@ -464,8 +768,23 @@
     ['Trace the origin of the reference correction', '参照補正の由来を追跡する'],
     ['Trace the origin of the reference correction.', '参照補正の由来を追跡してください。'],
 
-    ['Task: build an evidence map for the recovery claim', '依頼: 回復の主張に対する根拠対応表を作る'],
-    ['RE: six studies mapped, one supports only the mechanism', 'RE: 6研究を対応付け、1本が支えるのは機構だけ'],
+    ['Task: survey recovery mechanisms', '依頼: 回復機構を調査する'],
+    ['Task: compare forcing regimes', '依頼: 負荷条件を比較する'],
+    ['Task: audit acquisition artifacts in prior work', '依頼: 先行研究の取得アーティファクトを監査する'],
+    ['Task: trace measurement failure modes', '依頼: 測定の失敗モードを追跡する'],
+    ['Task: map recovery timescales', '依頼: 回復時間スケールを対応付ける'],
+    ['Could I register the comparison paper first?', '比較論文を先に登録してもよいですか'],
+    ['RE: yes — checkpointing for your priority row', 'RE: はい — 優先行のためチェックポイント化します'],
+    ['Handoff: the shared reference library is released', '引き継ぎ: 共有文献ライブラリを解放しました'],
+    ['Handoff: artifact batch may use the shared library', '引き継ぎ: アーティファクトバッチが共有ライブラリを使えます'],
+    ['Handoff: measurement batch is next', '引き継ぎ: 次は測定バッチです'],
+    ['Handoff: final literature import is ready', '引き継ぎ: 最後の文献インポートの準備ができました'],
+    ['RE: received — one import, then release', 'RE: 受領 — 1回インポートして解放します'],
+    ['RE: mechanism track mapped with a hard boundary', 'RE: 機構トラックを明確な境界付きで対応付けました'],
+    ['RE: forcing track distinguishes direct tests from analogies', 'RE: 負荷トラックで直接試験と類推を区別しました'],
+    ['RE: artifact track found the raw-versus-normalized warning', 'RE: アーティファクトトラックで生値と正規化値の警告を見つけました'],
+    ['RE: methods track returned three raw-data checks', 'RE: 手法トラックから生データ検査3件が戻りました'],
+    ['RE: timescale track keeps timing separate from cause', 'RE: 時間スケールトラックで時間と原因を分けました'],
     ['Task: rebuild the curve from raw measurements', '依頼: 生の測定値から曲線を再構築する'],
     ['Task: accompany the meeting and keep claims bounded', '依頼: ミーティングに伴走し、主張の境界を保つ'],
     ['Which source actually supports recovery after a pulse?', 'パルス後の回復を実際に支える出典はどれですか'],
@@ -487,8 +806,8 @@
 
     ['Prepare today\'s collaborator update. Connect literature, meeting questions, raw analysis, and the manuscript without letting causal language outrun the evidence.', '今日の共同研究者向け報告を準備してください。因果表現が根拠を追い越さないように、文献、ミーティングの問い、生データ解析、論文をつなぎます。'],
     ['The dependency is evidence first, raw-data audit second, writing last. The meeting can run alongside them if every claim keeps its source boundary.', '依存関係は、根拠が先、生データ監査が次、執筆が最後。各主張が出典の境界を保てば、ミーティングは並行して進められる。'],
-    ['I will give literature, analysis, and writing to separate children. The second parent owns the live meeting and the final collaborator brief.', '文献、解析、執筆を別々の子に渡す。2体目の親がライブミーティングと最終報告を担当する。'],
-    ['The literature makes a mechanism plausible but does not validate this pulse sequence. Keep that boundary visible while analysis checks the number.', '文献は機構を妥当にはするが、このパルス系列を検証はしない。解析が数値を確認する間、その境界を見えるままにする。'],
+    ['I will split literature into five fields and start them together. Analysis and writing stay separate; the second parent owns the live meeting and final brief.', '文献を5分野に分けて同時に起動する。解析と執筆は分けたままにし、2体目の親がライブミーティングと最終報告を担当する。'],
+    ['Five literature tracks are returning bounded notes in sequence. Their library access was negotiated, so consolidation starts from intact work instead of repaired conflicts.', '5つの文献トラックから境界付きノートが順次戻っている。ライブラリ利用は交渉済みなので、衝突を修復するのではなく、壊れていない作業から統合を始められる。'],
     ['The anomaly lands on the exposure boundary. The old effect size is unusable until the segments are calibrated separately.', '異常は露光境界に重なる。区間を別々に較正するまで、古い効果量は使えない。'],
     ['The direction survives correction, but the magnitude is much smaller. That is a useful result and a narrower claim.', '補正後も方向は残るが、大きさはずっと小さい。有用な結果であり、より狭い主張だ。'],
     ['The brief is out with one result, one correction, one open cause, and one next experiment. Handing back.', '報告には、結果1つ、補正1つ、未決の原因1つ、次の実験1つを入れた。引き継ぎます。'],
@@ -500,11 +819,16 @@
     ['Lead with the corrected estimate. The provenance matters, but the collaborator needs the result before the audit trail.', '補正後の推定値を先頭に置く。来歴も重要だが、共同研究者には監査履歴より先に結果が必要だ。'],
     ['Brief sent: known, changed after QC, unresolved, and next experiment.', '報告を送信。既知、QC 後の変更、未決、次の実験を分けた。'],
 
-    ['The closest experiment changes the forcing, not the exposure. It supports a mechanism comparison but cannot predict the pulse-specific plateau.', '最も近い実験が変えるのは負荷で、露光ではない。機構の比較は支えるが、パルス固有のプラトーは予測できない。'],
-    ['Six studies mapped. The closest supports only a possible mechanism, not the measured plateau.', '6研究を対応付けた。最も近い研究が支えるのは機構の可能性だけで、測定したプラトーではない。'],
+    ['TealLamarr can close a comparison track with one row. Checkpointing locally and handing over is safer than making four children poll the same writer.', 'TealLamarr は1行で比較トラックを閉じられる。子を4体とも1つの書き込み先をポーリングさせるより、ローカルでチェックポイントを作り引き継ぐ方が安全だ。'],
+    ['Three mechanism studies are mapped. The closest supports only a possible mechanism, not the measured plateau.', '機構研究3本を対応付けた。最も近い研究が支えるのは機構の可能性だけで、測定したプラトーではない。'],
     ['Answer with what was imposed and measured, then state the mismatch before the sentence can grow stronger in the meeting.', '何を与え何を測ったかで答え、ミーティング中に文が強くなる前に不一致を示す。'],
     ['The safe comparison is now in the meeting: plausible mechanism, no direct validation.', '安全な比較をミーティングへ出した。機構は妥当、直接の検証は無し。'],
     ['Evidence map final. The limitation carried through to the collaborator brief.', '根拠対応表を確定。限界も共同研究者向け報告まで引き継いだ。'],
+
+    ['The forcing track separates direct tests from analogies, and the shared library handoff is complete.', '負荷トラックは直接試験と類推を分け、共有ライブラリの引き継ぎも完了した。'],
+    ['The artifact track found why raw frames must stay beside normalized results.', 'アーティファクトトラックは、生フレームを正規化結果の横に残すべき理由を見つけた。'],
+    ['The methods track returned three checks that analysis can apply directly to raw measurements.', '手法トラックから、解析が生の測定値に直接適用できる検査3件が戻った。'],
+    ['The timescale track preserves timing as evidence without turning it into a cause.', '時間スケールトラックは、時間を原因にすり替えず根拠として保った。'],
 
     ['The curve step and the exposure step share frame 480. A global mean has made the two acquisition regimes look directly comparable.', '曲線の段差と露光の段差は frame 480 で一致する。全体平均により、2つの取得条件が直接比較可能に見えていた。'],
     ['The reported effect contains an exposure boundary. I am stopping the manuscript number and reporting the anomaly first.', '報告した効果には露光境界が含まれる。論文の数値を止め、先に異常を報告する。'],
@@ -528,7 +852,12 @@
 
     ['Decision trail for the claim', '主張の判断履歴'],
     ['Collaborator brief', '共同研究者向け報告'],
+    ['Mechanism Lit note with claim boundaries', '主張の境界付き機構 Lit ノート'],
     ['Evidence map with claim boundaries', '主張の境界付き根拠対応表'],
+    ['Forcing-regime Lit note', '負荷条件 Lit ノート'],
+    ['Acquisition-artifact Lit note', '取得アーティファクト Lit ノート'],
+    ['Measurement-failure Lit note', '測定失敗 Lit ノート'],
+    ['Recovery-timescale Lit note', '回復時間スケール Lit ノート'],
     ['Raw-to-corrected curve audit', '生値から補正値までの曲線監査'],
     ['Audited Figure 3 inputs', '監査済み Figure 3 入力'],
     ['Meeting decisions and open questions', 'ミーティングの決定事項と未決の問い'],
