@@ -127,6 +127,13 @@ RULES: dict[str, Any] = {
         "inherited_channels": ["color", "fill", "stroke"],
         "excluded_inherited_elements": ["input", "select", "textarea", "option"],
     },
+    "token_aliases": {
+        "--void": "--bg",
+        "--bone": "--ink",
+        "--bone-dim": "--ink-dim",
+        "--line": "--hair",
+        "--line-soft": "--hair-2",
+    },
 }
 
 
@@ -412,15 +419,13 @@ def _token_consumer_records(
                 declaration["value"], controlled, definitions
             )
         )
-        if not tokens:
-            continue
         record = dict(declaration)
         record.update(
             {
                 "channels": channels,
                 "references": VAR_RE.findall(declaration["value"]),
                 "tokens": tokens,
-                "consumer": True,
+                "consumer": bool(tokens),
                 "important": bool(
                     re.search(r"!\s*important\s*$", declaration["value"], re.I)
                 ),
