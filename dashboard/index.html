@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<style>
+<style id="agentstack-dashboard-styles">
   :root{
     --void:#080a0c;          /* deep ink */
     --bg:#0b0e11;
@@ -2793,6 +2793,256 @@ OFF = legacy snapshot+comet mode">
 
 <script>
 const AGENTSTACK_SERVER_DEFAULTS={language:null,murmur:null};
+const THEME_AXIS_NAMES=new Set([
+  'dim-contrast','small-text','tracking','glow','background'
+]);
+function normalizeThemeAxisMessage(data){
+  if(!data||data.type!=='agentstack-theme-axis'||data.version!==1||
+      !THEME_AXIS_NAMES.has(data.axis))return null;
+  if(data.value===null)return {axis:data.axis,value:null};
+  if(typeof data.value!=='number'||!Number.isFinite(data.value))return null;
+  return {axis:data.axis,value:Math.max(0,Math.min(1,data.value))};
+}
+function themeAxisMessageError(data){
+  if(!data||data.type!=='agentstack-theme-axis')return 'invalid-message';
+  if(data.version!==1)return 'unsupported-version';
+  if(!THEME_AXIS_NAMES.has(data.axis))return 'unknown-axis';
+  if(data.value!==null&&
+      (typeof data.value!=='number'||!Number.isFinite(data.value))){
+    return 'invalid-value';
+  }
+  return null;
+}
+function themeAxisMessageAllowed(event,embedMode,parentWindow,expectedOrigin){
+  return Boolean(embedMode&&event&&event.source===parentWindow&&
+    event.origin===expectedOrigin);
+}
+function parseThemeAxisColor(input){
+  if(typeof input!=='string')return null;
+  const value=input.trim().toLowerCase();
+  const hex=value.match(/^#([0-9a-f]{3,8})$/i);
+  if(hex){
+    let digits=hex[1];
+    if(digits.length===3||digits.length===4){
+      digits=[...digits].map(digit=>digit+digit).join('');
+    }
+    if(digits.length!==6&&digits.length!==8)return null;
+    return {r:parseInt(digits.slice(0,2),16)/255,
+      g:parseInt(digits.slice(2,4),16)/255,
+      b:parseInt(digits.slice(4,6),16)/255,
+      a:digits.length===8?parseInt(digits.slice(6,8),16)/255:1};
+  }
+  const functional=value.match(/^rgba?\((.*)\)$/);
+  if(!functional)return null;
+  const parts=functional[1].includes(',')
+    ?functional[1].split(',').map(part=>part.trim())
+    :functional[1].replace(/\s*\/\s*/,' ').trim().split(/\s+/);
+  if(parts.length<3||parts.length>4)return null;
+  const channel=part=>part.endsWith('%')
+    ?parseFloat(part)/100:parseFloat(part)/255;
+  const alpha=part=>part&&part.endsWith('%')
+    ?parseFloat(part)/100:part===undefined?1:parseFloat(part);
+  const color={r:channel(parts[0]),g:channel(parts[1]),
+    b:channel(parts[2]),a:alpha(parts[3])};
+  return Object.values(color).every(Number.isFinite)?color:null;
+}
+function themeAxisColorToOklch(color){
+  const linear=channel=>channel<=.04045
+    ?channel/12.92:((channel+.055)/1.055)**2.4;
+  const red=linear(color.r),green=linear(color.g),blue=linear(color.b);
+  const l=Math.cbrt(.4122214708*red+.5363325363*green+.0514459929*blue);
+  const m=Math.cbrt(.2119034982*red+.6806995451*green+.1073969566*blue);
+  const s=Math.cbrt(.0883024619*red+.2817188376*green+.6299787005*blue);
+  const lightness=.2104542553*l+.793617785*m-.0040720468*s;
+  const a=1.9779984951*l-2.428592205*m+.4505937099*s;
+  const b=.0259040371*l+.7827717662*m-.808675766*s;
+  return {l:lightness,c:Math.hypot(a,b),h:Math.atan2(b,a),a:color.a};
+}
+function themeAxisOklchToColor(color){
+  const a=color.c*Math.cos(color.h),b=color.c*Math.sin(color.h);
+  const l_=color.l+.3963377774*a+.2158037573*b;
+  const m_=color.l-.1055613458*a-.0638541728*b;
+  const s_=color.l-.0894841775*a-1.291485548*b;
+  const l=l_**3,m=m_**3,s=s_**3;
+  const gamma=channel=>{
+    const value=channel<=.0031308?12.92*channel:1.055*channel**(1/2.4)-.055;
+    return Math.max(0,Math.min(1,value));
+  };
+  return {r:gamma(4.0767416621*l-3.3077115913*m+.2309699292*s),
+    g:gamma(-1.2684380046*l+2.6097574011*m-.3413193965*s),
+    b:gamma(-.0041960863*l-.7034186147*m+1.707614701*s),a:color.a};
+}
+function themeAxisColorMix(from,to,value){
+  if(value<=0)return from;
+  if(value>=1)return to;
+  const fromColor=parseThemeAxisColor(from),toColor=parseThemeAxisColor(to);
+  if(!fromColor||!toColor)return null;
+  const first=themeAxisColorToOklch(fromColor),second=themeAxisColorToOklch(toColor);
+  if(first.c<1e-7)first.h=second.h;
+  if(second.c<1e-7)second.h=first.h;
+  const turn=Math.PI*2;
+  const hueDelta=((second.h-first.h+Math.PI)%turn+turn)%turn-Math.PI;
+  const mixed=themeAxisOklchToColor({
+    l:first.l+(second.l-first.l)*value,
+    c:first.c+(second.c-first.c)*value,
+    h:first.h+hueDelta*value,
+    a:first.a+(second.a-first.a)*value
+  });
+  const channel=number=>Math.round(number*255000)/1000;
+  const alpha=Math.round(mixed.a*100000)/100000;
+  return `rgba(${channel(mixed.r)}, ${channel(mixed.g)}, ${channel(mixed.b)}, ${alpha})`;
+}
+function attenuateThemeColorAlpha(color,value){
+  const parsed=parseThemeAxisColor(color);
+  if(!parsed)return color;
+  const channel=number=>Math.round(number*255000)/1000;
+  const alpha=Math.round(parsed.a*(1-.8*value)*10000)/10000;
+  return `rgba(${channel(parsed.r)}, ${channel(parsed.g)}, ${channel(parsed.b)}, ${alpha})`;
+}
+const THEME_EFFECT_COLOR_SOURCE=
+  '#(?:[0-9a-f]{3,8})\\b|(?:rgba?|hsla?)\\([^)]*\\)';
+const THEME_EFFECT_FOCUS_MARKERS=[':focus','::-webkit-slider-thumb'];
+const THEME_EFFECT_STATE_MARKERS=[
+  'arming','st-work','st-ask','imp-','.err','askbub','qbub','.armed','.arm',
+  '.run','retire','.exit','mail_sent','mail_recv','.spawn','urgent','high'
+];
+function splitThemeCssLayers(value){
+  const layers=[];
+  let start=0,depth=0;
+  for(let index=0;index<value.length;index++){
+    if(value[index]==='(')depth++;
+    else if(value[index]===')')depth=Math.max(0,depth-1);
+    else if(value[index]===','&&depth===0){
+      layers.push(value.slice(start,index).trim());start=index+1;
+    }
+  }
+  layers.push(value.slice(start).trim());
+  return layers.filter(Boolean);
+}
+function mapThemeDropShadows(value,mapper){
+  let output='',cursor=0;
+  const needle='drop-shadow(';
+  while(true){
+    const start=value.indexOf(needle,cursor);
+    if(start<0)break;
+    let depth=1,index=start+needle.length;
+    while(index<value.length&&depth){
+      if(value[index]==='(')depth++;
+      else if(value[index]===')')depth--;
+      index++;
+    }
+    output+=value.slice(cursor,start)+mapper(value.slice(start,index));
+    cursor=index;
+  }
+  return output+value.slice(cursor);
+}
+function themeAxisEffectComponents(property,value){
+  if(property==='filter'){
+    const components=[];
+    mapThemeDropShadows(value,component=>{components.push(component);return component;});
+    return components;
+  }
+  return splitThemeCssLayers(value);
+}
+function themeAxisEffectGeometry(component){
+  const masked=component.replace(new RegExp(THEME_EFFECT_COLOR_SOURCE,'gi'),'');
+  const matches=[...masked.matchAll(
+    /(?<![\w.])(-?(?:\d+(?:\.\d*)?|\.\d+))(px)?(?![\w.])/g)];
+  const values=matches.map(match=>Number(match[1]));
+  while(values.length<4)values.push(0);
+  return {x:values[0],y:values[1],blur:values[2],spread:values[3]};
+}
+function themeAxisColorIsNeutral(literal){
+  const parsed=parseThemeAxisColor(literal);
+  if(!parsed)return true;
+  const channels=[parsed.r,parsed.g,parsed.b].map(channel=>channel*255);
+  return Math.max(...channels)-Math.min(...channels)<24;
+}
+function themeAxisEffectCategory(selector,component,geometry){
+  const lowered=selector.toLowerCase();
+  if(THEME_EFFECT_FOCUS_MARKERS.some(marker=>lowered.includes(marker))){
+    return 'focus';
+  }
+  const literals=component.match(new RegExp(THEME_EFFECT_COLOR_SOURCE,'gi'))||[];
+  if(geometry.x||geometry.y||geometry.spread||
+      (literals.length&&literals.every(themeAxisColorIsNeutral))){
+    return 'elevation';
+  }
+  if(!literals.length)return 'elevation';
+  if(THEME_EFFECT_STATE_MARKERS.some(marker=>lowered.includes(marker))){
+    return 'state';
+  }
+  return 'emissive';
+}
+function themeAxisEffectComponent(selector,component){
+  const geometry=themeAxisEffectGeometry(component);
+  const category=themeAxisEffectCategory(selector,component,geometry);
+  const mutable=(category==='emissive'||category==='state')&&
+    geometry.x===0&&geometry.y===0&&geometry.blur>0&&geometry.spread===0;
+  return {geometry,category,mutable};
+}
+function attenuateThemeEffectComponent(component,value){
+  const colors=[];
+  let masked=component.replace(new RegExp(THEME_EFFECT_COLOR_SOURCE,'gi'),color=>{
+    const marker=String.fromCodePoint(0xe000+colors.length);
+    colors.push({marker,color});return marker;
+  });
+  let lengthIndex=0;
+  masked=masked.replace(
+    /(?<![\w.])(-?(?:\d+(?:\.\d*)?|\.\d+))(px)?(?![\w.])/g,
+    (match,number,unit)=>{
+      const index=lengthIndex++;
+      if(index!==2)return match;
+      const blur=Math.round(Number(number)*(1-.75*value)*1000)/1000;
+      return `${blur}${unit||'px'}`;
+    }
+  );
+  for(const {marker,color} of colors){
+    masked=masked.replace(marker,attenuateThemeColorAlpha(color,value));
+  }
+  return masked;
+}
+function transformThemeShadow(selector,property,shadow,value){
+  let expected=0,applied=0;
+  const transform=component=>{
+    if(!themeAxisEffectComponent(selector,component).mutable)return component;
+    expected++;
+    const next=attenuateThemeEffectComponent(component,value);
+    if(value===0||next!==component)applied++;
+    return next;
+  };
+  const next=property==='filter'
+    ?mapThemeDropShadows(shadow,transform)
+    :splitThemeCssLayers(shadow).map(transform).join(', ');
+  return {value:next,expected,applied};
+}
+function attenuateThemeShadow(shadow,value,selector='',property='box-shadow'){
+  if(!shadow||shadow==='none'||value<=0)return shadow;
+  return transformThemeShadow(selector,property,shadow,value).value;
+}
+function transformThemeRadialGradient(backgroundImage,value){
+  let expected=0,applied=0;
+  const layers=splitThemeCssLayers(backgroundImage).map(layer=>{
+    if(!layer.includes('radial-gradient'))return layer;
+    const literals=layer.match(new RegExp(THEME_EFFECT_COLOR_SOURCE,'gi'))||[];
+    const colored=literals.filter(literal=>!themeAxisColorIsNeutral(literal));
+    if(!colored.length)return layer;
+    expected++;
+    let next=layer;
+    for(const literal of colored){
+      next=next.replace(literal,attenuateThemeColorAlpha(literal,value));
+    }
+    if(value===0||next!==layer)applied++;
+    return next;
+  });
+  return {value:layers.join(', '),expected,applied};
+}
+function attenuateThemeRadialGradient(backgroundImage,value){
+  if(!backgroundImage||!backgroundImage.includes('radial-gradient')||value<=0){
+    return backgroundImage;
+  }
+  return transformThemeRadialGradient(backgroundImage,value).value;
+}
 function initialDashboardRoute(search,serverDefaults={},browserLanguages=[]){
   const params=new URLSearchParams(search);
   const requestedView=params.get('view');
@@ -2825,6 +3075,519 @@ const EMBED_MODE=
   INITIAL_ROUTE.embed ||
   window.parent!==window;
 document.body.classList.toggle('embed',EMBED_MODE);
+
+/* The cockpit owns persistence and the A/B control. This receiver deliberately
+   does nothing until a valid same-origin parent message arrives, so the default
+   render remains byte-for-byte on the existing CSS path. */
+const THEME_AXIS_TOKEN_ENDPOINTS={
+  'dim-contrast':{
+    '--ink-dim':'#b2aa9b',
+    '--ink-faint':'#8b877d'
+  },
+  background:{
+    '--bg':'#181a1f',
+    '--panel':'#1f2227',
+    '--panel-2':'#242830',
+    '--elev':'#2a3039',
+    '--ink':'#fffced',
+    '--ink-dim':'#aba394',
+    '--ink-faint':'#6c695e',
+    '--hair':'rgba(255,252,237,.085)',
+    '--hair-2':'rgba(255,252,237,.045)'
+  }
+};
+/* Generated by scripts/dashboard_theme_manifest.py. Tests compare this block
+   with the inventory output so CSS edits cannot leave a silent stale count. */
+const THEME_AXIS_SOURCE_EXPECTATIONS={
+  sourceDigest:'08649ed6befd0b313ac6c6c67c59cf269c8ec6c46b710b39bfe18cdbe1404b5f',
+  rulesDigest:'458e145b096baff8ef2b1497bc7414397311bc70413420e77955c188c08cf21f',
+  axes:{
+    background:{expected:9,unit:'token-write'},
+    'dim-contrast':{expected:2,unit:'token-write'},
+    glow:{expected:80,unit:'declaration'},
+    'small-text':{expected:142,unit:'source-declaration'},
+    tracking:{expected:64,unit:'source-declaration'}
+  }
+};
+const THEME_AXIS_RULES_CANONICAL=String.raw`{"color_literal":"#[0-9a-fA-F]{3,8}\\b|(?:rgba?|hsla?)\\([^)]*\\)","glow":{"classification_order":["focus","elevation","state","emissive"],"colored_channel_range_min":24,"component_unit":"comma layer for box/text shadow; drop-shadow() for filter","focus_selector_markers":[":focus","::-webkit-slider-thumb"],"mutable_categories":["emissive","state"],"mutable_geometry":"zero x/y, positive blur, zero spread","radial":"each saturated radial-gradient layer is an emissive component; neutral surface/vignette layers are elevation","source_properties":["box-shadow","text-shadow","filter"],"state_selector_markers":["arming","st-work","st-ask","imp-",".err","askbub","qbub",".armed",".arm",".run","retire",".exit","mail_sent","mail_recv",".spawn","urgent","high"]},"small_text":{"excluded_selector_markers":[".brand","svg","canvas",".xterm","icon","glyph"],"runtime_threshold":"computed font-size < 12px on an owned text element","source_threshold":"authored numeric px < 12"},"token_targets":{"background":["--bg","--panel","--panel-2","--elev","--ink","--ink-dim","--ink-faint","--hair","--hair-2"],"dim-contrast":["--ink-dim","--ink-faint"]},"tracking":{"audit_threshold":"authored numeric px >= 1.5","excluded_selector_markers":[".brand","code","pre",".xterm","canvas"],"runtime_threshold":"computed letter-spacing / computed font-size > 0.08"},"version":1}`;
+function themeAxisSha256(value){
+  if(!window.crypto||!window.crypto.subtle)return Promise.resolve(null);
+  const bytes=new TextEncoder().encode(value);
+  return window.crypto.subtle.digest('SHA-256',bytes).then(buffer=>
+    [...new Uint8Array(buffer)].map(byte=>byte.toString(16).padStart(2,'0')).join(''));
+}
+async function themeAxisInventoryDigestError(){
+  const [sourceDigest,rulesDigest]=await Promise.all([
+    themeAxisSha256(
+      document.getElementById('agentstack-dashboard-styles').textContent),
+    themeAxisSha256(THEME_AXIS_RULES_CANONICAL)
+  ]);
+  const actual={sourceDigest,rulesDigest};
+  if(!actual.sourceDigest||!actual.rulesDigest){
+    return {reason:'digest-unavailable',actual};
+  }
+  if(actual.sourceDigest!==THEME_AXIS_SOURCE_EXPECTATIONS.sourceDigest){
+    return {reason:'source-digest-mismatch',actual};
+  }
+  if(actual.rulesDigest!==THEME_AXIS_SOURCE_EXPECTATIONS.rulesDigest){
+    return {reason:'rules-digest-mismatch',actual};
+  }
+  return null;
+}
+const THEME_AXIS_SURFACES=['--bg','--panel','--panel-2','--elev'];
+const THEME_AXIS_INKS=['--ink','--ink-dim','--ink-faint'];
+const THEME_AXIS_NODE_ATTRIBUTE='data-agentstack-theme-node';
+const themeAxisMarkedElements=new Map();
+let activeThemeAxis=null;
+let activeThemeAxisValue=null;
+let activeThemeAxisAffected=0;
+let activeThemeAxisExpected=0;
+let activeThemeAxisSource={unit:null,expected:0,matched:0};
+let activeThemeAxisMutation={unit:null,expected:0,applied:0};
+let themeAxisObserver=null;
+let themeAxisStyleNode=null;
+let themeAxisNodeSequence=0;
+
+function ensureThemeAxisStyleNode(){
+  if(themeAxisStyleNode)return themeAxisStyleNode;
+  themeAxisStyleNode=document.createElement('style');
+  themeAxisStyleNode.id='agentstack-theme-axis-overrides';
+  document.head.appendChild(themeAxisStyleNode);
+  return themeAxisStyleNode;
+}
+function themeAxisElementSelector(element){
+  let record=themeAxisMarkedElements.get(element);
+  if(!record){
+    record={hadAttribute:element.hasAttribute(THEME_AXIS_NODE_ATTRIBUTE),
+      value:element.getAttribute(THEME_AXIS_NODE_ATTRIBUTE),
+      id:`n${++themeAxisNodeSequence}`};
+    themeAxisMarkedElements.set(element,record);
+    element.setAttribute(THEME_AXIS_NODE_ATTRIBUTE,record.id);
+  }
+  return `[${THEME_AXIS_NODE_ATTRIBUTE}="${record.id}"]`;
+}
+function addThemeAxisRule(element,declarations){
+  const entries=Object.entries(declarations).filter(([,value])=>value);
+  if(!entries.length)return 0;
+  const selector=themeAxisElementSelector(element);
+  const body=entries.map(([property,value])=>
+    `${property}:${value}!important`).join(';');
+  ensureThemeAxisStyleNode().sheet.insertRule(`${selector}{${body}}`);
+  return entries.length;
+}
+function addThemeAxisRootRule(declarations){
+  const body=Object.entries(declarations).map(([property,value])=>
+    `${property}:${value}!important`).join(';');
+  if(body)ensureThemeAxisStyleNode().sheet.insertRule(`:root{${body}}`);
+  return Object.keys(declarations).length;
+}
+function themeAxisSerializedDeclaration(style,property,value){
+  const important=style.getPropertyPriority(property)==='important'
+    ?' !important':'';
+  return `${property}:${value}${important};`;
+}
+function transformThemeAxisGlowStyle(style,selector,value,copyAll=false){
+  const effectProperties=new Set([
+    'box-shadow','text-shadow','filter','background','background-image'
+  ]);
+  let body='',expected=0,applied=0,relevant=false;
+  const hasBackgroundShorthand=/(?:^|;)\s*background\s*:/.test(style.cssText);
+  let copiedBackgroundShorthand=false;
+  for(let index=0;index<style.length;index++){
+    let property=style[index];
+    if(hasBackgroundShorthand&&property==='background-image'){
+      property='background';copiedBackgroundShorthand=true;
+    }else if(copiedBackgroundShorthand&&property.startsWith('background-')){
+      continue;
+    }
+    const current=style.getPropertyValue(property);
+    let next=current;
+    if(effectProperties.has(property)){
+      relevant=true;
+      if(property==='box-shadow'||property==='text-shadow'||property==='filter'){
+        const transformed=transformThemeShadow(selector,property,current,value);
+        next=transformed.value;
+        expected+=transformed.expected;applied+=transformed.applied;
+      }else{
+        const transformed=transformThemeRadialGradient(current,value);
+        next=transformed.value;
+        expected+=transformed.expected;applied+=transformed.applied;
+      }
+    }
+    if(copyAll||effectProperties.has(property)){
+      body+=themeAxisSerializedDeclaration(style,property,next);
+    }
+  }
+  return {body,expected,applied,relevant};
+}
+function buildThemeAxisGlowRule(rule,value){
+  const isKeyframes=rule.cssRules&&typeof rule.name==='string'&&
+    [...rule.cssRules].some(child=>typeof child.keyText==='string');
+  if(isKeyframes){
+    let steps='',expected=0,applied=0,relevant=false;
+    for(const step of rule.cssRules){
+      const transformed=transformThemeAxisGlowStyle(
+        step.style,`@keyframes ${rule.name} > ${step.keyText}`,value,true);
+      steps+=`${step.keyText}{${transformed.body}}`;
+      relevant ||= transformed.relevant;
+      expected+=transformed.expected;applied+=transformed.applied;
+    }
+    return {css:relevant?`@keyframes ${rule.name}{${steps}}`:'',
+      expected,applied};
+  }
+  if(rule.selectorText&&rule.style){
+    const transformed=transformThemeAxisGlowStyle(
+      rule.style,rule.selectorText,value);
+    return {css:transformed.relevant
+      ?`${rule.selectorText}{${transformed.body}}`:'',
+      expected:transformed.expected,applied:transformed.applied};
+  }
+  if(rule.cssRules){
+    let nested='',expected=0,applied=0;
+    for(const child of rule.cssRules){
+      const transformed=buildThemeAxisGlowRule(child,value);
+      nested+=transformed.css;
+      expected+=transformed.expected;applied+=transformed.applied;
+    }
+    if(!nested)return {css:'',expected,applied};
+    const brace=rule.cssText.indexOf('{');
+    const prelude=brace<0?'':rule.cssText.slice(0,brace).trim();
+    return {css:prelude?`${prelude}{${nested}}`:nested,expected,applied};
+  }
+  return {css:'',expected:0,applied:0};
+}
+function buildThemeAxisGlowStyles(value){
+  let css='',expected=0,applied=0,ruleCount=0;
+  const sheet=document.getElementById('agentstack-dashboard-styles').sheet;
+  for(const rule of sheet.cssRules){
+    const transformed=buildThemeAxisGlowRule(rule,value);
+    if(transformed.css){css+=transformed.css;ruleCount++;}
+    expected+=transformed.expected;applied+=transformed.applied;
+  }
+  return {css,expected,applied,ruleCount};
+}
+function renderGlowThemeAxis(value){
+  const snapshot=buildThemeAxisGlowStyles(value);
+  if(snapshot.expected===0||snapshot.applied!==snapshot.expected){
+    throw new Error(`partial-axis:${snapshot.applied}/${snapshot.expected}`);
+  }
+  const style=ensureThemeAxisStyleNode();
+  style.textContent=snapshot.css;
+  if(!style.sheet||style.sheet.cssRules.length!==snapshot.ruleCount){
+    throw new Error(
+      `style-parse:${style.sheet?style.sheet.cssRules.length:0}/${snapshot.ruleCount}`);
+  }
+  return {affected:snapshot.applied,expected:snapshot.expected};
+}
+function restoreThemeAxisOverrides(){
+  if(themeAxisObserver){themeAxisObserver.disconnect();themeAxisObserver=null;}
+  if(themeAxisStyleNode){themeAxisStyleNode.remove();themeAxisStyleNode=null;}
+  for(const [element,record] of themeAxisMarkedElements){
+    if(record.hadAttribute){
+      element.setAttribute(THEME_AXIS_NODE_ATTRIBUTE,record.value);
+    }else element.removeAttribute(THEME_AXIS_NODE_ATTRIBUTE);
+  }
+  themeAxisMarkedElements.clear();
+}
+function themeAxisElements(root=document.body){
+  if(!root)return [];
+  return [root,...root.querySelectorAll('*')];
+}
+function themeAxisElementHasText(element){
+  if(element.matches('input,select,textarea,option'))return true;
+  return [...element.childNodes].some(node=>
+    node.nodeType===Node.TEXT_NODE&&node.textContent.trim());
+}
+function themeAxisElementExcluded(element,axis){
+  if(element.closest('.brand'))return true;
+  if(axis==='small-text'&&
+      (element.matches('svg,svg *,canvas,img,.ico,[class*="icon" i],[class*="glyph" i],[aria-hidden="true"]')||
+       element.closest('.xterm')))return true;
+  return axis==='tracking'&&
+    Boolean(element.closest('code,pre,.xterm')||element.matches('canvas'));
+}
+function themeAxisSnapshots(elements){
+  return elements.map(element=>{
+    const style=getComputedStyle(element);
+    return {element,fontSize:parseFloat(style.fontSize),
+      fontWeight:parseFloat(style.fontWeight),
+      letterSpacing:parseFloat(style.letterSpacing)};
+  });
+}
+function applyMeasuredThemeAxis(axis,value,elements){
+  let affected=0,expected=0;
+  for(const snapshot of themeAxisSnapshots(elements)){
+    const {element}=snapshot;
+    if(axis==='small-text'&&themeAxisElementHasText(element)&&
+        !themeAxisElementExcluded(element,axis)&&
+        snapshot.fontSize>0&&snapshot.fontSize<12){
+      expected++;
+      const targetSize=Math.min(12,snapshot.fontSize+2);
+      const size=snapshot.fontSize+(targetSize-snapshot.fontSize)*value;
+      const baseWeight=Number.isFinite(snapshot.fontWeight)?snapshot.fontWeight:400;
+      const targetWeight=Math.max(baseWeight,500);
+      const weight=Math.round((baseWeight+(targetWeight-baseWeight)*value)/100)*100;
+      const applied=value<=0?2:addThemeAxisRule(element,{
+        'font-size':`${Math.round(size*1000)/1000}px`,
+        'font-weight':String(weight)
+      });
+      if(applied===2)affected++;
+    }else if(axis==='tracking'&&themeAxisElementHasText(element)&&
+        !themeAxisElementExcluded(element,axis)&&snapshot.fontSize>0&&
+        Number.isFinite(snapshot.letterSpacing)){
+      const currentEm=snapshot.letterSpacing/snapshot.fontSize;
+      if(currentEm<=.08)continue;
+      expected++;
+      const spacing=currentEm+(.08-currentEm)*value;
+      const applied=value<=0?1:addThemeAxisRule(element,{
+        'letter-spacing':`${Math.round(spacing*100000)/100000}em`
+      });
+      if(applied===1)affected++;
+    }
+  }
+  return {affected,expected};
+}
+function observeThemeAxisAdditions(axis,value){
+  if(!['small-text','tracking'].includes(axis))return;
+  themeAxisObserver=new MutationObserver(mutations=>{
+    const elements=new Set();
+    for(const mutation of mutations){
+      for(const node of mutation.addedNodes){
+        if(node.nodeType===Node.ELEMENT_NODE){
+          for(const element of themeAxisElements(node))elements.add(element);
+        }
+      }
+    }
+    if(elements.size){
+      const counts=applyMeasuredThemeAxis(axis,value,[...elements]);
+      activeThemeAxisAffected+=counts.affected;
+      activeThemeAxisExpected+=counts.expected;
+      activeThemeAxisMutation={...activeThemeAxisMutation,
+        expected:activeThemeAxisExpected,applied:activeThemeAxisAffected};
+    }
+  });
+  themeAxisObserver.observe(document.body,{childList:true,subtree:true});
+}
+function themeAxisTokenValues(endpoints,value){
+  const computed=getComputedStyle(document.documentElement);
+  const properties=new Set([
+    ...Object.keys(endpoints),...THEME_AXIS_SURFACES,...THEME_AXIS_INKS
+  ]);
+  const base={};
+  for(const property of properties){
+    base[property]=computed.getPropertyValue(property).trim();
+  }
+  const overrides={};
+  for(const [property,target] of Object.entries(endpoints)){
+    overrides[property]=themeAxisColorMix(base[property],target,value);
+  }
+  return {base,overrides};
+}
+function themeAxisSourceCoverage(axis){
+  const definition=THEME_AXIS_SOURCE_EXPECTATIONS.axes[axis];
+  if(!definition)return {unit:null,expected:0,matched:0};
+  if(axis==='dim-contrast'||axis==='background'){
+    const computed=getComputedStyle(document.documentElement);
+    const matched=Object.keys(THEME_AXIS_TOKEN_ENDPOINTS[axis]).filter(property=>
+      computed.getPropertyValue(property).trim()).length;
+    return {unit:definition.unit,expected:definition.expected,matched,
+      digest:THEME_AXIS_SOURCE_EXPECTATIONS.sourceDigest};
+  }
+  let matched=0;
+  const colorLiteral=/#(?:[0-9a-f]{3,8})\b|(?:rgba?|hsla?)\([^)]*\)/i;
+  const exclusions=axis==='small-text'
+    ?['.brand','svg','canvas','.xterm','icon','glyph']
+    :['.brand','code','pre','.xterm','canvas'];
+  const walk=rules=>{
+    for(const rule of rules){
+      if(rule.cssRules)walk(rule.cssRules);
+      if(!rule.style)continue;
+      const selector=(rule.selectorText||rule.keyText||'').toLowerCase();
+      if(axis==='glow'){
+        for(const property of ['box-shadow','text-shadow','filter']){
+          const value=rule.style.getPropertyValue(property);
+          if(value&&colorLiteral.test(value))matched++;
+        }
+      }else if(!exclusions.some(marker=>selector.includes(marker))){
+        const property=axis==='small-text'?'font-size':'letter-spacing';
+        const value=rule.style.getPropertyValue(property).trim();
+        const parsed=value.match(/^([0-9]*\.?[0-9]+)px$/);
+        if(parsed&&((axis==='small-text'&&Number(parsed[1])>0&&Number(parsed[1])<12)||
+            (axis==='tracking'&&Number(parsed[1])>=1.5)))matched++;
+      }
+    }
+  };
+  const sheet=document.getElementById('agentstack-dashboard-styles').sheet;
+  walk(sheet.cssRules);
+  return {unit:definition.unit,expected:definition.expected,matched,
+    digest:THEME_AXIS_SOURCE_EXPECTATIONS.sourceDigest};
+}
+function sampleThemeAxisColor(value){
+  const color=parseThemeAxisColor(value);
+  return color?[color.r*255,color.g*255,color.b*255,color.a]:null;
+}
+function themeAxisContrastRatio(foregroundValue,backgroundValue){
+  const foreground=sampleThemeAxisColor(foregroundValue);
+  const background=sampleThemeAxisColor(backgroundValue);
+  if(!foreground||!background)return null;
+  const alpha=foreground[3];
+  const composite=foreground.slice(0,3).map((channel,index)=>
+    channel*alpha+background[index]*(1-alpha));
+  const luminance=rgb=>{
+    const linear=rgb.map(channel=>{
+      const value=channel/255;
+      return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;
+    });
+    return .2126*linear[0]+.7152*linear[1]+.0722*linear[2];
+  };
+  const foregroundLuminance=luminance(composite);
+  const backgroundLuminance=luminance(background);
+  return (Math.max(foregroundLuminance,backgroundLuminance)+.05)/
+    (Math.min(foregroundLuminance,backgroundLuminance)+.05);
+}
+function validateThemeAxisContrast(axis,value,base,overrides){
+  const inks=axis==='dim-contrast'
+    ?['--ink-dim','--ink-faint']:THEME_AXIS_INKS;
+  for(const ink of inks){
+    for(const surface of THEME_AXIS_SURFACES){
+      const baseline=themeAxisContrastRatio(base[ink],base[surface]);
+      const next=themeAxisContrastRatio(
+        overrides[ink]||base[ink],overrides[surface]||base[surface]);
+      if(baseline===null||next===null)return `unresolved-color:${ink}/${surface}`;
+      if(next+.01<baseline)return `contrast-regression:${ink}/${surface}`;
+    }
+  }
+  if(axis==='dim-contrast'&&value===1){
+    const faint=themeAxisContrastRatio(overrides['--ink-faint'],base['--elev']);
+    const dim=themeAxisContrastRatio(overrides['--ink-dim'],base['--elev']);
+    if(faint===null||faint+.01<4.5)return 'contrast-guard:--ink-faint/--elev';
+    if(dim===null||dim+.01<7)return 'contrast-guard:--ink-dim/--elev';
+  }
+  return null;
+}
+function renderThemeAxis(axis,value){
+  const endpoints=THEME_AXIS_TOKEN_ENDPOINTS[axis];
+  if(endpoints){
+    const {base,overrides}=themeAxisTokenValues(endpoints,value);
+    const reason=validateThemeAxisContrast(axis,value,base,overrides);
+    if(reason)throw new Error(reason);
+    const expected=Object.keys(endpoints).length;
+    const affected=value<=0?expected:addThemeAxisRootRule(overrides);
+    if(expected===0||affected<expected){
+      throw new Error(`partial-axis:${affected}/${expected}`);
+    }
+    return {affected,expected};
+  }
+  if(axis==='glow')return renderGlowThemeAxis(value);
+  const counts=applyMeasuredThemeAxis(axis,value,themeAxisElements());
+  if(counts.expected===0||counts.affected<counts.expected){
+    throw new Error(`partial-axis:${counts.affected}/${counts.expected}`);
+  }
+  observeThemeAxisAdditions(axis,value);
+  return counts;
+}
+function setActiveThemeAxis(axis,value,counts={affected:0,expected:0,
+    source:{unit:null,expected:0,matched:0},
+    mutation:{unit:null,expected:0,applied:0}}){
+  activeThemeAxis=axis;activeThemeAxisValue=value;
+  activeThemeAxisAffected=counts.affected;
+  activeThemeAxisExpected=counts.expected;
+  activeThemeAxisSource=counts.source;
+  activeThemeAxisMutation=counts.mutation;
+  if(axis===null){
+    delete document.documentElement.dataset.agentstackThemeAxis;
+    delete document.documentElement.dataset.agentstackThemeValue;
+  }else{
+    document.documentElement.dataset.agentstackThemeAxis=axis;
+    document.documentElement.dataset.agentstackThemeValue=String(value);
+  }
+}
+function applyThemeAxis(axis,value){
+  if(value===null){
+    if(activeThemeAxis===axis){
+      restoreThemeAxisOverrides();
+      setActiveThemeAxis(null,null);
+    }
+    return {ok:true,reason:null,affected:0,expected:0,
+      source:{unit:null,expected:0,matched:0},
+      mutation:{unit:null,expected:0,applied:0}};
+  }
+  const previous={axis:activeThemeAxis,value:activeThemeAxisValue};
+  let requestedSource=null;
+  restoreThemeAxisOverrides();
+  setActiveThemeAxis(null,null);
+  try{
+    requestedSource=themeAxisSourceCoverage(axis);
+    if(requestedSource.expected===0||
+        requestedSource.matched!==requestedSource.expected){
+      throw new Error(
+        `source-coverage:${requestedSource.matched}/${requestedSource.expected}`);
+    }
+    const mutationCounts=renderThemeAxis(axis,value);
+    const mutationUnit=(axis==='dim-contrast'||axis==='background')
+      ?'token-write':axis==='glow'?'effect-component':'element';
+    const counts={...mutationCounts,source:requestedSource,
+      mutation:{unit:mutationUnit,expected:mutationCounts.expected,
+        applied:mutationCounts.affected}};
+    setActiveThemeAxis(axis,value,counts);
+    return {ok:true,reason:null,...counts};
+  }catch(error){
+    restoreThemeAxisOverrides();
+    if(previous.axis!==null){
+      try{
+        const previousSource=themeAxisSourceCoverage(previous.axis);
+        const mutationCounts=renderThemeAxis(previous.axis,previous.value);
+        const mutationUnit=(previous.axis==='dim-contrast'||previous.axis==='background')
+          ?'token-write':previous.axis==='glow'?'effect-component':'element';
+        const counts={...mutationCounts,source:previousSource,
+          mutation:{unit:mutationUnit,expected:mutationCounts.expected,
+            applied:mutationCounts.affected}};
+        setActiveThemeAxis(previous.axis,previous.value,counts);
+      }catch(_){
+        restoreThemeAxisOverrides();
+        setActiveThemeAxis(null,null);
+      }
+    }
+    return {ok:false,reason:error&&error.message||'apply-failed',
+      affected:activeThemeAxisAffected,expected:activeThemeAxisExpected,
+      source:requestedSource||activeThemeAxisSource,
+      mutation:activeThemeAxisMutation};
+  }
+}
+async function applyThemeAxisMessage(data){
+  const validationError=themeAxisMessageError(data);
+  if(validationError)return {ok:false,reason:validationError};
+  const message=normalizeThemeAxisMessage(data);
+  if(message.value!==null){
+    const digestError=await themeAxisInventoryDigestError();
+    if(digestError){
+      const source=themeAxisSourceCoverage(message.axis);
+      source.digest=digestError.actual.sourceDigest;
+      return {ok:false,reason:digestError.reason,
+        source,mutation:activeThemeAxisMutation};
+    }
+  }
+  return applyThemeAxis(message.axis,message.value);
+}
+function replyThemeAxisResult(data,result){
+  window.parent.postMessage({
+    type:'agentstack-theme-axis-result',version:1,ok:result.ok,
+    requested:{axis:(data&&data.axis)??null,value:(data&&data.value)??null},
+    state:{axis:activeThemeAxis,value:activeThemeAxisValue},
+    matched:result.expected??activeThemeAxisExpected,
+    applied:result.affected??activeThemeAxisAffected,
+    expected:result.expected??activeThemeAxisExpected,
+    source:result.source||activeThemeAxisSource,
+    mutation:result.mutation||activeThemeAxisMutation,
+    reason:result.reason
+  },location.origin);
+}
+window.AGENTSTACK_THEME_AXIS_STATE=()=>({
+  axis:activeThemeAxis,value:activeThemeAxisValue,
+  matched:activeThemeAxisExpected,applied:activeThemeAxisAffected,
+  expected:activeThemeAxisExpected,source:activeThemeAxisSource,
+  mutation:activeThemeAxisMutation
+});
 let netSuspended=false;
 const netLegend=document.getElementById('net-legend');
 if(netLegend)netLegend.addEventListener('beforetoggle',event=>{
@@ -2835,6 +3598,14 @@ window.addEventListener('message',e=>{
   if(!EMBED_MODE||e.origin!==location.origin)return;
   const d=e.data;
   if(!d||typeof d.type!=='string')return;
+  if(d.type==='agentstack-theme-axis'){
+    if(themeAxisMessageAllowed(e,EMBED_MODE,window.parent,location.origin)){
+      applyThemeAxisMessage(d).then(result=>replyThemeAxisResult(d,result))
+        .catch(error=>replyThemeAxisResult(d,{ok:false,
+          reason:error&&error.message||'apply-failed'}));
+    }
+    return;
+  }
   if(d.type==='net-pause')netSuspended=true;
   if(d.type==='net-resume'){
     netSuspended=false;

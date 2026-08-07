@@ -1,0 +1,3912 @@
+{
+  "axes": {
+    "background": {
+      "records": [
+        "--bg",
+        "--panel",
+        "--panel-2",
+        "--elev",
+        "--ink",
+        "--ink-dim",
+        "--ink-faint",
+        "--hair",
+        "--hair-2"
+      ],
+      "unit": "token-write"
+    },
+    "dim-contrast": {
+      "records": [
+        "--ink-dim",
+        "--ink-faint"
+      ],
+      "unit": "token-write"
+    },
+    "glow": {
+      "radial_records": [
+        {
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.04)"
+              ],
+              "layer": 1,
+              "mutable": true,
+              "value": "radial-gradient(120% 140% at 50% 0%, rgba(54,232,255,.04), transparent 55%)"
+            }
+          ],
+          "id": "453ae556ed7474e3",
+          "line": 1872,
+          "property": "background",
+          "selector": ".tm-spark .sp-frame",
+          "value": "repeating-linear-gradient(0deg, rgba(255,176,46,.04) 0 1px, transparent 1px 8px), radial-gradient(120% 140% at 50% 0%, rgba(54,232,255,.04), transparent 55%), #04060a"
+        },
+        {
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(242,182,90,.05)"
+              ],
+              "layer": 0,
+              "mutable": true,
+              "value": "radial-gradient(ellipse 60% 50% at 78% 8%,rgba(242,182,90,.05),transparent 60%)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(95,179,163,.045)"
+              ],
+              "layer": 1,
+              "mutable": true,
+              "value": "radial-gradient(ellipse 80% 60% at 12% 100%,rgba(95,179,163,.045),transparent 55%)"
+            }
+          ],
+          "id": "c85df90bf4a97426",
+          "line": 2022,
+          "property": "background",
+          "selector": "body",
+          "value": "radial-gradient(ellipse 60% 50% at 78% 8%,rgba(242,182,90,.05),transparent 60%), radial-gradient(ellipse 80% 60% at 12% 100%,rgba(95,179,163,.045),transparent 55%), var(--bg)"
+        }
+      ],
+      "records": [
+        {
+          "color_literals": [
+            "rgba(54,232,255,.25)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(54,232,255,.25)"
+              ],
+              "geometry": {
+                "blur": 18.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "0 0 18px rgba(54,232,255,.25)"
+            }
+          ],
+          "id": "79b3c77a6629300d",
+          "line": 119,
+          "property": "box-shadow",
+          "selector": "input[type=search]:focus",
+          "value": "0 0 0 1px var(--cyan),0 0 18px rgba(54,232,255,.25)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,90,77,.4)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,90,77,.4)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,90,77,.4)"
+            }
+          ],
+          "id": "bebb54c598446c88",
+          "line": 191,
+          "property": "box-shadow",
+          "selector": ".bay .killbtn:hover",
+          "value": "0 0 8px rgba(255,90,77,.4)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,90,77,.5)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,90,77,.5)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 4px rgba(255,90,77,.5))"
+            }
+          ],
+          "id": "20cc9ff786b997d2",
+          "line": 195,
+          "property": "filter",
+          "selector": ".bay.arming::after",
+          "value": "drop-shadow(0 0 4px rgba(255,90,77,.5))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,90,77,.35)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,90,77,.35)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(255,90,77,.35)"
+            }
+          ],
+          "id": "fa88ee12e4eace97",
+          "line": 199,
+          "property": "box-shadow",
+          "selector": "@keyframes armpulse > 50%",
+          "value": "0 0 14px rgba(255,90,77,.35)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.45)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.45)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 4px rgba(255,176,46,.45))"
+            }
+          ],
+          "id": "6fe482faf6a38b73",
+          "line": 205,
+          "property": "filter",
+          "selector": ".bay.exit-arming::after",
+          "value": "drop-shadow(0 0 4px rgba(255,176,46,.45))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.3)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.3)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(255,176,46,.3)"
+            }
+          ],
+          "id": "0c735bfc4e20ce3f",
+          "line": 209,
+          "property": "box-shadow",
+          "selector": "@keyframes exitarmpulse > 50%",
+          "value": "0 0 14px rgba(255,176,46,.3)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.45)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.45)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,176,46,.45)"
+            }
+          ],
+          "id": "eda1094722236306",
+          "line": 230,
+          "property": "box-shadow",
+          "selector": ".bay .exitbtn:hover",
+          "value": "0 0 8px rgba(255,176,46,.45)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.55)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.55)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 6px rgba(255,176,46,.55))"
+            }
+          ],
+          "id": "a5a477fa2f5e0f30",
+          "line": 236,
+          "property": "filter",
+          "selector": ".bay.st-work::after",
+          "value": "drop-shadow(0 0 6px rgba(255,176,46,.55))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,90,77,.28)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,90,77,.28)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(255,90,77,.28)"
+            }
+          ],
+          "id": "92436f6e0d72d41b",
+          "line": 242,
+          "property": "box-shadow",
+          "selector": "@keyframes bayaskpulse > 50%",
+          "value": "0 0 14px rgba(255,90,77,.28)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.25)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.25)"
+              ],
+              "geometry": {
+                "blur": 12.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 12px rgba(54,232,255,.25)"
+            }
+          ],
+          "id": "beebb327d82416c2",
+          "line": 255,
+          "property": "box-shadow",
+          "selector": ".bay:hover .port",
+          "value": "0 0 12px rgba(54,232,255,.25)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,255,255,.03)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,255,255,.03)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 3.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 3px rgba(255,255,255,.03)"
+            }
+          ],
+          "id": "cafc96c3c53549ea",
+          "line": 266,
+          "property": "box-shadow",
+          "selector": ".led",
+          "value": "0 0 0 3px rgba(255,255,255,.03)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.12)",
+            "rgba(255,176,46,.6)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,176,46,.12)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 3.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 3px rgba(255,176,46,.12)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.6)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 2,
+              "mutable": true,
+              "value": "0 0 22px rgba(255,176,46,.6)"
+            }
+          ],
+          "id": "5d39c4c1a1ef742c",
+          "line": 268,
+          "property": "box-shadow",
+          "selector": ".led.on",
+          "value": "0 0 0 3px rgba(255,176,46,.12),0 0 10px var(--amber), 0 0 22px rgba(255,176,46,.6)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.32)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.32)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "drop-shadow(0 0 8px rgba(255,176,46,.32))"
+            }
+          ],
+          "id": "e04af7c7afd4ab73",
+          "line": 281,
+          "property": "filter",
+          "selector": ".idrow .prov-logo.on",
+          "value": "drop-shadow(0 0 3.5px var(--amber)) drop-shadow(0 0 8px rgba(255,176,46,.32))"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.5)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.5)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(54,232,255,.5)"
+            }
+          ],
+          "id": "b215ca42e26a77aa",
+          "line": 293,
+          "property": "text-shadow",
+          "selector": ".chip.att",
+          "value": "0 0 8px rgba(54,232,255,.5)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,77,58,.5)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,77,58,.5)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,77,58,.5)"
+            }
+          ],
+          "id": "9bba7aa05f4c518c",
+          "line": 296,
+          "property": "text-shadow",
+          "selector": ".chip.imp",
+          "value": "0 0 8px rgba(255,77,58,.5)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.55)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.55)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,176,46,.55)"
+            }
+          ],
+          "id": "50b914e686f7efb7",
+          "line": 313,
+          "property": "text-shadow",
+          "selector": ".bay .stind.work .t",
+          "value": "0 0 8px rgba(255,176,46,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,77,58,.5)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,77,58,.5)"
+              ],
+              "geometry": {
+                "blur": 12.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 12px rgba(255,77,58,.5)"
+            }
+          ],
+          "id": "aa6ec5b95edee000",
+          "line": 362,
+          "property": "text-shadow",
+          "selector": ".state b",
+          "value": "0 0 12px rgba(255,77,58,.5)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.45)",
+            "rgba(54,232,255,.18)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.45)"
+              ],
+              "geometry": {
+                "blur": 36.0,
+                "spread": 0.0,
+                "x": -18.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "-18px 0 36px rgba(0,0,0,.45)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(54,232,255,.18)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 0.0,
+                "x": 1.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 1px 0 0 rgba(54,232,255,.18)"
+            }
+          ],
+          "id": "12c27ee88446a60d",
+          "line": 368,
+          "property": "box-shadow",
+          "selector": "#edrawer",
+          "value": "-18px 0 36px rgba(0,0,0,.45), inset 1px 0 0 rgba(54,232,255,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.12)",
+            "rgba(0,0,0,.55)",
+            "rgba(255,176,46,.08)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,176,46,.12)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 1px rgba(255,176,46,.12)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 50.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 18.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "0 18px 50px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.08)"
+              ],
+              "geometry": {
+                "blur": 60.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 2,
+              "mutable": true,
+              "value": "0 0 60px rgba(255,176,46,.08)"
+            }
+          ],
+          "id": "5221ca73580b050b",
+          "line": 466,
+          "property": "box-shadow",
+          "selector": "#spawnmd .spm-frame",
+          "value": "0 0 0 1px rgba(255,176,46,.12), 0 18px 50px rgba(0,0,0,.55), 0 0 60px rgba(255,176,46,.08)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.42)",
+            "rgba(255,176,46,.18)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(255,176,46,.42)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 1px rgba(255,176,46,.42)"
+            },
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(255,176,46,.18)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "0 0 14px rgba(255,176,46,.18)"
+            }
+          ],
+          "id": "33d6e498e3bca55e",
+          "line": 522,
+          "property": "box-shadow",
+          "selector": "#spawnmd input[type=text]:focus, #spawnmd select:focus, #spawnmd textarea:focus",
+          "value": "0 0 0 1px rgba(255,176,46,.42), 0 0 14px rgba(255,176,46,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.7)",
+            "rgba(255,255,255,.18)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.7)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 22px rgba(255,176,46,.7)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,255,255,.18)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 0 0 1px rgba(255,255,255,.18)"
+            }
+          ],
+          "id": "18aced2951b96249",
+          "line": 574,
+          "property": "box-shadow",
+          "selector": "#spawnmd .spm-spawn:hover",
+          "value": "0 0 22px rgba(255,176,46,.7), inset 0 0 0 1px rgba(255,255,255,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.58)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.58)"
+              ],
+              "geometry": {
+                "blur": 90.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 30.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 30px 90px rgba(0,0,0,.58)"
+            }
+          ],
+          "id": "f619d1cd30ca960f",
+          "line": 603,
+          "property": "box-shadow",
+          "selector": "#spawnmd .spm-frame",
+          "value": "0 30px 90px rgba(0,0,0,.58)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.42)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.42)"
+              ],
+              "geometry": {
+                "blur": 34.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 15.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 15px 34px rgba(0,0,0,.42)"
+            }
+          ],
+          "id": "9977bc528a1e09be",
+          "line": 703,
+          "property": "box-shadow",
+          "selector": "#spawnmd .spm-dir-options",
+          "value": "0 15px 34px rgba(0,0,0,.42)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.25)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.25)"
+              ],
+              "geometry": {
+                "blur": 24.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 24px rgba(54,232,255,.25)"
+            }
+          ],
+          "id": "20b5ade0db9b2809",
+          "line": 816,
+          "property": "box-shadow",
+          "selector": "#toast",
+          "value": "0 0 24px rgba(54,232,255,.25)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,77,58,.3)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,77,58,.3)"
+              ],
+              "geometry": {
+                "blur": 24.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 24px rgba(255,77,58,.3)"
+            }
+          ],
+          "id": "404ca9abce53274d",
+          "line": 821,
+          "property": "box-shadow",
+          "selector": "#toast.err",
+          "value": "0 0 24px rgba(255,77,58,.3)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(54,232,255,.04)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 6.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 6px 22px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(54,232,255,.04)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 0 0 1px rgba(54,232,255,.04)"
+            }
+          ],
+          "id": "c0ca92bb24f5b016",
+          "line": 921,
+          "property": "box-shadow",
+          "selector": ".mail-card",
+          "value": "0 6px 22px rgba(0,0,0,.55), inset 0 0 0 1px rgba(54,232,255,.04)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(255,176,46,.18)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 6.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 6px 22px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.18)"
+              ],
+              "geometry": {
+                "blur": 18.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 18px rgba(255,176,46,.18)"
+            }
+          ],
+          "id": "43eb93728b1e1f34",
+          "line": 927,
+          "property": "box-shadow",
+          "selector": ".mail-card.imp-high",
+          "value": "0 6px 22px rgba(0,0,0,.55), 0 0 18px rgba(255,176,46,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,77,58,.30)",
+            "rgba(255,77,58,.10)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,77,58,.30)"
+              ],
+              "geometry": {
+                "blur": 24.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 6.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 6px 24px rgba(255,77,58,.30)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,77,58,.10)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 0 0 1px rgba(255,77,58,.10)"
+            }
+          ],
+          "id": "844d3c88cbfa77fb",
+          "line": 930,
+          "property": "box-shadow",
+          "selector": ".mail-card.imp-urgent",
+          "value": "0 6px 24px rgba(255,77,58,.30), inset 0 0 0 1px rgba(255,77,58,.10)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.6)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.6)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 6px rgba(255,176,46,.6)"
+            }
+          ],
+          "id": "8e0bd96004277000",
+          "line": 940,
+          "property": "text-shadow",
+          "selector": ".mail-card.imp-high .mc-route .arr",
+          "value": "0 0 6px rgba(255,176,46,.6)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.2)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.2)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,176,46,.2)"
+            }
+          ],
+          "id": "3554bc5a7971022e",
+          "line": 1075,
+          "property": "box-shadow",
+          "selector": ".an-chip:hover",
+          "value": "0 0 8px rgba(255,176,46,.2)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.25)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(54,232,255,.25)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 8px rgba(54,232,255,.25)"
+            }
+          ],
+          "id": "92ee887611ec6ab8",
+          "line": 1084,
+          "property": "box-shadow",
+          "selector": ".an-role:focus",
+          "value": "0 0 8px rgba(54,232,255,.25)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.7)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.7)"
+              ],
+              "geometry": {
+                "blur": 16.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 16px rgba(255,176,46,.7)"
+            }
+          ],
+          "id": "f4240ea33b84d2d0",
+          "line": 1090,
+          "property": "box-shadow",
+          "selector": ".an-set:hover",
+          "value": "0 0 16px rgba(255,176,46,.7)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,106,93,.7)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,106,93,.7)"
+              ],
+              "geometry": {
+                "blur": 5.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 5px rgba(255,106,93,.7))"
+            }
+          ],
+          "id": "bfcd4c27dd7343af",
+          "line": 1157,
+          "property": "filter",
+          "selector": ".node .askbub .bx",
+          "value": "drop-shadow(0 0 5px rgba(255,106,93,.7))"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.65)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.65)"
+              ],
+              "geometry": {
+                "blur": 5.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 5px rgba(54,232,255,.65))"
+            }
+          ],
+          "id": "947471cb86bd6926",
+          "line": 1159,
+          "property": "filter",
+          "selector": ".node .qbub .bq",
+          "value": "drop-shadow(0 0 5px rgba(54,232,255,.65))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.4)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.4)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,176,46,.4)"
+            }
+          ],
+          "id": "4d313ec3a6562bac",
+          "line": 1274,
+          "property": "text-shadow",
+          "selector": "#selbar .sb-num",
+          "value": "0 0 8px rgba(255,176,46,.4)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.45)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.45)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(54,232,255,.45)"
+            }
+          ],
+          "id": "4b89c70f09effa2d",
+          "line": 1292,
+          "property": "box-shadow",
+          "selector": "#selbar .sb-resume:hover:not(:disabled)",
+          "value": "0 0 14px rgba(54,232,255,.45)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.55)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.55)"
+              ],
+              "geometry": {
+                "blur": 18.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 18px rgba(54,232,255,.55)"
+            }
+          ],
+          "id": "c86a5956aeaa285d",
+          "line": 1302,
+          "property": "box-shadow",
+          "selector": "#selbar .sb-replay:hover:not(:disabled)",
+          "value": "0 0 18px rgba(54,232,255,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.7)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.7)"
+              ],
+              "geometry": {
+                "blur": 18.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 18px rgba(54,232,255,.7)"
+            }
+          ],
+          "id": "6f037720e4d97bb6",
+          "line": 1305,
+          "property": "box-shadow",
+          "selector": "#selbar .sb-replay.armed",
+          "value": "0 0 18px rgba(54,232,255,.7)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.55)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(54,232,255,.55)"
+            }
+          ],
+          "id": "74ca6c0a9b253ff0",
+          "line": 1313,
+          "property": "box-shadow",
+          "selector": "#selbar .sb-resume.arm",
+          "value": "0 0 14px rgba(54,232,255,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.85)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.85)"
+              ],
+              "geometry": {
+                "blur": 18.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 18px rgba(255,176,46,.85)"
+            }
+          ],
+          "id": "c800acc44a4cf32f",
+          "line": 1316,
+          "property": "box-shadow",
+          "selector": "@keyframes sbarm > 50%",
+          "value": "0 0 18px rgba(255,176,46,.85)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.55)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 14px rgba(54,232,255,.55)"
+            }
+          ],
+          "id": "e3adc6ec22de7219",
+          "line": 1317,
+          "property": "box-shadow",
+          "selector": "@keyframes sbarmcy > 0%,100%",
+          "value": "0 0 14px rgba(54,232,255,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.9)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.9)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 22px rgba(54,232,255,.9)"
+            }
+          ],
+          "id": "58498b958cc8b124",
+          "line": 1318,
+          "property": "box-shadow",
+          "selector": "@keyframes sbarmcy > 50%",
+          "value": "0 0 22px rgba(54,232,255,.9)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 24.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 0 24px rgba(0,0,0,.55)"
+            }
+          ],
+          "id": "e53f6e28a6467c01",
+          "line": 1339,
+          "property": "box-shadow",
+          "selector": "#replayBar",
+          "value": "var(--rb-glow),inset 0 0 24px rgba(0,0,0,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.45)",
+            "rgba(0,0,0,.32)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.45)"
+              ],
+              "geometry": {
+                "blur": 10.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 10px rgba(255,157,46,.45)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.32)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 0 6px rgba(0,0,0,.32)"
+            }
+          ],
+          "id": "b0448b08118d972a",
+          "line": 1389,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-filter[aria-checked=\"true\"]",
+          "value": "0 0 10px rgba(255,157,46,.45), inset 0 0 6px rgba(0,0,0,.32)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.55)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.55)"
+              ],
+              "geometry": {
+                "blur": 12.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 12px rgba(255,157,46,.55)"
+            }
+          ],
+          "id": "de0936b83d376839",
+          "line": 1404,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-play:hover",
+          "value": "0 0 12px rgba(255,157,46,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.4)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.4)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 4px rgba(255,157,46,.4)"
+            }
+          ],
+          "id": "a0913b82b32e6dbd",
+          "line": 1425,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-spd-ticks span.maj",
+          "value": "0 0 4px rgba(255,157,46,.4)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.18)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.18)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "inset 0 0 8px rgba(255,157,46,.18)"
+            }
+          ],
+          "id": "94186cd3330a0633",
+          "line": 1430,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-spd-fill",
+          "value": "inset 0 0 8px rgba(255,157,46,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.55)",
+            "rgba(0,0,0,.42)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.55)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,157,46,.55)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.42)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": -2.0,
+                "x": 0.0,
+                "y": -5.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 -5px 4px -2px rgba(0,0,0,.42)"
+            }
+          ],
+          "id": "c19b34e6b1204963",
+          "line": 1434,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-spd-thumb",
+          "value": "0 0 8px rgba(255,157,46,.55), inset 0 -5px 4px -2px rgba(0,0,0,.42)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.36)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.36)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 6px rgba(255,157,46,.36)"
+            }
+          ],
+          "id": "e009215642794434",
+          "line": 1445,
+          "property": "text-shadow",
+          "selector": "#replayBar .rb-spd-val",
+          "value": "0 0 6px rgba(255,157,46,.36)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.4)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.4)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 4px rgba(54,232,255,.4)"
+            }
+          ],
+          "id": "ff0348e1f0a8a50e",
+          "line": 1465,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-hold .rb-spd-ticks span.maj",
+          "value": "0 0 4px rgba(54,232,255,.4)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.18)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.18)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "inset 0 0 8px rgba(54,232,255,.18)"
+            }
+          ],
+          "id": "95f32398b085c186",
+          "line": 1469,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-hold .rb-spd-fill",
+          "value": "inset 0 0 8px rgba(54,232,255,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.55)",
+            "rgba(0,0,0,.42)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.55)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(54,232,255,.55)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.42)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": -2.0,
+                "x": 0.0,
+                "y": -5.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 -5px 4px -2px rgba(0,0,0,.42)"
+            }
+          ],
+          "id": "061f858de000019e",
+          "line": 1471,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-hold .rb-spd-thumb",
+          "value": "0 0 8px rgba(54,232,255,.55), inset 0 -5px 4px -2px rgba(0,0,0,.42)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.36)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.36)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 6px rgba(54,232,255,.36)"
+            }
+          ],
+          "id": "02a9ed3ef28ddede",
+          "line": 1474,
+          "property": "text-shadow",
+          "selector": "#replayBar .rb-hold .rb-spd-val",
+          "value": "0 0 6px rgba(54,232,255,.36)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.18)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.18)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "inset 0 0 14px rgba(54,232,255,.18)"
+            }
+          ],
+          "id": "cffeacc64030ebee",
+          "line": 1490,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-fill",
+          "value": "inset 0 0 14px rgba(54,232,255,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 12.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 12px rgba(0,0,0,.55)"
+            }
+          ],
+          "id": "cbe4f1f757e2ab61",
+          "line": 1523,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-mk-tip",
+          "value": "0 0 12px rgba(0,0,0,.55)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.55)",
+            "rgba(0,0,0,.45)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.55)"
+              ],
+              "geometry": {
+                "blur": 10.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 10px rgba(255,157,46,.55)"
+            },
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.45)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": -3.0,
+                "x": 0.0,
+                "y": -8.0
+              },
+              "layer": 1,
+              "mutable": false,
+              "value": "inset 0 -8px 6px -3px rgba(0,0,0,.45)"
+            }
+          ],
+          "id": "da8b281d7294adb4",
+          "line": 1536,
+          "property": "box-shadow",
+          "selector": "#replayBar .rb-thumb",
+          "value": "0 0 10px rgba(255,157,46,.55), inset 0 -8px 6px -3px rgba(0,0,0,.45)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,157,46,.45)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,157,46,.45)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,157,46,.45)"
+            }
+          ],
+          "id": "cf3a5111a35c56e2",
+          "line": 1558,
+          "property": "text-shadow",
+          "selector": "#replayBar .rb-abs",
+          "value": "0 0 8px rgba(255,157,46,.45)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.6)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.6)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(54,232,255,.6)"
+            }
+          ],
+          "id": "df704616ad444177",
+          "line": 1573,
+          "property": "text-shadow",
+          "selector": ".node-exit-glyph",
+          "value": "0 0 8px rgba(54,232,255,.6)"
+        },
+        {
+          "color_literals": [
+            "rgba(255,209,102,.75)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,209,102,.75)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,209,102,.75)"
+            }
+          ],
+          "id": "9b4f71176f0d2997",
+          "line": 1619,
+          "property": "text-shadow",
+          "selector": ".ask-replay-glyph",
+          "value": "0 0 8px rgba(255,209,102,.75)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.6)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(54,232,255,.6)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 8px rgba(54,232,255,.6)"
+            }
+          ],
+          "id": "85bbf67dc64880a3",
+          "line": 1699,
+          "property": "box-shadow",
+          "selector": ".nc-row input[type=range]::-webkit-slider-thumb",
+          "value": "0 0 8px rgba(54,232,255,.6)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.95)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(54,232,255,.95)"
+              ],
+              "geometry": {
+                "blur": 13.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 13px rgba(54,232,255,.95)"
+            }
+          ],
+          "id": "05cfcbfffe657516",
+          "line": 1702,
+          "property": "box-shadow",
+          "selector": ".nc-row input[type=range]:hover::-webkit-slider-thumb",
+          "value": "0 0 13px rgba(54,232,255,.95)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.22)"
+          ],
+          "components": [
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(54,232,255,.22)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "0 0 22px rgba(54,232,255,.22)"
+            }
+          ],
+          "id": "46e0c39edd7c3aa0",
+          "line": 1713,
+          "property": "box-shadow",
+          "selector": "#gtip",
+          "value": "0 0 22px rgba(54,232,255,.22)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.7)",
+            "rgba(255,176,46,.12)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.7)"
+              ],
+              "geometry": {
+                "blur": 50.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 50px rgba(0,0,0,.7)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.12)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 22px rgba(255,176,46,.12)"
+            }
+          ],
+          "id": "86ef6df41b58b06e",
+          "line": 1780,
+          "property": "box-shadow",
+          "selector": ".tm-box",
+          "value": "0 0 50px rgba(0,0,0,.7),0 0 22px rgba(255,176,46,.12)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(255,176,46,.12)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 22.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 0 22px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.12)"
+              ],
+              "geometry": {
+                "blur": 2.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "inset 0 0 2px rgba(255,176,46,.12)"
+            }
+          ],
+          "id": "4f08aff336287734",
+          "line": 1877,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-frame",
+          "value": "inset 0 0 22px rgba(0,0,0,.55), inset 0 0 2px rgba(255,176,46,.12)"
+        },
+        {
+          "color_literals": [
+            "rgba(54,232,255,.55)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.55)"
+              ],
+              "geometry": {
+                "blur": 4.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 4px rgba(54,232,255,.55))"
+            }
+          ],
+          "id": "4168e1317dadaa5d",
+          "line": 1887,
+          "property": "filter",
+          "selector": ".tm-spark .sp-svg .ev.mail_sent, .tm-spark .sp-svg .ev.mail_recv",
+          "value": "drop-shadow(0 0 4px rgba(54,232,255,.55))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,176,46,.85)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,176,46,.85)"
+              ],
+              "geometry": {
+                "blur": 5.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 5px rgba(255,176,46,.85))"
+            }
+          ],
+          "id": "933dd283b83995da",
+          "line": 1891,
+          "property": "filter",
+          "selector": ".tm-spark .sp-svg .ev.spawn",
+          "value": "drop-shadow(0 0 5px rgba(255,176,46,.85))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,77,58,.7)"
+          ],
+          "components": [
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,77,58,.7)"
+              ],
+              "geometry": {
+                "blur": 6.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": true,
+              "value": "drop-shadow(0 0 6px rgba(255,77,58,.7))"
+            }
+          ],
+          "id": "68eea49ca7e4c6f9",
+          "line": 1895,
+          "property": "filter",
+          "selector": ".tm-spark .sp-svg .ev.retire, .tm-spark .sp-svg .ev.exit",
+          "value": "drop-shadow(0 0 6px rgba(255,77,58,.7))"
+        },
+        {
+          "color_literals": [
+            "rgba(255,255,255,.7)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(255,255,255,.7)"
+              ],
+              "geometry": {
+                "blur": 9.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "drop-shadow(0 0 9px rgba(255,255,255,.7))"
+            }
+          ],
+          "id": "075650e510309929",
+          "line": 1897,
+          "property": "filter",
+          "selector": ".tm-spark .sp-svg .ev:hover, .tm-spark .sp-svg .ev.act",
+          "value": "drop-shadow(0 0 9px rgba(255,255,255,.7))"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(255,176,46,.18)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 0 14px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "emissive",
+              "color_literals": [
+                "rgba(255,176,46,.18)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,176,46,.18)"
+            }
+          ],
+          "id": "1ff4d14a8a409efe",
+          "line": 1910,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-tip",
+          "value": "inset 0 0 14px rgba(0,0,0,.55), 0 0 8px rgba(255,176,46,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(54,232,255,.22)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 0 14px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.22)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 8px rgba(54,232,255,.22)"
+            }
+          ],
+          "id": "b6fb254cebd8caf5",
+          "line": 1923,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-tip.mail_recv",
+          "value": "inset 0 0 14px rgba(0,0,0,.55), 0 0 8px rgba(54,232,255,.22)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(54,232,255,.22)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 0 14px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(54,232,255,.22)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 8px rgba(54,232,255,.22)"
+            }
+          ],
+          "id": "bf5f093100bf7c94",
+          "line": 1926,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-tip.mail_sent",
+          "value": "inset 0 0 14px rgba(0,0,0,.55), 0 0 8px rgba(54,232,255,.22)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.55)",
+            "rgba(255,77,58,.22)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.55)"
+              ],
+              "geometry": {
+                "blur": 14.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 0 14px rgba(0,0,0,.55)"
+            },
+            {
+              "category": "state",
+              "color_literals": [
+                "rgba(255,77,58,.22)"
+              ],
+              "geometry": {
+                "blur": 8.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 1,
+              "mutable": true,
+              "value": "0 0 8px rgba(255,77,58,.22)"
+            }
+          ],
+          "id": "1406fcb871cb32e4",
+          "line": 1931,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-tip.retire, .tm-spark .sp-tip.exit",
+          "value": "inset 0 0 14px rgba(0,0,0,.55), 0 0 8px rgba(255,77,58,.22)"
+        },
+        {
+          "color_literals": [
+            "rgba(242,182,90,.06)"
+          ],
+          "components": [
+            {
+              "category": "focus",
+              "color_literals": [
+                "rgba(242,182,90,.06)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 2.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 2px rgba(242,182,90,.06)"
+            }
+          ],
+          "id": "c85f27cad9b9f1aa",
+          "line": 2072,
+          "property": "box-shadow",
+          "selector": "input[type=search]:focus",
+          "value": "0 0 0 2px rgba(242,182,90,.06)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.12)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.12)"
+              ],
+              "geometry": {
+                "blur": 32.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 10.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 10px 32px rgba(0,0,0,.12)"
+            }
+          ],
+          "id": "03c07f2c463a8a02",
+          "line": 2084,
+          "property": "box-shadow",
+          "selector": ".bay",
+          "value": "0 10px 32px rgba(0,0,0,.12)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.18)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.18)"
+              ],
+              "geometry": {
+                "blur": 42.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 16.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 16px 42px rgba(0,0,0,.18)"
+            }
+          ],
+          "id": "2533b0cb96be97e3",
+          "line": 2169,
+          "property": "box-shadow",
+          "selector": ".win,.netinfo,.nctl,.sel-toggle,.legend",
+          "value": "0 16px 42px rgba(0,0,0,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.52)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.52)"
+              ],
+              "geometry": {
+                "blur": 90.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 30.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 30px 90px rgba(0,0,0,.52)"
+            }
+          ],
+          "id": "1edad9e34e033525",
+          "line": 2195,
+          "property": "box-shadow",
+          "selector": ".legend-pop",
+          "value": "0 30px 90px rgba(0,0,0,.52)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.52)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.52)"
+              ],
+              "geometry": {
+                "blur": 90.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 30.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 30px 90px rgba(0,0,0,.52)"
+            }
+          ],
+          "id": "b1b3cae08eef3132",
+          "line": 2246,
+          "property": "box-shadow",
+          "selector": "#term .tm-box,#spawnmd .spm-frame,#edrawer",
+          "value": "0 30px 90px rgba(0,0,0,.52)"
+        },
+        {
+          "color_literals": [
+            "rgba(242,182,90,.08)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(242,182,90,.08)"
+              ],
+              "geometry": {
+                "blur": 0.0,
+                "spread": 3.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 0 0 3px rgba(242,182,90,.08)"
+            }
+          ],
+          "id": "35b48726099decea",
+          "line": 2254,
+          "property": "box-shadow",
+          "selector": "#term.s-run .tm-led",
+          "value": "0 0 0 3px rgba(242,182,90,.08)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.18)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.18)"
+              ],
+              "geometry": {
+                "blur": 30.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 12.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "inset 0 12px 30px rgba(0,0,0,.18)"
+            }
+          ],
+          "id": "cb804ef9e6051daa",
+          "line": 2337,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-frame",
+          "value": "inset 0 12px 30px rgba(0,0,0,.18)"
+        },
+        {
+          "color_literals": [
+            "rgba(0,0,0,.28)"
+          ],
+          "components": [
+            {
+              "category": "elevation",
+              "color_literals": [
+                "rgba(0,0,0,.28)"
+              ],
+              "geometry": {
+                "blur": 24.0,
+                "spread": 0.0,
+                "x": 0.0,
+                "y": 8.0
+              },
+              "layer": 0,
+              "mutable": false,
+              "value": "0 8px 24px rgba(0,0,0,.28)"
+            }
+          ],
+          "id": "6db915851bc90797",
+          "line": 2356,
+          "property": "box-shadow",
+          "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
+          "value": "0 8px 24px rgba(0,0,0,.28)"
+        }
+      ],
+      "unit": "declaration"
+    },
+    "small-text": {
+      "records": [
+        {
+          "line": 84,
+          "property": "font-size",
+          "selector": ".gauge .k",
+          "value": "9px"
+        },
+        {
+          "line": 94,
+          "property": "font-size",
+          "selector": ".mail-health",
+          "value": "11px"
+        },
+        {
+          "line": 111,
+          "property": "font-size",
+          "selector": ".field::before",
+          "value": "11px"
+        },
+        {
+          "line": 121,
+          "property": "font-size",
+          "selector": ".tog",
+          "value": "10px"
+        },
+        {
+          "line": 138,
+          "property": "font-size",
+          "selector": ".sector",
+          "value": "11px"
+        },
+        {
+          "line": 186,
+          "property": "font-size",
+          "selector": ".bay .killbtn",
+          "value": "8px"
+        },
+        {
+          "line": 223,
+          "property": "font-size",
+          "selector": ".bay .exitbtn",
+          "value": "8px"
+        },
+        {
+          "line": 260,
+          "property": "font-size",
+          "selector": ".subst-note",
+          "value": "10px"
+        },
+        {
+          "line": 289,
+          "property": "font-size",
+          "selector": ".chip",
+          "value": "9.5px"
+        },
+        {
+          "line": 304,
+          "property": "font-size",
+          "selector": ".bay .stind",
+          "value": "10px"
+        },
+        {
+          "line": 324,
+          "property": "font-size",
+          "selector": ".jump",
+          "value": "11px"
+        },
+        {
+          "line": 344,
+          "property": "font-size",
+          "selector": ".kv",
+          "value": "11.5px"
+        },
+        {
+          "line": 347,
+          "property": "font-size",
+          "selector": ".kv b",
+          "value": "9.5px"
+        },
+        {
+          "line": 352,
+          "property": "font-size",
+          "selector": ".foot",
+          "value": "10px"
+        },
+        {
+          "line": 385,
+          "property": "font-size",
+          "selector": "#edrawer .ed-cnt",
+          "value": "11px"
+        },
+        {
+          "line": 401,
+          "property": "font-size",
+          "selector": "#edrawer .ed-config b",
+          "value": "9px"
+        },
+        {
+          "line": 404,
+          "property": "font-size",
+          "selector": "#edrawer .ed-config span",
+          "value": "10px"
+        },
+        {
+          "line": 409,
+          "property": "font-size",
+          "selector": "#edrawer .ed-msg .ed-meta",
+          "value": "10px"
+        },
+        {
+          "line": 414,
+          "property": "font-size",
+          "selector": "#edrawer .ed-msg .ed-imp",
+          "value": "9px"
+        },
+        {
+          "line": 423,
+          "property": "font-size",
+          "selector": "#edrawer .ed-msg .ed-prev",
+          "value": "11px"
+        },
+        {
+          "line": 429,
+          "property": "font-size",
+          "selector": "#edrawer .ed-msg .ed-ack",
+          "value": "9px"
+        },
+        {
+          "line": 432,
+          "property": "font-size",
+          "selector": "#edrawer .ed-loading",
+          "value": "11px"
+        },
+        {
+          "line": 439,
+          "property": "font-size",
+          "selector": ".newbtn",
+          "value": "11px"
+        },
+        {
+          "line": 493,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-sub",
+          "value": "10px"
+        },
+        {
+          "line": 505,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-lab",
+          "value": "9.5px"
+        },
+        {
+          "line": 508,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-lab::before",
+          "value": "9px"
+        },
+        {
+          "line": 510,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-lab .spm-opt",
+          "value": "8px"
+        },
+        {
+          "line": 538,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-check",
+          "value": "11px"
+        },
+        {
+          "line": 547,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-check input:checked::after",
+          "value": "11px"
+        },
+        {
+          "line": 555,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-stat",
+          "value": "10px"
+        },
+        {
+          "line": 560,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-cancel",
+          "value": "11px"
+        },
+        {
+          "line": 566,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-spawn",
+          "value": "11.5px"
+        },
+        {
+          "line": 607,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-kicker",
+          "value": "8px"
+        },
+        {
+          "line": 612,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-sub",
+          "value": "8.5px"
+        },
+        {
+          "line": 625,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-section-meta",
+          "value": "7.5px"
+        },
+        {
+          "line": 628,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-lab",
+          "value": "8.5px"
+        },
+        {
+          "line": 659,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-agent-name",
+          "value": "10px"
+        },
+        {
+          "line": 660,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-agent-status",
+          "value": "6.5px"
+        },
+        {
+          "line": 678,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-name-card-label",
+          "value": "7px"
+        },
+        {
+          "line": 686,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-name-hint",
+          "value": "8px"
+        },
+        {
+          "line": 689,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-shuffle",
+          "value": "8px"
+        },
+        {
+          "line": 709,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-dir-option",
+          "value": "10px"
+        },
+        {
+          "line": 715,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-dir-option .spm-dir-arrow",
+          "value": "8px"
+        },
+        {
+          "line": 720,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-dir-option .spm-dir-option-path",
+          "value": "7px"
+        },
+        {
+          "line": 722,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-dir-empty",
+          "value": "8px"
+        },
+        {
+          "line": 726,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-chip",
+          "value": "9px"
+        },
+        {
+          "line": 737,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-provider-tab",
+          "value": "9px"
+        },
+        {
+          "line": 747,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-model-chip b",
+          "value": "9px"
+        },
+        {
+          "line": 749,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-model-chip small",
+          "value": "6.5px"
+        },
+        {
+          "line": 752,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-model-tone",
+          "value": "7.5px"
+        },
+        {
+          "line": 759,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-effort-label",
+          "value": "8px"
+        },
+        {
+          "line": 763,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-effort-hint",
+          "value": "7.5px"
+        },
+        {
+          "line": 769,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-advanced summary",
+          "value": "8.5px"
+        },
+        {
+          "line": 773,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-advanced summary::before",
+          "value": "10px"
+        },
+        {
+          "line": 779,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-advanced-meta",
+          "value": "7px"
+        },
+        {
+          "line": 784,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-load",
+          "value": "8px"
+        },
+        {
+          "line": 793,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-cancel",
+          "value": "9px"
+        },
+        {
+          "line": 796,
+          "property": "font-size",
+          "selector": "#spawnmd .spm-spawn",
+          "value": "9.5px"
+        },
+        {
+          "line": 849,
+          "property": "font-size",
+          "selector": ".viewtog button",
+          "value": "11px"
+        },
+        {
+          "line": 881,
+          "property": "font-size",
+          "selector": ".edge-count",
+          "value": "10px"
+        },
+        {
+          "line": 887,
+          "property": "font-size",
+          "selector": "#net.focus .edge-count.hl",
+          "value": "11px"
+        },
+        {
+          "line": 932,
+          "property": "font-size",
+          "selector": ".mail-card .mc-route",
+          "value": "9px"
+        },
+        {
+          "line": 942,
+          "property": "font-size",
+          "selector": ".mail-card .mc-kind",
+          "value": "8.5px"
+        },
+        {
+          "line": 949,
+          "property": "font-size",
+          "selector": ".mail-card .mc-ex",
+          "value": "10.5px"
+        },
+        {
+          "line": 966,
+          "property": "font-size",
+          "selector": ".node text",
+          "value": "10.5px"
+        },
+        {
+          "line": 1046,
+          "property": "font-size",
+          "selector": ".node .annot-lab",
+          "value": "7.5px"
+        },
+        {
+          "line": 1061,
+          "property": "font-size",
+          "selector": ".an-head",
+          "value": "10px"
+        },
+        {
+          "line": 1064,
+          "property": "font-size",
+          "selector": ".an-cur",
+          "value": "11.5px"
+        },
+        {
+          "line": 1069,
+          "property": "font-size",
+          "selector": ".an-chip",
+          "value": "11px"
+        },
+        {
+          "line": 1073,
+          "property": "font-size",
+          "selector": ".an-chip span",
+          "value": "10.5px"
+        },
+        {
+          "line": 1085,
+          "property": "font-size",
+          "selector": ".an-set,.an-clear",
+          "value": "10px"
+        },
+        {
+          "line": 1125,
+          "property": "font-size",
+          "selector": ".node .zsleep .z1",
+          "value": "8px"
+        },
+        {
+          "line": 1126,
+          "property": "font-size",
+          "selector": ".node .zsleep .z2",
+          "value": "11px"
+        },
+        {
+          "line": 1182,
+          "property": "font-size",
+          "selector": ".node .etime",
+          "value": "9px"
+        },
+        {
+          "line": 1196,
+          "property": "font-size",
+          "selector": ".node .murmur .mtx",
+          "value": "9px"
+        },
+        {
+          "line": 1210,
+          "property": "font-size",
+          "selector": ".win-label",
+          "value": "10.5px"
+        },
+        {
+          "line": 1220,
+          "property": "font-size",
+          "selector": ".win-all",
+          "value": "10.5px"
+        },
+        {
+          "line": 1224,
+          "property": "font-size",
+          "selector": ".netinfo",
+          "value": "10.5px"
+        },
+        {
+          "line": 1230,
+          "property": "font-size",
+          "selector": ".sel-toggle",
+          "value": "10.5px"
+        },
+        {
+          "line": 1276,
+          "property": "font-size",
+          "selector": "#selbar .sb-lab",
+          "value": "9px"
+        },
+        {
+          "line": 1279,
+          "property": "font-size",
+          "selector": "#selbar .sb-btn",
+          "value": "10.5px"
+        },
+        {
+          "line": 1359,
+          "property": "font-size",
+          "selector": "#replayBar .rb-label",
+          "value": "11px"
+        },
+        {
+          "line": 1361,
+          "property": "font-size",
+          "selector": "#replayBar .rb-sep",
+          "value": "11px"
+        },
+        {
+          "line": 1362,
+          "property": "font-size",
+          "selector": "#replayBar .rb-agents",
+          "value": "10px"
+        },
+        {
+          "line": 1371,
+          "property": "font-size",
+          "selector": "#replayBar .rb-x",
+          "value": "10px"
+        },
+        {
+          "line": 1378,
+          "property": "font-size",
+          "selector": "#replayBar .rb-filter",
+          "value": "9.5px"
+        },
+        {
+          "line": 1398,
+          "property": "font-size",
+          "selector": "#replayBar .rb-play",
+          "value": "11px"
+        },
+        {
+          "line": 1413,
+          "property": "font-size",
+          "selector": "#replayBar .rb-speed::before",
+          "value": "9px"
+        },
+        {
+          "line": 1442,
+          "property": "font-size",
+          "selector": "#replayBar .rb-spd-val",
+          "value": "11px"
+        },
+        {
+          "line": 1457,
+          "property": "font-size",
+          "selector": "#replayBar .rb-hold::before",
+          "value": "9px"
+        },
+        {
+          "line": 1520,
+          "property": "font-size",
+          "selector": "#replayBar .rb-mk-tip",
+          "value": "10px"
+        },
+        {
+          "line": 1548,
+          "property": "font-size",
+          "selector": "#replayBar .rb-axis",
+          "value": "8.5px"
+        },
+        {
+          "line": 1560,
+          "property": "font-size",
+          "selector": "#replayBar .rb-rel",
+          "value": "9.5px"
+        },
+        {
+          "line": 1642,
+          "property": "font-size",
+          "selector": ".legend",
+          "value": "10.5px"
+        },
+        {
+          "line": 1647,
+          "property": "font-size",
+          "selector": ".legend .lg-lab",
+          "value": "9.5px"
+        },
+        {
+          "line": 1650,
+          "property": "font-size",
+          "selector": ".legend .lg-hint",
+          "value": "9.5px"
+        },
+        {
+          "line": 1675,
+          "property": "font-size",
+          "selector": ".nctl-hd .ic",
+          "value": "10px"
+        },
+        {
+          "line": 1678,
+          "property": "font-size",
+          "selector": ".nctl-hd b",
+          "value": "10px"
+        },
+        {
+          "line": 1681,
+          "property": "font-size",
+          "selector": ".nctl-hd .sub",
+          "value": "8px"
+        },
+        {
+          "line": 1688,
+          "property": "font-size",
+          "selector": ".nc-row .lab",
+          "value": "9px"
+        },
+        {
+          "line": 1690,
+          "property": "font-size",
+          "selector": ".nc-row .val",
+          "value": "10px"
+        },
+        {
+          "line": 1705,
+          "property": "font-size",
+          "selector": ".nc-reset",
+          "value": "9px"
+        },
+        {
+          "line": 1731,
+          "property": "font-size",
+          "selector": "#gtip .gt-meta",
+          "value": "10px"
+        },
+        {
+          "line": 1736,
+          "property": "font-size",
+          "selector": "#gtip .gt-row b",
+          "value": "9.5px"
+        },
+        {
+          "line": 1767,
+          "property": "font-size",
+          "selector": ".term",
+          "value": "11px"
+        },
+        {
+          "line": 1791,
+          "property": "font-size",
+          "selector": ".tm-meta",
+          "value": "10.5px"
+        },
+        {
+          "line": 1795,
+          "property": "font-size",
+          "selector": ".tm-tabs button",
+          "value": "10.5px"
+        },
+        {
+          "line": 1805,
+          "property": "font-size",
+          "selector": ".tm-foot",
+          "value": "10.5px"
+        },
+        {
+          "line": 1808,
+          "property": "font-size",
+          "selector": ".tm-exit-btn",
+          "value": "11px"
+        },
+        {
+          "line": 1815,
+          "property": "font-size",
+          "selector": ".tm-open",
+          "value": "11px"
+        },
+        {
+          "line": 1835,
+          "property": "font-size",
+          "selector": ".tm-summary .ts-row b",
+          "value": "10px"
+        },
+        {
+          "line": 1859,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-ttl",
+          "value": "10.5px"
+        },
+        {
+          "line": 1861,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tot",
+          "value": "10px"
+        },
+        {
+          "line": 1863,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-leg",
+          "value": "9.5px"
+        },
+        {
+          "line": 1913,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tip",
+          "value": "10.5px"
+        },
+        {
+          "line": 1933,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tip .tp-k",
+          "value": "8.5px"
+        },
+        {
+          "line": 1941,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tip .tp-t",
+          "value": "9.5px"
+        },
+        {
+          "line": 1944,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tip .tp-r",
+          "value": "11px"
+        },
+        {
+          "line": 1947,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-tip .tp-s",
+          "value": "10.5px"
+        },
+        {
+          "line": 1951,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-axis",
+          "value": "9px"
+        },
+        {
+          "line": 1955,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-empty",
+          "value": "10px"
+        },
+        {
+          "line": 1971,
+          "property": "font-size",
+          "selector": ".tm-deliv .dv-d",
+          "value": "10px"
+        },
+        {
+          "line": 1973,
+          "property": "font-size",
+          "selector": ".tm-deliv .hempty",
+          "value": "11px"
+        },
+        {
+          "line": 1978,
+          "property": "font-size",
+          "selector": ".msg .who",
+          "value": "9.5px"
+        },
+        {
+          "line": 1990,
+          "property": "font-size",
+          "selector": ".bub.tool",
+          "value": "11px"
+        },
+        {
+          "line": 1998,
+          "property": "font-size",
+          "selector": ".tm-hist .hnote",
+          "value": "10.5px"
+        },
+        {
+          "line": 2064,
+          "property": "font-size",
+          "selector": ".viewtog button",
+          "value": "9.5px"
+        },
+        {
+          "line": 2078,
+          "property": "font-size",
+          "selector": ".sector",
+          "value": "9px"
+        },
+        {
+          "line": 2141,
+          "property": "font-size",
+          "selector": ".node text",
+          "value": "10px"
+        },
+        {
+          "line": 2144,
+          "property": "font-size",
+          "selector": ".node text:not([class])",
+          "value": "10.5px"
+        },
+        {
+          "line": 2145,
+          "property": "font-size",
+          "selector": ".node.run text:not([class])",
+          "value": "11px"
+        },
+        {
+          "line": 2147,
+          "property": "font-size",
+          "selector": ".node .annot-lab",
+          "value": "6.8px"
+        },
+        {
+          "line": 2165,
+          "property": "font-size",
+          "selector": ".edge-count",
+          "value": "9px"
+        },
+        {
+          "line": 2205,
+          "property": "font-size",
+          "selector": ".lp-row",
+          "value": "9px"
+        },
+        {
+          "line": 2207,
+          "property": "font-size",
+          "selector": ".lp-key",
+          "value": "8px"
+        },
+        {
+          "line": 2268,
+          "property": "font-size",
+          "selector": ".tm-meta",
+          "value": "8.5px"
+        },
+        {
+          "line": 2273,
+          "property": "font-size",
+          "selector": ".tm-tabs button",
+          "value": "9px"
+        },
+        {
+          "line": 2279,
+          "property": "font-size",
+          "selector": ".tm-x,.tm-open,.tm-exit-btn",
+          "value": "9px"
+        },
+        {
+          "line": 2322,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-ttl,.tm-spark .sp-tot,.tm-spark .sp-axis",
+          "value": "8.5px"
+        },
+        {
+          "line": 2329,
+          "property": "font-size",
+          "selector": ".tm-spark .sp-leg .sp-chip",
+          "value": "7.5px"
+        },
+        {
+          "line": 2363,
+          "property": "font-size",
+          "selector": ".msg .who,.msg.user .who,.msg.assistant .who",
+          "value": "8px"
+        },
+        {
+          "line": 2393,
+          "property": "font-size",
+          "selector": ".tm-exit-btn,.tm-open,.tm-x",
+          "value": "11px"
+        }
+      ],
+      "unit": "source-declaration"
+    },
+    "tracking": {
+      "records": [
+        {
+          "line": 84,
+          "property": "letter-spacing",
+          "selector": ".gauge .k",
+          "value": "2.5px"
+        },
+        {
+          "line": 95,
+          "property": "letter-spacing",
+          "selector": ".mail-health",
+          "value": "1.5px"
+        },
+        {
+          "line": 121,
+          "property": "letter-spacing",
+          "selector": ".tog",
+          "value": "1.5px"
+        },
+        {
+          "line": 138,
+          "property": "letter-spacing",
+          "selector": ".sector",
+          "value": "4px"
+        },
+        {
+          "line": 145,
+          "property": "letter-spacing",
+          "selector": ".sector u",
+          "value": "2px"
+        },
+        {
+          "line": 186,
+          "property": "letter-spacing",
+          "selector": ".bay .killbtn",
+          "value": "1.8px"
+        },
+        {
+          "line": 197,
+          "property": "letter-spacing",
+          "selector": ".bay.arming .killbtn",
+          "value": "1.5px"
+        },
+        {
+          "line": 207,
+          "property": "letter-spacing",
+          "selector": ".bay.exit-arming .exitbtn",
+          "value": "1.5px"
+        },
+        {
+          "line": 223,
+          "property": "letter-spacing",
+          "selector": ".bay .exitbtn",
+          "value": "1.8px"
+        },
+        {
+          "line": 289,
+          "property": "letter-spacing",
+          "selector": ".chip",
+          "value": "1.5px"
+        },
+        {
+          "line": 305,
+          "property": "letter-spacing",
+          "selector": ".bay .stind",
+          "value": "1.6px"
+        },
+        {
+          "line": 315,
+          "property": "letter-spacing",
+          "selector": ".bay .stind.ask",
+          "value": "2px"
+        },
+        {
+          "line": 319,
+          "property": "letter-spacing",
+          "selector": ".bay .stind.question",
+          "value": "2px"
+        },
+        {
+          "line": 325,
+          "property": "letter-spacing",
+          "selector": ".jump",
+          "value": "2px"
+        },
+        {
+          "line": 347,
+          "property": "letter-spacing",
+          "selector": ".kv b",
+          "value": "1.5px"
+        },
+        {
+          "line": 352,
+          "property": "letter-spacing",
+          "selector": ".foot",
+          "value": "1.5px"
+        },
+        {
+          "line": 360,
+          "property": "letter-spacing",
+          "selector": ".state",
+          "value": "6px"
+        },
+        {
+          "line": 439,
+          "property": "letter-spacing",
+          "selector": ".newbtn",
+          "value": "2.5px"
+        },
+        {
+          "line": 490,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-tt",
+          "value": "4px"
+        },
+        {
+          "line": 493,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-sub",
+          "value": "2.5px"
+        },
+        {
+          "line": 505,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-lab",
+          "value": "3px"
+        },
+        {
+          "line": 510,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-lab .spm-opt",
+          "value": "1.8px"
+        },
+        {
+          "line": 560,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-cancel",
+          "value": "2.5px"
+        },
+        {
+          "line": 566,
+          "property": "letter-spacing",
+          "selector": "#spawnmd .spm-spawn",
+          "value": "3px"
+        },
+        {
+          "line": 849,
+          "property": "letter-spacing",
+          "selector": ".viewtog button",
+          "value": "2.5px"
+        },
+        {
+          "line": 932,
+          "property": "letter-spacing",
+          "selector": ".mail-card .mc-route",
+          "value": "1.8px"
+        },
+        {
+          "line": 1062,
+          "property": "letter-spacing",
+          "selector": ".an-head",
+          "value": "2.5px"
+        },
+        {
+          "line": 1086,
+          "property": "letter-spacing",
+          "selector": ".an-set,.an-clear",
+          "value": "1.5px"
+        },
+        {
+          "line": 1224,
+          "property": "letter-spacing",
+          "selector": ".netinfo",
+          "value": "1.5px"
+        },
+        {
+          "line": 1230,
+          "property": "letter-spacing",
+          "selector": ".sel-toggle",
+          "value": "1.5px"
+        },
+        {
+          "line": 1272,
+          "property": "letter-spacing",
+          "selector": "#selbar .sb-num",
+          "value": "1.5px"
+        },
+        {
+          "line": 1276,
+          "property": "letter-spacing",
+          "selector": "#selbar .sb-lab",
+          "value": "2.2px"
+        },
+        {
+          "line": 1279,
+          "property": "letter-spacing",
+          "selector": "#selbar .sb-btn",
+          "value": "1.8px"
+        },
+        {
+          "line": 1359,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-label",
+          "value": "3.5px"
+        },
+        {
+          "line": 1379,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-filter",
+          "value": "1.5px"
+        },
+        {
+          "line": 1398,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-play",
+          "value": "1.6px"
+        },
+        {
+          "line": 1413,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-speed::before",
+          "value": "1.8px"
+        },
+        {
+          "line": 1457,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-hold::before",
+          "value": "1.8px"
+        },
+        {
+          "line": 1557,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-abs",
+          "value": "2px"
+        },
+        {
+          "line": 1560,
+          "property": "letter-spacing",
+          "selector": "#replayBar .rb-rel",
+          "value": "1.6px"
+        },
+        {
+          "line": 1646,
+          "property": "letter-spacing",
+          "selector": ".legend .lg-lab",
+          "value": "1.6px"
+        },
+        {
+          "line": 1679,
+          "property": "letter-spacing",
+          "selector": ".nctl-hd b",
+          "value": "2.4px"
+        },
+        {
+          "line": 1681,
+          "property": "letter-spacing",
+          "selector": ".nctl-hd .sub",
+          "value": "1.6px"
+        },
+        {
+          "line": 1689,
+          "property": "letter-spacing",
+          "selector": ".nc-row .lab",
+          "value": "1.5px"
+        },
+        {
+          "line": 1705,
+          "property": "letter-spacing",
+          "selector": ".nc-reset",
+          "value": "1.7px"
+        },
+        {
+          "line": 1731,
+          "property": "letter-spacing",
+          "selector": "#gtip .gt-meta",
+          "value": "1.5px"
+        },
+        {
+          "line": 1736,
+          "property": "letter-spacing",
+          "selector": "#gtip .gt-row b",
+          "value": "1.5px"
+        },
+        {
+          "line": 1767,
+          "property": "letter-spacing",
+          "selector": ".term",
+          "value": "2px"
+        },
+        {
+          "line": 1790,
+          "property": "letter-spacing",
+          "selector": ".tm-nm",
+          "value": "1.5px"
+        },
+        {
+          "line": 1791,
+          "property": "letter-spacing",
+          "selector": ".tm-meta",
+          "value": "1.5px"
+        },
+        {
+          "line": 1795,
+          "property": "letter-spacing",
+          "selector": ".tm-tabs button",
+          "value": "1.5px"
+        },
+        {
+          "line": 1808,
+          "property": "letter-spacing",
+          "selector": ".tm-exit-btn",
+          "value": "1.5px"
+        },
+        {
+          "line": 1815,
+          "property": "letter-spacing",
+          "selector": ".tm-open",
+          "value": "1.5px"
+        },
+        {
+          "line": 1835,
+          "property": "letter-spacing",
+          "selector": ".tm-summary .ts-row b",
+          "value": "1.5px"
+        },
+        {
+          "line": 1859,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-ttl",
+          "value": "2.5px"
+        },
+        {
+          "line": 1863,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-leg",
+          "value": "1.5px"
+        },
+        {
+          "line": 1901,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-svg .hush",
+          "value": "3px"
+        },
+        {
+          "line": 1934,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-tip .tp-k",
+          "value": "2px"
+        },
+        {
+          "line": 1951,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-axis",
+          "value": "1.5px"
+        },
+        {
+          "line": 1955,
+          "property": "letter-spacing",
+          "selector": ".tm-spark .sp-empty",
+          "value": "3px"
+        },
+        {
+          "line": 1973,
+          "property": "letter-spacing",
+          "selector": ".tm-deliv .hempty",
+          "value": "3px"
+        },
+        {
+          "line": 1978,
+          "property": "letter-spacing",
+          "selector": ".msg .who",
+          "value": "2.5px"
+        },
+        {
+          "line": 1999,
+          "property": "letter-spacing",
+          "selector": ".tm-hist .hnote",
+          "value": "2px"
+        },
+        {
+          "line": 2000,
+          "property": "letter-spacing",
+          "selector": ".tm-hist .hempty",
+          "value": "3px"
+        }
+      ],
+      "unit": "source-declaration"
+    }
+  },
+  "observed": {
+    "glow_color_literals": 99,
+    "glow_mutable_components": 61,
+    "glow_source_declarations": 80,
+    "small_text_source_records": 142,
+    "tracking_source_records": 64
+  },
+  "rules": {
+    "color_literal": "#[0-9a-fA-F]{3,8}\\b|(?:rgba?|hsla?)\\([^)]*\\)",
+    "glow": {
+      "classification_order": [
+        "focus",
+        "elevation",
+        "state",
+        "emissive"
+      ],
+      "colored_channel_range_min": 24,
+      "component_unit": "comma layer for box/text shadow; drop-shadow() for filter",
+      "focus_selector_markers": [
+        ":focus",
+        "::-webkit-slider-thumb"
+      ],
+      "mutable_categories": [
+        "emissive",
+        "state"
+      ],
+      "mutable_geometry": "zero x/y, positive blur, zero spread",
+      "radial": "each saturated radial-gradient layer is an emissive component; neutral surface/vignette layers are elevation",
+      "source_properties": [
+        "box-shadow",
+        "text-shadow",
+        "filter"
+      ],
+      "state_selector_markers": [
+        "arming",
+        "st-work",
+        "st-ask",
+        "imp-",
+        ".err",
+        "askbub",
+        "qbub",
+        ".armed",
+        ".arm",
+        ".run",
+        "retire",
+        ".exit",
+        "mail_sent",
+        "mail_recv",
+        ".spawn",
+        "urgent",
+        "high"
+      ]
+    },
+    "small_text": {
+      "excluded_selector_markers": [
+        ".brand",
+        "svg",
+        "canvas",
+        ".xterm",
+        "icon",
+        "glyph"
+      ],
+      "runtime_threshold": "computed font-size < 12px on an owned text element",
+      "source_threshold": "authored numeric px < 12"
+    },
+    "token_targets": {
+      "background": [
+        "--bg",
+        "--panel",
+        "--panel-2",
+        "--elev",
+        "--ink",
+        "--ink-dim",
+        "--ink-faint",
+        "--hair",
+        "--hair-2"
+      ],
+      "dim-contrast": [
+        "--ink-dim",
+        "--ink-faint"
+      ]
+    },
+    "tracking": {
+      "audit_threshold": "authored numeric px >= 1.5",
+      "excluded_selector_markers": [
+        ".brand",
+        "code",
+        "pre",
+        ".xterm",
+        "canvas"
+      ],
+      "runtime_threshold": "computed letter-spacing / computed font-size > 0.08"
+    },
+    "version": 1
+  },
+  "rules_digest": "458e145b096baff8ef2b1497bc7414397311bc70413420e77955c188c08cf21f",
+  "runtime_expectations": {
+    "axes": {
+      "background": {
+        "expected": 9,
+        "unit": "token-write"
+      },
+      "dim-contrast": {
+        "expected": 2,
+        "unit": "token-write"
+      },
+      "glow": {
+        "expected": 80,
+        "unit": "declaration"
+      },
+      "small-text": {
+        "expected": 142,
+        "unit": "source-declaration"
+      },
+      "tracking": {
+        "expected": 64,
+        "unit": "source-declaration"
+      }
+    },
+    "rulesDigest": "458e145b096baff8ef2b1497bc7414397311bc70413420e77955c188c08cf21f",
+    "sourceDigest": "08649ed6befd0b313ac6c6c67c59cf269c8ec6c46b710b39bfe18cdbe1404b5f"
+  },
+  "schema_version": 1,
+  "source": "dashboard/index.html",
+  "source_digest": "08649ed6befd0b313ac6c6c67c59cf269c8ec6c46b710b39bfe18cdbe1404b5f"
+}

@@ -308,6 +308,45 @@ frame.contentWindow.postMessage({type: "net-resume"}, location.origin);
 
 hidden iframe が tmux / SQLite を継続 polling しないための契約です。message は same-origin だけを受け付けます。
 
+### Theme axis bridge
+
+same-origin の parent は、dashboard だけに1軸の A/B override を送れます。parent 側が選択履歴と preset を所有し、iframe は永続化しません。
+
+```js
+frame.contentWindow.postMessage({
+  type: "agentstack-theme-axis",
+  version: 1,
+  axis: "glow",
+  value: 1,
+}, location.origin);
+```
+
+`axis` は `dim-contrast`、`small-text`、`tracking`、`glow`、`background` のいずれかです。数値は `0..1` へ正規化され、`null` は override style node と一時属性を物理的に除去します。初期表示は bridge の CSS を一切適用しないため、従来の描画経路のままです。
+
+receiver は `event.source === window.parent` と `event.origin === location.origin` の両方を確認します。処理した request には parent へ次の envelope を返します。
+
+```js
+{
+  type: "agentstack-theme-axis-result",
+  version: 1,
+  ok: true,
+  requested: {axis: "glow", value: 1},
+  state: {axis: "glow", value: 1},
+  source: {unit: "declaration", expected: sourceRecords.length, matched: sourceMatched},
+  mutation: {unit: "effect-component", expected: snapshot.length, applied: appliedCount},
+  reason: null,
+}
+```
+
+上の識別子は envelope の対応関係を示す擬似コードです。正本は [`scripts/dashboard_theme_manifest.py`](../scripts/dashboard_theme_manifest.py) が `dashboard/index.html` から生成する [`dashboard/theme_effect_manifest.json`](../dashboard/theme_effect_manifest.json) で、手書きの固定値ではありません。CSS を変更したら次を実行し、record list、規則 digest、source digest の差分を一緒に review します。
+
+```bash
+python3 scripts/dashboard_theme_manifest.py --write
+python3 scripts/dashboard_theme_manifest.py --check
+```
+
+`source` は token / source declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の実適用数です。面や単位を合算しません。expected が0、source の不足、partial mutation、contrast guard 違反では request を reject し、直前の valid axis を復元します。`glow` は selector と keyframe の effect component を `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
+
 ## Terminal bridge
 
 カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jump、または browser terminal 用 `ttyd` を確保します。
