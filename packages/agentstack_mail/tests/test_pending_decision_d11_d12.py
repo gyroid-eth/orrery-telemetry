@@ -1,8 +1,8 @@
-"""Hermetic executable evidence for pending product decisions D11 and D12.
+"""Hermetic executable evidence for selected D11 and pending D12.
 
-These probes freeze today's behavior as evidence for a pending decision, not as
-an assertion that the behavior is correct. Rewrite them to encode the chosen
-requirement after the decision.
+The D11 probes encode the selected upstream-parity requirement. The D12 probes
+still freeze observed behavior as evidence for a pending decision, not as an
+assertion that the behavior is correct.
 
 D11 runs the frozen, authenticated live source and AgentStack Mail Core in
 secret-free subprocesses with worker-owned database, archive, and signal roots.
@@ -61,7 +61,7 @@ from fastmcp.exceptions import ToolError
 namespace = os.environ["DECISION_NAMESPACE"]
 state_root = Path(os.environ["DECISION_STATE_ROOT"])
 database_path = Path(os.environ["DECISION_DATABASE"])
-signals_root = Path(os.environ["DECISION_SIGNALS"])
+source_root = Path(os.environ["DECISION_SOURCE_ROOT"]).resolve(strict=True)
 
 # The tested paths do not use an LLM.  Installing the same fail-closed stub as
 # the main differential worker lets frozen live import without the optional
@@ -76,6 +76,10 @@ async def fail_if_llm_called(*_args, **_kwargs):
 llm_stub.complete_system_user = fail_if_llm_called
 sys.modules[f"{namespace}.llm"] = llm_stub
 app = importlib.import_module(f"{namespace}.app")
+db = importlib.import_module(f"{namespace}.db")
+storage = importlib.import_module(f"{namespace}.storage")
+for module in (app, db, storage):
+    Path(module.__file__).resolve(strict=True).relative_to(source_root)
 
 
 def public_payload(result):
@@ -149,7 +153,7 @@ async def set_up_project(client, case_name):
 def snapshot(project_key):
     connection = sqlite3.connect(database_path)
     try:
-        project_id, project_slug = connection.execute(
+        project_id, _project_slug = connection.execute(
             "select id, slug from projects where human_key = ?", (project_key,)
         ).fetchone()
         retired = connection.execute(
@@ -158,14 +162,24 @@ def snapshot(project_key):
             (project_id,),
         ).fetchone()[0]
         reservations = connection.execute(
-            "select a.name, r.path_pattern from file_reservations r "
+            "select a.name, r.path_pattern, r.exclusive from file_reservations r "
             "join agents a on a.id = r.agent_id "
             "where r.project_id = ? and r.released_ts is null "
+            "and datetime(r.expires_ts) > CURRENT_TIMESTAMP "
             "order by r.id",
             (project_id,),
         ).fetchall()
         recipients = connection.execute(
             "select a.name, mr.kind, m.subject from message_recipients mr "
+            "join agents a on a.id = mr.agent_id "
+            "join messages m on m.id = mr.message_id "
+            "where m.project_id = ? order by mr.message_id, mr.agent_id",
+            (project_id,),
+        ).fetchall()
+        receipts = connection.execute(
+            "select a.name, mr.kind, m.subject, m.ack_required, "
+            "mr.read_ts is not null, mr.ack_ts is not null "
+            "from message_recipients mr "
             "join agents a on a.id = mr.agent_id "
             "join messages m on m.id = mr.message_id "
             "where m.project_id = ? order by mr.message_id, mr.agent_id",
@@ -177,24 +191,118 @@ def snapshot(project_key):
     finally:
         connection.close()
 
-    signals = []
-    project_signal_root = signals_root / "projects" / project_slug
-    for path in sorted(project_signal_root.rglob("*.signal")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload.get("project") == project_slug
-        signals.append(
-            {
-                "agent": payload.get("agent"),
-                "message": payload.get("message"),
-                "payload": payload,
-            }
-        )
     return {
         "retired": bool(retired),
-        "active_reservations": [list(row) for row in reservations],
+        "active_reservations": [
+            [name, path_pattern, bool(exclusive)]
+            for name, path_pattern, exclusive in reservations
+        ],
         "message_count": message_count,
         "recipients": [list(row) for row in recipients],
-        "signals": signals,
+        "receipts": [
+            [name, kind, subject, bool(required), bool(read), bool(ack)]
+            for name, kind, subject, required, read, ack in receipts
+        ],
+    }
+
+
+async def pending_state_retirement(actor, controller):
+    project = await set_up_project(controller, "pending_state_retirement")
+    reservation = await require_success(
+        actor,
+        "file_reservation_paths",
+        {
+            "project_key": project,
+            "agent_name": "BlueLake",
+            "paths": ["pending/owned.py"],
+            "ttl_seconds": 3600,
+            "exclusive": True,
+            "reason": "D11 selected pending-state retention",
+            "format": "json",
+        },
+    )
+    sent = []
+    for subject, ack_required in (
+        ("D11 pending normal", False),
+        ("D11 pending acknowledgement", True),
+    ):
+        sent.append(
+            await require_success(
+                actor,
+                "send_message",
+                {
+                    "project_key": project,
+                    "sender_name": "GreenCastle",
+                    "to": ["BlueLake"],
+                    "subject": subject,
+                    "body_md": "Hermetic D11 pending-state retirement.",
+                    "importance": "high",
+                    "ack_required": ack_required,
+                    "sender_token": "d11-green-token",
+                    "format": "json",
+                },
+            )
+        )
+    before_retire = snapshot(project)
+    retirement = await require_success(
+        controller,
+        "retire_agent",
+        {
+            "project_key": project,
+            "agent_name": "BlueLake",
+            "registration_token": "d11-blue-token",
+        },
+    )
+    after_retire = snapshot(project)
+    rejected_send = await invoke(
+        actor,
+        "send_message",
+        {
+            "project_key": project,
+            "sender_name": "GreenCastle",
+            "to": ["BlueLake"],
+            "subject": "D11 rejected after retirement",
+            "body_md": "This delivery must not commit.",
+            "sender_token": "d11-green-token",
+            "format": "json",
+        },
+    )
+    after_rejected_send = snapshot(project)
+    fetched = await require_success(
+        actor,
+        "fetch_inbox",
+        {
+            "project_key": project,
+            "agent_name": "BlueLake",
+            "limit": 1,
+            "include_bodies": True,
+            "format": "json",
+        },
+    )
+    after_fetch = snapshot(project)
+    acknowledged = await require_success(
+        actor,
+        "acknowledge_message",
+        {
+            "project_key": project,
+            "agent_name": "BlueLake",
+            "message_id": sent[-1]["deliveries"][0]["payload"]["id"],
+            "format": "json",
+        },
+    )
+    after_acknowledge = snapshot(project)
+    return {
+        "reservation": reservation,
+        "sent": sent,
+        "retirement": retirement,
+        "rejected_send": rejected_send,
+        "fetched": fetched,
+        "acknowledged": acknowledged,
+        "before_retire": before_retire,
+        "after_retire": after_retire,
+        "after_rejected_send": after_rejected_send,
+        "after_fetch": after_fetch,
+        "after_acknowledge": after_acknowledge,
     }
 
 
@@ -217,22 +325,22 @@ async def reservation_race(actor, controller, mode):
             return result
 
     app._create_file_reservation = gated_create
-    reservation_task = asyncio.create_task(
-        invoke(
-            actor,
-            "file_reservation_paths",
-            {
-                "project_key": project,
-                "agent_name": "BlueLake",
-                "paths": [f"race/{mode}.py"],
-                "ttl_seconds": 3600,
-                "exclusive": True,
-                "reason": mode,
-                "format": "json",
-            },
-        )
-    )
     try:
+        reservation_task = asyncio.create_task(
+            invoke(
+                actor,
+                "file_reservation_paths",
+                {
+                    "project_key": project,
+                    "agent_name": "BlueLake",
+                    "paths": [f"race/{mode}.py"],
+                    "ttl_seconds": 3600,
+                    "exclusive": True,
+                    "reason": mode,
+                    "format": "json",
+                },
+            )
+        )
         await asyncio.wait_for(ready.wait(), timeout=15)
         retirement = await require_success(
             controller,
@@ -243,10 +351,11 @@ async def reservation_race(actor, controller, mode):
                 "registration_token": "d11-blue-token",
             },
         )
+        release.set()
+        reservation = await asyncio.wait_for(reservation_task, timeout=15)
     finally:
         release.set()
-    reservation = await asyncio.wait_for(reservation_task, timeout=15)
-    app._create_file_reservation = original_create
+        app._create_file_reservation = original_create
     return {
         "reservation": reservation,
         "retirement": retirement,
@@ -281,25 +390,25 @@ async def send_race(actor, controller, mode):
         app._get_agent = gated_get_agent
         restore_name = "_get_agent"
 
-    send_task = asyncio.create_task(
-        invoke(
-            actor,
-            "send_message",
-            {
-                "project_key": project,
-                "sender_name": "GreenCastle",
-                "to": ["BlueLake"],
-                "bcc": ["RedStone"],
-                "subject": mode,
-                "body_md": "Hermetic D11 retirement race.",
-                "importance": "high",
-                "ack_required": True,
-                "sender_token": "d11-green-token",
-                "format": "json",
-            },
-        )
-    )
     try:
+        send_task = asyncio.create_task(
+            invoke(
+                actor,
+                "send_message",
+                {
+                    "project_key": project,
+                    "sender_name": "GreenCastle",
+                    "to": ["BlueLake"],
+                    "bcc": ["RedStone"],
+                    "subject": mode,
+                    "body_md": "Hermetic D11 retirement race.",
+                    "importance": "high",
+                    "ack_required": True,
+                    "sender_token": "d11-green-token",
+                    "format": "json",
+                },
+            )
+        )
         await asyncio.wait_for(ready.wait(), timeout=15)
         retirement = await require_success(
             controller,
@@ -310,10 +419,11 @@ async def send_race(actor, controller, mode):
                 "registration_token": "d11-blue-token",
             },
         )
+        release.set()
+        sent = await asyncio.wait_for(send_task, timeout=15)
     finally:
         release.set()
-    sent = await asyncio.wait_for(send_task, timeout=15)
-    setattr(app, restore_name, original)
+        setattr(app, restore_name, original)
     return {
         "send": sent,
         "retirement": retirement,
@@ -325,6 +435,10 @@ async def main():
     server = app.build_mcp_server()
     results = {}
     async with Client(server) as actor, Client(server) as controller:
+        results["pending_state_retirement"] = await pending_state_retirement(
+            actor,
+            controller,
+        )
         for mode in (
             "reservation_retire_before_create",
             "reservation_create_before_retire",
@@ -350,13 +464,11 @@ def frozen_live_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
 
 
-@pytest.fixture(scope="module", params=(LIVE_NAMESPACE, CORE_NAMESPACE))
-def mail_decision_probe(
-    request: pytest.FixtureRequest,
+def _run_d11_probe(
+    namespace: str,
     frozen_live_checkout: Path,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, Any]:
-    namespace = str(request.param)
     source = (
         frozen_live_checkout / "src" if namespace == LIVE_NAMESPACE else CORE_SOURCE
     )
@@ -369,6 +481,7 @@ def mail_decision_probe(
             "DECISION_STATE_ROOT": str(root),
             "DECISION_DATABASE": str(roots.database),
             "DECISION_SIGNALS": str(roots.signals),
+            "DECISION_SOURCE_ROOT": str(source.resolve()),
         }
     )
     completed = subprocess.run(
@@ -380,10 +493,21 @@ def mail_decision_probe(
         timeout=180,
         check=False,
     )
+    transcript = completed.stdout + completed.stderr
+    leaked_tokens = [
+        token
+        for token in ("d11-green-token", "d11-blue-token", "d11-red-token")
+        if token in transcript
+    ]
+    if leaked_tokens:
+        pytest.fail(
+            f"{namespace} D11 worker leaked a fake registration token",
+            pytrace=False,
+        )
     if completed.returncode != 0:
         pytest.fail(
             f"{namespace} D11 worker failed ({completed.returncode}):\n"
-            f"{(completed.stdout + completed.stderr)[-5000:]}",
+            f"{transcript[-5000:]}",
             pytrace=False,
         )
     output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
@@ -393,51 +517,218 @@ def mail_decision_probe(
     return result
 
 
-def test_d11_retirement_races_record_current_post_state(
-    mail_decision_probe: Mapping[str, Any],
-) -> None:
-    cases = mail_decision_probe["cases"]
+@pytest.fixture(scope="module")
+def mail_decision_probes(
+    frozen_live_checkout: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, dict[str, Any]]:
+    return {
+        namespace: _run_d11_probe(
+            namespace,
+            frozen_live_checkout,
+            tmp_path_factory,
+        )
+        for namespace in (LIVE_NAMESPACE, CORE_NAMESPACE)
+    }
 
+
+def _pending_state_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
+    case = probe["cases"]["pending_state_retirement"]
+    before = case["before_retire"]
+    after = case["after_retire"]
+    after_fetch = case["after_fetch"]
+    after_acknowledge = case["after_acknowledge"]
+    durable_keys = ("active_reservations", "message_count", "recipients", "receipts")
+    seed_receipts = [
+        [kind, required, read, ack]
+        for _name, kind, _subject, required, read, ack in before["receipts"]
+    ]
+    acknowledged_receipts = [
+        [kind, required, read, ack]
+        for _name, kind, _subject, required, read, ack in after_acknowledge[
+            "receipts"
+        ]
+    ]
+    return {
+        "reservation_grants": len(case["reservation"]["granted"]),
+        "successful_seed_sends": len(case["sent"]),
+        "before_retired": before["retired"],
+        "active_reservation_count": len(before["active_reservations"]),
+        "active_reservations_exclusive": all(
+            row[2] for row in before["active_reservations"]
+        ),
+        "seed_message_count": before["message_count"],
+        "seed_receipts": seed_receipts,
+        "after_retired": after["retired"],
+        "retire_preserved_durable_pending_state": all(
+            after[key] == before[key] for key in durable_keys
+        ),
+        "new_send_rejected": case["rejected_send"]["ok"] is False,
+        "new_send_retired_diagnostic": (
+            "retired" in case["rejected_send"]["error"].lower()
+        ),
+        "rejected_send_zero_d11_state_delta": (
+            case["after_rejected_send"]["retired"] == after["retired"]
+            and all(
+                case["after_rejected_send"][key] == after[key]
+                for key in durable_keys
+            )
+        ),
+        "retired_fetch_count": len(case["fetched"]["result"]),
+        "fetch_preserved_pending_state": all(
+            after_fetch[key] == after[key] for key in durable_keys
+        ),
+        "after_fetch_retired": after_fetch["retired"],
+        "retired_acknowledge_succeeded": bool(case["acknowledged"]["acknowledged"]),
+        "retired_acknowledge_receipts": acknowledged_receipts,
+        "acknowledge_preserved_reservation": (
+            after_acknowledge["active_reservations"]
+            == after_fetch["active_reservations"]
+        ),
+        "after_acknowledge_retired": after_acknowledge["retired"],
+    }
+
+
+def _retirement_race_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
+    cases = probe["cases"]
+    reservations = {}
     for mode in (
         "reservation_retire_before_create",
         "reservation_create_before_retire",
     ):
         case = cases[mode]
-        assert case["reservation"]["ok"] is True
-        assert len(case["reservation"]["result"]["granted"]) == 1
-        assert case["post_state"] == {
-            "retired": True,
-            "active_reservations": [["BlueLake", f"race/{mode}.py"]],
-            "message_count": 0,
-            "recipients": [],
-            "signals": [],
+        reservations[mode] = {
+            "ok": case["reservation"]["ok"],
+            "grant_count": len(case["reservation"]["result"]["granted"]),
+            "retired": case["post_state"]["retired"],
+            "active_reservation_count": len(
+                case["post_state"]["active_reservations"]
+            ),
+            "active_reservations_exclusive": all(
+                row[2] for row in case["post_state"]["active_reservations"]
+            ),
+            "message_count": case["post_state"]["message_count"],
+            "recipient_count": len(case["post_state"]["recipients"]),
         }
-
     after_validation = cases["send_retire_after_validation"]
-    assert after_validation["send"]["ok"] is True
-    assert after_validation["post_state"]["retired"] is True
-    assert after_validation["post_state"]["active_reservations"] == []
-    assert after_validation["post_state"]["message_count"] == 1
-    assert after_validation["post_state"]["recipients"] == [
-        ["BlueLake", "to", "send_retire_after_validation"],
-        ["RedStone", "bcc", "send_retire_after_validation"],
-    ]
-    signals = after_validation["post_state"]["signals"]
-    assert len(signals) == 1
-    assert signals[0]["agent"] == "BlueLake"
-    assert signals[0]["message"]["subject"] == "send_retire_after_validation"
-    assert all(signal_record["agent"] != "RedStone" for signal_record in signals)
-
     before_validation = cases["send_retire_before_validation"]
-    assert before_validation["send"]["ok"] is False
-    assert "retired" in before_validation["send"]["error"].lower()
-    assert before_validation["post_state"] == {
-        "retired": True,
-        "active_reservations": [],
-        "message_count": 0,
-        "recipients": [],
-        "signals": [],
+    return {
+        "reservations": reservations,
+        "send_after_validation": {
+            "ok": after_validation["send"]["ok"],
+            "retired": after_validation["post_state"]["retired"],
+            "active_reservation_count": len(
+                after_validation["post_state"]["active_reservations"]
+            ),
+            "message_count": after_validation["post_state"]["message_count"],
+            "recipient_kinds": sorted(
+                row[1] for row in after_validation["post_state"]["recipients"]
+            ),
+            "receipt_states": sorted(
+                [kind, required, read, ack]
+                for _name, kind, _subject, required, read, ack in after_validation[
+                    "post_state"
+                ]["receipts"]
+            ),
+        },
+        "send_before_validation": {
+            "ok": before_validation["send"]["ok"],
+            "retired_diagnostic": (
+                "retired" in before_validation["send"]["error"].lower()
+            ),
+            "retired": before_validation["post_state"]["retired"],
+            "active_reservation_count": len(
+                before_validation["post_state"]["active_reservations"]
+            ),
+            "message_count": before_validation["post_state"]["message_count"],
+            "recipient_count": len(before_validation["post_state"]["recipients"]),
+            "receipt_count": len(before_validation["post_state"]["receipts"]),
+        },
     }
+
+
+def test_d11_selected_parity_preserves_pending_state_and_retired_fetch(
+    mail_decision_probes: Mapping[str, dict[str, Any]],
+) -> None:
+    expected = {
+        "reservation_grants": 1,
+        "successful_seed_sends": 2,
+        "before_retired": False,
+        "active_reservation_count": 1,
+        "active_reservations_exclusive": True,
+        "seed_message_count": 2,
+        "seed_receipts": [
+            ["to", False, False, False],
+            ["to", True, False, False],
+        ],
+        "after_retired": True,
+        "retire_preserved_durable_pending_state": True,
+        "new_send_rejected": True,
+        "new_send_retired_diagnostic": True,
+        "rejected_send_zero_d11_state_delta": True,
+        "retired_fetch_count": 1,
+        "fetch_preserved_pending_state": True,
+        "after_fetch_retired": True,
+        "retired_acknowledge_succeeded": True,
+        "retired_acknowledge_receipts": [
+            ["to", False, False, False],
+            ["to", True, True, True],
+        ],
+        "acknowledge_preserved_reservation": True,
+        "after_acknowledge_retired": True,
+    }
+    live = _pending_state_projection(mail_decision_probes[LIVE_NAMESPACE])
+    core = _pending_state_projection(mail_decision_probes[CORE_NAMESPACE])
+    assert live == expected
+    assert core == expected
+    assert core == live
+
+
+def test_d11_selected_parity_retirement_races_keep_upstream_boundaries(
+    mail_decision_probes: Mapping[str, dict[str, Any]],
+) -> None:
+    expected = {
+        "reservations": {
+            mode: {
+                "ok": True,
+                "grant_count": 1,
+                "retired": True,
+                "active_reservation_count": 1,
+                "active_reservations_exclusive": True,
+                "message_count": 0,
+                "recipient_count": 0,
+            }
+            for mode in (
+                "reservation_retire_before_create",
+                "reservation_create_before_retire",
+            )
+        },
+        "send_after_validation": {
+            "ok": True,
+            "retired": True,
+            "active_reservation_count": 0,
+            "message_count": 1,
+            "recipient_kinds": ["bcc", "to"],
+            "receipt_states": [
+                ["bcc", True, False, False],
+                ["to", True, False, False],
+            ],
+        },
+        "send_before_validation": {
+            "ok": False,
+            "retired_diagnostic": True,
+            "retired": True,
+            "active_reservation_count": 0,
+            "message_count": 0,
+            "recipient_count": 0,
+            "receipt_count": 0,
+        },
+    }
+    live = _retirement_race_projection(mail_decision_probes[LIVE_NAMESPACE])
+    core = _retirement_race_projection(mail_decision_probes[CORE_NAMESPACE])
+    assert live == expected
+    assert core == expected
+    assert core == live
 
 
 _WATCHER_FUNCTIONS = (
@@ -500,7 +791,7 @@ def _watcher_shell(functions: str, *, deliver: bool) -> str:
     action = (
         'acquire_delivery_lease "$TEST_AGENT" "$TEST_MSG_KEY"\n'
         'deliver_worker "$TEST_SIGNAL" "$TEST_AGENT" "$TEST_MSG_KEY" '
-        '"GreenCastle" "D11 race delivery" "high" "1"\n'
+        '"GreenCastle" "D12 completion delivery" "high" "1"\n'
         if deliver
         else 'state_should_attempt "$TEST_AGENT" "$TEST_MSG_KEY"\n'
     )
@@ -598,15 +889,17 @@ def _state_should_attempt(
 
 
 def test_d12_watcher_crash_windows_are_durable_and_hermetic(
-    mail_decision_probe: Mapping[str, Any],
     tmp_path: Path,
 ) -> None:
-    generated_signals = mail_decision_probe["cases"]["send_retire_after_validation"][
-        "post_state"
-    ]["signals"]
-    assert len(generated_signals) == 1
-    signal_payload = generated_signals[0]["payload"]
-    assert signal_payload["agent"] == "BlueLake"
+    signal_payload = {
+        "project": "d12-hermetic-project",
+        "agent": "BlueLake",
+        "message": {
+            "id": 12001,
+            "subject": "D12 watcher completion",
+            "importance": "high",
+        },
+    }
 
     expectations = {
         "after_external_injection": (False, True, True),

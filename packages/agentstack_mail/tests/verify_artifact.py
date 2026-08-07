@@ -135,7 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D11": "retire with active reservations or unread messages",
     "D12": "signal cleanup after crash, retirement, or stale consumer",
 }
 
@@ -383,7 +382,7 @@ EXPECTED_SELECTED_DECISIONS = {
             ),
             "cutover_intentional_difference_set": ["D1"],
             "principal_admin_mechanism": "unselected",
-            "lifecycle_disposition": "unchanged_D11_unselected",
+            "lifecycle_disposition": "D11_selected_match_frozen_live",
         },
         "rationale": [
             "name_only_retire_is_timing_selectable_receive_denial",
@@ -621,6 +620,80 @@ EXPECTED_SELECTED_DECISIONS = {
             "tests/test_pending_decision_d10.py::test_d10_selected_parity_two_process_split_roots_preserve_double_grant",
         ],
     },
+    "D11": {
+        "id": "D11",
+        "title": "retire with active reservations or unread messages",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": (
+                "authenticated_same_project_retire_agent_with_active_exclusive_"
+                "future_expiry_reservation_and_two_unread_direct_receipts"
+            ),
+            "seed_receipts": (
+                "one_normal_and_one_ack_required_both_read_ts_null_ack_ts_null"
+            ),
+            "retirement_disposition": (
+                "set_retired_tombstone_preserve_active_reservation_messages_and_"
+                "unread_receipts"
+            ),
+            "retired_fetch": (
+                "limit_one_succeeds_without_marking_receipts_or_releasing_"
+                "reservation"
+            ),
+            "retired_acknowledge": (
+                "selected_ack_required_receipt_becomes_read_and_acknowledged_"
+                "while_other_unread_receipt_and_reservation_remain"
+            ),
+            "post_retirement_send": (
+                "reject_with_retired_causal_diagnostic_and_zero_observed_state_"
+                "delta"
+            ),
+            "reservation_races": {
+                "retire_before_create": (
+                    "reservation_succeeds_and_remains_active_on_retired_agent"
+                ),
+                "retire_after_create": (
+                    "reservation_succeeds_and_remains_active_on_retired_agent"
+                ),
+            },
+            "send_races": {
+                "retire_after_recipient_validation_before_message_create": (
+                    "send_succeeds_and_persists_direct_and_bcc_receipts"
+                ),
+                "retire_before_recipient_validation": (
+                    "send_rejected_with_zero_message_or_recipient_state"
+                ),
+            },
+            "not_claimed": [
+                (
+                    "exact_ids_timestamps_expiry_agent_names_subjects_paths_"
+                    "project_keys_response_envelopes_or_additive_error_fields"
+                ),
+                "inbox_order_body_or_more_than_selected_limit_one_result",
+                "signal_file_payload_emission_clear_or_stale_cleanup_D12",
+                "archive_Git_commit_identity_or_message_bundle_details",
+                "TTL_expiry_stale_auto_release_release_transfer_or_force_retire",
+                "D7_authorization_tokenless_retire_or_credential_lifecycle",
+                "D9_acknowledgement_timestamp_update_mechanics",
+                "D10_reservation_winner_lock_or_unselected_race_schedules",
+                "SIGKILL_cancellation_power_loss_restart_or_convergence",
+                (
+                    "unretire_reretire_legacy_retired_rows_migration_or_"
+                    "reconciliation"
+                ),
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_preserves_pending_state_and_retired_fetch",
+            "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_retirement_races_keep_upstream_boundaries",
+        ],
+    },
 }
 
 EXPECTED_DECISION_IDS = {f"D{index}" for index in range(1, 13)}
@@ -709,6 +782,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d6.py",
     "/tests/test_pending_decision_d8_d9.py",
     "/tests/test_pending_decision_d10.py",
+    "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",

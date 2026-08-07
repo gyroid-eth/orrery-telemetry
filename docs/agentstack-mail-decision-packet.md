@@ -45,7 +45,7 @@ owner explicitly selects upstream behavior as Path A.
 | D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
 | D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
 | D10 | selected | implemented (pre-existing parity) | no-go | Under explicit repeated rendezvous, a shared archive lock yields one scheduler-dependent winner; one DB with split archive roots preserves two conflicting winners | Path A preserves topology-dependent upstream behavior instead of adding a DB mutex in this release | parallel agents, HA/misconfigured deployments, existing duplicate leases |
-| D11 | unselected | not implemented | no-go | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
+| D11 | selected | implemented (pre-existing parity) | no-go | Retirement preserves active reservations and unread work; retired agents can fetch and acknowledge, while new sends are rejected | Path A preserves reversible upstream retirement despite blocked peers and pending senders | peers blocked by leases, senders awaiting ack, operators |
 | D12 | unselected | not implemented | no-go | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
 
 ## D1 — conflicting token registration mutation
@@ -655,50 +655,64 @@ migration, or D11/D12 lifecycle and signal behavior.
 
 ### 1. Observed live behavior
 
-Seed Blue with one active reservation, one unread message, and two signal files,
-then retire it. `retired_at` is set, while the reservation, unread receipt, and
-signals remain. A retired Blue can still `fetch_inbox`; `limit=1` returns the
-pending message and clears both signals. New sends to the retired recipient are
-rejected. Frozen retirement only sets the tombstone around `app.py:5020–5057`.
+Seed Blue with one active reservation, one normal unread message, one
+ack-required unread message, and two signal files, then retire it. `retired_at`
+is set, while the reservation and both unread receipts remain. A retired Blue
+can still `fetch_inbox`; `limit=1` returns one pending message without marking
+either receipt or releasing the reservation. It can acknowledge that message,
+which updates only the selected receipt. New sends to the retired recipient are
+rejected without a message or recipient delta. Retirement also leaves signals
+unchanged and fetch clears them, but that signal lifecycle is assigned to D12,
+not the selected D11 contract. Frozen retirement only sets the tombstone in the
+`retire_agent` tool body.
 
 The committed race probe adds two stronger observations. A reservation for
 Blue succeeds and remains active whether retirement pauses the call immediately
 before or immediately after reservation creation. A send paused after recipient
 validation succeeds after Blue retires, persists both its direct and BCC
-recipient, and emits only Blue's signal; the same send paused before validation
-is rejected after retirement with no message or signal. Frozen live and Core
+recipient; the same send paused before validation is rejected after retirement
+with no message or recipient state. Frozen live and Core
 match in `packages/agentstack_mail/tests/test_pending_decision_d11_d12.py`.
 
 ### 2. Current Core behavior
 
-Identical around Core `app.py:5043–5080`, `:6360–6367`, and `:7563–7638`,
-including the committed reservation/send races.
+Identical in the measured `retire_agent`, `fetch_inbox`,
+`acknowledge_message`, reservation, and send paths, including the committed
+reservation/send races. The gate authenticates `app`, `db`, and `storage` to
+the selected source root before running either namespace.
 
-### 3. Why it remains unselected
+### 3. Selected resolution
 
-Reversible soft retirement favors preserving state. Peers need immediate lease
-handoff, senders need disposition of unread/ack-required work, and operators
-need a predictable one-call versus drain/force model.
+Match frozen live. Retirement remains a reversible tombstone operation: it
+preserves active leases and unread receipts, permits retired fetch/ack, and
+rejects later delivery. This keeps the cutover intentional-difference set at
+D1 only. The cost is explicit: peers may stay blocked and senders may wait on
+work owned by a retired agent.
 
 ### 4. Options and breakage
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve everything until ordinary TTL/read/ack | Peers remain blocked and senders may wait indefinitely | None |
+| **Selected — preserve active reservations and unread receipts until ordinary TTL/read/ack** | Peers remain blocked and senders may wait indefinitely | None |
 | Atomically retire, release leases, and cancel/dead-letter pending notification work | Exact resume/unretire semantics change; senders need visible disposition | Retired legacy rows require cleanup policy |
 | Guarded two-phase retirement: reject until drained, plus explicit force mode | Current one-call automation and abandoned-agent cleanup need force | Existing state remains inspectable |
 | Transfer leases/pending work to an authorized successor | Adds successor auth, audit fields, and conflict resolution | Ownership/provenance migration required |
 
-Non-binding lean: guarded retirement with explicit preserve/release/transfer
-force semantics makes the destructive choice visible.
+### 5. Committed requirement gates
 
-### 5. Test that fixes the choice
+Two nodes normalize frozen-live and Core results, then assert both against the
+same expected projection and against each other. The sequential node fixes the
+active future-expiry lease, normal and ack-required unread receipts, tombstone,
+retired `limit=1` fetch, retired acknowledgement, and post-retirement send
+rejection. The race node fixes the two reservation seams and the send seams
+immediately before and after recipient validation.
 
-Seed exclusive lease, unread normal and ack-required messages, and multiple
-signals. Assert the chosen disposition, new-send rejection, retired fetch/ack
-policy, and unretire behavior. Race retirement against send/reserve. SIGKILL
-between tombstone and cleanup/transfer must converge on restart. Include a
-legacy retired row with all pending state without deleting message history.
+The selected D11 contract does not claim exact IDs, timestamps, expiry values,
+fixture names/subjects/paths, response envelopes, inbox ordering beyond the
+selected result, signal emission/clear/stale cleanup, archive/Git details,
+TTL cleanup, release/transfer/force modes, authorization, other race schedules,
+SIGKILL/restart convergence, unretire/re-retire, or legacy migration. Signal
+lifecycle remains D12.
 
 ## D12 — signal cleanup after crash, retirement, or stale consumer
 
