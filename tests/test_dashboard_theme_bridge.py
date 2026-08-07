@@ -250,36 +250,16 @@ def test_theme_axis_default_is_unapplied_and_reset_is_reversible():
     assert "themeAxisObserver.observe(document.body,{childList:true,subtree:true});" in html
 
 
-def _runtime_inventory_constants() -> dict:
+def _runtime_inventory() -> dict:
     html = INDEX.read_text(encoding="utf-8")
-    expectations = re.search(
-        r"(const THEME_AXIS_SOURCE_EXPECTATIONS=\{.*?\n\};)",
+    inventory = re.search(
+        r'<script id="agentstack-theme-axis-inventory" '
+        r'type="application/json">\n(.*?)\n</script>',
         html,
         re.DOTALL,
     )
-    rules = re.search(
-        r"(const THEME_AXIS_RULES_CANONICAL=String\.raw`.*?`;)",
-        html,
-        re.DOTALL,
-    )
-    assert expectations and rules, "runtime inventory constants must be embedded"
-    result = subprocess.run(
-        [
-            "node",
-            "-e",
-            expectations.group(1)
-            + "\n"
-            + rules.group(1)
-            + "\nprocess.stdout.write(JSON.stringify({"
-            + "expectations:THEME_AXIS_SOURCE_EXPECTATIONS,"
-            + "rulesCanonical:THEME_AXIS_RULES_CANONICAL}));",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=True,
-    )
-    return json.loads(result.stdout)
+    assert inventory, "generated runtime inventory must be embedded"
+    return json.loads(inventory.group(1))
 
 
 def test_theme_axis_inventory_is_regenerated_and_nonempty():
@@ -293,10 +273,12 @@ def test_theme_axis_inventory_is_regenerated_and_nonempty():
         check=True,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    runtime = _runtime_inventory_constants()
-    assert runtime["expectations"] == manifest["runtime_expectations"]
-    assert json.loads(runtime["rulesCanonical"]) == manifest["rules"]
-    assert hashlib.sha256(runtime["rulesCanonical"].encode()).hexdigest() == (
+    runtime = _runtime_inventory()
+    assert runtime == manifest["runtime_inventory"]
+    rules_canonical = json.dumps(
+        runtime["rules"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    assert hashlib.sha256(rules_canonical.encode()).hexdigest() == (
         manifest["rules_digest"]
     )
     html = INDEX.read_text(encoding="utf-8")
@@ -310,7 +292,15 @@ def test_theme_axis_inventory_is_regenerated_and_nonempty():
         manifest["source_digest"]
     )
     axes = manifest["axes"]
+    assert "runtime_expectations" not in manifest
+    assert '"expected"' not in manifest_path.read_text(encoding="utf-8")
+    assert "THEME_AXIS_SOURCE_EXPECTATIONS" not in html
+    assert "expected:80" not in html
+    assert "expected:9" not in html
+    assert "expected:2" not in html
     assert all(axes[axis]["records"] for axis in THEME_AXIS_NAMES)
+    for axis in THEME_AXIS_NAMES:
+        assert len(runtime["axes"][axis]["records"]) == len(axes[axis]["records"])
     glow_records = axes["glow"]["records"]
     assert manifest["observed"]["glow_source_declarations"] == len(glow_records)
     assert manifest["observed"]["glow_color_literals"] == sum(
@@ -327,4 +317,46 @@ def test_theme_axis_inventory_is_regenerated_and_nonempty():
             for record in axes["glow"]["radial_records"]
             for component in record["components"]
         )
+    )
+
+
+def test_theme_axis_inventory_check_detects_and_recovers_from_stale_css(tmp_path):
+    script = ROOT / "scripts" / "dashboard_theme_manifest.py"
+    index = tmp_path / "index.html"
+    manifest = tmp_path / "theme_effect_manifest.json"
+    original = INDEX.read_text(encoding="utf-8")
+    index.write_text(original, encoding="utf-8")
+    subprocess.run(
+        ["python3", str(script), "--index", str(index), "--output", str(manifest), "--write"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    baseline = index.read_text(encoding="utf-8")
+    stale = baseline.replace(
+        "0 0 8px rgba(255,90,77,.4)",
+        "0 0 9px rgba(255,90,77,.4)",
+        1,
+    )
+    assert stale != baseline
+    index.write_text(stale, encoding="utf-8")
+    failed = subprocess.run(
+        ["python3", str(script), "--index", str(index), "--output", str(manifest), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert failed.returncode == 1
+    assert "theme_effect_manifest.json is stale" in failed.stderr
+    assert "embedded theme inventory is stale" in failed.stderr
+    assert '"blur": 8.0' in failed.stderr
+    assert '"blur": 9.0' in failed.stderr
+    index.write_text(baseline, encoding="utf-8")
+    subprocess.run(
+        ["python3", str(script), "--index", str(index), "--output", str(manifest), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
     )

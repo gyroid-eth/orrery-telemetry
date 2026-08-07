@@ -338,7 +338,7 @@ receiver は `event.source === window.parent` と `event.origin === location.ori
 }
 ```
 
-上の識別子は envelope の対応関係を示す擬似コードです。正本は [`scripts/dashboard_theme_manifest.py`](../scripts/dashboard_theme_manifest.py) が `dashboard/index.html` から生成する [`dashboard/theme_effect_manifest.json`](../dashboard/theme_effect_manifest.json) で、手書きの固定値ではありません。CSS を変更したら次を実行し、record list、規則 digest、source digest の差分を一緒に review します。
+上の識別子は envelope の対応関係を示す擬似コードです。正本は [`scripts/dashboard_theme_manifest.py`](../scripts/dashboard_theme_manifest.py) が `dashboard/index.html` から生成する [`dashboard/theme_effect_manifest.json`](../dashboard/theme_effect_manifest.json) と、そこから生成して HTML に埋め込む runtime inventory です。前者は selector / property / line / component を含む review 用 record、後者は同じ record の安定 ID list と規則/source digest を持ちます。runtime の `source.expected` は軸ごとの `records.length` から導出し、独立した数値定数を持ちません。CSS を変更したら次を実行し、record list、規則 digest、source digest の差分を一緒に review します。
 
 ```bash
 python3 scripts/dashboard_theme_manifest.py --write

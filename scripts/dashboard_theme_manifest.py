@@ -8,6 +8,7 @@ after changing dashboard/index.html and commit the record-level JSON diff.
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import re
@@ -19,6 +20,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INDEX = ROOT / "dashboard" / "index.html"
 DEFAULT_OUTPUT = ROOT / "dashboard" / "theme_effect_manifest.json"
+INLINE_INVENTORY_RE = re.compile(
+    r'(<script id="agentstack-theme-axis-inventory" type="application/json">\n)'
+    r'(.*?)'
+    r'(\n</script>)',
+    re.DOTALL,
+)
 
 COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?)\([^)]*\)")
 BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
@@ -352,11 +359,26 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
         },
     }
     source_digest = _digest(css)
-    runtime_expectations = {
-        "sourceDigest": source_digest,
-        "rulesDigest": _digest(rules_json),
+    rules_digest = _digest(rules_json)
+    runtime_inventory = {
+        "schema_version": 1,
+        "source_digest": source_digest,
+        "rules_digest": rules_digest,
+        "rules": RULES,
         "axes": {
-            axis: {"unit": definition["unit"], "expected": len(definition["records"])}
+            axis: {
+                "unit": definition["unit"],
+                "records": [
+                    record
+                    if isinstance(record, str)
+                    else record.get("id")
+                    or _digest(
+                        f'{record["selector"]}\0{record["property"]}\0'
+                        f'{record["line"]}\0{record["value"]}'
+                    )[:16]
+                    for record in definition["records"]
+                ],
+            }
             for axis, definition in axes.items()
         },
     }
@@ -364,9 +386,9 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
         "schema_version": 1,
         "source": index.relative_to(ROOT).as_posix() if index.is_relative_to(ROOT) else str(index),
         "source_digest": source_digest,
-        "rules_digest": _digest(rules_json),
+        "rules_digest": rules_digest,
         "rules": RULES,
-        "runtime_expectations": runtime_expectations,
+        "runtime_inventory": runtime_inventory,
         "axes": axes,
         "observed": {
             "glow_source_declarations": len(source_effects),
@@ -392,6 +414,39 @@ def _serialized(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+def _inline_serialized(manifest: dict[str, Any]) -> str:
+    # JSON permits an escaped slash.  Escaping it prevents a future CSS value
+    # containing ``</script>`` from terminating the inert data block early.
+    return _serialized(manifest["runtime_inventory"]).rstrip("\n").replace(
+        "</", "<\\/"
+    )
+
+
+def _replace_inline_inventory(index_text: str, manifest: dict[str, Any]) -> str:
+    inline = _inline_serialized(manifest)
+    updated, count = INLINE_INVENTORY_RE.subn(
+        lambda match: match.group(1) + inline + match.group(3),
+        index_text,
+    )
+    if count != 1:
+        raise ValueError(
+            "expected exactly one #agentstack-theme-axis-inventory data block"
+        )
+    return updated
+
+
+def _print_diff(label: str, current: str, expected: str) -> None:
+    print(f"{label} is stale", file=sys.stderr)
+    sys.stderr.writelines(
+        difflib.unified_diff(
+            current.splitlines(keepends=True),
+            expected.splitlines(keepends=True),
+            fromfile=f"committed/{label}",
+            tofile=f"generated/{label}",
+        )
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX)
@@ -400,25 +455,50 @@ def main() -> int:
     mode.add_argument("--write", action="store_true", help="write the generated JSON")
     mode.add_argument("--check", action="store_true", help="fail when the committed JSON is stale")
     args = parser.parse_args()
-    rendered = _serialized(generate(args.index.resolve()))
+    index_path = args.index.resolve()
+    output_path = args.output.resolve()
+    index_text = index_path.read_text(encoding="utf-8")
+    manifest = generate(index_path)
+    rendered = _serialized(manifest)
+    rendered_index = _replace_inline_inventory(index_text, manifest)
     if args.write:
-        args.output.write_text(rendered, encoding="utf-8")
-        print(args.output)
+        output_path.write_text(rendered, encoding="utf-8")
+        index_path.write_text(rendered_index, encoding="utf-8")
+        print(output_path)
+        print(index_path)
         return 0
     if args.check:
         try:
-            current = args.output.read_text(encoding="utf-8")
+            current = output_path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            print(f"missing generated manifest: {args.output}", file=sys.stderr)
+            print(f"missing generated manifest: {output_path}", file=sys.stderr)
             return 1
+        stale = False
         if current != rendered:
+            _print_diff("dashboard/theme_effect_manifest.json", current, rendered)
+            stale = True
+        if index_text != rendered_index:
             print(
-                "dashboard theme manifest is stale; run "
-                "scripts/dashboard_theme_manifest.py --write",
+                "dashboard/index.html embedded theme inventory is stale",
+                file=sys.stderr,
+            )
+            if not stale:
+                current_inline = INLINE_INVENTORY_RE.search(index_text)
+                generated_inline = INLINE_INVENTORY_RE.search(rendered_index)
+                if current_inline and generated_inline:
+                    _print_diff(
+                        "dashboard inline theme inventory",
+                        current_inline.group(2),
+                        generated_inline.group(2),
+                    )
+            stale = True
+        if stale:
+            print(
+                "run scripts/dashboard_theme_manifest.py --write",
                 file=sys.stderr,
             )
             return 1
-        print(args.output)
+        print(output_path)
         return 0
     sys.stdout.write(rendered)
     return 0
