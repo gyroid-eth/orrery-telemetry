@@ -13,7 +13,7 @@ INDEX = ROOT / "dashboard" / "index.html"
 def _effect_guard_cases() -> dict:
     html = INDEX.read_text(encoding="utf-8")
     match = re.search(
-        r"(const THEME_AXIS_NAMES=new Set\(\[.*?\n\})\n"
+        r"(const THEME_AXIS_IDS=Object\.freeze\(\[.*?\n\})\n"
         r"function initialDashboardRoute",
         html,
         re.DOTALL,
@@ -145,21 +145,23 @@ def test_computed_effect_guard_uses_rendering_precision_epsilons():
 def test_theme_axis_apply_fixes_membership_before_requested_effect():
     html = INDEX.read_text(encoding="utf-8")
     apply_match = re.search(
-        r"function applyThemeAxis\(axis,value\)\{.*?\n\}", html, re.DOTALL
+        r"function evaluateThemeProfileCandidate\(values\)\{.*?\n\}",
+        html,
+        re.DOTALL,
     )
     assert apply_match
     apply_source = apply_match.group(0)
     membership = apply_source.index("captureThemeAxisGlowEffectEntries()")
     expected = apply_source.index("themeAxisExpectedEffectValues(")
-    requested = apply_source.index("const mutationCounts=renderThemeAxis(axis,value)")
-    effect = apply_source.index("requestedEffect=summarizeThemeAxisEffect(")
+    requested = apply_source.index("mutationCounts=renderThemeTextProfile(")
+    effect = apply_source.index("const effect=summarizeThemeAxisEffect(")
     assert membership < expected < requested < effect
     assert "captureThemeAxisTokenEffectEntries(axis)" in apply_source
     assert "themeAxisEndpointCandidates" not in html
     assert "renderThemeAxis(axis,1)" not in apply_source
-    assert "const effectError=themeAxisEffectError(requestedEffect)" in apply_source
+    assert "themeAxisEffectError(effect)" in apply_source
     assert "captureThemeAxisGlowEffectEntries()" in apply_source
-    assert "effect:requestedEffect" in apply_source
+    assert "mutation,effect" in apply_source
     assert "const applied=value<=0?" not in html
     assert "const affected=value<=0?" not in html
     assert "effect:result.effect||activeThemeAxisEffect" in html

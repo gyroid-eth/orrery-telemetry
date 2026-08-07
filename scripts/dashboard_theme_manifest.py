@@ -462,8 +462,8 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
             "records": RULES["token_targets"]["background"],
             "consumer_records": token_consumers["background"],
         },
-        "small-text": {"unit": "source-declaration", "records": axis_sources["small-text"]},
-        "tracking": {"unit": "source-declaration", "records": axis_sources["tracking"]},
+        "small-text": {"unit": "declaration", "records": axis_sources["small-text"]},
+        "tracking": {"unit": "declaration", "records": axis_sources["tracking"]},
         "glow": {
             "unit": "declaration",
             "records": source_effects,

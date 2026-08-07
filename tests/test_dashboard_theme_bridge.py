@@ -18,10 +18,21 @@ THEME_AXIS_NAMES = (
 )
 
 
+def _profile_values(*, small: float | None = None, tracking: float | None = None) -> dict:
+    return {
+        "dim-contrast": None,
+        "small-text": small,
+        "tracking": tracking,
+        "glow": None,
+        "background": None,
+    }
+
+
 def _theme_bridge_cases() -> dict:
     html = INDEX.read_text(encoding="utf-8")
     match = re.search(
-        r"(const THEME_AXIS_NAMES=new Set\(\[.*?\n\})\nfunction initialDashboardRoute",
+        r"(const THEME_AXIS_IDS=Object\.freeze\(\[.*?\n\})"
+        r"\nfunction initialDashboardRoute",
         html,
         re.DOTALL,
     )
@@ -67,7 +78,29 @@ const shadow=attenuateThemeShadow(
   'rgba(10, 100, 200, 0.5) 0px 0px 5px, '
   +'rgb(1, 2, 3) 0px 0px 2px, rgba(200, 20, 20, 0.5) 0px 2px 4px',0.4
 );
-process.stdout.write(JSON.stringify({axes,accepted,rejected,errors,guards,mix,shadow}));
+const profileValues=(small=null,tracking=null)=>({
+  'dim-contrast':null,'small-text':small,tracking,glow:null,background:null
+});
+const profiles={
+  accepted:[
+    {type:'agentstack-theme-profile',version:1,requestId:'reset',values:profileValues()},
+    {type:'agentstack-theme-profile',version:1,requestId:'small',values:profileValues(.25)},
+    {type:'agentstack-theme-profile',version:1,requestId:'tracking',values:profileValues(null,.5)},
+    {type:'agentstack-theme-profile',version:1,requestId:'both',values:profileValues(.75,1)},
+    {type:'agentstack-theme-profile',version:1,requestId:'legacy',values:{
+      ...profileValues(),'dim-contrast':.5}}
+  ].map(normalizeThemeProfileMessage),
+  errors:[
+    {type:'agentstack-theme-profile',version:1,requestId:'',values:profileValues()},
+    {type:'agentstack-theme-profile',version:1,requestId:'missing',values:{tracking:.5}},
+    {type:'agentstack-theme-profile',version:1,requestId:'extra',values:{
+      ...profileValues(),extra:null}},
+    {type:'agentstack-theme-profile',version:1,requestId:'mixed',values:{
+      ...profileValues(.5),'dim-contrast':.5}},
+    {type:'agentstack-theme-profile',version:1,requestId:'range',values:profileValues(1.001)}
+  ].map(themeProfileMessageError)
+};
+process.stdout.write(JSON.stringify({axes,accepted,rejected,errors,guards,mix,shadow,profiles}));
 """
     result = subprocess.run(
         ["node", "-e", match.group(1) + "\n" + harness],
@@ -82,7 +115,8 @@ process.stdout.write(JSON.stringify({axes,accepted,rejected,errors,guards,mix,sh
 def _theme_bridge_source() -> str:
     html = INDEX.read_text(encoding="utf-8")
     match = re.search(
-        r"(const THEME_AXIS_NAMES=new Set\(\[.*?\n\})\nfunction initialDashboardRoute",
+        r"(const THEME_AXIS_IDS=Object\.freeze\(\[.*?\n\})"
+        r"\nfunction initialDashboardRoute",
         html,
         re.DOTALL,
     )
@@ -132,6 +166,26 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
         "wrongSource": False,
         "wrongOrigin": False,
     }
+    assert cases["profiles"]["accepted"] == [
+        {"requestId": "reset", "values": _profile_values()},
+        {"requestId": "small", "values": _profile_values(small=0.25)},
+        {"requestId": "tracking", "values": _profile_values(tracking=0.5)},
+        {
+            "requestId": "both",
+            "values": _profile_values(small=0.75, tracking=1),
+        },
+        {
+            "requestId": "legacy",
+            "values": {**_profile_values(), "dim-contrast": 0.5},
+        },
+    ]
+    assert cases["profiles"]["errors"] == [
+        "invalid-request-id",
+        "invalid-values",
+        "invalid-values",
+        "invalid-profile-combination",
+        "invalid-value",
+    ]
 
 
 def test_theme_axis_out_of_range_reject_preserves_last_valid_state():
@@ -241,14 +295,21 @@ def test_theme_axis_default_is_unapplied_and_reset_is_reversible():
     html = INDEX.read_text(encoding="utf-8")
     assert "<html data-agentstack-theme-axis" not in html
     assert "<body data-agentstack-theme-axis" not in html
-    assert "if(value===null){\n    if(activeThemeAxis===axis){" in html
+    legacy_apply = re.search(
+        r"function applyThemeAxis\(axis,value\)\{.*?\n\}", html, re.DOTALL
+    )
+    assert legacy_apply
+    assert "const values=emptyThemeProfileValues()" in legacy_apply.group(0)
+    assert "if(value!==null)values[axis]=value" in legacy_apply.group(0)
+    assert "const profile=applyThemeProfile(values)" in legacy_apply.group(0)
     assert "if(themeAxisStyleNode){themeAxisStyleNode.remove();themeAxisStyleNode=null;}" in html
     assert re.search(
-        r"restoreThemeAxisOverrides\(\);\s+setActiveThemeAxis\(null,null\);",
+        r"restoreThemeAxisOverrides\(\);setActiveThemeProfile\(emptyThemeProfileValues\(\)\);",
         html,
     )
     assert "event.source===parentWindow" in html
     assert "event.origin===expectedOrigin" in html
+    assert "observeThemeProfileAdditions(activeThemeProfileValues)" in html
     assert "themeAxisObserver.observe(document.body,{childList:true,subtree:true});" in html
 
 
@@ -301,6 +362,17 @@ def test_theme_axis_inventory_is_regenerated_and_nonempty():
     assert "expected:9" not in html
     assert "expected:2" not in html
     assert all(axes[axis]["records"] for axis in THEME_AXIS_NAMES)
+    expected_units = {
+        "dim-contrast": "token-write",
+        "small-text": "declaration",
+        "tracking": "declaration",
+        "glow": "declaration",
+        "background": "token-write",
+    }
+    assert {axis: axes[axis]["unit"] for axis in THEME_AXIS_NAMES} == expected_units
+    assert {
+        axis: runtime["axes"][axis]["unit"] for axis in THEME_AXIS_NAMES
+    } == expected_units
     for axis in THEME_AXIS_NAMES:
         assert len(runtime["axes"][axis]["records"]) == len(axes[axis]["records"])
     glow_records = axes["glow"]["records"]

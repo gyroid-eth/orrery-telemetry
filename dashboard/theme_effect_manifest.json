@@ -33870,7 +33870,7 @@
           "value": "11px"
         }
       ],
-      "unit": "source-declaration"
+      "unit": "declaration"
     },
     "tracking": {
       "records": [
@@ -34259,7 +34259,7 @@
           "value": "3px"
         }
       ],
-      "unit": "source-declaration"
+      "unit": "declaration"
     }
   },
   "observed": {
@@ -59584,7 +59584,7 @@
           "989c2cd936ac1619",
           "b4896029a56a49d5"
         ],
-        "unit": "source-declaration"
+        "unit": "declaration"
       },
       "tracking": {
         "records": [
@@ -59653,7 +59653,7 @@
           "a5158f58c887125a",
           "471a8045927546da"
         ],
-        "unit": "source-declaration"
+        "unit": "declaration"
       }
     },
     "rules": {

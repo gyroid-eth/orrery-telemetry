@@ -3,11 +3,36 @@
   await document.fonts.ready;await waitFrame();
   const request=(axis,value)=>applyThemeAxisMessage({
     type:'agentstack-theme-axis',version:1,axis,value});
-  const reset=async()=>{
-    const state=window.AGENTSTACK_THEME_AXIS_STATE();
-    if(state.axis)await request(state.axis,null);
+  let profileRequestSequence=0;
+  const values=(small=null,tracking=null)=>({
+    'dim-contrast':null,'small-text':small,tracking,glow:null,background:null
+  });
+  const profile=async requested=>{
+    const data={type:'agentstack-theme-profile',version:1,
+      requestId:`dashboard-profile-${++profileRequestSequence}`,values:requested};
+    const applied=await applyThemeProfileMessage(data);
+    return {data,applied,envelope:themeProfileResultMessage(data,applied)};
   };
-  const result={normal:[],zero:[],minimum:[],adversarial:{}};
+  const reset=()=>profile(values());
+  const result={normal:[],zero:[],minimum:[],adversarial:{},profile:{}};
+  result.profile.ready=await new Promise((resolve,reject)=>{
+    const messages=[];
+    const timeout=setTimeout(()=>{
+      window.removeEventListener('message',onMessage);
+      reject(new Error('theme bridge ready timeout'));
+    },1000);
+    const onMessage=event=>{
+      if(!['agentstack-theme-axis-ready','agentstack-theme-profile-ready']
+          .includes(event.data&&event.data.type))return;
+      messages.push(event.data);
+      if(messages.length===2){
+        clearTimeout(timeout);window.removeEventListener('message',onMessage);
+        resolve(messages);
+      }
+    };
+    window.addEventListener('message',onMessage);
+    notifyThemeBridgeReady();
+  });
 
   for(const axis of THEME_AXIS_NAMES){
     for(const value of [.25,.5,.75,1]){
@@ -90,6 +115,99 @@
   document.head.appendChild(hidden);
   result.adversarial.hidden=await request('small-text',.5);
   hidden.remove();await reset();
+
+  /* Measure the two actual UI histories with public profile transactions.
+     The immutable member IDs are captured once from fresh A, and every second
+     transaction must rederive the complete vector from that baseline. */
+  const baselineSnapshots=themeAxisSnapshots(themeAxisElements());
+  const members=baselineSnapshots.map((snapshot,index)=>({snapshot,id:`m${index}`}))
+    .filter(({snapshot})=>['small-text','tracking'].some(axis=>
+      themeAxisSnapshotEligible(axis,snapshot)));
+  const computedRows=()=>members.map(({snapshot,id})=>{
+    const style=getComputedStyle(snapshot.element);
+    return {id,fontSize:style.fontSize,fontWeight:style.fontWeight,
+      letterSpacing:style.letterSpacing};
+  });
+  const mismatches=(left,right)=>{
+    const rightById=new Map(right.map(row=>[row.id,row]));
+    return left.filter(row=>{
+      const other=rightById.get(row.id);
+      return !other||['fontSize','fontWeight','letterSpacing'].some(property=>
+        row[property]!==other[property]);
+    }).map(row=>row.id);
+  };
+  const orderResults=[];
+  const canonicalRows=new Map();
+  for(const small of [.25,.5,.75,1]){
+    for(const tracking of [.25,.5,.75,1]){
+      await reset();
+      const smallFirst=await profile(values(small,null));
+      const smallThenTracking=await profile(values(small,tracking));
+      const forward=computedRows();
+      await reset();
+      const trackingFirst=await profile(values(null,tracking));
+      const trackingThenSmall=await profile(values(small,tracking));
+      const reverse=computedRows();
+      const mismatch=mismatches(forward,reverse);
+      canonicalRows.set(`${small}/${tracking}`,forward);
+      orderResults.push({small,tracking,memberCount:members.length,mismatch,
+        transactions:[smallFirst.applied.ok,smallThenTracking.applied.ok,
+          trackingFirst.applied.ok,trackingThenSmall.applied.ok],
+        requestIdEcho:trackingThenSmall.envelope.requestId===
+          trackingThenSmall.data.requestId,
+        finalEnvelope:trackingThenSmall.envelope});
+    }
+  }
+  result.profile.order=orderResults;
+
+  /* Negative control: only the second transaction in the tracking-first path
+     derives tracking from s0 instead of the final small-text size. The same
+     immutable-ID comparator must detect the corrupted implementation. */
+  await reset();
+  await profile(values(null,.5));
+  const originalTrackingSpacing=themeTextProfileTrackingSpacing;
+  themeTextProfileTrackingSpacing=(snapshot,_finalSize,value)=>
+    originalTrackingSpacing(snapshot,snapshot.fontSize,value);
+  let corrupted;
+  try{corrupted=await profile(values(.5,.5));}
+  finally{themeTextProfileTrackingSpacing=originalTrackingSpacing;}
+  result.profile.negativeControl={applied:corrupted.applied,
+    mismatch:mismatches(canonicalRows.get('0.5/0.5'),computedRows())};
+
+  /* A profile-aware observer composes both axes for a node added after the
+     transaction and extends each independent audit envelope. */
+  await reset();
+  const dynamicApplied=await profile(values(.5,.5));
+  const beforeDynamic=window.AGENTSTACK_THEME_AXIS_STATE();
+  const dynamic=document.createElement('div');
+  dynamic.textContent='dynamic profile target';
+  dynamic.style.cssText='position:fixed;left:20px;top:20px;font-size:10px;'+
+    'font-weight:400;letter-spacing:2px;z-index:99999';
+  document.body.appendChild(dynamic);await waitFrame();
+  const dynamicStyle=getComputedStyle(dynamic);
+  const afterDynamic=window.AGENTSTACK_THEME_AXIS_STATE();
+  result.profile.dynamic={applied:dynamicApplied.applied,
+    computed:{fontSize:dynamicStyle.fontSize,fontWeight:dynamicStyle.fontWeight,
+      letterSpacing:dynamicStyle.letterSpacing},before:beforeDynamic,
+    after:afterDynamic};
+  dynamic.remove();await reset();
+
+  /* Invalid and effect-rejected profiles preserve the complete last-valid
+     vector, while response envelopes stay complete and echo requestId. */
+  const lastValid=await profile(values(.25,.5));
+  const invalidData={type:'agentstack-theme-profile',version:1,
+    requestId:'dashboard-profile-invalid',values:values(1.001,.5)};
+  const invalidApplied=await applyThemeProfileMessage(invalidData);
+  const invalidEnvelope=themeProfileResultMessage(invalidData,invalidApplied);
+  const profileHidden=document.createElement('style');
+  profileHidden.textContent='html,body,body *{visibility:hidden!important}';
+  document.head.appendChild(profileHidden);
+  const effectRejected=await profile(values(.75,.75));
+  profileHidden.remove();await waitFrame();
+  result.profile.rollback={lastValid:lastValid.envelope,invalidEnvelope,
+    effectRejected:effectRejected.envelope,
+    state:window.AGENTSTACK_THEME_AXIS_STATE()};
+  await reset();
 
   result.final=window.AGENTSTACK_THEME_AXIS_STATE();
   return result;

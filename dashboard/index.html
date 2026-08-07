@@ -27943,7 +27943,7 @@ OFF = legacy snapshot+comet mode">
         "989c2cd936ac1619",
         "b4896029a56a49d5"
       ],
-      "unit": "source-declaration"
+      "unit": "declaration"
     },
     "tracking": {
       "records": [
@@ -28012,7 +28012,7 @@ OFF = legacy snapshot+comet mode">
         "a5158f58c887125a",
         "471a8045927546da"
       ],
-      "unit": "source-declaration"
+      "unit": "declaration"
     }
   },
   "rules": {
@@ -28183,9 +28183,14 @@ OFF = legacy snapshot+comet mode">
 </script>
 <script>
 const AGENTSTACK_SERVER_DEFAULTS={language:null,murmur:null};
-const THEME_AXIS_NAMES=new Set([
+const THEME_AXIS_IDS=Object.freeze([
   'dim-contrast','small-text','tracking','glow','background'
 ]);
+const THEME_AXIS_NAMES=new Set(THEME_AXIS_IDS);
+const THEME_PROFILE_TEXT_AXES=new Set(['small-text','tracking']);
+function emptyThemeProfileValues(){
+  return Object.fromEntries(THEME_AXIS_IDS.map(axis=>[axis,null]));
+}
 function normalizeThemeAxisMessage(data){
   if(!data||data.type!=='agentstack-theme-axis'||data.version!==1||
       !THEME_AXIS_NAMES.has(data.axis))return null;
@@ -28204,6 +28209,41 @@ function themeAxisMessageError(data){
     return 'invalid-value';
   }
   return null;
+}
+function themeProfileMessageError(data){
+  if(!data||data.type!=='agentstack-theme-profile')return 'invalid-message';
+  if(data.version!==1)return 'unsupported-version';
+  if(typeof data.requestId!=='string'||!data.requestId)return 'invalid-request-id';
+  if(!data.values||typeof data.values!=='object'||Array.isArray(data.values)){
+    return 'invalid-values';
+  }
+  const keys=Object.keys(data.values);
+  if(keys.length!==THEME_AXIS_IDS.length||
+      keys.some(axis=>!THEME_AXIS_NAMES.has(axis))||
+      THEME_AXIS_IDS.some(axis=>!Object.hasOwn(data.values,axis))){
+    return 'invalid-values';
+  }
+  for(const axis of THEME_AXIS_IDS){
+    const value=data.values[axis];
+    if(value!==null&&(typeof value!=='number'||!Number.isFinite(value)||
+        value<0||value>1))return 'invalid-value';
+  }
+  const active=THEME_AXIS_IDS.filter(axis=>data.values[axis]!==null);
+  if(active.length>1&&active.some(axis=>!THEME_PROFILE_TEXT_AXES.has(axis))){
+    return 'invalid-profile-combination';
+  }
+  return null;
+}
+function normalizeThemeProfileMessage(data){
+  if(themeProfileMessageError(data))return null;
+  return {requestId:data.requestId,values:Object.fromEntries(
+    THEME_AXIS_IDS.map(axis=>[axis,data.values[axis]]))};
+}
+function themeProfileRequestedValues(data){
+  const values=data&&data.values;
+  return Object.fromEntries(THEME_AXIS_IDS.map(axis=>[axis,
+    values&&typeof values==='object'&&Object.hasOwn(values,axis)
+      ?values[axis]:null]));
 }
 function themeAxisMessageAllowed(event,embedMode,parentWindow,expectedOrigin){
   return Boolean(embedMode&&event&&event.source===parentWindow&&
@@ -28614,6 +28654,8 @@ let activeThemeAxisExpected=0;
 let activeThemeAxisSource={unit:null,expected:0,matched:0};
 let activeThemeAxisMutation={unit:null,expected:0,applied:0};
 let activeThemeAxisEffect=emptyThemeAxisEffect();
+let activeThemeProfileValues=emptyThemeProfileValues();
+let activeThemeProfileAxes={};
 let themeAxisObserver=null;
 let themeAxisStyleNode=null;
 let themeAxisNodeSequence=0;
@@ -28799,6 +28841,60 @@ function themeAxisSnapshots(elements){
       letterSpacing:parseFloat(style.letterSpacing)};
   });
 }
+function themeTextProfileFinalSize(snapshot,value){
+  if(value===null||!themeAxisSnapshotEligible('small-text',snapshot)){
+    return snapshot.fontSize;
+  }
+  const target=Math.min(12,snapshot.fontSize+2);
+  return snapshot.fontSize+(target-snapshot.fontSize)*value;
+}
+function themeTextProfileTrackingSpacing(snapshot,finalSize,value){
+  if(value===null||!themeAxisSnapshotEligible('tracking',snapshot)){
+    return snapshot.letterSpacing;
+  }
+  const baselineRatio=snapshot.letterSpacing/snapshot.fontSize;
+  const targetRatio=Math.min(baselineRatio,.08);
+  const ratio=baselineRatio+(targetRatio-baselineRatio)*value;
+  return ratio*finalSize;
+}
+function themeTextProfileDeclarations(snapshot,values,order=[
+  'small-text','tracking'
+]){
+  const declarations={};
+  const axes=[];
+  const finalSize=themeTextProfileFinalSize(snapshot,values['small-text']);
+  for(const axis of order){
+    const value=values[axis];
+    if(value===null||!themeAxisSnapshotEligible(axis,snapshot))continue;
+    axes.push(axis);
+    if(axis==='small-text'){
+      const baseWeight=Number.isFinite(snapshot.fontWeight)?snapshot.fontWeight:400;
+      const targetWeight=Math.max(baseWeight,500);
+      declarations['font-size']=`${finalSize}px`;
+      declarations['font-weight']=String(Math.round(
+        (baseWeight+(targetWeight-baseWeight)*value)/100)*100);
+    }else{
+      declarations['letter-spacing']=`${themeTextProfileTrackingSpacing(
+        snapshot,finalSize,value)}px`;
+    }
+  }
+  return {axes,declarations};
+}
+function renderThemeTextProfile(snapshots,values,order=[
+  'small-text','tracking'
+]){
+  const counts=Object.fromEntries([...THEME_PROFILE_TEXT_AXES].map(axis=>[
+    axis,{expected:0,affected:0}
+  ]));
+  for(const snapshot of snapshots){
+    const compiled=themeTextProfileDeclarations(snapshot,values,order);
+    if(!compiled.axes.length)continue;
+    compiled.axes.forEach(axis=>counts[axis].expected++);
+    addThemeAxisRule(snapshot.element,compiled.declarations);
+    compiled.axes.forEach(axis=>counts[axis].affected++);
+  }
+  return counts;
+}
 function applyMeasuredThemeAxis(axis,value,elements){
   let affected=0,expected=0;
   for(const snapshot of themeAxisSnapshots(elements)){
@@ -28880,7 +28976,7 @@ function themeAxisEffectTargets(axis){
   if(axis==='small-text'||axis==='tracking'){
     return themeAxisSnapshots(themeAxisElements())
       .filter(snapshot=>themeAxisSnapshotEligible(axis,snapshot))
-      .map(snapshot=>({element:snapshot.element,pseudo:null}));
+      .map(snapshot=>({element:snapshot.element,pseudo:null,snapshot}));
   }
   const elements=[document.documentElement,...themeAxisElements()];
   return elements.flatMap(element=>[null,'::before','::after']
@@ -28891,7 +28987,8 @@ function captureThemeAxisEffectEntries(axis,targets){
     const style=getComputedStyle(target.element,target.pseudo);
     const rendered=themeAxisTargetRendered(target,style);
     return {target,before:THEME_AXIS_EFFECT_PROPERTIES[axis]
-        .map(property=>style[property]),fontSize:parseFloat(style.fontSize),rendered,
+        .map(property=>style[property]),snapshot:target.snapshot||null,
+      fontSize:target.snapshot?target.snapshot.fontSize:parseFloat(style.fontSize),rendered,
       inViewport:themeAxisTargetInViewport(target,rendered)};
   });
 }
@@ -29121,7 +29218,7 @@ function themeAxisTokenExpectedEffectValues(axis,entries,value){
     });
   }finally{frame.remove();}
 }
-function themeAxisExpectedEffectValues(axis,entries,value){
+function themeAxisExpectedEffectValues(axis,entries,value,profileValues=null){
   if(axis==='small-text'){
     return entries.map(entry=>{
       const size=parseFloat(entry.before[0]),weight=parseFloat(entry.before[1]);
@@ -29134,8 +29231,14 @@ function themeAxisExpectedEffectValues(axis,entries,value){
   }
   if(axis==='tracking'){
     return entries.map(entry=>{
-      const spacing=parseFloat(entry.before[0]);
-      return [`${spacing+(.08*entry.fontSize-spacing)*value}px`];
+      const snapshot=entry.snapshot||{
+        element:entry.target.element,fontSize:entry.fontSize,
+        fontWeight:parseFloat(getComputedStyle(entry.target.element).fontWeight),
+        letterSpacing:parseFloat(entry.before[0])};
+      const finalSize=profileValues
+        ?themeTextProfileFinalSize(snapshot,profileValues['small-text'])
+        :snapshot.fontSize;
+      return [`${themeTextProfileTrackingSpacing(snapshot,finalSize,value)}px`];
     });
   }
   if(axis==='glow'){
@@ -29148,8 +29251,21 @@ function themeAxisExpectedEffectValues(axis,entries,value){
   }
   return themeAxisTokenExpectedEffectValues(axis,entries,value);
 }
-function observeThemeAxisAdditions(axis,value){
-  if(!['small-text','tracking'].includes(axis))return;
+function mergeThemeAxisEffects(left,right){
+  const merged={unit:left.unit||right.unit};
+  for(const field of ['evaluated','changed','rendered','inViewport',
+    'visibleExpected','visibleReached','visibleChanged','deferred']){
+    merged[field]=(left[field]||0)+(right[field]||0);
+  }
+  return merged;
+}
+function observeThemeProfileAdditions(values){
+  if(themeAxisObserver){themeAxisObserver.disconnect();themeAxisObserver=null;}
+  const requested=Object.fromEntries(
+    THEME_AXIS_IDS.map(axis=>[axis,values[axis]??null]));
+  const active=themeProfileActiveAxes(requested);
+  if(!active.length||active.some(axis=>!THEME_PROFILE_TEXT_AXES.has(axis))||
+      !document.body)return;
   themeAxisObserver=new MutationObserver(mutations=>{
     const elements=new Set();
     for(const mutation of mutations){
@@ -29159,13 +29275,42 @@ function observeThemeAxisAdditions(axis,value){
         }
       }
     }
-    if(elements.size){
-      const counts=applyMeasuredThemeAxis(axis,value,[...elements]);
-      activeThemeAxisAffected+=counts.affected;
-      activeThemeAxisExpected+=counts.expected;
-      activeThemeAxisMutation={...activeThemeAxisMutation,
-        expected:activeThemeAxisExpected,applied:activeThemeAxisAffected};
+    if(!elements.size)return;
+    themeAxisObserver.disconnect();
+    const style=themeAxisStyleNode;
+    let snapshots,entries={},expected={};
+    try{
+      if(style)style.disabled=true;
+      snapshots=themeAxisSnapshots([...elements]);
+      for(const axis of active){
+        entries[axis]=themeProfileTextEffectEntries(axis,snapshots);
+        expected[axis]=themeAxisExpectedEffectValues(
+          axis,entries[axis],requested[axis],requested);
+      }
+    }finally{
+      if(style)style.disabled=false;
     }
+    const mutationCounts=renderThemeTextProfile(snapshots,requested);
+    const axes={...activeThemeProfileAxes};
+    for(const axis of active){
+      const previous=axes[axis];
+      const addedMutation={unit:themeProfileMutationUnit(axis),
+        expected:mutationCounts[axis].expected,
+        applied:mutationCounts[axis].affected};
+      const mutation={unit:addedMutation.unit,
+        expected:(previous.mutation.expected||0)+addedMutation.expected,
+        applied:(previous.mutation.applied||0)+addedMutation.applied};
+      const addedEffect=summarizeThemeAxisEffect(axis,entries[axis],
+        captureThemeAxisEffectValues(axis,entries[axis]),expected[axis]);
+      const effect=mergeThemeAxisEffects(previous.effect,addedEffect);
+      const reason=mutation.expected===0||mutation.applied!==mutation.expected
+        ?`partial-axis:${mutation.applied}/${mutation.expected}`
+        :themeAxisEffectError(effect);
+      axes[axis]={status:reason?'rejected':'applied',source:previous.source,
+        mutation,effect};
+      if(reason)axes[axis].reason=reason;
+    }
+    setActiveThemeProfile(requested,axes);
   });
   themeAxisObserver.observe(document.body,{childList:true,subtree:true});
 }
@@ -29289,99 +29434,165 @@ function renderThemeAxis(axis,value){
   if(counts.expected===0||counts.affected<counts.expected){
     throw new Error(`partial-axis:${counts.affected}/${counts.expected}`);
   }
-  observeThemeAxisAdditions(axis,value);
   return counts;
+}
+function themeProfileActiveAxes(values){
+  return THEME_AXIS_IDS.filter(axis=>values[axis]!==null);
+}
+function themeProfileMutationUnit(axis){
+  return (axis==='dim-contrast'||axis==='background')
+    ?'token-write':axis==='glow'?'effect-component':'element';
+}
+function setActiveThemeProfile(values,axes={}){
+  activeThemeProfileValues=Object.fromEntries(
+    THEME_AXIS_IDS.map(axis=>[axis,values[axis]??null]));
+  activeThemeProfileAxes=axes;
+  const active=themeProfileActiveAxes(activeThemeProfileValues);
+  const legacyAxis=active.length===1?active[0]:null;
+  const envelope=legacyAxis&&axes[legacyAxis]||null;
+  activeThemeAxis=legacyAxis;
+  activeThemeAxisValue=legacyAxis===null?null:activeThemeProfileValues[legacyAxis];
+  activeThemeAxisAffected=envelope&&envelope.mutation.applied||0;
+  activeThemeAxisExpected=envelope&&envelope.mutation.expected||0;
+  activeThemeAxisSource=envelope&&envelope.source||
+    {unit:null,expected:0,matched:0};
+  activeThemeAxisMutation=envelope&&envelope.mutation||
+    {unit:null,expected:0,applied:0};
+  activeThemeAxisEffect=envelope&&envelope.effect||emptyThemeAxisEffect();
+  if(!active.length){
+    delete document.documentElement.dataset.agentstackThemeAxis;
+    delete document.documentElement.dataset.agentstackThemeValue;
+    delete document.documentElement.dataset.agentstackThemeProfile;
+  }else{
+    document.documentElement.dataset.agentstackThemeProfile=active.map(axis=>
+      `${axis}:${activeThemeProfileValues[axis]}`).join(',');
+    if(legacyAxis!==null){
+      document.documentElement.dataset.agentstackThemeAxis=legacyAxis;
+      document.documentElement.dataset.agentstackThemeValue=
+        String(activeThemeProfileValues[legacyAxis]);
+    }else{
+      delete document.documentElement.dataset.agentstackThemeAxis;
+      delete document.documentElement.dataset.agentstackThemeValue;
+    }
+  }
+  observeThemeProfileAdditions(activeThemeProfileValues);
 }
 function setActiveThemeAxis(axis,value,counts={affected:0,expected:0,
     source:{unit:null,expected:0,matched:0},
     mutation:{unit:null,expected:0,applied:0},
     effect:emptyThemeAxisEffect()}){
-  activeThemeAxis=axis;activeThemeAxisValue=value;
-  activeThemeAxisAffected=counts.affected;
-  activeThemeAxisExpected=counts.expected;
-  activeThemeAxisSource=counts.source;
-  activeThemeAxisMutation=counts.mutation;
-  activeThemeAxisEffect=counts.effect;
-  if(axis===null){
-    delete document.documentElement.dataset.agentstackThemeAxis;
-    delete document.documentElement.dataset.agentstackThemeValue;
-  }else{
-    document.documentElement.dataset.agentstackThemeAxis=axis;
-    document.documentElement.dataset.agentstackThemeValue=String(value);
+  const values=emptyThemeProfileValues(),axes={};
+  if(axis!==null){
+    values[axis]=value;
+    axes[axis]={status:'applied',source:counts.source,
+      mutation:counts.mutation,effect:counts.effect};
   }
+  setActiveThemeProfile(values,axes);
 }
-function applyThemeAxis(axis,value){
-  if(value===null){
-    if(activeThemeAxis===axis){
-      restoreThemeAxisOverrides();
-      setActiveThemeAxis(null,null);
-    }
-    return {ok:true,reason:null,affected:0,expected:0,
-      source:{unit:null,expected:0,matched:0},
-      mutation:{unit:null,expected:0,applied:0},
+function themeProfileTextEffectEntries(axis,snapshots){
+  const targets=snapshots.filter(snapshot=>themeAxisSnapshotEligible(axis,snapshot))
+    .map(snapshot=>({element:snapshot.element,pseudo:null,snapshot}));
+  return captureThemeAxisEffectEntries(axis,targets);
+}
+function evaluateThemeProfileCandidate(values){
+  const active=themeProfileActiveAxes(values),axes={};
+  for(const axis of active){
+    const source=themeAxisSourceCoverage(axis);
+    axes[axis]={status:'rejected',source,
+      mutation:{unit:themeProfileMutationUnit(axis),expected:0,applied:0},
       effect:emptyThemeAxisEffect()};
-  }
-  const previous={axis:activeThemeAxis,value:activeThemeAxisValue,
-    effect:activeThemeAxisEffect};
-  let requestedSource=null;
-  let requestedMutation=null;
-  let requestedEffect=null;
-  let measurementStyle=null;
-  restoreThemeAxisOverrides();
-  setActiveThemeAxis(null,null);
-  try{
-    requestedSource=themeAxisSourceCoverage(axis);
-    if(requestedSource.expected===0||
-        requestedSource.matched!==requestedSource.expected){
-      throw new Error(
-        `source-coverage:${requestedSource.matched}/${requestedSource.expected}`);
+    if(source.expected===0||source.matched!==source.expected){
+      const reason=`source-coverage:${source.matched}/${source.expected}`;
+      axes[axis].reason=reason;
+      return {ok:false,reason,axes};
     }
-    measurementStyle=suspendThemeAxisMotion();
-    let effectEntries=axis==='glow'
+  }
+  const entries={},expected={};
+  let mutationCounts={};
+  const textProfile=active.every(axis=>THEME_PROFILE_TEXT_AXES.has(axis));
+  const snapshots=textProfile?themeAxisSnapshots(themeAxisElements()):null;
+  for(const axis of active){
+    entries[axis]=axis==='glow'
       ?captureThemeAxisGlowEffectEntries()
       :THEME_AXIS_TOKEN_ENDPOINTS[axis]
         ?captureThemeAxisTokenEffectEntries(axis)
-        :captureThemeAxisEffectEntries(axis,themeAxisEffectTargets(axis));
-    const expectedValues=themeAxisExpectedEffectValues(axis,effectEntries,value);
-    const mutationCounts=renderThemeAxis(axis,value);
-    const mutationUnit=(axis==='dim-contrast'||axis==='background')
-      ?'token-write':axis==='glow'?'effect-component':'element';
-    requestedMutation={unit:mutationUnit,expected:mutationCounts.expected,
-      applied:mutationCounts.affected};
-    requestedEffect=summarizeThemeAxisEffect(
-      axis,effectEntries,captureThemeAxisEffectValues(axis,effectEntries),
-      expectedValues);
-    const effectError=themeAxisEffectError(requestedEffect);
-    if(effectError)throw new Error(effectError);
-    const counts={...mutationCounts,source:requestedSource,
-      mutation:requestedMutation,effect:requestedEffect};
+        :textProfile
+          ?themeProfileTextEffectEntries(axis,snapshots)
+          :captureThemeAxisEffectEntries(axis,themeAxisEffectTargets(axis));
+    expected[axis]=themeAxisExpectedEffectValues(
+      axis,entries[axis],values[axis],textProfile?values:null);
+  }
+  if(textProfile){
+    mutationCounts=renderThemeTextProfile(snapshots,values);
+  }else{
+    const axis=active[0],counts=renderThemeAxis(axis,values[axis]);
+    mutationCounts[axis]=counts;
+  }
+  let reason=null;
+  for(const axis of active){
+    const counts=mutationCounts[axis];
+    const mutation={unit:themeProfileMutationUnit(axis),
+      expected:counts.expected,applied:counts.affected};
+    const effect=summarizeThemeAxisEffect(axis,entries[axis],
+      captureThemeAxisEffectValues(axis,entries[axis]),expected[axis]);
+    const axisReason=mutation.expected===0||mutation.applied!==mutation.expected
+      ?`partial-axis:${mutation.applied}/${mutation.expected}`
+      :themeAxisEffectError(effect);
+    axes[axis]={status:axisReason?'rejected':'applied',
+      source:axes[axis].source,mutation,effect};
+    if(axisReason){axes[axis].reason=axisReason;reason ||= axisReason;}
+  }
+  return {ok:reason===null,reason,axes};
+}
+function renderThemeProfileValues(values){
+  const active=themeProfileActiveAxes(values);
+  if(!active.length)return;
+  if(active.every(axis=>THEME_PROFILE_TEXT_AXES.has(axis))){
+    renderThemeTextProfile(themeAxisSnapshots(themeAxisElements()),values);
+  }else renderThemeAxis(active[0],values[active[0]]);
+}
+function applyThemeProfile(values){
+  const requested=Object.fromEntries(
+    THEME_AXIS_IDS.map(axis=>[axis,values[axis]??null]));
+  const previous={values:{...activeThemeProfileValues},axes:activeThemeProfileAxes};
+  let measurementStyle=null,candidate=null;
+  restoreThemeAxisOverrides();setActiveThemeProfile(emptyThemeProfileValues());
+  if(!themeProfileActiveAxes(requested).length){
+    return {ok:true,reason:null,axes:{},requested,
+      applied:{...activeThemeProfileValues}};
+  }
+  try{
+    measurementStyle=suspendThemeAxisMotion();
+    candidate=evaluateThemeProfileCandidate(requested);
     measurementStyle.remove();measurementStyle=null;
-    setActiveThemeAxis(axis,value,counts);
-    return {ok:true,reason:null,...counts};
+    if(!candidate.ok)throw new Error(candidate.reason);
+    setActiveThemeProfile(requested,candidate.axes);
+    return {...candidate,requested,applied:{...activeThemeProfileValues}};
   }catch(error){
     if(measurementStyle)measurementStyle.remove();
     restoreThemeAxisOverrides();
-    if(previous.axis!==null){
-      try{
-        const previousSource=themeAxisSourceCoverage(previous.axis);
-        const mutationCounts=renderThemeAxis(previous.axis,previous.value);
-        const mutationUnit=(previous.axis==='dim-contrast'||previous.axis==='background')
-          ?'token-write':previous.axis==='glow'?'effect-component':'element';
-        const counts={...mutationCounts,source:previousSource,
-          mutation:{unit:mutationUnit,expected:mutationCounts.expected,
-            applied:mutationCounts.affected},effect:previous.effect};
-        setActiveThemeAxis(previous.axis,previous.value,counts);
-      }catch(_){
-        restoreThemeAxisOverrides();
-        setActiveThemeAxis(null,null);
-      }
+    try{
+      renderThemeProfileValues(previous.values);
+      setActiveThemeProfile(previous.values,previous.axes);
+    }catch(_){
+      restoreThemeAxisOverrides();setActiveThemeProfile(emptyThemeProfileValues());
     }
     return {ok:false,reason:error&&error.message||'apply-failed',
-      affected:activeThemeAxisAffected,expected:activeThemeAxisExpected,
-      source:requestedSource||activeThemeAxisSource,
-      mutation:requestedMutation||activeThemeAxisMutation,
-      effect:requestedEffect||emptyThemeAxisEffect()};
+      axes:candidate&&candidate.axes||{},requested,
+      applied:{...activeThemeProfileValues}};
   }
+}
+function applyThemeAxis(axis,value){
+  const values=emptyThemeProfileValues();
+  if(value!==null)values[axis]=value;
+  const profile=applyThemeProfile(values);
+  const envelope=profile.axes[axis]||{
+    source:{unit:null,expected:0,matched:0},
+    mutation:{unit:null,expected:0,applied:0},
+    effect:emptyThemeAxisEffect()};
+  return {ok:profile.ok,reason:profile.reason,
+    affected:envelope.mutation.applied,expected:envelope.mutation.expected,
+    source:envelope.source,mutation:envelope.mutation,effect:envelope.effect};
 }
 async function applyThemeAxisMessage(data){
   const validationError=themeAxisMessageError(data);
@@ -29398,6 +29609,19 @@ async function applyThemeAxisMessage(data){
   }
   return applyThemeAxis(message.axis,message.value);
 }
+async function applyThemeProfileMessage(data){
+  const validationError=themeProfileMessageError(data);
+  if(validationError)return {ok:false,reason:validationError,axes:{},
+    requested:themeProfileRequestedValues(data),
+    applied:{...activeThemeProfileValues}};
+  const message=normalizeThemeProfileMessage(data);
+  if(themeProfileActiveAxes(message.values).length){
+    const digestError=await themeAxisInventoryDigestError();
+    if(digestError)return {ok:false,reason:digestError.reason,axes:{},
+      requested:message.values,applied:{...activeThemeProfileValues}};
+  }
+  return applyThemeProfile(message.values);
+}
 function replyThemeAxisResult(data,result){
   window.parent.postMessage({
     type:'agentstack-theme-axis-result',version:1,ok:result.ok,
@@ -29412,8 +29636,27 @@ function replyThemeAxisResult(data,result){
     reason:result.reason
   },location.origin);
 }
+function themeProfileResultMessage(data,result){
+  const message={
+    type:'agentstack-theme-profile-result',version:1,
+    requestId:data&&data.requestId,
+    surface:'telemetry',
+    requested:themeProfileRequestedValues({values:result.requested||
+      data&&data.values}),
+    applied:themeProfileRequestedValues({values:result.applied||
+      activeThemeProfileValues}),
+    status:result.ok?'applied':'rejected',
+    axes:result.axes||{}
+  };
+  if(result.reason)message.reason=result.reason;
+  return message;
+}
+function replyThemeProfileResult(data,result){
+  window.parent.postMessage(themeProfileResultMessage(data,result),location.origin);
+}
 window.AGENTSTACK_THEME_AXIS_STATE=()=>({
   axis:activeThemeAxis,value:activeThemeAxisValue,
+  values:{...activeThemeProfileValues},axes:activeThemeProfileAxes,
   matched:activeThemeAxisExpected,applied:activeThemeAxisAffected,
   expected:activeThemeAxisExpected,source:activeThemeAxisSource,
   mutation:activeThemeAxisMutation,effect:activeThemeAxisEffect
@@ -29436,6 +29679,15 @@ window.addEventListener('message',e=>{
     }
     return;
   }
+  if(d.type==='agentstack-theme-profile'){
+    if(themeAxisMessageAllowed(e,EMBED_MODE,window.parent,location.origin)){
+      applyThemeProfileMessage(d).then(result=>replyThemeProfileResult(d,result))
+        .catch(error=>replyThemeProfileResult(d,{ok:false,
+          requested:d.values,applied:{...activeThemeProfileValues},axes:{},
+          reason:error&&error.message||'apply-failed'}));
+    }
+    return;
+  }
   if(d.type==='net-pause')netSuspended=true;
   if(d.type==='net-resume'){
     netSuspended=false;
@@ -29443,6 +29695,18 @@ window.addEventListener('message',e=>{
     else tick();
   }
 });
+function notifyThemeBridgeReady(){
+  if(!EMBED_MODE)return false;
+  window.parent.postMessage({type:'agentstack-theme-axis-ready',version:1,
+    surface:'telemetry'},location.origin);
+  window.parent.postMessage({type:'agentstack-theme-profile-ready',version:1,
+    surface:'telemetry'},location.origin);
+  return true;
+}
+if(EMBED_MODE){
+  if(document.readyState==='complete')queueMicrotask(notifyThemeBridgeReady);
+  else window.addEventListener('load',notifyThemeBridgeReady,{once:true});
+}
 
 const CATLABEL={agent:"ACTIVE AGENTS",
   finished:"FINISHED — stale registration (retire / kill)",

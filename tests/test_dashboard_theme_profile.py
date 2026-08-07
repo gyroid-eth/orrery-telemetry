@@ -24,6 +24,20 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD = ROOT / "dashboard"
 FIXTURE = Path(__file__).parent / "fixtures" / "dashboard_theme_profile_order.js"
+THEME_AXIS_NAMES = (
+    "dim-contrast",
+    "small-text",
+    "tracking",
+    "glow",
+    "background",
+)
+THEME_SOURCE_UNITS = {
+    "dim-contrast": "token-write",
+    "small-text": "declaration",
+    "tracking": "declaration",
+    "glow": "declaration",
+    "background": "token-write",
+}
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -213,6 +227,7 @@ def _assert_browser_contract(result: dict[str, object]) -> None:
     assert len(normal) == 20
     for record in normal:
         assert record["ok"] is True, record
+        assert record["source"]["unit"] == THEME_SOURCE_UNITS[record["axis"]]
         effect = record["effect"]
         assert effect["visibleReached"] == effect["visibleExpected"] > 0, record
         assert effect["visibleChanged"] > 0 and effect["changed"] > 0, record
@@ -242,7 +257,101 @@ def _assert_browser_contract(result: dict[str, object]) -> None:
 
     hidden = result["adversarial"]["hidden"]
     assert hidden["ok"] is False and hidden["reason"] == "no-visible-targets"
+
+    assert result["profile"]["ready"] == [
+        {
+            "type": "agentstack-theme-axis-ready",
+            "version": 1,
+            "surface": "telemetry",
+        },
+        {
+            "type": "agentstack-theme-profile-ready",
+            "version": 1,
+            "surface": "telemetry",
+        },
+    ]
+
+    order = result["profile"]["order"]
+    assert len(order) == 16
+    for record in order:
+        assert record["memberCount"] > 0, record
+        assert record["transactions"] == [True, True, True, True], record
+        assert record["mismatch"] == [], record
+        assert record["requestIdEcho"] is True
+        envelope = record["finalEnvelope"]
+        assert envelope["type"] == "agentstack-theme-profile-result"
+        assert envelope["version"] == 1 and envelope["surface"] == "telemetry"
+        assert envelope["status"] == "applied"
+        assert envelope["requested"] == envelope["applied"]
+        assert set(envelope["requested"]) == set(THEME_AXIS_NAMES)
+        assert set(envelope["axes"]) == {"small-text", "tracking"}
+        assert all(axis["status"] == "applied" for axis in envelope["axes"].values())
+        assert {
+            name: axis["source"]["unit"] for name, axis in envelope["axes"].items()
+        } == {"small-text": "declaration", "tracking": "declaration"}
+
+    negative = result["profile"]["negativeControl"]
+    assert negative["applied"]["ok"] is True
+    assert len(negative["mismatch"]) > 0
+
+    dynamic = result["profile"]["dynamic"]
+    assert dynamic["applied"]["ok"] is True
+    assert dynamic["computed"] == {
+        "fontSize": "11px",
+        "fontWeight": "500",
+        "letterSpacing": "1.54px",
+    }
+    for axis in ("small-text", "tracking"):
+        before_axis = dynamic["before"]["axes"][axis]
+        after_axis = dynamic["after"]["axes"][axis]
+        assert after_axis["status"] == "applied"
+        expected_delta = (
+            after_axis["mutation"]["expected"]
+            - before_axis["mutation"]["expected"]
+        )
+        applied_delta = (
+            after_axis["mutation"]["applied"]
+            - before_axis["mutation"]["applied"]
+        )
+        assert expected_delta == applied_delta >= 1
+        visible_expected_delta = (
+            after_axis["effect"]["visibleExpected"]
+            - before_axis["effect"]["visibleExpected"]
+        )
+        visible_reached_delta = (
+            after_axis["effect"]["visibleReached"]
+            - before_axis["effect"]["visibleReached"]
+        )
+        visible_changed_delta = (
+            after_axis["effect"]["visibleChanged"]
+            - before_axis["effect"]["visibleChanged"]
+        )
+        assert visible_expected_delta == visible_reached_delta >= 1
+        assert visible_changed_delta >= 1
+
+    rollback = result["profile"]["rollback"]
+    last_valid = rollback["lastValid"]
+    expected_values = {
+        "dim-contrast": None,
+        "small-text": 0.25,
+        "tracking": 0.5,
+        "glow": None,
+        "background": None,
+    }
+    assert last_valid["status"] == "applied"
+    assert last_valid["requested"] == last_valid["applied"] == expected_values
+    invalid = rollback["invalidEnvelope"]
+    assert invalid["requestId"] == "dashboard-profile-invalid"
+    assert invalid["status"] == "rejected" and invalid["reason"] == "invalid-value"
+    assert set(invalid["requested"]) == set(THEME_AXIS_NAMES)
+    assert invalid["applied"] == expected_values
+    effect_rejected = rollback["effectRejected"]
+    assert effect_rejected["status"] == "rejected"
+    assert effect_rejected["reason"] == "no-visible-targets"
+    assert effect_rejected["applied"] == expected_values
+    assert rollback["state"]["values"] == expected_values
     assert result["final"]["axis"] is None
+    assert all(value is None for value in result["final"]["values"].values())
 
 
 def test_dashboard_browser_fixture_uses_full_guard_paths():
@@ -253,6 +362,14 @@ def test_dashboard_browser_fixture_uses_full_guard_paths():
     assert "beforeMembership" in source and "afterMembership" in source
     assert "alreadyAtEndpoint" in source
     assert "rolledBackState" in source
+    assert "applyThemeProfileMessage" in source
+    assert "values(small,null)" in source
+    assert "values(null,tracking)" in source
+    assert "values(small,tracking)" in source
+    assert "themeTextProfileTrackingSpacing=" in source
+    assert "mismatch:mismatches" in source
+    assert "document.body.appendChild(dynamic)" in source
+    assert "notifyThemeBridgeReady" in source
 
 
 @pytest.mark.skipif(
