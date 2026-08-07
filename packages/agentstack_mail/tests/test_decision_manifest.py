@@ -96,6 +96,22 @@ def _regress_d1_implementation(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D1")["implementation_state"] = "not_implemented"
 
 
+def _regress_d2_implementation(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D2")["implementation_state"] = "not_implemented"
+
+
+def _change_d2_resolution(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D2")["resolution"] = "enforce_expiry"
+
+
+def _change_d2_scope(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D2")["scope"]["local_reply"] = "identical"
+
+
+def _drop_d2_verification(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D2")["verification"].pop()
+
+
 def _change_d7_scope(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D7")["scope"]["active_null_token_name_only_retire"] = "allow"
 
@@ -122,7 +138,7 @@ def test_all_decisions_have_independent_required_states() -> None:
     assert {item["id"] for item in decisions} == {f"D{index}" for index in range(1, 13)}
     assert {
         item["id"] for item in decisions if item["decision_state"] == "selected"
-    } == {"D1", "D7"}
+    } == {"D1", "D2", "D7"}
     assert {
         (
             item["decision_state"],
@@ -142,7 +158,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
     implemented = [
         item for item in decisions if item["implementation_state"] == "implemented"
     ]
-    assert [item["id"] for item in implemented] == ["D1"]
+    assert [item["id"] for item in implemented] == ["D1", "D2"]
     node_ids = [node_id for item in implemented for node_id in item["verification"]]
     assert len(node_ids) == len(set(node_ids))
 
@@ -181,6 +197,10 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_pretend_d7_is_implemented, "selected product decision D7 changed"),
         (_approve_d7_cutover, "selected product decision D7 changed"),
         (_regress_d1_implementation, "selected product decision D1 changed"),
+        (_regress_d2_implementation, "selected product decision D2 changed"),
+        (_change_d2_resolution, "selected product decision D2 changed"),
+        (_change_d2_scope, "selected product decision D2 changed"),
+        (_drop_d2_verification, "selected product decision D2 changed"),
         (_change_d7_scope, "selected product decision D7 changed"),
         (_change_d1_resolution, "selected product decision D1 changed"),
         (_drop_d1_verification, "selected product decision D1 changed"),

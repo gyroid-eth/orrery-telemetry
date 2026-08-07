@@ -27,15 +27,16 @@ recorded earlier. The prevalence of these states in production data is unknown
 because inspecting the running database was intentionally out of scope.
 
 All dynamically proven cases originally matched between frozen live and Core.
-A selected resolution may intentionally make Core diverge; matching an unsafe
-or ambiguous live behavior is evidence, not acceptance.
+A selected resolution may intentionally make Core diverge. Parity alone is not
+acceptance; D2 becomes a requirement only because the product owner explicitly
+selected upstream parity as Path A.
 
 ## One-line summary
 
 | ID | Decision | Implementation | Cutover | Observed or selected behavior | Decision tension | Principal impact |
 |---|---|---|---|---|---|---|
 | D1 | selected | implemented | no-go | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
-| D2 | unselected | not implemented | no-go | Expired pending links can be accepted and expired approved links still authorize delivery | continuity versus TTL as a real authorization boundary | contact-controlled and cross-project senders/recipients; stale grants |
+| D2 | selected | implemented (pre-existing parity) | no-go | Expiry remains advisory: past/future/NULL pending links can be approved and approved links authorize the measured routes | Path A chooses upstream compatibility over making TTL an authorization boundary in this release | contact-controlled and cross-project senders/recipients; stale grants |
 | D3 | unselected | not implemented | no-go | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local alias and replies stay there | project-local schema versus authentic routable origin identity | replies, audit, same-name agents, existing aliases/messages |
 | D4 | unselected | not implemented | no-go | Accepting without a pending request creates an approved link | out-of-order convenience versus consent/audit provenance | contact owners and any caller who knows both names |
 | D5 | unselected | not implemented | no-go | An invalid contact policy silently becomes `auto` | forgiving clients versus fail-fast policy configuration | operators, policy audits, indistinguishable historical `auto` values |
@@ -135,12 +136,18 @@ link expiry to the year 2000: it still authorizes delivery to a
 but not expiry around `app.py:6304` and `:7424`; Core has the same omission
 around `app.py:6333` and `:7456`.
 
-### 2. Current Core behavior
+### 2. Selected Path A and current Core behavior
 
-Identical. Expiry is stored and returned but is not an authorization boundary
-in the proven response/send paths.
+Path A selects the frozen-live behavior. Core already matched without a D2 code
+change, so `implementation_state: implemented` means pre-existing parity, not a
+new expiry implementation. The manifest resolution
+`match_frozen_live_without_core_change` preserves that distinction.
 
-### 3. Why it remains unselected
+Expiry is stored and returned but is not an authorization boundary in the
+measured same-project response, local-send, explicit cross-project send, or
+explicit cross-project reply paths.
+
+### 3. Why this decision was needed
 
 Treating TTL as revocation conflicts with live continuity for stale links.
 Immediate enforcement may disable an unknown number of existing expired
@@ -150,21 +157,28 @@ pending or approved rows.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Keep expiry advisory | TTL remains misleading; expired grants authorize local and cross-project traffic | None |
+| **Selected — keep expiry advisory for upstream parity** | TTL remains misleading; expired grants authorize local and cross-project traffic | None |
 | Enforce `expires_ts > now` in response, send, reply, and external routing | Stale workflows stop immediately; contact-controlled clients must renew | Expired rows need reporting, renewal, or explicit invalidation |
 | Stage a legacy cutoff/grace period while enforcing newly created rows | Semantics differ temporarily by row age; clients and operators need visibility | Requires a cutoff/status migration and audit list |
 | Auto-refresh or re-handshake on use | Revocation is weakened because attempted access silently renews permission | Existing links continue but access attempts mutate them |
 
-Non-binding lean: make expiry real, but first inventory and expose stale rows;
-do not hide enforcement behind automatic renewal.
+### 5. Committed requirement gate
 
-### 5. Test that fixes the choice
+`packages/agentstack_mail/tests/test_upstream_parity_d2.py` runs authenticated
+frozen live and Core in separate private workers. It seeds past, future, and
+NULL expiry values for same-project contact response, local send, explicit
+cross-project send, and explicit cross-project reply. Raw per-side checks bind
+the response refresh to the requested 600-second TTL and retain full
+DB/archive/signal/Git integrity and causality evidence. The cross-namespace
+comparator projects only D2 effects so it does not freeze D3 identity or other
+incidental behavior. Route-specific pending-status errors prove the approved
+link is causal.
 
-Use an injected clock or private DB fixtures for expired pending, expired
-approved, unexpired, and null-expiry links. Cover response, local send,
-cross-project route, and reply with auto-handshake disabled. Strict denial must
-produce the chosen structured error and zero message/archive writes. A staged
-choice also needs both sides of the cutoff and idempotent migration tests.
+A normal local reply is not claimed because that path never queries
+`AgentLink`. Cross-project contact response, `accept=false`, concurrency, an
+auto-handshake-enabled route, and a future strict-expiry mode are also
+explicitly outside the selected scope. Adding an expiry predicate to the Core
+local-send query would make the past-expiry case fail.
 
 ## D3 — cross-project intro/reply identity
 

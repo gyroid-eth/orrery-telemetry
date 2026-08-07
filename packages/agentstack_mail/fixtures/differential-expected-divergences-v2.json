@@ -322,11 +322,48 @@
     {
       "id": "D2",
       "title": "expired contact link accepted",
-      "decision_state": "unselected",
-      "implementation_state": "not_implemented",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
       "cutover_state": "no_go",
+      "resolution": "match_frozen_live_without_core_change",
+      "scope": {
+        "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
+        "same_project_response_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "expired_pending_accept": "reuse_existing_row_approve_and_refresh_expiry",
+        "local_send_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "explicit_cross_project_send_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "explicit_cross_project_reply_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "pending_status_controls": "reject_without_new_message_recipient_archive_signal_or_git_state",
+        "local_reply": "not_claimed_because_it_does_not_query_agent_links",
+        "not_claimed": [
+          "accept_false",
+          "cross_project_response",
+          "concurrency",
+          "future_strict_expiry_denial",
+          "auto_handshake_enabled"
+        ]
+      },
       "allowlisted": false,
-      "comparator_disposition": "fail"
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_upstream_parity_d2.py::test_d2_expiry_semantics_match_frozen_live_without_core_change"
+      ]
     },
     {
       "id": "D3",

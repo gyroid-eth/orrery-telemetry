@@ -135,7 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D2": "expired contact link accepted",
     "D3": "cross-project intro/reply identity",
     "D4": "accept response without pending",
     "D5": "invalid contact policy coerced auto",
@@ -173,6 +172,48 @@ EXPECTED_SELECTED_DECISIONS = {
             "tests/test_pending_decision_d1.py::test_same_explicit_token_updates_metadata_with_exactly_one_git_commit",
             "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
             "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner",
+        ],
+    },
+    "D2": {
+        "id": "D2",
+        "title": "expired contact link accepted",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live_without_core_change",
+        "scope": {
+            "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
+            "same_project_response_expiry_cases": ["past", "future", "null"],
+            "expired_pending_accept": (
+                "reuse_existing_row_approve_and_refresh_expiry"
+            ),
+            "local_send_expiry_cases": ["past", "future", "null"],
+            "explicit_cross_project_send_expiry_cases": [
+                "past",
+                "future",
+                "null",
+            ],
+            "explicit_cross_project_reply_expiry_cases": [
+                "past",
+                "future",
+                "null",
+            ],
+            "pending_status_controls": (
+                "reject_without_new_message_recipient_archive_signal_or_git_state"
+            ),
+            "local_reply": "not_claimed_because_it_does_not_query_agent_links",
+            "not_claimed": [
+                "accept_false",
+                "cross_project_response",
+                "concurrency",
+                "future_strict_expiry_denial",
+                "auto_handshake_enabled",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_upstream_parity_d2.py::test_d2_expiry_semantics_match_frozen_live_without_core_change"
         ],
     },
     "D7": {
@@ -289,6 +330,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/pyproject.toml",
     "/tests/test_decision_manifest.py",
     "/tests/test_pending_decision_d1.py",
+    "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",
 } | {f"/src/agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
