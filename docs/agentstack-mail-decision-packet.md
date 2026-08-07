@@ -26,10 +26,10 @@ After a product choice, that recipe must become a committed test before its
 recorded earlier. The prevalence of these states in production data is unknown
 because inspecting the running database was intentionally out of scope.
 
-All dynamically proven cases originally matched between frozen live and Core.
-A selected resolution may intentionally make Core diverge. Parity alone is not
-acceptance; D2 becomes a requirement only because the product owner explicitly
-selected upstream parity as Path A.
+Some originally matching cases now intentionally diverge after a selected Core
+change, and later probes must not flatten those differences back into parity.
+Parity alone is not acceptance; it becomes a requirement only where the product
+owner explicitly selects upstream behavior as Path A.
 
 ## One-line summary
 
@@ -42,7 +42,7 @@ selected upstream parity as Path A.
 | D5 | selected | implemented (pre-existing parity) | no-go | The measured invalid and empty policies silently become `auto` | Path A preserves forgiving input despite typo/audit ambiguity | operators, policy audits, indistinguishable historical `auto` values |
 | D6 | selected | implemented (pre-existing parity) | no-go | A tokenized sender may omit `sender_token` and send unverified | Path A preserves legacy clients despite unenforced sender ownership | all recipients/auditors; identities whose generated token is unavailable |
 | D7 | selected | not implemented | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
-| D8 | unselected | not implemented | no-go | A failed archive write leaves committed DB agent/message state | live ordering versus cross-store consistency and truthful failure | senders, recipients, dashboard, Git/archive consumers |
+| D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
 | D9 | unselected | not implemented | no-go | Ack failure after the first helper leaves `read_ts` committed and `ack_ts` null | independently durable read progress versus atomic acknowledgement | receipt readers, retry logic, legacy partial rows |
 | D10 | unselected | not implemented | no-go | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
 | D11 | unselected | not implemented | no-go | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
@@ -437,37 +437,43 @@ that cutover is approved.
 
 ### 1. Observed live behavior
 
-Injecting `write_agent_profile` failure during new registration returns an
-error but leaves the DB agent row, with a null token and no profile. Injecting
-`write_message_bundle` failure during send returns an error but leaves message
-and recipient rows, with no corresponding archive message. Frozen source
-commits agent/message state before profile/bundle writes around
-`app.py:3191–3239` and `:3446–3484`/`:4676–4683`.
+The selected scope is the messaging path only: a same-project send from an
+explicitly tokenized sender to one open-policy recipient, with no attachment or
+thread. The message and its `to` recipient commit in SQLite before
+`write_message_bundle` begins.
 
-A committed literal-SIGKILL probe now kills the worker after the canonical,
-outbox, and inbox files are written and staged but immediately before
-`IndexFile.commit`. The DB message and recipient plus all three staged files
-survive, Git HEAD does not advance, no message commit exists, and no signal is
-emitted. This is pinned for frozen live and Core in
-`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py`.
+Injecting an ordinary `write_message_bundle` exception makes the tool call
+fail, but the selected-subject message/recipient relationship remains in
+SQLite and no archive file for that subject exists. Literal-SIGKILL probes then
+fix three completed Python seams. Killing after the first successful bundle
+write leaves only the canonical copy; killing after the second leaves canonical
+plus sender outbox.
+Both retain the DB rows, an unchanged Git HEAD, an empty index, and no message
+commit. Killing after canonical, outbox, and recipient inbox are written and
+staged, but before entering `IndexFile.commit`, leaves those three files staged
+with the DB rows intact, while HEAD remains unchanged and no message commit
+exists.
 
-The same committed probe wraps the existing `_write_text` seam and kills after
-the first or second successful bundle write. The first case leaves only the
-canonical file; the second leaves canonical plus outbox, with no inbox copy.
-Both retain the DB message/recipient, leave Git HEAD unchanged with no staging
-or message commit, and emit no signal.
+Registration is deliberately outside this parity claim. A one-off
+`write_agent_profile` failure leaves a DB row and no profile on both sides, but
+frozen live stores a null token while Core stores a non-null token because of
+the selected D1 change. Calling the complete registration result identical
+would erase a real divergence.
 
-Still unknown: instruction-level death inside Git's native commit, where no
-direct Python seam exists. Other archive-writing tools were not dynamically
-proven.
+Still unmeasured are death inside `IndexFile.commit` while Git stores the
+object, updates the ref, or writes the reflog; mid-write truncation and host
+power loss; restart, retry, deduplication, and reconciliation; and other
+archive-writing tools or message shapes.
 
-### 2. Current Core behavior
+### 2. Selected Path A and current Core behavior
 
-Identical injected results, complete and partial-bundle SIGKILL results, and
-ordering around Core `app.py:3214–3268` and
-`:3469–3507`/`:4699–4707`.
+Core already matches frozen live for the selected messaging projection; no
+Core change was required. The ledger therefore records
+`implementation_origin: pre_existing_parity` and
+`resolution: match_frozen_live`. Registration/profile behavior remains outside
+that projection and keeps its D1-originated difference visible.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
 SQLite and Git/filesystem cannot share one native transaction. Live DB-first
 ordering conflicts with caller-visible atomicity, retry safety, and agreement
@@ -477,7 +483,7 @@ between dashboard/DB and archive consumers.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve DB-first partial commits | Error can mean delivered; retry may duplicate; DB and Git readers disagree | Existing DB-only rows remain and should be audited |
+| **Selected — preserve the measured DB-first partial commits** | Error can mean delivered; retry may duplicate; DB and Git readers disagree | Existing DB-only rows remain and should be audited |
 | Compensate DB on archive exception | Compensation can fail and cannot close a SIGKILL window; concurrent readers see transient state | Historical partial rows need separate reconciliation |
 | Persisted saga/outbox with pending→archive→committed and idempotent recovery | Schema/API/readers/recovery become more complex | Backfill rows as committed, then reconcile missing archives |
 | Declare DB authoritative and archive best-effort/rebuildable; expose degraded status | Current canonical-Git completion promise changes | DB-only rows can rebuild; archive-only artifacts still need audit |
@@ -485,17 +491,23 @@ between dashboard/DB and archive consumers.
 Archive-first alone only trades DB orphans for archive orphans and does not
 solve message IDs assigned by SQLite.
 
-Non-binding lean: a persisted saga/outbox is the only listed option that also
-covers crash recovery and idempotent retry.
+Replacing Path A with a persisted saga/outbox remains a possible future
+divergence because it is the only listed option that also covers crash recovery
+and idempotent retry.
 
-### 5. Test that fixes the choice
+### 5. Committed requirement gates
 
-Fault at pre-write, first filesystem write, pre/post Git commit, and process
-termination in every persisted phase for registration and messaging. Assert
-tool result, DB, archive/Git integrity, inbox visibility, signals, retry, and
-duplicate count. The chosen option must pin either exact partial state,
-compensated pre-state, invisible/recoverable pending state, or explicit
-degraded DB success.
+The D8-only nodes in
+`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py` authenticate
+their source roots, normalize DB/archive/Git relationships, and compare frozen
+live and Core against the same selected projection. They cover the ordinary
+message-bundle exception, the exact canonical/outbox prefix after write one or
+two, and the three-copy staged state before Git commit.
+
+They do not claim registration/profile behavior, Git-commit internals,
+mid-write or power-loss durability, restart/retry/recovery, multiple recipients,
+CC/BCC, attachments, threads, other archive writers, notification signals, or
+fetch cleanup. Those omissions are explicit; they are not identical results.
 
 ## D9 — read/ack partial commit
 

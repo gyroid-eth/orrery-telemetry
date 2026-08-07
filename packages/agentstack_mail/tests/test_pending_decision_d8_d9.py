@@ -1,23 +1,18 @@
-"""Crash observations for unresolved AgentStack Mail decisions D8 and D9.
+"""Selected D8 messaging parity and pending D9 crash observations.
 
-These probes freeze today's behavior as evidence for a pending decision, not as
-an assertion that the behavior is correct. Rewrite them to encode the chosen
-requirement after the decision.
+D8 Path A preserves the measured DB-first messaging behavior at three literal
+``SIGKILL`` seams: after the first and second completed bundle copies, and after
+all three copies are staged immediately before Git commit.  It also preserves
+the measured ordinary ``write_message_bundle`` exception behavior.  The D8
+projection binds only the committed message/recipient relationship, completed
+archive-copy roles, and the selected Git boundary or stable tool-error origin.
 
-These tests record current frozen-live and Core durability; passing is not an
-approval of the behavior.  Each operation runs in a worker-private subprocess
-and is terminated by a literal ``SIGKILL`` at a test-installed seam.
-
-D8 probes two deterministic Python seams.  A test-only ``_write_text`` wrapper
-kills immediately after the first or second successful canonical/outbox/inbox
-write, fixing the observable partial-bundle subsets.  The existing later seam
-kills after all three files are written and GitPython stages them, but before
-``IndexFile.commit`` runs.  Only an instruction-level crash inside Git's native
-commit remains without a direct test seam.
-
-D9 wraps the existing timestamp helper, lets its ``read_ts`` transaction
-commit, then kills the process before control returns to
-``acknowledge_message`` for the separate ``ack_ts`` update.
+D8 does not claim ordinary failures outside the messaging bundle seam,
+registration/profile writes, death inside Git's native commit, retry,
+recovery, reconciliation, power-loss durability, concurrency, receipt state,
+or signal lifecycle.  D9 remains unselected evidence: its timestamp helper
+commits ``read_ts`` and then kills the process before the separate ``ack_ts``
+update.
 """
 
 from __future__ import annotations
@@ -45,7 +40,11 @@ TESTS_ROOT = Path(__file__).resolve().parent
 CORE_SOURCE = PACKAGE_ROOT / "src"
 _NAMESPACES = (LIVE_NAMESPACE, CORE_NAMESPACE)
 _D8_SUBJECT = "D8 crash before Git commit"
+_D8_BODY = "The child must die after staging this bundle."
 _D8_SUBSET_SUBJECT = "D8 crash after bundle subset"
+_D8_SUBSET_BODY = "Only the completed bundle subset may survive."
+_D8_EXCEPTION_SUBJECT = "D8 message bundle exception"
+_D8_EXCEPTION_BODY = "The database commit must survive the injected bundle error."
 _D9_SUBJECT = "D9 crash between read and ack"
 
 
@@ -63,6 +62,7 @@ from differential_probe import _install_llm_stub
 
 namespace, root_text = sys.argv[1:3]
 root = Path(root_text)
+source_root = Path(os.environ["D8_SOURCE_ROOT"]).resolve(strict=True)
 project_key = str(root / "project")
 marker = root / "d8-staged-before-commit.json"
 Path(project_key).mkdir(parents=True, exist_ok=True)
@@ -78,6 +78,13 @@ def write_marker(payload):
 
 _install_llm_stub(namespace)
 app = importlib.import_module(f"{namespace}.app")
+storage = importlib.import_module(f"{namespace}.storage")
+assert Path(app.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 precommit worker imported app outside the authenticated source"
+)
+assert Path(storage.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 precommit worker imported storage outside the authenticated source"
+)
 
 
 async def main():
@@ -168,6 +175,7 @@ from differential_probe import _install_llm_stub
 namespace, root_text, kill_after_text = sys.argv[1:4]
 kill_after = int(kill_after_text)
 root = Path(root_text)
+source_root = Path(os.environ["D8_SOURCE_ROOT"]).resolve(strict=True)
 project_key = str(root / "project")
 marker = root / f"d8-subset-after-{kill_after}.json"
 Path(project_key).mkdir(parents=True, exist_ok=True)
@@ -184,6 +192,12 @@ def write_marker(payload):
 _install_llm_stub(namespace)
 app = importlib.import_module(f"{namespace}.app")
 storage = importlib.import_module(f"{namespace}.storage")
+assert Path(app.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 subset worker imported app outside the authenticated source"
+)
+assert Path(storage.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 subset worker imported storage outside the authenticated source"
+)
 
 
 async def main():
@@ -266,6 +280,114 @@ async def main():
             )
         finally:
             storage._write_text = original_write_text
+
+
+asyncio.run(main())
+"""
+
+
+_D8_EXCEPTION_WORKER = r"""
+import asyncio
+import importlib
+import json
+import os
+import sys
+from pathlib import Path
+
+from differential_probe import _install_llm_stub
+
+
+namespace, root_text = sys.argv[1:3]
+root = Path(root_text)
+source_root = Path(os.environ["D8_SOURCE_ROOT"]).resolve(strict=True)
+project_key = str(root / "project")
+output_path = root / "d8-message-bundle-exception.json"
+Path(project_key).mkdir(parents=True, exist_ok=True)
+
+_install_llm_stub(namespace)
+app = importlib.import_module(f"{namespace}.app")
+storage = importlib.import_module(f"{namespace}.storage")
+assert Path(app.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 exception worker imported app outside the authenticated source"
+)
+assert Path(storage.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D8 exception worker imported storage outside the authenticated source"
+)
+
+
+async def main():
+    from fastmcp import Client
+
+    async with Client(app.build_mcp_server()) as client:
+        async def call(name, arguments):
+            result = await client.call_tool(name, arguments, raise_on_error=False)
+            if result.is_error:
+                raise AssertionError(f"setup tool {name} failed: {result.data!r}")
+            return result.data
+
+        await call("ensure_project", {"human_key": project_key, "format": "json"})
+        for agent_name, token in (
+            ("GreenCastle", "d8-exception-green-owner-token"),
+            ("BlueLake", "d8-exception-blue-owner-token"),
+        ):
+            await call(
+                "register_agent",
+                {
+                    "project_key": project_key,
+                    "program": "pending-decision-crash-probe",
+                    "model": "fixture-model",
+                    "name": agent_name,
+                    "task_description": "D8 message bundle exception probe",
+                    "registration_token": token,
+                    "format": "json",
+                },
+            )
+        await call(
+            "set_contact_policy",
+            {
+                "project_key": project_key,
+                "agent_name": "BlueLake",
+                "policy": "open",
+                "format": "json",
+            },
+        )
+
+        original_write_message_bundle = app.write_message_bundle
+
+        async def fail_message_bundle(*_args, **_kwargs):
+            raise RuntimeError("D8 injected write_message_bundle failure")
+
+        app.write_message_bundle = fail_message_bundle
+        try:
+            result = await client.call_tool_mcp(
+                "send_message",
+                {
+                    "project_key": project_key,
+                    "sender_name": "GreenCastle",
+                    "sender_token": "d8-exception-green-owner-token",
+                    "to": ["BlueLake"],
+                    "subject": "D8 message bundle exception",
+                    "body_md": (
+                        "The database commit must survive the injected bundle error."
+                    ),
+                    "format": "json",
+                },
+            )
+        finally:
+            app.write_message_bundle = original_write_message_bundle
+
+    raw_result = result.model_dump(mode="json", by_alias=True)
+    serialized_result = json.dumps(raw_result, ensure_ascii=False, sort_keys=True)
+    observation = {
+        "tool_error": bool(result.isError),
+        "injected_bundle_failure": (
+            "D8 injected write_message_bundle failure" in serialized_result
+        ),
+    }
+    descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(observation, output, sort_keys=True)
+        output.write("\n")
 
 
 asyncio.run(main())
@@ -427,11 +549,13 @@ def _run_until_sigkill(
     program: str,
     extra_arguments: tuple[str, ...] = (),
 ) -> tuple[WorkerStateRoots, subprocess.CompletedProcess[str]]:
+    source = source.resolve(strict=True)
     roots = WorkerStateRoots.under(
         root,
         pythonpath=(TESTS_ROOT, source),
     )
     environment = isolated_worker_env(os.environ, namespace, roots)
+    environment["D8_SOURCE_ROOT"] = str(source)
     completed = subprocess.run(
         [
             sys.executable,
@@ -453,6 +577,34 @@ def _run_until_sigkill(
     return roots, completed
 
 
+def _run_to_completion(
+    *,
+    namespace: str,
+    source: Path,
+    root: Path,
+    program: str,
+) -> WorkerStateRoots:
+    source = source.resolve(strict=True)
+    roots = WorkerStateRoots.under(
+        root,
+        pythonpath=(TESTS_ROOT, source),
+    )
+    environment = isolated_worker_env(os.environ, namespace, roots)
+    environment["D8_SOURCE_ROOT"] = str(source)
+    completed = subprocess.run(
+        [sys.executable, "-c", program, namespace, str(root)],
+        cwd=roots.cwd,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    diagnostic = (completed.stdout + completed.stderr)[-4000:]
+    assert completed.returncode == 0, diagnostic
+    return roots
+
+
 def _read_marker(path: Path) -> dict[str, Any]:
     assert path.is_file(), f"crash marker missing: {path}"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -460,7 +612,42 @@ def _read_marker(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _read_recipient_state(
+def _read_d8_delivery_records(
+    database_path: Path,
+    subject: str,
+) -> list[dict[str, Any]]:
+    connection = sqlite3.connect(
+        f"file:{database_path}?mode=ro",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                senders.name AS sender_name,
+                messages.subject AS subject,
+                messages.body_md AS body_md,
+                recipients.name AS recipient_name,
+                message_recipients.kind AS recipient_kind
+            FROM messages
+            JOIN agents AS senders
+              ON senders.id = messages.sender_id
+            JOIN message_recipients
+              ON message_recipients.message_id = messages.id
+            JOIN agents AS recipients
+              ON recipients.id = message_recipients.agent_id
+            WHERE messages.subject = ?
+            ORDER BY messages.id, recipients.id
+            """,
+            (subject,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [dict(row) for row in rows]
+
+
+def _read_d9_recipient_state(
     database_path: Path,
     subject: str,
 ) -> sqlite3.Row:
@@ -517,63 +704,93 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.skipif(
-    not hasattr(signal, "SIGKILL"),
-    reason="literal SIGKILL durability probes require a POSIX signal",
-)
-@pytest.mark.parametrize("namespace", _NAMESPACES)
-def test_d8_observes_database_and_staged_bundle_after_precommit_sigkill(
-    namespace: str,
-    frozen_live_checkout: Path,
-    tmp_path: Path,
-) -> None:
-    """Observe D8's crash boundary without accepting it as product behavior."""
+def _git_output(root: Path, *arguments: str) -> str:
+    completed = _git(root, *arguments)
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
 
-    root = tmp_path / namespace
+
+def _d8_archive_role(relative_path: str) -> str:
+    parts = Path(relative_path).parts
+    for index, part in enumerate(parts):
+        if part == "messages" and parts[index + 1 : index + 2] != ("threads",):
+            return "canonical"
+        if parts[index : index + 3] == ("agents", "GreenCastle", "outbox"):
+            return "sender_outbox"
+        if parts[index : index + 3] == ("agents", "BlueLake", "inbox"):
+            return "recipient_inbox"
+    return "unexpected"
+
+
+def _d8_bundle_snapshot(
+    storage: Path,
+    *,
+    subject: str,
+    body: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    roles_by_path: dict[str, str] = {}
+    contents_match = True
+    for path in sorted(storage.rglob("*.md")):
+        content = path.read_text(encoding="utf-8")
+        if subject not in content:
+            continue
+        relative = path.relative_to(storage).as_posix()
+        roles_by_path[relative] = _d8_archive_role(relative)
+        contents_match = contents_match and body in content
+    return (
+        {
+            "completed_archive_roles": sorted(roles_by_path.values()),
+            "archive_contents_match_message": contents_match,
+        },
+        roles_by_path,
+    )
+
+
+def _d8_common_projection(
+    roots: WorkerStateRoots,
+    *,
+    subject: str,
+    body: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    bundle, roles_by_path = _d8_bundle_snapshot(
+        roots.storage,
+        subject=subject,
+        body=body,
+    )
+    return (
+        {
+            "database_delivery_records": _read_d8_delivery_records(
+                roots.database,
+                subject,
+            ),
+            **bundle,
+        },
+        roles_by_path,
+    )
+
+
+def _observe_d8_precommit(
+    *,
+    namespace: str,
+    source: Path,
+    root: Path,
+) -> dict[str, Any]:
     roots, _completed = _run_until_sigkill(
         namespace=namespace,
-        source=_source_for(namespace, frozen_live_checkout),
+        source=source,
         root=root,
         program=_D8_WORKER,
     )
-
     marker = _read_marker(root / "d8-staged-before-commit.json")
-    assert marker["seam"] == "bundle_files_written_and_index_staged_before_commit"
-    assert _D8_SUBJECT in marker["commit_message"]
-
-    recipient = _read_recipient_state(roots.database, _D8_SUBJECT)
-    assert recipient["recipient_name"] == "BlueLake"
-    assert recipient["recipient_kind"] == "to"
-    assert recipient["read_ts"] is None
-    assert recipient["ack_ts"] is None
-
-    bundle_paths = sorted(
-        path
-        for path in roots.storage.rglob("*__d8-crash-before-git-commit__*.md")
-        if path.is_file()
+    common, roles_by_path = _d8_common_projection(
+        roots,
+        subject=_D8_SUBJECT,
+        body=_D8_BODY,
     )
-    assert len(bundle_paths) == 3
-    relative_bundle_paths = {
-        path.relative_to(roots.storage).as_posix() for path in bundle_paths
-    }
-    assert any("/messages/" in f"/{path}" for path in relative_bundle_paths)
-    assert any("/GreenCastle/outbox/" in f"/{path}" for path in relative_bundle_paths)
-    assert any("/BlueLake/inbox/" in f"/{path}" for path in relative_bundle_paths)
-    for path in bundle_paths:
-        content = path.read_text(encoding="utf-8")
-        assert _D8_SUBJECT in content
-        assert "The child must die after staging this bundle." in content
-
-    head = _git(roots.storage, "rev-parse", "HEAD")
-    assert head.returncode == 0, head.stderr
-    assert head.stdout.strip() == marker["head_before"]
-
-    staged = _git(roots.storage, "diff", "--cached", "--name-only")
-    assert staged.returncode == 0, staged.stderr
-    staged_paths = set(staged.stdout.splitlines())
-    assert relative_bundle_paths <= staged_paths
-
-    committed = _git(
+    staged_paths = set(
+        _git_output(roots.storage, "diff", "--cached", "--name-only").splitlines()
+    )
+    committed = _git_output(
         roots.storage,
         "log",
         "--all",
@@ -582,77 +799,46 @@ def test_d8_observes_database_and_staged_bundle_after_precommit_sigkill(
         _D8_SUBJECT,
         "--format=%H",
     )
-    assert committed.returncode == 0, committed.stderr
-    assert committed.stdout.strip() == ""
-    assert not any(path.is_file() for path in roots.signals.rglob("*"))
+    return {
+        "seam": marker.get("seam"),
+        **common,
+        "git_head_unchanged": (
+            _git_output(roots.storage, "rev-parse", "HEAD")
+            == marker.get("head_before")
+        ),
+        "staged_archive_roles": sorted(
+            roles_by_path.get(path, "unexpected") for path in staged_paths
+        ),
+        "only_completed_bundle_staged": staged_paths == set(roles_by_path),
+        "message_commit_absent": committed == "",
+    }
 
 
-@pytest.mark.skipif(
-    not hasattr(signal, "SIGKILL"),
-    reason="literal SIGKILL durability probes require a POSIX signal",
-)
-@pytest.mark.parametrize("kill_after", (1, 2))
-@pytest.mark.parametrize("namespace", _NAMESPACES)
-def test_d8_observes_only_completed_bundle_subset_after_write_sigkill(
+def _observe_d8_subset(
+    *,
     namespace: str,
+    source: Path,
+    root: Path,
     kill_after: int,
-    frozen_live_checkout: Path,
-    tmp_path: Path,
-) -> None:
-    """Observe the exact D8 subset that survives a post-write SIGKILL."""
-
-    root = tmp_path / f"{namespace}-{kill_after}"
+) -> dict[str, Any]:
     roots, _completed = _run_until_sigkill(
         namespace=namespace,
-        source=_source_for(namespace, frozen_live_checkout),
+        source=source,
         root=root,
         program=_D8_SUBSET_WORKER,
         extra_arguments=(str(kill_after),),
     )
-
     marker = _read_marker(root / f"d8-subset-after-{kill_after}.json")
-    assert marker["seam"] == "successful_bundle_write_before_next_copy"
-    assert marker["successful_write_count"] == kill_after
-
-    recipient = _read_recipient_state(roots.database, _D8_SUBSET_SUBJECT)
-    assert recipient["recipient_name"] == "BlueLake"
-    assert recipient["recipient_kind"] == "to"
-    assert recipient["read_ts"] is None
-    assert recipient["ack_ts"] is None
-
-    bundle_paths = sorted(
-        path
-        for path in roots.storage.rglob("*__d8-crash-after-bundle-subset__*.md")
-        if path.is_file()
+    common, roles_by_path = _d8_common_projection(
+        roots,
+        subject=_D8_SUBSET_SUBJECT,
+        body=_D8_SUBSET_BODY,
     )
-    relative_bundle_paths = [
-        path.relative_to(roots.storage).as_posix() for path in bundle_paths
-    ]
-    successful_paths = marker["successful_paths"]
-    assert set(relative_bundle_paths) == set(successful_paths)
-    assert len(relative_bundle_paths) == kill_after
-    assert "/messages/" in f"/{successful_paths[0]}"
-    if kill_after == 1:
-        assert not any(
-            "/GreenCastle/outbox/" in f"/{path}" for path in relative_bundle_paths
-        )
-    else:
-        assert "/GreenCastle/outbox/" in f"/{successful_paths[1]}"
-    assert not any("/BlueLake/inbox/" in f"/{path}" for path in relative_bundle_paths)
-    for path in bundle_paths:
-        content = path.read_text(encoding="utf-8")
-        assert _D8_SUBSET_SUBJECT in content
-        assert "Only the completed bundle subset may survive." in content
-
-    head = _git(roots.storage, "rev-parse", "HEAD")
-    assert head.returncode == 0, head.stderr
-    assert head.stdout.strip() == marker["head_before"]
-
-    staged = _git(roots.storage, "diff", "--cached", "--name-only")
-    assert staged.returncode == 0, staged.stderr
-    assert staged.stdout.strip() == ""
-
-    committed = _git(
+    successful_paths = marker.get("successful_paths") or []
+    staged_paths = set(
+        _git_output(roots.storage, "diff", "--cached", "--name-only").splitlines()
+    )
+    committed = _git_output(
         roots.storage,
         "log",
         "--all",
@@ -661,9 +847,189 @@ def test_d8_observes_only_completed_bundle_subset_after_write_sigkill(
         _D8_SUBSET_SUBJECT,
         "--format=%H",
     )
-    assert committed.returncode == 0, committed.stderr
-    assert committed.stdout.strip() == ""
-    assert not any(path.is_file() for path in roots.signals.rglob("*"))
+    return {
+        "seam": marker.get("seam"),
+        "successful_write_count": marker.get("successful_write_count"),
+        **common,
+        "successful_write_roles": [
+            roles_by_path.get(path, "unexpected") for path in successful_paths
+        ],
+        "archive_paths_match_successful_writes": (
+            set(successful_paths) == set(roles_by_path)
+        ),
+        "git_head_unchanged": (
+            _git_output(roots.storage, "rev-parse", "HEAD")
+            == marker.get("head_before")
+        ),
+        "staged_paths_empty": staged_paths == set(),
+        "message_commit_absent": committed == "",
+    }
+
+
+def _observe_d8_exception(
+    *,
+    namespace: str,
+    source: Path,
+    root: Path,
+) -> dict[str, Any]:
+    roots = _run_to_completion(
+        namespace=namespace,
+        source=source,
+        root=root,
+        program=_D8_EXCEPTION_WORKER,
+    )
+    tool_result = _read_marker(root / "d8-message-bundle-exception.json")
+    common, _roles_by_path = _d8_common_projection(
+        roots,
+        subject=_D8_EXCEPTION_SUBJECT,
+        body=_D8_EXCEPTION_BODY,
+    )
+    common.pop("archive_contents_match_message")
+    return {**tool_result, **common}
+
+
+def _expected_d8_database_records(subject: str, body: str) -> list[dict[str, str]]:
+    return [
+        {
+            "sender_name": "GreenCastle",
+            "subject": subject,
+            "body_md": body,
+            "recipient_name": "BlueLake",
+            "recipient_kind": "to",
+        }
+    ]
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"),
+    reason="literal SIGKILL durability probes require a POSIX signal",
+)
+def test_d8_selected_parity_database_and_staged_bundle_after_precommit_sigkill(
+    frozen_live_checkout: Path,
+    tmp_path: Path,
+) -> None:
+    """Require selected DB-first parity at the staged precommit crash seam."""
+
+    observations = {
+        namespace: _observe_d8_precommit(
+            namespace=namespace,
+            source=_source_for(namespace, frozen_live_checkout),
+            root=tmp_path / f"precommit-{namespace}",
+        )
+        for namespace in _NAMESPACES
+    }
+    expected = {
+        "seam": "bundle_files_written_and_index_staged_before_commit",
+        "database_delivery_records": _expected_d8_database_records(
+            _D8_SUBJECT,
+            _D8_BODY,
+        ),
+        "completed_archive_roles": [
+            "canonical",
+            "recipient_inbox",
+            "sender_outbox",
+        ],
+        "archive_contents_match_message": True,
+        "git_head_unchanged": True,
+        "staged_archive_roles": [
+            "canonical",
+            "recipient_inbox",
+            "sender_outbox",
+        ],
+        "only_completed_bundle_staged": True,
+        "message_commit_absent": True,
+    }
+
+    assert observations[LIVE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == observations[LIVE_NAMESPACE]
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"),
+    reason="literal SIGKILL durability probes require a POSIX signal",
+)
+def test_d8_selected_parity_completed_bundle_subset_after_write_sigkill(
+    frozen_live_checkout: Path,
+    tmp_path: Path,
+) -> None:
+    """Require selected DB-first parity for the first two completed copies."""
+
+    observations = {
+        namespace: {
+            kill_after: _observe_d8_subset(
+                namespace=namespace,
+                source=_source_for(namespace, frozen_live_checkout),
+                root=tmp_path / f"subset-{namespace}-{kill_after}",
+                kill_after=kill_after,
+            )
+            for kill_after in (1, 2)
+        }
+        for namespace in _NAMESPACES
+    }
+    database_records = _expected_d8_database_records(
+        _D8_SUBSET_SUBJECT,
+        _D8_SUBSET_BODY,
+    )
+    expected = {
+        1: {
+            "seam": "successful_bundle_write_before_next_copy",
+            "successful_write_count": 1,
+            "database_delivery_records": database_records,
+            "completed_archive_roles": ["canonical"],
+            "archive_contents_match_message": True,
+            "successful_write_roles": ["canonical"],
+            "archive_paths_match_successful_writes": True,
+            "git_head_unchanged": True,
+            "staged_paths_empty": True,
+            "message_commit_absent": True,
+        },
+        2: {
+            "seam": "successful_bundle_write_before_next_copy",
+            "successful_write_count": 2,
+            "database_delivery_records": database_records,
+            "completed_archive_roles": ["canonical", "sender_outbox"],
+            "archive_contents_match_message": True,
+            "successful_write_roles": ["canonical", "sender_outbox"],
+            "archive_paths_match_successful_writes": True,
+            "git_head_unchanged": True,
+            "staged_paths_empty": True,
+            "message_commit_absent": True,
+        },
+    }
+
+    assert observations[LIVE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == observations[LIVE_NAMESPACE]
+
+
+def test_d8_selected_parity_message_bundle_exception_leaves_committed_database_without_archive(
+    frozen_live_checkout: Path,
+    tmp_path: Path,
+) -> None:
+    """Require only the stable messaging-bundle exception projection."""
+
+    observations = {
+        namespace: _observe_d8_exception(
+            namespace=namespace,
+            source=_source_for(namespace, frozen_live_checkout),
+            root=tmp_path / f"exception-{namespace}",
+        )
+        for namespace in _NAMESPACES
+    }
+    expected = {
+        "tool_error": True,
+        "injected_bundle_failure": True,
+        "database_delivery_records": _expected_d8_database_records(
+            _D8_EXCEPTION_SUBJECT,
+            _D8_EXCEPTION_BODY,
+        ),
+        "completed_archive_roles": [],
+    }
+
+    assert observations[LIVE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == observations[LIVE_NAMESPACE]
 
 
 @pytest.mark.skipif(
@@ -690,7 +1056,7 @@ def test_d9_observes_read_without_ack_after_between_commit_sigkill(
     assert marker["seam"] == "read_ts_committed_before_ack_ts_call"
     assert marker["read_timestamp_observed"] is True
 
-    recipient = _read_recipient_state(roots.database, _D9_SUBJECT)
+    recipient = _read_d9_recipient_state(roots.database, _D9_SUBJECT)
     assert recipient["message_id"] == marker["message_id"]
     assert recipient["recipient_name"] == "BlueLake"
     assert recipient["recipient_kind"] == "to"

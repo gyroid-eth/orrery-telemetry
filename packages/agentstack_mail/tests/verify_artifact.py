@@ -135,7 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D8": "DB persists after archive failure",
     "D9": "read/ack partial commit",
     "D10": "concurrent reservation winner and SQLite lock semantics",
     "D11": "retire with active reservations or unread messages",
@@ -385,6 +384,74 @@ EXPECTED_SELECTED_DECISIONS = {
         "allowlisted": False,
         "comparator_disposition": "fail",
     },
+    "D8": {
+        "id": "D8",
+        "title": "DB persists after archive failure",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": "same_project_send_message_to_open_recipient",
+            "sender_cohort": (
+                "explicitly_registered_non_null_caller_supplied_token"
+            ),
+            "literal_sigkill_seams": [
+                "after_canonical_bundle_write_before_outbox_write",
+                "after_outbox_bundle_write_before_inbox_write",
+                (
+                    "after_canonical_outbox_inbox_writes_and_index_stage_"
+                    "before_git_commit"
+                ),
+            ],
+            "database_survival": (
+                "one_selected_subject_message_to_recipient_relationship_"
+                "survives_each_sigkill"
+            ),
+            "archive_git_projection": {
+                "after_canonical_write": (
+                    "canonical_only_head_unchanged_staging_empty_no_message_commit"
+                ),
+                "after_outbox_write": (
+                    "canonical_and_sender_outbox_only_head_unchanged_staging_"
+                    "empty_no_message_commit"
+                ),
+                "after_three_copies_staged": (
+                    "canonical_sender_outbox_recipient_inbox_exist_and_are_"
+                    "staged_head_unchanged_no_message_commit"
+                ),
+            },
+            "message_bundle_exception": {
+                "tool_failure": (
+                    "mcp_is_error_true_and_injected_exception_marker_present"
+                ),
+                "database": (
+                    "one_selected_subject_message_to_recipient_relationship_"
+                    "persists"
+                ),
+                "archive": "subject_absent",
+            },
+            "not_claimed": [
+                "ordinary_failures_outside_write_message_bundle",
+                "other_archive_exceptions_or_additive_tool_error_fields",
+                "registration_or_profile_write_failure",
+                "instruction_level_failure_inside_native_git_commit",
+                "restart_retry_reconciliation_or_power_loss",
+                "multi_recipient_attachments_or_threaded_message",
+                "concurrency",
+                "signal_lifecycle_fetch_cleanup_or_D12",
+                "unselected_database_fields",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_database_and_staged_bundle_after_precommit_sigkill",
+            "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_completed_bundle_subset_after_write_sigkill",
+            "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_message_bundle_exception_leaves_committed_database_without_archive",
+        ],
+    },
 }
 
 EXPECTED_DECISION_IDS = {f"D{index}" for index in range(1, 13)}
@@ -471,6 +538,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d4.py",
     "/tests/test_pending_decision_d5.py",
     "/tests/test_pending_decision_d6.py",
+    "/tests/test_pending_decision_d8_d9.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",

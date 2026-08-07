@@ -140,6 +140,14 @@ def _weaken_d6_comparator(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D6")["comparator_disposition"] = "warn"
 
 
+def _change_d8_scope(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D8")["scope"]["database_survival"] = "unspecified"
+
+
+def _select_d9(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D9")["decision_state"] = "selected"
+
+
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
@@ -150,7 +158,7 @@ def test_all_decisions_have_independent_required_states() -> None:
     assert {item["id"] for item in decisions} == {f"D{index}" for index in range(1, 13)}
     assert {
         item["id"] for item in decisions if item["decision_state"] == "selected"
-    } == {"D1", "D2", "D3", "D4", "D5", "D6", "D7"}
+    } == {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"}
     assert {
         (
             item["decision_state"],
@@ -177,6 +185,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D4",
         "D5",
         "D6",
+        "D8",
     ]
     assert {item["id"]: item["implementation_origin"] for item in implemented} == {
         "D1": "core_change",
@@ -185,6 +194,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D4": "pre_existing_parity",
         "D5": "pre_existing_parity",
         "D6": "pre_existing_parity",
+        "D8": "pre_existing_parity",
     }
     assert all(
         "implementation_origin" not in item
@@ -240,6 +250,8 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_change_d1_resolution, "selected product decision D1 changed"),
         (_drop_d1_verification, "selected product decision D1 changed"),
         (_weaken_d6_comparator, "selected product decision D6 changed"),
+        (_change_d8_scope, "selected product decision D8 changed"),
+        (_select_d9, "unselected decision D9 changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(
