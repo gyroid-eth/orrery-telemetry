@@ -35,12 +35,12 @@ selected upstream parity as Path A.
 
 | ID | Decision | Implementation | Cutover | Observed or selected behavior | Decision tension | Principal impact |
 |---|---|---|---|---|---|---|
-| D1 | selected | implemented | no-go | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
+| D1 | selected | implemented (Core change) | no-go | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
 | D2 | selected | implemented (pre-existing parity) | no-go | Expiry remains advisory: past/future/NULL pending links can be approved and approved links authorize the measured routes | Path A chooses upstream compatibility over making TTL an authorization boundary in this release | contact-controlled and cross-project senders/recipients; stale grants |
-| D3 | unselected | not implemented | no-go | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local alias and replies stay there | project-local schema versus authentic routable origin identity | replies, audit, same-name agents, existing aliases/messages |
-| D4 | unselected | not implemented | no-go | Accepting without a pending request creates an approved link | out-of-order convenience versus consent/audit provenance | contact owners and any caller who knows both names |
-| D5 | unselected | not implemented | no-go | An invalid contact policy silently becomes `auto` | forgiving clients versus fail-fast policy configuration | operators, policy audits, indistinguishable historical `auto` values |
-| D6 | unselected | not implemented | no-go | A tokenized sender may omit `sender_token` and send unverified | legacy clients versus sender authentication | all recipients/auditors; identities whose generated token is unavailable |
+| D3 | selected | implemented (pre-existing parity) | no-go | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local null-token alias and replies stay there | Path A preserves compatibility despite ambiguous identity topology | replies, audit, same-name agents, existing aliases/messages |
+| D4 | selected | implemented (pre-existing parity) | no-go | Accepting without a pending request creates an approved link | Path A preserves out-of-order convenience despite missing request provenance | contact owners and any caller who knows both names |
+| D5 | selected | implemented (pre-existing parity) | no-go | The measured invalid and empty policies silently become `auto` | Path A preserves forgiving input despite typo/audit ambiguity | operators, policy audits, indistinguishable historical `auto` values |
+| D6 | selected | implemented (pre-existing parity) | no-go | A tokenized sender may omit `sender_token` and send unverified | Path A preserves legacy clients despite unenforced sender ownership | all recipients/auditors; identities whose generated token is unavailable |
 | D7 | selected | not implemented | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
 | D8 | unselected | not implemented | no-go | A failed archive write leaves committed DB agent/message state | live ordering versus cross-store consistency and truthful failure | senders, recipients, dashboard, Git/archive consumers |
 | D9 | unselected | not implemented | no-go | Ack failure after the first helper leaves `read_ts` committed and `ack_ts` null | independently durable read progress versus atomic acknowledgement | receipt readers, retry logic, legacy partial rows |
@@ -75,9 +75,9 @@ SQLite update makes one concurrent registration the atomic writer; a different
 token arriving after that write is a conflict and cannot add metadata or a Git
 commit. The current first-DB-writer outcome is retained unsafe compatibility
 arbitration, not accepted ownership proof. This serialization does not decide
-who is entitled to establish authority over the row. D6 remains unselected;
-D7 is selected but not implemented and does not reinterpret the D1 writer as
-ownership proof.
+who is entitled to establish authority over the row. D6 selects pre-existing
+upstream parity for omitted-token sending; D7 is selected but not implemented
+and neither decision reinterprets the D1 writer as ownership proof.
 The committed requirement tests are in
 `packages/agentstack_mail/tests/test_pending_decision_d1.py`; the manifest
 remains authoritative for selected scope and status.
@@ -97,10 +97,10 @@ the tokenless recovery cases in D6 and D7.
 | Prevalidate only an explicitly conflicting token before any mutation | Only clients relying on rejected calls to mutate state break; omitted-token semantics remain as today | None; historical divergence still needs audit if desired |
 | Require valid owner credentials for every existing-name re-registration; use a separate rotate/recovery operation | Tokenless legacy launchers and identities with unavailable generated tokens cannot refresh until claimed | Rows without usable credentials need claim/backfill/recovery |
 
-The selected narrow closure prevalidates an explicit conflict. The broader
-omitted-token policy remains unselected in D6, while D7's selection does not
-turn the D1 writer into owner proof. This prose does not replace the manifest's
-normative resolution record.
+The selected narrow closure prevalidates an explicit conflict. D6 separately
+selects current omitted-token behavior for Path A, while D7's selection does
+not turn the D1 writer into owner proof. This prose does not replace the
+manifest's normative resolution record.
 
 ### 5. Test that fixes the choice
 
@@ -112,7 +112,8 @@ the existing-window route is exercised separately. A same-token update refreshes
 all metadata and commits exactly once. The omitted-token case preserves the
 legacy credential/authority semantics, one profile commit, and the existing
 profile-before-DB attachment ordering; it serves only as a compatibility
-regression while D6 is unselected and D7 remains unimplemented/no-go. A
+regression consistent with selected D6 parity while D7 remains
+unimplemented/no-go. A
 deterministic two-client rendezvous against a legacy null-token row proves
 exactly one atomic winner, one selected auth error, one Git commit, winner-only
 metadata, and no credential disclosure in either result under the retained
@@ -139,9 +140,9 @@ around `app.py:6333` and `:7456`.
 ### 2. Selected Path A and current Core behavior
 
 Path A selects the frozen-live behavior. Core already matched without a D2 code
-change, so `implementation_state: implemented` means pre-existing parity, not a
-new expiry implementation. The manifest resolution
-`match_frozen_live_without_core_change` preserves that distinction.
+change, so `implementation_state: implemented` plus
+`implementation_origin: pre_existing_parity` means no new expiry implementation
+was needed. The independent resolution is `match_frozen_live`.
 
 Expiry is stored and returned but is not an authorization boundary in the
 measured same-project response, local-send, explicit cross-project send, or
@@ -199,9 +200,11 @@ model and paths around `app.py:6883` and `:7078`.
 
 ### 2. Current Core behavior
 
-Identical failure, alias creation, and misrouted reply.
+Identical failure, alias creation, and target-local reply. Path A selects this
+frozen-live topology. No Core change was required, so the ledger records
+`implementation_origin: pre_existing_parity` and `resolution: match_frozen_live`.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
 Authentic, routable cross-project identity conflicts with the current
 project-local message/archive assumptions and name-based routing. A same-name
@@ -211,23 +214,26 @@ agent in multiple projects makes inference unsafe.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve foreign intro senders and local aliases | Replies remain broken or misleading; audit and ownership are not trustworthy | None; ambiguity remains |
+| **Selected — preserve foreign intro senders and target-local aliases** | Replies remain broken or misleading; audit and ownership are not trustworthy | None; ambiguity remains |
 | Add first-class origin project/agent identity or a global principal binding and route replies by ID | Schema, payload, archive, dashboard, and compatibility change | Foreign-sender messages and null-token aliases need deterministic migration/deduplication |
 | Keep target-local proxies but attach immutable origin IDs and bridge replies to origin | Proxy lifecycle and token/name confusion remain; bridge logic becomes mandatory | Existing aliases require origin backfill; unmappable rows need quarantine |
 | Reject cross-project messaging for the first authority cutover | Existing cross-project callers and links stop working | Preserve old records read-only or quarantine; create no new ambiguous rows |
 
-Non-binding lean: do not authorize cross-project writes until either a
-first-class origin model is fixed or the feature is explicitly disabled.
+### 5. Committed requirement gate
 
-### 5. Test that fixes the choice
+`tests/test_pending_decision_d3.py::test_d3_selected_upstream_parity_requirement`
+runs frozen live and Core from authenticated source roots in isolated workers.
+Its D3-only projection binds the foreign source-row intro, immediate
+target-project reply failure, creation and use of the target-local null-token
+alias with copied metadata, and a fresh-process reply reaching the alias rather
+than the source inbox while preserving the target agent's sender ID and rendered
+name wherever each appears across the message, delivery, and alias inbox
+projections and preserving thread identity. It deliberately does not bind exact
+archive/Git/signal details or D2/D4/D5/D6 setup behavior.
 
-Create two projects, then repeat with the same agent name in both. Exercise
-request intro, approval, send, reply, and process restart. Assert the selected
-message sender/project invariant, immutable origin provenance, thread
-continuity, and delivery to the source inbox. Reject mode must fail before any
-link, message, alias, or archive commit. A migration fixture must contain both
-a foreign-sender intro and null-token target alias and yield a deterministic
-mapping or explicit quarantine.
+Pre-existing same-name target agents, alias reuse, reject/migration modes,
+concurrency/crash behavior, and ownership or safe enrollment of the null-token
+alias remain outside the selected scope.
 
 ## D4 — accept response without pending
 
@@ -241,9 +247,10 @@ around `app.py:7472`.
 ### 2. Current Core behavior
 
 Identical. Acceptance is also an approval-creation operation, not solely a
-response to a stored request.
+response to a stored request. Path A selects that behavior with pre-existing
+parity and no Core change.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
 Out-of-order convenience conflicts with the consent/audit invariant that a
 response corresponds to a real, unexpired pending request. Administrative
@@ -253,21 +260,23 @@ contact establishment is a separate authority question.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve auto-create | Any caller knowing both names can synthesize approval; there is no request provenance | None |
+| **Selected — preserve auto-create** | Any caller knowing both names can synthesize approval; there is no request provenance | None |
 | Require an unexpired pending request | Out-of-order clients and macros fail with `NO_PENDING` | Existing approved rows may remain unchanged |
 | Make response strict and add an authenticated `establish_contact` operation | Adds a privileged surface and client migration | Existing links remain; future admin links gain provenance |
 | Permit no-pending accept only with target-owner credential | Tokenless callers break and the rule depends on unresolved owner auth | Existing links remain |
 
-Non-binding lean: require pending state for ordinary response; if administrative
-establishment is required, make it a separately authorized and audited action.
+### 5. Committed requirement gate
 
-### 5. Test that fixes the choice
+`tests/test_pending_decision_d4.py::test_d4_selected_parity_accept_without_pending_creates_approved_link`
+uses fresh same-project agents and no existing link. It binds `accept=true`,
+the exact successful response, one directed approved link with empty reason,
+created-equals-updated, the requested 600-second expiry, and the observed
+absence of message/recipient/archive/Git/signal changes. It explicitly does not
+claim complete database immutability.
 
-With no link, test accept and reject while snapshotting link/message/profile/Git
-state. Strict mode must return `NO_PENDING` with no writes. Then test unexpired
-pending acceptance, replay after approval, and expired pending under D2. Any
-privileged path must reject ordinary/wrong-token calls without mutation and
-create exactly one audited approval with valid authority.
+`accept=false`, cross-project response, existing-link states, replay,
+authorization, concurrency, other TTL cases, downstream delivery, and strict
+`NO_PENDING` behavior remain outside the selected scope.
 
 ## D5 — invalid contact policy coerced auto
 
@@ -276,15 +285,14 @@ create exactly one audited approval with valid authority.
 Calling `set_contact_policy(..., policy="not-a-policy")` succeeds and returns
 `{"agent":"BlueLake","policy":"auto"}`; the DB stores `auto`. Frozen source
 lowercases and coerces unknown values around `app.py:7512–7521`. A nonempty
-invalid string was dynamically proven. Empty input also maps to `auto` by
-source inspection but was not dynamically probed.
+invalid string and empty input were both dynamically proven.
 
 ### 2. Current Core behavior
 
-Identical result and AST-equivalent body at
-`packages/agentstack_mail/src/agentstack_mail/app.py:7544`.
+Identical result and persisted policy-only projection. Path A selects that
+behavior as pre-existing parity; no Core change was required.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
 Forgiving input compatibility conflicts with fail-fast policy configuration. A
 typo can silently change the intended access posture.
@@ -293,19 +301,22 @@ typo can silently change the intended access posture.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve coercion | Typo detection and policy auditing remain unreliable | Intentional and accidental historical `auto` are indistinguishable |
+| **Selected — preserve measured coercion** | Typo detection and policy auditing remain unreliable | Intentional and accidental historical `auto` are indistinguishable |
 | Reject unknown/empty values without mutation | Loose clients using invalid or empty values as defaults fail | No migration; past accidental values cannot be recovered automatically |
 | Compatibility mode warns/coerces while strict mode rejects, then schedule a default change | Dual semantics and warning/audit plumbing add complexity | Future coercions can be audited; past ones remain unknown |
 
-Non-binding lean: reject unknown values and accept only documented values or an
-explicit default syntax.
+### 5. Committed requirement gate
 
-### 5. Test that fixes the choice
+`tests/test_pending_decision_d5.py::test_d5_selected_parity_invalid_and_empty_policy_coerce_to_auto`
+starts an existing same-project agent at `contacts_only`. For the two measured
+inputs, `"not-a-policy"` and `""`, it binds the exact successful `auto` result
+and the observed contact-policy-only persisted change. A recent-contact and
+follow-up messaging sequence remains captured only as per-side diagnostics; it
+is neither asserted nor compared by the selected D5 projection.
 
-Start at `contacts_only`; test every valid value, mixed case, one invalid value,
-and empty input. Assert exact response/error, persisted policy, and unchanged DB
-on rejection. Add a downstream delivery check. A transitional choice must
-parameterize modes and assert its warning/audit event.
+Valid/mixed-case/whitespace and other invalid shapes, warnings/audit, strict or
+transitional modes, missing identities/projects, messaging/contact-link/sender
+authentication semantics, and concurrency remain outside the selected scope.
 
 ## D6 — missing sender token succeeds
 
@@ -320,9 +331,10 @@ around `app.py:6192–6199`.
 
 Identical in the `send_message` conditional sender-token verification. The
 proven DB contains only the successful omitted-token message when a wrong-token
-control is also attempted.
+control is also attempted. Path A selects this narrow pre-existing parity; no
+Core change was required.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
 Legacy clients omit credentials, but any caller knowing an agent name can then
 impersonate it. Strict enforcement is complicated because registration without
@@ -333,20 +345,31 @@ return; some apparent owners cannot possess it.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve optional verification | Sender ownership remains unenforced for omitted tokens; recipients and audits cannot trust `from` | None |
+| **Selected — preserve optional verification** | Sender ownership remains unenforced for omitted tokens; recipients and audits cannot trust `from` | None |
 | Require the matching token whenever the row has one | Old clients, generated-token owners, and tokenless internal welcome paths may stop sending | Some identities require re-enrollment before they can send |
 | Versioned enrollment: grandfather legacy identities, require caller-owned tokens for new ones, and add claim/rotation | Schema/enrollment/migration complexity and temporary mixed semantics | Existing rows can be marked legacy instead of locked out |
 
-Non-binding lean: do not flip strict enforcement until provenance, claim/
-rotation, and internal macro credential propagation are designed.
+### 5. Committed requirement gate
 
-### 5. Test that fixes the choice
+`tests/test_pending_decision_d6.py::test_d6_frozen_live_and_core_match_missing_sender_token_behavior`
+binds one explicitly registered same-project sender with a caller-supplied
+non-null token sending to an `open` recipient. Omitting `sender_token` succeeds
+with `verified_sender=false` and one delivery; a wrong-token control rejects
+as an MCP tool result with the observed selected SQLite projection unchanged.
+That projection contains only the two explicit non-null caller-token agents,
+the recipient's `open` policy, and the single message/recipient delivery. The
+gate does not inspect signal lifecycle, inbox-fetch cleanup, read/ack state, or
+archive/Git details. It selects only the required success fields and the
+wrong-token error kind/reason, so additive response or error fields do not
+change the requirement. Complete raw MCP results plus fixture transcripts and
+output are scanned for credential canaries without comparing their whole
+payload shapes.
 
-For known-token, server-generated-token, macro-created null-token, and migrated
-legacy identities, try correct, wrong, and missing credentials. Assert result,
-`verified_sender`, DB/recipient counts, archive, inbox, and zero rejected-call
-mutation. Add registration-then-send, macro welcome, any rotation path, and
-credential non-disclosure scans.
+Correct-token sending, generated/unavailable tokens, null/macro/migrated or
+grandfathered identities, non-open policies, cross-project and other send
+entrypoints, claim/rotation/recovery, concurrency, and future strict enforcement
+remain outside the selected scope. Stricter sender authentication is a future
+divergence decision, not part of this Path-A release.
 
 ## D7 — owner tools name-only auth
 
@@ -359,10 +382,17 @@ macro creation and conditional retirement guards are around `app.py:7864` and
 `:5041`. Broader unpublished owner tools have analogous source guards but were
 not all dynamically probed.
 
+D3 confirms another creation path: an approved cross-project send calls
+`_get_or_create_agent` in the target project without token management, creating
+a target-local sender alias whose `registration_token` is null. The D3 probe
+asserts that row directly. This is evidence for D7's already-selected
+stop-all-new-null prerequisite, not a change to D7's decision.
+
 ### 2. Current Core behavior
 
 Identical for the published `retire_agent` path and the macro's direct
-`_get_or_create_agent` call. Broader owner-tool behavior remains unproven
+`_get_or_create_agent` call, and for the D3-confirmed cross-project alias path.
+Broader owner-tool behavior and other null-row creation paths remain unproven
 dynamically.
 
 ### 3. Why implementation and cutover remain no-go

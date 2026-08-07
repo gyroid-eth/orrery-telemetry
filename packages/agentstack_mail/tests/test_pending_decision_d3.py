@@ -1,16 +1,22 @@
-"""Hermetic executable evidence for pending product decision D3.
+"""Selected upstream-parity requirement for product decision D3.
 
-This probe records current cross-project intro, send, and reply identity
-behavior.  Passing means frozen live and AgentStack Mail Core still agree; it
-does not select or endorse that behavior.  Each namespace runs in a private,
-secret-free database/archive/signal root, and phase two starts in a fresh
-Python process so the reply route is also measured across a process restart.
+Path A preserves the measured frozen-live cross-project identity topology:
+contact intros carry a source-project sender row, approved sends create a
+target-local null-token alias, and replies after a process restart reach that
+alias rather than the source identity.  The selected comparator projects only
+those D3 effects; contact expiry, no-pending response, policy coercion, and
+sender-token omission remain outside this requirement.
+
+Each namespace runs in a private database/archive/signal root, imports from an
+authenticated selected source, scans raw MCP result channels for credential
+canaries, and starts phase two in a fresh Python process.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -35,22 +41,18 @@ import asyncio
 import importlib
 import json
 import os
-import re
 import sqlite3
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 from fastmcp import Client
-from fastmcp.exceptions import ToolError
-
 namespace = os.environ["DECISION_NAMESPACE"]
 phase = os.environ["D3_PHASE"]
 state_root = Path(os.environ["DECISION_STATE_ROOT"])
 database_path = Path(os.environ["DECISION_DATABASE"])
-storage_root = Path(os.environ["DECISION_STORAGE"])
-signals_root = Path(os.environ["DECISION_SIGNALS"])
+source_root = Path(os.environ["DECISION_SOURCE_ROOT"]).resolve(strict=True)
+caller_tokens = json.loads(os.environ["D3_CALLER_TOKENS"])
 project_a_path = state_root / "project-a"
 project_b_path = state_root / "project-b"
 project_a_path.mkdir(parents=True, exist_ok=True)
@@ -68,12 +70,58 @@ async def fail_if_llm_called(*_args, **_kwargs):
 llm_stub.complete_system_user = fail_if_llm_called
 sys.modules[f"{namespace}.llm"] = llm_stub
 app = importlib.import_module(f"{namespace}.app")
+imported_app_path = Path(app.__file__).resolve(strict=True)
+assert imported_app_path.is_relative_to(source_root), (
+    "D3 worker imported its app outside the authenticated selected source"
+)
 
 
 def public_payload(result):
-    if result.structured_content is not None:
-        return result.structured_content
-    return result.data
+    value = result.structuredContent
+    if value is None:
+        blocks = result.model_dump(mode="json", by_alias=True)["content"]
+        if (
+            isinstance(blocks, list)
+            and len(blocks) == 1
+            and isinstance(blocks[0], dict)
+            and isinstance(blocks[0].get("text"), str)
+        ):
+            try:
+                value = json.loads(blocks[0]["text"])
+            except json.JSONDecodeError:
+                value = blocks
+        else:
+            value = blocks
+    return value
+
+
+def assert_no_caller_credentials(result):
+    channels = result.model_dump(mode="json", by_alias=True)
+    serialized = json.dumps(channels, sort_keys=True, ensure_ascii=False)
+    if any(token in serialized for token in caller_tokens.values()):
+        raise AssertionError("D3 tool result leaked a caller credential")
+
+    allowed_redactions = {None, "", "***", "<redacted>", "[REDACTED]"}
+
+    def inspect(value):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).strip().lower().lstrip("_")
+                if (
+                    normalized.endswith("token")
+                    or normalized.endswith("secret")
+                    or normalized.endswith("credential")
+                    or normalized in {"authorization", "api_key", "apikey"}
+                ) and nested not in allowed_redactions:
+                    raise AssertionError(
+                        "D3 tool result exposed a credential-bearing field"
+                    )
+                inspect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                inspect(nested)
+
+    inspect(channels)
 
 
 def unwrap(value):
@@ -97,15 +145,9 @@ def normalize_error(value):
 
 
 async def invoke(client, tool_name, arguments):
-    try:
-        result = await client.call_tool(tool_name, arguments)
-    except ToolError as exc:
-        return {
-            "ok": False,
-            "error_type": type(exc).__name__,
-            "error": normalize_error(exc),
-        }
-    if result.is_error:
+    result = await client.call_tool_mcp(tool_name, arguments)
+    assert_no_caller_credentials(result)
+    if result.isError:
         return {
             "ok": False,
             "error_type": "tool_result",
@@ -196,9 +238,13 @@ def database_snapshot():
                 "project": ids_to_labels[row[1]],
                 "name": row[2],
                 "registration_token_is_null": row[3] is None,
+                "program": row[4],
+                "model": row[5],
+                "task_description": row[6],
             }
             for row in connection.execute(
-                "select id, project_id, name, registration_token "
+                "select id, project_id, name, registration_token, program, "
+                "model, task_description "
                 "from agents order by id"
             )
         ]
@@ -235,175 +281,13 @@ def database_snapshot():
                 "order by message_id, agent_id"
             )
         ]
-        links = [
-            {
-                "a_project": ids_to_labels[row[0]],
-                "a_agent_id": row[1],
-                "b_project": ids_to_labels[row[2]],
-                "b_agent_id": row[3],
-                "status": row[4],
-                "reason": row[5],
-            }
-            for row in connection.execute(
-                "select a_project_id, a_agent_id, b_project_id, b_agent_id, "
-                "status, reason from agent_links order by id"
-            )
-        ]
     finally:
         connection.close()
     return {
-        "projects": [
-            {"label": labels[path], "id": record["id"]}
-            for path, record in sorted(projects.items(), key=lambda item: item[1]["id"])
-        ],
         "agents": agents,
         "messages": messages,
         "recipients": recipients,
-        "links": links,
     }
-
-
-def parse_archive_message(path, project):
-    content = path.read_text(encoding="utf-8")
-    marker = "\n---\n\n"
-    if not content.startswith("---json\n") or marker not in content:
-        raise AssertionError(f"unexpected archived message format: {path}")
-    frontmatter_text, body = content[len("---json\n") :].split(marker, 1)
-    frontmatter = json.loads(frontmatter_text)
-    selected_frontmatter = {
-        key: frontmatter.get(key)
-        for key in (
-            "id",
-            "thread_id",
-            "from",
-            "to",
-            "cc",
-            "bcc",
-            "subject",
-            "importance",
-            "ack_required",
-            "attachments",
-        )
-    }
-    selected_frontmatter["project"] = project_label(frontmatter.get("project"))
-    return selected_frontmatter, body.rstrip("\n")
-
-
-def archive_snapshot():
-    connection = sqlite3.connect(database_path)
-    try:
-        rows = connection.execute(
-            "select human_key, slug from projects order by id"
-        ).fetchall()
-    finally:
-        connection.close()
-
-    archived_messages = {}
-    profiles = []
-    thread_digests = []
-    for project_path, slug in rows:
-        project = project_label(project_path)
-        project_root = storage_root / "projects" / slug
-        for path in sorted(project_root.rglob("*")):
-            if not path.is_file() or ".git" in path.parts:
-                continue
-            relative = path.relative_to(project_root)
-            parts = relative.parts
-            if len(parts) == 3 and parts[0] == "agents" and parts[2] == "profile.json":
-                profile = json.loads(path.read_text(encoding="utf-8"))
-                profiles.append(
-                    {
-                        "project": project,
-                        "name": parts[1],
-                        "program": profile.get("program"),
-                        "model": profile.get("model"),
-                        "task_description": profile.get("task_description"),
-                    }
-                )
-                continue
-            if len(parts) == 3 and parts[:2] == ("messages", "threads"):
-                thread_digests.append(
-                    {"project": project, "thread_id": path.stem}
-                )
-                continue
-
-            surface = None
-            if len(parts) >= 4 and parts[0] == "messages":
-                surface = "canonical"
-            elif len(parts) >= 6 and parts[0] == "agents" and parts[2] in {
-                "inbox",
-                "outbox",
-            }:
-                surface = f"{parts[1]}/{parts[2]}"
-            if surface is None or path.suffix != ".md":
-                continue
-            match = re.search(r"__(\d+)\.md$", path.name)
-            if match is None:
-                raise AssertionError(f"archived message id missing from {path}")
-            message_id = int(match.group(1))
-            frontmatter, body = parse_archive_message(path, project)
-            record = archived_messages.setdefault(
-                message_id,
-                {
-                    "project": project,
-                    "frontmatter": frontmatter,
-                    "body_md": body,
-                    "copies": [],
-                },
-            )
-            if record["frontmatter"] != frontmatter or record["body_md"] != body:
-                raise AssertionError(
-                    f"archive copies disagree for message {message_id}"
-                )
-            record["copies"].append(surface)
-
-    completed = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=storage_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return {
-        "git_commit_count": int(completed.stdout.strip()),
-        "profiles": sorted(profiles, key=lambda item: (item["project"], item["name"])),
-        "messages": [
-            {
-                "id": message_id,
-                **record,
-                "copies": sorted(record["copies"]),
-            }
-            for message_id, record in sorted(archived_messages.items())
-        ],
-        "thread_digests": sorted(
-            thread_digests, key=lambda item: (item["project"], item["thread_id"])
-        ),
-    }
-
-
-def signal_snapshot():
-    connection = sqlite3.connect(database_path)
-    try:
-        labels = {
-            slug: project_label(human_key)
-            for human_key, slug in connection.execute(
-                "select human_key, slug from projects"
-            )
-        }
-    finally:
-        connection.close()
-    signals = []
-    for path in sorted(signals_root.rglob("*.signal")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        project_slug = payload.get("project")
-        signals.append(
-            {
-                "project": labels[project_slug],
-                "agent": payload.get("agent"),
-                "message": payload.get("message"),
-            }
-        )
-    return signals
 
 
 async def phase_one():
@@ -424,7 +308,7 @@ async def phase_one():
                 "model": "fixture-model",
                 "name": "GreenCastle",
                 "task_description": "D3 source identity",
-                "registration_token": "d3-green-source-token",
+                "registration_token": caller_tokens["GreenCastle"],
                 "format": "json",
             },
         )
@@ -437,11 +321,11 @@ async def phase_one():
                 "model": "fixture-model",
                 "name": "BlueLake",
                 "task_description": "D3 target identity",
-                "registration_token": "d3-blue-target-token",
+                "registration_token": caller_tokens["BlueLake"],
                 "format": "json",
             },
         )
-        request = await require_success(
+        await require_success(
             client,
             "request_contact",
             {
@@ -455,7 +339,6 @@ async def phase_one():
                 "format": "json",
             },
         )
-        signals_after_intro = signal_snapshot()
         blue_intro_inbox = await require_success(
             client,
             "fetch_inbox",
@@ -485,7 +368,7 @@ async def phase_one():
             },
         )
         post_intro_database = database_snapshot()
-        approval = await require_success(
+        await require_success(
             client,
             "respond_contact",
             {
@@ -498,13 +381,14 @@ async def phase_one():
                 "format": "json",
             },
         )
+        post_approval_database = database_snapshot()
         sent = await require_success(
             client,
             "send_message",
             {
                 "project_key": project_a,
                 "sender_name": "GreenCastle",
-                "sender_token": "d3-green-source-token",
+                "sender_token": caller_tokens["GreenCastle"],
                 "to": [f"project:{project_b}#BlueLake"],
                 "subject": "D3 approved cross-project message",
                 "body_md": "D3 normal cross-project body",
@@ -514,27 +398,11 @@ async def phase_one():
                 "format": "json",
             },
         )
-        signals_after_normal_send = signal_snapshot()
     return {
-        "request_contact": {
-            "from": request.get("from"),
-            "from_project": project_label(request.get("from_project")),
-            "to": request.get("to"),
-            "to_project": project_label(request.get("to_project")),
-            "status": request.get("status"),
-        },
-        "signals_after_intro": signals_after_intro,
-        "blue_intro_inbox": intro_messages,
         "intro_reply": intro_reply,
         "post_intro_database": post_intro_database,
-        "approval": {
-            "from": approval.get("from"),
-            "to": approval.get("to"),
-            "approved": approval.get("approved"),
-            "updated": approval.get("updated"),
-        },
+        "post_approval_database": post_approval_database,
         "normal_send": select_delivery(sent),
-        "signals_after_normal_send": signals_after_normal_send,
     }
 
 
@@ -558,18 +426,6 @@ async def phase_two():
                 "message_id": normal_message_id,
                 "sender_name": "BlueLake",
                 "body_md": "D3 reply after process restart",
-                "format": "json",
-            },
-        )
-        signals_before_fetch = signal_snapshot()
-        blue_inbox = await require_success(
-            client,
-            "fetch_inbox",
-            {
-                "project_key": project_b,
-                "agent_name": "BlueLake",
-                "include_bodies": True,
-                "limit": 20,
                 "format": "json",
             },
         )
@@ -597,13 +453,9 @@ async def phase_two():
         )
     return {
         "post_restart_reply": select_delivery(reply),
-        "signals_before_fetch": signals_before_fetch,
-        "blue_inbox": select_inbox(blue_inbox),
         "source_green_inbox": select_inbox(source_green_inbox),
         "alias_green_inbox": select_inbox(alias_green_inbox),
         "final_database": database_snapshot(),
-        "archive": archive_snapshot(),
-        "signals_after_fetch": signal_snapshot(),
     }
 
 
@@ -639,6 +491,7 @@ def _run_phase(
     phase: str,
     roots: WorkerStateRoots,
     environment: Mapping[str, str],
+    caller_tokens: Mapping[str, str],
 ) -> dict[str, Any]:
     phase_environment = dict(environment)
     phase_environment["D3_PHASE"] = phase
@@ -651,16 +504,25 @@ def _run_phase(
         timeout=180,
         check=False,
     )
+    transcript = completed.stdout + completed.stderr
+    if any(token in transcript for token in caller_tokens.values()):
+        pytest.fail(
+            f"{namespace} D3 phase {phase} leaked a caller credential "
+            "into its process transcript",
+            pytrace=False,
+        )
     if completed.returncode != 0:
         pytest.fail(
             f"{namespace} D3 phase {phase} worker failed "
             f"({completed.returncode}):\n"
-            f"{(completed.stdout + completed.stderr)[-5000:]}",
+            f"{transcript[-5000:]}",
             pytrace=False,
         )
     output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
     assert output_lines, f"{namespace} D3 phase {phase} produced no output"
     result = json.loads(output_lines[-1])
+    serialized_result = json.dumps(result, sort_keys=True, ensure_ascii=False)
+    assert not any(token in serialized_result for token in caller_tokens.values())
     assert result["namespace"] == namespace
     assert result["phase"] == phase
     return result["observation"]
@@ -680,298 +542,231 @@ def d3_observations(
         )
         root = tmp_path_factory.mktemp(f"d3-{namespace}")
         roots = WorkerStateRoots.under(root, pythonpath=(source,))
+        caller_tokens = {
+            "GreenCastle": secrets.token_urlsafe(32),
+            "BlueLake": secrets.token_urlsafe(32),
+        }
         environment = isolated_worker_env(os.environ, namespace, roots)
         environment.update(
             {
                 "DECISION_NAMESPACE": namespace,
                 "DECISION_STATE_ROOT": str(root),
                 "DECISION_DATABASE": str(roots.database),
-                "DECISION_STORAGE": str(roots.storage),
-                "DECISION_SIGNALS": str(roots.signals),
+                "DECISION_SOURCE_ROOT": str(source.resolve(strict=True)),
+                "D3_CALLER_TOKENS": json.dumps(caller_tokens, sort_keys=True),
             }
         )
-        phase_one = _run_phase(namespace, "one", roots, environment)
-        phase_two = _run_phase(namespace, "two", roots, environment)
+        phase_one = _run_phase(
+            namespace, "one", roots, environment, caller_tokens
+        )
+        phase_two = _run_phase(
+            namespace, "two", roots, environment, caller_tokens
+        )
         observations[namespace] = {**phase_one, **phase_two}
     return observations
 
 
-def test_d3_frozen_live_and_core_have_identical_normalized_observations(
-    d3_observations: Mapping[str, Mapping[str, Any]],
-) -> None:
-    assert d3_observations[LIVE_NAMESPACE] == d3_observations[CORE_NAMESPACE]
+def _only(
+    rows: list[Mapping[str, Any]],
+    description: str,
+    **criteria: Any,
+) -> Mapping[str, Any]:
+    matches = [
+        row
+        for row in rows
+        if all(row.get(key) == value for key, value in criteria.items())
+    ]
+    assert len(matches) == 1, (
+        f"expected one {description} matching {criteria!r}, found {len(matches)}"
+    )
+    return matches[0]
 
 
-def test_d3_records_foreign_intro_sender_and_target_local_reply(
-    d3_observations: Mapping[str, Mapping[str, Any]],
-) -> None:
-    observation = d3_observations[LIVE_NAMESPACE]
-    assert observation["request_contact"] == {
-        "from": "GreenCastle",
-        "from_project": "A",
-        "to": "BlueLake",
-        "to_project": "B",
-        "status": "pending",
-    }
-    assert observation["approval"] == {
-        "from": "GreenCastle",
-        "to": "BlueLake",
-        "approved": True,
-        "updated": 1,
-    }
+def _d3_selected_projection(
+    observation: Mapping[str, Any],
+) -> dict[str, Any]:
     post_intro = observation["post_intro_database"]
-    assert post_intro["agents"] == [
-        {
-            "id": 1,
-            "project": "A",
-            "name": "GreenCastle",
-            "registration_token_is_null": False,
-        },
-        {
-            "id": 2,
-            "project": "B",
-            "name": "BlueLake",
-            "registration_token_is_null": False,
-        },
-    ]
-    assert post_intro["messages"] == [
-        {
-            "id": 1,
-            "project": "B",
-            "sender_id": 1,
-            "sender_project": "A",
-            "thread_id": None,
-            "topic": None,
-            "subject": "Contact request from GreenCastle",
-            "body_md": "D3 cross-project contact",
-            "importance": "normal",
-            "ack_required": True,
-        }
-    ]
-    assert post_intro["recipients"] == [
-        {
-            "message_id": 1,
-            "agent_id": 2,
-            "agent_project": "B",
-            "agent_name": "BlueLake",
-            "kind": "to",
-        }
-    ]
-    assert post_intro["links"] == [
-        {
-            "a_project": "A",
-            "a_agent_id": 1,
-            "b_project": "B",
-            "b_agent_id": 2,
-            "status": "pending",
-            "reason": "D3 cross-project contact",
-        }
-    ]
-    assert observation["intro_reply"]["ok"] is False
-    assert "Agent id '1' not found for project '<PROJECT_B>'" in observation[
-        "intro_reply"
-    ]["error"]
+    post_approval = observation["post_approval_database"]
+    final = observation["final_database"]
 
-    final_database = observation["final_database"]
-    assert final_database["agents"][-1] == {
-        "id": 3,
-        "project": "B",
-        "name": "GreenCastle",
-        "registration_token_is_null": True,
+    source_before_send = _only(
+        post_intro["agents"], "source agent", project="A", name="GreenCastle"
+    )
+    target = _only(
+        post_intro["agents"], "target agent", project="B", name="BlueLake"
+    )
+    intro = _only(
+        post_intro["messages"],
+        "contact intro",
+        subject="Contact request from GreenCastle",
+    )
+    intro_recipient = _only(
+        post_intro["recipients"],
+        "contact intro recipient",
+        message_id=intro["id"],
+        kind="to",
+    )
+    alias_absent_before_send = not any(
+        agent["project"] == "B" and agent["name"] == "GreenCastle"
+        for agent in post_approval["agents"]
+    )
+    intro_reply = observation["intro_reply"]
+    expected_sender_error = f"Agent id '{intro['sender_id']}' not found for project"
+
+    alias = _only(
+        final["agents"], "target-local alias", project="B", name="GreenCastle"
+    )
+    normal_message = _only(
+        final["messages"],
+        "approved cross-project message",
+        subject="D3 approved cross-project message",
+    )
+    normal_recipient = _only(
+        final["recipients"],
+        "approved cross-project recipient",
+        message_id=normal_message["id"],
+        kind="to",
+    )
+    normal_delivery = _only(
+        observation["normal_send"]["deliveries"],
+        "approved cross-project delivery",
+        project="B",
+    )
+
+    reply_message = _only(
+        final["messages"],
+        "post-restart reply",
+        subject="Re: D3 approved cross-project message",
+    )
+    reply_recipient = _only(
+        final["recipients"],
+        "post-restart reply recipient",
+        message_id=reply_message["id"],
+        kind="to",
+    )
+    reply_delivery = _only(
+        observation["post_restart_reply"]["deliveries"],
+        "post-restart reply delivery",
+        project="B",
+    )
+    alias_inbox_reply = _only(
+        observation["alias_green_inbox"],
+        "reply in target-local alias inbox",
+        id=reply_message["id"],
+    )
+    expected_thread = str(normal_message["id"])
+    metadata_fields = ("program", "model", "task_description")
+
+    return {
+        "foreign_source_row_intro": {
+            "message_project": intro["project"],
+            "sender_is_source_agent": intro["sender_id"]
+            == source_before_send["id"],
+            "sender_project": intro["sender_project"],
+            "sender_name": source_before_send["name"],
+            "recipient_is_target_agent": intro_recipient["agent_id"]
+            == target["id"],
+            "recipient_project": intro_recipient["agent_project"],
+            "recipient_name": intro_recipient["agent_name"],
+        },
+        "immediate_target_reply": {
+            "foreign_sender_unresolvable": (
+                intro_reply["ok"] is False
+                and expected_sender_error in intro_reply["error"]
+                and "<PROJECT_B>" in intro_reply["error"]
+            ),
+        },
+        "approved_explicit_send": {
+            "alias_absent_before_send": alias_absent_before_send,
+            "alias_project": alias["project"],
+            "alias_name": alias["name"],
+            "alias_token_is_null": alias["registration_token_is_null"],
+            "alias_metadata_copied_from_source": all(
+                alias[field] == source_before_send[field]
+                for field in metadata_fields
+            ),
+            "message_project": normal_message["project"],
+            "message_sender_is_alias": normal_message["sender_id"] == alias["id"],
+            "delivery_sender_is_alias": normal_delivery["payload"]["sender_id"]
+            == alias["id"],
+            "recipient_is_target_agent": normal_recipient["agent_id"]
+            == target["id"],
+        },
+        "fresh_process_reply": {
+            "message_project": reply_message["project"],
+            "message_sender_is_target_agent": reply_message["sender_id"]
+            == target["id"],
+            "delivery_sender_is_target_agent": reply_delivery["payload"]["sender_id"]
+            == target["id"],
+            "delivery_from_is_target_agent": reply_delivery["payload"]["from"]
+            == target["name"],
+            "recipient_is_target_local_alias": reply_recipient["agent_id"]
+            == alias["id"],
+            "delivery_targets_alias_name": reply_delivery["payload"]["to"]
+            == [alias["name"]],
+            "source_inbox_empty": observation["source_green_inbox"] == [],
+            "alias_inbox_contains_reply": alias_inbox_reply["id"]
+            == reply_message["id"],
+            "alias_inbox_sender_is_target_agent": alias_inbox_reply["sender_id"]
+            == target["id"],
+            "alias_inbox_from_is_target_agent": alias_inbox_reply["from"]
+            == target["name"],
+            "thread_identity_preserved": (
+                observation["post_restart_reply"]["reply_to"]
+                == normal_message["id"]
+                and observation["post_restart_reply"]["thread_id"]
+                == expected_thread
+                and reply_message["thread_id"] == expected_thread
+                and reply_delivery["payload"]["thread_id"] == expected_thread
+                and alias_inbox_reply["thread_id"] == expected_thread
+            ),
+        },
     }
-    assert final_database["messages"] == [
-        post_intro["messages"][0],
-        {
-            "id": 2,
-            "project": "B",
-            "sender_id": 3,
-            "sender_project": "B",
-            "thread_id": None,
-            "topic": "d3-cross-project",
-            "subject": "D3 approved cross-project message",
-            "body_md": "D3 normal cross-project body",
-            "importance": "high",
-            "ack_required": True,
+
+
+def test_d3_selected_upstream_parity_requirement(
+    d3_observations: Mapping[str, Mapping[str, Any]],
+) -> None:
+    expected = {
+        "foreign_source_row_intro": {
+            "message_project": "B",
+            "sender_is_source_agent": True,
+            "sender_project": "A",
+            "sender_name": "GreenCastle",
+            "recipient_is_target_agent": True,
+            "recipient_project": "B",
+            "recipient_name": "BlueLake",
         },
-        {
-            "id": 3,
-            "project": "B",
-            "sender_id": 2,
-            "sender_project": "B",
-            "thread_id": "2",
-            "topic": "d3-cross-project",
-            "subject": "Re: D3 approved cross-project message",
-            "body_md": "D3 reply after process restart",
-            "importance": "high",
-            "ack_required": True,
+        "immediate_target_reply": {
+            "foreign_sender_unresolvable": True,
         },
-    ]
-    assert final_database["recipients"] == [
-        {
-            "message_id": 1,
-            "agent_id": 2,
-            "agent_project": "B",
-            "agent_name": "BlueLake",
-            "kind": "to",
+        "approved_explicit_send": {
+            "alias_absent_before_send": True,
+            "alias_project": "B",
+            "alias_name": "GreenCastle",
+            "alias_token_is_null": True,
+            "alias_metadata_copied_from_source": True,
+            "message_project": "B",
+            "message_sender_is_alias": True,
+            "delivery_sender_is_alias": True,
+            "recipient_is_target_agent": True,
         },
-        {
-            "message_id": 2,
-            "agent_id": 2,
-            "agent_project": "B",
-            "agent_name": "BlueLake",
-            "kind": "to",
+        "fresh_process_reply": {
+            "message_project": "B",
+            "message_sender_is_target_agent": True,
+            "delivery_sender_is_target_agent": True,
+            "delivery_from_is_target_agent": True,
+            "recipient_is_target_local_alias": True,
+            "delivery_targets_alias_name": True,
+            "source_inbox_empty": True,
+            "alias_inbox_contains_reply": True,
+            "alias_inbox_sender_is_target_agent": True,
+            "alias_inbox_from_is_target_agent": True,
+            "thread_identity_preserved": True,
         },
-        {
-            "message_id": 3,
-            "agent_id": 3,
-            "agent_project": "B",
-            "agent_name": "GreenCastle",
-            "kind": "to",
-        },
-    ]
-    assert final_database["links"] == [
-        {
-            "a_project": "A",
-            "a_agent_id": 1,
-            "b_project": "B",
-            "b_agent_id": 2,
-            "status": "approved",
-            "reason": "D3 cross-project contact",
-        }
-    ]
-    assert observation["normal_send"]["count"] == 1
-    assert observation["normal_send"]["verified_sender"] is True
-    assert observation["normal_send"]["deliveries"] == [
-        {
-            "project": "B",
-            "payload": {
-                "id": 2,
-                "project_id": 2,
-                "sender_id": 3,
-                "thread_id": None,
-                "topic": "d3-cross-project",
-                "subject": "D3 approved cross-project message",
-                "importance": "high",
-                "ack_required": True,
-                "from": "GreenCastle",
-                "to": ["BlueLake"],
-                "cc": [],
-                "bcc": [],
-                "body_md": "D3 normal cross-project body",
-            },
-        }
-    ]
-    assert observation["post_restart_reply"]["count"] == 1
-    assert observation["post_restart_reply"]["reply_to"] == 2
-    assert observation["post_restart_reply"]["thread_id"] == "2"
-    assert observation["post_restart_reply"]["deliveries"] == [
-        {
-            "project": "B",
-            "payload": {
-                "id": 3,
-                "project_id": 2,
-                "sender_id": 2,
-                "thread_id": "2",
-                "topic": "d3-cross-project",
-                "subject": "Re: D3 approved cross-project message",
-                "importance": "high",
-                "ack_required": True,
-                "from": "BlueLake",
-                "to": ["GreenCastle"],
-                "cc": [],
-                "bcc": [],
-                "body_md": "D3 reply after process restart",
-            },
-        }
-    ]
-    assert observation["source_green_inbox"] == []
-    assert [item["id"] for item in observation["alias_green_inbox"]] == [3]
-    assert observation["archive"]["git_commit_count"] == 7
-    assert observation["archive"]["profiles"] == [
-        {
-            "project": "A",
-            "name": "GreenCastle",
-            "program": "d3-hermetic-probe",
-            "model": "fixture-model",
-            "task_description": "D3 source identity",
-        },
-        {
-            "project": "B",
-            "name": "BlueLake",
-            "program": "d3-hermetic-probe",
-            "model": "fixture-model",
-            "task_description": "D3 target identity",
-        },
-        {
-            "project": "B",
-            "name": "GreenCastle",
-            "program": "d3-hermetic-probe",
-            "model": "fixture-model",
-            "task_description": "D3 source identity",
-        },
-    ]
-    assert [item["id"] for item in observation["archive"]["messages"]] == [
-        1,
-        2,
-        3,
-    ]
-    assert observation["archive"]["messages"][0]["copies"] == [
-        "BlueLake/inbox",
-        "GreenCastle/outbox",
-        "canonical",
-    ]
-    assert observation["archive"]["messages"][2]["copies"] == [
-        "BlueLake/outbox",
-        "GreenCastle/inbox",
-        "canonical",
-    ]
-    assert observation["archive"]["thread_digests"] == [
-        {"project": "B", "thread_id": "2"}
-    ]
-    assert observation["signals_after_intro"] == [
-        {
-            "project": "B",
-            "agent": "BlueLake",
-            "message": {
-                "id": 1,
-                "from": "GreenCastle",
-                "subject": "Contact request from GreenCastle",
-                "importance": "normal",
-            },
-        },
-    ]
-    assert observation["signals_after_normal_send"] == [
-        {
-            "project": "B",
-            "agent": "BlueLake",
-            "message": {
-                "id": 2,
-                "from": "GreenCastle",
-                "subject": "D3 approved cross-project message",
-                "importance": "high",
-            },
-        },
-    ]
-    assert observation["signals_before_fetch"] == [
-        {
-            "project": "B",
-            "agent": "BlueLake",
-            "message": {
-                "id": 2,
-                "from": "GreenCastle",
-                "subject": "D3 approved cross-project message",
-                "importance": "high",
-            },
-        },
-        {
-            "project": "B",
-            "agent": "GreenCastle",
-            "message": {
-                "id": 3,
-                "from": "BlueLake",
-                "subject": "Re: D3 approved cross-project message",
-                "importance": "high",
-            },
-        },
-    ]
-    assert observation["signals_after_fetch"] == []
+    }
+    frozen_live = _d3_selected_projection(d3_observations[LIVE_NAMESPACE])
+    core = _d3_selected_projection(d3_observations[CORE_NAMESPACE])
+
+    assert frozen_live == expected
+    assert core == frozen_live

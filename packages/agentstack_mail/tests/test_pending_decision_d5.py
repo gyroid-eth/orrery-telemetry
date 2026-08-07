@@ -1,9 +1,15 @@
-"""Hermetic frozen-live versus Core evidence for pending decision D5.
+"""Selected frozen-live parity requirement for D5.
 
-These probes record today's coercion behavior; they do not select whether an
-invalid contact policy should keep coercing or become an error.  Frozen live
-and Core execute the exact same worker in fresh interpreters with private
-databases, archives, signal directories, and homes.
+Path A preserves the pre-existing policy coercion for the two measured inputs:
+``"not-a-policy"`` and ``""`` both succeed, return ``policy="auto"``, and
+persist only the observed contact-policy change.  Frozen live and Core execute
+the same worker in private interpreters and compare only that D5 projection.
+
+The worker still captures the prior recent-contact messaging sequence as
+per-side diagnostic evidence, but it is neither asserted nor compared by the
+selected gate and therefore does not bind D2, D3, or D6 behavior.  Credential
+canaries are rejected from raw results, transcripts, output artifacts, and
+archive/signal/Git text.
 """
 
 from __future__ import annotations
@@ -12,9 +18,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pytest
 from differential_source import (
@@ -27,6 +34,35 @@ from differential_source import (
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CORE_SOURCE = PACKAGE_ROOT / "src"
+_CALLER_CREDENTIALS = (
+    "d5-green-owner-token",
+    "d5-blue-owner-token",
+)
+
+
+def _assert_no_caller_credentials(value: Any, *, label: str) -> None:
+    serialized = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, sort_keys=True, ensure_ascii=False)
+    )
+    assert not any(secret in serialized for secret in _CALLER_CREDENTIALS), label
+
+
+def _assert_no_credential_fields(value: Any) -> None:
+    allowed_redactions = {None, "", "***", "<redacted>", "[REDACTED]"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if (
+                normalized.endswith(("_token", "_secret", "_credential"))
+                or normalized in {"authorization", "api_key", "apikey"}
+            ):
+                assert nested in allowed_redactions
+            _assert_no_credential_fields(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _assert_no_credential_fields(nested)
 
 
 _WORKER_SOURCE = r"""
@@ -52,6 +88,11 @@ storage = Path(os.environ["D5_STORAGE"])
 signals = Path(os.environ["D5_SIGNALS"])
 project_key = os.environ["D5_PROJECT_KEY"]
 output = Path(os.environ["D5_OUTPUT"])
+source_root = Path(os.environ["D5_SOURCE_ROOT"]).resolve(strict=True)
+CALLER_CREDENTIALS = (
+    "d5-green-owner-token",
+    "d5-blue-owner-token",
+)
 
 
 def install_llm_stub() -> None:
@@ -90,16 +131,51 @@ def public_payload(result: Any) -> Any:
     return value
 
 
+def assert_no_caller_credentials(value: Any, *, label: str) -> Any:
+    converted = jsonable(value)
+    serialized = json.dumps(converted, sort_keys=True, ensure_ascii=False)
+    if any(secret in serialized for secret in CALLER_CREDENTIALS):
+        raise AssertionError(f"D5 {label} leaked a caller credential")
+    return converted
+
+
+def assert_no_credential_fields(value: Any) -> None:
+    allowed_redactions = {None, "", "***", "<redacted>", "[REDACTED]"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if (
+                normalized.endswith(("_token", "_secret", "_credential"))
+                or normalized in {"authorization", "api_key", "apikey"}
+            ) and nested not in allowed_redactions:
+                raise AssertionError("D5 result exposed a credential-bearing field")
+            assert_no_credential_fields(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            assert_no_credential_fields(nested)
+
+
 async def capture(client: Any, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         result = await client.call_tool(tool_name, arguments)
     except BaseException as exc:
+        error = str(exc)
+        assert_no_caller_credentials(error, label=f"{tool_name} exception")
         return {
             "ok": False,
             "error_type": type(exc).__name__,
-            "error": str(exc),
+            "error": error,
             "payload": None,
         }
+    channels = assert_no_caller_credentials(
+        {
+            "content": result.content,
+            "structured_content": result.structured_content,
+            "data": result.data,
+        },
+        label=f"{tool_name} raw result",
+    )
+    assert_no_credential_fields(channels)
     return {
         "ok": not result.is_error,
         "error_type": None if not result.is_error else "tool_result",
@@ -199,7 +275,12 @@ def tree_state(root: Path, *, exclude_git: bool = False) -> dict[str, str]:
             continue
         if path.name == ".archive.lock" or path.name.endswith(".lock"):
             continue
-        state[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        contents = path.read_bytes()
+        assert_no_caller_credentials(
+            contents.decode("utf-8", errors="replace"),
+            label=str(relative),
+        )
+        state[relative.as_posix()] = hashlib.sha256(contents).hexdigest()
     return state
 
 
@@ -216,6 +297,8 @@ def git_state() -> dict[str, Any]:
         )
         return completed.stdout.strip()
 
+    log_text = run("log", "--format=%B")
+    assert_no_caller_credentials(log_text, label="archive Git log")
     return {
         "commit_count": int(run("rev-list", "--count", "HEAD")),
         "status": run("status", "--porcelain=v1"),
@@ -240,6 +323,7 @@ def contact_policy(state: dict[str, Any], name: str = "BlueLake") -> str:
 
 install_llm_stub()
 app = importlib.import_module(f"{namespace}.app")
+Path(app.__file__).resolve(strict=True).relative_to(source_root)
 
 
 async def main() -> None:
@@ -252,9 +336,10 @@ async def main() -> None:
             "ensure_project",
             {"human_key": project_key, "format": "json"},
         )
-        for name, token in (
-            ("GreenCastle", "d5-green-owner-token"),
-            ("BlueLake", "d5-blue-owner-token"),
+        for name, token in zip(
+            ("GreenCastle", "BlueLake"),
+            CALLER_CREDENTIALS,
+            strict=True,
         ):
             await require_success(
                 client,
@@ -270,7 +355,7 @@ async def main() -> None:
                 },
             )
 
-        await require_success(
+        downstream_open = await capture(
             client,
             "set_contact_policy",
             {
@@ -280,13 +365,13 @@ async def main() -> None:
                 "format": "json",
             },
         )
-        await require_success(
+        downstream_seed = await capture(
             client,
             "send_message",
             {
                 "project_key": project_key,
                 "sender_name": "GreenCastle",
-                "sender_token": "d5-green-owner-token",
+                "sender_token": CALLER_CREDENTIALS[0],
                 "to": ["BlueLake"],
                 "subject": "D5 prior contact seed",
                 "body_md": "Establish a recent-contact record before the policy controls.",
@@ -309,7 +394,7 @@ async def main() -> None:
             {
                 "project_key": project_key,
                 "sender_name": "GreenCastle",
-                "sender_token": "d5-green-owner-token",
+                "sender_token": CALLER_CREDENTIALS[0],
                 "to": ["BlueLake"],
                 "subject": "D5 contacts-only control",
                 "body_md": "This must be blocked without an approved link.",
@@ -336,7 +421,7 @@ async def main() -> None:
             {
                 "project_key": project_key,
                 "sender_name": "GreenCastle",
-                "sender_token": "d5-green-owner-token",
+                "sender_token": CALLER_CREDENTIALS[0],
                 "to": ["BlueLake"],
                 "subject": "D5 invalid-coercion follow-up",
                 "body_md": "The recent contact is accepted after coercion to auto.",
@@ -371,17 +456,21 @@ async def main() -> None:
 
     payload = {
         "namespace": namespace,
-        "contacts_only_delivery": contacts_only_delivery,
+        "downstream_evidence": {
+            "open_policy": downstream_open,
+            "prior_contact_seed": downstream_seed,
+            "contacts_only_delivery": contacts_only_delivery,
+            "invalid_delivery": {
+                "result": invalid_delivery,
+                "after": invalid_delivery_after,
+            },
+        },
         "invalid": {
             "result": invalid_result,
             "policy_before": contact_policy(invalid_before),
             "policy_after": contact_policy(invalid_after),
             "before": invalid_before,
             "after": invalid_after,
-        },
-        "invalid_delivery": {
-            "result": invalid_delivery,
-            "after": invalid_delivery_after,
         },
         "empty": {
             "result": empty_result,
@@ -431,6 +520,7 @@ def _run_worker(
     environment.update(
         {
             "D5_NAMESPACE": namespace,
+            "D5_SOURCE_ROOT": str(source),
             "D5_DATABASE": str(roots.database),
             "D5_STORAGE": str(roots.storage),
             "D5_SIGNALS": str(roots.signals),
@@ -452,15 +542,19 @@ def _run_worker(
         timeout=180,
         check=False,
     )
+    transcript = completed.stdout + completed.stderr
+    _assert_no_caller_credentials(transcript, label=f"{namespace} transcript")
     if completed.returncode != 0:
-        transcript = (completed.stdout + completed.stderr)[-6000:]
         pytest.fail(
-            f"{namespace} D5 worker exited {completed.returncode}:\n{transcript}",
+            f"{namespace} D5 worker exited {completed.returncode}:\n{transcript[-6000:]}",
             pytrace=False,
         )
     assert output.is_file()
     assert output.stat().st_mode & 0o077 == 0
-    payload = json.loads(output.read_text(encoding="utf-8"))
+    output_text = output.read_text(encoding="utf-8")
+    _assert_no_caller_credentials(output_text, label=f"{namespace} output")
+    payload = json.loads(output_text)
+    _assert_no_credential_fields(payload)
     assert payload["namespace"] == namespace
     return payload
 
@@ -479,23 +573,26 @@ def _expected_policy_only_change(
     return expected
 
 
-def _stable_measurement(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _selected_policy_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "contacts_only_delivery": payload["contacts_only_delivery"],
-        "invalid_result": payload["invalid"]["result"],
-        "invalid_policy_before": payload["invalid"]["policy_before"],
-        "invalid_policy_after": payload["invalid"]["policy_after"],
-        "invalid_db_after": payload["invalid"]["after"]["database"],
-        "invalid_delivery_ok": payload["invalid_delivery"]["result"]["ok"],
-        "invalid_delivery_db_after": payload["invalid_delivery"]["after"]["database"],
-        "empty_result": payload["empty"]["result"],
-        "empty_policy_before": payload["empty"]["policy_before"],
-        "empty_policy_after": payload["empty"]["policy_after"],
-        "empty_db_after": payload["empty"]["after"]["database"],
+        case_name: {
+            "input": "not-a-policy" if case_name == "invalid" else "",
+            "result": payload[case_name]["result"],
+            "policy_before": payload[case_name]["policy_before"],
+            "policy_after": payload[case_name]["policy_after"],
+            "observed_policy_only_change": (
+                payload[case_name]["after"]
+                == _expected_policy_only_change(
+                    payload[case_name]["before"],
+                    policy="auto",
+                )
+            ),
+        }
+        for case_name in ("invalid", "empty")
     }
 
 
-def test_d5_invalid_and_empty_policy_coerce_to_auto_with_matching_side_effects(
+def test_d5_selected_parity_invalid_and_empty_policy_coerce_to_auto(
     frozen_live_checkout_d5: Path,
     tmp_path: Path,
 ) -> None:
@@ -512,10 +609,6 @@ def test_d5_invalid_and_empty_policy_coerce_to_auto_with_matching_side_effects(
     }
 
     for namespace, payload in results.items():
-        contacts_only = payload["contacts_only_delivery"]
-        assert contacts_only["ok"] is False, namespace
-        assert "Contact approval required" in contacts_only["error"], namespace
-
         for case_name in ("invalid", "empty"):
             case = payload[case_name]
             assert case["result"] == {
@@ -530,17 +623,6 @@ def test_d5_invalid_and_empty_policy_coerce_to_auto_with_matching_side_effects(
                 case["before"], policy="auto"
             ), (namespace, case_name)
 
-        invalid_delivery = payload["invalid_delivery"]
-        assert invalid_delivery["result"]["ok"] is True, namespace
-        database = invalid_delivery["after"]["database"]
-        assert database["counts"]["messages"] == 2, namespace
-        assert database["counts"]["message_recipients"] == 2, namespace
-        assert [row[1] for row in database["messages"]] == [
-            "D5 prior contact seed",
-            "D5 invalid-coercion follow-up",
-        ], namespace
-        assert database["links"] == [], namespace
-
-    live_measurement = _stable_measurement(results[LIVE_NAMESPACE])
-    core_measurement = _stable_measurement(results[CORE_NAMESPACE])
-    assert core_measurement == live_measurement
+    live_requirement = _selected_policy_projection(results[LIVE_NAMESPACE])
+    core_requirement = _selected_policy_projection(results[CORE_NAMESPACE])
+    assert core_requirement == live_requirement

@@ -1,9 +1,18 @@
-"""Hermetic executable evidence for pending product decision D6.
+"""Selected upstream-parity requirement for product decision D6.
 
-This probe measures whether a tokenized sender can omit ``sender_token`` and
-still send.  It records frozen-live and Core behavior without selecting or
-implementing a future authentication policy.  A wrong-token attempt is the
-rejected-call control and must leave every observed durable surface unchanged.
+Path A preserves the pre-existing frozen-live behavior for one narrow cohort:
+an explicitly registered same-project sender with a caller-supplied non-NULL
+token may omit ``sender_token`` when sending to an ``open`` recipient.  The
+send succeeds with ``verified_sender=false`` and one delivery.  A wrong-token
+control rejects with the observed durable projection unchanged.
+
+The selected scope does not claim matching-token behavior, generated or
+unavailable tokens, NULL-token/macro/migrated identities, cross-project sends,
+other contact policies, other send entrypoints, concurrency, claim, rotation,
+recovery, or future strict enforcement.  Credential non-disclosure is claimed
+only for serialized raw MCP results and fixture transcripts.  Those canary
+scans do not freeze additive response or error fields.  Signal lifecycle,
+inbox-fetch cleanup, archive/Git details, and read/ack state are not projected.
 """
 
 from __future__ import annotations
@@ -31,18 +40,22 @@ CORE_SOURCE = PACKAGE_ROOT / "src"
 
 _SUBJECT = "D6 missing sender token"
 _BODY = "Known-token sender omitted sender_token."
-_TOKEN_MISMATCH_FRAGMENT = "sender_token does not match registered token"
+_CALLER_TOKENS = (
+    "d6-green-owner-token",
+    "d6-blue-owner-token",
+    "d6-wrong-sender-token",
+)
 
 
 _WORKER = r"""
 from __future__ import annotations
 
 import asyncio
+import hmac
 import importlib
 import json
 import os
 import sqlite3
-import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -56,9 +69,8 @@ project_path = root / "project"
 project_path.mkdir(parents=True, exist_ok=True)
 project_key = str(project_path)
 database = root / "mail.sqlite3"
-archive = root / "archive"
-signals = root / "signals"
 output_path = root / "result.json"
+source_root = Path(os.environ["D6_SOURCE_ROOT"]).resolve(strict=True)
 
 sender_name = "GreenCastle"
 recipient_name = "BlueLake"
@@ -70,6 +82,7 @@ body = "Known-token sender omitted sender_token."
 
 _install_llm_stub(namespace)
 app = importlib.import_module(f"{namespace}.app")
+Path(app.__file__).resolve(strict=True).relative_to(source_root)
 
 
 def jsonable(value):
@@ -88,51 +101,61 @@ def jsonable(value):
 
 
 def public_payload(result):
-    value = result.structured_content
+    value = result.structuredContent
     if value is None:
-        value = result.data
+        blocks = jsonable(result.content)
+        if (
+            isinstance(blocks, list)
+            and len(blocks) == 1
+            and isinstance(blocks[0], dict)
+            and isinstance(blocks[0].get("text"), str)
+        ):
+            try:
+                value = json.loads(blocks[0]["text"])
+            except json.JSONDecodeError:
+                value = blocks
+        else:
+            value = blocks
     value = jsonable(value)
-    if isinstance(value, dict) and set(value) == {"result"}:
+    if isinstance(value, dict) and "result" in value:
         value = value["result"]
     return value
 
 
-def normalize_public(value):
-    if isinstance(value, dict):
-        normalized = {}
-        for key, item in value.items():
-            if key in {"created_ts", "read_ts", "ack_ts"} and item is not None:
-                normalized[key] = "<TIMESTAMP>"
-            else:
-                normalized[key] = normalize_public(item)
-        return normalized
-    if isinstance(value, list):
-        return [normalize_public(item) for item in value]
-    if isinstance(value, str):
-        return value.replace(project_key, "<PROJECT>")
-    return value
+def assert_no_caller_credentials(result):
+    raw_result = result.model_dump(mode="json", by_alias=True)
+    serialized = json.dumps(raw_result, ensure_ascii=False, sort_keys=True)
+    for secret in (sender_token, recipient_token, wrong_sender_token):
+        if secret in serialized:
+            raise AssertionError("D6 raw MCP result disclosed a caller token")
+    return raw_result
 
 
 async def capture_call(client, tool_name, arguments):
     try:
-        result = await client.call_tool(
+        result = await client.call_tool_mcp(
             tool_name,
             arguments,
-            raise_on_error=False,
         )
     except BaseException as exc:
         return {
             "ok": False,
             "error_type": type(exc).__name__,
-            "error": normalize_public(str(exc)),
+            "token_mismatch": wrong_sender_token in str(exc),
         }
-    payload = normalize_public(public_payload(result))
-    content = normalize_public(jsonable(result.content))
-    if result.is_error:
+    assert_no_caller_credentials(result)
+    payload = public_payload(result)
+    if result.isError:
+        error_observation = json.dumps(
+            {"payload": payload, "content": jsonable(result.content)},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         return {
             "ok": False,
             "error_type": "tool_result",
-            "error": repr({"payload": payload, "content": content}),
+            "token_mismatch": "sender_token does not match registered token"
+            in error_observation,
         }
     return {"ok": True, "payload": payload}
 
@@ -144,48 +167,49 @@ async def require_success(client, tool_name, arguments):
     return result["payload"]
 
 
-def git_commit_count():
-    completed = subprocess.run(
-        ["git", "-C", str(archive), "rev-list", "--count", "HEAD"],
-        env={
-            "PATH": os.environ.get("PATH", ""),
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_OPTIONAL_LOCKS": "0",
-            "LC_ALL": "C",
-        },
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    return int(completed.stdout.strip())
-
-
 def database_state():
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
-        project_id, project_slug = connection.execute(
-            "SELECT id, slug FROM projects WHERE human_key = ?",
+        project_id = connection.execute(
+            "SELECT id FROM projects WHERE human_key = ?",
             (project_key,),
-        ).fetchone()
+        ).fetchone()[0]
+        expected_tokens = {
+            sender_name: sender_token,
+            recipient_name: recipient_token,
+        }
+        agents = [
+            {
+                "name": row["name"],
+                "registration_token_is_non_null": (
+                    row["registration_token"] is not None
+                ),
+                "registration_token_matches_fixture": hmac.compare_digest(
+                    row["registration_token"] or "",
+                    expected_tokens[row["name"]],
+                ),
+            }
+            for row in connection.execute(
+                "SELECT name, registration_token "
+                "FROM agents WHERE project_id = ? ORDER BY id",
+                (project_id,),
+            )
+        ]
+        recipient_policy = connection.execute(
+            "SELECT contact_policy FROM agents "
+            "WHERE project_id = ? AND name = ?",
+            (project_id, recipient_name),
+        ).fetchone()[0]
         messages = [
             {
                 "id": row["id"],
                 "sender": row["sender"],
-                "thread_id": row["thread_id"],
-                "topic": row["topic"],
                 "subject": row["subject"],
                 "body_md": row["body_md"],
-                "importance": row["importance"],
-                "ack_required": bool(row["ack_required"]),
-                "created_ts_present": row["created_ts"] is not None,
-                "attachments": json.loads(row["attachments"]),
             }
             for row in connection.execute(
-                "SELECT m.id, a.name AS sender, m.thread_id, m.topic, "
-                "m.subject, m.body_md, m.importance, m.ack_required, "
-                "m.created_ts, m.attachments "
+                "SELECT m.id, a.name AS sender, m.subject, m.body_md "
                 "FROM messages AS m "
                 "JOIN agents AS a ON a.id = m.sender_id "
                 "WHERE m.project_id = ? "
@@ -198,12 +222,9 @@ def database_state():
                 "message_id": row["message_id"],
                 "agent": row["agent"],
                 "kind": row["kind"],
-                "read": row["read_ts"] is not None,
-                "acknowledged": row["ack_ts"] is not None,
             }
             for row in connection.execute(
-                "SELECT mr.message_id, a.name AS agent, mr.kind, "
-                "mr.read_ts, mr.ack_ts "
+                "SELECT mr.message_id, a.name AS agent, mr.kind "
                 "FROM message_recipients AS mr "
                 "JOIN agents AS a ON a.id = mr.agent_id "
                 "JOIN messages AS m ON m.id = mr.message_id "
@@ -227,69 +248,12 @@ def database_state():
         }
     finally:
         connection.close()
-    return project_slug, {
+    return {
+        "agents": agents,
+        "recipient_policy": recipient_policy,
         "counts": counts,
         "messages": messages,
         "recipients": recipients,
-    }
-
-
-def archive_state():
-    observations = []
-    for path in sorted(archive.rglob("*.md")):
-        content = path.read_text(encoding="utf-8")
-        if subject not in content:
-            continue
-        relative = path.relative_to(archive)
-        relative_text = relative.as_posix()
-        if "/messages/" in f"/{relative_text}":
-            role = "canonical"
-        elif f"/{sender_name}/outbox/" in f"/{relative_text}":
-            role = "sender_outbox"
-        elif f"/{recipient_name}/inbox/" in f"/{relative_text}":
-            role = "recipient_inbox"
-        else:
-            role = "unexpected"
-        observations.append(
-            {
-                "role": role,
-                "subject_occurrences": content.count(subject),
-                "body_occurrences": content.count(body),
-                "mentions_sender": sender_name in content,
-                "mentions_recipient": recipient_name in content,
-            }
-        )
-    return sorted(observations, key=lambda item: item["role"])
-
-
-def signal_state(project_slug):
-    observations = []
-    for path in sorted(signals.rglob("*.signal")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        message = payload.get("message") or {}
-        observations.append(
-            {
-                "recipient": payload.get("agent"),
-                "project_matches": payload.get("project") == project_slug,
-                "timestamp_present": bool(payload.get("timestamp")),
-                "message": {
-                    "id": message.get("id"),
-                    "from": message.get("from"),
-                    "subject": message.get("subject"),
-                    "importance": message.get("importance"),
-                },
-            }
-        )
-    return observations
-
-
-def durable_state():
-    project_slug, db = database_state()
-    return {
-        "database": db,
-        "archive_bundle": archive_state(),
-        "signals": signal_state(project_slug),
-        "git_commit_count": git_commit_count(),
     }
 
 
@@ -330,7 +294,7 @@ async def main():
             },
         )
 
-        before_missing = durable_state()
+        before_missing = database_state()
         missing = await capture_call(
             client,
             "send_message",
@@ -340,24 +304,11 @@ async def main():
                 "to": [recipient_name],
                 "subject": subject,
                 "body_md": body,
-                "importance": "high",
-                "ack_required": True,
                 "format": "json",
             },
         )
-        after_missing = durable_state()
-        inbox = await capture_call(
-            client,
-            "fetch_inbox",
-            {
-                "project_key": project_key,
-                "agent_name": recipient_name,
-                "include_bodies": True,
-                "limit": 20,
-                "format": "json",
-            },
-        )
-        before_wrong = durable_state()
+        after_missing = database_state()
+        before_wrong = database_state()
         wrong = await capture_call(
             client,
             "send_message",
@@ -371,13 +322,12 @@ async def main():
                 "format": "json",
             },
         )
-        after_wrong = durable_state()
+        after_wrong = database_state()
 
     payload = {
         "before_missing": before_missing,
         "missing": missing,
         "after_missing": after_missing,
-        "inbox": inbox,
         "before_wrong": before_wrong,
         "wrong": wrong,
         "after_wrong": after_wrong,
@@ -385,7 +335,7 @@ async def main():
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     for secret in (sender_token, recipient_token, wrong_sender_token):
         if secret in serialized:
-            raise AssertionError("D6 result disclosed a caller token")
+            raise AssertionError("D6 serialized probe result disclosed a caller token")
     output_path.write_text(serialized + "\n", encoding="utf-8")
 
 
@@ -416,11 +366,15 @@ def _run_worker(
     frozen_live_checkout: Path,
     root: Path,
 ) -> dict[str, Any]:
+    source = _source_for(namespace, frozen_live_checkout).resolve(strict=True)
     roots = WorkerStateRoots.under(
         root,
-        pythonpath=(TESTS_ROOT, _source_for(namespace, frozen_live_checkout)),
+        pythonpath=(TESTS_ROOT, source),
     )
     environment = isolated_worker_env(os.environ, namespace, roots)
+    environment["D6_SOURCE_ROOT"] = str(source)
+    environment["NOTIFICATIONS_ENABLED"] = "false"
+    environment["AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED"] = "false"
     completed = subprocess.run(
         [sys.executable, "-c", _WORKER, namespace, str(root)],
         cwd=roots.cwd,
@@ -430,52 +384,58 @@ def _run_worker(
         timeout=180,
         check=False,
     )
-    diagnostic = (completed.stdout + completed.stderr)[-8000:]
+    transcript = completed.stdout + completed.stderr
+    for secret in _CALLER_TOKENS:
+        assert secret not in transcript, f"{namespace} D6 worker leaked a token"
+    diagnostic = transcript[-8000:]
     assert completed.returncode == 0, diagnostic
     result_path = root / "result.json"
     assert result_path.is_file(), diagnostic
-    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    serialized = result_path.read_text(encoding="utf-8")
+    for secret in _CALLER_TOKENS:
+        assert secret not in serialized, f"{namespace} D6 output leaked a token"
+    payload = json.loads(serialized)
     assert isinstance(payload, dict)
     return payload
 
 
-def _assert_observed_d6_behavior(payload: Mapping[str, Any]) -> None:
+def _assert_selected_d6_behavior(payload: Mapping[str, Any]) -> None:
     before_missing = payload["before_missing"]
     after_missing = payload["after_missing"]
     missing = payload["missing"]
 
-    assert before_missing["database"]["counts"] == {
+    assert before_missing["counts"] == {
         "messages": 0,
         "recipients": 0,
     }
+    assert before_missing["agents"] == [
+        {
+            "name": "GreenCastle",
+            "registration_token_is_non_null": True,
+            "registration_token_matches_fixture": True,
+        },
+        {
+            "name": "BlueLake",
+            "registration_token_is_non_null": True,
+            "registration_token_matches_fixture": True,
+        },
+    ]
+    assert before_missing["recipient_policy"] == "open"
     assert missing["ok"] is True, missing
     assert missing["payload"]["count"] == 1
     assert missing["payload"]["verified_sender"] is False
     assert len(missing["payload"]["deliveries"]) == 1
-    delivery = missing["payload"]["deliveries"][0]
-    assert delivery["project"] == "<PROJECT>"
-    assert delivery["payload"]["id"] == 1
-    assert delivery["payload"]["from"] == "GreenCastle"
-    assert delivery["payload"]["to"] == ["BlueLake"]
-    assert delivery["payload"]["subject"] == _SUBJECT
-    assert delivery["payload"]["body_md"] == _BODY
-    assert delivery["payload"]["importance"] == "high"
-    assert delivery["payload"]["ack_required"] is True
 
-    assert after_missing["database"] == {
+    assert after_missing == {
+        "agents": before_missing["agents"],
+        "recipient_policy": "open",
         "counts": {"messages": 1, "recipients": 1},
         "messages": [
             {
                 "id": 1,
                 "sender": "GreenCastle",
-                "thread_id": None,
-                "topic": None,
                 "subject": _SUBJECT,
                 "body_md": _BODY,
-                "importance": "high",
-                "ack_required": True,
-                "created_ts_present": True,
-                "attachments": [],
             }
         ],
         "recipients": [
@@ -483,55 +443,16 @@ def _assert_observed_d6_behavior(payload: Mapping[str, Any]) -> None:
                 "message_id": 1,
                 "agent": "BlueLake",
                 "kind": "to",
-                "read": False,
-                "acknowledged": False,
             }
         ],
     }
-    assert [item["role"] for item in after_missing["archive_bundle"]] == [
-        "canonical",
-        "recipient_inbox",
-        "sender_outbox",
-    ]
-    for item in after_missing["archive_bundle"]:
-        assert item["subject_occurrences"] >= 1
-        assert item["body_occurrences"] == 1
-        assert item["mentions_sender"] is True
-        assert item["mentions_recipient"] is True
-    assert after_missing["signals"] == [
-        {
-            "recipient": "BlueLake",
-            "project_matches": True,
-            "timestamp_present": True,
-            "message": {
-                "id": 1,
-                "from": "GreenCastle",
-                "subject": _SUBJECT,
-                "importance": "high",
-            },
-        }
-    ]
-    assert (
-        after_missing["git_commit_count"]
-        == before_missing["git_commit_count"] + 1
-    )
-
-    inbox = payload["inbox"]
-    assert inbox["ok"] is True, inbox
-    assert len(inbox["payload"]) == 1
-    inbox_message = inbox["payload"][0]
-    assert inbox_message["id"] == 1
-    assert inbox_message["from"] == "GreenCastle"
-    assert inbox_message["subject"] == _SUBJECT
-    assert inbox_message["body_md"] == _BODY
-    assert inbox_message["importance"] == "high"
-    assert inbox_message["ack_required"] is True
 
     wrong = payload["wrong"]
     assert wrong["ok"] is False
-    assert _TOKEN_MISMATCH_FRAGMENT in wrong["error"]
+    assert wrong["error_type"] == "tool_result"
+    assert wrong["token_mismatch"] is True
     assert payload["before_wrong"] == payload["after_wrong"]
-    assert payload["after_wrong"]["database"]["counts"] == {
+    assert payload["after_wrong"]["counts"] == {
         "messages": 1,
         "recipients": 1,
     }
@@ -552,6 +473,5 @@ def test_d6_frozen_live_and_core_match_missing_sender_token_behavior(
         tmp_path / "core",
     )
 
-    _assert_observed_d6_behavior(live)
-    _assert_observed_d6_behavior(core)
-    assert core == live
+    _assert_selected_d6_behavior(live)
+    _assert_selected_d6_behavior(core)

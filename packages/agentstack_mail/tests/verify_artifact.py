@@ -135,10 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D3": "cross-project intro/reply identity",
-    "D4": "accept response without pending",
-    "D5": "invalid contact policy coerced auto",
-    "D6": "missing sender token succeeds",
     "D8": "DB persists after archive failure",
     "D9": "read/ack partial commit",
     "D10": "concurrent reservation winner and SQLite lock semantics",
@@ -152,6 +148,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "title": "conflicting token registration mutation",
         "decision_state": "selected",
         "implementation_state": "implemented",
+        "implementation_origin": "core_change",
         "cutover_state": "no_go",
         "resolution": "reject_explicit_conflicting_token_before_mutation",
         "scope": {
@@ -159,7 +156,7 @@ EXPECTED_SELECTED_DECISIONS = {
             "same_token": "metadata_refresh_with_exactly_one_git_commit",
             "omitted_token": (
                 "credential_retention_and_authority_semantics_unchanged_"
-                "D6_unselected_D7_selected_not_implemented_no_go"
+                "D6_selected_pre_existing_parity_D7_selected_not_implemented_no_go"
             ),
             "concurrent_conflicting_tokens_on_null_identity": (
                 "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
@@ -179,8 +176,9 @@ EXPECTED_SELECTED_DECISIONS = {
         "title": "expired contact link accepted",
         "decision_state": "selected",
         "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
         "cutover_state": "no_go",
-        "resolution": "match_frozen_live_without_core_change",
+        "resolution": "match_frozen_live",
         "scope": {
             "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
             "same_project_response_expiry_cases": ["past", "future", "null"],
@@ -214,6 +212,145 @@ EXPECTED_SELECTED_DECISIONS = {
         "comparator_disposition": "assert_selected_behavior",
         "verification": [
             "tests/test_upstream_parity_d2.py::test_d2_expiry_semantics_match_frozen_live_without_core_change"
+        ],
+    },
+    "D3": {
+        "id": "D3",
+        "title": "cross-project intro/reply identity",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "foreign_source_row_intro": (
+                "target_project_message_uses_source_project_sender_row"
+            ),
+            "immediate_target_reply": (
+                "foreign_sender_id_unresolvable_in_target_project"
+            ),
+            "approved_explicit_send": (
+                "creates_target_local_same_name_null_token_alias_with_copied_"
+                "metadata_and_uses_it_as_sender"
+            ),
+            "reply_after_fresh_process": (
+                "targets_alias_in_target_project_preserves_thread_and_does_not_"
+                "reach_source_inbox"
+            ),
+            "not_claimed": [
+                "contact_expiry_or_no_pending_response",
+                "invalid_policy_or_sender_token_omission",
+                "pre_existing_same_name_target_agent_or_alias_reuse",
+                "migration_reject_mode_concurrency_or_crash",
+                "ownership_or_safe_enrollment_of_null_alias",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d3.py::test_d3_selected_upstream_parity_requirement"
+        ],
+    },
+    "D4": {
+        "id": "D4",
+        "title": "accept response without pending",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": (
+                "same_project_respond_contact_accept_true_without_existing_link"
+            ),
+            "result": "approved_true_updated_one_returned_expiry_equals_persisted",
+            "created_link": (
+                "one_directed_approved_empty_reason_created_equals_updated_"
+                "expiry_plus_requested_600_seconds"
+            ),
+            "observed_absences": (
+                "no_new_message_or_recipient_and_no_observed_archive_git_or_"
+                "signal_change"
+            ),
+            "not_claimed": [
+                "accept_false_or_cross_project",
+                "existing_link_states_or_replay",
+                "concurrency_authorization_or_strict_no_pending",
+                "other_ttl_cases_or_downstream_delivery",
+                "unobserved_database_columns",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d4.py::test_d4_selected_parity_accept_without_pending_creates_approved_link"
+        ],
+    },
+    "D5": {
+        "id": "D5",
+        "title": "invalid contact policy coerced auto",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": "same_project_existing_agent_starting_contacts_only",
+            "invalid_inputs": ["not-a-policy", ""],
+            "selected_behavior": (
+                "succeed_return_auto_and_persist_observed_contact_policy_only_change"
+            ),
+            "diagnostic_only": (
+                "recent_contact_and_followup_message_sequence_not_selected_or_compared"
+            ),
+            "not_claimed": [
+                "valid_mixed_case_whitespace_or_other_invalid_shapes",
+                "missing_agent_or_project",
+                "warnings_audit_or_strict_transitional_modes",
+                "messaging_contact_link_or_sender_auth_semantics",
+                "concurrency",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d5.py::test_d5_selected_parity_invalid_and_empty_policy_coerce_to_auto"
+        ],
+    },
+    "D6": {
+        "id": "D6",
+        "title": "missing sender token succeeds",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": "same_project_send_message_to_open_recipient",
+            "sender_cohort": (
+                "explicitly_registered_non_null_caller_supplied_token"
+            ),
+            "missing_sender_token": (
+                "succeeds_verified_sender_false_and_commits_one_delivery"
+            ),
+            "wrong_sender_token_control": (
+                "rejects_with_observed_durable_projection_unchanged"
+            ),
+            "credential_non_disclosure": (
+                "complete_raw_mcp_results_plus_fixture_transcript_and_output"
+            ),
+            "not_claimed": [
+                "correct_token_or_generated_unavailable_token",
+                "null_macro_migrated_or_grandfathered_identity",
+                "non_open_contact_policy",
+                "cross_project_or_other_send_entrypoints",
+                "concurrency_rotation_recovery_claim_or_strict_enforcement",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d6.py::test_d6_frozen_live_and_core_match_missing_sender_token_behavior"
         ],
     },
     "D7": {
@@ -330,6 +467,10 @@ SDIST_REQUIRED_SUFFIXES = {
     "/pyproject.toml",
     "/tests/test_decision_manifest.py",
     "/tests/test_pending_decision_d1.py",
+    "/tests/test_pending_decision_d3.py",
+    "/tests/test_pending_decision_d4.py",
+    "/tests/test_pending_decision_d5.py",
+    "/tests/test_pending_decision_d6.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",
@@ -599,6 +740,18 @@ def _assert_expected_divergences_manifest(
             f"{artifact} product decisions must not be allowlisted: "
             f"{decision_allowlisted}"
         )
+
+    implementation_origins = {"pre_existing_parity", "core_change"}
+    for decision_id, decision in decisions_by_id.items():
+        if decision.get("implementation_state") == "implemented":
+            if decision.get("implementation_origin") not in implementation_origins:
+                raise SystemExit(
+                    f"{artifact} implemented decision {decision_id} has invalid or missing origin"
+                )
+        elif "implementation_origin" in decision:
+            raise SystemExit(
+                f"{artifact} non-implemented decision {decision_id} must not have origin"
+            )
 
     for decision_id, title in EXPECTED_UNSELECTED_DECISIONS.items():
         if decisions_by_id[decision_id] != {

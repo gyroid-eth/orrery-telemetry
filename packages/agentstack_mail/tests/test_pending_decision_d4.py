@@ -1,14 +1,15 @@
-"""Hermetic evidence for pending decision D4.
+"""Selected frozen-live parity requirement for D4.
 
-These probes freeze today's behavior as evidence for a pending decision, not as
-an assertion that accepting a contact response without a pending request is the
-correct product behavior. Rewrite them to encode the selected requirement after
-the decision.
+Path A preserves the pre-existing same-project behavior: accepting a contact
+response with no stored link creates one approved directed link.  The gate binds
+only the observed response/link projection, the requested 600-second expiry,
+and the measured absence of message/recipient/archive/Git/signal changes.  It
+does not claim complete database immutability or select behavior for other link
+states, cross-project response, rejection, authorization, or concurrency.
 
-Frozen live and Core run in separate, secret-free subprocesses with private
-SQLite, archive, and notification roots.  The probe records the public response,
-the exact contact-link row, message/recipient counts, and archive/Git/signal state
-on both sides of the no-pending ``respond_contact(accept=True)`` call.
+Frozen live and Core run in separate subprocesses with private SQLite, archive,
+and notification roots.  Caller credential canaries are rejected from every
+raw result channel, transcripts, output artifacts, and archive/signal/Git text.
 """
 
 from __future__ import annotations
@@ -33,6 +34,35 @@ from differential_source import (
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CORE_SOURCE = PACKAGE_ROOT / "src"
 TTL_SECONDS = 600
+_CALLER_CREDENTIALS = (
+    "d4-green-owner-token",
+    "d4-blue-owner-token",
+)
+
+
+def _assert_no_caller_credentials(value: Any, *, label: str) -> None:
+    serialized = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, sort_keys=True, ensure_ascii=False)
+    )
+    assert not any(secret in serialized for secret in _CALLER_CREDENTIALS), label
+
+
+def _assert_no_credential_fields(value: Any) -> None:
+    allowed_redactions = {None, "", "***", "<redacted>", "[REDACTED]"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if (
+                normalized.endswith(("_token", "_secret", "_credential"))
+                or normalized in {"authorization", "api_key", "apikey"}
+            ):
+                assert nested in allowed_redactions
+            _assert_no_credential_fields(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _assert_no_credential_fields(nested)
 
 
 # Both namespaces execute this exact worker in fresh interpreters; live and Core
@@ -53,6 +83,12 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+CALLER_CREDENTIALS = (
+    "d4-green-owner-token",
+    "d4-blue-owner-token",
+)
 
 
 def install_llm_stub(namespace: str) -> None:
@@ -91,8 +127,41 @@ def payload(result: Any) -> Any:
     return value
 
 
+def assert_no_caller_credentials(value: Any, *, label: str) -> Any:
+    converted = jsonable(value)
+    serialized = json.dumps(converted, sort_keys=True, ensure_ascii=False)
+    if any(secret in serialized for secret in CALLER_CREDENTIALS):
+        raise AssertionError(f"D4 {label} leaked a caller credential")
+    return converted
+
+
+def assert_no_credential_fields(value: Any) -> None:
+    allowed_redactions = {None, "", "***", "<redacted>", "[REDACTED]"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if (
+                normalized.endswith(("_token", "_secret", "_credential"))
+                or normalized in {"authorization", "api_key", "apikey"}
+            ) and nested not in allowed_redactions:
+                raise AssertionError("D4 result exposed a credential-bearing field")
+            assert_no_credential_fields(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            assert_no_credential_fields(nested)
+
+
 async def required_call(client: Any, name: str, arguments: dict[str, Any]) -> Any:
     result = await client.call_tool(name, arguments, raise_on_error=False)
+    channels = assert_no_caller_credentials(
+        {
+            "content": result.content,
+            "structured_content": result.structured_content,
+            "data": result.data,
+        },
+        label=f"{name} raw result",
+    )
+    assert_no_credential_fields(channels)
     if result.is_error:
         raise AssertionError(f"tool {name} returned an error: {payload(result)!r}")
     return payload(result)
@@ -110,7 +179,9 @@ def tree_snapshot(root: Path) -> dict[str, str]:
             continue
         if path.name == ".archive.lock" or path.name.endswith(".lock"):
             continue
-        files[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        contents = path.read_bytes()
+        assert_no_caller_credentials(contents.decode("utf-8", errors="replace"), label=str(relative))
+        files[relative.as_posix()] = hashlib.sha256(contents).hexdigest()
     return files
 
 
@@ -124,6 +195,8 @@ def git_snapshot(root: Path) -> dict[str, Any]:
         )
         return completed.stdout.strip()
 
+    log_text = run("log", "--format=%B")
+    assert_no_caller_credentials(log_text, label="archive Git log")
     return {
         "head": run("rev-parse", "HEAD"),
         "commit_count": int(run("rev-list", "--count", "HEAD")),
@@ -212,9 +285,10 @@ async def main() -> None:
             "ensure_project",
             {"human_key": project_key, "format": "json"},
         )
-        for name, token in (
-            ("GreenCastle", "d4-green-owner-token"),
-            ("BlueLake", "d4-blue-owner-token"),
+        for name, token in zip(
+            ("GreenCastle", "BlueLake"),
+            CALLER_CREDENTIALS,
+            strict=True,
         ):
             await required_call(
                 client,
@@ -312,15 +386,20 @@ def _run_worker(
         timeout=180,
         check=False,
     )
+    transcript = completed.stdout + completed.stderr
+    _assert_no_caller_credentials(transcript, label=f"{namespace} transcript")
     if completed.returncode != 0:
-        transcript = (completed.stdout + completed.stderr)[-6000:]
         pytest.fail(
-            f"{namespace} D4 worker exited {completed.returncode}:\n{transcript}",
+            f"{namespace} D4 worker exited {completed.returncode}:\n{transcript[-6000:]}",
             pytrace=False,
         )
     assert output.is_file()
     assert output.stat().st_mode & 0o077 == 0
-    return json.loads(output.read_text(encoding="utf-8"))
+    output_text = output.read_text(encoding="utf-8")
+    _assert_no_caller_credentials(output_text, label=f"{namespace} output")
+    value = json.loads(output_text)
+    _assert_no_credential_fields(value)
+    return value
 
 
 @pytest.fixture(scope="module")
@@ -365,7 +444,7 @@ def _assert_observation(observation: dict[str, Any]) -> None:
     agents = {row["name"]: row["id"] for row in after["database"]["agents"]}
     project_id = after["database"]["project"]["id"]
     link = after["database"]["links"][0]
-    assert link["id"] == 1
+    assert isinstance(link["id"], int) and not isinstance(link["id"], bool)
     assert link["a_project_id"] == project_id
     assert link["a_agent_id"] == agents["GreenCastle"]
     assert link["b_project_id"] == project_id
@@ -389,7 +468,7 @@ def _assert_observation(observation: dict[str, Any]) -> None:
     finished_at = _parse_time(observation["call_window"]["finished_at"])
     assert started_at <= _parse_time(link["created_ts"]) <= finished_at
 
-    # The single agent_links insert is the only durable side effect of the call.
+    # These are the observed unchanged projections, not a complete DB claim.
     assert after["database"]["project"] == before["database"]["project"]
     assert after["database"]["agents"] == before["database"]["agents"]
     assert after["archive"] == before["archive"]
@@ -397,12 +476,23 @@ def _assert_observation(observation: dict[str, Any]) -> None:
     assert after["signals"] == before["signals"] == {}
 
 
-def _normalized(observation: dict[str, Any]) -> dict[str, Any]:
-    """Keep measured semantics while removing only independent wall clocks."""
+def _selected_projection(observation: dict[str, Any]) -> dict[str, Any]:
+    """Keep selected D4 semantics while removing independent clocks and ids."""
 
     response = dict(observation["response"])
     response["expires_ts"] = "<CALL_EXPIRY>"
     link = dict(observation["after"]["database"]["links"][0])
+    agents = {
+        row["id"]: row["name"] for row in observation["after"]["database"]["agents"]
+    }
+    project_id = observation["after"]["database"]["project"]["id"]
+    link.pop("id")
+    link["from"] = agents[link.pop("a_agent_id")]
+    link["to"] = agents[link.pop("b_agent_id")]
+    link["same_project"] = (
+        link.pop("a_project_id") == project_id
+        and link.pop("b_project_id") == project_id
+    )
     created = _parse_time(link.pop("created_ts"))
     updated = _parse_time(link.pop("updated_ts"))
     expires = _parse_time(link.pop("expires_ts"))
@@ -419,6 +509,14 @@ def _normalized(observation: dict[str, Any]) -> dict[str, Any]:
         "after_link_count": len(observation["after"]["database"]["links"]),
         "message_count": observation["after"]["database"]["message_count"],
         "recipient_count": observation["after"]["database"]["recipient_count"],
+        "observed_project_unchanged": (
+            observation["after"]["database"]["project"]
+            == observation["before"]["database"]["project"]
+        ),
+        "observed_agents_unchanged": (
+            observation["after"]["database"]["agents"]
+            == observation["before"]["database"]["agents"]
+        ),
         "archive_unchanged": (
             observation["after"]["archive"] == observation["before"]["archive"]
         ),
@@ -429,13 +527,13 @@ def _normalized(observation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def test_d4_accept_without_pending_creates_one_approved_link_in_live_and_core(
+def test_d4_selected_parity_accept_without_pending_creates_approved_link(
     d4_observations: dict[str, dict[str, Any]],
 ) -> None:
-    """Record matching current behavior without selecting it as a requirement."""
+    """Require selected pre-existing parity without binding unobserved DB state."""
 
     live = d4_observations[LIVE_NAMESPACE]
     core = d4_observations[CORE_NAMESPACE]
     _assert_observation(live)
     _assert_observation(core)
-    assert _normalized(core) == _normalized(live)
+    assert _selected_projection(core) == _selected_projection(live)

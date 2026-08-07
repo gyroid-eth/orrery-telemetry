@@ -4,7 +4,8 @@ Status: supporting design for the normative product-decision ledger. D7's
 selection, implementation state, and cutover state live only in
 `packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`.
 This document does not choose an enrollment, rotation, recovery, principal, or
-administrator mechanism; change D6; implement or enforce D7; implement an
+administrator mechanism; change D6's selected upstream-parity behavior;
+implement or enforce D7; implement an
 authority cutover; or authorize access to a live service or database. D1's
 narrow, selected failure-atomicity rule is an input constraint, not a choice
 reopened here.
@@ -13,8 +14,8 @@ reopened here.
 
 A safe path needs secret-free enrollment transport, authority external to a
 null-token row, explicit rotation and loss recovery, authenticated macro
-bootstrap, and an additive shadowed migration before D6 or the selected D7
-boundary can be enforced.
+bootstrap, and an additive shadowed migration before any future strict D6
+behavior or the selected D7 boundary can be enforced.
 
 Throughout this packet, **claim** is an umbrella term for the flows that
 establish or restore authority: enrollment, recovery, administrator approval,
@@ -34,14 +35,16 @@ into a product guarantee.
 
 Current D7 runtime behavior remains unchanged and shadow verdicts are not
 enforced. The ledger records D7 as selected, not implemented, and cutover
-no-go. D6 is unselected. The default deployment model remains one local
-principal with no authorization enforcement; principal subdivision is later
-work.
+no-go. D6 is selected and implemented as pre-existing upstream parity, with
+cutover still no-go; that selection preserves omitted-token behavior for Path A
+and does not authorize stricter enforcement. The default deployment model
+remains one local principal with no authorization enforcement; principal
+subdivision is later work.
 
 The 22-tool permission catalog is a prospective, non-binding inventory except
 where its D7 row mirrors the normative ledger. In particular, its candidate
-`send_message` owner/admin rule does not select D6, and its other rows do not
-authorize enforcement.
+`send_message` owner/admin rule does not replace D6's selected upstream-parity
+rule, and its other rows do not authorize enforcement.
 
 ## New credential issuance and return
 
@@ -70,13 +73,19 @@ The checked-in implementation establishes these constraints:
   explicitly conflicting token before durable mutation and uses a conditional
   DB write so concurrent registration against a null-token row has one atomic
   writer. The first-DB-writer result is retained unsafe compatibility
-  arbitration, not accepted claim proof. D6 omitted-token authority remains
-  unselected; the selected D7 boundary is not implemented and does not
-  reinterpret D1's writer result as owner authority.
+  arbitration, not accepted claim proof. D6's selected upstream parity retains
+  omitted-token sending without turning it into owner proof; the selected D7
+  boundary is not implemented and does not reinterpret D1's writer result as
+  owner authority.
 - `macro_start_session` accepts no credential, calls `_get_or_create_agent`
   directly, and can then reserve files and read inbox state for a newly created
   null-token identity.
-- Current behavior recorded under unselected D6 lets a tokenized sender omit
+- D3 dynamically confirms a second new-null path: an approved cross-project
+  send calls `_get_or_create_agent` in the target project without token
+  management and creates a target-local sender alias whose
+  `registration_token` is null. This is measured evidence for D7's existing
+  stop-all-new-null prerequisite, not a change to D7's selected boundary.
+- Current behavior selected under D6 lets a tokenized sender omit
   `sender_token`. Current Core still conditionally allows name-only owner
   operations when the row token is null; that behavior is not the selected,
   unimplemented D7 boundary.
@@ -270,8 +279,9 @@ the secret on the model-facing tool and Rich-log paths.
 Whichever option is selected, macro reuse of an existing name must authenticate
 before metadata refresh, and rejected authentication must be side-effect free.
 The same rule applies to internal welcome messages, reservation ownership, and
-inbox read/ack state. Other macros that directly call `_get_or_create_agent`
-need a separate inventory after the `macro_start_session` policy is decided.
+inbox read/ack state. The inventory must cover both other macros that directly
+call `_get_or_create_agent` and the D3-confirmed non-macro cross-project alias
+path; `macro_start_session` is not the only source of new null-token rows.
 
 ## Zero-lockout, rollback-capable migration order
 
@@ -287,6 +297,7 @@ it promise perpetual name-only access.
 | Non-null token with a matching caller/private-store copy | Current credential can prove continuity | Lowest risk; verify by fingerprint/challenge without exporting the DB value |
 | Non-null token whose origin or caller copy is unavailable | Server has a bearer, apparent owner may not | Treat as recovery, not null claim; do not expose or silently replace the stored value |
 | Null-token macro/legacy row with no qualifying external binding | No owner proof | Grandfather temporarily or require administrator-approved claim/new identity; automatic claim is unsafe |
+| Null-token target-project alias created by cross-project send | D3 proves the alias and its source metadata, but not owner authority or safe deduplication | Keep distinct from macro/legacy rows; migration must preserve origin/project attribution or quarantine ambiguity |
 | Null-token row with a qualifying binding recorded before migration | External continuity evidence may exist | Validate binding provenance and exact project/name association before allowing claim |
 | Retired, deregistered, or operationally encumbered row | Lifecycle/work state in addition to credential state | Decide whether claim restores activity, preserves retirement, or requires separate lifecycle action |
 
@@ -318,7 +329,7 @@ an inventory artifact.
    by name or activity. Null rows without proof stay visibly legacy-unclaimed;
    unavailable-token rows use recovery. Do not bulk-write synthetic owner
    tokens and call that enrollment.
-6. **Shadow every proposed D6/D7 denial.** The first transport-independent
+6. **Shadow every proposed strict-D6/D7 denial.** The first transport-independent
    observer records exactly principal candidate, tool, `would_allow` or
    `would_deny`, and reason while preserving current behavior. It records no
    credential value. Extra cohort or client fields require a later
@@ -330,9 +341,9 @@ an inventory artifact.
    enrolled credential back into null.
 8. **Change the default only after reviewed coverage thresholds.** Unselected
    legacy rows remain in an explicit compatibility cohort with a published
-   deadline or administrator action. This step still needs a future D6
-   decision and a separate D7 implementation/cutover approval; neither is
-   authorized here.
+   deadline or administrator action. Replacing D6's selected Path-A parity with
+   strict behavior needs a new decision; D7 still needs separate
+   implementation/cutover approval. Neither change is authorized here.
 9. **Remove legacy credential representation last.** One-way verifier cleanup,
    old client removal, and deletion of plaintext/token duplicates happen only
    after restore drills, backup review, and expiration of the agreed rollback
@@ -457,10 +468,11 @@ than an open choice.
 - D1: snapshot the row, timestamps, profile bytes, archive HEAD/log, and Git
   status; an explicitly conflicting token must have zero rejected-call mutation,
   while a same-token update commits once. Pin omitted-token compatibility
-  without treating it as the D6 decision, and race distinct explicit tokens
+  without treating it as D1 authority, and race distinct explicit tokens
   against a null-token row so only one DB writer and one profile commit win.
-- D6: for caller-known token, generated-unavailable token, null legacy,
-  enrolled, pending, and grandfathered cohorts, test correct/wrong/missing
+- D6: retain the selected omitted-token parity case, then separately evaluate
+  any future strict behavior for caller-known token, generated-unavailable
+  token, null legacy, enrolled, pending, and grandfathered cohorts; test correct/wrong/missing
   sender authority and assert `verified_sender`, DB recipients, archive, inbox,
   and zero rejected-call mutation.
 - D7: split active-null and already-retired-null legacy cohorts. Prove that
@@ -517,5 +529,6 @@ than an open choice.
   unretiring or transferring an identity?
 - What audit retention is sufficient without turning fingerprints, OS identity,
   or approver metadata into a new privacy/security liability?
-- What readiness threshold and compatibility deadline are required before a D6
-  selection or D7 implementation/cutover change?
+- What readiness threshold and compatibility deadline are required before
+  replacing D6 parity with strict behavior or changing D7
+  implementation/cutover?
