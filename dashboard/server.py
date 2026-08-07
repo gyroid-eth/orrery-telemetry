@@ -63,6 +63,14 @@ PORT = _env_int("AGENTSTACK_PORT", 8770)
 BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
+THEME_ASSETS = {
+    "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
+    "/theme_controller.js": (
+        os.path.join(HERE, "theme_controller.js"),
+        "text/javascript; charset=utf-8",
+    ),
+    "/theme_light.css": (os.path.join(HERE, "theme_light.css"), "text/css; charset=utf-8"),
+}
 DB_PATH = _env_path("AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3")
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/mcp_agent_mail/.env")
 VAULT = _env_path("AGENTSTACK_VAULT", "")
@@ -4334,6 +4342,13 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except FileNotFoundError:
                 self._send(500, b"index.html missing", "text/plain")
+        elif path in THEME_ASSETS:
+            asset_path, content_type = THEME_ASSETS[path]
+            try:
+                with open(asset_path, "rb") as file:
+                    self._send(200, file.read(), content_type)
+            except FileNotFoundError:
+                self._send(404, b"theme asset missing", "text/plain")
         elif path == "/api/version":
             version = _resolve_version()
             self._send(200, json.dumps({"name": "claude-agent-stack", "version": version, "api": 1}).encode(), "application/json; charset=utf-8")
