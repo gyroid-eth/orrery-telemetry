@@ -43,7 +43,7 @@ owner explicitly selects upstream behavior as Path A.
 | D6 | selected | implemented (pre-existing parity) | no-go | A tokenized sender may omit `sender_token` and send unverified | Path A preserves legacy clients despite unenforced sender ownership | all recipients/auditors; identities whose generated token is unavailable |
 | D7 | selected | not implemented | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
 | D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
-| D9 | unselected | not implemented | no-go | Ack failure after the first helper leaves `read_ts` committed and `ack_ts` null | independently durable read progress versus atomic acknowledgement | receipt readers, retry logic, legacy partial rows |
+| D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
 | D10 | unselected | not implemented | no-go | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
 | D11 | unselected | not implemented | no-go | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
 | D12 | unselected | not implemented | no-go | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
@@ -514,21 +514,27 @@ fetch cleanup. Those omissions are explicit; they are not identical results.
 ### 1. Observed live behavior
 
 `acknowledge_message` calls the read and ack timestamp helpers sequentially;
-each helper opens and commits its own session. Inject failure before the second
-helper: the tool errors, while SQLite durably retains `read_ts != NULL` and
-`ack_ts = NULL`. A committed worker probe now uses literal SIGKILL after the
-read transaction commits but before the ack helper is called; reopening SQLite
-retains `read_ts != NULL, ack_ts = NULL`. Frozen seams are around
-`app.py:4416–4444` and `:7817–7818`, and the probe is in
-`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py`.
+each helper opens and commits its own session. The selected direct recipient
+starts with both timestamps null. Injecting an ordinary error at entry to the
+second helper makes the MCP call fail while SQLite retains `read_ts != NULL`
+and `ack_ts = NULL`. Literal SIGKILL after the committed read helper returns,
+but before the ack helper call, leaves the same nullity relation after SQLite
+is reopened. The exception has a tool-error surface; the SIGKILL has no tool
+return, so only their durable receipt projection is shared.
 
-### 2. Current Core behavior
+Frozen seams are around `app.py:4416–4445` and `:7817–7818`. A missing-recipient
+call, normal success/replay, and exact timestamp bytes are deliberately outside
+the selected scope.
 
-Identical at Core `app.py:4439–4467` and `:7849–7850`. The committed probe pins
-this failure seam in addition to existing Behavior coverage of success and
-replay.
+### 2. Selected Path A and current Core behavior
 
-### 3. Why it remains unselected
+The relevant `_update_recipient_timestamp` and `acknowledge_message` code and
+the measured projections match frozen live at Core `app.py:4536–4565` and
+`:7945–7946`. No Core change was required, so the ledger records
+`implementation_origin: pre_existing_parity` and
+`resolution: match_frozen_live`.
+
+### 3. Why this decision was needed
 
 An independently durable read event can be useful progress, but callers may
 reason that a failed acknowledgement changed neither field. Richer retry/audit
@@ -538,19 +544,28 @@ state would require a new model.
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve partial commit | Failed ack can appear read; monitoring and callers need partial-success semantics | No migration; retry fills ack |
+| **Selected — preserve the measured partial commit** | Failed ack can appear read; monitoring and callers need partial-success semantics | No migration; retry may fill ack, but retry behavior is outside this selected scope |
 | Set both fields in one transaction | Live failure parity and independently durable read progress change | Existing read-only rows cannot be auto-acked safely |
 | Add acknowledgement operation state/idempotency key (`pending/completed/failed`) | Schema/API and receipt readers become more complex | Partial rows must be classified legacy/unknown, not fabricated as acked |
 
-Non-binding lean: use one transaction unless independently durable read
-progress is a stated product requirement.
+Changing both fields to one transaction remains a possible future divergence;
+it would replace the Path A behavior selected here.
 
-### 5. Test that fixes the choice
+### 5. Committed requirement gates
 
-Fault before the first write, after the first write, before commit, and after
-commit; then SIGKILL after the first durable phase and reopen/retry. Race two
-ack calls and require stable timestamp/idempotency behavior. Include a legacy
-`read!=NULL, ack=NULL` fixture and prove migration does not invent an ack.
+The two D9-only nodes in
+`packages/agentstack_mail/tests/test_pending_decision_d8_d9.py` authenticate
+the imported source, verify the initial null/null precondition, and compare
+frozen live and Core with the same normalized projections. One uses literal
+SIGKILL after the read commit; the other injects an ordinary error at ack-helper
+entry. Both require `read: present` and `ack: absent`; the ordinary-error node
+also requires the MCP error and injected causal marker.
+
+They do not bind exact timestamps, IDs, names, recipient kind, helper return
+values, additive error fields, missing-recipient behavior, normal success or
+replay, other commit/crash windows, cancellation or power loss, retry,
+idempotency, reconciliation, legacy migration, concurrency, authorization,
+archive/Git state, notification signals, or fetch cleanup.
 
 ## D10 — concurrent reservation winner and SQLite lock semantics
 

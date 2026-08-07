@@ -135,7 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D9": "read/ack partial commit",
     "D10": "concurrent reservation winner and SQLite lock semantics",
     "D11": "retire with active reservations or unread messages",
     "D12": "signal cleanup after crash, retirement, or stale consumer",
@@ -450,6 +449,50 @@ EXPECTED_SELECTED_DECISIONS = {
             "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_database_and_staged_bundle_after_precommit_sigkill",
             "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_completed_bundle_subset_after_write_sigkill",
             "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_message_bundle_exception_leaves_committed_database_without_archive",
+        ],
+    },
+    "D9": {
+        "id": "D9",
+        "title": "read/ack partial commit",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": (
+                "same_project_acknowledge_message_for_one_ack_required_"
+                "direct_to_recipient"
+            ),
+            "initial_recipient_state": (
+                "selected_receipt_read_ts_null_ack_ts_null"
+            ),
+            "literal_sigkill_seam": (
+                "after_committed_read_helper_returns_before_ack_helper_call"
+            ),
+            "ordinary_exception_seam": "at_ack_helper_entry_after_read_commit",
+            "durable_recipient_state": (
+                "read_ts_present_ack_ts_absent_after_each_selected_seam"
+            ),
+            "not_claimed": [
+                (
+                    "exact_timestamp_ids_names_recipient_kind_helper_return_"
+                    "or_error_envelope"
+                ),
+                "missing_recipient_normal_success_or_replay",
+                "other_exception_or_process_crash_windows",
+                "restart_retry_idempotency_reconciliation_or_migration",
+                "concurrency_or_races",
+                "archive_git_or_D8",
+                "signal_lifecycle_fetch_cleanup_or_D12",
+                "other_message_recipient_or_database_fields",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d8_d9.py::test_d9_selected_parity_read_commits_before_ack_after_between_commit_sigkill",
+            "tests/test_pending_decision_d8_d9.py::test_d9_selected_parity_ack_helper_exception_preserves_read_without_ack",
         ],
     },
 }

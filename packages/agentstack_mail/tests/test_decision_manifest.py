@@ -144,8 +144,24 @@ def _change_d8_scope(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D8")["scope"]["database_survival"] = "unspecified"
 
 
-def _select_d9(manifest: dict[str, Any]) -> None:
-    _decision(manifest, "D9")["decision_state"] = "selected"
+def _change_d9_scope(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D9")["scope"]["durable_recipient_state"] = "atomic"
+
+
+def _drop_d9_verification(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D9")["verification"].pop()
+
+
+def _select_d10(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D10")["decision_state"] = "selected"
+
+
+def _select_d11(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D11")["decision_state"] = "selected"
+
+
+def _select_d12(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D12")["decision_state"] = "selected"
 
 
 def test_canonical_decision_ledger_is_accepted() -> None:
@@ -158,7 +174,7 @@ def test_all_decisions_have_independent_required_states() -> None:
     assert {item["id"] for item in decisions} == {f"D{index}" for index in range(1, 13)}
     assert {
         item["id"] for item in decisions if item["decision_state"] == "selected"
-    } == {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"}
+    } == {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"}
     assert {
         (
             item["decision_state"],
@@ -186,6 +202,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D5",
         "D6",
         "D8",
+        "D9",
     ]
     assert {item["id"]: item["implementation_origin"] for item in implemented} == {
         "D1": "core_change",
@@ -195,6 +212,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D5": "pre_existing_parity",
         "D6": "pre_existing_parity",
         "D8": "pre_existing_parity",
+        "D9": "pre_existing_parity",
     }
     assert all(
         "implementation_origin" not in item
@@ -251,7 +269,11 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_drop_d1_verification, "selected product decision D1 changed"),
         (_weaken_d6_comparator, "selected product decision D6 changed"),
         (_change_d8_scope, "selected product decision D8 changed"),
-        (_select_d9, "unselected decision D9 changed"),
+        (_change_d9_scope, "selected product decision D9 changed"),
+        (_drop_d9_verification, "selected product decision D9 changed"),
+        (_select_d10, "unselected decision D10 changed"),
+        (_select_d11, "unselected decision D11 changed"),
+        (_select_d12, "unselected decision D12 changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

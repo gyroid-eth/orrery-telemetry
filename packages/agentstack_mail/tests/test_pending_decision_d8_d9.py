@@ -1,4 +1,4 @@
-"""Selected D8 messaging parity and pending D9 crash observations.
+"""Selected D8 messaging parity and D9 receipt-commit parity.
 
 D8 Path A preserves the measured DB-first messaging behavior at three literal
 ``SIGKILL`` seams: after the first and second completed bundle copies, and after
@@ -10,9 +10,11 @@ archive-copy roles, and the selected Git boundary or stable tool-error origin.
 D8 does not claim ordinary failures outside the messaging bundle seam,
 registration/profile writes, death inside Git's native commit, retry,
 recovery, reconciliation, power-loss durability, concurrency, receipt state,
-or signal lifecycle.  D9 remains unselected evidence: its timestamp helper
-commits ``read_ts`` and then kills the process before the separate ``ack_ts``
-update.
+or signal lifecycle.  D9 preserves the measured receipt boundary for literal
+``SIGKILL`` and an ordinary ack-helper exception: ``read_ts`` commits before
+the separate ``ack_ts`` update.  It does not claim timestamp values, receipt
+identity fields, error-envelope shape, retry/recovery, concurrency, or D8/D12
+behavior.
 """
 
 from __future__ import annotations
@@ -46,6 +48,12 @@ _D8_SUBSET_BODY = "Only the completed bundle subset may survive."
 _D8_EXCEPTION_SUBJECT = "D8 message bundle exception"
 _D8_EXCEPTION_BODY = "The database commit must survive the injected bundle error."
 _D9_SUBJECT = "D9 crash between read and ack"
+_D9_EXCEPTION_SUBJECT = "D9 ack helper exception"
+_D9_EXCEPTION_BODY = "The read commit must survive the injected ack helper error."
+_D9_REGISTRATION_TOKENS = (
+    "d9-green-owner-token",
+    "d9-blue-owner-token",
+)
 
 
 _D8_WORKER = r"""
@@ -409,6 +417,7 @@ from differential_probe import _install_llm_stub
 
 namespace, root_text = sys.argv[1:3]
 root = Path(root_text)
+source_root = Path(os.environ["D9_SOURCE_ROOT"]).resolve(strict=True)
 project_key = str(root / "project")
 database_path = root / "mail.sqlite3"
 marker = root / "d9-read-committed-before-ack.json"
@@ -425,6 +434,9 @@ def write_marker(payload):
 
 _install_llm_stub(namespace)
 app = importlib.import_module(f"{namespace}.app")
+assert Path(app.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D9 crash worker imported app outside the authenticated source"
+)
 
 
 async def main():
@@ -479,12 +491,24 @@ async def main():
 
         connection = sqlite3.connect(database_path)
         try:
-            message_id = int(
-                connection.execute(
-                    "SELECT id FROM messages WHERE subject = ?",
-                    ("D9 crash between read and ack",),
-                ).fetchone()[0]
-            )
+            message_row = connection.execute(
+                "SELECT id FROM messages WHERE subject = ?",
+                ("D9 crash between read and ack",),
+            ).fetchone()
+            assert message_row is not None
+            message_id = int(message_row[0])
+            receipt_rows = connection.execute(
+                '''
+                SELECT message_recipients.read_ts, message_recipients.ack_ts
+                FROM message_recipients
+                JOIN agents ON agents.id = message_recipients.agent_id
+                WHERE message_recipients.message_id = ? AND agents.name = ?
+                ''',
+                (message_id, "BlueLake"),
+            ).fetchall()
+            assert len(receipt_rows) == 1
+            assert receipt_rows[0][0] is None
+            assert receipt_rows[0][1] is None
         finally:
             connection.close()
 
@@ -494,11 +518,7 @@ async def main():
             timestamp = await original_update(agent, candidate_message_id, field)
             if field == "read_ts":
                 write_marker(
-                    {
-                        "seam": "read_ts_committed_before_ack_ts_call",
-                        "message_id": candidate_message_id,
-                        "read_timestamp_observed": timestamp is not None,
-                    }
+                    {"seam": "read_ts_committed_before_ack_ts_call"}
                 )
                 os.kill(os.getpid(), signal.SIGKILL)
                 raise AssertionError("SIGKILL unexpectedly returned")
@@ -517,6 +537,147 @@ async def main():
             )
         finally:
             app._update_recipient_timestamp = original_update
+
+
+asyncio.run(main())
+"""
+
+
+_D9_EXCEPTION_WORKER = r"""
+import asyncio
+import importlib
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+from differential_probe import _install_llm_stub
+
+
+namespace, root_text = sys.argv[1:3]
+root = Path(root_text)
+source_root = Path(os.environ["D9_SOURCE_ROOT"]).resolve(strict=True)
+project_key = str(root / "project")
+database_path = root / "mail.sqlite3"
+output_path = root / "d9-ack-helper-exception.json"
+Path(project_key).mkdir(parents=True, exist_ok=True)
+
+_install_llm_stub(namespace)
+app = importlib.import_module(f"{namespace}.app")
+assert Path(app.__file__).resolve(strict=True).is_relative_to(source_root), (
+    "D9 exception worker imported app outside the authenticated source"
+)
+
+
+async def main():
+    from fastmcp import Client
+
+    async with Client(app.build_mcp_server()) as client:
+        async def call(name, arguments):
+            result = await client.call_tool(name, arguments, raise_on_error=False)
+            if result.is_error:
+                raise AssertionError(f"setup tool {name} failed: {result.data!r}")
+            return result.data
+
+        await call("ensure_project", {"human_key": project_key, "format": "json"})
+        for agent_name, token in (
+            ("GreenCastle", "d9-green-owner-token"),
+            ("BlueLake", "d9-blue-owner-token"),
+        ):
+            await call(
+                "register_agent",
+                {
+                    "project_key": project_key,
+                    "program": "pending-decision-exception-probe",
+                    "model": "fixture-model",
+                    "name": agent_name,
+                    "task_description": "D9 ack helper exception probe",
+                    "registration_token": token,
+                    "format": "json",
+                },
+            )
+        await call(
+            "set_contact_policy",
+            {
+                "project_key": project_key,
+                "agent_name": "BlueLake",
+                "policy": "open",
+                "format": "json",
+            },
+        )
+        await call(
+            "send_message",
+            {
+                "project_key": project_key,
+                "sender_name": "GreenCastle",
+                "sender_token": "d9-green-owner-token",
+                "to": ["BlueLake"],
+                "subject": "D9 ack helper exception",
+                "body_md": (
+                    "The read commit must survive the injected ack helper error."
+                ),
+                "ack_required": True,
+                "format": "json",
+            },
+        )
+
+        connection = sqlite3.connect(database_path)
+        try:
+            message_row = connection.execute(
+                "SELECT id FROM messages WHERE subject = ?",
+                ("D9 ack helper exception",),
+            ).fetchone()
+            assert message_row is not None
+            message_id = int(message_row[0])
+            receipt_rows = connection.execute(
+                '''
+                SELECT message_recipients.read_ts, message_recipients.ack_ts
+                FROM message_recipients
+                JOIN agents ON agents.id = message_recipients.agent_id
+                WHERE message_recipients.message_id = ? AND agents.name = ?
+                ''',
+                (message_id, "BlueLake"),
+            ).fetchall()
+            assert len(receipt_rows) == 1
+            assert receipt_rows[0][0] is None
+            assert receipt_rows[0][1] is None
+        finally:
+            connection.close()
+
+        original_update = app._update_recipient_timestamp
+
+        async def fail_at_ack_helper_entry(agent, candidate_message_id, field):
+            if field == "ack_ts":
+                raise RuntimeError("D9 injected ack helper failure")
+            return await original_update(agent, candidate_message_id, field)
+
+        app._update_recipient_timestamp = fail_at_ack_helper_entry
+        try:
+            result = await client.call_tool_mcp(
+                "acknowledge_message",
+                {
+                    "project_key": project_key,
+                    "agent_name": "BlueLake",
+                    "message_id": message_id,
+                    "format": "json",
+                },
+            )
+        finally:
+            app._update_recipient_timestamp = original_update
+
+    raw_result = result.model_dump(mode="json", by_alias=True)
+    serialized_result = json.dumps(raw_result, ensure_ascii=False, sort_keys=True)
+    observation = {
+        "tool_error": bool(result.isError),
+        "injected_ack_failure": (
+            "D9 injected ack helper failure" in serialized_result
+        ),
+    }
+    descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(observation, output, sort_keys=True)
+        output.write("\n")
 
 
 asyncio.run(main())
@@ -556,6 +717,7 @@ def _run_until_sigkill(
     )
     environment = isolated_worker_env(os.environ, namespace, roots)
     environment["D8_SOURCE_ROOT"] = str(source)
+    environment["D9_SOURCE_ROOT"] = str(source)
     completed = subprocess.run(
         [
             sys.executable,
@@ -583,6 +745,7 @@ def _run_to_completion(
     source: Path,
     root: Path,
     program: str,
+    secrets: tuple[str, ...] = (),
 ) -> WorkerStateRoots:
     source = source.resolve(strict=True)
     roots = WorkerStateRoots.under(
@@ -591,6 +754,7 @@ def _run_to_completion(
     )
     environment = isolated_worker_env(os.environ, namespace, roots)
     environment["D8_SOURCE_ROOT"] = str(source)
+    environment["D9_SOURCE_ROOT"] = str(source)
     completed = subprocess.run(
         [sys.executable, "-c", program, namespace, str(root)],
         cwd=roots.cwd,
@@ -602,6 +766,9 @@ def _run_to_completion(
     )
     diagnostic = (completed.stdout + completed.stderr)[-4000:]
     assert completed.returncode == 0, diagnostic
+    raw_output = completed.stdout + completed.stderr
+    for secret in secrets:
+        assert secret not in raw_output, "registration token leaked to worker output"
     return roots
 
 
@@ -647,38 +814,35 @@ def _read_d8_delivery_records(
     return [dict(row) for row in rows]
 
 
-def _read_d9_recipient_state(
+def _read_d9_receipt_projection(
     database_path: Path,
     subject: str,
-) -> sqlite3.Row:
+) -> dict[str, str]:
     connection = sqlite3.connect(
         f"file:{database_path}?mode=ro",
         uri=True,
     )
-    connection.row_factory = sqlite3.Row
     try:
-        row = connection.execute(
+        rows = connection.execute(
             """
             SELECT
-                messages.id AS message_id,
-                messages.subject AS subject,
-                agents.name AS recipient_name,
-                message_recipients.kind AS recipient_kind,
-                message_recipients.read_ts AS read_ts,
-                message_recipients.ack_ts AS ack_ts
+                message_recipients.read_ts,
+                message_recipients.ack_ts
             FROM messages
             JOIN message_recipients
               ON message_recipients.message_id = messages.id
-            JOIN agents
-              ON agents.id = message_recipients.agent_id
             WHERE messages.subject = ?
             """,
             (subject,),
-        ).fetchone()
+        ).fetchall()
     finally:
         connection.close()
-    assert row is not None, f"message row missing after child death: {subject}"
-    return row
+    assert len(rows) == 1, f"selected receipt row count differs from one: {subject}"
+    read_ts, ack_ts = rows[0]
+    return {
+        "read": "present" if read_ts is not None else "absent",
+        "ack": "present" if ack_ts is not None else "absent",
+    }
 
 
 def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -900,6 +1064,56 @@ def _expected_d8_database_records(subject: str, body: str) -> list[dict[str, str
     ]
 
 
+def _assert_d9_tokens_absent(completed: subprocess.CompletedProcess[str]) -> None:
+    raw_output = completed.stdout + completed.stderr
+    for secret in _D9_REGISTRATION_TOKENS:
+        assert secret not in raw_output, "registration token leaked to worker output"
+
+
+def _observe_d9_sigkill(
+    *,
+    namespace: str,
+    source: Path,
+    root: Path,
+) -> dict[str, Any]:
+    roots, completed = _run_until_sigkill(
+        namespace=namespace,
+        source=source,
+        root=root,
+        program=_D9_WORKER,
+    )
+    _assert_d9_tokens_absent(completed)
+    marker = _read_marker(root / "d9-read-committed-before-ack.json")
+    return {
+        "seam": marker.get("seam"),
+        "receipt": _read_d9_receipt_projection(roots.database, _D9_SUBJECT),
+    }
+
+
+def _observe_d9_exception(
+    *,
+    namespace: str,
+    source: Path,
+    root: Path,
+) -> dict[str, Any]:
+    roots = _run_to_completion(
+        namespace=namespace,
+        source=source,
+        root=root,
+        program=_D9_EXCEPTION_WORKER,
+        secrets=_D9_REGISTRATION_TOKENS,
+    )
+    tool_result = _read_marker(root / "d9-ack-helper-exception.json")
+    return {
+        "tool_error": tool_result.get("tool_error"),
+        "injected_ack_failure": tool_result.get("injected_ack_failure"),
+        "receipt": _read_d9_receipt_projection(
+            roots.database,
+            _D9_EXCEPTION_SUBJECT,
+        ),
+    }
+
+
 @pytest.mark.skipif(
     not hasattr(signal, "SIGKILL"),
     reason="literal SIGKILL durability probes require a POSIX signal",
@@ -1036,29 +1250,50 @@ def test_d8_selected_parity_message_bundle_exception_leaves_committed_database_w
     not hasattr(signal, "SIGKILL"),
     reason="literal SIGKILL durability probes require a POSIX signal",
 )
-@pytest.mark.parametrize("namespace", _NAMESPACES)
-def test_d9_observes_read_without_ack_after_between_commit_sigkill(
-    namespace: str,
+def test_d9_selected_parity_read_commits_before_ack_after_between_commit_sigkill(
     frozen_live_checkout: Path,
     tmp_path: Path,
 ) -> None:
-    """Observe D9's two-transaction crash window without approving it."""
+    """Require selected receipt parity after the between-commit SIGKILL."""
 
-    root = tmp_path / namespace
-    roots, _completed = _run_until_sigkill(
-        namespace=namespace,
-        source=_source_for(namespace, frozen_live_checkout),
-        root=root,
-        program=_D9_WORKER,
-    )
+    observations = {
+        namespace: _observe_d9_sigkill(
+            namespace=namespace,
+            source=_source_for(namespace, frozen_live_checkout),
+            root=tmp_path / f"d9-sigkill-{namespace}",
+        )
+        for namespace in _NAMESPACES
+    }
+    expected = {
+        "seam": "read_ts_committed_before_ack_ts_call",
+        "receipt": {"read": "present", "ack": "absent"},
+    }
 
-    marker = _read_marker(root / "d9-read-committed-before-ack.json")
-    assert marker["seam"] == "read_ts_committed_before_ack_ts_call"
-    assert marker["read_timestamp_observed"] is True
+    assert observations[LIVE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == observations[LIVE_NAMESPACE]
 
-    recipient = _read_d9_recipient_state(roots.database, _D9_SUBJECT)
-    assert recipient["message_id"] == marker["message_id"]
-    assert recipient["recipient_name"] == "BlueLake"
-    assert recipient["recipient_kind"] == "to"
-    assert recipient["read_ts"] is not None
-    assert recipient["ack_ts"] is None
+
+def test_d9_selected_parity_ack_helper_exception_preserves_read_without_ack(
+    frozen_live_checkout: Path,
+    tmp_path: Path,
+) -> None:
+    """Require selected receipt parity for an ordinary ack-helper error."""
+
+    observations = {
+        namespace: _observe_d9_exception(
+            namespace=namespace,
+            source=_source_for(namespace, frozen_live_checkout),
+            root=tmp_path / f"d9-exception-{namespace}",
+        )
+        for namespace in _NAMESPACES
+    }
+    expected = {
+        "tool_error": True,
+        "injected_ack_failure": True,
+        "receipt": {"read": "present", "ack": "absent"},
+    }
+
+    assert observations[LIVE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == expected
+    assert observations[CORE_NAMESPACE] == observations[LIVE_NAMESPACE]
