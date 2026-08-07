@@ -96,6 +96,37 @@ RULES: dict[str, Any] = {
             "--hair-2",
         ],
     },
+    "token_consumers": {
+        "property_channels": {
+            "background": ["backgroundColor"],
+            "background-color": ["backgroundColor"],
+            "border": [
+                "borderTopColor",
+                "borderRightColor",
+                "borderBottomColor",
+                "borderLeftColor",
+            ],
+            "border-color": [
+                "borderTopColor",
+                "borderRightColor",
+                "borderBottomColor",
+                "borderLeftColor",
+            ],
+            "border-top": ["borderTopColor"],
+            "border-top-color": ["borderTopColor"],
+            "border-right": ["borderRightColor"],
+            "border-right-color": ["borderRightColor"],
+            "border-bottom": ["borderBottomColor"],
+            "border-bottom-color": ["borderBottomColor"],
+            "border-left": ["borderLeftColor"],
+            "border-left-color": ["borderLeftColor"],
+            "color": ["color"],
+            "fill": ["fill"],
+            "stroke": ["stroke"],
+        },
+        "inherited_channels": ["color", "fill", "stroke"],
+        "excluded_inherited_elements": ["input", "select", "textarea", "option"],
+    },
 }
 
 
@@ -339,6 +370,70 @@ def _axis_source_records(
     return {"small-text": small, "tracking": tracking}
 
 
+VAR_RE = re.compile(r"var\(\s*(--[\w-]+)")
+
+
+def _controlled_tokens(
+    value: str,
+    controlled: set[str],
+    definitions: dict[str, str],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    found: set[str] = set()
+    for token in VAR_RE.findall(value):
+        if token in controlled:
+            found.add(token)
+        elif token not in seen and token in definitions:
+            found.update(
+                _controlled_tokens(
+                    definitions[token], controlled, definitions, seen | {token}
+                )
+            )
+    return found
+
+
+def _token_consumer_records(
+    declarations: list[dict[str, Any]], axis: str
+) -> list[dict[str, Any]]:
+    controlled = set(RULES["token_targets"][axis])
+    definitions = {
+        declaration["property"]: declaration["value"]
+        for declaration in declarations
+        if declaration["property"].startswith("--")
+    }
+    channel_map = RULES["token_consumers"]["property_channels"]
+    records: list[dict[str, Any]] = []
+    for declaration in declarations:
+        channels = channel_map.get(declaration["property"], [])
+        if not channels or declaration["selector"].startswith("@keyframes"):
+            continue
+        tokens = sorted(
+            _controlled_tokens(
+                declaration["value"], controlled, definitions
+            )
+        )
+        if not tokens:
+            continue
+        record = dict(declaration)
+        record.update(
+            {
+                "channels": channels,
+                "references": VAR_RE.findall(declaration["value"]),
+                "tokens": tokens,
+                "consumer": True,
+                "important": bool(
+                    re.search(r"!\s*important\s*$", declaration["value"], re.I)
+                ),
+            }
+        )
+        record["id"] = _digest(
+            f'token-consumer\0{axis}\0{record["selector"]}\0'
+            f'{record["property"]}\0{record["line"]}\0{record["value"]}'
+        )[:16]
+        records.append(record)
+    return records
+
+
 def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
     html = index.read_text(encoding="utf-8")
     css, first_line = _css_blocks(html)
@@ -346,10 +441,22 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
     source_effects = _source_effects(declarations)
     radial_effects = _radial_effects(declarations)
     axis_sources = _axis_source_records(declarations)
+    token_consumers = {
+        axis: _token_consumer_records(declarations, axis)
+        for axis in RULES["token_targets"]
+    }
     rules_json = json.dumps(RULES, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     axes = {
-        "dim-contrast": {"unit": "token-write", "records": RULES["token_targets"]["dim-contrast"]},
-        "background": {"unit": "token-write", "records": RULES["token_targets"]["background"]},
+        "dim-contrast": {
+            "unit": "token-write",
+            "records": RULES["token_targets"]["dim-contrast"],
+            "consumer_records": token_consumers["dim-contrast"],
+        },
+        "background": {
+            "unit": "token-write",
+            "records": RULES["token_targets"]["background"],
+            "consumer_records": token_consumers["background"],
+        },
         "small-text": {"unit": "source-declaration", "records": axis_sources["small-text"]},
         "tracking": {"unit": "source-declaration", "records": axis_sources["tracking"]},
         "glow": {
@@ -378,6 +485,24 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
                     )[:16]
                     for record in definition["records"]
                 ],
+                **(
+                    {
+                        "consumers": [
+                            {
+                                "id": record["id"],
+                                "selector": record["selector"],
+                                "channels": record["channels"],
+                                "references": record["references"],
+                                "tokens": record["tokens"],
+                                "consumer": record["consumer"],
+                                "important": record["important"],
+                            }
+                            for record in definition["consumer_records"]
+                        ]
+                    }
+                    if "consumer_records" in definition
+                    else {}
+                ),
             }
             for axis, definition in axes.items()
         },
@@ -405,6 +530,12 @@ def generate(index: Path = DEFAULT_INDEX) -> dict[str, Any]:
             ),
             "small_text_source_records": len(axis_sources["small-text"]),
             "tracking_source_records": len(axis_sources["tracking"]),
+            "dim_contrast_consumer_records": sum(
+                record["consumer"] for record in token_consumers["dim-contrast"]
+            ),
+            "background_consumer_records": sum(
+                record["consumer"] for record in token_consumers["background"]
+            ),
         },
     }
     return manifest

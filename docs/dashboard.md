@@ -334,6 +334,9 @@ receiver は `event.source === window.parent` と `event.origin === location.ori
   state: {axis: "glow", value: 1},
   source: {unit: "declaration", expected: sourceRecords.length, matched: sourceMatched},
   mutation: {unit: "effect-component", expected: snapshot.length, applied: appliedCount},
+  effect: {unit: "effect-component", evaluated: 30, changed: 26,
+    rendered: 28, inViewport: 26, visibleExpected: 26,
+    visibleReached: 26, visibleChanged: 26, deferred: 4},
   reason: null,
 }
 ```
@@ -345,7 +348,7 @@ python3 scripts/dashboard_theme_manifest.py --write
 python3 scripts/dashboard_theme_manifest.py --check
 ```
 
-`source` は token / source declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の実適用数です。面や単位を合算しません。expected が0、source の不足、partial mutation、contrast guard 違反では request を reject し、直前の valid axis を復元します。`glow` は selector と keyframe の effect component を `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
+`source` は token / source declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の compiled 適用数です。`effect` の membership は generated eligibility の pre-apply live match だけで固定し、適用前・適用後・endpoint の値から対象を増減しません。そのうち rendered・nonzero box・viewport 内を `visibleExpected`、cascade 後の computed が requested derivation へ到達したものを `visibleReached` と数えます。元から requested 値だった member も reached です。`visibleChanged` は可視 member の canonical post が pre と異なる数、`changed` は全 evaluated member の同じ差分を数える独立 no-op gate です。hidden / zero-box / offscreen は `deferred` に数えます。non-null apply は `visibleExpected > 0`、`visibleReached === visibleExpected`、`visibleChanged > 0`、`changed > 0` をすべて満たす場合だけ成功します。0や量子化以下は `no-effective-change`、可視対象0は `no-visible-targets`、requested derivation に到達しない member があれば `effect-count-mismatch` として reject し、直前の valid axis を復元します。面や単位を合算しません。`glow` の effect unit は live `effect-component` です。同一 surface に対象 radial layer が2つあれば2件と数え、CSS rule 1件が可視 element 10件へ match すれば10件と数えます。selector と keyframe の source component は `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
 
 ## Terminal bridge
 

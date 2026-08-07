@@ -32,6 +32,7 @@ const allowedEvent={source:parentWindow,origin:'http://dashboard.test'};
 const axes=[...THEME_AXIS_NAMES];
 const accepted=axes.map(axis=>({
   zero:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:0}),
+  tiny:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:Number.MIN_VALUE}),
   fraction:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:0.3333}),
   one:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:1}),
   reset:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:null})
@@ -101,6 +102,7 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
     for axis, values in zip(cases["axes"], cases["accepted"], strict=True):
         assert values == {
             "zero": {"axis": axis, "value": 0},
+            "tiny": {"axis": axis, "value": 5e-324},
             "fraction": {"axis": axis, "value": 0.3333},
             "one": {"axis": axis, "value": 1},
             "reset": {"axis": axis, "value": None},
