@@ -128,6 +128,10 @@ def _change_d7_scope(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D7")["scope"]["active_null_token_name_only_retire"] = "allow"
 
 
+def _change_d7_implementation_order(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["implementation_order"] = "before_cutover"
+
+
 def _change_d1_resolution(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D1")["resolution"] = "silent_accept"
 
@@ -265,6 +269,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_unknown_implemented_origin, "implemented decision D2 has invalid or missing origin"),
         (_add_nonimplemented_origin, "non-implemented decision D7 must not have origin"),
         (_change_d7_scope, "selected product decision D7 changed"),
+        (_change_d7_implementation_order, "selected product decision D7 changed"),
         (_change_d1_resolution, "selected product decision D1 changed"),
         (_drop_d1_verification, "selected product decision D1 changed"),
         (_weaken_d6_comparator, "selected product decision D6 changed"),

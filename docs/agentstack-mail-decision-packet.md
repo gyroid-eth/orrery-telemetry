@@ -41,7 +41,7 @@ owner explicitly selects upstream behavior as Path A.
 | D4 | selected | implemented (pre-existing parity) | no-go | Accepting without a pending request creates an approved link | Path A preserves out-of-order convenience despite missing request provenance | contact owners and any caller who knows both names |
 | D5 | selected | implemented (pre-existing parity) | no-go | The measured invalid and empty policies silently become `auto` | Path A preserves forgiving input despite typo/audit ambiguity | operators, policy audits, indistinguishable historical `auto` values |
 | D6 | selected | implemented (pre-existing parity) | no-go | A tokenized sender may omit `sender_token` and send unverified | Path A preserves legacy clients despite unenforced sender ownership | all recipients/auditors; identities whose generated token is unavailable |
-| D7 | selected | not implemented | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
+| D7 | selected | not implemented (post-cutover order) | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
 | D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
 | D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
 | D10 | unselected | not implemented | no-go | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
@@ -402,6 +402,14 @@ not proof of ownership. `macro_start_session` currently cannot accept or return
 a caller-owned token. The selection therefore cannot be enforced until every
 new-null creation path is stopped and a principal/admin mechanism exists.
 Current behavior is intentionally unchanged.
+
+Implementation is ordered after authority cutover. At cutover, D1 remains the
+only intentional upstream difference. D7 and the prerequisite that stops new
+null-token creation will land together later as one change. The confirmed
+cross-project alias call to `_get_or_create_agent(p, sender.name, ...)` omits a
+token; stopping that currently matching path is itself an intentional upstream
+difference, not a parity-preserving prerequisite. The manifest's machine-readable
+`implementation_order` and scope are authoritative for this sequencing.
 
 ### 4. Selected boundary and breakage
 

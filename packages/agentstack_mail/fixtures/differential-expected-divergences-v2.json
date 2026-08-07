@@ -485,12 +485,18 @@
       "decision_state": "selected",
       "implementation_state": "not_implemented",
       "cutover_state": "no_go",
+      "implementation_order": "post_cutover_with_null_token_creation_stop_as_one_change",
       "resolution": "limit_name_only_retire_to_idempotent_retired_null_legacy",
       "scope": {
         "name_only_soft_retire": "only_idempotent_reretire_of_already_retired_null_token_legacy_row_preserving_retired_at_with_zero_durable_mutation",
         "active_null_token_name_only_retire": "deny",
         "stronger_owner_operations": "unretire_hard_delete_transfer_and_project_wide_require_future_principal_or_administrator",
         "enforcement_prerequisite": "stop_all_new_null_token_creation_paths_before_enforcement_ordering_only_not_current_behavior",
+        "confirmed_prerequisite_path": "cross_project_alias_get_or_create_agent_without_token",
+        "prerequisite_divergence": "stopping_the_currently_matching_alias_path_is_itself_an_intentional_upstream_difference",
+        "cutover_intentional_difference_set": [
+          "D1"
+        ],
         "principal_admin_mechanism": "unselected",
         "lifecycle_disposition": "unchanged_D11_unselected"
       },

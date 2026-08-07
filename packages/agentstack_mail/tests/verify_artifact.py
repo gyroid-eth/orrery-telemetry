@@ -357,6 +357,9 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "not_implemented",
         "cutover_state": "no_go",
+        "implementation_order": (
+            "post_cutover_with_null_token_creation_stop_as_one_change"
+        ),
         "resolution": "limit_name_only_retire_to_idempotent_retired_null_legacy",
         "scope": {
             "name_only_soft_retire": (
@@ -372,6 +375,14 @@ EXPECTED_SELECTED_DECISIONS = {
                 "stop_all_new_null_token_creation_paths_before_enforcement_"
                 "ordering_only_not_current_behavior"
             ),
+            "confirmed_prerequisite_path": (
+                "cross_project_alias_get_or_create_agent_without_token"
+            ),
+            "prerequisite_divergence": (
+                "stopping_the_currently_matching_alias_path_is_itself_an_"
+                "intentional_upstream_difference"
+            ),
+            "cutover_intentional_difference_set": ["D1"],
             "principal_admin_mechanism": "unselected",
             "lifecycle_disposition": "unchanged_D11_unselected",
         },
