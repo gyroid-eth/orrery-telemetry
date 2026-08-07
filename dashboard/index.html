@@ -2800,15 +2800,17 @@ function normalizeThemeAxisMessage(data){
   if(!data||data.type!=='agentstack-theme-axis'||data.version!==1||
       !THEME_AXIS_NAMES.has(data.axis))return null;
   if(data.value===null)return {axis:data.axis,value:null};
-  if(typeof data.value!=='number'||!Number.isFinite(data.value))return null;
-  return {axis:data.axis,value:Math.max(0,Math.min(1,data.value))};
+  if(typeof data.value!=='number'||!Number.isFinite(data.value)||
+      data.value<0||data.value>1)return null;
+  return {axis:data.axis,value:data.value};
 }
 function themeAxisMessageError(data){
   if(!data||data.type!=='agentstack-theme-axis')return 'invalid-message';
   if(data.version!==1)return 'unsupported-version';
   if(!THEME_AXIS_NAMES.has(data.axis))return 'unknown-axis';
   if(data.value!==null&&
-      (typeof data.value!=='number'||!Number.isFinite(data.value))){
+      (typeof data.value!=='number'||!Number.isFinite(data.value)||
+       data.value<0||data.value>1)){
     return 'invalid-value';
   }
   return null;

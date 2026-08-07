@@ -321,7 +321,7 @@ frame.contentWindow.postMessage({
 }, location.origin);
 ```
 
-`axis` は `dim-contrast`、`small-text`、`tracking`、`glow`、`background` のいずれかです。数値は `0..1` へ正規化され、`null` は override style node と一時属性を物理的に除去します。初期表示は bridge の CSS を一切適用しないため、従来の描画経路のままです。
+`axis` は `dim-contrast`、`small-text`、`tracking`、`glow`、`background` のいずれかです。数値は finite かつ `0 <= value <= 1` でなければならず、範囲外は clamp せず `invalid-value` として reject します。`null` は override style node と一時属性を物理的に除去します。初期表示は bridge の CSS を一切適用しないため、従来の描画経路のままです。
 
 receiver は `event.source === window.parent` と `event.origin === location.origin` の両方を確認します。処理した request には parent へ次の envelope を返します。
 

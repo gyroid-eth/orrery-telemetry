@@ -32,6 +32,7 @@ const allowedEvent={source:parentWindow,origin:'http://dashboard.test'};
 const axes=[...THEME_AXIS_NAMES];
 const accepted=axes.map(axis=>({
   zero:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:0}),
+  fraction:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:0.3333}),
   one:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:1}),
   reset:normalizeThemeAxisMessage({type:'agentstack-theme-axis',version:1,axis,value:null})
 }));
@@ -40,8 +41,8 @@ const rejected=[
   {type:'other',version:1,axis:'glow',value:1},
   {type:'agentstack-theme-axis',version:2,axis:'glow',value:1},
   {type:'agentstack-theme-axis',version:1,axis:'unknown',value:1},
-  {type:'agentstack-theme-axis',version:1,axis:'glow',value:-0.01},
-  {type:'agentstack-theme-axis',version:1,axis:'glow',value:1.01},
+  {type:'agentstack-theme-axis',version:1,axis:'glow',value:-0.001},
+  {type:'agentstack-theme-axis',version:1,axis:'glow',value:1.001},
   {type:'agentstack-theme-axis',version:1,axis:'glow',value:'1'},
   {type:'agentstack-theme-axis',version:1,axis:'glow',value:NaN},
   {type:'agentstack-theme-axis',version:1,axis:'glow',value:Infinity}
@@ -50,6 +51,8 @@ const errors=[
   {type:'other',version:1,axis:'glow',value:1},
   {type:'agentstack-theme-axis',version:2,axis:'glow',value:1},
   {type:'agentstack-theme-axis',version:1,axis:'unknown',value:1},
+  {type:'agentstack-theme-axis',version:1,axis:'glow',value:-0.001},
+  {type:'agentstack-theme-axis',version:1,axis:'glow',value:1.001},
   {type:'agentstack-theme-axis',version:1,axis:'glow',value:'1'}
 ].map(themeAxisMessageError);
 const guards={
@@ -98,6 +101,7 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
     for axis, values in zip(cases["axes"], cases["accepted"], strict=True):
         assert values == {
             "zero": {"axis": axis, "value": 0},
+            "fraction": {"axis": axis, "value": 0.3333},
             "one": {"axis": axis, "value": 1},
             "reset": {"axis": axis, "value": None},
         }
@@ -106,8 +110,8 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
         None,
         None,
         None,
-        {"axis": "glow", "value": 0},
-        {"axis": "glow", "value": 1},
+        None,
+        None,
         None,
         None,
         None,
@@ -117,12 +121,64 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
         "unsupported-version",
         "unknown-axis",
         "invalid-value",
+        "invalid-value",
+        "invalid-value",
     ]
     assert cases["guards"] == {
         "allowed": True,
         "topLevel": False,
         "wrongSource": False,
         "wrongOrigin": False,
+    }
+
+
+def test_theme_axis_out_of_range_reject_preserves_last_valid_state():
+    html = INDEX.read_text(encoding="utf-8")
+    apply_message = re.search(
+        r"(async function applyThemeAxisMessage\(data\)\{.*?\n\})",
+        html,
+        re.DOTALL,
+    )
+    assert apply_message, "theme message application must remain testable"
+    harness = r"""
+let state={axis:null,value:null};
+const applied=[];
+async function themeAxisInventoryDigestError(){return null;}
+function applyThemeAxis(axis,value){
+  state={axis,value};
+  applied.push({...state});
+  return {ok:true};
+}
+(async()=>{
+  const valid=await applyThemeAxisMessage({
+    type:'agentstack-theme-axis',version:1,axis:'background',value:0.4
+  });
+  const below=await applyThemeAxisMessage({
+    type:'agentstack-theme-axis',version:1,axis:'background',value:-0.001
+  });
+  const above=await applyThemeAxisMessage({
+    type:'agentstack-theme-axis',version:1,axis:'background',value:1.001
+  });
+  process.stdout.write(JSON.stringify({valid,below,above,state,applied}));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+    result = subprocess.run(
+        [
+            "node",
+            "-e",
+            _theme_bridge_source() + "\n" + apply_message.group(1) + "\n" + harness,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert json.loads(result.stdout) == {
+        "valid": {"ok": True},
+        "below": {"ok": False, "reason": "invalid-value"},
+        "above": {"ok": False, "reason": "invalid-value"},
+        "state": {"axis": "background", "value": 0.4},
+        "applied": [{"axis": "background", "value": 0.4}],
     }
 
 
