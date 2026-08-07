@@ -135,7 +135,6 @@ EXPECTED_STATIC_ALLOWLIST = {
 }
 
 EXPECTED_UNSELECTED_DECISIONS = {
-    "D10": "concurrent reservation winner and SQLite lock semantics",
     "D11": "retire with active reservations or unread messages",
     "D12": "signal cleanup after crash, retirement, or stale consumer",
 }
@@ -506,6 +505,122 @@ EXPECTED_SELECTED_DECISIONS = {
             "tests/test_pending_decision_d8_d9.py::test_d9_selected_parity_ack_helper_exception_preserves_read_without_ack",
         ],
     },
+    "D10": {
+        "id": "D10",
+        "title": "concurrent reservation winner and SQLite lock semantics",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "measured_path": (
+                "same_project_file_reservation_paths_for_one_exact_exclusive_"
+                "path_per_trial"
+            ),
+            "sqlite_lock_timeout": {
+                "trials": 3,
+                "database": "one_shared_SQLite_database_in_WAL_mode",
+                "blocker": (
+                    "external_BEGIN_IMMEDIATE_writer_held_until_public_call_returns"
+                ),
+                "production_configuration": (
+                    "PRAGMA_busy_timeout_60000_and_journal_mode_WAL_read_back"
+                ),
+                "test_scaling": (
+                    "checkout_local_PRAGMA_busy_timeout_75_on_same_commit_rollback_"
+                    "retry_path_without_wall_clock_claim"
+                ),
+                "locked_outcome": (
+                    "sanitized_database_ToolError_with_zero_reservation_row_and_"
+                    "archive_record_delta"
+                ),
+                "after_rollback": (
+                    "one_grant_zero_conflicts_one_row_and_two_archive_records"
+                ),
+            },
+            "same_process_shared_root": {
+                "trials": 4,
+                "contenders": (
+                    "two_clients_released_after_both_reach_archive_lock_"
+                    "acquisition_seam"
+                ),
+                "order": "task_creation_order_reversed_on_alternating_trials",
+                "result_per_trial": "one_grant_one_conflict_one_active_row",
+            },
+            "two_process_shared_root": {
+                "trials": 2,
+                "topology": (
+                    "one_database_one_preinitialized_archive_and_one_shared_lock_path"
+                ),
+                "barrier": (
+                    "both_processes_reach_archive_lock_acquisition_seam_before_"
+                    "release"
+                ),
+                "order": "process_launch_order_reversed",
+                "result_per_trial": "one_grant_one_conflict_one_active_row",
+            },
+            "two_process_split_roots": {
+                "trials": 2,
+                "topology": (
+                    "one_database_two_preinitialized_archives_and_distinct_lock_paths"
+                ),
+                "barrier": (
+                    "both_processes_pass_conflict_read_before_either_insert"
+                ),
+                "order": "process_launch_order_reversed",
+                "result_per_trial": (
+                    "two_grants_zero_conflicts_two_active_rows_with_distinct_holders"
+                ),
+            },
+            "not_claimed": [
+                (
+                    "exact_wall_time_or_unscaled_60000ms_runtime_and_internal_"
+                    "timeout_site"
+                ),
+                (
+                    "named_winner_FIFO_order_statistical_balance_starvation_"
+                    "freedom_or_fairness"
+                ),
+                (
+                    "all_unconstrained_schedules_or_probability_of_split_root_"
+                    "double_grant"
+                ),
+                "concurrent_first_archive_initialization_or_git_init_races",
+                (
+                    "exact_ids_timestamps_expiry_reason_payload_order_or_additive_"
+                    "error_fields"
+                ),
+                "registration_token_authorization_or_credential_lifecycle",
+                "archive_record_contents_or_Git_commit_identity",
+                (
+                    "glob_overlap_shared_nonexclusive_multiple_path_or_same_agent_"
+                    "reacquisition"
+                ),
+                (
+                    "SIGKILL_cancellation_power_loss_stale_lock_recovery_restart_"
+                    "or_retry_beyond_selected_rollback"
+                ),
+                (
+                    "network_filesystems_non_SQLite_databases_or_multi_host_lock_"
+                    "reliability"
+                ),
+                (
+                    "legacy_overlapping_row_reconciliation_migration_or_new_"
+                    "database_invariants"
+                ),
+                "retirement_message_notification_signal_or_D11_D12",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d10.py::test_d10_selected_parity_scaled_sqlite_lock_timeout_and_recovery",
+            "tests/test_pending_decision_d10.py::test_d10_selected_parity_same_process_shared_root_rendezvous",
+            "tests/test_pending_decision_d10.py::test_d10_selected_parity_two_process_shared_archive_lock",
+            "tests/test_pending_decision_d10.py::test_d10_selected_parity_two_process_split_roots_preserve_double_grant",
+        ],
+    },
 }
 
 EXPECTED_DECISION_IDS = {f"D{index}" for index in range(1, 13)}
@@ -593,6 +708,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d5.py",
     "/tests/test_pending_decision_d6.py",
     "/tests/test_pending_decision_d8_d9.py",
+    "/tests/test_pending_decision_d10.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",

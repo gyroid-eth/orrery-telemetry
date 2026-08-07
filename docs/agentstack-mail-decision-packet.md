@@ -44,7 +44,7 @@ owner explicitly selects upstream behavior as Path A.
 | D7 | selected | not implemented (post-cutover order) | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
 | D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
 | D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
-| D10 | unselected | not implemented | no-go | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
+| D10 | selected | implemented (pre-existing parity) | no-go | Under explicit repeated rendezvous, a shared archive lock yields one scheduler-dependent winner; one DB with split archive roots preserves two conflicting winners | Path A preserves topology-dependent upstream behavior instead of adding a DB mutex in this release | parallel agents, HA/misconfigured deployments, existing duplicate leases |
 | D11 | unselected | not implemented | no-go | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
 | D12 | unselected | not implemented | no-go | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
 
@@ -577,65 +577,79 @@ archive/Git state, notification signals, or fetch cleanup.
 
 ## D10 — concurrent reservation winner and SQLite lock semantics
 
-### 1. Observed live behavior
+### 1. Selected observation conditions
 
-With one shared DB and archive root, both same-process and two-process barrier
-races persist exactly one reservation. The named winner is scheduler-dependent:
-Green won one same-process run; Blue won a process race launched Green first.
-The archive lock encloses conflict read, creation, and archive write around
-frozen `app.py:9084–9205` and `storage.py:645–780`/`:974–997`.
+The selected path is `file_reservation_paths` for one exact exclusive path and
+two registered contenders. Frozen live and Core execute in separate processes,
+private homes and source roots; every process attests `app`, `db`, and `storage`
+to the authenticated source root.
 
-With one DB but different archive roots, each process takes a different lock;
-both pass their conflict read and SQLite serializes two inserts, leaving two
-active logically conflicting rows.
+Four same-process trials release two FastMCP clients only after both reach the
+archive-lock acquisition seam, alternating task-creation order. Two additional
+two-process trials use one DB and one sequentially preinitialized archive root,
+release both processes at the same lock seam, and reverse process-launch order.
+Every shared-root trial returns one grant and one conflict and persists one
+active row. No winner name is selected.
 
-A committed probe records the production `PRAGMA busy_timeout` as 60,000 ms,
-then uses the same checkout/commit path with a test-local 75 ms timeout and an
-external `BEGIN IMMEDIATE` writer. The public call returns the sanitized generic
-DB `ToolError`; no reservation row or archive projection is written. After the
-writer rolls back, retry grants exactly one reservation. Four bounded
-shared-root races per implementation each produced one grant and one conflict,
-without naming a winner. The probe is
-`packages/agentstack_mail/tests/test_pending_decision_d10.py`.
+Two split-root trials use one DB but two sequentially preinitialized archives,
+so the processes hold different lock paths. Each process waits inside
+`_create_file_reservation` after its conflict read; release occurs only after
+both have proven that rendezvous. SQLite serializes the inserts, both calls
+grant, and two active rows with distinct holders persist. This deliberately
+selects the measured upstream topology dependence; it does not assert that an
+unconstrained schedule always produces duplicates.
 
-Exact wall time with the unscaled 60-second setting remains unmeasured because
-multiple connection/check-in waits may accumulate. Finite black-box races
-cannot prove FIFO order, winner balance, starvation freedom, or fairness over
-all schedules; the committed test explicitly records those non-claims.
+Three lock trials read back production `PRAGMA busy_timeout=60000` and
+`journal_mode=WAL`, then apply a test-local 75 ms checkout timeout. An external SQLite
+`BEGIN IMMEDIATE` writer remains held until the public call returns. Each call
+returns the sanitized database `ToolError` with zero reservation-row/archive
+delta; after rollback, retry yields one grant, one row, and two archive records.
+The 75 ms probe exercises the same SQLite mechanism and commit/rollback path,
+but is not declared wall-time-equivalent to an unscaled 60-second run.
 
-### 2. Current Core behavior
+### 2. Selected Path A and current Core behavior
 
-Identical shared-root, split-root, scaled lock-timeout/recovery, and bounded-race
-results; corresponding Core reservation and SQLite seams are
-`app.py:9116–9236` and `db.py:319–477`.
+Core already matches frozen live under every condition above, so D10 is
+`implemented` with `implementation_origin: pre_existing_parity` and
+`resolution: match_frozen_live`. The relevant symbolic seams are
+`file_reservation_paths`, `_archive_write_lock`, `_create_file_reservation`,
+`archive_write_lock`, and `_build_engine`; symbolic names avoid stale line-number
+anchors as the derived source moves.
 
-### 3. Why it remains unselected
+### 3. Why this decision was needed
 
-Filesystem locking is simple and sufficient under a single canonical archive,
-but correctness then depends on topology. DB-scoped coordination changes
-contention/error semantics. Fair deterministic ordering conflicts with a cheap
-first-lock-wins model.
+Path A selects upstream behavior for the replacement release. Filesystem locking
+is sufficient under one canonical archive but makes correctness depend on
+topology; DB-scoped coordination would be a new Core divergence and change
+contention/error semantics. This selection preserves the known split-root hole
+for compatibility and keeps cutover no-go; it is not an endorsement of the hole.
 
 ### 4. Options and breakage
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve current lock and make one shared storage root a hard startup invariant | Split-root/HA users must reconfigure; winner remains nondeterministic | Existing duplicates need audit/release |
+| **Selected — preserve the storage-root-scoped lock, including forced-overlap split-root double grants** | Split-root/HA deployments can retain conflicting active leases; winner remains nondeterministic with a shared root | Existing duplicates remain and need audit/release |
+| Preserve the lock but make one shared storage root a hard startup invariant | Split-root/HA users must reconfigure; startup behavior diverges from upstream | Existing duplicates need audit/release |
 | Use a DB-scoped per-project mutex or `BEGIN IMMEDIATE`, recheck, then insert | Contention timing changes and DB availability becomes the coordination dependency | Resolve existing conflicts deterministically |
 | Add DB invariants plus serialized glob-overlap evaluation | Migration and application-level overlap logic remain necessary | Duplicate losers need quarantine/release |
 | Dedicated coordinator/advisory-lock service | Local-only simplicity and deployment independence are lost | Requires importing/reconciling current leases |
 
-Non-binding lean: a DB-scoped project mutex plus in-transaction recheck removes
-the split-storage correctness hole without asserting a named winner.
+### 5. Committed requirement gates
 
-### 5. Test that fixes the choice
+The four D10 nodes in
+`packages/agentstack_mail/tests/test_pending_decision_d10.py` compare normalized
+frozen-live and Core projections against the same selected result. A barrier
+that is not reached is a harness failure, not a parity result. The gates assert
+multiple trials, reversed ordering, exact contender/lock modes, call outcomes,
+and targeted durable-row counts without binding IDs, timestamps, or winner.
 
-Use two-process barriers with shared DB/archive and reversed launch orders:
-exactly one grant, one conflict, and one active row; do not assert the winner's
-name unless fairness is selected. Repeat with one DB/different roots: either
-one winner or a fail-fast topology error. Cover exact/glob races, same-agent
-reacquisition, before/after-timeout DB locks, SIGKILL lock-owner recovery, and
-a legacy overlapping-row reconciliation fixture.
+They do not claim exact or unscaled wall time, the internal timeout statement,
+FIFO/fairness/starvation freedom, every unconstrained schedule, concurrent first
+archive initialization, Git-init races, glob/shared/multi-path reservations,
+same-agent reacquisition, registration-token or authorization semantics,
+archive-record contents or Git commit identity, SIGKILL/cancellation/power loss, stale-lock recovery,
+network-filesystem or non-SQLite behavior, legacy-duplicate reconciliation,
+migration, or D11/D12 lifecycle and signal behavior.
 
 ## D11 — retire with active reservations or unread messages
 
