@@ -1,0 +1,187 @@
+{
+  "catalog_version": 1,
+  "default_policy": {
+    "decision": "would_allow",
+    "reason": "policy_empty_default_allow"
+  },
+  "default_principal_candidate": "local-single-principal",
+  "rule_status": "prospective_non_binding_except_selected_D7_retire_boundary",
+  "tools": {
+    "acknowledge_message": {
+      "action": "acknowledge_received_message",
+      "authorization_rule": "recipient agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name", "message_id"],
+      "resource": "project:{project_key}/message:{message_id}/recipient:{agent_name}",
+      "subject": "agent:{agent_name}"
+    },
+    "ensure_project": {
+      "action": "ensure_project",
+      "authorization_rule": "bound local principal; project administrator after principal subdivision",
+      "current_credential_arguments": [],
+      "required_arguments": ["human_key"],
+      "resource": "project:{human_key}",
+      "subject": "local-single-principal"
+    },
+    "fetch_inbox": {
+      "action": "read_agent_inbox",
+      "authorization_rule": "agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}/inbox",
+      "subject": "agent:{agent_name}"
+    },
+    "fetch_summary": {
+      "action": "read_project_summaries",
+      "authorization_rule": "project member or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key"],
+      "resource": "project:{project_key}/summaries",
+      "subject": "local-single-principal"
+    },
+    "fetch_topic": {
+      "action": "read_project_topic",
+      "authorization_rule": "project member or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "topic_name"],
+      "resource": "project:{project_key}/topic:{topic_name}",
+      "subject": "local-single-principal"
+    },
+    "file_reservation_paths": {
+      "action": "create_file_reservations",
+      "authorization_rule": "agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name", "paths"],
+      "resource": "project:{project_key}/agent:{agent_name}/file-reservations",
+      "subject": "agent:{agent_name}"
+    },
+    "health_check": {
+      "action": "read_service_health",
+      "authorization_rule": "public service read",
+      "current_credential_arguments": [],
+      "required_arguments": [],
+      "resource": "service",
+      "subject": "caller"
+    },
+    "list_contacts": {
+      "action": "read_agent_contacts",
+      "authorization_rule": "agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}/contacts",
+      "subject": "agent:{agent_name}"
+    },
+    "macro_contact_handshake": {
+      "action": "request_accept_and_optionally_welcome_contact",
+      "authorization_rule": "requester agent owner; target mutation requires target owner or administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key"],
+      "resource": "project:{project_key}/contact:{requester|agent_name}->{target|to_agent}",
+      "subject": "agent:{requester|agent_name}"
+    },
+    "macro_file_reservation_cycle": {
+      "action": "create_and_optionally_release_file_reservations",
+      "authorization_rule": "agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name", "paths"],
+      "resource": "project:{project_key}/agent:{agent_name}/file-reservations",
+      "subject": "agent:{agent_name}"
+    },
+    "macro_start_session": {
+      "action": "bind_agent_start_session_reserve_and_read_inbox",
+      "authorization_rule": "bound local principal may create or use only its agent; administrator otherwise",
+      "current_credential_arguments": [],
+      "required_arguments": ["human_key", "program", "model"],
+      "resource": "project:{human_key}/agent:{agent_name|generated}",
+      "subject": "local-single-principal"
+    },
+    "mark_message_read": {
+      "action": "mark_received_message_read",
+      "authorization_rule": "recipient agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name", "message_id"],
+      "resource": "project:{project_key}/message:{message_id}/recipient:{agent_name}",
+      "subject": "agent:{agent_name}"
+    },
+    "register_agent": {
+      "action": "create_or_refresh_agent_identity",
+      "authorization_rule": "bound local principal for new identity; agent owner or administrator for existing identity",
+      "current_credential_arguments": ["registration_token"],
+      "required_arguments": ["project_key", "program", "model"],
+      "resource": "project:{project_key}/agent:{name|generated}",
+      "subject": "local-single-principal"
+    },
+    "release_file_reservations": {
+      "action": "release_file_reservations",
+      "authorization_rule": "reservation owner agent or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}/file-reservations",
+      "subject": "agent:{agent_name}"
+    },
+    "renew_file_reservations": {
+      "action": "renew_file_reservations",
+      "authorization_rule": "reservation owner agent or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}/file-reservations",
+      "subject": "agent:{agent_name}"
+    },
+    "reply_message": {
+      "action": "reply_as_agent",
+      "authorization_rule": "sender agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "message_id", "sender_name", "body_md"],
+      "resource": "project:{project_key}/message:{message_id}/reply",
+      "subject": "agent:{sender_name}"
+    },
+    "request_contact": {
+      "action": "request_contact",
+      "authorization_rule": "requesting agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "from_agent", "to_agent"],
+      "resource": "project:{project_key}/contact:{from_agent}->{to_project|project_key}:{to_agent}",
+      "subject": "agent:{from_agent}"
+    },
+    "respond_contact": {
+      "action": "accept_or_reject_contact_request",
+      "authorization_rule": "target agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "to_agent", "from_agent", "accept"],
+      "resource": "project:{project_key}/contact:{from_project|project_key}:{from_agent}->{to_agent}",
+      "subject": "agent:{to_agent}"
+    },
+    "retire_agent": {
+      "action": "soft_retire_agent",
+      "authorization_rule": "agent owner or project administrator; name-only is limited to idempotent re-retire of an already-retired null-token legacy row",
+      "current_credential_arguments": ["registration_token"],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}",
+      "subject": "agent:{agent_name}"
+    },
+    "send_message": {
+      "action": "send_message_as_agent",
+      "authorization_rule": "sender agent owner or project administrator",
+      "current_credential_arguments": ["sender_token"],
+      "required_arguments": ["project_key", "sender_name", "to", "subject", "body_md"],
+      "resource": "project:{project_key}/outbox:{sender_name}/message:new",
+      "subject": "agent:{sender_name}"
+    },
+    "set_contact_policy": {
+      "action": "set_agent_contact_policy",
+      "authorization_rule": "agent owner or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name", "policy"],
+      "resource": "project:{project_key}/agent:{agent_name}/contact-policy",
+      "subject": "agent:{agent_name}"
+    },
+    "whois": {
+      "action": "read_agent_profile",
+      "authorization_rule": "project member or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}/profile",
+      "subject": "local-single-principal"
+    }
+  }
+}

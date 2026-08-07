@@ -43,6 +43,18 @@ only until the differential suite proves they can be
 removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
 trains.
 
+`authorization.py` is the machine-readable inventory for the exact 22-tool
+surface. Each entry records the prospective subject, action, resource, current
+required arguments, existing credential arguments, and future authorization
+rule without adding credentials to any MCP schema. The runtime emits a
+four-field, credential-free shadow observation (`principal_candidate`, `tool`,
+`decision`, `reason`) for each valid invocation that reaches the observer. No
+configured policy means default allow with zero `would_deny` observations, and
+shadow verdicts are discarded rather than enforced. A synthetic deny is
+therefore observable while the underlying operation still succeeds. Server
+construction fails closed if the runtime catalog, canonical versioned fixture,
+or published tool set diverges.
+
 The Behavior differential reconstructs the frozen live source only from the
 authenticated repository bundle plus tracked working-tree patch. Live and Core
 then run in separate Python processes with disjoint 0700 state roots, private
@@ -55,18 +67,17 @@ integrity, relationship, TTL, receipt-idempotency, archive-derivation, and
 credential-leak checks.
 
 Expected differences are fail-closed in
-`fixtures/differential-expected-divergences-v1.json`. The only tool-description
+`fixtures/differential-expected-divergences-v2.json`. The only tool-description
 allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
 surface versus Core 22-tool surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
 and Core 22/0/0/0. Service namespace/default isolation is also an exact,
-versioned allowance. The manifest's `pending_product_decisions` array is the
-sole normative list of unresolved cutover decisions, and
-`resolved_product_decisions` is the normative ledger of selected behavior and
-its exact verification; prose does not duplicate their identifiers or titles.
-Pending decisions are not accepted behavior differences, so observing one
-still fails the gate. Resolved decisions are not allowlisted differences and
-must pass their selected-behavior tests.
+versioned allowance. The manifest's single `product_decisions` ledger keeps
+`decision_state`, `implementation_state`, and `cutover_state` independent and
+mandatory. A choice can therefore be selected without pretending it is
+implemented or approved for cutover. Unselected and selected-but-unimplemented
+decisions remain fail-closed; implemented selections are not allowlisted
+differences and must pass their exact selected-behavior tests.
 
 Run the focused gate from the repository root with:
 

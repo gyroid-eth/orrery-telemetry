@@ -97,14 +97,14 @@ validated against the live fixture and Core source. It permits only the exact
 tools/concrete resources/resource templates/prompts publication surfaces of
 live 40/0/21/0 versus Core 22/0/0/0, renamed/isolation defaults, provenance and
 lazy-LLM boundary, and the three roster-resource description rewrites. The
-manifest's `pending_product_decisions` array is the single normative source for
-unresolved cutover decisions, while `resolved_product_decisions` records the
-selected behavior and its exact verification. This document deliberately does
-not duplicate their identifiers or titles. Pending entries are `pending_no_go`
-with `comparator_disposition: fail`; resolved entries are not allowances and
-must assert their selected behavior. The gate therefore proves copied live
-parity for the exercised success paths but does not authorize authority
-cutover.
+manifest's single `product_decisions` array is the normative decision ledger.
+Every entry independently records selection, implementation, and cutover state,
+so a selected design cannot be mistaken for implemented or cutover-approved
+behavior. This document deliberately does not duplicate entry scopes.
+Unselected and selected-but-unimplemented entries retain
+`comparator_disposition: fail`; implemented selections are not allowances and
+must assert their selected behavior. Every current entry has
+`cutover_state: no_go`, so the gate does not authorize authority cutover.
 
 ## Decision material
 
@@ -114,7 +114,8 @@ cutover.
   this evidence packet.
 - [Claim/enrollment design](agentstack-mail-claim-enrollment-design.md) frames
   credential issuance, legacy null-token ownership proof, recovery, macro
-  integration, migration, and rollback choices without selecting an option.
+  integration, migration, and rollback implications; normative selections stay
+  in the manifest ledger.
 - [Performance gate design](agentstack-mail-performance-gate.md) specifies the
   separate measurement boundary needed to close the timing-normalization blind
   spot. It is a design, not an implemented budget or release gate.

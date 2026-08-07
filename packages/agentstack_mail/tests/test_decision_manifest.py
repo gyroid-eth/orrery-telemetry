@@ -1,4 +1,4 @@
-"""Fail-closed checks for the pending/resolved product-decision ledger."""
+"""Fail-closed checks for the independent-state product-decision ledger."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from verify_artifact import _assert_expected_divergences_manifest
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = PACKAGE_ROOT / "fixtures"
-MANIFEST = FIXTURES / "differential-expected-divergences-v1.json"
+MANIFEST = FIXTURES / "differential-expected-divergences-v2.json"
 
 
 def _canonical_manifest() -> dict[str, Any]:
@@ -34,110 +34,116 @@ def _verify(manifest: dict[str, Any]) -> None:
     )
 
 
-def _drop_resolved_d1(manifest: dict[str, Any]) -> None:
-    manifest["resolved_product_decisions"] = []
-
-
-def _overlap_d1(manifest: dict[str, Any]) -> None:
-    manifest["pending_product_decisions"].append(
-        {
-            "id": "D1",
-            "title": "conflicting token registration mutation",
-            "status": "pending_no_go",
-            "allowlisted": False,
-            "comparator_disposition": "fail",
-        }
+def _decision(manifest: dict[str, Any], decision_id: str) -> dict[str, Any]:
+    return next(
+        item for item in manifest["product_decisions"] if item["id"] == decision_id
     )
 
 
-def _drop_pending_d6(manifest: dict[str, Any]) -> None:
-    manifest["pending_product_decisions"] = [
-        decision
-        for decision in manifest["pending_product_decisions"]
-        if decision["id"] != "D6"
+def _drop_d1(manifest: dict[str, Any]) -> None:
+    manifest["product_decisions"] = [
+        item for item in manifest["product_decisions"] if item["id"] != "D1"
     ]
 
 
-def _add_unknown_d13(manifest: dict[str, Any]) -> None:
-    manifest["pending_product_decisions"].append(
-        {
-            "id": "D13",
-            "title": "unknown decision",
-            "status": "pending_no_go",
-            "allowlisted": False,
-            "comparator_disposition": "fail",
-        }
-    )
+def _add_d13(manifest: dict[str, Any]) -> None:
+    extra = copy.deepcopy(_decision(manifest, "D2"))
+    extra.update(id="D13", title="unknown decision")
+    manifest["product_decisions"].append(extra)
 
 
-def _duplicate_pending_d6(manifest: dict[str, Any]) -> None:
-    decision = next(
-        item for item in manifest["pending_product_decisions"] if item["id"] == "D6"
-    )
-    manifest["pending_product_decisions"].append(copy.deepcopy(decision))
+def _duplicate_d6(manifest: dict[str, Any]) -> None:
+    manifest["product_decisions"].append(copy.deepcopy(_decision(manifest, "D6")))
 
 
-def _duplicate_resolved_d1(manifest: dict[str, Any]) -> None:
-    manifest["resolved_product_decisions"].append(
-        copy.deepcopy(manifest["resolved_product_decisions"][0])
-    )
+def _drop_decision_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6").pop("decision_state")
 
 
-def _allowlist_resolved_d1(manifest: dict[str, Any]) -> None:
-    entry = copy.deepcopy(manifest["intentional_differences"]["allowlisted_entries"][0])
-    entry["id"] = "D1"
-    manifest["intentional_differences"]["allowlisted_entries"].append(entry)
+def _drop_implementation_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6").pop("implementation_state")
 
 
-def _move_d2_to_resolved(manifest: dict[str, Any]) -> None:
-    pending = manifest["pending_product_decisions"]
-    decision = next(item for item in pending if item["id"] == "D2")
-    pending.remove(decision)
-    resolved = copy.deepcopy(decision)
-    resolved["status"] = "resolved"
-    manifest["resolved_product_decisions"].append(resolved)
+def _drop_cutover_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6").pop("cutover_state")
 
 
-def _weaken_resolved_allowlist_flag(manifest: dict[str, Any]) -> None:
-    decision = manifest["resolved_product_decisions"][0]
-    decision["allowlisted"] = True
+def _unknown_decision_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6")["decision_state"] = "maybe"
 
 
-def _weaken_resolved_disposition(manifest: dict[str, Any]) -> None:
-    decision = manifest["resolved_product_decisions"][0]
-    decision["comparator_disposition"] = "allow"
+def _unknown_implementation_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6")["implementation_state"] = "partial"
 
 
-def _change_omitted_token_scope(manifest: dict[str, Any]) -> None:
-    manifest["resolved_product_decisions"][0]["scope"]["omitted_token"] = "fail_closed"
+def _unknown_cutover_state(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6")["cutover_state"] = "go"
 
 
-def _change_resolved_resolution(manifest: dict[str, Any]) -> None:
-    manifest["resolved_product_decisions"][0]["resolution"] = "silent_accept"
+def _unselect_d7(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["decision_state"] = "unselected"
 
 
-def _drop_resolved_verification_node(manifest: dict[str, Any]) -> None:
-    manifest["resolved_product_decisions"][0]["verification"].pop()
+def _pretend_d7_is_implemented(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["implementation_state"] = "implemented"
 
 
-def _weaken_pending_d6(manifest: dict[str, Any]) -> None:
-    decision = next(
-        item for item in manifest["pending_product_decisions"] if item["id"] == "D6"
-    )
-    decision["comparator_disposition"] = "warn"
+def _approve_d7_cutover(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["cutover_state"] = "go"
+
+
+def _regress_d1_implementation(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D1")["implementation_state"] = "not_implemented"
+
+
+def _change_d7_scope(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["scope"]["active_null_token_name_only_retire"] = "allow"
+
+
+def _change_d1_resolution(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D1")["resolution"] = "silent_accept"
+
+
+def _drop_d1_verification(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D1")["verification"].pop()
+
+
+def _weaken_d6_comparator(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D6")["comparator_disposition"] = "warn"
 
 
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
 
-def test_resolved_decision_verification_nodes_exist_as_top_level_tests() -> None:
-    manifest = _canonical_manifest()
-    node_ids = [
-        node_id
-        for decision in manifest["resolved_product_decisions"]
-        for node_id in decision["verification"]
+def test_all_decisions_have_independent_required_states() -> None:
+    decisions = _canonical_manifest()["product_decisions"]
+    assert len(decisions) == 12
+    assert {item["id"] for item in decisions} == {f"D{index}" for index in range(1, 13)}
+    assert {
+        item["id"] for item in decisions if item["decision_state"] == "selected"
+    } == {"D1", "D7"}
+    assert {
+        (
+            item["decision_state"],
+            item["implementation_state"],
+            item["cutover_state"],
+        )
+        for item in decisions
+    } == {
+        ("selected", "implemented", "no_go"),
+        ("selected", "not_implemented", "no_go"),
+        ("unselected", "not_implemented", "no_go"),
+    }
+
+
+def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> None:
+    decisions = _canonical_manifest()["product_decisions"]
+    implemented = [
+        item for item in decisions if item["implementation_state"] == "implemented"
     ]
+    assert [item["id"] for item in implemented] == ["D1"]
+    node_ids = [node_id for item in implemented for node_id in item["verification"]]
     assert len(node_ids) == len(set(node_ids))
 
     for node_id in node_ids:
@@ -162,53 +168,23 @@ def test_resolved_decision_verification_nodes_exist_as_top_level_tests() -> None
 @pytest.mark.parametrize(
     ("mutate", "expected_message"),
     (
-        (
-            _drop_resolved_d1,
-            "product decision ledger ids changed: missing=['D1'], extra=[]",
-        ),
-        (_overlap_d1, "product decision ledgers overlap: ['D1']"),
-        (
-            _drop_pending_d6,
-            "product decision ledger ids changed: missing=['D6'], extra=[]",
-        ),
-        (
-            _add_unknown_d13,
-            "product decision ledger ids changed: missing=[], extra=['D13']",
-        ),
-        (
-            _duplicate_pending_d6,
-            "pending product decisions contain duplicate ids",
-        ),
-        (
-            _duplicate_resolved_d1,
-            "resolved product decisions contain duplicate ids",
-        ),
-        (
-            _allowlist_resolved_d1,
-            "resolved product decisions must not be allowlisted: ['D1']",
-        ),
-        (_move_d2_to_resolved, "pending product decision ids changed"),
-        (
-            _weaken_resolved_allowlist_flag,
-            "resolved product decision D1 changed",
-        ),
-        (
-            _weaken_resolved_disposition,
-            "resolved product decision D1 changed",
-        ),
-        (
-            _change_omitted_token_scope,
-            "resolved product decision D1 changed",
-        ),
-        (
-            _change_resolved_resolution,
-            "resolved product decision D1 changed",
-        ),
-        (
-            _drop_resolved_verification_node,
-            "resolved product decision D1 changed",
-        ),
-        (_weaken_pending_d6, "pending decision D6 is not fail-closed"),
+        (_drop_d1, "product decision ledger ids changed: missing=['D1'], extra=[]"),
+        (_add_d13, "product decision ledger ids changed: missing=[], extra=['D13']"),
+        (_duplicate_d6, "product decisions contain duplicate ids"),
+        (_drop_decision_state, "unselected decision D6 changed"),
+        (_drop_implementation_state, "unselected decision D6 changed"),
+        (_drop_cutover_state, "unselected decision D6 changed"),
+        (_unknown_decision_state, "unselected decision D6 changed"),
+        (_unknown_implementation_state, "unselected decision D6 changed"),
+        (_unknown_cutover_state, "unselected decision D6 changed"),
+        (_unselect_d7, "selected product decision D7 changed"),
+        (_pretend_d7_is_implemented, "selected product decision D7 changed"),
+        (_approve_d7_cutover, "selected product decision D7 changed"),
+        (_regress_d1_implementation, "selected product decision D1 changed"),
+        (_change_d7_scope, "selected product decision D7 changed"),
+        (_change_d1_resolution, "selected product decision D1 changed"),
+        (_drop_d1_verification, "selected product decision D1 changed"),
+        (_weaken_d6_comparator, "unselected decision D6 changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

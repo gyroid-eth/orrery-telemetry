@@ -8,10 +8,19 @@ from importlib.resources import files
 from typing import Any
 
 from agentstack_mail.app import build_mcp_server
+from agentstack_mail.authorization import (
+    assert_authorization_catalog_boundary,
+    catalog_as_plain_data,
+)
 from agentstack_mail.contract import COMPATIBILITY_TOOLS
 
 
 async def verify() -> None:
+    authorization_fixture = json.loads(
+        files("agentstack_mail")
+        .joinpath("fixtures/authorization-tools-v1.json")
+        .read_text(encoding="utf-8")
+    )
     fixture = json.loads(
         files("agentstack_mail")
         .joinpath("fixtures/live-tools-list.json")
@@ -32,6 +41,9 @@ async def verify() -> None:
     resources = await server.get_resources()
     resource_templates = await server.get_resource_templates()
     prompts = await server.get_prompts()
+    assert_authorization_catalog_boundary(tools)
+    if authorization_fixture.get("tools") != catalog_as_plain_data():
+        raise SystemExit("installed wheel authorization table mismatch")
     actual: dict[str, dict[str, Any]] = {}
     for name, tool in tools.items():
         dumped = tool.to_mcp_tool().model_dump(
@@ -61,9 +73,7 @@ async def verify() -> None:
         mismatched = sorted(
             name for name in expected if actual.get(name) != expected[name]
         )
-        raise SystemExit(
-            "installed wheel schema mismatch: " + ", ".join(mismatched)
-        )
+        raise SystemExit("installed wheel schema mismatch: " + ", ".join(mismatched))
     if any("resource://agents" in (tool.description or "") for tool in tools.values()):
         raise SystemExit("installed wheel advertises a suppressed roster resource")
 

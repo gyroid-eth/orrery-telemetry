@@ -35,7 +35,7 @@ TESTS_ROOT = Path(__file__).resolve().parent
 CORE_SOURCE = PACKAGE_ROOT / "src"
 PROBE = TESTS_ROOT / "differential_probe.py"
 EXPECTED_DIVERGENCES = (
-    PACKAGE_ROOT / "fixtures" / "differential-expected-divergences-v1.json"
+    PACKAGE_ROOT / "fixtures" / "differential-expected-divergences-v2.json"
 )
 
 _SCENARIOS = ("identity", "lifecycle", "reservation_signal")

@@ -10,7 +10,11 @@ import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-DIVERGENCE_MANIFEST = "differential-expected-divergences-v1.json"
+DIVERGENCE_MANIFEST = "differential-expected-divergences-v2.json"
+AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
+EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
+    "c4da3e65c01daf727517490469ab02031764effd718e159cc30a8c2a1d0a0f61"
+)
 
 EXPECTED_BASELINES = {
     "live": {
@@ -130,13 +134,12 @@ EXPECTED_STATIC_ALLOWLIST = {
     },
 }
 
-EXPECTED_PENDING_DECISIONS = {
+EXPECTED_UNSELECTED_DECISIONS = {
     "D2": "expired contact link accepted",
     "D3": "cross-project intro/reply identity",
     "D4": "accept response without pending",
     "D5": "invalid contact policy coerced auto",
     "D6": "missing sender token succeeds",
-    "D7": "owner tools name-only auth",
     "D8": "DB persists after archive failure",
     "D9": "read/ack partial commit",
     "D10": "concurrent reservation winner and SQLite lock semantics",
@@ -144,17 +147,20 @@ EXPECTED_PENDING_DECISIONS = {
     "D12": "signal cleanup after crash, retirement, or stale consumer",
 }
 
-EXPECTED_RESOLVED_DECISIONS = {
+EXPECTED_SELECTED_DECISIONS = {
     "D1": {
         "id": "D1",
         "title": "conflicting token registration mutation",
-        "status": "resolved",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "cutover_state": "no_go",
         "resolution": "reject_explicit_conflicting_token_before_mutation",
         "scope": {
             "explicit_conflicting_token": "reject_without_durable_mutation",
             "same_token": "metadata_refresh_with_exactly_one_git_commit",
             "omitted_token": (
-                "credential_retention_and_authority_semantics_unchanged_pending_D6_D7"
+                "credential_retention_and_authority_semantics_unchanged_"
+                "D6_unselected_D7_selected_not_implemented_no_go"
             ),
             "concurrent_conflicting_tokens_on_null_identity": (
                 "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
@@ -168,7 +174,39 @@ EXPECTED_RESOLVED_DECISIONS = {
             "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
             "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner",
         ],
-    }
+    },
+    "D7": {
+        "id": "D7",
+        "title": "owner tools name-only auth",
+        "decision_state": "selected",
+        "implementation_state": "not_implemented",
+        "cutover_state": "no_go",
+        "resolution": "limit_name_only_retire_to_idempotent_retired_null_legacy",
+        "scope": {
+            "name_only_soft_retire": (
+                "only_idempotent_reretire_of_already_retired_null_token_legacy_"
+                "row_preserving_retired_at_with_zero_durable_mutation"
+            ),
+            "active_null_token_name_only_retire": "deny",
+            "stronger_owner_operations": (
+                "unretire_hard_delete_transfer_and_project_wide_require_future_"
+                "principal_or_administrator"
+            ),
+            "enforcement_prerequisite": (
+                "stop_all_new_null_token_creation_paths_before_enforcement_"
+                "ordering_only_not_current_behavior"
+            ),
+            "principal_admin_mechanism": "unselected",
+            "lifecycle_disposition": "unchanged_D11_unselected",
+        },
+        "rationale": [
+            "name_only_retire_is_timing_selectable_receive_denial",
+            "unretire_cannot_restore_rejected_sends",
+            "observed_zero_rows_is_machine_fact_not_product_fact",
+        ],
+        "allowlisted": False,
+        "comparator_disposition": "fail",
+    },
 }
 
 EXPECTED_DECISION_IDS = {f"D{index}" for index in range(1, 13)}
@@ -215,6 +253,7 @@ EXPECTED_NORMALIZATION_BLIND_SPOTS = [
 REQUIRED_RUNTIME_MODULES = {
     "__init__.py",
     "app.py",
+    "authorization.py",
     "boundary.py",
     "config.py",
     "contract.py",
@@ -232,6 +271,7 @@ WHEEL_REQUIRED_SUFFIXES = {
     ".dist-info/licenses/AGENTSTACK_LICENSE",
     ".dist-info/licenses/UPSTREAM_LICENSE",
     "agentstack_mail/NOTICE.md",
+    f"agentstack_mail/fixtures/{AUTHORIZATION_FIXTURE}",
     "agentstack_mail/fixtures/compatibility-tools-v1.json",
     f"agentstack_mail/fixtures/{DIVERGENCE_MANIFEST}",
     "agentstack_mail/fixtures/live-tools-list.json",
@@ -242,6 +282,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/UPSTREAM_LICENSE",
     "/NOTICE.md",
     "/README.md",
+    f"/fixtures/{AUTHORIZATION_FIXTURE}",
     "/fixtures/compatibility-tools-v1.json",
     f"/fixtures/{DIVERGENCE_MANIFEST}",
     "/fixtures/live-tools-list.json",
@@ -262,7 +303,9 @@ REQUIRED_METADATA = {
 
 def _missing_suffixes(names: set[str], required: set[str]) -> list[str]:
     return sorted(
-        suffix for suffix in required if not any(name.endswith(suffix) for name in names)
+        suffix
+        for suffix in required
+        if not any(name.endswith(suffix) for name in names)
     )
 
 
@@ -308,8 +351,7 @@ def _assert_exact_runtime_modules(
     actual = {
         name.split(marker, 1)[1]
         for name in names
-        if marker in name
-        and name.endswith(".py")
+        if marker in name and name.endswith(".py")
     }
     if actual != REQUIRED_RUNTIME_MODULES:
         raise SystemExit(
@@ -360,6 +402,49 @@ def _digest_record(value: str) -> dict[str, object]:
     }
 
 
+def _assert_authorization_fixture(
+    content: bytes,
+    compatibility_content: bytes,
+    *,
+    artifact: str,
+) -> None:
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != EXPECTED_AUTHORIZATION_FIXTURE_SHA256:
+        raise SystemExit(
+            f"{artifact} authorization fixture digest changed: "
+            f"expected={EXPECTED_AUTHORIZATION_FIXTURE_SHA256}, actual={digest}"
+        )
+    fixture = _json_object(
+        content,
+        label=AUTHORIZATION_FIXTURE,
+        artifact=artifact,
+    )
+    compatibility = _json_object(
+        compatibility_content,
+        label="compatibility-tools-v1.json",
+        artifact=artifact,
+    )
+    expected_names = set(compatibility.get("compatibility_union", []))
+    tools = fixture.get("tools")
+    if not isinstance(tools, dict) or set(tools) != expected_names:
+        raise SystemExit(
+            f"{artifact} authorization fixture must cover exact tool union"
+        )
+    if fixture.get("catalog_version") != 1:
+        raise SystemExit(f"{artifact} authorization catalog version changed")
+    if fixture.get("default_principal_candidate") != "local-single-principal":
+        raise SystemExit(f"{artifact} authorization default principal changed")
+    if fixture.get("rule_status") != (
+        "prospective_non_binding_except_selected_D7_retire_boundary"
+    ):
+        raise SystemExit(f"{artifact} authorization rule status changed")
+    if fixture.get("default_policy") != {
+        "decision": "would_allow",
+        "reason": "policy_empty_default_allow",
+    }:
+        raise SystemExit(f"{artifact} authorization default policy changed")
+
+
 def _core_tool_descriptions(
     app_source: bytes,
     tool_names: set[str],
@@ -407,20 +492,22 @@ def _assert_expected_divergences_manifest(
         "comparison_policy",
         "baselines",
         "intentional_differences",
-        "resolved_product_decisions",
-        "pending_product_decisions",
+        "product_decisions",
     }
     if set(manifest) != expected_top_level:
         raise SystemExit(
-            f"{artifact} divergence manifest top-level keys do not match v1"
+            f"{artifact} divergence manifest top-level keys do not match v2"
         )
-    if manifest["manifest_version"] != 1 or manifest["contract_version"] != 1:
-        raise SystemExit(f"{artifact} divergence manifest must be version 1")
+    if manifest["manifest_version"] != 2 or manifest["contract_version"] != 1:
+        raise SystemExit(
+            f"{artifact} divergence manifest must be schema version 2, contract 1"
+        )
     expected_policy = {
         "default": "fail_on_difference",
         "allowlist": "intentional_differences.allowlisted_entries_only",
-        "unresolved_product_decisions": "fail_on_observation",
-        "resolved_product_decisions": "assert_selected_behavior",
+        "unselected_product_decisions": "fail_on_observation",
+        "selected_implemented_product_decisions": "assert_selected_behavior",
+        "selected_not_implemented_product_decisions": "fail_on_observation",
     }
     if manifest["comparison_policy"] != expected_policy:
         raise SystemExit(f"{artifact} divergence manifest is not fail-closed")
@@ -439,70 +526,54 @@ def _assert_expected_divergences_manifest(
     if intentional["normalization_blind_spots"] != EXPECTED_NORMALIZATION_BLIND_SPOTS:
         raise SystemExit(f"{artifact} normalization blind spots changed")
     entries = intentional["allowlisted_entries"]
-    if not isinstance(entries, list) or not all(isinstance(item, dict) for item in entries):
+    if not isinstance(entries, list) or not all(
+        isinstance(item, dict) for item in entries
+    ):
         raise SystemExit(f"{artifact} divergence manifest allowlist must be a list")
     entries_by_id = {item.get("id"): item for item in entries}
     if len(entries_by_id) != len(entries):
         raise SystemExit(f"{artifact} divergence manifest has duplicate allowlist ids")
 
-    pending = manifest["pending_product_decisions"]
-    if not isinstance(pending, list) or not all(
-        isinstance(item, dict) for item in pending
+    decisions = manifest["product_decisions"]
+    if not isinstance(decisions, list) or not all(
+        isinstance(item, dict) for item in decisions
     ):
-        raise SystemExit(f"{artifact} pending product decisions must be a list")
-    pending_by_id = {item.get("id"): item for item in pending}
-    if len(pending_by_id) != len(pending):
-        raise SystemExit(f"{artifact} pending product decisions contain duplicate ids")
+        raise SystemExit(f"{artifact} product decisions must be a list")
+    decisions_by_id = {item.get("id"): item for item in decisions}
+    if len(decisions_by_id) != len(decisions):
+        raise SystemExit(f"{artifact} product decisions contain duplicate ids")
 
-    resolved = manifest["resolved_product_decisions"]
-    if not isinstance(resolved, list) or not all(
-        isinstance(item, dict) for item in resolved
-    ):
-        raise SystemExit(f"{artifact} resolved product decisions must be a list")
-    resolved_by_id = {item.get("id"): item for item in resolved}
-    if len(resolved_by_id) != len(resolved):
-        raise SystemExit(f"{artifact} resolved product decisions contain duplicate ids")
-
-    pending_ids = set(pending_by_id)
-    resolved_ids = set(resolved_by_id)
-    overlap = sorted(pending_ids & resolved_ids)
-    if overlap:
-        raise SystemExit(f"{artifact} product decision ledgers overlap: {overlap}")
-    ledger_ids = pending_ids | resolved_ids
-    if ledger_ids != EXPECTED_DECISION_IDS:
-        missing = sorted(EXPECTED_DECISION_IDS - ledger_ids)
-        extra = sorted(ledger_ids - EXPECTED_DECISION_IDS)
+    decision_ids = set(decisions_by_id)
+    if decision_ids != EXPECTED_DECISION_IDS:
+        missing = sorted(EXPECTED_DECISION_IDS - decision_ids)
+        extra = sorted(decision_ids - EXPECTED_DECISION_IDS)
         raise SystemExit(
             f"{artifact} product decision ledger ids changed: "
             f"missing={missing}, extra={extra}"
         )
-    resolved_allowlisted = sorted(resolved_ids & set(entries_by_id))
-    if resolved_allowlisted:
+    decision_allowlisted = sorted(decision_ids & set(entries_by_id))
+    if decision_allowlisted:
         raise SystemExit(
-            f"{artifact} resolved product decisions must not be allowlisted: "
-            f"{resolved_allowlisted}"
+            f"{artifact} product decisions must not be allowlisted: "
+            f"{decision_allowlisted}"
         )
 
-    if pending_ids != set(EXPECTED_PENDING_DECISIONS):
-        raise SystemExit(f"{artifact} pending product decision ids changed")
-    for decision_id, title in EXPECTED_PENDING_DECISIONS.items():
-        if pending_by_id[decision_id] != {
+    for decision_id, title in EXPECTED_UNSELECTED_DECISIONS.items():
+        if decisions_by_id[decision_id] != {
             "id": decision_id,
             "title": title,
-            "status": "pending_no_go",
+            "decision_state": "unselected",
+            "implementation_state": "not_implemented",
+            "cutover_state": "no_go",
             "allowlisted": False,
             "comparator_disposition": "fail",
         }:
-            raise SystemExit(
-                f"{artifact} pending decision {decision_id} is not fail-closed"
-            )
+            raise SystemExit(f"{artifact} unselected decision {decision_id} changed")
 
-    if resolved_ids != set(EXPECTED_RESOLVED_DECISIONS):
-        raise SystemExit(f"{artifact} resolved product decision ids changed")
-    for decision_id, expected in EXPECTED_RESOLVED_DECISIONS.items():
-        if resolved_by_id[decision_id] != expected:
+    for decision_id, expected in EXPECTED_SELECTED_DECISIONS.items():
+        if decisions_by_id[decision_id] != expected:
             raise SystemExit(
-                f"{artifact} resolved product decision {decision_id} changed"
+                f"{artifact} selected product decision {decision_id} changed"
             )
 
     expected_allowed_ids = {
@@ -586,9 +657,10 @@ def _assert_expected_divergences_manifest(
         "prompt_names": [],
         "tool_names": sorted(compatibility_names),
     }
-    if topology_entry["category"] != "server_topology" or topology_entry[
-        "selector"
-    ] != "server":
+    if (
+        topology_entry["category"] != "server_topology"
+        or topology_entry["selector"] != "server"
+    ):
         raise SystemExit(f"{artifact} topology allowance selector changed")
     if topology_entry["live"] != expected_live_topology:
         raise SystemExit(f"{artifact} live topology allowance changed")
@@ -625,15 +697,17 @@ def _assert_expected_divergences_manifest(
             raise SystemExit(
                 f"{artifact} description allowance selector changed for {tool_name}"
             )
-        if entry["live"] != expected_digests["live"] or entry[
-            "core"
-        ] != expected_digests["core"]:
+        if (
+            entry["live"] != expected_digests["live"]
+            or entry["core"] != expected_digests["core"]
+        ):
             raise SystemExit(
                 f"{artifact} description allowance digest changed for {tool_name}"
             )
-        if _digest_record(live_by_name[tool_name].get("description", "")) != entry[
-            "live"
-        ]:
+        if (
+            _digest_record(live_by_name[tool_name].get("description", ""))
+            != entry["live"]
+        ):
             raise SystemExit(
                 f"{artifact} live fixture no longer matches the {tool_name} allowance"
             )
@@ -650,22 +724,21 @@ def _assert_expected_divergences_manifest(
                     f"{artifact} static divergence allowance changed for {entry_id}"
                 )
 
+
 def verify_wheel(path: Path) -> None:
     with zipfile.ZipFile(path) as archive:
         member_names = archive.namelist()
         _assert_safe_paths(member_names, artifact="wheel")
         names = set(member_names)
-        files = {
-            name: archive.read(name)
-            for name in names
-            if not name.endswith("/")
-        }
+        files = {name: archive.read(name) for name in names if not name.endswith("/")}
         python_files = {
             name: content
             for name, content in files.items()
             if name.startswith("agentstack_mail/") and name.endswith(".py")
         }
-        metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
+        metadata_names = [
+            name for name in names if name.endswith(".dist-info/METADATA")
+        ]
         if len(metadata_names) != 1:
             raise SystemExit("wheel must contain exactly one .dist-info/METADATA")
         metadata = files[metadata_names[0]]
@@ -698,6 +771,19 @@ def verify_wheel(path: Path) -> None:
             artifact="wheel",
         ),
         _content_with_suffix(files, "agentstack_mail/app.py", artifact="wheel"),
+        artifact="wheel",
+    )
+    _assert_authorization_fixture(
+        _content_with_suffix(
+            files,
+            f"agentstack_mail/fixtures/{AUTHORIZATION_FIXTURE}",
+            artifact="wheel",
+        ),
+        _content_with_suffix(
+            files,
+            "agentstack_mail/fixtures/compatibility-tools-v1.json",
+            artifact="wheel",
+        ),
         artifact="wheel",
     )
     old_namespace_imports = _old_namespace_imports(python_files)
@@ -774,6 +860,19 @@ def verify_sdist(path: Path) -> None:
         _content_with_suffix(
             files,
             "/src/agentstack_mail/app.py",
+            artifact="sdist",
+        ),
+        artifact="sdist",
+    )
+    _assert_authorization_fixture(
+        _content_with_suffix(
+            files,
+            f"/fixtures/{AUTHORIZATION_FIXTURE}",
+            artifact="sdist",
+        ),
+        _content_with_suffix(
+            files,
+            "/fixtures/compatibility-tools-v1.json",
             artifact="sdist",
         ),
         artifact="sdist",

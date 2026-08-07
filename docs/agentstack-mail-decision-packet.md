@@ -1,9 +1,9 @@
 # AgentStack Mail product decision evidence
 
-Status: evidence packet, not the normative decision record. Items may move from
-pending to resolved as choices are implemented and verified. The authoritative
-status, selected scope, and verification remain in
-`packages/agentstack_mail/fixtures/differential-expected-divergences-v1.json`.
+Status: evidence packet, not the normative decision record. A selection may be
+recorded before implementation, verification, or cutover approval. The
+authoritative decision, implementation, and cutover states remain separate in
+`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`.
 No entry in this document approves authority cutover.
 
 ## Observation method and limits
@@ -21,9 +21,10 @@ The committed Behavior scenarios remain the reproducible success-path base in
 `packages/agentstack_mail/tests/test_differential.py`. Edge probes used for this
 packet were one-off diagnostics; each section therefore gives the operation,
 fault/race, durable assertion, and relevant source seam needed to reproduce it.
-After a product choice, that recipe must become a committed test before the
-manifest entry can change. The prevalence of these states in production data is
-unknown because inspecting the running database was intentionally out of scope.
+After a product choice, that recipe must become a committed test before its
+`implementation_state` can become `implemented`. Selection itself may be
+recorded earlier. The prevalence of these states in production data is unknown
+because inspecting the running database was intentionally out of scope.
 
 All dynamically proven cases originally matched between frozen live and Core.
 A selected resolution may intentionally make Core diverge; matching an unsafe
@@ -31,20 +32,20 @@ or ambiguous live behavior is evidence, not acceptance.
 
 ## One-line summary
 
-| ID | Observed or selected behavior | Decision tension | Principal impact |
-|---|---|---|---|
-| D1 | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
-| D2 | Expired pending links can be accepted and expired approved links still authorize delivery | continuity versus TTL as a real authorization boundary | contact-controlled and cross-project senders/recipients; stale grants |
-| D3 | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local alias and replies stay there | project-local schema versus authentic routable origin identity | replies, audit, same-name agents, existing aliases/messages |
-| D4 | Accepting without a pending request creates an approved link | out-of-order convenience versus consent/audit provenance | contact owners and any caller who knows both names |
-| D5 | An invalid contact policy silently becomes `auto` | forgiving clients versus fail-fast policy configuration | operators, policy audits, indistinguishable historical `auto` values |
-| D6 | A tokenized sender may omit `sender_token` and send unverified | legacy clients versus sender authentication | all recipients/auditors; identities whose generated token is unavailable |
-| D7 | Tokenless macro/legacy identities can be retired by name alone | macro operability versus owner authorization | tokenless identities and owner-operation callers |
-| D8 | A failed archive write leaves committed DB agent/message state | live ordering versus cross-store consistency and truthful failure | senders, recipients, dashboard, Git/archive consumers |
-| D9 | Ack failure after the first helper leaves `read_ts` committed and `ack_ts` null | independently durable read progress versus atomic acknowledgement | receipt readers, retry logic, legacy partial rows |
-| D10 | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
-| D11 | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
-| D12 | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
+| ID | Decision | Implementation | Cutover | Observed or selected behavior | Decision tension | Principal impact |
+|---|---|---|---|---|---|---|
+| D1 | selected | implemented | no-go | Frozen live mutates before rejecting a conflicting token; selected Core behavior rejects before durable mutation | restart compatibility versus owner authentication and failure atomicity | identity owners, dashboard/profile readers, divergent DB/archive state |
+| D2 | unselected | not implemented | no-go | Expired pending links can be accepted and expired approved links still authorize delivery | continuity versus TTL as a real authorization boundary | contact-controlled and cross-project senders/recipients; stale grants |
+| D3 | unselected | not implemented | no-go | Cross-project intros use a foreign sender row; reply fails, while later sends create a target-local alias and replies stay there | project-local schema versus authentic routable origin identity | replies, audit, same-name agents, existing aliases/messages |
+| D4 | unselected | not implemented | no-go | Accepting without a pending request creates an approved link | out-of-order convenience versus consent/audit provenance | contact owners and any caller who knows both names |
+| D5 | unselected | not implemented | no-go | An invalid contact policy silently becomes `auto` | forgiving clients versus fail-fast policy configuration | operators, policy audits, indistinguishable historical `auto` values |
+| D6 | unselected | not implemented | no-go | A tokenized sender may omit `sender_token` and send unverified | legacy clients versus sender authentication | all recipients/auditors; identities whose generated token is unavailable |
+| D7 | selected | not implemented | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
+| D8 | unselected | not implemented | no-go | A failed archive write leaves committed DB agent/message state | live ordering versus cross-store consistency and truthful failure | senders, recipients, dashboard, Git/archive consumers |
+| D9 | unselected | not implemented | no-go | Ack failure after the first helper leaves `read_ts` committed and `ack_ts` null | independently durable read progress versus atomic acknowledgement | receipt readers, retry logic, legacy partial rows |
+| D10 | unselected | not implemented | no-go | One shared archive lock yields one scheduler-dependent winner; one DB with split archive roots can store conflicting winners | local simplicity versus topology-independent correctness/fairness | parallel agents, HA/misconfigured deployments, existing duplicate leases |
+| D11 | unselected | not implemented | no-go | Retirement preserves active reservations, unread work, and signals; retired agents can still fetch | reversible soft retirement versus immediate handoff and explicit work disposition | peers blocked by leases, senders awaiting ack, operators |
+| D12 | unselected | not implemented | no-go | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
 
 ## D1 — conflicting token registration mutation
 
@@ -73,13 +74,14 @@ SQLite update makes one concurrent registration the atomic writer; a different
 token arriving after that write is a conflict and cannot add metadata or a Git
 commit. The current first-DB-writer outcome is retained unsafe compatibility
 arbitration, not accepted ownership proof. This serialization does not decide
-who is entitled to claim the row: the D6/D7 authority behavior remains pending,
-and its eventual decision may replace this arbitration and its regression test.
+who is entitled to establish authority over the row. D6 remains unselected;
+D7 is selected but not implemented and does not reinterpret the D1 writer as
+ownership proof.
 The committed requirement tests are in
 `packages/agentstack_mail/tests/test_pending_decision_d1.py`; the manifest
 remains authoritative for selected scope and status.
 
-### 3. Why it was pending
+### 3. Why this decision was needed
 
 Live-compatible re-registration permits restart metadata refresh, but owner
 authentication and the normal meaning of a rejected call require zero durable
@@ -95,8 +97,9 @@ the tokenless recovery cases in D6 and D7.
 | Require valid owner credentials for every existing-name re-registration; use a separate rotate/recovery operation | Tokenless legacy launchers and identities with unavailable generated tokens cannot refresh until claimed | Rows without usable credentials need claim/backfill/recovery |
 
 The selected narrow closure prevalidates an explicit conflict. The broader
-omitted-token policy remains separate with D6 and D7; this prose does not replace
-the manifest's normative resolution record.
+omitted-token policy remains unselected in D6, while D7's selection does not
+turn the D1 writer into owner proof. This prose does not replace the manifest's
+normative resolution record.
 
 ### 5. Test that fixes the choice
 
@@ -108,17 +111,18 @@ the existing-window route is exercised separately. A same-token update refreshes
 all metadata and commits exactly once. The omitted-token case preserves the
 legacy credential/authority semantics, one profile commit, and the existing
 profile-before-DB attachment ordering; it serves only as a compatibility
-regression for pending D6/D7. A deterministic
-two-client rendezvous against a legacy null-token row proves exactly one atomic
-winner, one selected auth error, one Git commit, winner-only metadata, and no
-credential disclosure in either result under the retained compatibility path.
+regression while D6 is unselected and D7 remains unimplemented/no-go. A
+deterministic two-client rendezvous against a legacy null-token row proves
+exactly one atomic winner, one selected auth error, one Git commit, winner-only
+metadata, and no credential disclosure in either result under the retained
+compatibility path.
 It does not prove that the winner is an authorized claimant and must be revised
-with the D6/D7 test matrix when claim authority is selected.
+with the D6/D7 test matrix when an authority mechanism is selected.
 
 The result/profile assertions above are not an end-to-end secret logging gate.
-The current Rich request instrumentation can still receive raw credential
-arguments; redaction or proxy injection remains an explicit, unimplemented
-requirement in the claim/enrollment design.
+Core now redacts known top-level credential arguments before Rich logging, but
+nested aliases, exceptions, and future transport paths still require the
+end-to-end canary gate in the claim/enrollment design.
 
 ## D2 — expired contact link accepted
 
@@ -136,7 +140,7 @@ around `app.py:6333` and `:7456`.
 Identical. Expiry is stored and returned but is not an authorization boundary
 in the proven response/send paths.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Treating TTL as revocation conflicts with live continuity for stale links.
 Immediate enforcement may disable an unknown number of existing expired
@@ -183,7 +187,7 @@ model and paths around `app.py:6883` and `:7078`.
 
 Identical failure, alias creation, and misrouted reply.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Authentic, routable cross-project identity conflicts with the current
 project-local message/archive assumptions and name-based routing. A same-name
@@ -225,7 +229,7 @@ around `app.py:7472`.
 Identical. Acceptance is also an approval-creation operation, not solely a
 response to a stored request.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Out-of-order convenience conflicts with the consent/audit invariant that a
 response corresponds to a real, unexpired pending request. Administrative
@@ -266,7 +270,7 @@ source inspection but was not dynamically probed.
 Identical result and AST-equivalent body at
 `packages/agentstack_mail/src/agentstack_mail/app.py:7544`.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Forgiving input compatibility conflicts with fail-fast policy configuration. A
 typo can silently change the intended access posture.
@@ -304,7 +308,7 @@ Identical in the `send_message` conditional sender-token verification. The
 proven DB contains only the successful omitted-token message when a wrong-token
 control is also attempted.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Legacy clients omit credentials, but any caller knowing an agent name can then
 impersonate it. Strict enforcement is complicated because registration without
@@ -347,30 +351,43 @@ Identical for the published `retire_agent` path and the macro's direct
 `_get_or_create_agent` call. Broader owner-tool behavior remains unproven
 dynamically.
 
-### 3. Why it is pending
+### 3. Why implementation and cutover remain no-go
 
 Tokenless macro/legacy identities must remain operable, while a name alone is
 not proof of ownership. `macro_start_session` currently cannot accept or return
-a caller-owned token.
+a caller-owned token. The selection therefore cannot be enforced until every
+new-null creation path is stopped and a principal/admin mechanism exists.
+Current behavior is intentionally unchanged.
 
-### 4. Options and breakage
+### 4. Selected boundary and breakage
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
 | Preserve conditional name-only authorization | Any caller knowing a null-token identity name can retire it | None |
 | Require credentials for every owner operation | Tokenless macro/legacy identities cannot retire, restore, deregister, or delete themselves | Null-token rows require claim/enrollment |
-| Tier by operation: allow name-only soft retirement but require token/admin for restore or irreversible actions; add claim | Name-only denial of service remains; authorization becomes operation-specific | Null-token rows remain usable but need an `unclaimed` interpretation |
+| **Selected, not implemented:** name-only soft retire is limited to idempotent re-retire of an already-retired null-token legacy row; active-null name-only retirement is denied; unretire, hard delete, transfer, and project-wide operations require the future principal/admin | New null-token creation must stop first; the principal/admin mechanism remains unselected; current callers keep current behavior until a separate implementation/cutover approval | Existing retired-null rows retain only a no-mutation retry path; active-null rows require a future authority path |
 
-Non-binding lean: add an explicit claim path, then fail closed for owner
-mutation; do not solve this by leaking generated credentials from macros.
+The selected idempotent retry must preserve the original `retired_at` and make
+zero durable DB/profile/archive/signal mutation. It does not choose D11's
+lifecycle disposition. “Claim” remains an umbrella for bind, administrator
+grant, recovery, and transfer—not an independent primitive.
+
+Name-only retire is a timing-selectable receive-denial attack because new
+delivery is rejected while the row is retired; unretire cannot restore those
+rejected sends. An observed count of zero affected rows is a fact about one
+machine, not a product invariant.
 
 ### 5. Test that fixes the choice
 
-Build a matrix for caller-supplied-token registration, generated-token
-registration, macro-created null token, and migrated null token. For each owner
-operation retained in the product, test missing/wrong/correct authority and
-exact DB state. At minimum cover published retirement, macro reuse of a
-tokenized identity, and result/log credential non-disclosure.
+Split active-null and already-retired-null legacy cohorts. Prove name-only
+re-retire succeeds only for the latter, preserves `retired_at`, and changes no
+DB/profile/archive/signal state. Prove active-null name-only retire is denied;
+unretire, hard delete, transfer, and project-wide operations require the future
+principal/admin authority; and every new-identity path has stopped creating
+null-token rows before enforcement is enabled. Correct/wrong/missing authority,
+macro reuse, and credential non-disclosure remain part of the matrix. These
+tests are prerequisites for `implementation_state: implemented`, not evidence
+that cutover is approved.
 
 ## D8 — DB persists after archive failure
 
@@ -406,7 +423,7 @@ Identical injected results, complete and partial-bundle SIGKILL results, and
 ordering around Core `app.py:3214–3268` and
 `:3469–3507`/`:4699–4707`.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 SQLite and Git/filesystem cannot share one native transaction. Live DB-first
 ordering conflicts with caller-visible atomicity, retry safety, and agreement
@@ -455,7 +472,7 @@ Identical at Core `app.py:4439–4467` and `:7849–7850`. The committed probe p
 this failure seam in addition to existing Behavior coverage of success and
 replay.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 An independently durable read event can be useful progress, but callers may
 reason that a failed acknowledgement changed neither field. Richer retry/audit
@@ -513,7 +530,7 @@ Identical shared-root, split-root, scaled lock-timeout/recovery, and bounded-rac
 results; corresponding Core reservation and SQLite seams are
 `app.py:9116–9236` and `db.py:319–477`.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Filesystem locking is simple and sufficient under a single canonical archive,
 but correctness then depends on topology. DB-scoped coordination changes
@@ -564,7 +581,7 @@ match in `packages/agentstack_mail/tests/test_pending_decision_d11_d12.py`.
 Identical around Core `app.py:5043–5080`, `:6360–6367`, and `:7563–7638`,
 including the committed reservation/send races.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Reversible soft retirement favors preserving state. Peers need immediate lease
 handoff, senders need disposition of unread/ack-required work, and operators
@@ -624,7 +641,7 @@ for pending signals.
 Identical crash, cleanup, and hermetic watcher-state results around Core
 `app.py:4547–4725`/`:7631–7638` and `storage.py:3115–3244`.
 
-### 3. Why it is pending
+### 3. Why it remains unselected
 
 Best-effort signals keep send available, while durable wakeups require an
 outbox/consumer protocol. At-least-once recovery conflicts with at-most-once
@@ -655,7 +672,10 @@ decision explicitly chooses global clear.
 
 ## Decision procedure
 
-For each item, the decision owner records the chosen option (or a new one),
-data migration/disposition, rollout compatibility policy, and exact committed
-test. Only then may that manifest entry change. A green Behavior differential,
-this packet, or a recommendation above is not authority-cutover approval.
+For each item, the decision owner may first move `decision_state` from
+`unselected` to `selected` and record the exact scope. Only after the selected
+behavior has committed tests and implementation may `implementation_state`
+become `implemented`. `cutover_state` changes independently and requires its
+own explicit approval; implementation does not imply cutover. A green Behavior
+differential, this packet, or a recommendation above is not authority-cutover
+approval.

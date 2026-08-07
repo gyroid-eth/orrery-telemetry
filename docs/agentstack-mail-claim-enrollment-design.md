@@ -1,13 +1,47 @@
 # AgentStack Mail claim and enrollment design
 
-Status: design packet only. This document does not choose a claim, enrollment,
-rotation, or recovery policy; change D6 or D7; implement an authority cutover;
-or authorize access to a live service or database. D1's narrow, selected
-failure-atomicity rule is an input constraint, not a choice reopened here.
+Status: supporting design for the normative product-decision ledger. D7's
+selection, implementation state, and cutover state live only in
+`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`.
+This document does not choose an enrollment, rotation, recovery, principal, or
+administrator mechanism; change D6; implement or enforce D7; implement an
+authority cutover; or authorize access to a live service or database. D1's
+narrow, selected failure-atomicity rule is an input constraint, not a choice
+reopened here.
 
 ## One-line summary
 
-A safe path needs secret-free enrollment transport, authority that predates a null-token claim, explicit rotation and loss recovery, authenticated macro bootstrap, and an additive shadowed migration before D6/D7 owner enforcement can safely change.
+A safe path needs secret-free enrollment transport, authority external to a
+null-token row, explicit rotation and loss recovery, authenticated macro
+bootstrap, and an additive shadowed migration before D6 or the selected D7
+boundary can be enforced.
+
+Throughout this packet, **claim** is an umbrella term for the flows that
+establish or restore authority: enrollment, recovery, administrator approval,
+binding-backed continuity, or an audited transfer. It is not a separately
+selected primitive, endpoint, or proof source.
+
+## D7 rationale and design implications
+
+The manifest ledger is the sole source for D7's exact selected scope. This
+document does not restate that decision. It records why the selection needs an
+enrollment prerequisite, separate principal/admin design, and lifecycle tests.
+
+Name-only retirement is a timing-selectable receive-denial attack. A later
+unretire cannot recover sends rejected while the row was retired. A machine
+inventory that currently observes zero affected rows would not turn that fact
+into a product guarantee.
+
+Current D7 runtime behavior remains unchanged and shadow verdicts are not
+enforced. The ledger records D7 as selected, not implemented, and cutover
+no-go. D6 is unselected. The default deployment model remains one local
+principal with no authorization enforcement; principal subdivision is later
+work.
+
+The 22-tool permission catalog is a prospective, non-binding inventory except
+where its D7 row mirrors the normative ledger. In particular, its candidate
+`send_message` owner/admin rule does not select D6, and its other rows do not
+authorize enforcement.
 
 ## New credential issuance and return
 
@@ -28,25 +62,28 @@ The checked-in implementation establishes these constraints:
   logs when it was previously returned.
 - `Agent.registration_token` is nullable and currently stored as an indexed
   plaintext value.
-- `_instrument_tool` sends all bound arguments except `ctx` to Rich logging.
-  Therefore a token omitted from the result can still be exposed through the
-  request/tool-argument logging path.
+- Frozen live sends all bound arguments except `ctx` to Rich logging. Core now
+  redacts credential-suffixed top-level arguments before Rich serialization
+  and keeps authorization shadow observations to four credential-free fields.
 - Frozen live lets a conflicting D1 re-registration reach identity metadata and
   archive mutation before rejection. Core's selected D1 rule now rejects an
   explicitly conflicting token before durable mutation and uses a conditional
   DB write so concurrent registration against a null-token row has one atomic
   writer. The first-DB-writer result is retained unsafe compatibility
-  arbitration, not accepted claim proof; omitted-token and name-only authority
-  behavior remain under pending D6/D7 and may replace that arbitration.
+  arbitration, not accepted claim proof. D6 omitted-token authority remains
+  unselected; the selected D7 boundary is not implemented and does not
+  reinterpret D1's writer result as owner authority.
 - `macro_start_session` accepts no credential, calls `_get_or_create_agent`
   directly, and can then reserve files and read inbox state for a newly created
   null-token identity.
-- Current behavior recorded under pending D6 lets a tokenized sender omit
-  `sender_token`; behavior recorded under pending D7 conditionally allows
-  name-only owner operations when the row token is null.
+- Current behavior recorded under unselected D6 lets a tokenized sender omit
+  `sender_token`. Current Core still conditionally allows name-only owner
+  operations when the row token is null; that behavior is not the selected,
+  unimplemented D7 boundary.
 - D1 result/profile tests do not establish end-to-end secret non-disclosure.
-  Current Rich request instrumentation still receives raw credential arguments;
-  closing that leak belongs to the prospective enrollment transport contract.
+  Core's new Rich redaction closes the known top-level token path, but nested
+  aliases, exceptions, and future transport surfaces still need end-to-end
+  canary gates.
 - Existing launchers already demonstrate useful primitives: caller-generated
   tokens, mode-`0600` files under mode-`0700` directories, atomic replacement,
   stdin rather than literal argv transport, and a proxy that keeps the token
@@ -106,7 +143,7 @@ as tainted values across these surfaces:
 
 | Surface | Required invariant | Current or residual risk to test |
 |---|---|---|
-| Tool request and model transcript | The model-facing call uses a credential reference or bound proxy; if a secret-valued compatibility parameter remains, redact it before any instrumentation | Current `_instrument_tool` copies `registration_token`/`sender_token` into Rich kwargs |
+| Tool request and model transcript | The model-facing call uses a credential reference or bound proxy; if a secret-valued compatibility parameter remains, redact it before any instrumentation | Core redacts top-level credential-suffixed fields before Rich logging; frozen live, aliases, nested payloads, and future instrumentation remain canary-test surfaces |
 | Tool result and error | No reusable secret in structured content, text content, formatting variants, exception data, or retry hints | `_agent_to_dict` is safe, but future enrollment and macro results could regress |
 | Logs and telemetry | Redact by schema/taint before serialization; never interpolate values; avoid traceback locals and request dumps | Field-name-only redaction misses aliases, nested payloads, and formatted JSON strings |
 | Messages, profiles, archives, Git, dashboard, and notifications | Store only state, receipt, version, and a fingerprint safe for correlation | A credential sent in mail is already disclosed even if later deleted; Git history is durable |
@@ -120,7 +157,7 @@ The result/log/message/argv/history scans are release gates, not best-effort
 documentation. A secret-canary test should fail on any unexpected occurrence,
 including failure and retry paths.
 
-## Existing null-token claim: authority proof is the central decision
+## Existing null-token authority establishment: proof is the central decision
 
 ### What the existing row can and cannot prove
 
@@ -136,10 +173,10 @@ ability to quote historical messages or filesystem paths is likewise not a
 cryptographic or administratively delegated authority. First-come name-only
 claim would convert a known D7 weakness into permanent account takeover.
 
-Therefore an automatic safe self-claim is impossible from current null-row
-data alone. A claim must rely on authority external to the row that was either
-established before the claim or explicitly delegated by a trusted
-administrator at claim time.
+Therefore automatic authority establishment is impossible from current
+null-row data alone. A flow under the claim umbrella must rely on authority
+external to the row that was either established beforehand or explicitly
+delegated by a trusted administrator at the time of the operation.
 
 ### Candidate proof authorities
 
@@ -153,14 +190,14 @@ administrator at claim time.
 | Create a new enrolled identity and perform an administrator-approved continuity transfer/alias | No unsupported ownership claim is made; history continuity is an explicit administrative action | Stable name, inbox, reservation, and audit semantics may change; transfer tooling is substantial | Preserves the old row as evidence and can link it to a new principal without silently rewriting history |
 | First caller knowing project and name claims the row | Only knowledge of public/ambient identifiers | Permits takeover and races; all null-token owners are affected | Converts every null row to attacker-wins-on-first-use and is not a meaningful authority proof |
 
-The product must decide which external authority exists before claim endpoints
-or schemas are designed. “Local machine” is not precise enough: a private
-socket with verified peer credentials, a user confirmation, and an
-already-bound bridge have different trust scopes.
+The product must decide which external authority exists before endpoints or
+schemas are designed. “Local machine” is not precise enough: a private socket
+with verified peer credentials, a user confirmation, and an already-bound
+bridge have different trust scopes.
 
-### Claim protocol invariants independent of the authority choice
+### Authority-establishment invariants independent of the mechanism
 
-Any viable claim protocol should satisfy all of these properties:
+Any viable authority-establishment flow should satisfy all of these properties:
 
 - Bind the proof to the exact immutable project ID, agent row ID, canonical
   name, credential version, claimant, nonce, and expiry.
@@ -176,7 +213,8 @@ Any viable claim protocol should satisfy all of these properties:
 - Make wrong, expired, replayed, cancelled, and losing-race proofs produce zero
   changes to DB metadata, profile bytes, archive Git state, reservations,
   inbox read state, and signals. This is a prospective claim invariant with the
-  same failure-atomic shape as D1, not an expansion of D1's resolved scope.
+  same failure-atomic shape as D1, not an expansion of D1's selected and
+  implemented scope.
 - Audit authority type, approver/binding identifier, old/new enrollment state,
   timestamp, and a non-secret credential fingerprint. Never audit the secret.
 - Make retries idempotent by receipt without returning the reusable credential.
@@ -199,7 +237,7 @@ These are different operations and must not share a weak fallback:
 |---|---|---|---|
 | Current-credential-authenticated atomic rotation | Normal rotation; old credential authorizes replacement, with an optional short explicit grace window | Clients that cannot update their private store atomically can lose continuity; grace permits temporary dual authority | Works for owners that possess existing tokens; unavailable generated tokens cannot use it |
 | Pre-issued single-use recovery codes/keys stored as verifiers | Loss or compromise when recovery material was prepared earlier | Users must store recovery material; code theft is takeover; codes need revocation, replenishment, and replay protection | Prospective only unless codes are securely issued after existing ownership is proven |
-| Recovery through the selected project-admin/local authority | Reviewed recovery without the old credential | Requires availability and trust of the administrator; unattended jobs may stop | Can cover generated-unavailable and null cohorts after an explicit review; should not rewrite history silently |
+| Recovery through a later-selected project-admin/local authority | Reviewed recovery without the old credential | Requires availability and trust of the administrator; unattended jobs may stop | Can cover generated-unavailable and null cohorts after an explicit review; should not rewrite history silently |
 | Recovery through a pre-existing non-exportable bridge binding | Proves control of a bound runtime even if its bearer file is lost | Binding migration or bridge loss leaves no route; must resist a newly fabricated binding | Only rows with a qualifying prior binding benefit |
 | New identity plus audited continuity transfer | Safest fallback when no valid authority survives | Stable name and history consumers may need alias/transfer support | Does not destroy the old row; existing mail and audit can remain attributable |
 | Server reveals the stored plaintext credential | Restores access if plaintext exists | Database/server operators become credential delivery authorities; disclosure cannot distinguish owner from requester and defeats one-way storage | Impossible after verifier migration; exposes current plaintext rows and backups |
@@ -226,7 +264,7 @@ the secret on the model-facing tool and Rich-log paths.
 | Macro accepts a non-secret credential reference and resolves it only in a trusted server/proxy boundary | Requires reference lifecycle, authorization, and remote semantics; arbitrary file paths must be rejected | Existing stores need a reference adapter; rows themselves are unchanged |
 | Macro performs a two-phase enrollment and returns `enrollment_required`/pending receipt until a secret sink acknowledges | No immediate reservations or inbox on first call; clients need retry/resume logic | Prevents new null rows; existing null rows remain a claim problem |
 | Macro accepts a literal owner token and delegates to authenticated registration | Simple but exposes the credential to transcripts and instrumentation unless the macro is never model-facing and logging is fixed | Known-token callers work; generated-unavailable and null rows still fail |
-| Keep creating legacy-unclaimed rows, then claim later | Preserves current one-call behavior but continues name-only reservation/inbox/retirement exposure and creates more migration debt | Existing and new null rows remain mixed unless clearly marked and time-bounded |
+| Keep creating legacy-unclaimed rows, then establish authority later | Rejected for the selected D7 rollout: it continues name-only reservation/inbox/retirement exposure and creates more migration debt | Existing and new null rows remain mixed, so enforcement cannot begin |
 | Macro returns a generated plaintext token | Preserves one-call enrollment but recreates the documented result/archive leak and makes the broad macro result a secret container | Existing null rows still require claim; newly returned secrets require rotation if logged |
 
 Whichever option is selected, macro reuse of an existing name must authenticate
@@ -270,25 +308,31 @@ an inventory artifact.
    private transport, atomic store update, and rollback-compatible dual read.
    Direct clients receive explicit compatibility diagnostics. No strict server
    denial is enabled.
-4. **Use the new path for opt-in new identities.** Do not create a usable owner
-   identity until secret delivery is acknowledged. A kill switch returns new
-   creation to the legacy policy during the rollback window; already enrolled
-   identities keep working rather than having their credential erased.
+4. **Stop creating new null-token identities, then use the new path for new
+   identities.** Do not create a usable owner identity until secret delivery is
+   acknowledged. This prerequisite is selected but not implemented here. A
+   rollback may pause new enrollment, but it must not resume null-token
+   creation; already enrolled identities keep working rather than having their
+   credential erased.
 5. **Run an authorized claim/recovery campaign.** Classify only by proof, not
    by name or activity. Null rows without proof stay visibly legacy-unclaimed;
    unavailable-token rows use recovery. Do not bulk-write synthetic owner
    tokens and call that enrollment.
-6. **Shadow every proposed D6/D7 denial.** Record a redacted `would_allow`/
-   `would_deny`, cohort, reason, and client version while preserving current
-   behavior. Measure macro/internal callers as well as published tools.
+6. **Shadow every proposed D6/D7 denial.** The first transport-independent
+   observer records exactly principal candidate, tool, `would_allow` or
+   `would_deny`, and reason while preserving current behavior. It records no
+   credential value. Extra cohort or client fields require a later
+   privacy-reviewed schema revision. Measure macro/internal callers as well as
+   published tools before enforcement.
 7. **Enable strict behavior per opted-in identity/project.** Require an
    explicit readiness check and retain an operator kill switch. Rollback
    changes enforcement mode, not credential history; it must not turn an
    enrolled credential back into null.
-8. **Change the default only after reviewed coverage thresholds.** Unresolved
+8. **Change the default only after reviewed coverage thresholds.** Unselected
    legacy rows remain in an explicit compatibility cohort with a published
-   deadline or administrator action. This step is a future D6/D7 decision,
-   not authorized here.
+   deadline or administrator action. This step still needs a future D6
+   decision and a separate D7 implementation/cutover approval; neither is
+   authorized here.
 9. **Remove legacy credential representation last.** One-way verifier cleanup,
    old client removal, and deletion of plaintext/token duplicates happen only
    after restore drills, backup review, and expiration of the agreed rollback
@@ -305,6 +349,9 @@ an inventory artifact.
 - Failed rollout does not restore a row to null automatically: that would
   discard newly established authority and reopen D7. Rollback changes policy,
   not ownership facts.
+- Rollback never re-enables creation of new null-token identities. If the new
+  enrollment path is unavailable, new creation pauses or fails closed while
+  existing compatible identities retain their separately selected behavior.
 - No migration deletes a plaintext value, private client copy, binding, or
   recovery verifier until a tested recovery path and backup rollback exist.
 - Shadow and enforcement logs contain fingerprints/reasons only and can be
@@ -327,21 +374,23 @@ This table is a checklist, not a ranking.
 
 ## Non-binding lean for evaluation
 
-This lean exists only to focus prototypes and tests. It is not a decision, does
-not change the pending D6/D7 records or D1's resolved scope, and does not
-authorize D6/D7 enforcement.
+This lean exists only to focus prototypes and tests. It does not select the
+enrollment or authority mechanism, change D6 or D1's selected and implemented
+scope, weaken the
+ledger-selected D7 boundary, or authorize D6/D7 enforcement.
 
 - Prefer caller-generated high-entropy credentials held by a trusted
   launcher/proxy, or server-generated credentials delivered to an authenticated
   one-time sink. Return only a receipt/fingerprint to model-facing tools.
 - Prefer one-way versioned server verification after a dual-read rollback
   period; never design normal recovery around revealing a stored bearer.
-- For a null row, accept a pre-existing private binding challenge when one
-  genuinely predates the claim; otherwise require explicit project-admin/local
-  approval. If neither exists, create a new enrolled identity and use an
-  audited continuity transfer rather than first-come name claim.
+- For a null row, evaluate a pre-existing private binding challenge when one
+  genuinely predates the authority-establishment request; otherwise evaluate
+  explicit project-admin/local approval. If neither exists, create a new
+  enrolled identity and use an audited continuity transfer rather than
+  first-come name claim. These remain mechanism candidates, not selections.
 - Use current-credential-authenticated atomic rotation for normal rotation;
-  use pre-issued recovery material or the selected administrator/binding
+  use pre-issued recovery material or the later-selected administrator/binding
   authority for loss. Do not reuse ambient identity facts.
 - Have a trusted bootstrap enroll/bind before `macro_start_session`; keep
   reservation and inbox operations behind the authenticated boundary.
@@ -354,9 +403,10 @@ sinks, verifier key custody, and continuity-transfer semantics.
 
 ## Post-decision tests
 
-After a policy is chosen, these tests become committed, hermetic gates before
-the corresponding pending manifest entries can change. D1's existing selected-
-requirement test remains a prerequisite rather than a pending choice.
+After the relevant mechanism and implementation are approved, these tests
+become committed, hermetic gates before an entry's `implementation_state` can
+change. D1's existing selected-requirement test remains a prerequisite rather
+than an open choice.
 
 ### Enrollment and non-disclosure
 
@@ -413,9 +463,13 @@ requirement test remains a prerequisite rather than a pending choice.
   enrolled, pending, and grandfathered cohorts, test correct/wrong/missing
   sender authority and assert `verified_sender`, DB recipients, archive, inbox,
   and zero rejected-call mutation.
-- D7: run every retained owner operation with correct/wrong/missing authority
-  across the same cohorts; include retire, unretire, deregister, hard delete,
-  and any project-wide operation the product classifies as owner-authorized.
+- D7: split active-null and already-retired-null legacy cohorts. Prove that
+  name-only re-retire succeeds only for the already-retired null-token cohort,
+  preserves `retired_at`, and changes no DB/profile/archive/signal state. Prove
+  that an active null-token row is not auto-retired and that unretire, hard
+  delete, transfer, and project-wide owner operations
+  require the future principal/admin authority. Also prove every new-identity
+  path has stopped creating null-token rows before enforcement is enabled.
 - `macro_start_session`: fresh enrolled identity, existing valid identity,
   existing conflicting identity, null legacy row, unavailable generated token,
   pending sink, and retry after crash. No reservation or inbox access may occur
@@ -431,15 +485,17 @@ requirement test remains a prerequisite rather than a pending choice.
   emitted by inventory or shadow telemetry.
 - Flip the kill switch during enrollment, claim, send, rotation, macro start,
   and service restart; newly established ownership remains intact while the
-  selected compatibility behavior returns.
+  explicitly retained legacy compatibility behavior returns. New null-token
+  creation must remain disabled.
 - Restore old binaries and backups at every declared rollback milestone; fail
   closed at an explicit version gate if an old binary cannot safely read the
-  additive state.
+  additive state or, after the stop-null milestone, can create a new null-token
+  identity.
 - Fresh-install coverage remains mandatory: a clean installation must enroll,
   restart, rotate, send, retire, and recover without depending on developer
   machine state.
 
-## Unresolved matters requiring a product decision
+## Unselected matters requiring a product decision
 
 - What is the canonical project-administrator authority, how is it enrolled and
   revoked, and how does it work on shared machines and in headless CI?
@@ -454,11 +510,12 @@ requirement test remains a prerequisite rather than a pending choice.
 - What are the custody, expiry, and replenishment rules for recovery material?
 - Does continuity transfer preserve the canonical name, create an alias, move
   inbox/reservations, or only link audit history?
-- Which tools are owner operations beyond the dynamically proven D7 retirement
-  path, and which project-wide operations require a stronger authority?
-- What should claim do to retired identities, active reservations, unread mail,
-  signals, and concurrent metadata refresh?
+- What exact principal/admin credential, delegation, and audit mechanism would
+  turn the prospective 22-tool permission inventory into selected policy?
+- How should each authority-establishment mechanism handle active reservations,
+  unread mail, signals, and concurrent metadata refresh without implicitly
+  unretiring or transferring an identity?
 - What audit retention is sufficient without turning fingerprints, OS identity,
   or approver metadata into a new privacy/security liability?
-- What readiness threshold and compatibility deadline are required before any
-  separately approved D6/D7 default change?
+- What readiness threshold and compatibility deadline are required before a D6
+  selection or D7 implementation/cutover change?

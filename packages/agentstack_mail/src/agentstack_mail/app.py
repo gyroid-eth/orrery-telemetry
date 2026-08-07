@@ -40,6 +40,12 @@ from sqlalchemy.exc import IntegrityError, NoResultFound, OperationalError, Time
 from sqlalchemy.orm import aliased
 
 from . import rich_logger
+from .authorization import (
+    AUTHORIZATION_CATALOG,
+    assert_authorization_catalog_boundary,
+    record_shadow_authorization,
+    redact_tool_arguments,
+)
 from .boundary import CompatibilityFastMCP
 from .config import Settings, get_settings
 from .model_normalize import display_model, normalize_model
@@ -436,6 +442,10 @@ def _instrument_tool(
                 _enforce_capabilities(ctx, required_caps, tool_name)
             project_value = _extract_argument(bound, project_arg)
             agent_value = _extract_argument(bound, agent_arg)
+            if tool_name in AUTHORIZATION_CATALOG:
+                # Observation only: verdicts never control execution or output.
+                with suppress(Exception):
+                    record_shadow_authorization(tool_name)
 
             # Rich logging: Log tool call start if enabled
             settings = get_settings()
@@ -451,7 +461,7 @@ def _instrument_tool(
 
             if log_enabled:
                 try:
-                    clean_kwargs = {k: v for k, v in bound.arguments.items() if k != "ctx"}
+                    clean_kwargs = redact_tool_arguments(bound.arguments)
                     log_ctx = rich_logger.ToolCallContext(
                         tool_name=tool_name,
                         args=[],
@@ -12042,6 +12052,7 @@ def build_mcp_server() -> FastMCP:
     # incompatible with the frozen compatibility contract and therefore makes
     # construction fail rather than silently publishing fewer than 22 tools.
     mcp.assert_contract_boundary()
+    assert_authorization_catalog_boundary(mcp.published_tool_names)
 
     return mcp
 

@@ -1,11 +1,12 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "contract_version": 1,
   "comparison_policy": {
     "default": "fail_on_difference",
     "allowlist": "intentional_differences.allowlisted_entries_only",
-    "unresolved_product_decisions": "fail_on_observation",
-    "resolved_product_decisions": "assert_selected_behavior"
+    "unselected_product_decisions": "fail_on_observation",
+    "selected_implemented_product_decisions": "assert_selected_behavior",
+    "selected_not_implemented_product_decisions": "fail_on_observation"
   },
   "baselines": {
     "live": {
@@ -295,16 +296,18 @@
     }
     ]
   },
-  "resolved_product_decisions": [
+  "product_decisions": [
     {
       "id": "D1",
       "title": "conflicting token registration mutation",
-      "status": "resolved",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "cutover_state": "no_go",
       "resolution": "reject_explicit_conflicting_token_before_mutation",
       "scope": {
         "explicit_conflicting_token": "reject_without_durable_mutation",
         "same_token": "metadata_refresh_with_exactly_one_git_commit",
-        "omitted_token": "credential_retention_and_authority_semantics_unchanged_pending_D6_D7",
+        "omitted_token": "credential_retention_and_authority_semantics_unchanged_D6_unselected_D7_selected_not_implemented_no_go",
         "concurrent_conflicting_tokens_on_null_identity": "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
       },
       "allowlisted": false,
@@ -315,83 +318,117 @@
         "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
         "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner"
       ]
-    }
-  ],
-  "pending_product_decisions": [
+    },
     {
       "id": "D2",
       "title": "expired contact link accepted",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D3",
       "title": "cross-project intro/reply identity",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D4",
       "title": "accept response without pending",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D5",
       "title": "invalid contact policy coerced auto",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D6",
       "title": "missing sender token succeeds",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D7",
       "title": "owner tools name-only auth",
-      "status": "pending_no_go",
+      "decision_state": "selected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
+      "resolution": "limit_name_only_retire_to_idempotent_retired_null_legacy",
+      "scope": {
+        "name_only_soft_retire": "only_idempotent_reretire_of_already_retired_null_token_legacy_row_preserving_retired_at_with_zero_durable_mutation",
+        "active_null_token_name_only_retire": "deny",
+        "stronger_owner_operations": "unretire_hard_delete_transfer_and_project_wide_require_future_principal_or_administrator",
+        "enforcement_prerequisite": "stop_all_new_null_token_creation_paths_before_enforcement_ordering_only_not_current_behavior",
+        "principal_admin_mechanism": "unselected",
+        "lifecycle_disposition": "unchanged_D11_unselected"
+      },
+      "rationale": [
+        "name_only_retire_is_timing_selectable_receive_denial",
+        "unretire_cannot_restore_rejected_sends",
+        "observed_zero_rows_is_machine_fact_not_product_fact"
+      ],
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D8",
       "title": "DB persists after archive failure",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D9",
       "title": "read/ack partial commit",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D10",
       "title": "concurrent reservation winner and SQLite lock semantics",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D11",
       "title": "retire with active reservations or unread messages",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     },
     {
       "id": "D12",
       "title": "signal cleanup after crash, retirement, or stale consumer",
-      "status": "pending_no_go",
+      "decision_state": "unselected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
       "allowlisted": false,
       "comparator_disposition": "fail"
     }
