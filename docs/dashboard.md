@@ -308,6 +308,93 @@ frame.contentWindow.postMessage({type: "net-resume"}, location.origin);
 
 hidden iframe が tmux / SQLite を継続 polling しないための契約です。message は same-origin だけを受け付けます。
 
+### Theme axis bridge
+
+same-origin の parent は、dashboard だけに1軸の A/B override を送れます。parent 側が選択履歴と preset を所有し、iframe は永続化しません。
+
+```js
+frame.contentWindow.postMessage({
+  type: "agentstack-theme-axis",
+  version: 1,
+  axis: "glow",
+  value: 1,
+}, location.origin);
+```
+
+`axis` は `dim-contrast`、`small-text`、`tracking`、`glow`、`background` のいずれかです。数値は finite かつ `0 <= value <= 1` でなければならず、範囲外は clamp せず `invalid-value` として reject します。`null` は override style node と一時属性を物理的に除去します。初期表示は bridge の CSS を一切適用しないため、従来の描画経路のままです。
+
+receiver は `event.source === window.parent` と `event.origin === location.origin` の両方を確認します。処理した request には parent へ次の envelope を返します。
+
+```js
+{
+  type: "agentstack-theme-axis-result",
+  version: 1,
+  ok: true,
+  requested: {axis: "glow", value: 1},
+  state: {axis: "glow", value: 1},
+  source: {unit: "declaration", expected: sourceRecords.length, matched: sourceMatched},
+  mutation: {unit: "effect-component", expected: snapshot.length, applied: appliedCount},
+  effect: {unit: "effect-component", evaluated: 30, changed: 26,
+    rendered: 28, inViewport: 26, visibleExpected: 26,
+    visibleReached: 26, visibleChanged: 26, deferred: 4},
+  reason: null,
+}
+```
+
+上の識別子は envelope の対応関係を示す擬似コードです。正本は [`scripts/dashboard_theme_manifest.py`](../scripts/dashboard_theme_manifest.py) が `dashboard/index.html` から生成する [`dashboard/theme_effect_manifest.json`](../dashboard/theme_effect_manifest.json) と、そこから生成して HTML に埋め込む runtime inventory です。前者は selector / property / line / component を含む review 用 record、後者は同じ record の安定 ID list と規則/source digest を持ちます。runtime の `source.expected` は軸ごとの `records.length` から導出し、独立した数値定数を持ちません。CSS を変更したら次を実行し、record list、規則 digest、source digest の差分を一緒に review します。
+
+```bash
+python3 scripts/dashboard_theme_manifest.py --write
+python3 scripts/dashboard_theme_manifest.py --check
+```
+
+`source` は token / declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の compiled 適用数です。source unit は軸ごとに厳密で、`dim-contrast` / `background` は `token-write`、`small-text` / `tracking` / `glow` は `declaration` です。`effect` の membership は generated eligibility の pre-apply live match だけで固定し、適用前・適用後・endpoint の値から対象を増減しません。そのうち rendered・nonzero box・viewport 内を `visibleExpected`、cascade 後の computed が requested derivation へ到達したものを `visibleReached` と数えます。元から requested 値だった member も reached です。`visibleChanged` は可視 member の canonical post が pre と異なる数、`changed` は全 evaluated member の同じ差分を数える独立 no-op gate です。hidden / zero-box / offscreen は `deferred` に数えます。non-null apply は `visibleExpected > 0`、`visibleReached === visibleExpected`、`visibleChanged > 0`、`changed > 0` をすべて満たす場合だけ成功します。0や量子化以下は `no-effective-change`、可視対象0は `no-visible-targets`、requested derivation に到達しない member があれば `effect-count-mismatch` として reject し、直前の valid axis を復元します。面や単位を合算しません。`glow` の effect unit は live `effect-component` です。同一 surface に対象 radial layer が2つあれば2件と数え、CSS rule 1件が可視 element 10件へ match すれば10件と数えます。selector と keyframe の source component は `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
+
+### Atomic theme profile bridge
+
+`small-text` と `tracking` は complete five-axis vector を使う1つの atomic profile として同時適用できます。全キーは必須で、non-null の組み合わせは空、`small-text` / `tracking` の任意 subset、または legacy 1軸だけです。
+
+```js
+frame.contentWindow.postMessage({
+  type: "agentstack-theme-profile",
+  version: 1,
+  requestId: "theme-42",
+  values: {
+    "dim-contrast": null,
+    "small-text": 0.5,
+    tracking: 0.25,
+    glow: null,
+    background: null,
+  },
+}, location.origin);
+```
+
+receiver は全 experimental override を外した同じ A snapshot から両軸を導出します。baseline font size を `s0`、baseline letter-spacing ratio を `r0` とすると、small の final size は `s(vs)`、tracking ratio は `lerp(r0, min(r0, 0.08), vt)`、final spacing はその ratio と `s(vs)` の積です。前の profile render を次の baseline にしないため、UI で small→tracking と tracking→small の順に操作しても complete final vector が同じなら computed size / weight / spacing は一致します。適用後に追加された DOM node も override を一時無効化した A baseline から両軸を同時導出し、各軸の独立 envelope へ加算します。
+
+成功時は次の response を返します。`requested` / `applied` は常に exact five-key map、`axes` は non-null 軸の exact set です。
+
+```js
+{
+  type: "agentstack-theme-profile-result",
+  version: 1,
+  requestId: "theme-42",
+  surface: "telemetry",
+  requested: {"dim-contrast": null, "small-text": 0.5,
+    tracking: 0.25, glow: null, background: null},
+  applied: {"dim-contrast": null, "small-text": 0.5,
+    tracking: 0.25, glow: null, background: null},
+  status: "applied",
+  axes: {
+    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
+    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
+  },
+}
+```
+
+1軸でも source / mutation / effect guard に失敗すれば profile 全体を reject し、`applied` には receiver が復元した last-valid complete map を返します。schema 違反も state を変更しません。legacy `agentstack-theme-axis` v1 は対象1軸以外を null にした complete profile と同じで、legacy `value: null` は全軸 reset です。result reply が失われた場合、parent coordinator は fresh `requestId` の last-valid complete profile を compensating request として送れます。
+
+embed の初期化完了時と reload 後には、dashboard が `agentstack-theme-axis-ready` と `agentstack-theme-profile-ready`（ともに version 1、`surface: "telemetry"`）を same-origin parent へ送ります。recovery はこの明示 signal の後に compensating profile を送り、その result が acknowledged になるまで完了扱いにしません。ready が来ない場合の timeout と UI failure 表示は parent coordinator が担当します。
+
 ## Terminal bridge
 
 カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jump、または browser terminal 用 `ttyd` を確保します。
