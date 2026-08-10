@@ -43,6 +43,15 @@ only until the differential suite proves they can be
 removed. The installed `agentstack-mail` console script serves this boundary at
 the loopback-only default `http://127.0.0.1:18765/mcp`; it rejects non-loopback
 binds and bearer/JWT settings until the HTTP authentication layer is wired.
+`agentstack-mail --help` prints usage without starting the server, and
+`--host`, `--port`, and `--path` override the endpoint for one process. Naming
+mode behavior remains compatible with the frozen source, including default
+`coerce` substitution. Fixed AgentStack identities therefore use
+`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough`; the unprefixed live
+key is intentionally not a fallback. AgentStack's Claude registration hook
+checks explicit request and response names before marking registration success;
+Codex launch paths have separate, partial comparison coverage documented in the
+cutover procedure.
 Supervisor, migration, and consumer cutover remain later trains.
 
 `authorization.py` is the machine-readable inventory for the exact 22-tool

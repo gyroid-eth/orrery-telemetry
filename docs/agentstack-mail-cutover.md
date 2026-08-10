@@ -13,6 +13,20 @@
 
 新 service の開発用 URL は `http://127.0.0.1:18765/mcp` である。
 
+## 0. 明示した agent 名をそのまま通す設定を先に固定する
+
+新 service の環境には、最初の agent 登録より前に次を設定する。
+
+```sh
+AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough
+```
+
+旧 service の `AGENT_NAME_ENFORCEMENT_MODE=passthrough` は新 package では意図的に読まない。server の命名挙動は frozen live と同じで、namespaced key が欠けた既定 `coerce` は規則外の明示名を別名へ置換して成功を返し、mode の typo も `coerce` へ戻る。このため、設定そのものが切替の必須条件である。Claude Code の登録 hook は明示した要求名と response の `name` を完全一致で比較し、不一致・response 解析失敗では成功フラグを作らない。
+
+Codex には Claude Code の PostToolUse hook がない。予約済み child/resume の bootstrap と reregister は既に応答名不一致で停止する一方、direct spawn は警告後に応答名を採用し、raw MCP 登録と Codex App 再認証も未検出である。これらの補強は今回の切替 blocker 修正には含めず、direct spawn を tmux 作成前に止める変更を最優先の follow-up とする。したがって、Codex 側の検出を設定漏れの代替にしてはならない。
+
+これを実行したら何が変わるか: `ProOpus`、`AirSonnet`、`BiomatterBot`、`SeminarBot` の固定 identity が要求名と同じ名前で登録できる。service 定義が未実装のため、最終的にこの値を永続化する実在コマンドはまだ書けない。
+
 ## 1. 新 service を旧 service と別にインストールする
 
 実行コマンド: **製品 installer が未実装なので書けない。** Package は wheel/editable install でき、console script `agentstack-mail` も生成されるが、専用 venv、service 定義、install manifest がない。`~/.agentstack/mail` は install 先ではなくデータの既定 root である。既存の `scripts/install.sh` は旧 `~/mcp_agent_mail` を導入するため、この切替には使わない。
@@ -29,7 +43,14 @@ Signals は永続データではなく message 到着時の wakeup なので、�
 
 ## 3. 新 service を起動する
 
-開発用の foreground 起動は `agentstack-mail` で実在する。ただし切替に使う `agentstack-mail service start|status|stop|restart` は未実装なので、ここで必要な service 起動コマンドはまだ書けない。宣言だけある service 名は macOS が `org.agentstack.mail`、systemd が `agentstack-mail.service` である。
+開発用の foreground 起動は次で実在する。`--help` は server を起動せず、同名の環境設定を `--host`、`--port`、`--path` がその process だけ上書きする。
+
+```sh
+AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough \
+  agentstack-mail --host 127.0.0.1 --port 18765 --path /mcp
+```
+
+ただし切替に使う `agentstack-mail service start|status|stop|restart` は未実装なので、ここで必要な service 起動コマンドはまだ書けない。宣言だけある service 名は macOS が `org.agentstack.mail`、systemd が `agentstack-mail.service` である。
 
 これを実行したら何が変わるか: `127.0.0.1:18765` で新 service だけが新 DB/archive/signal root の writer になる。
 
@@ -47,7 +68,7 @@ Signals は永続データではなく message 到着時の wakeup なので、�
 
 ## 5. Client を再起動し、実送受信を確認する
 
-実行コマンド: **未実装なので書けない。** 新 service 用 selftest は、テスト用 agent を登録し、1回 `send_message`、1回 `fetch_inbox` を実行して同じ message ID と本文を確認する1コマンドであるべきだが、現在の `scripts/selftest.py` は旧 key と旧 endpoint を検査するため代用できない。Claude/Codex の再起動も一括切替 helper の出力に従う必要がある。
+実行コマンド: **未実装なので書けない。** Package/wheel の隔離 DB preflight で `ProOpus`、`AirSonnet`、`BiomatterBot`、`SeminarBot` を登録し、各 response の `name` が要求名と完全一致することを先に検査する。切替先の実 DB で中央 selftest が実在4名を代理登録すると metadata/token を変え得るため行わず、実切替では再起動した各 client が自身の要求名と登録 response を照合する。その後、専用テスト identity で1回 `send_message`、1回 `fetch_inbox` を実行して同じ message ID と本文を確認する。単なる `isError: false` は別名への置換を見逃すので合格にしない。現在の `scripts/selftest.py` は旧 key と旧 endpoint を検査するため代用できない。Claude/Codex の再起動も一括切替 helper の出力に従う必要がある。
 
 これを実行したら何が変わるか: 再起動した実 client が新 service 経由で message を永続化し、その message を新 service から読み戻す。
 

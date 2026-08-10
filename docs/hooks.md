@@ -18,7 +18,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | agent-mail health と既存 identity を確認し、同名再登録または登録手順と `fetch_inbox` を session context へ出力 |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の exact path reservation を renew / auto-acquire。競合または取得失敗は exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
-| `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__mcp-agent-mail__register_agent` または互換 tool が成功した直後 | session flag、canonical name、session index、pane / tmux metadata を更新 |
+| `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__mcp-agent-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
 
 `Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。
 
@@ -48,9 +48,11 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 
 ### `mark-agent-registered.sh`
 
-- **発火:** `register_agent` MCP tool の PostToolUse。server response の canonical name を優先し、なければ tool input の明示名を使います。
-- **動作:** registration flag を作り、`record-session-index.py` を非同期実行します。現在が `pending-*`、既に同名、または env の `AGENT_NAME` と一致する場合だけ title helper を呼びます。
-- **親子保護:** 親が child を preregister した PostToolUse でも、親 pane metadata を child identity に書き換えません。name 抽出失敗は runtime log へ残しますが、成功した registration 自体は失敗扱いにしません。
+- **発火:** `register_agent` MCP tool の PostToolUse。`tool_input` と error でない server response の両方が必要です。response の canonical name を取得できない場合に tool input の明示名へ fallback しません。
+- **検証:** `name` が明示されていれば response の `name` と完全一致を要求します。別名、error response、入力または応答の解析失敗は `registration-failures.log` へ記録し、exit 2 で caller に返します。名前を省略した登録だけは response の生成名を採用します。
+- **動作:** 検証後にだけ registration flag を作り、`record-session-index.py` を非同期実行します。現在が `pending-*`、既に同名、または env の `AGENT_NAME` と一致する場合だけ title helper を呼びます。
+- **親子保護:** 親が child を preregister した PostToolUse でも、親 pane metadata を child identity に書き換えません。
+- **保証境界:** PostToolUse は server call 後なので、拒否した別名 row を transaction rollback はしません。また `check-agent-registered.sh` は既存 `AGENT_NAME` を持つ channel を flag なしでも許可します。この hook の保証は「不一致を黙って受理せず、成功 state を新規作成しない」であり、全 session の後続操作を強制停止することではありません。
 
 ## 運用 helper（6件）
 
@@ -97,7 +99,7 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ## Codex との違い
 
-Codex CLI には Claude Code の `SessionStart` / `PreToolUse` / `PostToolUse` hook system がありません。`agent-start-codex` は bootstrap で identity 登録と tmux rename を済ませ、managed `~/.codex/AGENTS.md` が reservation の reserve / renew / release を指示します。mail watcher と agent-mail registry は Claude / Codex 共通なので、通知と reservation conflict は相互に見えます。
+Codex CLI には Claude Code の `SessionStart` / `PreToolUse` / `PostToolUse` hook system がなく、`mark-agent-registered.sh` も走りません。`agent-start-codex` は bootstrap で identity 登録と tmux rename を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。一方、direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。これらは別 follow-up であり、mail service の `passthrough` 設定を省略できる根拠にはなりません。managed `~/.codex/AGENTS.md` は reservation の reserve / renew / release を指示します。mail watcher と agent-mail registry は Claude / Codex 共通なので、通知と reservation conflict は相互に見えます。
 
 Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います。詳しくは [Codex App 統合](codex-app.md)を参照してください。
 

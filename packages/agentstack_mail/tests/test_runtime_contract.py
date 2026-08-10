@@ -22,6 +22,7 @@ LEGACY_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite:///./storage.sqlite3",
     "STORAGE_ROOT": "~/.mcp_agent_mail_git_mailbox_repo",
     "NOTIFICATIONS_SIGNALS_DIR": "~/.mcp_agent_mail/signals",
+    "AGENT_NAME_ENFORCEMENT_MODE": "passthrough",
 }
 
 AGENTSTACK_ENV = {
@@ -29,6 +30,7 @@ AGENTSTACK_ENV = {
     "AGENTSTACK_MAIL_DATABASE_URL": "sqlite+aiosqlite:////tmp/agentstack-mail.sqlite3",
     "AGENTSTACK_MAIL_STORAGE_ROOT": "/tmp/agentstack-mail-archive",
     "AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR": "/tmp/agentstack-mail-signals",
+    "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE": "passthrough",
 }
 
 
@@ -97,6 +99,7 @@ def test_isolated_defaults_ignore_all_legacy_environment_names(
         assert Path(settings.notifications.signals_dir).expanduser().resolve() == Path(
             ISOLATION_DEFAULTS.signals
         ).expanduser().resolve()
+        assert settings.agent_name_enforcement_mode == "coerce"
     finally:
         _require_attr(config, "clear_settings_cache")()
 
@@ -123,6 +126,24 @@ def test_only_agentstack_prefixed_environment_names_override_defaults(
             settings.notifications.signals_dir
             == AGENTSTACK_ENV["AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR"]
         )
+        assert settings.agent_name_enforcement_mode == "passthrough"
+    finally:
+        _require_attr(config, "clear_settings_cache")()
+
+
+def test_invalid_agent_name_mode_keeps_frozen_coerce_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSTACK_MAIL_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.setenv(
+        "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE",
+        "passthrough-typo",
+    )
+
+    config, settings = _load_settings()
+    try:
+        assert settings.agent_name_enforcement_mode == "coerce"
     finally:
         _require_attr(config, "clear_settings_cache")()
 

@@ -60,6 +60,22 @@ signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
 serves the exact boundary on the loopback-only default
 `http://127.0.0.1:18765/mcp`. The first entry point rejects non-loopback binds
 and bearer/JWT settings rather than pretending to enforce authentication.
+`agentstack-mail --help` exits without starting a server; `--host`, `--port`,
+and `--path` override the namespaced endpoint settings for that process.
+Identity mode behavior remains frozen-source compatible: default `coerce` may
+return a generated name for a noncanonical explicit request, and an invalid
+mode falls back to `coerce`. The cutover profile must therefore set
+`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` for the fixed runtime
+identities; the legacy unprefixed key remains intentionally isolated. The
+Claude Code registration hook compares every explicit request with the returned
+name before recording success; a mismatch or unreadable response exits nonzero.
+This is a caller-side refusal, not a transaction rollback: because it
+runs after the tool call, a substituted server row may remain, and sessions with
+an existing `AGENT_NAME` are not universally stopped by the success-flag guard.
+Codex has no equivalent PostToolUse hook: reserved bootstrap and
+reregister paths already stop on mismatch, while direct spawn, raw MCP calls,
+and Codex App reauthentication remain follow-up coverage rather than a substitute
+for the required cutover setting.
 Supervisor, migration, and installer switching are not implemented yet.
 
 File-reservation activity probes converge on upstream #240's one-pathspec Git

@@ -40,9 +40,9 @@ def test_main_runs_the_exact_http_transport(
 ) -> None:
     server = _Server()
     monkeypatch.setattr(cli, "get_settings", lambda: _settings(path="mcp"))
-    monkeypatch.setattr(cli, "build_mcp_server", lambda: server)
+    monkeypatch.setattr(cli, "_build_mcp_server", lambda: server)
 
-    cli.main()
+    cli.main([])
 
     assert server.calls == [
         {
@@ -58,6 +58,50 @@ def test_main_runs_the_exact_http_transport(
     ]
 
 
+def test_help_exits_without_loading_settings_or_building_server(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: (_ for _ in ()).throw(AssertionError("help must not load settings")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_build_mcp_server",
+        lambda: (_ for _ in ()).throw(AssertionError("help must not build server")),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["--help"])
+
+    assert exited.value.code == 0
+    output = capsys.readouterr().out
+    assert "usage: agentstack-mail" in output
+    assert "--host HOST" in output
+    assert "--port PORT" in output
+    assert "--path PATH" in output
+
+
+def test_cli_endpoint_arguments_override_environment_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server()
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: _settings(host="localhost", port=18765, path="/from-env"),
+    )
+    monkeypatch.setattr(cli, "_build_mcp_server", lambda: server)
+
+    cli.main(["--host", "127.0.0.1", "--port", "18999", "--path", "probe"])
+
+    assert server.calls[0]["host"] == "127.0.0.1"
+    assert server.calls[0]["port"] == 18999
+    assert server.calls[0]["path"] == "/probe"
+
+
 @pytest.mark.parametrize("host", ("0.0.0.0", "mail.local", "192.168.1.10"))
 def test_main_rejects_non_loopback_bind(
     host: str,
@@ -66,12 +110,26 @@ def test_main_rejects_non_loopback_bind(
     monkeypatch.setattr(cli, "get_settings", lambda: _settings(host=host))
     monkeypatch.setattr(
         cli,
-        "build_mcp_server",
+        "_build_mcp_server",
         lambda: (_ for _ in ()).throw(AssertionError("must reject before build")),
     )
 
     with pytest.raises(RuntimeError, match="loopback-only"):
-        cli.main()
+        cli.main([])
+
+
+def test_cli_non_loopback_override_is_rejected_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "get_settings", lambda: _settings())
+    monkeypatch.setattr(
+        cli,
+        "_build_mcp_server",
+        lambda: (_ for _ in ()).throw(AssertionError("must reject before build")),
+    )
+
+    with pytest.raises(RuntimeError, match="loopback-only"):
+        cli.main(["--host", "0.0.0.0"])
 
 
 @pytest.mark.parametrize(
@@ -88,9 +146,28 @@ def test_main_rejects_unwired_auth_configuration(
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     monkeypatch.setattr(
         cli,
-        "build_mcp_server",
+        "_build_mcp_server",
         lambda: (_ for _ in ()).throw(AssertionError("must reject before build")),
     )
 
     with pytest.raises(RuntimeError, match="authentication is not wired"):
-        cli.main()
+        cli.main([])
+
+
+@pytest.mark.parametrize("arguments", (["--port", "not-an-integer"], ["--unknown"]))
+def test_invalid_arguments_fail_before_settings_load(
+    arguments: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("invalid arguments must not load settings")
+        ),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        cli.main(arguments)
+
+    assert exited.value.code == 2

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 import ipaddress
+from collections.abc import Sequence
+from typing import Any
 
-from .app import build_mcp_server
 from .config import get_settings
 
 
 def _normalized_path(raw_path: str) -> str:
     path = raw_path.strip()
     if not path:
-        raise RuntimeError("AGENTSTACK_MAIL_HTTP_PATH must not be empty")
+        raise RuntimeError("AgentStack Mail HTTP path must not be empty")
     return path if path.startswith("/") else f"/{path}"
 
 
@@ -25,14 +27,39 @@ def _is_loopback_host(raw_host: str) -> bool:
         return False
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agentstack-mail",
+        description="Run the loopback-only AgentStack Mail MCP server.",
+    )
+    parser.add_argument("--host", metavar="HOST", help="loopback bind host")
+    parser.add_argument("--port", metavar="PORT", type=int, help="HTTP listen port")
+    parser.add_argument("--path", metavar="PATH", help="MCP HTTP path")
+    return parser
+
+
+def _build_mcp_server() -> Any:
+    # Keep the FastMCP/application import behind argument parsing so --help is
+    # fast, warning-free, and unable to initialize runtime state.
+    from .app import build_mcp_server
+
+    return build_mcp_server()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     """Run the exact 22-tool MCP boundary on its isolated HTTP endpoint."""
+    args = _parser().parse_args(argv)
     settings = get_settings()
-    host = settings.http.host.strip()
+    host = (
+        args.host if args.host is not None else settings.http.host
+    ).strip()
+    port = args.port if args.port is not None else settings.http.port
+    path = args.path if args.path is not None else settings.http.path
     if not _is_loopback_host(host):
         raise RuntimeError(
             "the first AgentStack Mail HTTP entry point is loopback-only; "
-            "set AGENTSTACK_MAIL_HTTP_HOST to 127.0.0.1, ::1, or localhost"
+            "use --host or set AGENTSTACK_MAIL_HTTP_HOST to 127.0.0.1, ::1, "
+            "or localhost"
         )
     if settings.http.bearer_token or settings.http.jwt_enabled:
         raise RuntimeError(
@@ -40,11 +67,11 @@ def main() -> None:
             "AgentStack Mail entry point; refusing to start with auth configured"
         )
 
-    build_mcp_server().run(
+    _build_mcp_server().run(
         transport="streamable-http",
         host=host,
-        port=settings.http.port,
-        path=_normalized_path(settings.http.path),
+        port=port,
+        path=_normalized_path(path),
         log_level=settings.log_level.lower(),
         json_response=True,
         stateless_http=True,
