@@ -205,7 +205,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
         cwd=tmp_path,
     )
     # A bundle does not transport the source repository's `.git/shallow` file.
-    # Restore the authenticated one-commit boundary before traversing history.
+    # Until this authenticated boundary is restored, rev-list/fsck will report
+    # the intentionally absent parent as broken; that is not evidence that the
+    # parent or another unreachable object is present in the bundle.
     shallow_file = checkout / ".git" / "shallow"
     shallow_file.write_text(f"{LIVE_HEAD}\n", encoding="ascii")
     _run_git(
@@ -253,6 +255,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
             f"live history count mismatch: expected {LIVE_COMMIT_COUNT}, got {commit_count}"
         )
 
+    # Before the shallow boundary is restored, path-limited history traversal
+    # is invalid because the parent is intentionally absent.  Inspecting the
+    # committed tree is the direct positive control for path presence.
     tree_paths = _run_git(
         "live HEAD path inspection",
         ["ls-tree", "-r", "--name-only", "HEAD"],
