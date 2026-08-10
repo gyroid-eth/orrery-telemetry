@@ -14,10 +14,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-LIVE_BUNDLE_SHA256 = "55f03ea48a3279f090c4b93436af1d55f912c75c3f985e4ba06a8b95d39f7670"
+LIVE_BUNDLE_SHA256 = "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30e37a1e"
 LIVE_PATCH_SHA256 = "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac"
-LIVE_HEAD = "ad0e4788967d809979fa25004cf52545fdcd888a"
-LIVE_COMMIT_COUNT = 720
+LIVE_HEAD = "b8251c1336e5fdca80a91b8b608d843df91b64e8"
+LIVE_COMMIT_COUNT = 1
+FORBIDDEN_PROVENANCE_PATH = "signing-77c6e768.key"
+FORBIDDEN_PROVENANCE_BLOB = "607de0ca5197430e8a3eae4c08c051d5799b84cc"
 
 LIVE_NAMESPACE = "mcp_agent_mail"
 CORE_NAMESPACE = "agentstack_mail"
@@ -111,12 +113,11 @@ def _run_git(
     args: Sequence[str],
     *,
     cwd: Path,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git", *args]
     git_env = {
-        name: value
-        for name in _BASE_ENV_ALLOWLIST
-        if (value := os.environ.get(name))
+        name: value for name in _BASE_ENV_ALLOWLIST if (value := os.environ.get(name))
     }
     git_env.update(
         {
@@ -135,6 +136,7 @@ def _run_git(
             capture_output=True,
             text=True,
             env=git_env,
+            input=input_text,
         )
     except FileNotFoundError as exc:
         raise LiveReconstructionError(
@@ -157,9 +159,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
     """Reconstruct and authenticate the frozen tracked live checkout.
 
     ``package_root`` must be the checked-in ``packages/agentstack_mail``
-    directory.  The returned path is a newly cloned, detached checkout below
-    ``tmp_path`` with the frozen tracked working-tree patch applied.  There is
-    deliberately no mutable-checkout or network fallback.
+    directory.  The returned path is a newly cloned, detached, depth-1 checkout
+    below ``tmp_path`` with the frozen tracked working-tree patch applied.  There
+    is deliberately no mutable-checkout or network fallback.
     """
 
     package_root = Path(package_root).resolve()
@@ -169,6 +171,10 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
 
     _verify_artifact(bundle, LIVE_BUNDLE_SHA256, "live Git bundle")
     _verify_artifact(patch, LIVE_PATCH_SHA256, "live working-tree patch")
+    if FORBIDDEN_PROVENANCE_PATH.encode() in patch.read_bytes():
+        raise LiveReconstructionError(
+            "live working-tree patch contains the forbidden signing-key path"
+        )
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     checkout = tmp_path / "live-agent-mail"
@@ -198,7 +204,13 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
         ["clone", "--no-checkout", str(bundle), str(checkout)],
         cwd=tmp_path,
     )
-    _run_git("live detached checkout", ["checkout", "--detach", LIVE_HEAD], cwd=checkout)
+    # A bundle does not transport the source repository's `.git/shallow` file.
+    # Restore the authenticated one-commit boundary before traversing history.
+    shallow_file = checkout / ".git" / "shallow"
+    shallow_file.write_text(f"{LIVE_HEAD}\n", encoding="ascii")
+    _run_git(
+        "live detached checkout", ["checkout", "--detach", LIVE_HEAD], cwd=checkout
+    )
 
     actual_head = _single_line(
         _run_git("live HEAD verification", ["rev-parse", "HEAD"], cwd=checkout),
@@ -217,9 +229,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
         ),
         "live shallow-state verification",
     )
-    if shallow != "false":
+    if shallow != "true":
         raise LiveReconstructionError(
-            f"live bundle clone is unexpectedly shallow: {shallow}"
+            f"live bundle clone did not retain its depth-1 boundary: {shallow}"
         )
 
     count_text = _single_line(
@@ -241,7 +253,43 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
             f"live history count mismatch: expected {LIVE_COMMIT_COUNT}, got {commit_count}"
         )
 
-    _run_git("live object integrity verification", ["fsck", "--full"], cwd=checkout)
+    tree_paths = _run_git(
+        "live HEAD path inspection",
+        ["ls-tree", "-r", "--name-only", "HEAD"],
+        cwd=checkout,
+    ).stdout.splitlines()
+    if "README.md" not in tree_paths:
+        raise LiveReconstructionError(
+            "live HEAD path inspection did not find the README.md positive control"
+        )
+    if FORBIDDEN_PROVENANCE_PATH in tree_paths:
+        raise LiveReconstructionError(
+            "live HEAD path inspection found the forbidden signing-key path"
+        )
+    forbidden_blob = _single_line(
+        _run_git(
+            "live forbidden signing-key blob inspection",
+            ["cat-file", "--batch-check"],
+            cwd=checkout,
+            input_text=f"{FORBIDDEN_PROVENANCE_BLOB}\n",
+        ),
+        "live forbidden signing-key blob inspection",
+    )
+    if forbidden_blob != f"{FORBIDDEN_PROVENANCE_BLOB} missing":
+        raise LiveReconstructionError(
+            "live depth-1 bundle contains the forbidden signing-key blob"
+        )
+
+    fsck = _run_git(
+        "live object integrity and reachability verification",
+        ["fsck", "--full", "--no-reflogs", "--no-progress", "--unreachable"],
+        cwd=checkout,
+    )
+    if fsck.stdout.strip() or fsck.stderr.strip():
+        raise LiveReconstructionError(
+            "live depth-1 bundle contains unreachable objects: "
+            f"{(fsck.stderr or fsck.stdout).strip()[-4000:]}"
+        )
     _run_git("live patch preflight", ["apply", "--check", str(patch)], cwd=checkout)
     _run_git("live patch application", ["apply", str(patch)], cwd=checkout)
     _run_git(
@@ -249,7 +297,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
         ["apply", "--reverse", "--check", str(patch)],
         cwd=checkout,
     )
-    _run_git("live patched-tree whitespace verification", ["diff", "--check"], cwd=checkout)
+    _run_git(
+        "live patched-tree whitespace verification", ["diff", "--check"], cwd=checkout
+    )
 
     status = _run_git(
         "live patched-tree status inspection",
@@ -258,7 +308,9 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
     )
     status_lines = status.stdout.splitlines()
     if not status_lines:
-        raise LiveReconstructionError("live working-tree patch produced no tracked changes")
+        raise LiveReconstructionError(
+            "live working-tree patch produced no tracked changes"
+        )
     if any(line.startswith("?? ") for line in status_lines):
         raise LiveReconstructionError(
             "live reconstruction unexpectedly produced untracked files"
@@ -332,11 +384,7 @@ def isolated_worker_env(
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
 
-    env = {
-        name: value
-        for name in _BASE_ENV_ALLOWLIST
-        if (value := base.get(name))
-    }
+    env = {name: value for name in _BASE_ENV_ALLOWLIST if (value := base.get(name))}
     env.update(
         {
             "HOME": str(home),

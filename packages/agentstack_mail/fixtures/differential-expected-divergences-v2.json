@@ -11,8 +11,8 @@
   "baselines": {
     "live": {
       "python_namespace": "mcp_agent_mail",
-      "source_head": "ad0e4788967d809979fa25004cf52545fdcd888a",
-      "bundle_sha256": "55f03ea48a3279f090c4b93436af1d55f912c75c3f985e4ba06a8b95d39f7670",
+      "source_head": "b8251c1336e5fdca80a91b8b608d843df91b64e8",
+      "bundle_sha256": "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30e37a1e",
       "tracked_patch_sha256": "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac",
       "tool_fixture": "live-tools-list.json"
     },
