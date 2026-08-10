@@ -121,8 +121,9 @@ This first gate does not measure concurrent reservation latency or fairness
 (D10), retirement while work is concurrently arriving (D11), or crash,
 recovery, and stale-consumer notification latency (D12). Those are central
 production conditions, not negligible edge cases; they are excluded because
-their product semantics are still pending. Passing this gate therefore says
-nothing about latency under contention.
+this first paired gate has no deterministic contention, retirement, or watcher
+recovery workload. Their product semantics are selected, but passing this gate
+still says nothing about latency under those conditions.
 
 It also cannot detect sustained throughput collapse, memory/file-descriptor
 growth, long-run queue buildup, network transport overhead, optional LLM paths,
@@ -130,4 +131,4 @@ or machine-specific behavior outside the selected runners. The PR lane's
 paired Linux result is relative only. Until the designated Mac runner and
 absolute budget exist, neither a PR pass nor a report-only Mac sample is an
 absolute target-machine guarantee. Each omitted dimension needs its own
-post-decision load, soak, or fault gate before authority cutover.
+selected-semantics load, soak, or fault gate before authority cutover.

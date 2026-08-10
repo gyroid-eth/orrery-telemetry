@@ -174,8 +174,16 @@ def _drop_d11_verification(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D11")["verification"].pop()
 
 
-def _select_d12(manifest: dict[str, Any]) -> None:
-    _decision(manifest, "D12")["decision_state"] = "selected"
+def _unselect_d12(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D12")["decision_state"] = "unselected"
+
+
+def _change_d12_scope(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D12")["scope"]["delivery_guarantee"] = "exactly_once"
+
+
+def _drop_d12_verification(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D12")["verification"].pop()
 
 
 def test_canonical_decision_ledger_is_accepted() -> None:
@@ -200,6 +208,7 @@ def test_all_decisions_have_independent_required_states() -> None:
         "D9",
         "D10",
         "D11",
+        "D12",
     }
     assert {
         (
@@ -211,7 +220,6 @@ def test_all_decisions_have_independent_required_states() -> None:
     } == {
         ("selected", "implemented", "no_go"),
         ("selected", "not_implemented", "no_go"),
-        ("unselected", "not_implemented", "no_go"),
     }
 
 
@@ -231,6 +239,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D9",
         "D10",
         "D11",
+        "D12",
     ]
     assert {item["id"]: item["implementation_origin"] for item in implemented} == {
         "D1": "core_change",
@@ -243,6 +252,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         "D9": "pre_existing_parity",
         "D10": "pre_existing_parity",
         "D11": "pre_existing_parity",
+        "D12": "pre_existing_parity",
     }
     assert all(
         "implementation_origin" not in item
@@ -278,22 +288,46 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_add_d13, "product decision ledger ids changed: missing=[], extra=['D13']"),
         (_duplicate_d6, "product decisions contain duplicate ids"),
         (_drop_decision_state, "selected product decision D6 changed"),
-        (_drop_implementation_state, "non-implemented decision D6 must not have origin"),
+        (
+            _drop_implementation_state,
+            "non-implemented decision D6 must not have origin",
+        ),
         (_drop_cutover_state, "selected product decision D6 changed"),
         (_unknown_decision_state, "selected product decision D6 changed"),
-        (_unknown_implementation_state, "non-implemented decision D6 must not have origin"),
+        (
+            _unknown_implementation_state,
+            "non-implemented decision D6 must not have origin",
+        ),
         (_unknown_cutover_state, "selected product decision D6 changed"),
         (_unselect_d7, "selected product decision D7 changed"),
-        (_pretend_d7_is_implemented, "implemented decision D7 has invalid or missing origin"),
+        (
+            _pretend_d7_is_implemented,
+            "implemented decision D7 has invalid or missing origin",
+        ),
         (_approve_d7_cutover, "selected product decision D7 changed"),
-        (_regress_d1_implementation, "non-implemented decision D1 must not have origin"),
-        (_regress_d2_implementation, "non-implemented decision D2 must not have origin"),
+        (
+            _regress_d1_implementation,
+            "non-implemented decision D1 must not have origin",
+        ),
+        (
+            _regress_d2_implementation,
+            "non-implemented decision D2 must not have origin",
+        ),
         (_change_d2_resolution, "selected product decision D2 changed"),
         (_change_d2_scope, "selected product decision D2 changed"),
         (_drop_d2_verification, "selected product decision D2 changed"),
-        (_drop_implemented_origin, "implemented decision D1 has invalid or missing origin"),
-        (_unknown_implemented_origin, "implemented decision D2 has invalid or missing origin"),
-        (_add_nonimplemented_origin, "non-implemented decision D7 must not have origin"),
+        (
+            _drop_implemented_origin,
+            "implemented decision D1 has invalid or missing origin",
+        ),
+        (
+            _unknown_implemented_origin,
+            "implemented decision D2 has invalid or missing origin",
+        ),
+        (
+            _add_nonimplemented_origin,
+            "non-implemented decision D7 must not have origin",
+        ),
         (_change_d7_scope, "selected product decision D7 changed"),
         (_change_d7_implementation_order, "selected product decision D7 changed"),
         (_change_d1_resolution, "selected product decision D1 changed"),
@@ -306,7 +340,9 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_drop_d10_verification, "selected product decision D10 changed"),
         (_change_d11_scope, "selected product decision D11 changed"),
         (_drop_d11_verification, "selected product decision D11 changed"),
-        (_select_d12, "unselected decision D12 changed"),
+        (_unselect_d12, "selected product decision D12 changed"),
+        (_change_d12_scope, "selected product decision D12 changed"),
+        (_drop_d12_verification, "selected product decision D12 changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

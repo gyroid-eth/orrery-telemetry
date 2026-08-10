@@ -46,7 +46,7 @@ owner explicitly selects upstream behavior as Path A.
 | D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
 | D10 | selected | implemented (pre-existing parity) | no-go | Under explicit repeated rendezvous, a shared archive lock yields one scheduler-dependent winner; one DB with split archive roots preserves two conflicting winners | Path A preserves topology-dependent upstream behavior instead of adding a DB mutex in this release | parallel agents, HA/misconfigured deployments, existing duplicate leases |
 | D11 | selected | implemented (pre-existing parity) | no-go | Retirement preserves active reservations and unread work; retired agents can fetch and acknowledge, while new sends are rejected | Path A preserves reversible upstream retirement despite blocked peers and pending senders | peers blocked by leases, senders awaiting ack, operators |
-| D12 | unselected | not implemented | no-go | Message state can commit before a crash loses its signal; filtered fetch clears every signal | send availability versus durable wakeups, retry, and per-message acknowledgement | offline/stale consumers, watchers, notification operators |
+| D12 | selected | implemented (pre-existing parity) | no-go | Preserve DB/archive-first best-effort signals, global per-agent fetch cleanup, and watcher retry/duplicate windows | Path A keeps the first cutover at one deliberate difference without claiming exactly-once tmux injection | offline/stale consumers, watchers, notification operators |
 
 ## D1 — conflicting token registration mutation
 
@@ -748,34 +748,59 @@ for pending signals.
 Identical crash, cleanup, and hermetic watcher-state results around Core
 `app.py:4547–4725`/`:7631–7638` and `storage.py:3115–3244`.
 
-### 3. Why it remains unselected
+### 3. Selected decision and basis
 
-Best-effort signals keep send available, while durable wakeups require an
-outbox/consumer protocol. At-least-once recovery conflicts with at-most-once
-external injection. Offline retention conflicts with bounded cleanup, and a
-global dirty-bit clear conflicts with filter-aware message consumption.
+Path A selects frozen-live parity for this release. Message and archive
+persistence remain authoritative; signaling remains best effort, and the
+watcher retains its retry, lease, and duplicate windows. This keeps the first
+authority cutover at the already-selected D1 difference only instead of adding
+a second pre-cutover behavior change to a notification path used by current
+operations.
+
+The operational sample at selection time contained 44 residual signal files.
+All were per-message files whose durable watcher result was
+`session_not_found`; none was a success-marked residue. This demonstrates the
+selected offline-retention path on this machine, not a product-wide frequency
+or latency guarantee. A parallel cron monitor can discover missed notifications
+after the fact, so a lost wakeup degrades to delayed discovery while the DB
+message remains available. No cron service-level guarantee is selected here.
+
+A transactional DB outbox could close the DB-commit-to-signal gap, but it cannot
+prove whether tmux applied bytes immediately before the watcher died. Without
+receiver-side idempotency, exactly-once external injection remains unavailable.
+The selection therefore states the at-least-once duplicate window explicitly
+and does not claim exactly-once delivery.
 
 ### 4. Options and breakage
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
-| Preserve best-effort files and global clear | Missed wakeups, duplicates, and stale files remain contractual | None |
+| **Selected: preserve best-effort files and global clear** | Missed wakeups, duplicates, and stale files remain contractual | None |
 | Transactional DB outbox per recipient with lease, ack, and dead-letter | Schema, worker, and API change; external injection still needs idempotency | Import or quarantine existing signals |
 | Atomic file claim protocol with rename/lease/requeue, message-ID dedupe, and sweeper | Cannot guarantee exact-once across external side effect plus crash | Existing files can be imported; corrupt ones need quarantine |
 | Derive wakeups from unread DB state; treat files as rebuildable cache | More polling/DB access and weaker edge-trigger behavior | Existing files cease to be authority |
 
-Non-binding lean: use a durable outbox with an explicit at-least-once contract
-and message-ID idempotency; do not promise exact-once tmux injection.
+The rejected durable-outbox and file-claim alternatives remain valid future
+design inputs. Selecting parity now does not preclude a later versioned product
+decision, but no post-cutover change is promised by D12.
 
-### 5. Test that fixes the choice
+### 5. Committed requirement gates
 
-SIGKILL at recipient commit→notification persistence, temp write→publish,
-consumer claim→inject, and inject→ack/delete. Restart must recover the proven
-committed-message/no-signal state. Race two consumers, exercise lease expiry,
-and pin the documented duplicate/idempotent outcome. Cover retirement,
-filtered/limited/empty fetch, stale retention, corrupt/legacy files, and
-per-message BCC privacy. Only selected notification IDs may clear unless the
-decision explicitly chooses global clear.
+The selected server node runs frozen live and Core in isolated subprocesses. It
+pins suppressed signal-write failure after successful DB/archive persistence,
+to/cc signal emission with no bcc signal, retirement preserving pending files,
+limited fetch clearing the selected agent's legacy and all per-message signals,
+and filtered-empty fetch doing the same without deleting another agent's
+signal. A source-order node fixes DB creation, archive bundle write, suppressed
+best-effort emission in that order.
+
+The selected watcher nodes execute the checked-in functions with a recorded
+fake tmux boundary. They pin prompt-before-submit, ordinary failure cooldown,
+lease release and retry, stale-lease duplicate recovery, success-state skip,
+normal cleanup, the 30/120-second constants, and the production
+`state_should_attempt → acquire_delivery_lease → deliver_worker` wiring. The
+final source-order node preserves `submit → success → lease release → unlink`
+while leaving real external byte application expressly unobserved.
 
 ## Decision procedure
 

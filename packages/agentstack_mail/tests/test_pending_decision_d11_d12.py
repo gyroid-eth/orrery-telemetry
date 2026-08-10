@@ -1,8 +1,9 @@
-"""Hermetic executable evidence for selected D11 and pending D12.
+"""Hermetic executable requirements for selected D11 and D12 parity.
 
-The D11 probes encode the selected upstream-parity requirement. The D12 probes
-still freeze observed behavior as evidence for a pending decision, not as an
-assertion that the behavior is correct.
+The D11 and D12 probes encode selected upstream-parity requirements. They pin
+the measured behavior for this release; they do not claim that best-effort
+notification can provide exactly-once delivery across an external tmux side
+effect.
 
 D11 runs the frozen, authenticated live source and AgentStack Mail Core in
 secret-free subprocesses with worker-owned database, archive, and signal roots.
@@ -545,9 +546,7 @@ def _pending_state_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
     ]
     acknowledged_receipts = [
         [kind, required, read, ack]
-        for _name, kind, _subject, required, read, ack in after_acknowledge[
-            "receipts"
-        ]
+        for _name, kind, _subject, required, read, ack in after_acknowledge["receipts"]
     ]
     return {
         "reservation_grants": len(case["reservation"]["granted"]),
@@ -570,8 +569,7 @@ def _pending_state_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
         "rejected_send_zero_d11_state_delta": (
             case["after_rejected_send"]["retired"] == after["retired"]
             and all(
-                case["after_rejected_send"][key] == after[key]
-                for key in durable_keys
+                case["after_rejected_send"][key] == after[key] for key in durable_keys
             )
         ),
         "retired_fetch_count": len(case["fetched"]["result"]),
@@ -601,9 +599,7 @@ def _retirement_race_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
             "ok": case["reservation"]["ok"],
             "grant_count": len(case["reservation"]["result"]["granted"]),
             "retired": case["post_state"]["retired"],
-            "active_reservation_count": len(
-                case["post_state"]["active_reservations"]
-            ),
+            "active_reservation_count": len(case["post_state"]["active_reservations"]),
             "active_reservations_exclusive": all(
                 row[2] for row in case["post_state"]["active_reservations"]
             ),
@@ -731,6 +727,468 @@ def test_d11_selected_parity_retirement_races_keep_upstream_boundaries(
     assert core == live
 
 
+_D12_SERVER_WORKER = r"""
+import asyncio
+import importlib
+import json
+import os
+import sqlite3
+import sys
+import types
+from pathlib import Path
+
+from fastmcp import Client
+
+namespace = os.environ["DECISION_NAMESPACE"]
+state_root = Path(os.environ["DECISION_STATE_ROOT"])
+database_path = Path(os.environ["DECISION_DATABASE"])
+signals_root = Path(os.environ["DECISION_SIGNALS"])
+storage_root = Path(os.environ["DECISION_STORAGE"])
+source_root = Path(os.environ["DECISION_SOURCE_ROOT"]).resolve(strict=True)
+
+llm_stub = types.ModuleType(f"{namespace}.llm")
+
+
+async def fail_if_llm_called(*_args, **_kwargs):
+    raise AssertionError("D12 decision probe entered the disabled LLM seam")
+
+
+llm_stub.complete_system_user = fail_if_llm_called
+sys.modules[f"{namespace}.llm"] = llm_stub
+app = importlib.import_module(f"{namespace}.app")
+storage = importlib.import_module(f"{namespace}.storage")
+for module in (app, storage):
+    Path(module.__file__).resolve(strict=True).relative_to(source_root)
+
+
+def public_payload(result):
+    if result.structured_content is not None:
+        return result.structured_content
+    return result.data
+
+
+async def require_success(client, tool_name, arguments):
+    result = await client.call_tool(tool_name, arguments)
+    if result.is_error:
+        raise AssertionError(
+            f"{tool_name} unexpectedly failed: {public_payload(result)!r}"
+        )
+    return public_payload(result)
+
+
+def durable_snapshot(project_key):
+    connection = sqlite3.connect(database_path)
+    try:
+        project_id, project_slug = connection.execute(
+            "select id, slug from projects where human_key = ?", (project_key,)
+        ).fetchone()
+        retired = connection.execute(
+            "select retired_at is not null from agents "
+            "where project_id = ? and name = 'BlueLake'",
+            (project_id,),
+        ).fetchone()[0]
+        message_count = connection.execute(
+            "select count(*) from messages where project_id = ?", (project_id,)
+        ).fetchone()[0]
+        recipient_count = connection.execute(
+            "select count(*) from message_recipients mr "
+            "join messages m on m.id = mr.message_id "
+            "where m.project_id = ?",
+            (project_id,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    signal_root = signals_root / "projects" / project_slug / "agents"
+    signals = {
+        str(path.relative_to(signal_root)): path.read_bytes().hex()
+        for path in sorted(signal_root.rglob("*.signal"))
+    }
+    return {
+        "retired": bool(retired),
+        "message_count": message_count,
+        "recipient_count": recipient_count,
+        "signals": signals,
+    }
+
+
+async def main():
+    server = app.build_mcp_server()
+    async with Client(server) as client:
+        project_path = state_root / "project"
+        project_path.mkdir(parents=True, exist_ok=True)
+        project = str(project_path)
+        await require_success(
+            client,
+            "ensure_project",
+            {"human_key": project, "format": "json"},
+        )
+        for name, token in (
+            ("GreenCastle", "d12-green-token"),
+            ("BlueLake", "d12-blue-token"),
+            ("RedStone", "d12-red-token"),
+            ("YellowCrane", "d12-yellow-token"),
+        ):
+            await require_success(
+                client,
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "d12-hermetic-probe",
+                    "model": "fixture-model",
+                    "name": name,
+                    "task_description": "D12 selected signal lifecycle",
+                    "registration_token": token,
+                    "format": "json",
+                },
+            )
+        for name in ("BlueLake", "RedStone", "YellowCrane"):
+            await require_success(
+                client,
+                "set_contact_policy",
+                {
+                    "project_key": project,
+                    "agent_name": name,
+                    "policy": "open",
+                    "format": "json",
+                },
+            )
+
+        signal_attempts = 0
+        original_emit = app.emit_notification_signal
+
+        async def fail_signal(*_args, **_kwargs):
+            nonlocal signal_attempts
+            signal_attempts += 1
+            raise RuntimeError("D12 injected best-effort signal failure")
+
+        app.emit_notification_signal = fail_signal
+        try:
+            failed_signal_send = await require_success(
+                client,
+                "send_message",
+                {
+                    "project_key": project,
+                    "sender_name": "GreenCastle",
+                    "to": ["BlueLake"],
+                    "cc": ["RedStone"],
+                    "bcc": ["YellowCrane"],
+                    "subject": "D12 persisted without signal",
+                    "body_md": "The DB message remains authoritative.",
+                    "sender_token": "d12-green-token",
+                    "format": "json",
+                },
+            )
+        finally:
+            app.emit_notification_signal = original_emit
+        after_signal_failure = durable_snapshot(project)
+        failure_fetch = await require_success(
+            client,
+            "fetch_inbox",
+            {
+                "project_key": project,
+                "agent_name": "BlueLake",
+                "limit": 10,
+                "include_bodies": False,
+                "format": "json",
+            },
+        )
+        failure_archive_contains_message = any(
+            "D12 persisted without signal" in path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+            for path in storage_root.rglob("*.md")
+        )
+
+        routed = await require_success(
+            client,
+            "send_message",
+            {
+                "project_key": project,
+                "sender_name": "GreenCastle",
+                "to": ["BlueLake"],
+                "cc": ["RedStone"],
+                "bcc": ["YellowCrane"],
+                "subject": "D12 visible and blind signal routing",
+                "body_md": "Only to and cc recipients receive wakeup files.",
+                "sender_token": "d12-green-token",
+                "format": "json",
+            },
+        )
+        seeded = []
+        for index in (1, 2):
+            seeded.append(
+                await require_success(
+                    client,
+                    "send_message",
+                    {
+                        "project_key": project,
+                        "sender_name": "GreenCastle",
+                        "to": ["BlueLake"],
+                        "subject": f"D12 pending signal {index}",
+                        "body_md": "Offline delivery remains retryable.",
+                        "sender_token": "d12-green-token",
+                        "format": "json",
+                    },
+                )
+            )
+        project_slug = next(
+            path.parent.name
+            for path in (signals_root / "projects").glob("*/agents")
+        )
+        legacy_signal = (
+            signals_root / "projects" / project_slug / "agents" / "BlueLake.signal"
+        )
+        legacy_signal.write_text(
+            json.dumps({"project": project_slug, "agent": "BlueLake"}),
+            encoding="utf-8",
+        )
+        before_retire = durable_snapshot(project)
+        retirement = await require_success(
+            client,
+            "retire_agent",
+            {
+                "project_key": project,
+                "agent_name": "BlueLake",
+                "registration_token": "d12-blue-token",
+            },
+        )
+        after_retire = durable_snapshot(project)
+        fetched = await require_success(
+            client,
+            "fetch_inbox",
+            {
+                "project_key": project,
+                "agent_name": "BlueLake",
+                "limit": 1,
+                "include_bodies": False,
+                "format": "json",
+            },
+        )
+        after_limited_fetch = durable_snapshot(project)
+        filtered_fetch = await require_success(
+            client,
+            "fetch_inbox",
+            {
+                "project_key": project,
+                "agent_name": "RedStone",
+                "limit": 1,
+                "topic": "D12-no-such-topic",
+                "include_bodies": False,
+                "format": "json",
+            },
+        )
+        after_filtered_fetch = durable_snapshot(project)
+
+    print(
+        json.dumps(
+            {
+                "namespace": namespace,
+                "signal_attempts": signal_attempts,
+                "failed_signal_send_count": failed_signal_send["count"],
+                "failure_fetch_subjects": sorted(
+                    item["subject"] for item in failure_fetch["result"]
+                ),
+                "failure_archive_contains_message": failure_archive_contains_message,
+                "routed_send_count": routed["count"],
+                "seed_send_count": sum(item["count"] for item in seeded),
+                "retirement": retirement,
+                "fetch_count": len(fetched["result"]),
+                "filtered_fetch_count": len(filtered_fetch["result"]),
+                "after_signal_failure": after_signal_failure,
+                "before_retire": before_retire,
+                "after_retire": after_retire,
+                "after_limited_fetch": after_limited_fetch,
+                "after_filtered_fetch": after_filtered_fetch,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+asyncio.run(main())
+"""
+
+
+def _run_d12_server_probe(
+    namespace: str,
+    frozen_live_checkout: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, Any]:
+    source = (
+        frozen_live_checkout / "src" if namespace == LIVE_NAMESPACE else CORE_SOURCE
+    )
+    root = tmp_path_factory.mktemp(f"d12-server-{namespace}")
+    roots = WorkerStateRoots.under(root, pythonpath=(source,))
+    environment = isolated_worker_env(os.environ, namespace, roots)
+    environment.update(
+        {
+            "DECISION_NAMESPACE": namespace,
+            "DECISION_STATE_ROOT": str(root),
+            "DECISION_DATABASE": str(roots.database),
+            "DECISION_SIGNALS": str(roots.signals),
+            "DECISION_STORAGE": str(roots.storage),
+            "DECISION_SOURCE_ROOT": str(source.resolve()),
+        }
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", _D12_SERVER_WORKER],
+        cwd=roots.cwd,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    transcript = completed.stdout + completed.stderr
+    if any(
+        token in transcript
+        for token in (
+            "d12-green-token",
+            "d12-blue-token",
+            "d12-red-token",
+            "d12-yellow-token",
+        )
+    ):
+        pytest.fail("D12 worker leaked a fake registration token", pytrace=False)
+    if completed.returncode != 0:
+        pytest.fail(
+            f"{namespace} D12 worker failed ({completed.returncode}):\n"
+            f"{transcript[-5000:]}",
+            pytrace=False,
+        )
+    output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    assert output_lines, f"{namespace} D12 worker produced no output"
+    result = json.loads(output_lines[-1])
+    assert result["namespace"] == namespace
+    return result
+
+
+@pytest.fixture(scope="module")
+def d12_server_probes(
+    frozen_live_checkout: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, dict[str, Any]]:
+    return {
+        namespace: _run_d12_server_probe(
+            namespace,
+            frozen_live_checkout,
+            tmp_path_factory,
+        )
+        for namespace in (LIVE_NAMESPACE, CORE_NAMESPACE)
+    }
+
+
+def _d12_server_projection(probe: Mapping[str, Any]) -> dict[str, Any]:
+    after_failure = probe["after_signal_failure"]
+    before_retire = probe["before_retire"]
+    after_retire = probe["after_retire"]
+    after_limited_fetch = probe["after_limited_fetch"]
+    after_filtered_fetch = probe["after_filtered_fetch"]
+    before_signal_paths = set(before_retire["signals"])
+    limited_signal_paths = set(after_limited_fetch["signals"])
+    return {
+        "signal_failure_attempts": probe["signal_attempts"],
+        "failed_signal_send_count": probe["failed_signal_send_count"],
+        "failure_message_api_fetchable": (
+            "D12 persisted without signal" in probe["failure_fetch_subjects"]
+        ),
+        "failure_archive_contains_message": probe["failure_archive_contains_message"],
+        "failure_message_count": after_failure["message_count"],
+        "failure_recipient_count": after_failure["recipient_count"],
+        "failure_signal_count": len(after_failure["signals"]),
+        "routed_send_count": probe["routed_send_count"],
+        "seed_send_count": probe["seed_send_count"],
+        "pre_retire_message_count": before_retire["message_count"],
+        "pre_retire_recipient_count": before_retire["recipient_count"],
+        "pre_retire_signal_count": len(before_retire["signals"]),
+        "blue_per_message_signal_count": sum(
+            path.startswith("BlueLake/") for path in before_signal_paths
+        ),
+        "red_per_message_signal_count": sum(
+            path.startswith("RedStone/") for path in before_signal_paths
+        ),
+        "yellow_signal_count": sum(
+            path == "YellowCrane.signal" or path.startswith("YellowCrane/")
+            for path in before_signal_paths
+        ),
+        "blue_legacy_signal_present": "BlueLake.signal" in before_signal_paths,
+        "retired": after_retire["retired"],
+        "retire_preserved_signals": after_retire["signals"] == before_retire["signals"],
+        "fetch_count": probe["fetch_count"],
+        "limited_fetch_preserved_messages": after_limited_fetch["message_count"]
+        == after_retire["message_count"],
+        "limited_fetch_preserved_recipients": after_limited_fetch["recipient_count"]
+        == after_retire["recipient_count"],
+        "limited_fetch_cleared_blue_signals": not any(
+            path == "BlueLake.signal" or path.startswith("BlueLake/")
+            for path in limited_signal_paths
+        ),
+        "limited_fetch_preserved_red_signal": sum(
+            path.startswith("RedStone/") for path in limited_signal_paths
+        ),
+        "filtered_fetch_count": probe["filtered_fetch_count"],
+        "filtered_fetch_cleared_red_signals": not after_filtered_fetch["signals"],
+        "filtered_fetch_preserved_messages": after_filtered_fetch["message_count"]
+        == after_limited_fetch["message_count"],
+        "filtered_fetch_preserved_recipients": after_filtered_fetch["recipient_count"]
+        == after_limited_fetch["recipient_count"],
+        "after_fetch_retired": after_filtered_fetch["retired"],
+    }
+
+
+def test_d12_selected_parity_server_signal_lifecycle_matches_frozen_live(
+    d12_server_probes: Mapping[str, dict[str, Any]],
+) -> None:
+    expected = {
+        "signal_failure_attempts": 2,
+        "failed_signal_send_count": 1,
+        "failure_message_api_fetchable": True,
+        "failure_archive_contains_message": True,
+        "failure_message_count": 1,
+        "failure_recipient_count": 3,
+        "failure_signal_count": 0,
+        "routed_send_count": 1,
+        "seed_send_count": 2,
+        "pre_retire_message_count": 4,
+        "pre_retire_recipient_count": 8,
+        "pre_retire_signal_count": 5,
+        "blue_per_message_signal_count": 3,
+        "red_per_message_signal_count": 1,
+        "yellow_signal_count": 0,
+        "blue_legacy_signal_present": True,
+        "retired": True,
+        "retire_preserved_signals": True,
+        "fetch_count": 1,
+        "limited_fetch_preserved_messages": True,
+        "limited_fetch_preserved_recipients": True,
+        "limited_fetch_cleared_blue_signals": True,
+        "limited_fetch_preserved_red_signal": 1,
+        "filtered_fetch_count": 0,
+        "filtered_fetch_cleared_red_signals": True,
+        "filtered_fetch_preserved_messages": True,
+        "filtered_fetch_preserved_recipients": True,
+        "after_fetch_retired": True,
+    }
+    live = _d12_server_projection(d12_server_probes[LIVE_NAMESPACE])
+    core = _d12_server_projection(d12_server_probes[CORE_NAMESPACE])
+    assert live == expected
+    assert core == expected
+    assert core == live
+
+
+def test_d12_selected_parity_server_source_order_preserves_best_effort_gap() -> None:
+    source = (CORE_SOURCE / "agentstack_mail" / "app.py").read_text(encoding="utf-8")
+    start = source.index("    async def _deliver_message(")
+    end = source.index("\n    @mcp.tool(", start)
+    delivery = source[start:end]
+    create = delivery.index("message = await _create_message(")
+    archive = delivery.index("await write_message_bundle(", create)
+    suppress_signal_error = delivery.index("with suppress(Exception):", archive)
+    emit = delivery.index("await emit_notification_signal(", suppress_signal_error)
+    assert create < archive < suppress_signal_error < emit
+
+
 _WATCHER_FUNCTIONS = (
     "state_should_attempt",
     "state_mark_result",
@@ -816,7 +1274,12 @@ run_to() {{
     fi
     printf '%s\n' "$*" >> "$FAKE_COMMAND_LOG"
     case "$2" in
-        has-session) return 0 ;;
+        has-session)
+            if [[ "${{FAIL_HAS_SESSION:-0}}" == "1" ]]; then
+                return 1
+            fi
+            return 0
+            ;;
         capture-pane) printf 'Claude ❯\n'; return 0 ;;
         send-keys) return 0 ;;
         *) return 98 ;;
@@ -832,6 +1295,7 @@ def _run_watcher_state_machine(
     crash_point: str,
     *,
     command_log: Path | None = None,
+    fail_has_session: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
     functions, _source = _instrumented_watcher_functions()
     agent = str(signal_payload["agent"])
@@ -852,6 +1316,7 @@ def _run_watcher_state_machine(
         "TEST_LEASE_DIR": str(lease_dir),
         "FAKE_COMMAND_LOG": str(command_log),
         "CRASH_POINT": crash_point,
+        "FAIL_HAS_SESSION": "1" if fail_has_session else "0",
     }
     completed = subprocess.run(
         ["/bin/bash", "-c", _watcher_shell(functions, deliver=True)],
@@ -888,7 +1353,18 @@ def _state_should_attempt(
     )
 
 
-def test_d12_watcher_crash_windows_are_durable_and_hermetic(
+def _assert_injection_commands(commands: list[str], *, expected_count: int) -> None:
+    injection_sequence = []
+    for command in commands:
+        if "send-keys -t BlueLake -l " in command:
+            assert "D12 completion delivery" in command
+            injection_sequence.append("prompt")
+        elif command.endswith("send-keys -t BlueLake C-m"):
+            injection_sequence.append("submit")
+    assert injection_sequence == ["prompt", "submit"] * expected_count
+
+
+def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
     tmp_path: Path,
 ) -> None:
     signal_payload = {
@@ -935,7 +1411,7 @@ def test_d12_watcher_crash_windows_are_durable_and_hermetic(
             .splitlines()
         )
         assert commands[-1].endswith("send-keys -t BlueLake C-m")
-        assert sum("send-keys -t BlueLake C-m" in line for line in commands) == 1
+        _assert_injection_commands(commands, expected_count=1)
 
         if crash_point == "after_external_injection":
             # Model lease expiry without waiting 120 seconds.  With no success
@@ -956,7 +1432,7 @@ def test_d12_watcher_crash_windows_are_durable_and_hermetic(
                 .read_text(encoding="utf-8")
                 .splitlines()
             )
-            assert sum("send-keys -t BlueLake C-m" in line for line in commands) == 2
+            _assert_injection_commands(commands, expected_count=2)
         elif crash_point:
             # Once success is durable, state_should_attempt permanently skips
             # the still-present signal.  This is the stale-file crash window.
@@ -965,7 +1441,55 @@ def test_d12_watcher_crash_windows_are_durable_and_hermetic(
             assert signal_path.exists()
 
 
-def test_d12_source_order_exposes_only_the_external_application_seam() -> None:
+def test_d12_selected_parity_watcher_failure_cooldown_retries_without_loss(
+    tmp_path: Path,
+) -> None:
+    signal_payload = {
+        "project": "d12-hermetic-project",
+        "agent": "BlueLake",
+        "message": {
+            "id": 12002,
+            "subject": "D12 watcher completion",
+            "importance": "high",
+        },
+    }
+    case_root = tmp_path / "ordinary-failure-cooldown"
+    failed, signal_path, state_file, lease_path = _run_watcher_state_machine(
+        case_root,
+        signal_payload,
+        "",
+        fail_has_session=True,
+    )
+    assert failed.returncode == 0, failed.stderr
+    assert signal_path.exists()
+    assert not lease_path.exists()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    key = f"BlueLake:{signal_payload['message']['id']}"
+    assert state[key]["last_result"] == "session_not_found"
+    assert _state_should_attempt(case_root, signal_payload).returncode == 1
+
+    state[key]["last_attempt_epoch"] = 0
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    assert _state_should_attempt(case_root, signal_payload).returncode == 0
+
+    retried, retried_signal, _state, retried_lease = _run_watcher_state_machine(
+        case_root,
+        signal_payload,
+        "",
+        command_log=case_root / "fake-external-commands.log",
+    )
+    assert retried.returncode == 0, retried.stderr
+    assert not retried_signal.exists()
+    assert not retried_lease.exists()
+    commands = (
+        (case_root / "fake-external-commands.log")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    _assert_injection_commands(commands, expected_count=1)
+
+
+def test_d12_selected_parity_source_order_exposes_external_application_seam() -> None:
     """The fake-command return is observable; external application is not.
 
     No local state can prove whether tmux applied the submitted bytes immediately
@@ -975,6 +1499,31 @@ def test_d12_source_order_exposes_only_the_external_application_seam() -> None:
     """
 
     source = WATCHER.read_text(encoding="utf-8")
+    assert (
+        len(
+            re.findall(
+                r"^RETRY_COOLDOWN=30(?:\s+#.*)?$",
+                source,
+                re.MULTILINE,
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            re.findall(
+                r"^LEASE_TTL=120(?:\s+#.*)?$",
+                source,
+                re.MULTILINE,
+            )
+        )
+        == 1
+    )
+    handler = _extract_shell_function(source, "handle_signal_file")
+    should_attempt = handler.index('state_should_attempt "$agent_name" "$msg_key"')
+    acquire = handler.index('acquire_delivery_lease "$agent_name" "$msg_key"')
+    worker = handler.index('deliver_worker "$signal_file" "$agent_name" "$msg_key"')
+    assert should_attempt < acquire < worker
     delivery = _extract_shell_function(source, "deliver_worker")
     submit = delivery.index('tmux send-keys -t "$session_name" C-m')
     success = delivery.index(

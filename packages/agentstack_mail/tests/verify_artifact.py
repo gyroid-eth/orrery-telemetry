@@ -134,9 +134,7 @@ EXPECTED_STATIC_ALLOWLIST = {
     },
 }
 
-EXPECTED_UNSELECTED_DECISIONS = {
-    "D12": "signal cleanup after crash, retirement, or stale consumer",
-}
+EXPECTED_UNSELECTED_DECISIONS: dict[str, str] = {}
 
 EXPECTED_SELECTED_DECISIONS = {
     "D1": {
@@ -178,9 +176,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "scope": {
             "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
             "same_project_response_expiry_cases": ["past", "future", "null"],
-            "expired_pending_accept": (
-                "reuse_existing_row_approve_and_refresh_expiry"
-            ),
+            "expired_pending_accept": ("reuse_existing_row_approve_and_refresh_expiry"),
             "local_send_expiry_cases": ["past", "future", "null"],
             "explicit_cross_project_send_expiry_cases": [
                 "past",
@@ -323,9 +319,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": "same_project_send_message_to_open_recipient",
-            "sender_cohort": (
-                "explicitly_registered_non_null_caller_supplied_token"
-            ),
+            "sender_cohort": ("explicitly_registered_non_null_caller_supplied_token"),
             "missing_sender_token": (
                 "succeeds_verified_sender_false_and_commits_one_delivery"
             ),
@@ -402,9 +396,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": "same_project_send_message_to_open_recipient",
-            "sender_cohort": (
-                "explicitly_registered_non_null_caller_supplied_token"
-            ),
+            "sender_cohort": ("explicitly_registered_non_null_caller_supplied_token"),
             "literal_sigkill_seams": [
                 "after_canonical_bundle_write_before_outbox_write",
                 "after_outbox_bundle_write_before_inbox_write",
@@ -435,8 +427,7 @@ EXPECTED_SELECTED_DECISIONS = {
                     "mcp_is_error_true_and_injected_exception_marker_present"
                 ),
                 "database": (
-                    "one_selected_subject_message_to_recipient_relationship_"
-                    "persists"
+                    "one_selected_subject_message_to_recipient_relationship_persists"
                 ),
                 "archive": "subject_absent",
             },
@@ -473,9 +464,7 @@ EXPECTED_SELECTED_DECISIONS = {
                 "same_project_acknowledge_message_for_one_ack_required_"
                 "direct_to_recipient"
             ),
-            "initial_recipient_state": (
-                "selected_receipt_read_ts_null_ack_ts_null"
-            ),
+            "initial_recipient_state": ("selected_receipt_read_ts_null_ack_ts_null"),
             "literal_sigkill_seam": (
                 "after_committed_read_helper_returns_before_ack_helper_call"
             ),
@@ -553,8 +542,7 @@ EXPECTED_SELECTED_DECISIONS = {
                     "one_database_one_preinitialized_archive_and_one_shared_lock_path"
                 ),
                 "barrier": (
-                    "both_processes_reach_archive_lock_acquisition_seam_before_"
-                    "release"
+                    "both_processes_reach_archive_lock_acquisition_seam_before_release"
                 ),
                 "order": "process_launch_order_reversed",
                 "result_per_trial": "one_grant_one_conflict_one_active_row",
@@ -564,9 +552,7 @@ EXPECTED_SELECTED_DECISIONS = {
                 "topology": (
                     "one_database_two_preinitialized_archives_and_distinct_lock_paths"
                 ),
-                "barrier": (
-                    "both_processes_pass_conflict_read_before_either_insert"
-                ),
+                "barrier": ("both_processes_pass_conflict_read_before_either_insert"),
                 "order": "process_launch_order_reversed",
                 "result_per_trial": (
                     "two_grants_zero_conflicts_two_active_rows_with_distinct_holders"
@@ -641,16 +627,14 @@ EXPECTED_SELECTED_DECISIONS = {
                 "unread_receipts"
             ),
             "retired_fetch": (
-                "limit_one_succeeds_without_marking_receipts_or_releasing_"
-                "reservation"
+                "limit_one_succeeds_without_marking_receipts_or_releasing_reservation"
             ),
             "retired_acknowledge": (
                 "selected_ack_required_receipt_becomes_read_and_acknowledged_"
                 "while_other_unread_receipt_and_reservation_remain"
             ),
             "post_retirement_send": (
-                "reject_with_retired_causal_diagnostic_and_zero_observed_state_"
-                "delta"
+                "reject_with_retired_causal_diagnostic_and_zero_observed_state_delta"
             ),
             "reservation_races": {
                 "retire_before_create": (
@@ -681,10 +665,7 @@ EXPECTED_SELECTED_DECISIONS = {
                 "D9_acknowledgement_timestamp_update_mechanics",
                 "D10_reservation_winner_lock_or_unselected_race_schedules",
                 "SIGKILL_cancellation_power_loss_restart_or_convergence",
-                (
-                    "unretire_reretire_legacy_retired_rows_migration_or_"
-                    "reconciliation"
-                ),
+                ("unretire_reretire_legacy_retired_rows_migration_or_reconciliation"),
             ],
         },
         "allowlisted": False,
@@ -692,6 +673,108 @@ EXPECTED_SELECTED_DECISIONS = {
         "verification": [
             "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_preserves_pending_state_and_retired_fetch",
             "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_retirement_races_keep_upstream_boundaries",
+        ],
+    },
+    "D12": {
+        "id": "D12",
+        "title": "signal cleanup after crash, retirement, or stale consumer",
+        "decision_state": "selected",
+        "implementation_state": "implemented",
+        "implementation_origin": "pre_existing_parity",
+        "cutover_state": "no_go",
+        "resolution": "match_frozen_live",
+        "scope": {
+            "server_delivery_order": (
+                "database_message_and_recipients_then_archive_bundle_then_best_"
+                "effort_signal_attempt"
+            ),
+            "signal_write_failure": (
+                "send_succeeds_with_database_message_and_recipient_preserved_"
+                "and_no_signal"
+            ),
+            "signal_recipients": (
+                "to_and_cc_receive_per_message_signals_and_bcc_receives_no_signal"
+            ),
+            "retirement_cleanup": ("retirement_preserves_pending_per_message_signals"),
+            "fetch_cleanup": (
+                "successful_limit_one_or_filtered_empty_fetch_preserves_message_"
+                "and_recipient_state_and_clears_selected_agent_legacy_and_all_"
+                "per_message_signals_only"
+            ),
+            "watcher_retry_contract": (
+                "retry_after_30_seconds_and_reclaim_stale_delivery_lease_after_"
+                "120_seconds"
+            ),
+            "watcher_crash_windows": {
+                "after_external_injection_before_success_record": (
+                    "signal_and_lease_remain_then_retry_can_duplicate_external_"
+                    "injection_after_lease_expiry"
+                ),
+                "after_success_record_before_lease_release": (
+                    "success_state_signal_and_lease_remain_and_future_attempts_skip"
+                ),
+                "after_lease_release_before_unlink": (
+                    "success_state_and_signal_remain_without_lease_and_future_"
+                    "attempts_skip"
+                ),
+                "normal_completion": (
+                    "success_state_remains_and_signal_and_lease_are_removed"
+                ),
+            },
+            "delivery_guarantee": (
+                "best_effort_wakeup_with_at_least_once_duplicate_window_not_"
+                "exactly_once"
+            ),
+            "message_authority": (
+                "database_message_remains_fetchable_when_wakeup_is_missing_or_delayed"
+            ),
+            "selection_basis": [
+                (
+                    "match_frozen_live_and_keep_initial_cutover_difference_count_"
+                    "at_D1_only"
+                ),
+                (
+                    "observed_offline_per_message_signals_are_retained_for_"
+                    "session_not_found_retry"
+                ),
+                (
+                    "operational_cron_detection_reduces_a_missed_wakeup_to_"
+                    "delayed_notification"
+                ),
+                (
+                    "durable_database_outbox_would_not_close_the_unobservable_"
+                    "external_application_seam"
+                ),
+            ],
+            "not_claimed": [
+                (
+                    "exact_signal_paths_payload_bytes_timestamps_message_ids_"
+                    "agent_names_subjects_or_retry_wall_clock_latency"
+                ),
+                ("exactly_once_external_tmux_application_or_receiver_side_idempotency"),
+                (
+                    "whether_tmux_applied_submitted_bytes_immediately_before_"
+                    "worker_process_death"
+                ),
+                (
+                    "cron_monitor_latency_availability_or_end_to_end_delivery_"
+                    "service_level"
+                ),
+                (
+                    "corrupt_legacy_signal_quarantine_ttl_sweeping_or_bounded_"
+                    "state_file_growth"
+                ),
+                "multi_host_network_filesystem_or_non_tmux_notification_consumers",
+            ],
+        },
+        "allowlisted": False,
+        "comparator_disposition": "assert_selected_behavior",
+        "verification": [
+            "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_server_signal_lifecycle_matches_frozen_live",
+            "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_server_source_order_preserves_best_effort_gap",
+            "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic",
+            "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_watcher_failure_cooldown_retries_without_loss",
+            "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_source_order_exposes_external_application_seam",
         ],
     },
 }
