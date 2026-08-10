@@ -186,6 +186,24 @@ def _drop_d12_verification(manifest: dict[str, Any]) -> None:
     _decision(manifest, "D12")["verification"].pop()
 
 
+def _drop_safety_difference(manifest: dict[str, Any]) -> None:
+    manifest["intentional_differences"]["safety_entries"].clear()
+
+
+def _weaken_safety_difference(manifest: dict[str, Any]) -> None:
+    manifest["intentional_differences"]["safety_entries"][0]["product"] = (
+        "probe uncertainty may auto-release"
+    )
+
+
+def _drop_performance_gate(manifest: dict[str, Any]) -> None:
+    manifest["performance_gates"].clear()
+
+
+def _weaken_performance_gate(manifest: dict[str, Any]) -> None:
+    manifest["performance_gates"][0]["minimum_complete_runs"] = 0
+
+
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
@@ -343,6 +361,10 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_unselect_d12, "selected product decision D12 changed"),
         (_change_d12_scope, "selected product decision D12 changed"),
         (_drop_d12_verification, "selected product decision D12 changed"),
+        (_drop_safety_difference, "safety differences changed"),
+        (_weaken_safety_difference, "safety differences changed"),
+        (_drop_performance_gate, "performance gates changed"),
+        (_weaken_performance_gate, "performance gates changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

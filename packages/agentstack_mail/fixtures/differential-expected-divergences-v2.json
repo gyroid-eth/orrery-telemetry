@@ -48,6 +48,15 @@
         "consequence": "This behavior differential cannot detect live/Core performance-class regressions; performance must be measured by a separate gate."
       }
     ],
+    "safety_entries": [
+      {
+        "id": "reservation-probe-incomplete-fail-closed",
+        "selector": "file_reservation_staleness.activity_probe.{timeout,error,filesystem_incomplete}",
+        "frozen_live": "timeout/error is collapsed to matches=[], fs=None, git=None; an inactive owner with no recent mail can therefore become stale and be auto-released",
+        "product": "probe_complete=false and activity_unknown=true; stale=false, so activity-probe uncertainty cannot auto-release; explicit TTL expiry remains authoritative",
+        "reason": "absence of evidence after an incomplete probe is not evidence of inactivity; avoid erroneous early release while retaining deterministic TTL expiry"
+      }
+    ],
     "allowlisted_entries": [
     {
       "id": "description.request_contact",
@@ -296,6 +305,36 @@
     }
     ]
   },
+  "performance_gates": [
+    {
+      "id": "reservation-activity-57-path-wall-time",
+      "selector": "reservation_activity.performance.57_concrete",
+      "script": "packages/agentstack_mail/scripts/reservation_performance_gate.py",
+      "input": {
+        "workspace": "/Users/operator/Syncthing/<vault-directory>",
+        "count": 57,
+        "source": "git ls-files -z; prefer 10_Reference/**/*.{md,png,jpg,jpeg,webp}; evenly sample deterministically"
+      },
+      "repetitions": 5,
+      "statistic": "median_wall_seconds",
+      "threshold_seconds": 6.0,
+      "minimum_complete_runs": 3,
+      "pass_definition": "median wall time across 5 runs <= 6.0s AND at least 3 runs have matched=probe_complete=57; maximum and live snapshot are diagnostic only",
+      "purpose": "detect regression to the approximately 9.5s serial reservation sweep, not distinguish normal 2s versus 3s machine-load variation",
+      "fingerprints": {
+        "input_sha256": "hash of sampled path strings only",
+        "result_shape_sha256": "hash of path/matched/probe_complete/filesystem_present/git_present only",
+        "excluded": "filesystem and Git activity timestamps; hourly vault commits make them mutable"
+      },
+      "calibration": {
+        "runs": 10,
+        "fresh_process_each_run": true,
+        "median_seconds": 1.5137,
+        "max_seconds": 2.7907,
+        "complete_runs": 10
+      }
+    }
+  ],
   "product_decisions": [
     {
       "id": "D1",
