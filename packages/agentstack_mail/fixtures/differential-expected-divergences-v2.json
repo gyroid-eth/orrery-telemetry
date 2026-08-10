@@ -313,17 +313,28 @@
       "input": {
         "workspace": "/Users/operator/Syncthing/<vault-directory>",
         "count": 57,
-        "source": "git ls-files -z; prefer 10_Reference/**/*.{md,png,jpg,jpeg,webp}; evenly sample deterministically"
+        "source_command": "git ls-files -z",
+        "preferred_prefix": "10_Reference/",
+        "preferred_extensions": [
+          ".md",
+          ".png",
+          ".jpg",
+          ".jpeg",
+          ".webp"
+        ],
+        "ordering": "unicode_codepoint_ascending",
+        "sampling": "if preferred has at least count paths use floor(i*(n-1)/(count-1)) for i=0..count-1; otherwise take every preferred path then apply the same formula to nonpreferred for the remainder"
       },
       "repetitions": 5,
+      "fresh_process_each_run": true,
       "statistic": "median_wall_seconds",
       "threshold_seconds": 6.0,
       "minimum_complete_runs": 3,
       "pass_definition": "median wall time across 5 runs <= 6.0s AND at least 3 runs have matched=probe_complete=57; maximum and live snapshot are diagnostic only",
       "purpose": "detect regression to the approximately 9.5s serial reservation sweep, not distinguish normal 2s versus 3s machine-load variation",
       "fingerprints": {
-        "input_sha256": "hash of sampled path strings only",
-        "result_shape_sha256": "hash of path/matched/probe_complete/filesystem_present/git_present only",
+        "input_sha256": "sha256 of canonical JSON UTF-8 input_paths array",
+        "result_shape_sha256": "sha256 of canonical JSON UTF-8 runs[*].results arrays containing only path/matched/probe_complete/filesystem_present/git_present",
         "excluded": "filesystem and Git activity timestamps; hourly vault commits make them mutable"
       },
       "calibration": {
@@ -348,7 +359,8 @@
         "emit machine-readable phase and case heartbeats before and after each long-running operation",
         "arm faulthandler before the existing outer timeout and persist the dump with the failing phase or case"
       ],
-      "acceptance": "a timeout identifies the last completed marker, active phase or case, and Python stacks without waiting for normal stdout completion"
+      "acceptance": "a timeout identifies the last completed marker, active phase or case, and Python stacks without waiting for normal stdout completion",
+      "verification_gate": "d2-d3-worker-progress-diagnostics"
     },
     {
       "id": "d2-d3-timeout-process-group-cleanup",
@@ -362,7 +374,8 @@
         "replace subprocess.run with a bounded Popen runner using start_new_session=true or an equivalent isolated process group",
         "on timeout capture the diagnostic stack plus partial stdout and stderr before terminating and reaping the complete process group"
       ],
-      "acceptance": "a forced timeout preserves bounded diagnostics and leaves no worker descendants"
+      "acceptance": "a forced timeout preserves bounded diagnostics and leaves no worker descendants",
+      "verification_gate": "d2-d3-timeout-process-group-cleanup"
     },
     {
       "id": "d10-diagnostic-liveness-timeout",
@@ -378,9 +391,531 @@
         "emit progress markers and capture faulthandler stacks plus partial transcripts before terminating a timed-out process group"
       ],
       "acceptance": "transient Git or SQLite scheduling is not classified as a reservation performance regression, while an internal deadlock still fails at its bounded internal wait",
-      "performance_separation": "the 180-second outer deadline is liveness-only; reservation performance pass or fail remains exclusively governed by performance_gates.reservation-activity-57-path-wall-time, whose 6.0-second median threshold, five repetitions, and minimum-three-complete-runs rule are unchanged"
+      "performance_separation": "the 180-second outer deadline is liveness-only; reservation performance pass or fail remains exclusively governed by performance_gates.reservation-activity-57-path-wall-time, whose 6.0-second median threshold, five repetitions, and minimum-three-complete-runs rule are unchanged",
+      "verification_gate": "d10-diagnostic-liveness-timeout"
+    },
+    {
+      "id": "provenance-regression-sync",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "tests/test_agentstack_mail_contract.py",
+        "packages/agentstack_mail/NOTICE.md",
+        "packages/agentstack_mail/provenance/live-head.bundle"
+      ],
+      "requirements": [
+        "make repository-level contract assertions use the current b8251c1 live source head and 2265572d bundle digest",
+        "keep a positive provenance control and the physical signing-key-blob absence check"
+      ],
+      "acceptance": "the repository contract gate passes against the same source head and bundle digest pinned by the packaged manifest and NOTICE",
+      "verification_gate": "provenance-regression-sync"
+    },
+    {
+      "id": "reservation-probe-safety-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "reservation activity probe timeout, error, and incomplete filesystem observation",
+        "explicit TTL expiry positive control"
+      ],
+      "requirements": [
+        "implement fail-closed activity_unknown semantics so an incomplete probe cannot make a reservation stale or releasable before explicit TTL expiry",
+        "version and run adverse timeout, error, and filesystem-incomplete controls plus the explicit TTL positive control"
+      ],
+      "acceptance": "the implementation and raw safety gate prove every incomplete probe is retained while an explicitly TTL-expired reservation remains releasable",
+      "verification_gate": "reservation-probe-safety-release-gate"
+    },
+    {
+      "id": "reservation-performance-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "packages/agentstack_mail/scripts/reservation_performance_gate.py",
+        "57-path reservation activity workload"
+      ],
+      "requirements": [
+        "implement the declared fresh-process five-run performance runner and its canonical 57-path input and per-path result fingerprints",
+        "emit the exact raw report consumed by reservation_performance_v1 without accepting caller-authored aggregate-only claims"
+      ],
+      "acceptance": "the runner exists in the candidate and the evaluator recomputes its script, input, result-shape, completeness, and median gates from the raw report",
+      "verification_gate": "reservation-performance-release-gate"
+    },
+    {
+      "id": "http-cli-transport-entrypoints",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "HTTP transport entrypoint",
+        "CLI service entrypoint"
+      ],
+      "requirements": [
+        "boot the exact 22-tool boundary through supported HTTP and CLI paths under the agentstack-mail namespace",
+        "use the isolated endpoint and roots without reading legacy unprefixed variables or a working-directory .env"
+      ],
+      "acceptance": "real transport tests start the service on an isolated endpoint, verify health and the exact MCP publication surface, and leave the live AgentMail endpoint reachable",
+      "verification_gate": "http-cli-transport-entrypoints"
+    },
+    {
+      "id": "service-lifecycle-supervision",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "agentstack-mail service start/status/stop/restart",
+        "crash recovery and duplicate-start exclusion"
+      ],
+      "requirements": [
+        "provide bounded start, readiness, stop, restart, and crash-recovery behavior",
+        "prove the supervisor cannot start two writers for the same AgentStack Mail roots"
+      ],
+      "acceptance": "lifecycle tests exercise normal and crash paths, observe one ready service, reap descendants, and leave the legacy service untouched",
+      "verification_gate": "service-lifecycle-supervision"
+    },
+    {
+      "id": "installer-core-integration",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "installer",
+        "doctor",
+        "selftest",
+        "uninstaller"
+      ],
+      "requirements": [
+        "install and verify AgentStack Mail without silently reusing the legacy package or service",
+        "preserve explicit human approvals and provide a reversible manifest for every client and service change"
+      ],
+      "acceptance": "fresh-install and upgrade tests prove the installed service works, the legacy installation remains recoverable, and partial failure rolls back the installer-owned changes",
+      "verification_gate": "installer-core-integration"
+    },
+    {
+      "id": "mcp-client-reregistration-cutover",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "Claude MCP configuration",
+        "Codex MCP configuration",
+        "bridge, hooks, skills, and permissions"
+      ],
+      "requirements": [
+        "move every declared consumer to the agentstack-mail MCP key as one reversible operation",
+        "do not register mcp-agent-mail as an alias for the new service"
+      ],
+      "acceptance": "N and N-1 fixture tests show all consumers resolve the new key, no consumer writes through the old service after authority switch, and the prior configuration can be restored exactly",
+      "verification_gate": "mcp-client-reregistration-cutover"
+    },
+    {
+      "id": "data-migration-reconciliation",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "copied SQLite database",
+        "copied Git archive",
+        "identity, message, recipient, receipt, and reservation records"
+      ],
+      "requirements": [
+        "copy rather than share writable live database and archive roots",
+        "preserve stable identifiers and timestamps and reconcile sqlite_schema objects, indexes, triggers, views, relevant PRAGMAs and schema versions, relationships, receipts, reservations, archive state, and restart or partial-copy recovery"
+      ],
+      "acceptance": "a production-shaped migration rehearsal compares canonical sqlite_schema plus relevant PRAGMA and version inventories, reports exact identity or a versioned approved transform, exact record counts, relationship integrity, stable identifiers and timestamps, archive verification, and zero concurrent writers to either authority",
+      "verification_gate": "data-migration-reconciliation"
+    },
+    {
+      "id": "rollback-revert-procedure",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "pre-authority abort",
+        "partial client switch",
+        "post-authority revert"
+      ],
+      "requirements": [
+        "define one-writer authority transitions and exact client and service restoration steps for each rollback seam",
+        "preserve access to records created before and after authority switch without treating an unverified transform as recovery"
+      ],
+      "acceptance": "a rehearsal restores the prior client and service configuration, proves one writable authority at every checkpoint, and reconciles all messages, receipts, reservations, and archive records after revert",
+      "verification_gate": "rollback-revert-procedure"
+    },
+    {
+      "id": "coexistence-fault-soak-gates",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "live and AgentStack Mail coexistence",
+        "migration and rollback fault injection",
+        "real-machine soak"
+      ],
+      "requirements": [
+        "exercise both isolated services concurrently without port, MCP-key, database, archive, signal, or environment collision",
+        "run bounded functional fault and durability soak gates over the selected migration and rollback paths; performance and resource-degradation ownership remains in full-performance-load-soak-matrix"
+      ],
+      "acceptance": "the release evidence contains complete coexistence, fault, and soak reports with no shared writable root, lost durable record, leaked descendant, or unexplained timeout",
+      "verification_gate": "coexistence-fault-soak-gates"
+    },
+    {
+      "id": "full-performance-load-soak-matrix",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "22-tool cold readiness, per-operation, and workflow gates",
+        "D10 reservation contention, D11 retirement under load, and D12 recovery latency",
+        "throughput, memory, file descriptors, queue growth, network, optional LLM paths, and target macOS load"
+      ],
+      "requirements": [
+        "define absolute and live-relative thresholds for the full 22-tool contract without replacing the independent 57-path reservation gate",
+        "pin target macOS runner characteristics, calibration, sample counts, and absolute and relative thresholds before running bounded performance fault and resource-degradation soak scenarios with machine-readable resource and latency series"
+      ],
+      "acceptance": "the candidate satisfies every versioned absolute and relative threshold with no unbounded memory, file-descriptor, queue, recovery, or latency growth",
+      "verification_gate": "full-performance-load-soak-matrix"
+    },
+    {
+      "id": "notification-layout-consumer-compatibility",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "per-message notification writer",
+        "legacy single-file notification consumer",
+        "versioned inventory of every supported real consumer"
+      ],
+      "requirements": [
+        "prove canonical writes remain per-message while supported consumers can drain both per-message and legacy layouts",
+        "freeze the exact consumer and version inventory, then exercise every listed transition without losing, duplicating beyond the selected D12 window, or prematurely deleting a notification"
+      ],
+      "acceptance": "machine tests cover both layouts and a production-shaped consumer transition with durable message authority and the selected best-effort wakeup contract intact",
+      "verification_gate": "notification-layout-consumer-compatibility"
+    },
+    {
+      "id": "full-repository-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "hermetic 22-tool differential",
+        "contract, runtime, authorization, and identity suites",
+        "supported Python matrix and required repository CI"
+      ],
+      "requirements": [
+        "version the exact required CI job and node inventory for the candidate commit",
+        "reject zero-test, skipped, xfailed, cancelled, missing, duplicate, extra, or unknown required results"
+      ],
+      "acceptance": "every required repository and supported-Python job passes on the clean designated candidate with exact nonzero node inventories",
+      "verification_gate": "full-repository-release-gate"
+    },
+    {
+      "id": "installed-wheel-contract-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "fresh environment",
+        "built wheel",
+        "tests/verify_installed_contract.py"
+      ],
+      "requirements": [
+        "install the exact candidate wheel into a fresh environment",
+        "run from outside every source checkout, assert import origins resolve only inside the fresh environment site-packages, and verify the installed package publishes the exact 22 tools and zero resources, templates, or prompts"
+      ],
+      "acceptance": "the installed-wheel verifier passes outside the checkout with every agentstack_mail import rooted in fresh-environment site-packages and against the same wheel digest named by the distribution artifact gate",
+      "verification_gate": "installed-wheel-contract-release-gate"
+    },
+    {
+      "id": "cutover-evidence-provenance-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "trusted evidence producer identity",
+        "candidate, manifest, condition, command, and raw-artifact binding",
+        "operator cutover approval provenance"
+      ],
+      "requirements": [
+        "verify a protected-CI or cryptographic attestation that binds the exact full candidate commit, manifest digest, condition-definition digests, generator commands and versions, and raw artifact digests",
+        "bind D1-D6 and D8-D12 operator approval provenance to the same candidate and reject hand-authored evidence, replay, unknown issuers, and candidate mismatch"
+      ],
+      "acceptance": "the evaluator verifies immutable producer and operator provenance, and mutations of issuer, candidate, manifest, command, artifact, approval, or replay identity all remain no_go",
+      "verification_gate": "cutover-evidence-provenance-gate"
+    },
+    {
+      "id": "cutover-documentation-consistency",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "docs/agentstack-mail-decision-packet.md",
+        "docs/agentstack-mail.md",
+        "docs/agentstack-mail-performance-gate.md",
+        "docs/install.md",
+        "docs/configuration.md",
+        "docs/troubleshooting.md",
+        "README.md",
+        "claude/CLAUDE.md",
+        "codex/AGENTS.md",
+        "packages/agentstack_mail/README.md",
+        "cutover operator runbook"
+      ],
+      "requirements": [
+        "remove stale D1-only first-cutover statements in favor of the exact D1 plus reservation-probe safety difference set",
+        "make the operator runbook name every machine gate and prohibit interpreting missing or unknown evidence as approval"
+      ],
+      "acceptance": "a documentation consistency gate finds no conflicting cutover difference set, authority order, gate identifier, or rollback instruction",
+      "verification_gate": "cutover-documentation-consistency"
     }
   ],
+  "cutover_gate": {
+    "schema_version": 1,
+    "authority_effect": "read_only_computation_only_never_updates_product_decisions_or_creates_approval_records",
+    "default_state": "no_go",
+    "unknown_state": "no_go",
+    "go_rule": "every required condition id is present exactly once and evaluates pass",
+    "evidence_contract": {
+      "schema_version": 1,
+      "manifest_binding": "sha256_of_exact_manifest_bytes",
+      "candidate_binding": "explicit_full_git_commit_with_clean_tracked_and_untracked_worktree",
+      "condition_binding": "sha256_of_condition_definition_canonical_json",
+      "artifact_index_fields": [
+        "condition_id",
+        "definition_sha256",
+        "kind",
+        "path",
+        "sha256"
+      ],
+      "pass_rule": "condition_specific_handler_recomputes_the_result_from_digest_verified_raw_artifacts_without_status_pass_or_verdict_fields",
+      "missing_duplicate_extra_or_unknown": "no_go"
+    },
+    "required_condition_ids": [
+      "product-decisions-selected",
+      "pre-cutover-product-decisions-implemented",
+      "initial-cutover-difference-set-exact",
+      "candidate-source-bound",
+      "product-decision-cutover-approval",
+      "selected-behavior-release-gate",
+      "distribution-artifact-release-gate",
+      "d2-d3-worker-progress-diagnostics",
+      "d2-d3-timeout-process-group-cleanup",
+      "d10-diagnostic-liveness-timeout",
+      "provenance-regression-sync",
+      "reservation-probe-safety-release-gate",
+      "reservation-performance-release-gate",
+      "http-cli-transport-entrypoints",
+      "service-lifecycle-supervision",
+      "installer-core-integration",
+      "mcp-client-reregistration-cutover",
+      "data-migration-reconciliation",
+      "rollback-revert-procedure",
+      "coexistence-fault-soak-gates",
+      "full-performance-load-soak-matrix",
+      "notification-layout-consumer-compatibility",
+      "full-repository-release-gate",
+      "installed-wheel-contract-release-gate",
+      "cutover-evidence-provenance-gate",
+      "cutover-documentation-consistency"
+    ],
+    "conditions": [
+      {
+        "id": "product-decisions-selected",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].{id,decision_state}",
+        "predicate": "ids_are_exactly_D1_through_D12_and_every_decision_state_equals_selected",
+        "remediation": "select every versioned product decision without adding, deleting, or duplicating an id"
+      },
+      {
+        "id": "pre-cutover-product-decisions-implemented",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].{implementation_state,implementation_order}",
+        "predicate": "every_decision_is_implemented_except_D7_with_exact_post_cutover_order",
+        "remediation": "implement every pre-cutover product decision; retain only the exact D7 post-cutover deferral"
+      },
+      {
+        "id": "initial-cutover-difference-set-exact",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[D7].scope.cutover_intentional_difference_set_and_intentional_differences.safety_entries",
+        "predicate": "difference_ids_equal_D1_plus_reservation_probe_incomplete_fail_closed_and_the_safety_entry_exists",
+        "remediation": "restore the exact two-difference cutover set and its safety definition"
+      },
+      {
+        "id": "candidate-source-bound",
+        "kind": "checkout_predicate",
+        "evidence_kind": "none",
+        "source": "explicit_full_candidate_commit_and_pre_post_git_status_for_the_evaluator_checkout",
+        "predicate": "explicit_full_candidate_commit_equals_HEAD_and_tracked_plus_untracked_worktree_is_clean_and_unchanged_across_evaluation",
+        "remediation": "commit the complete reviewed candidate, remove unrelated generated files, and rerun with its explicit full commit id"
+      },
+      {
+        "id": "product-decision-cutover-approval",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].cutover_state",
+        "predicate": "D1_through_D6_and_D8_through_D12_cutover_state_equal_go_while_D7_remains_exact_deferred_no_go",
+        "remediation": "obtain maintainer approval for the initial-cutover decisions while keeping D7 in its exact post-cutover deferred state; the evaluator never writes these fields"
+      },
+      {
+        "id": "selected-behavior-release-gate",
+        "kind": "evidence_gate",
+        "evidence_kind": "pytest_nodes_v1",
+        "source": "product_decisions[*].verification",
+        "predicate": "all_exact_selected_behavior_nodes_pass_on_the_candidate_commit",
+        "remediation": "run the complete selected-behavior suite and attach manifest-bound machine evidence"
+      },
+      {
+        "id": "distribution-artifact-release-gate",
+        "kind": "evidence_gate",
+        "evidence_kind": "distribution_artifacts_v1",
+        "source": "tests/verify_artifact.py_on_fresh_wheel_and_sdist",
+        "predicate": "fresh_wheel_and_sdist_both_pass_the_exact_artifact_verifier",
+        "remediation": "build both distributions from the candidate commit and attach manifest-bound verifier evidence"
+      },
+      {
+        "id": "d2-d3-worker-progress-diagnostics",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[d2-d3-worker-progress-diagnostics]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover task"
+      },
+      {
+        "id": "d2-d3-timeout-process-group-cleanup",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[d2-d3-timeout-process-group-cleanup]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover task"
+      },
+      {
+        "id": "d10-diagnostic-liveness-timeout",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[d10-diagnostic-liveness-timeout]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover task without changing the independent performance gate"
+      },
+      {
+        "id": "provenance-regression-sync",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[provenance-regression-sync]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover task"
+      },
+      {
+        "id": "reservation-probe-safety-release-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "reservation_safety_v1",
+        "source": "follow_up_tasks[reservation-probe-safety-release-gate] plus intentional_differences.safety_entries[reservation-probe-incomplete-fail-closed]",
+        "predicate": "implementation_state_equals_implemented_and_timeout_error_and_filesystem_incomplete_controls_fail_closed_while_explicit_TTL_expiry_remains_authoritative",
+        "remediation": "implement fail-closed incomplete-probe behavior and verify all adverse controls plus the TTL positive control"
+      },
+      {
+        "id": "reservation-performance-release-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "reservation_performance_v1",
+        "source": "follow_up_tasks[reservation-performance-release-gate] plus performance_gates[reservation-activity-57-path-wall-time]",
+        "predicate": "implementation_state_equals_implemented_and_raw_report_recomputes_the_versioned_repetition_input_threshold_and_completeness_policy",
+        "remediation": "implement the declared runner and verify script, input, result-shape, completeness, and median from raw evidence"
+      },
+      {
+        "id": "http-cli-transport-entrypoints",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[http-cli-transport-entrypoints]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "service-lifecycle-supervision",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[service-lifecycle-supervision]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "installer-core-integration",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[installer-core-integration]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "mcp-client-reregistration-cutover",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[mcp-client-reregistration-cutover]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "data-migration-reconciliation",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[data-migration-reconciliation]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "rollback-revert-procedure",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[rollback-revert-procedure]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "coexistence-fault-soak-gates",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[coexistence-fault-soak-gates]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify every coexistence, fault, and soak gate"
+      },
+      {
+        "id": "full-performance-load-soak-matrix",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[full-performance-load-soak-matrix]",
+        "predicate": "implementation_state_equals_implemented_and_a_versioned_raw_metric_handler_passes",
+        "remediation": "define measurable workloads and thresholds, implement the matrix, and add its raw evidence handler"
+      },
+      {
+        "id": "notification-layout-consumer-compatibility",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[notification-layout-consumer-compatibility]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the per-message plus legacy-layout consumer transition"
+      },
+      {
+        "id": "full-repository-release-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[full-repository-release-gate]",
+        "predicate": "implementation_state_equals_implemented_and_exact_required_CI_evidence_passes",
+        "remediation": "version and verify the exact full-repository and supported-Python release matrix"
+      },
+      {
+        "id": "installed-wheel-contract-release-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[installed-wheel-contract-release-gate]",
+        "predicate": "implementation_state_equals_implemented_and_installed_wheel_contract_evidence_passes",
+        "remediation": "install the exact candidate wheel in a fresh environment and verify its published contract"
+      },
+      {
+        "id": "cutover-evidence-provenance-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[cutover-evidence-provenance-gate]",
+        "predicate": "implementation_state_equals_implemented_and_trusted_candidate_bound_evidence_and_operator_approval_attestations_pass",
+        "remediation": "implement and verify protected or cryptographic provenance for every raw gate artifact and operator approval"
+      },
+      {
+        "id": "cutover-documentation-consistency",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[cutover-documentation-consistency]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "make the cutover packet and operator runbook agree with the normative ledger"
+      }
+    ]
+  },
   "product_decisions": [
     {
       "id": "D1",

@@ -856,13 +856,25 @@ EXPECTED_PERFORMANCE_GATES = [
         "input": {
             "workspace": "/Users/operator/Syncthing/<vault-directory>",
             "count": 57,
-            "source": (
-                "git ls-files -z; prefer "
-                "10_Reference/**/*.{md,png,jpg,jpeg,webp}; evenly sample "
-                "deterministically"
+            "source_command": "git ls-files -z",
+            "preferred_prefix": "10_Reference/",
+            "preferred_extensions": [
+                ".md",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+            ],
+            "ordering": "unicode_codepoint_ascending",
+            "sampling": (
+                "if preferred has at least count paths use "
+                "floor(i*(n-1)/(count-1)) for i=0..count-1; otherwise take "
+                "every preferred path then apply the same formula to "
+                "nonpreferred for the remainder"
             ),
         },
         "repetitions": 5,
+        "fresh_process_each_run": True,
         "statistic": "median_wall_seconds",
         "threshold_seconds": 6.0,
         "minimum_complete_runs": 3,
@@ -875,10 +887,10 @@ EXPECTED_PERFORMANCE_GATES = [
             "not distinguish normal 2s versus 3s machine-load variation"
         ),
         "fingerprints": {
-            "input_sha256": "hash of sampled path strings only",
+            "input_sha256": "sha256 of canonical JSON UTF-8 input_paths array",
             "result_shape_sha256": (
-                "hash of path/matched/probe_complete/filesystem_present/"
-                "git_present only"
+                "sha256 of canonical JSON UTF-8 runs[*].results arrays containing "
+                "only path/matched/probe_complete/filesystem_present/git_present"
             ),
             "excluded": (
                 "filesystem and Git activity timestamps; hourly vault commits make "
@@ -895,86 +907,61 @@ EXPECTED_PERFORMANCE_GATES = [
     }
 ]
 
-EXPECTED_FOLLOW_UP_TASKS = [
-    {
-        "id": "d2-d3-worker-progress-diagnostics",
-        "implementation_state": "not_implemented",
-        "implementation_order": "pre_cutover",
-        "scope": [
-            "tests/test_upstream_parity_d2.py::_run_worker",
-            "tests/test_pending_decision_d3.py::_run_phase",
-        ],
-        "requirements": [
-            (
-                "emit machine-readable phase and case heartbeats before and after "
-                "each long-running operation"
-            ),
-            (
-                "arm faulthandler before the existing outer timeout and persist the "
-                "dump with the failing phase or case"
-            ),
-        ],
-        "acceptance": (
-            "a timeout identifies the last completed marker, active phase or case, "
-            "and Python stacks without waiting for normal stdout completion"
-        ),
-    },
-    {
-        "id": "d2-d3-timeout-process-group-cleanup",
-        "implementation_state": "not_implemented",
-        "implementation_order": "pre_cutover",
-        "scope": [
-            "tests/test_upstream_parity_d2.py::_run_worker",
-            "tests/test_pending_decision_d3.py::_run_phase",
-        ],
-        "requirements": [
-            (
-                "replace subprocess.run with a bounded Popen runner using "
-                "start_new_session=true or an equivalent isolated process group"
-            ),
-            (
-                "on timeout capture the diagnostic stack plus partial stdout and "
-                "stderr before terminating and reaping the complete process group"
-            ),
-        ],
-        "acceptance": (
-            "a forced timeout preserves bounded diagnostics and leaves no worker "
-            "descendants"
-        ),
-    },
-    {
-        "id": "d10-diagnostic-liveness-timeout",
-        "implementation_state": "not_implemented",
-        "implementation_order": "pre_cutover",
-        "scope": [
-            "tests/test_pending_decision_d10.py::_run_worker",
-            "tests/test_pending_decision_d10.py::_run_initializer",
-            "tests/test_pending_decision_d10.py::_run_two_process_topology",
-        ],
-        "requirements": [
-            (
-                "replace the outer 45-second subprocess watchdog with a diagnostic "
-                "180-second liveness deadline while retaining the existing bounded "
-                "internal barrier and rendezvous waits"
-            ),
-            (
-                "emit progress markers and capture faulthandler stacks plus partial "
-                "transcripts before terminating a timed-out process group"
-            ),
-        ],
-        "acceptance": (
-            "transient Git or SQLite scheduling is not classified as a reservation "
-            "performance regression, while an internal deadlock still fails at its "
-            "bounded internal wait"
-        ),
-        "performance_separation": (
-            "the 180-second outer deadline is liveness-only; reservation performance "
-            "pass or fail remains exclusively governed by performance_gates."
-            "reservation-activity-57-path-wall-time, whose 6.0-second median threshold, "
-            "five repetitions, and minimum-three-complete-runs rule are unchanged"
-        ),
-    },
+EXPECTED_FOLLOW_UP_TASK_IDS = [
+    "d2-d3-worker-progress-diagnostics",
+    "d2-d3-timeout-process-group-cleanup",
+    "d10-diagnostic-liveness-timeout",
+    "provenance-regression-sync",
+    "reservation-probe-safety-release-gate",
+    "reservation-performance-release-gate",
+    "http-cli-transport-entrypoints",
+    "service-lifecycle-supervision",
+    "installer-core-integration",
+    "mcp-client-reregistration-cutover",
+    "data-migration-reconciliation",
+    "rollback-revert-procedure",
+    "coexistence-fault-soak-gates",
+    "full-performance-load-soak-matrix",
+    "notification-layout-consumer-compatibility",
+    "full-repository-release-gate",
+    "installed-wheel-contract-release-gate",
+    "cutover-evidence-provenance-gate",
+    "cutover-documentation-consistency",
 ]
+EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
+    "52fb24b090513075399fdf2846e1e98429adc7ced9d7a6783c7cf69888746466"
+)
+EXPECTED_CUTOVER_CONDITION_IDS = [
+    "product-decisions-selected",
+    "pre-cutover-product-decisions-implemented",
+    "initial-cutover-difference-set-exact",
+    "candidate-source-bound",
+    "product-decision-cutover-approval",
+    "selected-behavior-release-gate",
+    "distribution-artifact-release-gate",
+    "d2-d3-worker-progress-diagnostics",
+    "d2-d3-timeout-process-group-cleanup",
+    "d10-diagnostic-liveness-timeout",
+    "provenance-regression-sync",
+    "reservation-probe-safety-release-gate",
+    "reservation-performance-release-gate",
+    "http-cli-transport-entrypoints",
+    "service-lifecycle-supervision",
+    "installer-core-integration",
+    "mcp-client-reregistration-cutover",
+    "data-migration-reconciliation",
+    "rollback-revert-procedure",
+    "coexistence-fault-soak-gates",
+    "full-performance-load-soak-matrix",
+    "notification-layout-consumer-compatibility",
+    "full-repository-release-gate",
+    "installed-wheel-contract-release-gate",
+    "cutover-evidence-provenance-gate",
+    "cutover-documentation-consistency",
+]
+EXPECTED_CUTOVER_GATE_SHA256 = (
+    "df63b25a99e6a3d1e86de49f8650b92c0b11721f3206779ac0761ed2f363afe7"
+)
 
 REQUIRED_RUNTIME_MODULES = {
     "__init__.py",
@@ -1014,6 +1001,8 @@ SDIST_REQUIRED_SUFFIXES = {
     "/fixtures/live-tools-list.json",
     "/pyproject.toml",
     "/tests/test_decision_manifest.py",
+    "/tests/cutover_readiness.py",
+    "/tests/test_cutover_readiness.py",
     "/tests/test_pending_decision_d1.py",
     "/tests/test_pending_decision_d3.py",
     "/tests/test_pending_decision_d4.py",
@@ -1136,6 +1125,16 @@ def _digest_record(value: str) -> dict[str, object]:
     }
 
 
+def _canonical_json_sha256(value: object) -> str:
+    content = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _assert_authorization_fixture(
     content: bytes,
     compatibility_content: bytes,
@@ -1228,6 +1227,7 @@ def _assert_expected_divergences_manifest(
         "intentional_differences",
         "performance_gates",
         "follow_up_tasks",
+        "cutover_gate",
         "product_decisions",
     }
     if set(manifest) != expected_top_level:
@@ -1266,8 +1266,60 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(f"{artifact} safety differences changed")
     if manifest["performance_gates"] != EXPECTED_PERFORMANCE_GATES:
         raise SystemExit(f"{artifact} performance gates changed")
-    if manifest["follow_up_tasks"] != EXPECTED_FOLLOW_UP_TASKS:
+    follow_up_tasks = manifest["follow_up_tasks"]
+    if not isinstance(follow_up_tasks, list) or not all(
+        isinstance(task, dict) for task in follow_up_tasks
+    ):
+        raise SystemExit(f"{artifact} follow-up tasks must be a list")
+    task_ids = [task.get("id") for task in follow_up_tasks]
+    if task_ids != EXPECTED_FOLLOW_UP_TASK_IDS:
         raise SystemExit(f"{artifact} follow-up tasks changed")
+    if any(
+        task.get("implementation_state") != "not_implemented"
+        or task.get("implementation_order") != "pre_cutover"
+        or task.get("verification_gate") != task.get("id")
+        or not isinstance(task.get("scope"), list)
+        or not task["scope"]
+        or not isinstance(task.get("requirements"), list)
+        or not task["requirements"]
+        or not isinstance(task.get("acceptance"), str)
+        or not task["acceptance"].strip()
+        for task in follow_up_tasks
+    ):
+        raise SystemExit(f"{artifact} follow-up tasks changed")
+    if _canonical_json_sha256(follow_up_tasks) != EXPECTED_FOLLOW_UP_TASKS_SHA256:
+        raise SystemExit(f"{artifact} follow-up tasks changed")
+
+    cutover_gate = manifest["cutover_gate"]
+    if not isinstance(cutover_gate, dict) or set(cutover_gate) != {
+        "schema_version",
+        "authority_effect",
+        "default_state",
+        "unknown_state",
+        "go_rule",
+        "evidence_contract",
+        "required_condition_ids",
+        "conditions",
+    }:
+        raise SystemExit(f"{artifact} cutover gate shape is invalid")
+    if (
+        cutover_gate["schema_version"] != 1
+        or cutover_gate["default_state"] != "no_go"
+        or cutover_gate["unknown_state"] != "no_go"
+        or cutover_gate["required_condition_ids"]
+        != EXPECTED_CUTOVER_CONDITION_IDS
+    ):
+        raise SystemExit(f"{artifact} cutover gate is not fail-closed")
+    conditions = cutover_gate["conditions"]
+    if not isinstance(conditions, list) or not all(
+        isinstance(condition, dict) for condition in conditions
+    ):
+        raise SystemExit(f"{artifact} cutover conditions must be a list")
+    condition_ids = [condition.get("id") for condition in conditions]
+    if condition_ids != EXPECTED_CUTOVER_CONDITION_IDS:
+        raise SystemExit(f"{artifact} cutover condition ids changed")
+    if _canonical_json_sha256(cutover_gate) != EXPECTED_CUTOVER_GATE_SHA256:
+        raise SystemExit(f"{artifact} cutover gate changed")
     entries = intentional["allowlisted_entries"]
     if not isinstance(entries, list) or not all(
         isinstance(item, dict) for item in entries

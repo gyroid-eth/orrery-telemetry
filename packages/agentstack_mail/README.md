@@ -79,6 +79,74 @@ implemented or approved for cutover. Unselected and selected-but-unimplemented
 decisions remain fail-closed; implemented selections are not allowlisted
 differences and must pass their exact selected-behavior tests.
 
+## Cutover readiness
+
+The same manifest now carries a versioned `cutover_gate`. Its result is a
+read-only computation, not an approval record: the evaluator never updates a
+decision, creates an authority file, starts or stops a service, changes a
+client, or performs migration. `go` is possible only when the exact 26-condition
+registry is present and every condition passes. D1-D6 and D8-D12 must already
+contain the operator's explicit `cutover_state: go`; D7 must remain the exact
+selected, unimplemented, post-cutover deferral recorded as `no_go`. Every
+pre-cutover task must be implemented and backed by its named machine gate.
+Missing, duplicate, extra, malformed, skipped, failed, or unknown inputs all
+produce `no_go`.
+
+Run the current ledger check from the repository root:
+
+```console
+python3 packages/agentstack_mail/tests/cutover_readiness.py \
+  --candidate-commit 0123456789abcdef0123456789abcdef01234567
+```
+
+Replace the example with the explicitly designated full commit; symbolic refs
+such as `HEAD` are rejected. The designated commit must equal the evaluator
+checkout's `HEAD`, the tracked and untracked worktree status must be clean, and
+the evaluator repeats both observations before returning.
+
+The checked-in ledger intentionally returns exit 1 and `cutover_state: no_go`.
+In a clean checkout whose explicit full candidate commit equals `HEAD`, four
+conditions pass without external evidence; a dirty checkout passes only the
+three ledger-only conditions. That is 22 or 23 missing conditions,
+respectively. The returned `missing_conditions` array is the
+canonical remaining-task list: the candidate-source binding itself when the
+checkout is dirty or mismatched; decision cutover approvals; candidate-bound
+behavior, distribution, reservation-safety, and reservation-performance
+implementation and evidence; three timeout-diagnostic tasks; stale provenance
+regression assertions; HTTP/CLI transport; service supervision; installer
+integration; MCP client re-registration; data migration and reconciliation;
+rollback; coexistence/fault/soak gates; the full performance/load/soak matrix;
+notification-layout consumer compatibility; full-repository and installed-wheel
+release gates; trusted evidence and operator-approval provenance; and
+cutover-document consistency.
+
+Machine results are supplied separately with `--evidence`; they are not stored
+as mutable verdicts in the ledger. Evidence schema v1 binds raw artifacts to
+the exact candidate commit, manifest bytes, and canonical condition definition.
+Condition-specific handlers recompute the result from exact pytest node
+outcomes, wheel and source-distribution contents, five-run performance data, or
+the required adverse safety controls. Caller-authored `status`, `passed`,
+`verdict`, and generic exit-code claims are invalid. Tasks whose current
+evidence kind is `unimplemented_v1` cannot pass at all; implementing a task must
+also add and review a versioned raw-artifact handler. Exit codes are 0 for
+`go`, 1 for a valid `no_go`, and 2 for invalid ledger or evidence. This guards
+accidental and single-field falsification. Raw artifact hashes prove integrity,
+not producer identity: the independent
+`cutover-evidence-provenance-gate` therefore remains a mandatory pre-cutover
+task until protected CI or cryptographic attestations bind the producer,
+commands, candidate, manifest, condition definitions, artifacts, and operator
+approval. Hand-authored or replayed raw JSON is not sufficient for global
+`go`.
+
+This v1 snapshot deliberately has no reachable `go`: the canonical artifact
+validator pins every listed follow-up task as `not_implemented` and pins the
+current decision approvals as `no_go`. A future task may become satisfiable
+only in a reviewed change that updates its implementation state, introduces its
+versioned raw handler, and updates the canonical manifest pin together. The
+first future-ready candidate must add an end-to-end fixture that reaches `go`
+through both the canonical artifact validator and the readiness evaluator; a
+synthetic unpinned manifest is not sufficient.
+
 Run the focused gate from the repository root with:
 
 ```console

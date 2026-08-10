@@ -230,6 +230,22 @@ def _merge_d10_liveness_and_performance_gates(manifest: dict[str, Any]) -> None:
     )
 
 
+def _drop_cutover_required_id(manifest: dict[str, Any]) -> None:
+    manifest["cutover_gate"]["required_condition_ids"].pop()
+
+
+def _drop_cutover_condition(manifest: dict[str, Any]) -> None:
+    manifest["cutover_gate"]["conditions"].pop()
+
+
+def _weaken_cutover_unknown_policy(manifest: dict[str, Any]) -> None:
+    manifest["cutover_gate"]["unknown_state"] = "go"
+
+
+def _weaken_cutover_remediation(manifest: dict[str, Any]) -> None:
+    manifest["cutover_gate"]["conditions"][0]["remediation"] = "review later"
+
+
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
@@ -396,6 +412,10 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_drop_follow_up_task, "follow-up tasks changed"),
         (_pretend_follow_up_task_is_implemented, "follow-up tasks changed"),
         (_merge_d10_liveness_and_performance_gates, "follow-up tasks changed"),
+        (_drop_cutover_required_id, "cutover gate is not fail-closed"),
+        (_drop_cutover_condition, "cutover condition ids changed"),
+        (_weaken_cutover_unknown_policy, "cutover gate is not fail-closed"),
+        (_weaken_cutover_remediation, "cutover gate changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(
