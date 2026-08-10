@@ -52,7 +52,35 @@ key is intentionally not a fallback. AgentStack's Claude registration hook
 checks explicit request and response names before marking registration success;
 Codex launch paths have separate, partial comparison coverage documented in the
 cutover procedure.
-Supervisor, migration, and consumer cutover remain later trains.
+
+The separate `agentstack-mail-migrate` console copies a quiesced SQLite
+database, Git archive, and signal tree into one sibling staging generation,
+compares full logical rows and relationship projections, and publishes the
+three surfaces with one directory rename. Identical state is a write-free
+no-op; corrupt input, source mutation, a different existing destination, and
+pre-publication I/O failures fail closed. An interruption after atomic publish
+leaves a complete marker-owned generation that must be reverified and finalized
+by rerunning `copy`; the foreground service refuses that marker. Destination
+absence is rechecked immediately before publish, but the remaining check/rename
+TOCTOU is accepted only under the documented single-operator assumption and is
+not safe for concurrent migration writers. Its read-only `rollback-assess`
+command reports post-baseline writes after client switching as `no_go` because
+no verified reverse transform exists.
+
+`agentstack-mail-service` renders a content-aware launchd plist and ownership
+manifest without registering it. Its explicit start/stop controller refuses
+unknown definitions, compensates a partial bootstrap, and allows a proven-owned
+job to be stopped even if its environment file drifted. `status: job_loaded`
+proves only the exact launchd definition, not HTTP/MCP readiness. Its foreground
+supervisor owns a child process group and holds one authority lock for the
+canonical new state root. This artifact is macOS launchd-only; systemd and
+`restart` are outside this slice. The cutover installer, transactional
+all-consumer switch, legacy/new cross-product writer exclusion, and
+post-authority reverse migration remain later work. The canonical release
+manifest therefore continues to mark the overall service-lifecycle, migration,
+and rollback gates `not_implemented`; these tools alone are not release-ready.
+The normal cutover must not cross its documented first-write boundary until
+those gaps are resolved.
 
 `authorization.py` is the machine-readable inventory for the exact 22-tool
 surface. Each entry records the prospective subject, action, resource, current

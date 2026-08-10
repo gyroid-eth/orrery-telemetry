@@ -974,9 +974,11 @@ REQUIRED_RUNTIME_MODULES = {
     "db.py",
     "guard.py",
     "llm.py",
+    "migration.py",
     "model_normalize.py",
     "models.py",
     "rich_logger.py",
+    "service.py",
     "storage.py",
     "utils.py",
 }
@@ -1013,6 +1015,8 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d8_d9.py",
     "/tests/test_pending_decision_d10.py",
     "/tests/test_pending_decision_d11_d12.py",
+    "/tests/test_migration.py",
+    "/tests/test_service.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
     "/tests/verify_artifact.py",
@@ -1026,8 +1030,18 @@ REQUIRED_METADATA = {
 }
 
 CONSOLE_ENTRY_POINTS = {
-    "agentstack-mail = agentstack_mail.cli:main",
-    'agentstack-mail = "agentstack_mail.cli:main"',
+    "agentstack-mail": (
+        "agentstack-mail = agentstack_mail.cli:main",
+        'agentstack-mail = "agentstack_mail.cli:main"',
+    ),
+    "agentstack-mail-migrate": (
+        "agentstack-mail-migrate = agentstack_mail.migration:main",
+        'agentstack-mail-migrate = "agentstack_mail.migration:main"',
+    ),
+    "agentstack-mail-service": (
+        "agentstack-mail-service = agentstack_mail.service:main",
+        'agentstack-mail-service = "agentstack_mail.service:main"',
+    ),
 }
 
 
@@ -1105,9 +1119,14 @@ def _assert_console_entry_point(content: bytes, *, artifact: str) -> None:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SystemExit(f"{artifact} console entry point is not UTF-8") from exc
-    if not any(entry in text for entry in CONSOLE_ENTRY_POINTS):
+    missing = [
+        name
+        for name, alternatives in CONSOLE_ENTRY_POINTS.items()
+        if not any(entry in text for entry in alternatives)
+    ]
+    if missing:
         raise SystemExit(
-            f"{artifact} is missing the agentstack_mail.cli:main console entry point"
+            f"{artifact} is missing console entry point(s): {', '.join(missing)}"
         )
 
 
