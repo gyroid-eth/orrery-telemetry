@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -465,6 +466,8 @@ def test_performance_gate_runs_the_57_path_contract(tmp_path: Path) -> None:
             str(repo),
             "--threshold-seconds",
             "10",
+            "--repetitions",
+            "3",
             "--skip-live-snapshot",
         ],
         check=False,
@@ -475,7 +478,68 @@ def test_performance_gate_runs_the_57_path_contract(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     payloads = [json.loads(line) for line in completed.stdout.splitlines()]
-    assert payloads[0]["count"] == 57
-    assert payloads[0]["matched"] == 57
-    assert payloads[0]["probe_complete"] == 57
+    runs = [
+        payload for payload in payloads if payload.get("set") == "57-concrete"
+    ]
+    summary = next(
+        payload for payload in payloads if payload.get("set") == "57-concrete-summary"
+    )
+    assert len(runs) == 3
+    assert all(payload["count"] == 57 for payload in runs)
+    assert all(payload["matched"] == 57 for payload in runs)
+    assert all(payload["probe_complete"] == 57 for payload in runs)
+    assert len({payload["input_sha256"] for payload in runs}) == 1
+    assert all("result_sha256" not in payload for payload in runs)
+    assert summary["complete_runs"] == 3
+    assert summary["required_complete_runs"] == 2
+    assert summary["median_wall_seconds"] <= summary["max_wall_seconds"]
     assert payloads[-1]["passed"] is True
+
+
+def test_performance_gate_uses_median_and_complete_run_majority() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "reservation_performance_gate.py"
+    )
+    namespace = runpy.run_path(str(script))
+    summarize = namespace["summarize_concrete_runs"]
+    passes = namespace["passes_gate"]
+
+    def result(seconds: float, complete: bool = True) -> dict[str, Any]:
+        count = 57 if complete else 40
+        return {
+            "wall_seconds": seconds,
+            "matched": count,
+            "probe_complete": count,
+            "input_sha256": "stable-input",
+        }
+
+    one_loaded_outlier = summarize(
+        [
+            result(1.5),
+            result(1.6),
+            result(4.02, complete=False),
+            result(1.7),
+            result(2.0),
+        ],
+        expected_count=57,
+    )
+    serial_regression = summarize(
+        [result(9.3), result(9.5), result(9.7), result(9.4), result(9.6)],
+        expected_count=57,
+    )
+    incomplete_majority = summarize(
+        [
+            result(1.5),
+            result(1.6),
+            result(4.0, complete=False),
+            result(4.0, complete=False),
+            result(4.0, complete=False),
+        ],
+        expected_count=57,
+    )
+
+    assert passes(one_loaded_outlier, threshold_seconds=6.0) is True
+    assert passes(serial_regression, threshold_seconds=6.0) is False
+    assert passes(incomplete_majority, threshold_seconds=6.0) is False
