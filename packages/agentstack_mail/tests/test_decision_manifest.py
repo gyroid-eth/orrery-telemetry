@@ -204,6 +204,32 @@ def _weaken_performance_gate(manifest: dict[str, Any]) -> None:
     manifest["performance_gates"][0]["minimum_complete_runs"] = 0
 
 
+def _drop_d7_cutover_safety_difference(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D7")["scope"]["cutover_intentional_difference_set"] = [
+        "D1"
+    ]
+
+
+def _restore_d12_d1_only_basis(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D12")["scope"]["selection_basis"][0] = (
+        "match_frozen_live_and_keep_initial_cutover_difference_count_at_D1_only"
+    )
+
+
+def _drop_follow_up_task(manifest: dict[str, Any]) -> None:
+    manifest["follow_up_tasks"].pop()
+
+
+def _pretend_follow_up_task_is_implemented(manifest: dict[str, Any]) -> None:
+    manifest["follow_up_tasks"][0]["implementation_state"] = "implemented"
+
+
+def _merge_d10_liveness_and_performance_gates(manifest: dict[str, Any]) -> None:
+    manifest["follow_up_tasks"][2]["performance_separation"] = (
+        "the outer deadline is the reservation performance threshold"
+    )
+
+
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
@@ -365,6 +391,11 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_weaken_safety_difference, "safety differences changed"),
         (_drop_performance_gate, "performance gates changed"),
         (_weaken_performance_gate, "performance gates changed"),
+        (_drop_d7_cutover_safety_difference, "selected product decision D7 changed"),
+        (_restore_d12_d1_only_basis, "selected product decision D12 changed"),
+        (_drop_follow_up_task, "follow-up tasks changed"),
+        (_pretend_follow_up_task_is_implemented, "follow-up tasks changed"),
+        (_merge_d10_liveness_and_performance_gates, "follow-up tasks changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

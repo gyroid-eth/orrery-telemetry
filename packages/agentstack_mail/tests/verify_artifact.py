@@ -374,7 +374,10 @@ EXPECTED_SELECTED_DECISIONS = {
                 "stopping_the_currently_matching_alias_path_is_itself_an_"
                 "intentional_upstream_difference"
             ),
-            "cutover_intentional_difference_set": ["D1"],
+            "cutover_intentional_difference_set": [
+                "D1",
+                "reservation-probe-incomplete-fail-closed",
+            ],
             "principal_admin_mechanism": "unselected",
             "lifecycle_disposition": "D11_selected_match_frozen_live",
         },
@@ -730,8 +733,8 @@ EXPECTED_SELECTED_DECISIONS = {
             ),
             "selection_basis": [
                 (
-                    "match_frozen_live_and_keep_initial_cutover_difference_count_"
-                    "at_D1_only"
+                    "match_frozen_live_and_keep_initial_cutover_difference_set_"
+                    "at_D1_plus_reservation_probe_incomplete_fail_closed"
                 ),
                 (
                     "observed_offline_per_message_signals_are_retained_for_"
@@ -890,6 +893,87 @@ EXPECTED_PERFORMANCE_GATES = [
             "complete_runs": 10,
         },
     }
+]
+
+EXPECTED_FOLLOW_UP_TASKS = [
+    {
+        "id": "d2-d3-worker-progress-diagnostics",
+        "implementation_state": "not_implemented",
+        "implementation_order": "pre_cutover",
+        "scope": [
+            "tests/test_upstream_parity_d2.py::_run_worker",
+            "tests/test_pending_decision_d3.py::_run_phase",
+        ],
+        "requirements": [
+            (
+                "emit machine-readable phase and case heartbeats before and after "
+                "each long-running operation"
+            ),
+            (
+                "arm faulthandler before the existing outer timeout and persist the "
+                "dump with the failing phase or case"
+            ),
+        ],
+        "acceptance": (
+            "a timeout identifies the last completed marker, active phase or case, "
+            "and Python stacks without waiting for normal stdout completion"
+        ),
+    },
+    {
+        "id": "d2-d3-timeout-process-group-cleanup",
+        "implementation_state": "not_implemented",
+        "implementation_order": "pre_cutover",
+        "scope": [
+            "tests/test_upstream_parity_d2.py::_run_worker",
+            "tests/test_pending_decision_d3.py::_run_phase",
+        ],
+        "requirements": [
+            (
+                "replace subprocess.run with a bounded Popen runner using "
+                "start_new_session=true or an equivalent isolated process group"
+            ),
+            (
+                "on timeout capture the diagnostic stack plus partial stdout and "
+                "stderr before terminating and reaping the complete process group"
+            ),
+        ],
+        "acceptance": (
+            "a forced timeout preserves bounded diagnostics and leaves no worker "
+            "descendants"
+        ),
+    },
+    {
+        "id": "d10-diagnostic-liveness-timeout",
+        "implementation_state": "not_implemented",
+        "implementation_order": "pre_cutover",
+        "scope": [
+            "tests/test_pending_decision_d10.py::_run_worker",
+            "tests/test_pending_decision_d10.py::_run_initializer",
+            "tests/test_pending_decision_d10.py::_run_two_process_topology",
+        ],
+        "requirements": [
+            (
+                "replace the outer 45-second subprocess watchdog with a diagnostic "
+                "180-second liveness deadline while retaining the existing bounded "
+                "internal barrier and rendezvous waits"
+            ),
+            (
+                "emit progress markers and capture faulthandler stacks plus partial "
+                "transcripts before terminating a timed-out process group"
+            ),
+        ],
+        "acceptance": (
+            "transient Git or SQLite scheduling is not classified as a reservation "
+            "performance regression, while an internal deadlock still fails at its "
+            "bounded internal wait"
+        ),
+        "performance_separation": (
+            "the 180-second outer deadline is liveness-only; reservation performance "
+            "pass or fail remains exclusively governed by performance_gates."
+            "reservation-activity-57-path-wall-time, whose 6.0-second median threshold, "
+            "five repetitions, and minimum-three-complete-runs rule are unchanged"
+        ),
+    },
 ]
 
 REQUIRED_RUNTIME_MODULES = {
@@ -1143,6 +1227,7 @@ def _assert_expected_divergences_manifest(
         "baselines",
         "intentional_differences",
         "performance_gates",
+        "follow_up_tasks",
         "product_decisions",
     }
     if set(manifest) != expected_top_level:
@@ -1181,6 +1266,8 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(f"{artifact} safety differences changed")
     if manifest["performance_gates"] != EXPECTED_PERFORMANCE_GATES:
         raise SystemExit(f"{artifact} performance gates changed")
+    if manifest["follow_up_tasks"] != EXPECTED_FOLLOW_UP_TASKS:
+        raise SystemExit(f"{artifact} follow-up tasks changed")
     entries = intentional["allowlisted_entries"]
     if not isinstance(entries, list) or not all(
         isinstance(item, dict) for item in entries
