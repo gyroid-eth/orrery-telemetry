@@ -16,7 +16,7 @@ from agentstack_mail.contract import (
 )
 
 LIVE_TOOLS_SHA256 = "6ea7dabf41f71091161fa1fcb8a4073a383a65c7bba4785306217fd35f9e8332"
-LIVE_BUNDLE_SHA256 = "55f03ea48a3279f090c4b93436af1d55f912c75c3f985e4ba06a8b95d39f7670"
+LIVE_BUNDLE_SHA256 = "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30e37a1e"
 LIVE_PATCH_SHA256 = "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac"
 
 
@@ -27,7 +27,7 @@ def test_provenance_and_live_contract_fixture_are_present() -> None:
 
     assert "Copyright (c) 2026 Jeffrey Emanuel" in license_text
     assert "OpenAI/Anthropic Rider" in license_text
-    assert "ad0e4788967d809979fa25004cf52545fdcd888a" in notice
+    assert "b8251c1336e5fdca80a91b8b608d843df91b64e8" in notice
     assert hashlib.sha256(fixture_path.read_bytes()).hexdigest() == LIVE_TOOLS_SHA256
 
     live_payload = json.loads(fixture_path.read_text())
