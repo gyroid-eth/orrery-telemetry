@@ -59,6 +59,16 @@ signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
 `.env` are ignored. The package intentionally has no HTTP/CLI entrypoint,
 supervisor, migration command, or installer switch yet.
 
+File-reservation activity probes converge on upstream #240's one-pathspec Git
+walk, then add a process-global concurrency limit of eight, a three-second
+per-probe deadline, and a four-second status-pass budget. A timed-out, failed,
+or incomplete filesystem/Git probe is explicit unknown activity and therefore
+cannot trigger stale auto-release; TTL expiry is unchanged. The package-local
+performance gate repeats 57 concrete tracked paths five times, requires a
+six-second-or-better median and at least three fully matched/complete runs, and
+reports the maximum separately. Fingerprints exclude mutable activity
+timestamps.
+
 The provenance Git bundle and dirty patch remain repository-only audit inputs
 and are excluded from wheels and source distributions. Distribution gates
 verify both artifact types still contain the runtime modules, NOTICE, both

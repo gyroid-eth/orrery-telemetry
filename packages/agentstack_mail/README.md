@@ -153,6 +153,27 @@ Run the focused gate from the repository root with:
 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q packages/agentstack_mail/tests/test_differential.py -p no:cacheprovider
 ```
 
+Reservation activity sweeps use the upstream #240 single-pathspec Git walk and
+bound probes process-wide to eight concurrent subprocesses. Each probe has a
+three-second deadline and each status pass has a four-second wall budget. Git
+subprocesses are killed and reaped on timeout, filesystem globs stop only on a
+deadline or decisive recent mtime, and an incomplete/error result is reported
+as unknown and cannot auto-release a reservation. Explicit TTL expiry remains
+authoritative. The real-workspace gate is:
+
+```sh
+uv run --project packages/agentstack_mail \
+  python packages/agentstack_mail/scripts/reservation_performance_gate.py \
+  /path/to/workspace
+```
+
+It repeats a deterministic 57-tracked-path sample five times and requires the
+median to stay within six seconds, with at least three runs fully matched and
+complete. The maximum is reported for diagnostics but does not let a single
+loaded-machine outlier fail the gate. The input and result-shape fingerprints
+exclude activity timestamps, which change as the workspace is committed. The
+configured live-pattern snapshot is also diagnostic only.
+
 The 22-tool contract does not expose an MCP roster resource. Callers obtain
 their own assigned identity from the AgentStack runtime, `register_agent`, or
 `macro_start_session`; `list_contacts` returns known contact links and `whois`

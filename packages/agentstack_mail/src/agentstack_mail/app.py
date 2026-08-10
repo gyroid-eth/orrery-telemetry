@@ -19,6 +19,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Sequence
@@ -1247,22 +1248,32 @@ class FileReservationStatus:
     last_mail_activity: Optional[datetime]
     last_fs_activity: Optional[datetime]
     last_git_activity: Optional[datetime]
+    probe_complete: bool
+    activity_unknown: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ReservationActivityResult:
+    matched: bool = False
+    fs_activity: Optional[datetime] = None
+    git_activity: Optional[datetime] = None
+    probe_complete: bool = True
+
+
+@dataclass(slots=True)
+class _FileReservationSweepResult:
+    auto_released: list[FileReservationStatus]
+    statuses: list[FileReservationStatus]
 
 
 _GLOB_MARKERS: tuple[str, ...] = ("*", "?", "[")
 
-# Guards against event-loop stalls when evaluating file-reservation staleness on
-# large workspaces (e.g. an Obsidian vault under hourly-backup git with thousands
-# of commits). A broad glob like ``runs/*refine*/**`` can otherwise expand to
-# hundreds of files and trigger a full-history ``git log`` walk per file, all
-# synchronously on the event loop. See LOG 2026-07-10.
-#   - _MAX_GLOB_MATCHES: cap ``**`` glob expansion so the filesystem walk is bounded.
-#   - _MAX_GIT_ACTIVITY_MATCHES: above this many matches, skip git-history probing
-#     entirely and fall back to filesystem mtime + mail activity (semantics preserved).
-#   - _GIT_ACTIVITY_TIMEOUT_SECONDS: hard wall-clock cap for the off-loop git probe.
-_MAX_GLOB_MATCHES: int = 500
-_MAX_GIT_ACTIVITY_MATCHES: int = 20
-_GIT_ACTIVITY_TIMEOUT_SECONDS: float = 3.0
+_RESERVATION_PROBE_CONCURRENCY: int = 8
+_RESERVATION_PROBE_TIMEOUT_SECONDS: float = 3.0
+_RESERVATION_PROBE_TOTAL_TIMEOUT_SECONDS: float = 4.0
+_RESERVATION_PROBE_SEMAPHORE = threading.BoundedSemaphore(
+    _RESERVATION_PROBE_CONCURRENCY
+)
 
 # Virtual namespace prefixes for non-filesystem reservations (bd-14z)
 _VIRTUAL_NS_PREFIXES: tuple[str, ...] = ("tool://", "resource://", "service://")
@@ -1283,97 +1294,261 @@ def _normalize_pattern(pattern: str) -> str:
     return pattern.lstrip("/").strip()
 
 
-def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
+def _deadline_expired(deadline: float) -> bool:
+    return time.monotonic() >= deadline
+
+
+def _iter_matching_paths(base: Path, normalized: str) -> Any:
+    return iter(base.glob(normalized))
+
+
+def _filesystem_activity_before_deadline(
+    base: Path,
+    pattern: str,
+    *,
+    recent_after: Optional[datetime],
+    deadline: float,
+) -> tuple[bool, Optional[datetime], bool]:
+    """Return matching/mtime evidence without silently truncating a glob.
+
+    The final boolean says whether the filesystem answer is decision-complete.
+    Finding one recent mtime is complete even without visiting the rest because
+    that observation alone proves the reservation is not stale.
+    """
     if _is_virtual_namespace(pattern):
-        return []  # Virtual namespaces have no filesystem presence
-    if not base.exists():
-        return []
+        return False, None, True
+    if _deadline_expired(deadline):
+        return False, None, False
+    try:
+        if not base.exists():
+            return False, None, True
+    except OSError:
+        return False, None, False
     normalized = _normalize_pattern(pattern)
     if not normalized:
-        return []
+        return False, None, True
+
     if _contains_glob(normalized):
-        # Bound the walk: a ``**`` pattern on a huge working tree would otherwise
-        # enumerate the entire subtree. islice stops the generator early so we
-        # never materialize (or stat) more than the cap.
-        from itertools import islice
+        try:
+            paths = _iter_matching_paths(base, normalized)
+        except (OSError, RuntimeError, ValueError):
+            return False, None, False
+    else:
+        candidate = base / normalized
+        try:
+            exists = candidate.exists()
+        except OSError:
+            return False, None, False
+        if _deadline_expired(deadline):
+            return False, None, False
+        if not exists:
+            return False, None, True
+        paths = iter((candidate,))
 
-        return list(islice(base.glob(normalized), _MAX_GLOB_MATCHES))
-    candidate = base / normalized
-    if not candidate.exists():
-        return []
-    return [candidate]
-
-
-def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
-    mtimes: list[datetime] = []
-    for path in paths:
+    matched = False
+    latest: Optional[datetime] = None
+    while True:
+        if _deadline_expired(deadline):
+            return matched, latest, False
+        try:
+            path = next(paths)
+        except StopIteration:
+            return matched, latest, True
+        except (OSError, RuntimeError, ValueError):
+            return matched, latest, False
+        if _deadline_expired(deadline):
+            return matched, latest, False
+        matched = True
         try:
             stat = path.stat()
         except OSError:
-            continue
-        mtimes.append(datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc))
-    if not mtimes:
-        return None
-    return max(mtimes)
+            return matched, latest, False
+        mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        if latest is None or mtime > latest:
+            latest = mtime
+        if recent_after is not None and mtime >= recent_after:
+            return True, latest, True
 
 
-def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
-    """Most-recent commit timestamp touching any of ``matches``.
-
-    Bounded so it can never stall the event loop:
-      * Skips entirely when there are more than ``_MAX_GIT_ACTIVITY_MATCHES``
-        matches (staleness naturally falls back to fs mtime + mail activity).
-      * Uses a single batched ``git log -1`` over all paths instead of one
-        full-history ``iter_commits`` walk per file.
-    Callers should run this off the event loop (see ``asyncio.to_thread`` in
-    ``_collect_file_reservation_statuses``); it may block for a git subprocess.
-    """
-    if repo is None:
+def _reservation_repo_pathspec(
+    repo_root: Path, workspace: Path, pattern: str
+) -> Optional[str]:
+    """Build one repo-root-relative Git pathspec for a reservation pattern."""
+    if _is_virtual_namespace(pattern):
         return None
-    # Too many matches → a broad reservation whose git history is not worth
-    # (and too expensive to) probe. Fall back to filesystem/mail signals.
-    if len(matches) > _MAX_GIT_ACTIVITY_MATCHES:
-        return None
-    repo_root = Path(repo.working_tree_dir or "").resolve()
-    rel_paths: list[str] = []
-    for match in matches:
-        try:
-            rel_paths.append(str(match.resolve().relative_to(repo_root)))
-        except Exception:
-            continue
-    if not rel_paths:
+    normalized = _normalize_pattern(pattern)
+    if not normalized:
         return None
     try:
-        # One walk that stops at the first commit touching any of the paths.
-        raw = repo.git.log("-1", "--format=%ct", "--", *rel_paths)
+        resolved_root = repo_root.resolve()
+        workspace_rel = workspace.resolve().relative_to(resolved_root).as_posix()
     except Exception:
         return None
-    raw = (raw or "").strip()
-    if not raw:
-        return None
+    rel = normalized if workspace_rel in ("", ".") else f"{workspace_rel}/{normalized}"
+    rel = rel.replace("\\", "/")
+    return f":(glob){rel}" if _contains_glob(normalized) else rel
+
+
+def _kill_and_reap_process(process: subprocess.Popen[str]) -> None:
+    with suppress(Exception):
+        process.kill()
+    with suppress(Exception):
+        process.communicate(timeout=1.0)
+
+
+def _git_executable() -> str:
+    return shutil.which("git") or "git"
+
+
+def _latest_git_activity_before_deadline(
+    repo_root: Optional[Path],
+    pathspec: Optional[str],
+    *,
+    deadline: float,
+) -> tuple[Optional[datetime], bool]:
+    """Run one directly killable Git rev walk and distinguish absence from error."""
+    if repo_root is None or not pathspec:
+        return None, True
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None, False
+    process: Optional[subprocess.Popen[str]] = None
     try:
-        return datetime.fromtimestamp(int(raw.splitlines()[0]), tz=timezone.utc)
-    except (ValueError, OSError, OverflowError):
-        return None
+        process = subprocess.Popen(
+            [
+                _git_executable(),
+                "-C",
+                str(repo_root),
+                "rev-list",
+                "--timestamp",
+                "--max-count=1",
+                "HEAD",
+                "--",
+                pathspec,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, _stderr = process.communicate(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        if process is not None:
+            _kill_and_reap_process(process)
+        return None, False
+    except Exception:
+        if process is not None:
+            _kill_and_reap_process(process)
+        return None, False
+    if process.returncode != 0:
+        return None, False
+    raw = stdout.strip()
+    if not raw:
+        return None, True
+    try:
+        committed_ts = int(raw.split()[0])
+        return datetime.fromtimestamp(committed_ts, tz=timezone.utc), True
+    except (IndexError, OSError, OverflowError, ValueError):
+        return None, False
 
 
-def _reservation_activity_probe(
-    workspace: Optional[Path], repo: Optional[Repo], pattern: str
-) -> tuple[list[Path], Optional[datetime], Optional[datetime]]:
-    """Blocking glob + filesystem-mtime + git probe for a single reservation.
-
-    Returns ``(matches, fs_activity, git_activity)``. Designed to be run off the
-    event loop via ``asyncio.to_thread`` so a slow filesystem walk or git
-    subprocess can never stall async request handling.
-    """
+def _compute_reservation_activity(
+    workspace: Optional[Path],
+    repo_root: Optional[Path],
+    pattern: str,
+    *,
+    recent_after: Optional[datetime],
+    total_deadline: float,
+) -> _ReservationActivityResult:
+    """Bound one synchronous probe by global capacity and explicit deadlines."""
+    if _is_virtual_namespace(pattern):
+        return _ReservationActivityResult()
     if workspace is None:
-        return [], None, None
-    matches = _collect_matching_paths(workspace, pattern)
-    if not matches:
-        return [], None, None
-    fs_activity = _latest_filesystem_activity(matches)
-    git_activity = _latest_git_activity(repo, matches)
-    return matches, fs_activity, git_activity
+        return _ReservationActivityResult(probe_complete=False)
+
+    acquire_timeout = max(0.0, total_deadline - time.monotonic())
+    if not _RESERVATION_PROBE_SEMAPHORE.acquire(timeout=acquire_timeout):
+        return _ReservationActivityResult(probe_complete=False)
+    try:
+        probe_deadline = min(
+            total_deadline,
+            time.monotonic() + _RESERVATION_PROBE_TIMEOUT_SECONDS,
+        )
+        matched, fs_activity, fs_complete = _filesystem_activity_before_deadline(
+            workspace,
+            pattern,
+            recent_after=recent_after,
+            deadline=probe_deadline,
+        )
+        if not fs_complete:
+            return _ReservationActivityResult(
+                matched=matched,
+                fs_activity=fs_activity,
+                probe_complete=False,
+            )
+        if not matched:
+            return _ReservationActivityResult()
+        git_pathspec = (
+            _reservation_repo_pathspec(repo_root, workspace, pattern)
+            if repo_root is not None
+            else None
+        )
+        git_activity, git_complete = _latest_git_activity_before_deadline(
+            repo_root,
+            git_pathspec,
+            deadline=probe_deadline,
+        )
+        return _ReservationActivityResult(
+            matched=True,
+            fs_activity=fs_activity,
+            git_activity=git_activity,
+            probe_complete=git_complete,
+        )
+    except Exception:
+        return _ReservationActivityResult(probe_complete=False)
+    finally:
+        _RESERVATION_PROBE_SEMAPHORE.release()
+
+
+async def _probe_reservation_activities(
+    workspace: Optional[Path],
+    repo_root: Optional[Path],
+    patterns: Sequence[str],
+    *,
+    recent_after: Optional[datetime],
+) -> list[_ReservationActivityResult]:
+    """Probe reservations concurrently while preserving input order."""
+    if not patterns:
+        return []
+    total_deadline = time.monotonic() + _RESERVATION_PROBE_TOTAL_TIMEOUT_SECONDS
+    tasks = [
+        asyncio.create_task(
+            asyncio.to_thread(
+                _compute_reservation_activity,
+                workspace,
+                repo_root,
+                pattern,
+                recent_after=recent_after,
+                total_deadline=total_deadline,
+            )
+        )
+        for pattern in patterns
+    ]
+    remaining = max(0.0, total_deadline - time.monotonic())
+    done, pending = await asyncio.wait(tasks, timeout=remaining)
+    unknown = _ReservationActivityResult(probe_complete=False)
+    results: list[_ReservationActivityResult] = []
+    for task in tasks:
+        if task in done and not task.cancelled():
+            try:
+                results.append(task.result())
+            except Exception:
+                results.append(unknown)
+        else:
+            task.cancel()
+            results.append(unknown)
+    for task in pending:
+        task.cancel()
+    return results
 
 
 def _project_workspace_path(project: Project) -> Optional[Path]:
@@ -1387,28 +1562,19 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
     return None
 
 
-def _open_repo_if_available(workspace: Optional[Path]) -> Optional[Repo]:
+def _find_repo_root_if_available(workspace: Optional[Path]) -> Optional[Path]:
     if workspace is None:
         return None
     try:
-        repo = Repo(workspace, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
+        candidate = workspace.resolve()
+    except OSError:
         return None
-    except Exception:
-        return None
-    try:
-        root = Path(repo.working_tree_dir or "")
-    except Exception:
-        # Close repo before returning None to avoid file handle leak
-        with suppress(Exception):
-            repo.close()
-        return None
-    with suppress(Exception):
-        workspace.resolve().relative_to(root.resolve())
-        return repo
-    # Close repo before returning None to avoid file handle leak
-    with suppress(Exception):
-        repo.close()
+    for root in (candidate, *candidate.parents):
+        try:
+            if (root / ".git").exists():
+                return root
+        except OSError:
+            return None
     return None
 
 
@@ -3810,84 +3976,81 @@ async def _collect_file_reservation_statuses(
             read_map = {row[0]: _ensure_utc(row[1]) for row in read_result}
 
     workspace = _project_workspace_path(project)
-    repo = _open_repo_if_available(workspace) if workspace is not None else None
+    repo_root = _find_repo_root_if_available(workspace)
+    recent_after = moment - timedelta(seconds=activity_grace)
+    activity_results = await _probe_reservation_activities(
+        workspace,
+        repo_root,
+        [reservation.path_pattern for reservation, _agent in rows],
+        recent_after=recent_after,
+    )
 
     statuses: list[FileReservationStatus] = []
-    try:
-        for reservation, agent in rows:
-            agent_id = agent.id or -1
-            agent_last_active = _ensure_utc(agent.last_active_ts)
-            last_mail = _max_datetime(send_map.get(agent_id), ack_map.get(agent_id), read_map.get(agent_id))
-
-            matches: list[Path] = []
-            fs_activity: Optional[datetime] = None
-            git_activity: Optional[datetime] = None
-
-            if workspace is not None:
-                # Run the (potentially slow) glob + git probe off the event loop
-                # with a hard timeout so one broad reservation cannot stall the
-                # whole server. On timeout/failure we degrade to no fs/git signal
-                # (staleness still uses agent inactivity + mail activity).
-                try:
-                    matches, fs_activity, git_activity = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            _reservation_activity_probe, workspace, repo, reservation.path_pattern
-                        ),
-                        timeout=_GIT_ACTIVITY_TIMEOUT_SECONDS,
-                    )
-                except (asyncio.TimeoutError, Exception):
-                    matches, fs_activity, git_activity = [], None, None
-
-            agent_inactive = (
-                agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
-            )
-            recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
-            recent_fs = fs_activity is not None and (moment - fs_activity).total_seconds() <= activity_grace
-            recent_git = git_activity is not None and (moment - git_activity).total_seconds() <= activity_grace
-
-            stale = bool(
-                reservation.released_ts is None
-                and agent_inactive
-                and not (recent_mail or recent_fs or recent_git)
-            )
-            reasons: list[str] = []
-            if agent_inactive:
-                reasons.append(f"agent_inactive>{inactivity_seconds}s")
+    for (reservation, agent), activity in zip(rows, activity_results, strict=True):
+        agent_id = agent.id or -1
+        agent_last_active = _ensure_utc(agent.last_active_ts)
+        last_mail = _max_datetime(send_map.get(agent_id), ack_map.get(agent_id), read_map.get(agent_id))
+        recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
+        recent_fs = (
+            activity.fs_activity is not None
+            and (moment - activity.fs_activity).total_seconds() <= activity_grace
+        )
+        recent_git = (
+            activity.git_activity is not None
+            and (moment - activity.git_activity).total_seconds() <= activity_grace
+        )
+        agent_inactive = (
+            agent_last_active is None
+            or (moment - agent_last_active).total_seconds() > inactivity_seconds
+        )
+        activity_unknown = not activity.probe_complete
+        stale = bool(
+            reservation.released_ts is None
+            and agent_inactive
+            and not activity_unknown
+            and not (recent_mail or recent_fs or recent_git)
+        )
+        reasons: list[str] = []
+        if agent_inactive:
+            reasons.append(f"agent_inactive>{inactivity_seconds}s")
+        else:
+            reasons.append("agent_recently_active")
+        if recent_mail:
+            reasons.append("mail_activity_recent")
+        else:
+            reasons.append(f"no_recent_mail_activity>{activity_grace}s")
+        if activity_unknown:
+            if recent_fs:
+                reasons.append("filesystem_activity_recent")
+            if recent_git:
+                reasons.append("git_activity_recent")
+            reasons.append("activity_unknown")
+        elif activity.matched:
+            if recent_fs:
+                reasons.append("filesystem_activity_recent")
             else:
-                reasons.append("agent_recently_active")
-            if recent_mail:
-                reasons.append("mail_activity_recent")
+                reasons.append(f"no_recent_filesystem_activity>{activity_grace}s")
+            if recent_git:
+                reasons.append("git_activity_recent")
             else:
-                reasons.append(f"no_recent_mail_activity>{activity_grace}s")
-            if matches:
-                if recent_fs:
-                    reasons.append("filesystem_activity_recent")
-                else:
-                    reasons.append(f"no_recent_filesystem_activity>{activity_grace}s")
-                if recent_git:
-                    reasons.append("git_activity_recent")
-                else:
-                    reasons.append(f"no_recent_git_activity>{activity_grace}s")
-            else:
-                reasons.append("path_pattern_unmatched")
+                reasons.append(f"no_recent_git_activity>{activity_grace}s")
+        else:
+            reasons.append("path_pattern_unmatched")
 
-            statuses.append(
-                FileReservationStatus(
-                    reservation=reservation,
-                    agent=agent,
-                    stale=stale,
-                    stale_reasons=reasons,
-                    last_agent_activity=agent_last_active,
-                    last_mail_activity=last_mail,
-                    last_fs_activity=fs_activity,
-                    last_git_activity=git_activity,
-                )
+        statuses.append(
+            FileReservationStatus(
+                reservation=reservation,
+                agent=agent,
+                stale=stale,
+                stale_reasons=reasons,
+                last_agent_activity=agent_last_active,
+                last_mail_activity=last_mail,
+                last_fs_activity=activity.fs_activity,
+                last_git_activity=activity.git_activity,
+                probe_complete=activity.probe_complete,
+                activity_unknown=activity_unknown,
             )
-    finally:
-        # Cleanup: close repo if we opened one
-        if repo is not None:
-            with suppress(Exception):
-                repo.close()
+        )
     return statuses
 
 
@@ -3896,7 +4059,8 @@ async def _expire_stale_file_reservations(
     *,
     archive: ProjectArchive | None = None,
     archive_locked: bool = False,
-) -> list[FileReservationStatus]:
+    include_released_statuses: bool = False,
+) -> _FileReservationSweepResult:
     await ensure_schema()
     now = datetime.now(timezone.utc)
     naive_now = _naive_utc(now)  # Compute once for consistency and efficiency
@@ -3905,7 +4069,7 @@ async def _expire_stale_file_reservations(
     async with get_session() as session:
         project = await session.get(Project, project_id)
     if project is None:
-        return []
+        return _FileReservationSweepResult(auto_released=[], statuses=[])
 
     expired_pairs: list[tuple[FileReservation, Agent]] = []
     # Release any entries whose TTL has already elapsed
@@ -3931,7 +4095,11 @@ async def _expire_stale_file_reservations(
                 .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
             )
             await session.commit()
-    statuses = await _collect_file_reservation_statuses(project, include_released=False, now=now)
+    statuses = await _collect_file_reservation_statuses(
+        project,
+        include_released=include_released_statuses,
+        now=now,
+    )
     stale_statuses = [status for status in statuses if status.stale and status.reservation.id is not None]
     stale_ids = [cast(int, status.reservation.id) for status in stale_statuses]
     if stale_ids:
@@ -3978,7 +4146,25 @@ async def _expire_stale_file_reservations(
             archive_locked=archive_locked,
         )
 
-    return stale_statuses
+    return _FileReservationSweepResult(
+        auto_released=stale_statuses,
+        statuses=statuses,
+    )
+
+
+async def _file_reservation_resource_statuses(
+    project: Project,
+    *,
+    active_only: bool,
+) -> list[FileReservationStatus]:
+    """Sweep and return the same status pass used for release decisions."""
+    if project.id is None:
+        raise ValueError("Project must have an id before listing file_reservations.")
+    sweep = await _expire_stale_file_reservations(
+        project.id,
+        include_released_statuses=not active_only,
+    )
+    return sweep.statuses
 
 
 def _file_reservations_conflict(existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent) -> bool:
@@ -9191,7 +9377,8 @@ def build_mcp_server() -> FastMCP:
         agent = await _get_agent(project, agent_name)
         if project.id is None:
             raise ValueError("Project must have an id before reserving file paths.")
-        stale_auto_releases = await _expire_stale_file_reservations(project.id)
+        sweep = await _expire_stale_file_reservations(project.id)
+        stale_auto_releases = sweep.auto_released
         if stale_auto_releases:
             summary = ", ".join(
                 f"{status.agent.name}:{status.reservation.path_pattern}"
@@ -11141,8 +11328,10 @@ def build_mcp_server() -> FastMCP:
         if project.id is None:
             raise ValueError("Project must have an id before listing file_reservations.")
 
-        await _expire_stale_file_reservations(project.id)
-        statuses = await _collect_file_reservation_statuses(project, include_released=not active_only)
+        statuses = await _file_reservation_resource_statuses(
+            project,
+            active_only=active_only,
+        )
 
         payload: list[dict[str, Any]] = []
         for status in statuses:
@@ -11165,6 +11354,8 @@ def build_mcp_server() -> FastMCP:
                     "last_mail_activity_ts": _iso(status.last_mail_activity) if status.last_mail_activity else None,
                     "last_filesystem_activity_ts": _iso(status.last_fs_activity) if status.last_fs_activity else None,
                     "last_git_activity_ts": _iso(status.last_git_activity) if status.last_git_activity else None,
+                    "probe_complete": status.probe_complete,
+                    "activity_unknown": status.activity_unknown,
                 }
             )
         return _apply_resource_output_format(
