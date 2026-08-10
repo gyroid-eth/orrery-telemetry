@@ -1,6 +1,6 @@
 # AgentStack Mail 通常切替手順（未実行）
 
-これは maintainer の Mac で上から順に実行する切替手順の下書きである。現状の `agentstack-mail` は Python core までで、製品用の HTTP/CLI、service lifecycle、installer、データ移送、client 一括切替、切り戻しが未実装である。このため、以下には実在しないコマンドを書かず、書けない箇所を明示する。稼働中の `~/mcp_agent_mail`、MCP 設定、サービスにはまだ触れない。
+これは maintainer の Mac で上から順に実行する切替手順の下書きである。現状の `agentstack-mail` は loopback HTTP console までで、service lifecycle、installer、データ移送、client 一括切替、切り戻しが未実装である。このため、以下には実在しないコマンドを書かず、書けない箇所を明示する。稼働中の `~/mcp_agent_mail`、MCP 設定、サービスにはまだ触れない。
 
 ## 移送先
 
@@ -11,11 +11,11 @@
 | Git archive | `~/.mcp_agent_mail_git_mailbox_repo` | `~/.agentstack/mail/archive` |
 | signals | `~/.mcp_agent_mail/signals` | `~/.agentstack/mail/signals` |
 
-新 service の URL path は未確定である。contract は `/mcp`、runtime config は `/api/` を既定にしているが、それを公開する HTTP entrypoint 自体がまだない。
+新 service の開発用 URL は `http://127.0.0.1:18765/mcp` である。
 
 ## 1. 新 service を旧 service と別にインストールする
 
-実行コマンド: **未実装なので書けない。** Package は wheel/editable install できるが、`pyproject.toml` に console script がなく、専用 venv、service 定義、install manifest もない。`~/.agentstack/mail` は install 先ではなくデータの既定 root である。既存の `scripts/install.sh` は旧 `~/mcp_agent_mail` を導入するため、この切替には使わない。
+実行コマンド: **製品 installer が未実装なので書けない。** Package は wheel/editable install でき、console script `agentstack-mail` も生成されるが、専用 venv、service 定義、install manifest がない。`~/.agentstack/mail` は install 先ではなくデータの既定 root である。既存の `scripts/install.sh` は旧 `~/mcp_agent_mail` を導入するため、この切替には使わない。
 
 これを実行したら何が変わるか: 旧 service を動かしたまま、新 package と service 定義だけが別 namespace に追加される。
 
@@ -29,7 +29,7 @@ Signals は永続データではなく message 到着時の wakeup なので、�
 
 ## 3. 新 service を起動する
 
-実行コマンド: **未実装なので書けない。** `agentstack-mail serve-http` と `agentstack-mail service start|status|stop|restart` はまだ存在しない。宣言だけある service 名は macOS が `org.agentstack.mail`、systemd が `agentstack-mail.service` である。
+開発用の foreground 起動は `agentstack-mail` で実在する。ただし切替に使う `agentstack-mail service start|status|stop|restart` は未実装なので、ここで必要な service 起動コマンドはまだ書けない。宣言だけある service 名は macOS が `org.agentstack.mail`、systemd が `agentstack-mail.service` である。
 
 これを実行したら何が変わるか: `127.0.0.1:18765` で新 service だけが新 DB/archive/signal root の writer になる。
 
@@ -57,4 +57,4 @@ Signals は永続データではなく message 到着時の wakeup なので、�
 
 これを実行したら何が変わるか: 全 consumer が同時に旧 service へ戻り、新旧どちらか一方だけが writer の状態で復旧する。
 
-現時点の結論: この順序は確定できるが、通常切替を実行できる手順にはまだなっていない。上記6箇所の製品コマンドを実装した後に、実在するコマンドへ置き換えてから実行する。
+現時点の結論: この順序は確定できるが、通常切替を実行できる手順にはまだなっていない。残る製品コマンドを実装し、未実装の段を実在するコマンドへ置き換えてから実行する。

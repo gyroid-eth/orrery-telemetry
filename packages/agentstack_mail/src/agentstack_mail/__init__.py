@@ -1,7 +1,7 @@
 """AgentStack-owned coordination mail service.
 
-The first bootable core is available for differential testing. Transport,
-migration, supervision, and consumer cutover are intentionally not shipped yet.
+The first bootable core and loopback HTTP console entry point are available for
+testing. Migration, supervision, and consumer cutover are not shipped yet.
 """
 
 from .contract import ISOLATION_DEFAULTS, SERVICE_IDENTITY

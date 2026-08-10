@@ -40,8 +40,10 @@ compared without translating behavior. A fail-closed FastMCP boundary publishes
 exactly the 22 compatibility tools, zero concrete resources, zero resource
 templates, and zero prompts. Non-compatibility bodies are retained internally
 only until the differential suite proves they can be
-removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
-trains.
+removed. The installed `agentstack-mail` console script serves this boundary at
+the loopback-only default `http://127.0.0.1:18765/mcp`; it rejects non-loopback
+binds and bearer/JWT settings until the HTTP authentication layer is wired.
+Supervisor, migration, and consumer cutover remain later trains.
 
 `authorization.py` is the machine-readable inventory for the exact 22-tool
 surface. Each entry records the prospective subject, action, resource, current

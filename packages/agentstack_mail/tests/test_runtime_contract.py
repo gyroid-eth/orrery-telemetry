@@ -87,6 +87,7 @@ def test_isolated_defaults_ignore_all_legacy_environment_names(
 
     try:
         assert settings.http.port == ISOLATION_DEFAULTS.port
+        assert settings.http.path == ISOLATION_DEFAULTS.mcp_path == "/mcp"
         assert _sqlite_path(settings.database.url) == Path(
             ISOLATION_DEFAULTS.database
         ).expanduser().resolve()

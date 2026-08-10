@@ -56,8 +56,11 @@ that removes any contract tool makes server construction fail closed.
 All production settings use the `AGENTSTACK_MAIL_*` namespace. With no new
 settings present, the resolved port is `18765` and database, archive, and
 signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
-`.env` are ignored. The package intentionally has no HTTP/CLI entrypoint,
-supervisor, migration command, or installer switch yet.
+`.env` are ignored. An installed package now exposes `agentstack-mail`, which
+serves the exact boundary on the loopback-only default
+`http://127.0.0.1:18765/mcp`. The first entry point rejects non-loopback binds
+and bearer/JWT settings rather than pretending to enforce authentication.
+Supervisor, migration, and installer switching are not implemented yet.
 
 File-reservation activity probes converge on upstream #240's one-pathspec Git
 walk, then add a process-global concurrency limit of eight, a three-second

@@ -968,6 +968,7 @@ REQUIRED_RUNTIME_MODULES = {
     "app.py",
     "authorization.py",
     "boundary.py",
+    "cli.py",
     "config.py",
     "contract.py",
     "db.py",
@@ -981,6 +982,7 @@ REQUIRED_RUNTIME_MODULES = {
 }
 
 WHEEL_REQUIRED_SUFFIXES = {
+    ".dist-info/entry_points.txt",
     ".dist-info/licenses/AGENTSTACK_LICENSE",
     ".dist-info/licenses/UPSTREAM_LICENSE",
     "agentstack_mail/NOTICE.md",
@@ -1021,6 +1023,11 @@ REQUIRED_METADATA = {
     "License-Expression: LicenseRef-PolyForm-Perimeter-1.0.1 AND LicenseRef-MCP-Agent-Mail",
     "Requires-Dist: fastmcp==2.13.0.2",
     "Requires-Dist: pydantic==2.12.5",
+}
+
+CONSOLE_ENTRY_POINTS = {
+    "agentstack-mail = agentstack_mail.cli:main",
+    'agentstack-mail = "agentstack_mail.cli:main"',
 }
 
 
@@ -1090,6 +1097,17 @@ def _assert_metadata(content: bytes, *, artifact: str) -> None:
     if missing:
         raise SystemExit(
             f"{artifact} metadata is missing required fields: {', '.join(missing)}"
+        )
+
+
+def _assert_console_entry_point(content: bytes, *, artifact: str) -> None:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{artifact} console entry point is not UTF-8") from exc
+    if not any(entry in text for entry in CONSOLE_ENTRY_POINTS):
+        raise SystemExit(
+            f"{artifact} is missing the agentstack_mail.cli:main console entry point"
         )
 
 
@@ -1561,6 +1579,10 @@ def verify_wheel(path: Path) -> None:
         artifact="wheel",
     )
     _assert_metadata(metadata, artifact="wheel")
+    _assert_console_entry_point(
+        _content_with_suffix(files, ".dist-info/entry_points.txt", artifact="wheel"),
+        artifact="wheel",
+    )
     _assert_expected_divergences_manifest(
         _content_with_suffix(
             files,
@@ -1648,6 +1670,10 @@ def verify_sdist(path: Path) -> None:
         artifact="sdist",
     )
     _assert_metadata(metadata, artifact="sdist")
+    _assert_console_entry_point(
+        _content_with_suffix(files, "/pyproject.toml", artifact="sdist"),
+        artifact="sdist",
+    )
     _assert_expected_divergences_manifest(
         _content_with_suffix(
             files,

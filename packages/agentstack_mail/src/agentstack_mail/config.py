@@ -305,7 +305,7 @@ def get_settings() -> Settings:
     http_settings = HttpSettings(
         host=decouple_config("AGENTSTACK_MAIL_HTTP_HOST", default="127.0.0.1"),
         port=_int(decouple_config("AGENTSTACK_MAIL_HTTP_PORT", default="18765"), default=18765),
-        path=decouple_config("AGENTSTACK_MAIL_HTTP_PATH", default="/api/"),
+        path=decouple_config("AGENTSTACK_MAIL_HTTP_PATH", default="/mcp"),
         bearer_token=decouple_config("AGENTSTACK_MAIL_HTTP_BEARER_TOKEN", default="") or None,
         rate_limit_enabled=_bool(decouple_config("AGENTSTACK_MAIL_HTTP_RATE_LIMIT_ENABLED", default="false"), default=False),
         rate_limit_per_minute=_int(decouple_config("AGENTSTACK_MAIL_HTTP_RATE_LIMIT_PER_MINUTE", default="60"), default=60),

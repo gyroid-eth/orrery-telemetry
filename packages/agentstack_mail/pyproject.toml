@@ -40,6 +40,9 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 
+[project.scripts]
+agentstack-mail = "agentstack_mail.cli:main"
+
 [project.optional-dependencies]
 legacy-llm = [
   "litellm>=1.40.0,<2",
