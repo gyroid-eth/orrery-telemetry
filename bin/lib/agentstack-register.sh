@@ -360,6 +360,7 @@ ags_pick_available_agent_name() {
   if [[ -n "$preferred_name" ]]; then
     name_status="$(ags_agent_name_status "$project_key" "$preferred_name")"
     if [[ "$name_status" == "available" ]]; then
+      ags_note_scientist_used "$preferred_name" || true
       printf '%s\n' "$preferred_name"
       return 0
     fi
@@ -373,7 +374,11 @@ ags_pick_available_agent_name() {
     candidate="$(ags_pick_adjective_scientist_name)" || return 1
     name_status="$(ags_agent_name_status "$project_key" "$candidate")"
     case "$name_status" in
-      available) printf '%s\n' "$candidate"; return 0 ;;
+      available)
+        # Record only on the claim: the loop discards candidates, and recording
+        # those would burn through the roster with surnames nobody is using.
+        ags_note_scientist_used "$candidate" || true
+        printf '%s\n' "$candidate"; return 0 ;;
       occupied)  unknowns=0 ;;
       *)
         unknowns=$((unknowns + 1))
@@ -391,7 +396,11 @@ ags_pick_available_agent_name() {
     candidate="${adjective}-${i}-${scientist}"
     name_status="$(ags_agent_name_status "$project_key" "$candidate")"
     case "$name_status" in
-      available) printf '%s\n' "$candidate"; return 0 ;;
+      available)
+        # Record only on the claim: the loop discards candidates, and recording
+        # those would burn through the roster with surnames nobody is using.
+        ags_note_scientist_used "$candidate" || true
+        printf '%s\n' "$candidate"; return 0 ;;
       occupied)  unknowns=0 ;;
       *)
         unknowns=$((unknowns + 1))

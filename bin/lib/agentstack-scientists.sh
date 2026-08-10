@@ -65,10 +65,64 @@ for name in sorted(data):
 PY
 }
 
+# Surnames handed out recently, most recent last.  The draw itself is uniform
+# (secrets.choice over the 50 portrait names), but uniform draws collide far
+# more than people expect: with 17 agents in a day, the chance that some
+# surname lands three times is ~21%.  2026-08-10 produced FoggyPauling,
+# VioletPauling and MossyPauling and the operator misread three different
+# agents as one.  The fix is not a fairer coin, it is remembering.
+AGS_SCIENTIST_RECENT_LIMIT="${AGENTSTACK_SCIENTIST_RECENT_LIMIT:-12}"
+
+ags_scientist_recent_file() {
+  printf '%s\n' "${AGENTSTACK_HOME:-$HOME/.agentstack}/state/recent-scientists"
+}
+
+ags_scientist_recent_list() {
+  local f; f="$(ags_scientist_recent_file)"
+  [[ -f "$f" ]] && tail -n "$AGS_SCIENTIST_RECENT_LIMIT" "$f" || true
+}
+
+# Call once the name is actually claimed, not once it is drawn: the picker may
+# discard many candidates, and recording those would exhaust the roster with
+# surnames nobody is using.
+ags_note_scientist_used() {
+  local agent_name="$1" json_path="${2:-$(ags_scientists_json)}" surname f
+  [[ -f "$json_path" ]] || return 0
+  surname="$(python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    names = [n for n in json.load(fh) if n.isascii() and n.isalpha()]
+name = sys.argv[2]
+hit = [n for n in names if name.endswith(n)]
+print(max(hit, key=len) if hit else "")
+' "$json_path" "$agent_name")" || return 0
+  [[ -n "$surname" ]] || return 0
+  f="$(ags_scientist_recent_file)"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+  printf '%s\n' "$surname" >>"$f" 2>/dev/null || return 0
+  # Keep the ledger from growing without bound; only the tail is ever read.
+  if [[ "$(wc -l <"$f" 2>/dev/null || echo 0)" -gt $((AGS_SCIENTIST_RECENT_LIMIT * 8)) ]]; then
+    tail -n "$AGS_SCIENTIST_RECENT_LIMIT" "$f" >"$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
+  fi
+}
+
 ags_pick_scientist() {
   local json_path="${1:-$(ags_scientists_json)}"
   [[ -f "$json_path" ]] || return 1
-  python3 - "$json_path" <<'PY'
+  # The recent list goes through argv, not stdin: a heredoc program and a piped
+  # payload both claim stdin, and the heredoc wins silently — the filter would
+  # simply never apply and nothing would say so.
+  #
+  # Read into an array rather than splitting an unquoted string.  Word splitting
+  # on unquoted expansion is a bash behaviour that zsh does not share, so the
+  # string form passes one argument instead of twelve when this file is sourced
+  # from a zsh shell — the filter degrades to a no-op and still prints a name.
+  local -a recent=()
+  local _line
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] && recent+=("$_line")
+  done < <(ags_scientist_recent_list)
+  python3 -c '
 import json
 import secrets
 import sys
@@ -78,8 +132,12 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 names = sorted(name for name in data if name.isascii() and name.isalpha())
 if not names:
     sys.exit(1)
-print(secrets.choice(names))
-PY
+recent = {n for n in sys.argv[2:] if n}
+# Never fail because everything is recent: a smaller roster or a long ledger
+# must degrade to the old uniform draw, not to no name at all.
+fresh = [n for n in names if n not in recent] or names
+print(secrets.choice(fresh))
+' "$json_path" ${recent[@]+"${recent[@]}"}
 }
 
 ags_pick_adjective_scientist_name() {
