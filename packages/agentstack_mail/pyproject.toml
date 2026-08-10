@@ -29,6 +29,7 @@ dependencies = [
   "GitPython>=3.1.43",
   "filelock>=3.16.0",
   "psutil>=6.1.1",
+  "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 classifiers = [
@@ -44,6 +45,7 @@ classifiers = [
 agentstack-mail = "agentstack_mail.cli:main"
 agentstack-mail-migrate = "agentstack_mail.migration:main"
 agentstack-mail-service = "agentstack_mail.service:main"
+agentstack-mail-consumers = "agentstack_mail.consumer:main"
 
 [project.optional-dependencies]
 legacy-llm = [

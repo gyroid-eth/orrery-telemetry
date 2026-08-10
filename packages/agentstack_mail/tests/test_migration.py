@@ -624,6 +624,24 @@ def test_rollback_assessment_rejects_pre_manifest_stages(tmp_path: Path) -> None
         connection.close()
 
 
+def test_rollback_assessment_rejects_non_verified_manifest_status(
+    tmp_path: Path,
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        manifest_path = destination / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "C2_LEGACY_QUIESCED"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        with pytest.raises(MigrationError, match="verified C3 baseline"):
+            assess_rollback(manifest_path, "C5_CLIENT_SWITCHING")
+    finally:
+        connection.close()
+
+
 @pytest.mark.parametrize("surface", ("archive", "signals"))
 def test_rollback_rejects_non_database_destination_divergence(
     tmp_path: Path,

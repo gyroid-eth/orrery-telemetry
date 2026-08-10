@@ -970,6 +970,7 @@ REQUIRED_RUNTIME_MODULES = {
     "boundary.py",
     "cli.py",
     "config.py",
+    "consumer.py",
     "contract.py",
     "db.py",
     "guard.py",
@@ -1016,6 +1017,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d10.py",
     "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_migration.py",
+    "/tests/test_consumer.py",
     "/tests/test_service.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
@@ -1041,6 +1043,10 @@ CONSOLE_ENTRY_POINTS = {
     "agentstack-mail-service": (
         "agentstack-mail-service = agentstack_mail.service:main",
         'agentstack-mail-service = "agentstack_mail.service:main"',
+    ),
+    "agentstack-mail-consumers": (
+        "agentstack-mail-consumers = agentstack_mail.consumer:main",
+        'agentstack-mail-consumers = "agentstack_mail.consumer:main"',
     ),
 }
 

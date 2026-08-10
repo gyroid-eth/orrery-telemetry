@@ -2,7 +2,7 @@
 
 > **ここを越えると戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。
 
-> **この間は全員が黙る:** C2 で旧 writer を止めてから、C4 の新 endpoint readiness が確認できるまでの **2–4分**、ProOpus、全 Claude/Codex parent・child、bot、watcher/hook、切替 operator を含む全 sender は agent-mail を使わない。
+> **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/read が合格するまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。**2–4分はC3のdata copy/verificationだけの実測**であり、client restart/rebindを含む全静止時間は未測定である。
 
 これは maintainer の Mac で後日、上から順に実行するための手順書である。この変更では切替を実行しない。稼働中の `~/mcp_agent_mail`、MCP 設定、launchd、service、port 8765 には触れていない。
 
@@ -10,7 +10,9 @@
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-ただし working-tree scope の migration command と、consumer を before-image/CAS 付きで一括切替する helper はまだ未実装である。現在の `agentstack-mail-migrate copy` は legacy `.git` まで複製するため、この手順の代用に使わない。両方が実装・負方向テスト済みになるまで C2 へ進まない。
+ただし working-tree scope の migration command はまだ未実装である。現在の `agentstack-mail-migrate copy` は legacy `.git` まで複製するため、この手順の代用に使わない。
+
+consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
 ## 今回運ぶもの、運ばないもの
 
@@ -51,7 +53,7 @@ legacy DB、signals、working tree、`.git` は移動も削除も変更もしな
 | copied tree fsync | 3.60秒 |
 | baseline `git add` + commit | 24.47秒 |
 
-最初の live copy は動的 lock が走査中に消えて失敗した。これは静止を省略した場合に migration が成功しない、望ましい fail-closed の実証である。既存6 snapshot相当を working-tree scope で維持すると warm側で約100秒になり、cold walkと余裕を含む **2–4分**を正式な無通信枠とする。短縮のために検証粒度を変えない。
+最初の live copy は動的 lock が走査中に消えて失敗した。これは静止を省略した場合に migration が成功しない、望ましい fail-closed の実証である。既存6 snapshot相当を working-tree scope で維持すると warm側で約100秒になり、cold walkと余裕を含む **2–4分**をC3 data copy/verification枠とする。全体の無通信はC2からC5 test合格まで維持し、短縮のために検証粒度を変えない。
 
 ## 実行前に固定する namespace
 
@@ -78,15 +80,32 @@ AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=/Users/operator/.agentstack/mail/signa
 
 旧 port/root/env key への fallback は持たせない。`ProOpus`、`AirSonnet`、`BiomatterBot`、`SeminarBot` は隔離環境で request name と response `name` の完全一致を確認してから使う。
 
+## 切替前に完了させる consumer compatibility
+
+Orrery と dashboard は C5 helper が検出して後回しにする対象ではない。maintainer が日常的に使う表示・操作面なので、次を別変更として実装・検証してから C2へ入る。この手順書では列挙だけを行い、実装もlive file変更もしていない。
+
+| consumer | 切替前に直すこと | 直さず切り替えた場合 |
+|---|---|---|
+| Orrery | `~/.orrery/config.json` に `mail_db=~/.agentstack/mail/storage.sqlite3` を明示できる実装と切替操作を用意し、Finder起動でも実画面が新DBのmessage/agent更新を読むことを確認する。`ORRERY_MAIL_DB`だけには依存しない | 現在のconfigには`mail_db`がなく、Finder起動はshell envを継承しないため、Orreryのmail roster/railだけ旧DBの静止snapshotを読み続ける |
+| dashboard DB | 実際にport 8770で動く`~/.claude/tools/agent-dashboard/server.py`と`graph_data.py`の固定`~/mcp_agent_mail/storage.sqlite3`を、明示selectorで新DBへ切り替えられるrepo-managed版へ置換する。LaunchAgentにもselectorを渡す | 一覧・graph・timeline・telemetryが旧authorityの静止snapshotを表示し続ける |
+| dashboard retire | 旧 `POST /mail/api/retire-agent` を22-tool MCPの `retire_agent` 呼出しへ置換する前にcredential経路を決め、token付きagentを含むrequest/responseと失敗表示を検証する。現toolはtoken付きagentの`registration_token`を要求し、dashboardは現在`agent_id`しか持たない | 新serviceには旧REST routeがない。単純なMCP置換もtoken付きagentで失敗し、現在の後続tmux killだけが進むと「paneは消えたがagentはactive」の不整合になる |
+| dashboard unretire | repo版の旧 `POST /mail/api/unretire-agent` を初回22-tool境界では無効化し、「未対応」を明示する。`unretire_agent`を無断で公開しない | 存在しないroute/toolを呼び、成功したように見えるUIまたは操作失敗になる |
+| dashboard import | live dashboardの `~/mcp_agent_mail/src` 挿入と `from mcp_agent_mail import utils` を除き、repo版が既に使う`bin/lib/agentstack-scientists.sh`等のAgentStack-owned語彙へ統一してpickerを検証する | 旧source撤去時に即死はせずfrozen語彙へsilent fallbackするが、語彙正本との同期を失い、upstream依存ゼロも満たさない |
+| dashboard auth | `HTTP_BEARER_TOKEN` 必須読出しと常時`Authorization: Bearer ...`送信を除き、認証未実装の新loopback MCP入口に合わせる | token fileが無ければregister/sendの呼出し前にhard failする。一方、新serviceはbearer/JWT設定があると起動自体を拒否するため、旧auth前提との両立経路はない |
+| dashboard signals | live固定 `~/.mcp_agent_mail/signals` とrepo版旧defaultを `AGENTSTACK_SIGNALS_DIR=~/.agentstack/mail/signals` へ揃える | 通知・offline表示が旧signal treeを監視し続ける |
+
+加えて、`~/.zshrc` の旧 `MCP_AGENT_MAIL_TOKEN` export、旧health URLを直接叩くhook/watcher、dashboard/Codex Appの旧fallbackを、新旧envの両方で動くrepo-managed artifactへ先に置換する。ここは任意文字列置換をせず個別testを持つ。旧source自身の `.mcp.json` / `.codex/config.toml`、frozen differential fixture、backup/historyは通常consumer inventoryへ入れない。
+
 ## 上から順に実行する操作
 
 ### C0–C1: 旧 authority を動かしたまま準備する
 
 1. maintainer が baseline commit の A/B を選び、記録する。
-2. working-tree scope migration、consumer一括切替 helper、bounded MCP readiness probe が実装・検証済みであることを確認する。一つでも未実装ならここで止まる。
+2. working-tree scope migration、bounded MCP readiness probe、上のOrrery/dashboard互換変更が実装・検証済みであることを確認する。`agentstack-mail-consumers` は確定artifact上でcopy-only rehearsalが通ることを確認する。一つでも未実装ならここで止まる。
 3. 確定 wheel を専用 venv へ入れ、live `~/Library/LaunchAgents` ではない staging directory に `agentstack-mail-service render` で plist と ownership manifest を作る。render は launchctl を呼ばない。
-4. 旧 DB/archive/signals の read-only fingerprint、旧 launchd plist、全 consumer config の whole-file before-image と対象 entry hash を保存する。
-5. 全 sender に開始時刻と2–4分の無通信を事前通知する。ProOpus 自身も、停止後は agent-mail を送受信せず同じ maintenance shell だけを使う。
+4. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerをtyped inventoryへ列挙し、`agentstack-mail-consumers prepare`で0600/0400のbefore/after bundleを作る。標準出力のmanifest SHA-256はbundle外のmaintenance記録へpinする。
+5. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。特にlive inventoryでtool permission/hookを確認した15個の `.claude/settings.local.json` は、対象fileと変更行を一件ずつ事前承認されるまでapplyしない。helperは**列挙したfile内**の旧alias、old/new併存、未知endpointをfailさせる。inventory外のfileは見えないため、別のlive inventory reviewで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
+6. 全 sender に開始時刻、C3の2–4分見込み、C5 test合格まで無通信が続くことを事前通知する。ProOpus 自身も、停止後は agent-mail を送受信せず同じ maintenance shell だけを使う。
 
 ### C2: 全 sender と旧 writer を静止する
 
@@ -151,17 +170,58 @@ agentstack-mail-service status \
   --ownership-manifest /path/to/cutover-staging/launchd/org.agentstack.mail.ownership.json
 ```
 
-`status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。bounded probe で新 port 18765 の `health_check`、既存 identity の read-only `whois(include_recent_commits=false)`、read-only inbox fetch を確認する。この段階では `register_agent`、send、receipt変更、reservation変更を行わない。
+`status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。bounded probe で新 port 18765 の `health_check`と、既存 identity の read-only `whois(include_recent_commits=false)`を確認する。この段階では `fetch_inbox`も呼ばない。notification有効時の`fetch_inbox`はsignal fileをclearし、migration baselineそのものを変え得るためである。`register_agent`、send、receipt変更、reservation変更も行わない。
 
 新 root が migration baseline と同一で、旧 job/8765が停止、新 job/18765だけがreadyであることを確認する。readinessが期限内に通らなければC4 rollbackへ進む。
 
 ### C5: consumer を一括切替し、最初の1通で実動確認する
 
-個別手編集はしない。before-image/CAS helperで Claude、Codex、bridge、launcher、hooks、watcher、skills、child proxyを新 key/endpoint/signal rootへ一括変更する。Bridge自身の client key `agentstack` は変えない。
+個別手編集はしない。C0でsealしたbundleと外部pinしたdigestだけを使い、次の1操作で構造化configを切り替える。
+
+```sh
+agentstack-mail-consumers apply \
+  --bundle /path/to/private-consumer-bundle \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256"
+
+agentstack-mail-consumers status \
+  --bundle /path/to/private-consumer-bundle \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256"
+```
+
+`status=committed`以外ではconsumerを再開しない。対象は明示inventoryに入れたClaude/Codex direct config、tool permissions、AgentStack/Codex App envとinstall receipt、停止時に存在したchild resume configである。Bridge自身の client key `agentstack` は変えない。repo-managed launcher/hook/watcher/skillsとOrrery/dashboardは、C2より前に新旧env両対応artifactとしてdeploy済みであることが前提であり、C5でsourceを文字列置換しない。
+
+helperは列挙済みfile内の未知aliasを拒否するが、**inventoryから漏れたfileを発見するscannerではない**。C0のlive inventory reviewが別のhard gateである。inventory schema v1は次の全fieldを明示し、pathは全てabsoluteにする（値は本番用maintenance artifactにのみ書き、repoへcommitしない）。
+
+live residual Codex child config 4件は、read-only inventory時点で全てper-tool policy tableが0件だった。helperは存在するproxy 8-tool policyだけを保存し、欠落policyを製造しない。C0で各artifactを「resume対象」または「staleなのでexcludeし、更新済みspawn経路から再生成」に分類し、未分類のchild configはinventoryへ入れない。
+
+```json
+{
+  "schema_version": 1,
+  "desired": {
+    "legacy_mcp_url": "http://127.0.0.1:8765/mcp",
+    "new_mcp_url": "http://127.0.0.1:18765/mcp",
+    "legacy_mail_db": "/absolute/legacy/storage.sqlite3",
+    "new_mail_db": "/absolute/new/mail/storage.sqlite3",
+    "legacy_mail_env": "/absolute/legacy/.env",
+    "new_mail_env": "/absolute/new/agentstack-mail.env",
+    "legacy_mail_home": "/absolute/legacy/mail-home",
+    "new_mail_home": "/absolute/new/mail",
+    "legacy_signals_dir": "/absolute/legacy/signals",
+    "new_signals_dir": "/absolute/new/mail/signals"
+  },
+  "consumers": [
+    {"kind": "claude_mcp", "path": "/absolute/copied/.claude.json"},
+    {"kind": "claude_settings", "path": "/absolute/copied/.claude/settings.local.json"},
+    {"kind": "codex_mcp", "path": "/absolute/copied/.codex/config.toml"}
+  ]
+}
+```
+
+全config置換後、**既に起動していたclientは設定file変更だけでは新endpointへ移らない**。各Claude/Codex parent、Codex App、停止時に存在したchildを明示的にrestart/rebindし、loaded MCP keyが`agentstack-mail`、endpointが127.0.0.1:18765、新keyのtool surfaceが期待値、旧key/8765のconnectionが無いことをread-onlyに確認する。確認前はtest pairを含め誰もcallしない。
 
 最初の clientが `register_agent` またはwriteを成功させる直前に、maintainerが冒頭の不可逆境界を再確認する。成功した瞬間から旧 authorityへのrollbackは禁止である。
 
-専用test sender/recipientで1通だけ送る。合格条件は次の全てである。
+その後、専用test sender/recipientだけを許可して1通だけ送る。他の全senderは合格確認まで黙ったままにする。合格条件は次の全てである。
 
 - request nameとresponse `name` が完全一致する。
 - `send_message` が返したmessage IDをrecipientの `fetch_inbox` が返す。
@@ -179,7 +239,7 @@ agentstack-mail-service status \
 | C2、destination未公開 | 新 serviceを起動せず、旧 source fingerprint不変を確認し、旧jobだけをbootstrapする |
 | C3、copy検証済み | 新 copyは診断用に保持する。両service停止下でbaselineを確認し、旧jobだけをbootstrapする |
 | C4、新service ready・consumer未切替 | exact ownershipで新jobをstopし、新rootがbaselineと同一なら旧jobだけをbootstrapする |
-| C5、config切替済み・新rootがまだbaseline | 新jobをstopし、CASでconfig before-imageを戻し、旧jobをbootstrapする。外部編集を検出したconfigは上書きせずincidentにする |
+| C5、config切替済み・新rootがまだbaseline | 新jobをstopし、`agentstack-mail-consumers rollback --bundle ... --expected-manifest-sha256 ... --migration-manifest ~/.agentstack/mail/migration-manifest.json --cutover-stage C5_CLIENT_SWITCHING` の1操作でserviceのauthority lockを取得し、data baselineを再検査してからexact before-imageへ戻す。`status=rolled_back`を確認して旧jobをbootstrapする。新jobがlockを保持中、外部編集、post-baseline writeのいずれかを検出した場合は一つも上書きせずincidentにする |
 | **C5/C6、最初のdurable write後** | **旧jobを起動しない。configを戻さない。** 全consumerをquiesceし、exact new jobを再起動してbounded readiness後に新authority上でfix-forwardする |
 
 旧 job の再開が許される段階だけ、同じ maintenance shell から次を実行する。
@@ -200,7 +260,7 @@ durable write後にnew jobがreadyにならない場合は、旧を起動して�
 
 - working-tree scope migration commandと、その6回照合・中断・source mutation・destination occupation・corruptionの負方向テスト
 - baseline commit A/Bのmaintainer裁定
-- transactional consumer cutover helperとbefore-image/CAS manifest
+- 実機consumer inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
 - bounded MCP readiness probe
 - 確定wheelでのinstalled-artifact verification
 

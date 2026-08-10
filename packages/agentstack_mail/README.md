@@ -74,13 +74,44 @@ job to be stopped even if its environment file drifted. `status: job_loaded`
 proves only the exact launchd definition, not HTTP/MCP readiness. Its foreground
 supervisor owns a child process group and holds one authority lock for the
 canonical new state root. This artifact is macOS launchd-only; systemd and
-`restart` are outside this slice. The cutover installer, transactional
-all-consumer switch, legacy/new cross-product writer exclusion, and
+`restart` are outside this slice. The cutover installer, approved live-consumer
+inventory and predeployment, legacy/new cross-product writer exclusion, and
 post-authority reverse migration remain later work. The canonical release
 manifest therefore continues to mark the overall service-lifecycle, migration,
 and rollback gates `not_implemented`; these tools alone are not release-ready.
 The normal cutover must not cross its documented first-write boundary until
 those gaps are resolved.
+
+`agentstack-mail-consumers` is the separate settings cutover helper. Its
+`prepare` command accepts only an explicit typed JSON inventory and writes a
+private sealed bundle of exact before/after images without changing any
+consumer. `preview` reports only file paths and changed line ranges; it does
+not print values or bearer material. `apply`, `status`, and `rollback` require
+the externally pinned manifest SHA-256. Whole-set compare-and-swap, immutable
+blobs, deterministic crash-resumable stages, same-directory atomic
+replacements, and write-once terminal receipts make an interrupted multi-file
+switch recoverable with one `rollback` command. The mutable journal is only a
+progress diagnostic and cannot authorize a terminal state. Rollback also
+requires the verified migration manifest, acquires the same stable authority
+lock used by the service, and rechecks that the new authority still equals its
+baseline before publication. Exact mode, owner, flags, and
+extended attributes are preserved; ACL-bearing inputs are rejected rather
+than flattened. The install receipt is rewritten so a later purge cannot
+delete the cold legacy roots.
+
+No cross-directory filesystem transaction exists: a crash can leave a mixed
+before/after vector, but it is never marked committed, and consumers must
+remain quiesced until `status=committed` or `status=rolled_back`. Unknown
+aliases, duplicate JSON keys/tables, unsupported formatting, symlinks,
+hardlinks, external edits, and bundle tampering fail closed. Stable
+target-directory locks serialize cooperating helper processes across file
+replacement. A malicious process under the
+same UID can still rewrite 0400 bundle data or race the final classify/rename;
+that is outside this helper's threat model, so the cutover still requires a
+single operator and no other consumer-config writer. The tool validates only
+the explicitly listed inventory and is not a filesystem scanner. It does not
+rewrite runtime source; Orrery and dashboard compatibility are explicit
+pre-cutover prerequisites in the runbook.
 
 `authorization.py` is the machine-readable inventory for the exact 22-tool
 surface. Each entry records the prospective subject, action, resource, current

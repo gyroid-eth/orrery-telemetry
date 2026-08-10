@@ -620,7 +620,8 @@ server = dict(command=runner, args=[], env=server_env)
 
 
 def looks_like_agent_mail(name):
-    return "agentmail" in name.replace("-", "").replace("_", "").lower()
+    normalized = name.replace("-", "").replace("_", "").lower()
+    return normalized in {"agentmail", "mcpagentmail", "agentstackmail"}
 
 
 # The child inherits the user's own MCP servers, including their DIRECT
@@ -643,8 +644,10 @@ if isinstance(projects, dict):
 for scope in scopes:
     if isinstance(scope, dict):
         names.update(name for name in scope if looks_like_agent_mail(name))
-if not names:
-    names = set(["mcp-agent-mail"])
+if "agentstack-mail" in names or ":18765/" in mcp_url:
+    names = {"agentstack-mail"}
+elif not names:
+    names = {"mcp-agent-mail"}
 
 config = dict(mcpServers=dict((name, server) for name in sorted(names)))
 with open(path, "w", encoding="utf-8") as handle:
@@ -712,7 +715,8 @@ for entry in source_path.iterdir():
     os.symlink(entry, link)
 
 def looks_like_agent_mail(name):
-    return "agentmail" in name.replace("-", "").replace("_", "").replace('"', "").lower()
+    normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
+    return normalized in {"agentmail", "mcpagentmail", "agentstackmail"}
 
 
 def toml_string(value):
@@ -772,7 +776,9 @@ for line in text.splitlines():
                 claimed.append(name)
     if not skipping:
         lines.append(line)
-if not claimed:
+if "agentstack-mail" in claimed or ":18765/" in mcp_url:
+    claimed = ["agentstack-mail"]
+elif not claimed:
     claimed = ["agent-mail"]
 # Codex's deferred tool registry identifies this proxy by serverInfo.name
 # (`agentstack`), while direct MCP calls use the configured server key. Claim

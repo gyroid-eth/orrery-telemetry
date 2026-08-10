@@ -814,6 +814,8 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         raise MigrationError("unsupported or malformed migration manifest")
     if payload.get("tool") != "agentstack-mail-migrate":
         raise MigrationError("manifest was not created by agentstack-mail-migrate")
+    if payload.get("status") != "C3_MIGRATION_VERIFIED":
+        raise MigrationError("migration manifest is not a verified C3 baseline")
     return payload
 
 
