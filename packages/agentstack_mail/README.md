@@ -42,6 +42,24 @@ are retained internally only until the differential suite proves they can be
 removed; HTTP, CLI, supervisor, migration, and consumer cutover are later
 trains.
 
+Reservation activity sweeps use the upstream #240 single-pathspec Git walk and
+bound probes process-wide to eight concurrent subprocesses. Each probe has a
+three-second deadline and each status pass has a four-second wall budget. Git
+subprocesses are killed and reaped on timeout, filesystem globs stop only on a
+deadline or decisive recent mtime, and an incomplete/error result is reported
+as unknown and cannot auto-release a reservation. Explicit TTL expiry remains
+authoritative. The real-workspace gate is:
+
+```sh
+uv run --project packages/agentstack_mail \
+  python packages/agentstack_mail/scripts/reservation_performance_gate.py \
+  /path/to/workspace
+```
+
+It requires a deterministic 57-tracked-path sample to finish completely within
+three seconds and prints the configured live-pattern snapshot separately for
+diagnostics.
+
 The 22-tool contract does not expose an MCP roster resource. Callers obtain
 their own assigned identity from the AgentStack runtime, `register_agent`, or
 `macro_start_session`; `list_contacts` returns known contact links and `whois`
