@@ -480,6 +480,7 @@ def _launchctl(
         check=False,
         capture_output=True,
         text=True,
+        timeout=20,
     )
 
 

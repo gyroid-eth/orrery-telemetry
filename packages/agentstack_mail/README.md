@@ -396,6 +396,31 @@ listener on the explicitly selected isolated port. The
 `--allow-missing-legacy-listener` option is for an offline test machine, not a
 cutover receipt.
 
+After the foreground producer has emitted a same-candidate lifecycle receipt,
+`launchd-rehearsal` can exercise the installed service controller under one
+operator-authorized, non-production launchd identity:
+
+```console
+agentstack-mail-evidence launchd-rehearsal \
+  --output-dir /absolute/absent/launchd-evidence-directory \
+  --wheel /absolute/candidate/agentstack_mail-0.0.0-py3-none-any.whl \
+  --candidate-repo /absolute/clean/candidate-checkout \
+  --candidate-commit 0123456789abcdef0123456789abcdef01234567 \
+  --foreground-receipt /absolute/service-lifecycle-v1.json \
+  --foreground-receipt-sha256 "$FOREGROUND_RECEIPT_SHA256" \
+  --label org.agentstack.mail.rehearsal.01234567.one-use-nonce \
+  --port 28765
+```
+
+The label must contain the exact candidate's first eight hexadecimal digits.
+This producer may change launchd state only through the installed controller's
+`bootstrap`, `enable`, `kickstart`, and `bootout` calls for that exact label.
+It reads, but does not change, the production launchd identity and legacy 8765
+listener. It publishes no terminal receipt unless the rehearsal label is
+absent again, the isolated port is closed, and both production observations
+are unchanged. The receipt retains only the exact test label's disabled
+override value; it never stores the full `print-disabled` domain output.
+
 This producer does not install its own environment and does not claim that a
 dependency closure is hash-locked. Therefore adding it alone does not change
 either `http-cli-transport-entrypoints` or

@@ -39,15 +39,17 @@ maintainer は **2026-08-11**、foregroundではlaunchdが送る停止signal、K
 許可は次の範囲に限定する。
 
 - 対象labelは `org.agentstack.mail.rehearsal.<candidate8>.<nonce>` 形式の **1つだけ**とする。
-- 許可された状態変更は、そのexact labelへの `bootstrap` / `enable` / `kickstart` / `bootout` の4操作だけである。
+- launchdへの読み取り専用操作は許可する。`print`、`print-disabled`、`list`等を含むが、receiptへ保存するのは試験専用exact labelに関係する値だけとする。
+- 許可された状態変更は、そのexact labelへの `bootstrap` / `enable` / `kickstart` / `bootout` の4操作だけである。これ以外の状態変更が必要になった場合は実行前にProOpusへ確認する。
 - `enable` は最初の3操作の列挙後に追加された。実際の `agentstack-mail-service start` が `bootstrap → enable → kickstart` を呼ぶためであり、rehearsalだけ省略すると本番と異なるcontroller経路を試すことになる。
-- 稼働中のdashboard・agent-mail job、production label `org.agentstack.mail`、legacy service、MCP設定・data、port 8765へのnetwork requestは対象外であり、起動・停止・変更しない。8765はprocessを変えない `lsof` listener fingerprintだけをbefore/afterで比較する。
+- 稼働中のdashboard・agent-mail job、production label `org.agentstack.mail`、legacy service、MCP設定・data、port 8765は対象外であり、起動・停止・変更しない。production labelと8765が不変であることを確認するread-only観測だけを例外とし、8765はnetwork requestを送らず `lsof` listener fingerprintだけをbefore/afterで比較する。
 - plist、ownership、env、state root、DB、archive、signals、log、wheel、venv、receiptは0700の隔離temp配下に置き、隔離portを使う。
 - 実行前にlabelの明示引数化、production既定値の維持、ownership/CLI label不一致のfail-closed、fake launchctl検証を完了する。`launchctl print gui/$UID/<rehearsal_label>` が113以外、production labelと一致、予約prefix外、またはlabelが既存なら、process起動前に中止する。
 - `finally` は試験専用exact labelだけをbootoutする。最後に同labelがprint=113、隔離portのlistenerが0、production labelと8765のfingerprintがbefore/after一致であることを確認する。
-- cleanupに失敗した場合はterminal receiptを出さない。想定外のprocessまたはjobが残り、このsandboxから停止できない場合は、exact label・port・PID・隔離pathを **ProOpusへurgent報告**し、ProOpusが素性を照合してcleanupする。
+- cleanup経路ではprocessへSIGTERM/SIGKILLを送らない。bootout後もlistenerが残ること自体を失敗証跡として保持する。
+- cleanupに失敗した場合はterminal receiptを出さない。想定外のprocessまたはjobが残った場合は、exact label・port・PID・隔離pathを **ProOpusへurgent報告**し、ProOpusが素性を照合してcleanupする。
 
-試験receiptには、foreground receiptとの差の有無に加え、`enable` が隔離temp外に作るlabel単位の永続状態をbefore/afterで実測し、残ったものとcleanupしなかった理由を記録する。推測で「何も残らない」「disableすれば消える」とは扱わない。
+試験receiptには、foreground receiptとの差の有無に加え、`enable` が隔離temp外に作るlabel単位の永続overrideをbefore/afterで実測し、残ったものとcleanupしなかった理由を記録する。exact nonce labelのoverrideは永続残留として受け入れ、許可外の`disable`やdomain全体へ作用する`reset-disabled`では消さない。推測で「何も残らない」とは扱わない。
 
 現在の状態: **許可とlabel可変化/fake launchctl検証は完了、実launchd rehearsalとそのterminal receiptは未実行**。
 
