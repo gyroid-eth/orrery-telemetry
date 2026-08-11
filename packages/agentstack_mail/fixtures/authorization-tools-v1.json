@@ -5,7 +5,7 @@
     "reason": "policy_empty_default_allow"
   },
   "default_principal_candidate": "local-single-principal",
-  "rule_status": "prospective_non_binding_except_selected_D7_retire_boundary",
+  "rule_status": "current_loopback_retire_boundary_other_rules_prospective_non_binding",
   "tools": {
     "acknowledge_message": {
       "action": "acknowledge_received_message",
@@ -153,7 +153,7 @@
     },
     "retire_agent": {
       "action": "soft_retire_agent",
-      "authorization_rule": "agent owner or project administrator; name-only is limited to idempotent re-retire of an already-retired null-token legacy row",
+      "authorization_rule": "bound loopback local principal may soft-retire any project target without its registration_token; retain the credential field for future project-administrator hardening",
       "current_credential_arguments": ["registration_token"],
       "required_arguments": ["project_key", "agent_name"],
       "resource": "project:{project_key}/agent:{agent_name}",

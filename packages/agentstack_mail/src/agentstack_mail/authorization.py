@@ -1,10 +1,10 @@
 """Transport-independent authorization catalog and shadow observations.
 
 The catalog describes the selected 24-tool compatibility surface without
-adding credentials to tool schemas. Its rules are prospective and non-binding
-except for the selected, unimplemented D7 retirement boundary. Shadow
-observations are diagnostic only: they never authorize or deny the wrapped
-operation.
+adding credentials to tool schemas. The retire rule records the current
+loopback local-process boundary; other rules remain prospective and
+non-binding. Shadow observations are diagnostic only: they never authorize or
+deny the wrapped operation.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "d1b7df5dbd947d94a12017a8ca601763713ba68081c6462270f20f5031e56eb5"
+    "1d769ea851af1c13110a1648b2922ab5e2e83ae9a419a76a0a8e9f5ad0ea5ca8"
 )
 
 
@@ -182,7 +182,11 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
         resource="project:{project_key}/agent:{agent_name}",
         required_arguments=("project_key", "agent_name"),
         current_credential_arguments=("registration_token",),
-        authorization_rule="agent owner or project administrator; name-only is limited to idempotent re-retire of an already-retired null-token legacy row",
+        authorization_rule=(
+            "bound loopback local principal may soft-retire any project target "
+            "without its registration_token; retain the credential field for "
+            "future project-administrator hardening"
+        ),
     ),
     "search_messages": _entry(
         subject=LOCAL_SINGLE_PRINCIPAL,
@@ -370,7 +374,9 @@ def assert_authorization_catalog_boundary(
             "reason": "policy_empty_default_allow",
         },
         "default_principal_candidate": LOCAL_SINGLE_PRINCIPAL,
-        "rule_status": ("prospective_non_binding_except_selected_D7_retire_boundary"),
+        "rule_status": (
+            "current_loopback_retire_boundary_other_rules_prospective_non_binding"
+        ),
         "tools": catalog_as_plain_data(),
     }:
         raise RuntimeError("Authorization source and canonical fixture diverged")

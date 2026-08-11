@@ -69,6 +69,77 @@ process check cannot prevent a writer from appearing immediately after the
 check. The cutover procedure requires a byte-exact cold copy before this cost
 is incurred. The migration does not perform its own sidecar cleanup.
 
+`cold-backup` is the machine implementation of that pre-open copy. With both
+authorities externally stopped, it fixes the main/WAL/SHM presence set,
+copies each present regular single-link file into a sibling staging directory,
+fsyncs the raw files, validates only a disposable clone through SQLite, writes
+a canonical receipt, and atomically publishes and fsyncs the backup directory.
+`cold-restore` requires that receipt plus the verified C3 migration manifest.
+It rejects path aliases and false target classifications, requires an observed
+file-generation difference for a rehearsal, atomically replaces `PRESENT`
+files, quarantines sidecars recorded `ABSENT`, and writes its terminal receipt
+only after raw and logical post-restore validation, cleanup, and parent fsync.
+The services-stopped flag remains an explicit caller assertion; neither command
+controls launchd or a running service.
+
+`scripts/build_rehearsal_seed.py` builds the reproducible non-production input
+for restore acceptance. It never opens the recorded production path. Instead,
+it creates a deterministic 50+ MiB SQLite database with 800 agents, 8,200
+messages and recipients, a minimal archive and signal tree, and exact synthetic
+provenance. The executing generator and `migration.py` bytes must match a clean,
+exact candidate commit. The seed, provenance, and write-once generator receipt
+are fsynced in one sibling staging generation before atomic directory publish.
+Caller-authored `production-read-only-clone` provenance is rejected until a
+separate capture command can produce independently bound acquisition evidence.
+
+`cold-restore-rehearse` consumes that seed and its verified migration manifest
+without opening the production database. It retains source, backup, damaged,
+and restored raw main/WAL/SHM families under one UUID, applies a built-in
+physical and logical non-no-op fault, exercises `PRESENT` replacement and an
+originally `ABSENT` sidecar removal, then publishes a candidate-bound terminal
+receipt. `cold-restore-rehearsal-verify` requires out-of-band receipt SHA, run
+UUID, and candidate pins before it re-hashes and logically reopens the retained
+artifacts and creates a separate write-once verifier receipt. A subsequent
+`--check-only` call additionally requires the verifier-receipt SHA and repeats
+the computation without changing either receipt or the evidence tree.
+
+Rehearsal success is only the canonical receipt after an observed zero exit and
+separate verification. A `.prepared` or `.unconfirmed` receipt, an ownership
+marker without the canonical receipt, or a nonzero/unknown command result is an
+incident, not success; those artifacts must not be manually renamed. Receipt
+text cannot prove that storage actually flushed or that an atomic syscall ran.
+Those properties are covered by the implementation and injected-I/O failure
+tests, while the receipts prove only what can be recomputed from retained raw
+artifacts.
+
+The release sequence is therefore: generate the seed, create the rehearsal
+receipt, publish one verifier receipt, then perform a read-only recheck with
+all three generator, rehearsal, and verifier receipt hashes pinned outside the
+run directory. The complete asserted
+commands and paths are in `docs/agentstack-mail-cutover.md`; the CLI surfaces
+are:
+
+```text
+python packages/agentstack_mail/scripts/build_rehearsal_seed.py \
+  --output-root ABSENT_ROOT --production-source-db PRODUCTION_PATH \
+  --candidate-repo CLEAN_REPO --candidate-commit FULL_SHA
+agentstack-mail-migrate cold-restore-rehearse \
+  --seed-db SEED --production-source-db PRODUCTION_PATH --run-dir ABSENT_RUN \
+  --migration-manifest MANIFEST --candidate-repo CLEAN_REPO \
+  --candidate-commit FULL_SHA --seed-provenance PROVENANCE \
+  --generator-receipt GENERATOR_RECEIPT \
+  --expected-generator-receipt-sha256 GENERATOR_RECEIPT_SHA
+agentstack-mail-migrate cold-restore-rehearsal-verify \
+  --receipt RECEIPT --verification-receipt VERIFIER_RECEIPT \
+  --expected-receipt-sha256 RECEIPT_SHA --expected-run-id RUN_UUID \
+  --expected-candidate-commit FULL_SHA
+agentstack-mail-migrate cold-restore-rehearsal-verify --check-only \
+  --receipt RECEIPT --verification-receipt VERIFIER_RECEIPT \
+  --expected-receipt-sha256 RECEIPT_SHA \
+  --expected-verification-receipt-sha256 VERIFIER_SHA \
+  --expected-run-id RUN_UUID --expected-candidate-commit FULL_SHA
+```
+
 Identical state is a write-free no-op; an active SQLite writer, corrupt input,
 source mutation, aliases or hard links, a different existing destination,
 unreachable destination Git objects, and pre-publication I/O failures fail
@@ -82,7 +153,9 @@ single-operator model; the final destination check/rename has no `RENAME_EXCL`
 guarantee. `verify` and `rollback-assess` take one-transaction logical read
 snapshots without acquiring the copy-only writer fence. Rollback reports
 post-baseline writes after client switching as `no_go` because no verified
-reverse transform exists.
+reverse transform exists. Both accepted C6 spellings are unconditionally
+`no_go`, even when files still equal the baseline, because the caller-asserted
+C6 stage is at or beyond the durable-write boundary and is fix-forward-only.
 
 `agentstack-mail-service` renders a content-aware launchd plist and ownership
 manifest without registering it. Its explicit start/stop controller refuses
@@ -179,6 +252,14 @@ pre-cutover task must be implemented and backed by its named machine gate.
 Missing, duplicate, extra, malformed, skipped, failed, or unknown inputs all
 produce `no_go`.
 
+The interim dashboard EXIT boundary is separate from the deferred D7 owner
+model: because the HTTP service is loopback-only, `retire_agent` accepts a
+token-bearing target without its `registration_token` and records a structured
+authorization event. The schema field is retained so a project-administrator
+credential can replace this local-process boundary after cutover. This is an
+intentional MCP-level difference from frozen live even though it preserves the
+live dashboard's end-to-end behavior.
+
 Run the current ledger check from the repository root:
 
 ```console
@@ -224,6 +305,16 @@ task until protected CI or cryptographic attestations bind the producer,
 commands, candidate, manifest, condition definitions, artifacts, and operator
 approval. Hand-authored or replayed raw JSON is not sufficient for global
 `go`.
+
+The production-shaped restore rehearsal bundle is only a future input to
+`data-migration-reconciliation`; `rollback-revert-procedure` requires a
+separate handler and evidence record. In v1 both remain `unimplemented_v1`, so
+the runbook stops before readiness without writing either record.
+
+The candidate wheel/source-distribution gate also does not bind the transitive
+dependency closure. Production venv creation remains NO-GO until an
+interpreter-bound, hash-locked offline wheelhouse and install receipt are
+versioned evidence; the current runbook install block is future-only.
 
 This v1 snapshot deliberately has no reachable `go`: the canonical artifact
 validator pins every listed follow-up task as `not_implemented` and pins the

@@ -29,7 +29,7 @@ evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` は実装済みである。ただし台帳の`data-migration-reconciliation`はproduction-shaped rehearsalとcandidate-bound raw evidenceが未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。ただし台帳の`data-migration-reconciliation` evidence handlerは未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -140,15 +140,623 @@ hook/watcherのrepo実装とtestはC2前の前提条件にする。liveへのdep
 
 ### C0–C1: 旧 authority を動かしたまま準備する
 
-1. clean checkoutでfull candidate commit、exact manifest、digest-verified evidenceを`cutover_readiness.py`へ渡す。`evaluation_state: valid`、`cutover_state: go`、`condition_count: 26`、`missing_conditions: []`と上表26 IDのexact unionをmaintenance記録へsealする。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
+最初に次の固定pathを同じmaintenance shellへ設定する。isolated rehearsal evidenceの生成・検算だけはfinal readinessより先に行う。本番pathへのcopy、service/config/authority操作は、readinessが`go`でなければ開始しない。
+
+```sh
+set -eu
+REPO='/Users/operator/Syncthing/<vault-directory>/21_Coding Projects/claude-agent-stack'
+MAINT='/Users/operator/.agentstack/cutover-maintenance'
+READINESS="$REPO/packages/agentstack_mail/tests/cutover_readiness.py"
+CUTOVER_MANIFEST="$REPO/packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json"
+EVIDENCE_INDEX="$MAINT/evidence-index.json"
+EVIDENCE_ROOT="$MAINT/evidence"
+LEGACY_PLIST='/Users/operator/Library/LaunchAgents/com.operator.mcp-agent-mail.plist'
+NEW_OWNERSHIP="$MAINT/render/org.agentstack.mail.ownership.json"
+NEW_ENV="$MAINT/render/agentstack-mail.env"
+NEW_STATE_ROOT='/Users/operator/.agentstack/mail'
+CANDIDATE_VENV="$MAINT/candidate-venv"
+MIGRATE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-migrate"
+SERVICE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-service"
+CONSUMERS_BIN="$CANDIDATE_VENV/bin/agentstack-mail-consumers"
+SERVER_BIN="$CANDIDATE_VENV/bin/agentstack-mail"
+MIGRATION_MANIFEST='/Users/operator/.agentstack/mail/migration-manifest.json'
+COLD_BACKUP_DIR="$MAINT/cold-backup"
+CONSUMER_BUNDLE="$MAINT/consumer-bundle"
+REHEARSAL_SEED_ROOT="$MAINT/rehearsal-seed"
+REHEARSAL_SEED_DB="$REHEARSAL_SEED_ROOT/legacy/storage.sqlite3"
+REHEARSAL_SEED_ARCHIVE="$MAINT/rehearsal-seed/legacy/archive"
+REHEARSAL_SEED_SIGNALS="$MAINT/rehearsal-seed/legacy/signals"
+REHEARSAL_COPY_ROOT="$MAINT/rehearsal-seed/migration-copy"
+REHEARSAL_MANIFEST="$MAINT/rehearsal-seed/migration-copy/migration-manifest.json"
+REHEARSAL_PROVENANCE="$MAINT/rehearsal-seed/seed-provenance.json"
+REHEARSAL_EVIDENCE_DIR="$EVIDENCE_ROOT/data-migration-reconciliation"
+REHEARSAL_RUN="$REHEARSAL_EVIDENCE_DIR/restore-rehearsal"
+REHEARSAL_PINS="$REHEARSAL_EVIDENCE_DIR/restore-rehearsal-pins.json"
+install -d -m 700 "$MAINT" "$EVIDENCE_ROOT" "$REHEARSAL_EVIDENCE_DIR"
+```
+
+この時点で、後続のC4/C5とR1–R6が使うassertionを一度だけ定義する。関数定義より前に利用しない。
+
+```sh
+bounded_mail_probe() {
+  python3 - "$1" "$2" "$3" 'PluckyEinstein' <<'PY'
+import json, sys, time, urllib.request
+url, expected_port, expected_db, agent = sys.argv[1:]
+
+def call(name, arguments):
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": name, "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }).encode()
+    request = urllib.request.Request(url, data=payload, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    })
+    with urllib.request.urlopen(request, timeout=2) as response:
+        raw = response.read().decode("utf-8")
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    envelope = json.loads(raw)
+    if "error" in envelope:
+        raise RuntimeError(envelope["error"])
+    result = envelope.get("result") or {}
+    if result.get("isError") is True:
+        raise RuntimeError(result)
+    value = result.get("structuredContent")
+    if value is None:
+        for block in result.get("content") or []:
+            if block.get("type") == "text":
+                value = json.loads(block.get("text") or "{}")
+                break
+    if not isinstance(value, dict):
+        raise RuntimeError("missing structured MCP result")
+    return value
+
+deadline = time.monotonic() + 20
+last = None
+while time.monotonic() < deadline:
+    try:
+        health = call("health_check", {})
+        assert health["status"] == "ok"
+        assert health["http_host"] == "127.0.0.1"
+        assert health["http_port"] == int(expected_port)
+        assert health["database_url"] == expected_db
+        who = call("whois", {
+            "project_key": "/Users/operator/Syncthing/<vault-directory>",
+            "agent_name": agent,
+            "include_recent_commits": False,
+        })
+        assert who["name"] == agent
+        assert who.get("recent_commits", []) == []
+        raise SystemExit(0)
+    except Exception as exc:
+        last = exc
+        time.sleep(0.5)
+raise SystemExit(f"bounded MCP read probe failed: {last}")
+PY
+}
+
+assert_service_state() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == sys.argv[2]
+assert p["owned"] is True
+assert p["label"] == "org.agentstack.mail"
+if "environment_drift" in p:
+    assert p["environment_drift"] is False
+if sys.argv[3] != "-":
+    assert p["action"] == sys.argv[3]
+PY
+}
+
+assert_rollback_state() {
+  python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == "reversible"
+assert p["cutover_stage"] == sys.argv[2]
+assert p["cutover_stage_provenance"] == "caller_asserted_unverified"
+assert p["source_matches_baseline"] is True
+assert p["destination_matches_baseline"] is True
+assert p["data_reversible"] is True
+assert p["source_verification_error"] is None
+assert p["destination_verification_error"] is None
+assert p["service_and_client_state_requires_external_verification"] is True
+PY
+}
+
+assert_rollback_no_go() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == "no_go"
+assert p["cutover_stage"] == sys.argv[2]
+assert p["cutover_stage_provenance"] == "caller_asserted_unverified"
+if sys.argv[3] == "fresh":
+    assert p["source_matches_baseline"] is True
+    assert p["destination_matches_baseline"] is True
+elif sys.argv[3] != "any":
+    raise AssertionError("unsupported baseline expectation")
+assert p["data_reversible"] is False
+assert p["service_and_client_state_requires_external_verification"] is True
+assert p["reason"] == (
+    "caller asserted C6, which is at or beyond the first durable new-authority "
+    "write boundary; rollback is fix-forward-only even if both snapshots still "
+    "equal the migration baseline"
+)
+assert p["actions"] == [
+    "keep all consumers quiesced and keep the legacy service stopped",
+    "stop and inspect only the exact owned new job",
+    "repair the new authority in place and start only that exact owned new job",
+    "require bounded MCP readiness before resuming consumers",
+    "if the new job cannot become ready, start neither authority and enter incident/no-writer state",
+]
+PY
+}
+
+assert_consumer_state() {
+  python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == sys.argv[2]
+assert p["receipt_invalid"] is False
+assert p["third"] == 0
+if sys.argv[2] == "committed":
+    assert p["committed_receipt"] is True
+    assert p["before"] == 0
+elif sys.argv[2] == "rolled_back":
+    assert p["rolled_back_receipt"] is True
+    assert p["after"] == 0
+else:
+    raise AssertionError("unsupported expected consumer state")
+PY
+}
+```
+
+#### C0A: isolated restore rehearsal evidenceを先に作る
+
+これは本番sourceを開かず、service/config/authorityを変えない唯一のpre-readiness操作である。candidate checkoutはcleanなexact HEADで、実行中の`migration.py` bytesもそのcommit blobと一致しなければrunnerが失敗する。schema v1のprovenanceは現在`production-shaped-synthetic`だけを許可する。caller-authored JSONだけで`production-read-only-clone`を名乗ることは禁止し、clone captureは専用capture receiptが実装されるまで未対応である。
+
+versionedな`packages/agentstack_mail/scripts/build_rehearsal_seed.py`はseed DB、少なくとも1 fileを持つarchive、signals、generator receipt、次のexact 7-field provenance JSONを一つのsibling staging generationで作り、fsync後にdirectory renameで公開する。実行scriptと`migration.py`のbytesをclean candidateのblobへ束縛し、本番source pathは記録するだけでopenしない。`created_at`はUTC、両DB pathはcanonical absolute、`source_reference`にはgeneratorのcandidate SHAとinvocation receiptを入れる。free-form provenanceは由来の証明にならないため、syntheticであることと、runner/verifierがraw artifactから再計算する規模だけを主張する。合格floorはdatabase family 50 MiB、agents 700、messages 8,000、message_recipients 8,000である。
+
+```json
+{
+  "schema_version": 1,
+  "kind": "production-shaped-synthetic",
+  "created_at": "2026-08-11T00:00:00+00:00",
+  "seed_database": "/Users/operator/.agentstack/cutover-maintenance/rehearsal-seed/legacy/storage.sqlite3",
+  "production_source_database": "/Users/operator/mcp_agent_mail/storage.sqlite3",
+  "acquisition_method": "deterministic candidate-bound synthetic generator",
+  "source_reference": "candidate SHA + generator invocation receipt"
+}
+```
+
+seed生成後、次の順序でseed自身のC3 manifest、4状態raw evidence、write-once verifier receiptを作る。`REHEARSAL_RUN`は開始前に存在してはならない。runner stdoutから得たreceipt SHA/run ID/candidateをrun directory外へpinしてから、別processのverifierを起動する。
+
+```sh
+CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
+test -z "$(git -C "$REPO" status --porcelain)"
+candidate_migrate() {
+  PYTHONPATH="$REPO/packages/agentstack_mail/src" \
+    python3 -m agentstack_mail.migration "$@"
+}
+test ! -e "$REHEARSAL_SEED_ROOT" && test ! -L "$REHEARSAL_SEED_ROOT"
+PYTHONPATH="$REPO/packages/agentstack_mail/src" \
+python3 "$REPO/packages/agentstack_mail/scripts/build_rehearsal_seed.py" \
+  --output-root "$REHEARSAL_SEED_ROOT" \
+  --production-source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --candidate-repo "$REPO" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  > "$MAINT/c0-rehearsal-seed-generate.json" || exit 1
+python3 - "$MAINT/c0-rehearsal-seed-generate.json" \
+  "$REHEARSAL_SEED_ROOT/generator-receipt.json" "$CANDIDATE_COMMIT" <<'PY'
+import hashlib, json, pathlib, re, sys
+command, receipt_path, candidate = sys.argv[1:]
+p = json.loads(pathlib.Path(command).read_text(encoding="utf-8"))
+raw = pathlib.Path(receipt_path).read_bytes()
+receipt = json.loads(raw)
+assert p["status"] == "generated"
+assert p["candidate_commit"] == candidate == receipt["candidate_commit"]
+assert p["generator_receipt"] == receipt_path
+assert p["generator_receipt_sha256"] == hashlib.sha256(raw).hexdigest()
+assert p["seed_database_size"] >= 50 * 1024 * 1024
+assert p["major_table_rows"]["agents"] >= 700
+assert p["major_table_rows"]["messages"] >= 8_000
+assert p["major_table_rows"]["message_recipients"] >= 8_000
+assert receipt["production_source_opened"] is False
+assert re.fullmatch(r"[0-9a-f]{64}", receipt["seed_database_sha256"])
+PY
+shasum -a 256 "$REHEARSAL_SEED_ROOT/generator-receipt.json" \
+  > "$MAINT/rehearsal-seed-generator-receipt.sha256"
+REHEARSAL_GENERATOR_SHA256=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["generator_receipt_sha256"])' \
+  "$MAINT/c0-rehearsal-seed-generate.json")
+test -f "$REHEARSAL_SEED_DB" && test ! -L "$REHEARSAL_SEED_DB"
+test -d "$REHEARSAL_SEED_ARCHIVE" && test ! -L "$REHEARSAL_SEED_ARCHIVE"
+test -d "$REHEARSAL_SEED_SIGNALS" && test ! -L "$REHEARSAL_SEED_SIGNALS"
+test -f "$REHEARSAL_PROVENANCE" && test ! -L "$REHEARSAL_PROVENANCE"
+test ! -e "$REHEARSAL_COPY_ROOT" && test ! -L "$REHEARSAL_COPY_ROOT"
+test ! -e "$REHEARSAL_RUN" && test ! -L "$REHEARSAL_RUN"
+
+python3 - "$REHEARSAL_PROVENANCE" "$REHEARSAL_SEED_DB" <<'PY'
+from datetime import datetime, timezone
+import json, pathlib, sys
+path, seed = map(pathlib.Path, sys.argv[1:])
+p = json.loads(path.read_text(encoding="utf-8"))
+assert set(p) == {
+    "schema_version", "kind", "created_at", "seed_database",
+    "production_source_database", "acquisition_method", "source_reference",
+}
+assert p["schema_version"] == 1
+assert p["kind"] == "production-shaped-synthetic"
+assert p["seed_database"] == str(seed)
+assert p["production_source_database"] == "/Users/operator/mcp_agent_mail/storage.sqlite3"
+assert p["acquisition_method"] == "deterministic candidate-bound synthetic generator"
+assert p["source_reference"]
+created = datetime.fromisoformat(p["created_at"])
+assert created.utcoffset() == timezone.utc.utcoffset(created)
+PY
+
+candidate_migrate copy \
+  --source-db "$REHEARSAL_SEED_DB" \
+  --source-archive "$REHEARSAL_SEED_ARCHIVE" \
+  --source-signals "$REHEARSAL_SEED_SIGNALS" \
+  --destination-root "$REHEARSAL_COPY_ROOT" \
+  > "$MAINT/c0-rehearsal-seed-copy.json" || exit 1
+candidate_migrate verify \
+  --source-db "$REHEARSAL_SEED_DB" \
+  --source-archive "$REHEARSAL_SEED_ARCHIVE" \
+  --source-signals "$REHEARSAL_SEED_SIGNALS" \
+  --destination-root "$REHEARSAL_COPY_ROOT" \
+  > "$MAINT/c0-rehearsal-seed-verify.json" || exit 1
+
+candidate_migrate rollback-assess \
+  --manifest "$REHEARSAL_MANIFEST" \
+  --cutover-stage C5_CLIENT_SWITCHING \
+  > "$MAINT/c0-boundary-c5.json" || exit 1
+assert_rollback_state "$MAINT/c0-boundary-c5.json" C5_CLIENT_SWITCHING
+set +e
+candidate_migrate rollback-assess \
+  --manifest "$REHEARSAL_MANIFEST" \
+  --cutover-stage C6_NEW_AUTHORITY_VERIFIED \
+  > "$MAINT/c0-boundary-C6_NEW_AUTHORITY_VERIFIED.json" \
+  2> "$MAINT/c0-boundary-C6_NEW_AUTHORITY_VERIFIED.err"
+BOUNDARY_RC=$?
+set -e
+test "$BOUNDARY_RC" -eq 1
+test ! -s "$MAINT/c0-boundary-C6_NEW_AUTHORITY_VERIFIED.err"
+assert_rollback_no_go \
+  "$MAINT/c0-boundary-C6_NEW_AUTHORITY_VERIFIED.json" \
+  C6_NEW_AUTHORITY_VERIFIED fresh
+set +e
+candidate_migrate rollback-assess \
+  --manifest "$REHEARSAL_MANIFEST" --cutover-stage C5_TO_C6 \
+  > "$MAINT/c0-boundary-unknown.out" 2> "$MAINT/c0-boundary-unknown.err"
+UNKNOWN_RC=$?
+candidate_migrate rollback-assess \
+  --manifest "$REHEARSAL_MANIFEST" \
+  > "$MAINT/c0-boundary-omitted.out" 2> "$MAINT/c0-boundary-omitted.err"
+OMITTED_RC=$?
+set -e
+test "$UNKNOWN_RC" -eq 2 && test ! -s "$MAINT/c0-boundary-unknown.out"
+grep -q 'invalid choice' "$MAINT/c0-boundary-unknown.err"
+test "$OMITTED_RC" -eq 2 && test ! -s "$MAINT/c0-boundary-omitted.out"
+grep -q 'required' "$MAINT/c0-boundary-omitted.err"
+
+candidate_migrate cold-restore-rehearse \
+  --seed-db "$REHEARSAL_SEED_DB" \
+  --production-source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --run-dir "$REHEARSAL_RUN" \
+  --migration-manifest "$REHEARSAL_MANIFEST" \
+  --candidate-repo "$REPO" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --seed-provenance "$REHEARSAL_PROVENANCE" \
+  --generator-receipt "$REHEARSAL_SEED_ROOT/generator-receipt.json" \
+  --expected-generator-receipt-sha256 "$REHEARSAL_GENERATOR_SHA256" \
+  > "$MAINT/c0-restore-rehearsal-command.json" || exit 1
+
+REHEARSAL_RUN_ID=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' \
+  "$MAINT/c0-restore-rehearsal-command.json")
+REHEARSAL_RECEIPT_SHA256=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["rehearsal_receipt_sha256"])' \
+  "$MAINT/c0-restore-rehearsal-command.json")
+python3 - "$MAINT/c0-restore-rehearsal-command.json" \
+  "$MAINT/c0-rehearsal-seed-generate.json" "$CANDIDATE_COMMIT" \
+  "$REHEARSAL_RUN" "$REHEARSAL_PINS.runner" <<'PY'
+import json, pathlib, re, sys
+command, generator_command, candidate, run_dir, output = sys.argv[1:]
+p = json.loads(pathlib.Path(command).read_text(encoding="utf-8"))
+generator = json.loads(pathlib.Path(generator_command).read_text(encoding="utf-8"))
+assert p["status"] == "completed"
+assert p["candidate_commit"] == candidate
+assert p["rehearsal_receipt"] == f"{run_dir}/cold-restore-rehearsal-receipt.json"
+assert re.fullmatch(r"[0-9a-f]{64}", p["rehearsal_receipt_sha256"])
+pathlib.Path(output).write_text(json.dumps({
+    "run_id": p["run_id"],
+    "candidate_commit": candidate,
+    "generator_receipt_sha256": generator["generator_receipt_sha256"],
+    "rehearsal_receipt_sha256": p["rehearsal_receipt_sha256"],
+}, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+candidate_migrate cold-restore-rehearsal-verify \
+  --receipt "$REHEARSAL_RUN/cold-restore-rehearsal-receipt.json" \
+  --verification-receipt "$REHEARSAL_RUN/cold-restore-rehearsal-verification.json" \
+  --expected-receipt-sha256 "$REHEARSAL_RECEIPT_SHA256" \
+  --expected-run-id "$REHEARSAL_RUN_ID" \
+  --expected-candidate-commit "$CANDIDATE_COMMIT" \
+  > "$MAINT/c0-restore-rehearsal-verify.json" || exit 1
+REHEARSAL_VERIFICATION_SHA256=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["verification_receipt_sha256"])' \
+  "$MAINT/c0-restore-rehearsal-verify.json")
+
+python3 - "$MAINT/c0-restore-rehearsal-verify.json" \
+  "$REHEARSAL_PINS.runner" "$REHEARSAL_PINS" <<'PY'
+import json, pathlib, re, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+runner = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert p["status"] == "verified"
+assert p["raw_artifact_count"] == 4
+assert p["damage_control"] == "physical_and_logical_non_noop"
+assert re.fullmatch(r"[0-9a-f]{64}", p["verification_receipt_sha256"])
+assert runner["run_id"] == p["run_id"]
+assert runner["candidate_commit"] == p["candidate_commit"]
+assert runner["rehearsal_receipt_sha256"] == p["rehearsal_receipt_sha256"]
+pathlib.Path(sys.argv[3]).write_text(json.dumps({
+    "run_id": p["run_id"],
+    "candidate_commit": p["candidate_commit"],
+    "generator_receipt_sha256": runner["generator_receipt_sha256"],
+    "rehearsal_receipt_sha256": p["rehearsal_receipt_sha256"],
+    "verification_receipt_sha256": p["verification_receipt_sha256"],
+}, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+candidate_migrate cold-restore-rehearsal-verify \
+  --receipt "$REHEARSAL_RUN/cold-restore-rehearsal-receipt.json" \
+  --verification-receipt "$REHEARSAL_RUN/cold-restore-rehearsal-verification.json" \
+  --expected-receipt-sha256 "$REHEARSAL_RECEIPT_SHA256" \
+  --expected-verification-receipt-sha256 "$REHEARSAL_VERIFICATION_SHA256" \
+  --expected-run-id "$REHEARSAL_RUN_ID" \
+  --expected-candidate-commit "$CANDIDATE_COMMIT" \
+  --check-only \
+  > "$MAINT/c0-restore-rehearsal-check-only.json" || exit 1
+python3 - "$MAINT/c0-restore-rehearsal-check-only.json" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == "verified_check_only"
+assert p["raw_artifact_count"] == 4
+assert p["damage_control"] == "physical_and_logical_non_noop"
+PY
+```
+
+runnerはsource/backup/damaged/restoredの4 raw familyを同一run IDへ束縛し、built-in damageがmainを実際に変え、backup時ABSENTだったsidecarを作って除去branchを通したことを要求する。no-op damage、restore skip、PRESENT replace skip、ABSENT unlink skipは各mutation testで赤くなる。raw artifact、terminal receipt、separate verifier receipt、run directory外の3 SHA pinは、将来の`data-migration-reconciliation` handlerへの入力として保持する。`rollback-revert-procedure`は同じartifactを別名で再登録せず、C3–C6/R2–R6を再計算する独立handlerと独立recordを必要とする。最終booleanだけはevidenceに数えない。
+
+canonical rehearsal receiptが無い、command rc0を観測できない、`.prepared`/`.unconfirmed`/ownership markerだけが残る、または初回verifier/check-onlyのどちらかが失敗した場合は未完了である。prepared/unconfirmedを手動renameしない。receipt内の`fsync`/`atomic_replace`という文字列は自己証明ではなく、それらはcode pathとEIO fault testでのみ照合する。producerが実際に走ったことの暗号学的証明ではなく、保持raw artifactsから独立再計算できるところが保証の上限である。
+
+### 現行v1の停止点（normative）
+
+現在のversioned manifestでは`data-migration-reconciliation`と`rollback-revert-procedure`がともに`unimplemented_v1`である。この状態ではartifactやindexへ何も書かず、非0で停止する。両conditionのversioned handlerと別々のevidence recordが実装され、readiness evaluatorが両recordを再計算して受理するまで次へ進まない。
+
+### handler実装後のfuture skeleton（現行では実行禁止）
+
+次のproducerは、将来`data-migration-reconciliation`用のversioned handlerが実装された後に、rehearsalの3つの外部pinとcanonical raw evidenceから同条件の1 recordだけを作るためのskeletonである。現在の`unimplemented_v1`では先頭で意図的に非0となる。これは`rollback-revert-procedure`のproducer/handlerを実装せず、未知の将来`evidence_kind`も固定していないため、現行の実行可能契約ではない。handler実装後もcondition IDを増やさず、review済みのversioned `evidence_kind`と同じ値だけを受け入れる。
+
+```sh
+python3 - "$CUTOVER_MANIFEST" "$CANDIDATE_COMMIT" "$REHEARSAL_RUN" \
+  "$REHEARSAL_PINS" "$EVIDENCE_ROOT" "$EVIDENCE_INDEX" <<'PY'
+import hashlib, json, os, pathlib, sys, tempfile
+manifest_path, candidate, run_arg, pins_arg, root_arg, index_arg = sys.argv[1:]
+manifest_path = pathlib.Path(manifest_path)
+run = pathlib.Path(run_arg)
+pins_path = pathlib.Path(pins_arg)
+root = pathlib.Path(root_arg)
+index_path = pathlib.Path(index_arg)
+manifest_bytes = manifest_path.read_bytes()
+manifest = json.loads(manifest_bytes)
+condition = next(c for c in manifest["cutover_gate"]["conditions"]
+                 if c["id"] == "data-migration-reconciliation")
+kind = condition["evidence_kind"]
+if kind in {"none", "unimplemented_v1"}:
+    raise SystemExit("data-migration-reconciliation evidence handler is not implemented")
+pins = json.loads(pins_path.read_text(encoding="utf-8"))
+receipt = run / "cold-restore-rehearsal-receipt.json"
+verification = run / "cold-restore-rehearsal-verification.json"
+sealed_generator = run / "identities" / "generator-receipt.json"
+for value in pins.values():
+    if not isinstance(value, str):
+        raise SystemExit("rehearsal pin envelope is malformed")
+assert pins["candidate_commit"] == candidate
+assert hashlib.sha256(receipt.read_bytes()).hexdigest() == pins["rehearsal_receipt_sha256"]
+assert hashlib.sha256(verification.read_bytes()).hexdigest() == pins["verification_receipt_sha256"]
+assert hashlib.sha256(sealed_generator.read_bytes()).hexdigest() == pins["generator_receipt_sha256"]
+relative = pathlib.Path("data-migration-reconciliation/rehearsal-binding.json")
+artifact = root / relative
+payload = {
+    "schema_version": 1,
+    "candidate_commit": candidate,
+    "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+    "run_id": pins["run_id"],
+    "generator_receipt": str(sealed_generator.relative_to(root)),
+    "generator_receipt_sha256": pins["generator_receipt_sha256"],
+    "rehearsal_receipt": str(receipt.relative_to(root)),
+    "rehearsal_receipt_sha256": pins["rehearsal_receipt_sha256"],
+    "verification_receipt": str(verification.relative_to(root)),
+    "verification_receipt_sha256": pins["verification_receipt_sha256"],
+}
+artifact.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+artifact_sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
+definition_sha = hashlib.sha256(json.dumps(
+    condition, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+).encode()).hexdigest()
+if index_path.exists():
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+else:
+    index = {
+        "schema_version": 1,
+        "candidate_commit": candidate,
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "artifacts": [],
+    }
+assert index["candidate_commit"] == candidate
+assert index["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+record = {
+    "condition_id": condition["id"],
+    "definition_sha256": definition_sha,
+    "kind": kind,
+    "path": relative.as_posix(),
+    "sha256": artifact_sha,
+}
+prior = [r for r in index["artifacts"] if r["condition_id"] == condition["id"]]
+if prior and prior != [record]:
+    raise SystemExit("conflicting data-migration-reconciliation evidence already indexed")
+if not prior:
+    index["artifacts"].append(record)
+fd, temporary = tempfile.mkstemp(prefix=".evidence-index-", dir=index_path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(index, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, index_path)
+    parent = os.open(index_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+finally:
+    pathlib.Path(temporary).unlink(missing_ok=True)
+PY
+```
+
+1. 将来版で`data-migration-reconciliation`と`rollback-revert-procedure`のversioned handlerおよび別々のevidence recordが実装され、両recordを含むindexをreadiness evaluatorが再計算して受理できた場合にだけ、clean checkoutでfull candidate commit、exact manifest、digest-verified evidenceを次のexact commandへ渡す。現行v1ではここへ進まない。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
+
+```sh
+CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
+python3 "$READINESS" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --manifest "$CUTOVER_MANIFEST" \
+  --evidence "$EVIDENCE_INDEX" \
+  --evidence-root "$EVIDENCE_ROOT" \
+  > "$MAINT/c0-readiness.json" || exit 1
+python3 - "$MAINT/c0-readiness.json" <<'PY'
+import json, pathlib, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["evaluation_state"] == "valid"
+assert p["cutover_state"] == "go"
+assert p["condition_count"] == 26
+assert len(p["passed_condition_ids"]) == 26
+assert len(set(p["passed_condition_ids"])) == 26
+assert p["missing_conditions"] == []
+assert p["invalid_reasons"] == []
+PY
+test -f "$LEGACY_PLIST" && test ! -L "$LEGACY_PLIST"
+test "$(stat -f '%l' "$LEGACY_PLIST")" -eq 1
+plutil -lint "$LEGACY_PLIST"
+python3 - "$LEGACY_PLIST" <<'PY'
+import pathlib, plistlib, sys
+with pathlib.Path(sys.argv[1]).open("rb") as handle:
+    plist = plistlib.load(handle)
+assert plist["Label"] == "com.operator.mcp-agent-mail"
+assert plist["WorkingDirectory"] == "/Users/operator/mcp_agent_mail"
+assert plist["ProgramArguments"] == [
+    "/bin/bash",
+    "/Users/operator/mcp_agent_mail/scripts/run_server_with_token.sh",
+]
+PY
+shasum -a 256 "$LEGACY_PLIST" > "$MAINT/legacy-plist.sha256"
+```
+
+`passed_condition_ids`の集合と順序は台帳の`cutover_gate.required_condition_ids`とexact一致することもmaintenance記録へsealする。旧jobを戻す可能性があるR1–R5では、bootstrap直前に必ず`shasum -a 256 -c "$MAINT/legacy-plist.sha256"`を再実行する。
 2. baseline開始方法はmaintainer裁定済みの **A（copied filesを1 baseline commitにする）** をversioned migration inputとmaintenance記録へ固定する。選択のcandidate/evidence bindingがmachine gateに含まれることも確認する。
 3. working-tree scope migration、bounded MCP readiness probe、上のOrrery/dashboard互換変更とlive hooks変更が実装・検証済みであることを確認する。`agentstack-mail-consumers` は確定artifact上でcopy-only rehearsalが通ることを確認する。一つでも未実装ならここで止まる。
-4. 確定 wheel を専用 venv へ入れ、live `~/Library/LaunchAgents` ではない staging directory に `agentstack-mail-service render` で plist と ownership manifest を作る。render は launchctl を呼ばない。
-5. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerをtyped inventoryへ列挙し、`agentstack-mail-consumers prepare`で0600/0400のbefore/after bundleを作る。標準出力のmanifest SHA-256はbundle外のmaintenance記録へpinする。
+4. `distribution-artifact-release-gate`がindexへ束縛するのは現在wheel/sdistまでで、transitive dependency closureとinterpreter identityはまだ束縛しない。したがって現行v1は専用venvを作る前でNO-GOであり、以下はfuture-only skeletonとしてもそのまま実行しない。将来のdistribution/install evidenceは、interpreter identity、hash-lockされたrequirements、全dependency wheelのname/SHAを持つsealed wheelhouse manifest、install receiptを同じcandidateへ束縛する。installerは`--no-index --find-links <sealed-wheelhouse> --require-hashes -r <sealed-lock>`でcandidate wheelをlock内から導入し、`pip check`を通してからrenderへ進む。live `~/Library/LaunchAgents`ではないstaging directoryだけを使い、bare PATH entrypointやlaunchctlは使わない。
+
+```sh
+CANDIDATE_WHEEL=$(python3 - "$EVIDENCE_INDEX" "$EVIDENCE_ROOT" <<'PY'
+import hashlib, json, pathlib, sys
+index = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+root = pathlib.Path(sys.argv[2]).resolve()
+record = next(r for r in index["artifacts"]
+              if r["condition_id"] == "distribution-artifact-release-gate")
+report_path = (root / record["path"]).resolve()
+assert report_path == root or root in report_path.parents
+assert hashlib.sha256(report_path.read_bytes()).hexdigest() == record["sha256"]
+report = json.loads(report_path.read_text(encoding="utf-8"))
+wheel = (root / report["wheel"]["path"]).resolve()
+assert wheel == root or root in wheel.parents
+assert hashlib.sha256(wheel.read_bytes()).hexdigest() == report["wheel"]["sha256"]
+print(wheel)
+PY
+)
+# FUTURE ONLY: sealed lock/wheelhouse evidence is not implemented in v1.
+test -n "${SEALED_WHEELHOUSE:-}" && test -d "$SEALED_WHEELHOUSE" || exit 1
+test -n "${SEALED_LOCK:-}" && test -f "$SEALED_LOCK" || exit 1
+test ! -e "$CANDIDATE_VENV"
+python3 -m venv "$CANDIDATE_VENV"
+"$CANDIDATE_VENV/bin/python" -m pip install --disable-pip-version-check \
+  --no-index --find-links "$SEALED_WHEELHOUSE" --require-hashes \
+  -r "$SEALED_LOCK" > "$MAINT/c1-pip-install.txt" || exit 1
+"$CANDIDATE_VENV/bin/python" -m pip check \
+  > "$MAINT/c1-pip-check.txt" || exit 1
+for executable in "$MIGRATE_BIN" "$SERVICE_BIN" "$CONSUMERS_BIN" "$SERVER_BIN"; do
+  test -x "$executable"
+done
+install -d -m 700 "$MAINT/render"
+umask 077
+cat > "$NEW_ENV" <<'EOF'
+AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough
+AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1
+AGENTSTACK_MAIL_HTTP_PORT=18765
+AGENTSTACK_MAIL_HTTP_PATH=/mcp
+AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3
+AGENTSTACK_MAIL_STORAGE_ROOT=/Users/operator/.agentstack/mail/archive
+AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=/Users/operator/.agentstack/mail/signals
+EOF
+"$SERVICE_BIN" render \
+  --output-dir "$MAINT/render" \
+  --service-executable "$SERVICE_BIN" \
+  --server-executable "$SERVER_BIN" \
+  --env-file "$NEW_ENV" \
+  --state-root "$NEW_STATE_ROOT" \
+  > "$MAINT/c1-service-render.json" || exit 1
+python3 - "$MAINT/c1-service-render.json" "$NEW_OWNERSHIP" <<'PY'
+import json, pathlib, sys
+result = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] in {"rendered", "noop"}
+assert result["ownership_manifest"] == sys.argv[2]
+assert pathlib.Path(sys.argv[2]).is_file()
+PY
+```
+5. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerを`$MAINT/consumer-inventory.json`へtyped inventoryとして列挙し、次のexact commandで0600/0400のbefore/after bundleを作る。標準出力のmanifest SHA-256をbundle外へpinし、同じmaintenance shellの変数へ代入する。
+
+```sh
+"$CONSUMERS_BIN" prepare \
+  --inventory "$MAINT/consumer-inventory.json" \
+  --bundle "$CONSUMER_BUNDLE" \
+  > "$MAINT/c0-consumer-prepare.json" || exit 1
+PINNED_MANIFEST_SHA256=$(python3 - "$MAINT/c0-consumer-prepare.json" <<'PY'
+import json, pathlib, re, sys
+p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["status"] == "prepared"
+assert p["bundle"] == "/Users/operator/.agentstack/cutover-maintenance/consumer-bundle"
+assert re.fullmatch(r"[0-9a-f]{64}", p["manifest_sha256"])
+print(p["manifest_sha256"])
+PY
+)
+printf '%s\n' "$PINNED_MANIFEST_SHA256" > "$MAINT/consumer-manifest.sha256"
+test "$(wc -l < "$MAINT/consumer-manifest.sha256")" -eq 1
+grep -Eq '^[0-9a-f]{64}$' "$MAINT/consumer-manifest.sha256"
+```
+
+maintenance shellを再開した場合は`PINNED_MANIFEST_SHA256=$(cat "$MAINT/consumer-manifest.sha256")`で同じexternal pinを復元し、正規表現を再検査する。
 6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。特にlive inventoryでtool permission/hookを確認した15個の `.claude/settings.local.json` は、対象fileと変更行を一件ずつ事前承認されるまでapplyしない。helperは**列挙したfile内**の旧alias、old/new併存、未知endpointをfailさせる。inventory外のfileは見えないため、別のlive inventory reviewで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
 7. 全 sender に開始時刻、C3の2–4分見込み、C5 test合格まで無通信が続くことを事前通知する。ProOpus 自身も、停止後は agent-mail を送受信せず同じ maintenance shell だけを使う。
 
-### C2: 全 sender と旧 writer を静止する
+### C2A: cold backup前に全 sender と旧 writer を静止する
 
 tmux server 全体を kill しない。Claude/Codex parent・childは agent-mail call を止めて idle、`BiomatterBot`、`SeminarBot`、watcher/hook は停止または送信不能状態にする。全員の停止確認を agent-mail 停止前に済ませる。
 
@@ -161,13 +769,27 @@ launchctl bootout "gui/$(id -u)/com.operator.mcp-agent-mail"
 次を全て確認する。一つでも hit したら copy せず、writer を特定する。
 
 ```sh
-if launchctl print "gui/$(id -u)/com.operator.mcp-agent-mail"; then
-  echo "legacy job is still loaded" >&2
+set +e
+launchctl print "gui/$(id -u)/com.operator.mcp-agent-mail" \
+  > "$MAINT/c2-legacy-launchctl-print.txt" 2>&1
+LEGACY_PRINT_RC=$?
+set -e
+if [ "$LEGACY_PRINT_RC" -ne 113 ]; then
+  echo "legacy job is loaded or launchd status is unknown: rc=$LEGACY_PRINT_RC" >&2
   exit 1
 fi
 
-if lsof -nP -iTCP:8765 -sTCP:LISTEN; then
+set +e
+lsof -nP -iTCP:8765 -sTCP:LISTEN \
+  > "$MAINT/c2-listener-lsof.txt" 2> "$MAINT/c2-listener-lsof.err"
+LISTENER_LSOF_RC=$?
+set -e
+if [ "$LISTENER_LSOF_RC" -eq 0 ]; then
   echo "legacy listener is still present" >&2
+  exit 1
+fi
+if [ "$LISTENER_LSOF_RC" -ne 1 ] || [ -s "$MAINT/c2-listener-lsof.err" ]; then
+  echo "cannot prove legacy listener absence" >&2
   exit 1
 fi
 
@@ -175,55 +797,73 @@ for path in \
   /Users/operator/mcp_agent_mail/storage.sqlite3 \
   /Users/operator/mcp_agent_mail/storage.sqlite3-wal \
   /Users/operator/mcp_agent_mail/storage.sqlite3-shm; do
-  if [ -e "$path" ] && lsof "$path"; then
-    echo "legacy database still has an open holder: $path" >&2
-    exit 1
+  if [ -e "$path" ]; then
+    set +e
+    lsof -- "$path" > "$MAINT/c2-db-lsof.txt" 2> "$MAINT/c2-db-lsof.err"
+    DB_LSOF_RC=$?
+    set -e
+    if [ "$DB_LSOF_RC" -eq 0 ]; then
+      echo "legacy database still has an open holder: $path" >&2
+      exit 1
+    fi
+    if [ "$DB_LSOF_RC" -ne 1 ] || [ -s "$MAINT/c2-db-lsof.err" ]; then
+      echo "cannot prove holder absence for: $path" >&2
+      exit 1
+    fi
   fi
 done
 
-find /Users/operator/.mcp_agent_mail_git_mailbox_repo \
-  \( -name '*.lock' -o -name '*.lock.owner.json' \) -print
+LOCK_HIT=$(find /Users/operator/.mcp_agent_mail_git_mailbox_repo \
+  \( -name '*.lock' -o -name '*.lock.owner.json' \) -print -quit) || exit 1
+if [ -n "$LOCK_HIT" ]; then
+  echo "legacy archive contains a lock artifact" >&2
+  exit 1
+fi
+if [ -e /Users/operator/.mcp_agent_mail_git_mailbox_repo/.git/index.lock ] || \
+   [ -L /Users/operator/.mcp_agent_mail_git_mailbox_repo/.git/index.lock ]; then
+  echo "legacy archive Git index is locked" >&2
+  exit 1
+fi
 ```
 
-最後の `find` は0件が合格である。さらに `.git/index.lock` が無いことを確認する。これらは既知 writer の停止を示すが、unknown direct filesystem writer の不在を証明しない。そのため migration 自身の6回の source照合も維持する。
+`launchctl print`はexact rc 113だけをstoppedと扱い、権限・query failureなど別のnonzeroを成功に畳まない。これらは既知 writer の停止を示すが、unknown direct filesystem writer の不在を証明しない。そのため migration 自身の6回の source照合も維持する。
+
+### C2B: cold backupを公開し、receiptをsealする
+
+この時点でもmigrationはまだSQLiteを開かない。`cold-backup`はmain / `-wal` / `-shm`の存在集合を前後で固定し、mainを必須、sidecarを`PRESENT`または`ABSENT`として記録する。各`PRESENT` fileを`O_NOFOLLOW`かつsingle-linkでsibling stagingへcopyし、SHA-256、file fsync、sealed raw bundleの別scratch cloneによるschema・全row・関係・PRAGMA検証、receipt fsync、directory fsync、atomic directory publish、parent fsyncまで成功した場合だけ`status=backed_up`を返す。sealed原本そのものはSQLiteで開かない。
+
+```sh
+"$MIGRATE_BIN" cold-backup \
+  --source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --backup-dir "$COLD_BACKUP_DIR" \
+  --services-stopped \
+  > "$MAINT/c2-cold-backup.json" || exit 1
+python3 - "$MAINT/c2-cold-backup.json" "$COLD_BACKUP_DIR/cold-backup-receipt.json" <<'PY'
+import hashlib, json, pathlib, sys
+result = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+receipt_bytes = pathlib.Path(sys.argv[2]).read_bytes()
+receipt = json.loads(receipt_bytes)
+assert result["status"] == "backed_up"
+assert result["receipt"] == sys.argv[2]
+assert result["receipt_sha256"] == hashlib.sha256(receipt_bytes).hexdigest()
+assert result["operation_id"] == receipt["operation_id"]
+assert result["logical_sha256"] == receipt["logical_sha256"]
+assert receipt["kind"] == "cold-backup"
+assert receipt["services_stopped"] == {
+    "asserted": True, "provenance": "caller_asserted_unverified"
+}
+assert receipt["files"]["main"]["state"] == "PRESENT"
+assert {receipt["files"][k]["state"] for k in ("wal", "shm")} <= {"PRESENT", "ABSENT"}
+PY
+shasum -a 256 "$COLD_BACKUP_DIR/cold-backup-receipt.json" \
+  > "$MAINT/cold-backup-receipt.sha256"
+```
+
+`$MAINT/cold-backup-receipt.sha256`はbundle外のpinであり、R2のrestoreとHappyTeslaの照合が同じbackup identityを見るために保持する。ここで中止する場合はR2へ進み、C3を一度もinvokeしていないことをmaintenance記録へ残す。
 
 ### C3: DB + signals + working tree を一単位として複製・検証する
 
-**SQLiteを一度でも開く前に**、C2でquiesce済みのmain / `-wal` / `-shm`を通常file copyで別directoryへcold退避する。これは`mode=rw` guardのcloseでcheckpointが起きた後にもbytes単位で戻せる原本であり、migration destinationではない。mainは必須、sidecarは存在時にcopyし、不在時もreceiptへ`ABSENT`を残す。各copyはsourceとbackupのMD5が一致した場合だけ合格とする。
-
-```sh
-COLD_BACKUP_DIR=/Users/operator/agentstack-mail-cold-backup-20260811T000000
-mkdir -m 700 "$COLD_BACKUP_DIR"
-SOURCE_DB_MAIN=/Users/operator/mcp_agent_mail/storage.sqlite3
-if [ ! -f "$SOURCE_DB_MAIN" ] || [ -L "$SOURCE_DB_MAIN" ]; then
-  echo "canonical SQLite main file is missing or is a symlink" >&2
-  exit 1
-fi
-
-for SQLITE_SUFFIX in '' '-wal' '-shm'; do
-  SQLITE_NAME="storage.sqlite3${SQLITE_SUFFIX}"
-  SOURCE_DB_FILE="/Users/operator/mcp_agent_mail/${SQLITE_NAME}"
-  BACKUP_DB_FILE="${COLD_BACKUP_DIR}/${SQLITE_NAME}"
-  if [ -L "$SOURCE_DB_FILE" ]; then
-    echo "SQLite source is a symlink: $SOURCE_DB_FILE" >&2
-    exit 1
-  elif [ -f "$SOURCE_DB_FILE" ]; then
-    md5 -q "$SOURCE_DB_FILE" > "${COLD_BACKUP_DIR}/${SQLITE_NAME}.source.md5"
-    cp -p "$SOURCE_DB_FILE" "$BACKUP_DB_FILE"
-    md5 -q "$BACKUP_DB_FILE" > "${COLD_BACKUP_DIR}/${SQLITE_NAME}.backup.md5"
-    cmp -s \
-      "${COLD_BACKUP_DIR}/${SQLITE_NAME}.source.md5" \
-      "${COLD_BACKUP_DIR}/${SQLITE_NAME}.backup.md5" || exit 1
-    printf 'PRESENT %s\n' "$SQLITE_NAME" \
-      >> "${COLD_BACKUP_DIR}/cold-backup-receipt.txt"
-  else
-    printf 'ABSENT %s\n' "$SOURCE_DB_FILE" \
-      >> "${COLD_BACKUP_DIR}/cold-backup-receipt.txt"
-  fi
-done
-```
-
-上記はこの変更では実行しない。実行時はtimestamp部分を実時刻へ置換し、directoryが新規であること、`cold-backup-receipt.txt`が3行でmainは`PRESENT`、各`PRESENT` fileのsource/backup MD5 pairが一致していることを確認する。cold backupはbyte recoveryの正本だが、戻し後の受け入れ判定はbytes一致ではなくschema・全row・関係・PRAGMAの論理一致で行う。
+C2Bのmachine-readable cold backup receiptとbundle外SHA-256 pinが揃った後だけ開始する。`cold-backup`の取得成功はrestore可能性の証明ではないため、本番C0の`data-migration-reconciliation` evidenceには、後述の非production rehearsal receiptも必要である。
 
 working-tree scope migration は次を一つの staging generation 内で行う。
 
@@ -238,13 +878,13 @@ working-tree scope migration は次を一つの staging generation 内で行う�
 以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、26条件がGOになるまで稼働dataへ実行しない。**
 
 ```sh
-agentstack-mail-migrate copy \
+"$MIGRATE_BIN" copy \
   --source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
   --source-archive /Users/operator/.mcp_agent_mail_git_mailbox_repo \
   --source-signals /Users/operator/.mcp_agent_mail/signals \
   --destination-root /Users/operator/.agentstack/mail
 
-agentstack-mail-migrate verify \
+"$MIGRATE_BIN" verify \
   --source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
   --source-archive /Users/operator/.mcp_agent_mail_git_mailbox_repo \
   --source-signals /Users/operator/.mcp_agent_mail/signals \
@@ -256,11 +896,18 @@ manifestは`archive_policy`でworking treeのみ・legacy `.git`/`server.pid`非
 ### C4: 新 service を起動し、read-only readiness を確認する
 
 ```sh
-agentstack-mail-service start \
-  --ownership-manifest /path/to/cutover-staging/launchd/org.agentstack.mail.ownership.json
+"$SERVICE_BIN" start \
+  --ownership-manifest "$NEW_OWNERSHIP" \
+  > "$MAINT/c4-start.json" || exit 1
 
-agentstack-mail-service status \
-  --ownership-manifest /path/to/cutover-staging/launchd/org.agentstack.mail.ownership.json
+"$SERVICE_BIN" status \
+  --ownership-manifest "$NEW_OWNERSHIP" \
+  > "$MAINT/c4-status.json" || exit 1
+assert_service_state "$MAINT/c4-start.json" job_loaded started
+assert_service_state "$MAINT/c4-status.json" job_loaded -
+bounded_mail_probe \
+  'http://127.0.0.1:18765/mcp' 18765 \
+  'sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3' || exit 1
 ```
 
 `status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。bounded probe で新 port 18765 の `health_check`と、既存 identity の read-only `whois(include_recent_commits=false)`を確認する。この段階では `fetch_inbox`も呼ばない。notification有効時の`fetch_inbox`はsignal fileをclearし、migration baselineそのものを変え得るためである。`register_agent`、send、receipt変更、reservation変更も行わない。
@@ -272,13 +919,16 @@ agentstack-mail-service status \
 個別手編集はしない。C0でsealしたbundleと外部pinしたdigestだけを使い、次の1操作で構造化configを切り替える。
 
 ```sh
-agentstack-mail-consumers apply \
-  --bundle /path/to/private-consumer-bundle \
-  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256"
+"$CONSUMERS_BIN" apply \
+  --bundle "$CONSUMER_BUNDLE" \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256" \
+  > "$MAINT/c5-consumer-apply.json" || exit 1
 
-agentstack-mail-consumers status \
-  --bundle /path/to/private-consumer-bundle \
-  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256"
+"$CONSUMERS_BIN" status \
+  --bundle "$CONSUMER_BUNDLE" \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256" \
+  > "$MAINT/c5-consumer-status.json" || exit 1
+assert_consumer_state "$MAINT/c5-consumer-status.json" committed
 ```
 
 `status=committed`以外ではconsumerを再開しない。対象は明示inventoryに入れたClaude/Codex direct config、tool permissions、AgentStack/Codex App envとinstall receipt、停止時に存在したchild resume configである。Bridge自身の client key `agentstack` は変えない。repo-managed launcher/watcher/skillsとOrrery/dashboardはC2より前に新旧env両対応artifactとしてdeploy済みであることを前提とし、C5でsourceを文字列置換しない。例外はstrict identity版のreservation hookだけで、下記restart/rebind後にexact repo artifactをdeployする。
@@ -335,37 +985,184 @@ restart/rebindとidentity確認が全件終わった後にだけ、strict版`che
 
 ## 失敗時の戻し方
 
-pre-open cold backupはmain / `-wal` / `-shm`のbyte recovery原本として保持する。ただしwriter guardの正常checkpointだけでもmain bytesとsidecar有無は変わるため、戻しの合格をMD5同一では判定しない。旧authorityを再開できるのは、復元後にschema・全row digest・関係projection・PRAGMAがmigration baselineと一致し、新authorityにpost-baseline durable writeがない場合だけである。
+pre-open cold backupはmain / `-wal` / `-shm`のbyte recovery原本として保持する。ただし受け入れ判定はbytes一致でなく、scratch clone上のschema・全row・関係projection・PRAGMAの論理一致である。`rollback-assess`のstageはtoolが観測した値ではなくcaller assertionなので、出力の`cutover_stage_provenance=caller_asserted_unverified`を必ず確認する。
 
-| 失敗した段階 | 戻し方 |
-|---|---|
-| C0–C1 | 新 artifactを使わない。旧 authorityは動いたままなので変更なし |
-| C2、destination未公開 | 新 serviceを起動せず、cold backup receiptと旧sourceの論理baseline一致を確認し、旧jobだけをbootstrapする |
-| C3、copy検証済み | 新 copyは診断用に保持する。両service停止下でbaselineを確認し、旧jobだけをbootstrapする |
-| C4、新service ready・consumer未切替 | exact ownershipで新jobをstopし、新rootがbaselineと同一なら旧jobだけをbootstrapする |
-| C5、config切替済み・新rootがまだbaseline | 新jobをstopし、`agentstack-mail-consumers rollback --bundle ... --expected-manifest-sha256 ... --migration-manifest ~/.agentstack/mail/migration-manifest.json --cutover-stage C5_CLIENT_SWITCHING` の1操作でserviceのauthority lockを取得し、data baselineを再検査してからexact before-imageへ戻す。`status=rolled_back`を確認して旧jobをbootstrapする。新jobがlockを保持中、外部編集、post-baseline writeのいずれかを検出した場合は一つも上書きせずincidentにする |
-| **C5/C6、最初のdurable write後** | **旧jobを起動しない。configを戻さない。** 全consumerをquiesceし、exact new jobを再起動してbounded readiness後に新authority上でfix-forwardする |
+共通probe/assertionはC0のmaintenance shellで既に定義済みである。`bounded_mail_probe`はhealthが期待port/DBとexact一致し、C0でsealした既存agentの`whois(include_recent_commits=false)`が同名を返すまで20秒で打ち切る。register/fetch/sendは呼ばない。
 
-旧 job の再開が許される段階だけ、同じ maintenance shell から次を実行する。
+### R0 — C0/C1、旧authority未停止
+
+新artifactを使わない。旧authorityは動いたままなのでservice/config/data変更はない。C0 readiness出力と中止理由だけをmaintenance記録へ残す。
+
+### R1 — C2A、cold backup前
+
+全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。`shasum -a 256 -c "$MAINT/legacy-plist.sha256"`が成功した場合だけ旧jobを戻す。
 
 ```sh
-launchctl bootstrap \
-  "gui/$(id -u)" \
-  /Users/operator/Library/LaunchAgents/com.operator.mcp-agent-mail.plist
+shasum -a 256 -c "$MAINT/legacy-plist.sha256" || exit 1
+launchctl bootstrap "gui/$(id -u)" "$LEGACY_PLIST" || exit 1
+bounded_mail_probe \
+  'http://127.0.0.1:8765/mcp' 8765 \
+  'sqlite+aiosqlite:////Users/operator/mcp_agent_mail/storage.sqlite3' || exit 1
 ```
 
-その後、旧8765のbounded health、旧DB/archive/signalsのfingerprint、実clientの同名read handshakeを確認してからsenderを再開する。
+旧DB/archive/signalsがC0 fingerprintと一致してからsenderを再開する。
 
-durable write後にnew jobがreadyにならない場合は、旧を起動して二つのauthorityを作らない。新dataを保持したままincident/no-writerとし、repair後にexact new jobだけを起動する。検証済みreverse transformが無いため、新規recordだけを旧DBへbest-effort mergeしない。
+### R2 — C2B、cold backup後
+
+まず分岐に関係なくbundle外pinを確認する。失敗したら旧DBへrestoreせずincident/no-writerにする。
+
+```sh
+shasum -a 256 -c "$MAINT/cold-backup-receipt.sha256" || exit 1
+```
+
+`copy`を一度もinvokeしていない場合は上のpin確認後にR1のlegacy tailへ進む。`copy`をinvokeし、verified C3 manifestまで公開済みなら、同じpin確認済みのbackupだけを使い、両service停止を再確認してcold restoreを実行できる。PRESENTはsibling stagingからatomic replace、receiptがABSENTとしたsidecarはatomic quarantine後に除去し、mainを最後にreplaceする。post-restore scratch論理一致、staging cleanup、target parent fsyncの後にだけterminal receiptを作る。
+
+```sh
+"$MIGRATE_BIN" cold-restore \
+  --backup-dir "$COLD_BACKUP_DIR" \
+  --destination-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --restore-receipt "$MAINT/r2-production-restore.json" \
+  --migration-manifest "$MIGRATION_MANIFEST" \
+  --services-stopped \
+  --target-kind production-source \
+  --fault-injection none \
+  > "$MAINT/r2-production-restore-command.json" || exit 1
+python3 - "$MAINT/r2-production-restore-command.json" \
+  "$MAINT/r2-production-restore.json" "$COLD_BACKUP_DIR/cold-backup-receipt.json" \
+  "$MIGRATION_MANIFEST" <<'PY'
+import hashlib, json, pathlib, sys
+command_path, receipt_path, backup_path, manifest_path = map(pathlib.Path, sys.argv[1:])
+command = json.loads(command_path.read_text(encoding="utf-8"))
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+backup_sha = hashlib.sha256(backup_path.read_bytes()).hexdigest()
+manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+assert command["status"] == "restored"
+assert command["restore_receipt"] == str(receipt_path)
+assert receipt["kind"] == "cold-restore"
+assert receipt["restore_result"]["status"] == "restored"
+assert receipt["logical_validator"]["status"] == "matched"
+assert receipt["physical_validator"]["status"] == "matched"
+assert receipt["physical_validator"]["post_restore_before_logical"] == (
+    receipt["physical_validator"]["post_logical"]
+)
+assert receipt["target"]["production_source"] is True
+assert receipt["services_stopped"] == {
+    "asserted": True, "provenance": "caller_asserted_unverified",
+}
+assert receipt["backup_identity"]["receipt_sha256"] == backup_sha
+assert receipt["migration_identity"]["manifest_sha256"] == manifest_sha
+PY
+```
+
+上のmachine assertionが通ってからR1のlegacy tailへ進む。最初のtarget rename後に失敗した場合、toolはcanonical terminal receiptを作らず、quarantineを含み得るowned staging、`.prepared`、または`.unconfirmed`をincident evidenceとして保持する。command rc0を観測できない、`copy`をinvokeしたがverified manifestが無い、canonical receiptが無い、またはowned stagingが残る場合は、推測で旧jobを起動せずincident/no-writerにする。prepared/unconfirmedをterminalへ手動renameしない。
+
+### R3 — C3_MIGRATION_VERIFIED
+
+新copyは診断用に保持し、次のexact assessmentがexit 0かつ`status=reversible`、両baseline一致、両verification errorがnull、external verification requiredを返した場合だけR1のlegacy tailへ進む。`no_go`は旧jobをauthorizeしない。
+
+```sh
+"$MIGRATE_BIN" rollback-assess \
+  --manifest "$MIGRATION_MANIFEST" \
+  --cutover-stage C3_MIGRATION_VERIFIED \
+  > "$MAINT/r3-rollback-assess.json" || exit 1
+assert_rollback_state "$MAINT/r3-rollback-assess.json" C3_MIGRATION_VERIFIED
+```
+
+### R4 — C4_NEW_SERVICE_READY
+
+exact owned new jobをstopし、任意のnonzeroを成功扱いせず、JSONの`status=stopped`と`owned=true`を確認する。その後C4 assessmentがR3と同じreversible条件を満たした場合だけR1のlegacy tailへ進む。
+
+```sh
+"$SERVICE_BIN" stop \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r4-stop.json" || exit 1
+"$SERVICE_BIN" status \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r4-stopped.json" || exit 1
+assert_service_state "$MAINT/r4-stop.json" stopped stopped
+assert_service_state "$MAINT/r4-stopped.json" stopped -
+"$MIGRATE_BIN" rollback-assess \
+  --manifest "$MIGRATION_MANIFEST" \
+  --cutover-stage C4_NEW_SERVICE_READY \
+  > "$MAINT/r4-rollback-assess.json" || exit 1
+assert_rollback_state "$MAINT/r4-rollback-assess.json" C4_NEW_SERVICE_READY
+```
+
+### R5 — C5_CLIENT_SWITCHING、first durable write前だけ
+
+新jobをR4と同じexact sequenceでstop/status確認する。次のstandalone assessmentがreversibleの場合だけ、authority lock内で再検査するconsumer rollbackを実行する。
+
+```sh
+"$SERVICE_BIN" stop \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r5-stop.json" || exit 1
+"$SERVICE_BIN" status \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r5-stopped.json" || exit 1
+assert_service_state "$MAINT/r5-stop.json" stopped stopped
+assert_service_state "$MAINT/r5-stopped.json" stopped -
+"$MIGRATE_BIN" rollback-assess \
+  --manifest "$MIGRATION_MANIFEST" \
+  --cutover-stage C5_CLIENT_SWITCHING \
+  > "$MAINT/r5-rollback-assess.json" || exit 1
+assert_rollback_state "$MAINT/r5-rollback-assess.json" C5_CLIENT_SWITCHING
+"$CONSUMERS_BIN" rollback \
+  --bundle "$CONSUMER_BUNDLE" \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256" \
+  --migration-manifest "$MIGRATION_MANIFEST" \
+  --cutover-stage C5_CLIENT_SWITCHING \
+  > "$MAINT/r5-consumer-rollback.json" || exit 1
+"$CONSUMERS_BIN" status \
+  --bundle "$CONSUMER_BUNDLE" \
+  --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256" \
+  > "$MAINT/r5-consumer-status.json" || exit 1
+assert_consumer_state "$MAINT/r5-consumer-status.json" rolled_back
+```
+
+`status=rolled_back`、terminal receipt有効、third state 0、after state 0をmachine確認した後だけR1のlegacy tailへ進む。first durable write、external edit、authority lock失敗、assessment `no_go`はいずれもR6へ進む。
+
+### R6 — C6またはfirst durable write後（fix-forward only）
+
+**旧plist照合/bootstrap、consumer rollback、旧endpoint handshakeは行わない。** canonical stageは`C6_NEW_AUTHORITY_VERIFIED`だけであり、snapshotがfresh baselineでも`rollback-assess`は無条件`no_go`を返す。`C6_CUTOVER_COMPLETE`を含む別名は受け入れず、operatorが同じ境界に二つの名前を使わない。新authorityだけを次の順序で止め、`status=stopped, owned=true`を確認し、incident固有repair後にstartする。loaded jobへstartを直接撃ってrestart扱いにしない。
+
+```sh
+set +e
+"$MIGRATE_BIN" rollback-assess \
+  --manifest "$MIGRATION_MANIFEST" \
+  --cutover-stage C6_NEW_AUTHORITY_VERIFIED \
+  > "$MAINT/r6-rollback-C6_NEW_AUTHORITY_VERIFIED.json" \
+  2> "$MAINT/r6-rollback-C6_NEW_AUTHORITY_VERIFIED.err"
+R6_ASSESS_RC=$?
+set -e
+test "$R6_ASSESS_RC" -eq 1
+test ! -s "$MAINT/r6-rollback-C6_NEW_AUTHORITY_VERIFIED.err"
+assert_rollback_no_go \
+  "$MAINT/r6-rollback-C6_NEW_AUTHORITY_VERIFIED.json" \
+  C6_NEW_AUTHORITY_VERIFIED any
+"$SERVICE_BIN" stop \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r6-stop.json" || exit 1
+"$SERVICE_BIN" status \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r6-stopped.json" || exit 1
+assert_service_state "$MAINT/r6-stop.json" stopped stopped
+assert_service_state "$MAINT/r6-stopped.json" stopped -
+# repairが未確定ならここで停止し、startしない。
+"$SERVICE_BIN" start \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r6-start.json" || exit 1
+"$SERVICE_BIN" status \
+  --ownership-manifest "$NEW_OWNERSHIP" > "$MAINT/r6-loaded.json" || exit 1
+assert_service_state "$MAINT/r6-start.json" job_loaded started
+assert_service_state "$MAINT/r6-loaded.json" job_loaded -
+bounded_mail_probe \
+  'http://127.0.0.1:18765/mcp' 18765 \
+  'sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3' || exit 1
+```
+
+`start`は`status=job_loaded, owned=true, environment_drift=false, action=started`、続くstatusも`job_loaded, owned=true, environment_drift=false`をexact確認する。new jobが20秒以内にreadyにならない場合は旧を起動して二つのauthorityを作らず、new dataを保持したincident/no-writerを継続する。検証済みreverse transformが無いため、新規recordだけを旧DBへbest-effort mergeしない。
 
 ## 現在の blocker digest（non-normative）
 
 これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。現在は少なくとも次が未完了なので、本番切替は未承認である。
 
-- working-tree scope migrationのproduction-shaped rehearsal、active-writer/6回照合/中断/alias/object-store/corruptionのcandidate-bound raw evidence
+- versioned generatorと手順は実装済みだが、clean candidateに対するproduction-shaped rehearsal/独立verifier/check-onlyのrelease receiptはまだ未生成。active-writer/6回照合/中断/alias/object-store/corruptionの残りraw evidenceも未完了
 - 実機consumerとlive hooksのexact inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
 - bounded MCP readiness probe
 - clean candidateのwheel/sdistとfresh installed wheel verification
 - 台帳で`not_implemented`のpre-cutover follow-up taskと、それぞれのdigest-bound raw evidence
 
-`README.md`、`claude/CLAUDE.md`、`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。実装が入るPRで同時に更新する。
+`packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。

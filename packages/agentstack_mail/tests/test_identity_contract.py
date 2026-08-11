@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -227,3 +228,101 @@ def test_compatibility_tool_schemas_advertise_only_live_token_parameters() -> No
         "retire_agent": {"registration_token"},
         "send_message": {"sender_token"},
     }
+
+
+def test_loopback_retire_accepts_token_bearing_target_without_target_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_isolated_runtime(monkeypatch, tmp_path, mode="passthrough")
+    project = str(tmp_path / "project")
+
+    async def retire_without_target_token() -> dict[str, Any]:
+        async with Client(app.build_mcp_server()) as client:
+            await _ensure_project(client, project)
+            registered = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "identity-contract",
+                    "model": "fixture-model",
+                    "name": "BlueTarget",
+                    "registration_token": "target-owned-token",
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+            assert registered.is_error is False
+            retired = await client.call_tool(
+                "retire_agent",
+                {"project_key": project, "agent_name": "BlueTarget"},
+                raise_on_error=False,
+            )
+            assert retired.is_error is False
+        await db.get_engine().dispose()
+        return _payload(retired)
+
+    try:
+        assert asyncio.run(retire_without_target_token()) == {
+            "status": "retired",
+            "agent_name": "BlueTarget",
+            "project_key": project,
+        }
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()
+
+
+def test_loopback_retire_emits_audit_event_without_exposing_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _configure_isolated_runtime(monkeypatch, tmp_path, mode="passthrough")
+    project = str(tmp_path / "project")
+    token_canary = "audit-target-token-must-not-leak"
+    caplog.set_level(logging.INFO, logger=app.__name__)
+
+    async def retire_without_target_token() -> None:
+        async with Client(app.build_mcp_server()) as client:
+            await _ensure_project(client, project)
+            registered = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "identity-contract",
+                    "model": "fixture-model",
+                    "name": "AuditTarget",
+                    "registration_token": token_canary,
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+            assert registered.is_error is False
+            retired = await client.call_tool(
+                "retire_agent",
+                {"project_key": project, "agent_name": "AuditTarget"},
+                raise_on_error=False,
+            )
+            assert retired.is_error is False
+        await db.get_engine().dispose()
+
+    try:
+        asyncio.run(retire_without_target_token())
+        records = [
+            record
+            for record in caplog.records
+            if record.name == app.__name__
+            and record.getMessage() == "retire_agent.loopback_authorized"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.authorization_mode == "loopback_local_process"
+        assert record.project_key == project
+        assert record.agent_name == "AuditTarget"
+        assert record.target_has_registration_token is True
+        assert record.registration_token_supplied is False
+        assert token_canary not in json.dumps(record.__dict__, default=str)
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()

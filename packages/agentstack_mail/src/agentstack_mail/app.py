@@ -5334,7 +5334,12 @@ def build_mcp_server() -> FastMCP:
         agent_name: str,
         registration_token: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Retire an agent (soft-delete). The agent stops accepting new messages but message history is preserved."""
+        """Retire an agent through the loopback-only local-process boundary.
+
+        ``registration_token`` remains in the public schema for compatibility
+        and future administrator hardening, but the first HTTP transport trusts
+        the bound local process rather than requiring the target's credential.
+        """
         project = await _get_project_by_identifier(project_key)
         if not project:
             raise ValueError(f"Project '{project_key}' not found")
@@ -5343,9 +5348,16 @@ def build_mcp_server() -> FastMCP:
         if not agent:
             raise ValueError(f"Agent '{agent_name}' not found in project '{project_key}'")
 
-        # Verify registration token if the agent has one
-        if agent.registration_token and not hmac.compare_digest(registration_token or "", agent.registration_token):
-            raise ValueError("Invalid registration_token — only the agent's owner can retire it")
+        logger.info(
+            "retire_agent.loopback_authorized",
+            extra={
+                "authorization_mode": "loopback_local_process",
+                "project_key": project.human_key,
+                "agent_name": agent.name,
+                "target_has_registration_token": bool(agent.registration_token),
+                "registration_token_supplied": bool(registration_token),
+            },
+        )
 
         async with get_session() as session:
             db_agent = await session.get(Agent, agent.id)

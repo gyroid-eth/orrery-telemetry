@@ -66,6 +66,7 @@ INITIAL_APPROVAL_IDS = tuple(
 EXPECTED_DIFFERENCE_IDS = (
     "D1",
     "reservation-probe-incomplete-fail-closed",
+    "loopback-retire-target-token-omission",
 )
 EXPECTED_D7_ORDER = "post_cutover_with_null_token_creation_stop_as_one_change"
 CONDITION_KEYS = {
@@ -858,7 +859,7 @@ def _evaluate_cutover_core(
             ]
             if (
                 actual_difference_ids == list(EXPECTED_DIFFERENCE_IDS)
-                and safety_ids == [EXPECTED_DIFFERENCE_IDS[1]]
+                and safety_ids == list(EXPECTED_DIFFERENCE_IDS[1:])
             ):
                 passed.append(condition_id)
             else:

@@ -99,7 +99,9 @@ def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
             "reason": "policy_empty_default_allow",
         },
         "default_principal_candidate": authorization.LOCAL_SINGLE_PRINCIPAL,
-        "rule_status": ("prospective_non_binding_except_selected_D7_retire_boundary"),
+        "rule_status": (
+            "current_loopback_retire_boundary_other_rules_prospective_non_binding"
+        ),
         "tools": authorization.catalog_as_plain_data(),
     }
 
@@ -142,8 +144,10 @@ def test_catalog_does_not_add_in_schema_credentials() -> None:
     assert actual == EXPECTED_CURRENT_CREDENTIAL_ARGUMENTS
     assert authorization.AUTHORIZATION_CATALOG["retire_agent"][
         "authorization_rule"
-    ].endswith(
-        "name-only is limited to idempotent re-retire of an already-retired null-token legacy row"
+    ] == (
+        "bound loopback local principal may soft-retire any project target without "
+        "its registration_token; retain the credential field for future "
+        "project-administrator hardening"
     )
 
 

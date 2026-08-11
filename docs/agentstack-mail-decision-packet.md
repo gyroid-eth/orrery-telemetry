@@ -41,12 +41,12 @@ owner explicitly selects upstream behavior as Path A.
 | D4 | selected | implemented (pre-existing parity) | no-go | Accepting without a pending request creates an approved link | Path A preserves out-of-order convenience despite missing request provenance | contact owners and any caller who knows both names |
 | D5 | selected | implemented (pre-existing parity) | no-go | The measured invalid and empty policies silently become `auto` | Path A preserves forgiving input despite typo/audit ambiguity | operators, policy audits, indistinguishable historical `auto` values |
 | D6 | selected | implemented (pre-existing parity) | no-go | A tokenized sender may omit `sender_token` and send unverified | Path A preserves legacy clients despite unenforced sender ownership | all recipients/auditors; identities whose generated token is unavailable |
-| D7 | selected | not implemented (post-cutover order) | no-go | Only an already-retired null-token legacy row may eventually retain idempotent name-only re-retire; current Core still permits broader active-null retirement | legacy continuity versus timing-selectable receive denial | tokenless identities and owner-operation callers |
+| D7 | selected | not implemented (post-cutover order) | no-go | Cutover preserves dashboard EXIT by letting the loopback local principal retire any target without its token; the eventual owner/admin restriction remains deferred | live system compatibility versus timing-selectable receive denial | dashboard operators, tokenless identities, and owner-operation callers |
 | D8 | selected | implemented (pre-existing parity) | no-go | In the measured messaging seams, an archive exception or process death leaves the already-committed DB message/recipient and an exact prefix of completed archive work | Path A preserves DB-first compatibility despite cross-store partial state | senders, recipients, dashboard, Git/archive consumers |
 | D9 | selected | implemented (pre-existing parity) | no-go | At the measured ordinary-error and process-death seams, `read_ts` commits before the separate `ack_ts` update | Path A preserves independently durable read progress despite partial acknowledgement state | receipt readers, retry logic, legacy partial rows |
 | D10 | selected | implemented (pre-existing parity) | no-go | Under explicit repeated rendezvous, a shared archive lock yields one scheduler-dependent winner; one DB with split archive roots preserves two conflicting winners | Path A preserves topology-dependent upstream behavior instead of adding a DB mutex in this release | parallel agents, HA/misconfigured deployments, existing duplicate leases |
 | D11 | selected | implemented (pre-existing parity) | no-go | Retirement preserves active reservations and unread work; retired agents can fetch and acknowledge, while new sends are rejected | Path A preserves reversible upstream retirement despite blocked peers and pending senders | peers blocked by leases, senders awaiting ack, operators |
-| D12 | selected | implemented (pre-existing parity) | no-go | Preserve DB/archive-first best-effort signals, global per-agent fetch cleanup, and watcher retry/duplicate windows | Path A keeps the first cutover at one deliberate difference without claiming exactly-once tmux injection | offline/stale consumers, watchers, notification operators |
+| D12 | selected | implemented (pre-existing parity) | no-go | Preserve DB/archive-first best-effort signals, global per-agent fetch cleanup, and watcher retry/duplicate windows | Path A avoids an additional signal-lifecycle difference without claiming exactly-once tmux injection | offline/stale consumers, watchers, notification operators |
 
 ## D1 — conflicting token registration mutation
 
@@ -376,11 +376,13 @@ divergence decision, not part of this Path-A release.
 ### 1. Observed live behavior
 
 `macro_start_session(agent_name="RedStone")` creates a row whose token is null.
-`retire_agent` then succeeds with only project and name and persists
-`retired_at`. Omitting the token for a tokenized control agent fails. Frozen
-macro creation and conditional retirement guards are around `app.py:7864` and
-`:5041`. Broader unpublished owner tools have analogous source guards but were
-not all dynamically probed.
+The frozen published `retire_agent` then succeeds with only project and name
+and persists `retired_at`; omitting the token for a tokenized control agent
+fails. Separately, the operator-used live dashboard posts an `agent_id` to its
+old loopback REST route and supplies no target token, so system-level EXIT can
+retire either cohort. Frozen macro creation and conditional MCP retirement
+guards are around `app.py:7864` and `:5041`. Broader unpublished owner tools
+have analogous source guards but were not all dynamically probed.
 
 D3 confirms another creation path: an approved cross-project send calls
 `_get_or_create_agent` in the target project without token management, creating
@@ -390,21 +392,31 @@ stop-all-new-null prerequisite, not a change to D7's decision.
 
 ### 2. Current Core behavior
 
-Identical for the published `retire_agent` path and the macro's direct
-`_get_or_create_agent` call, and for the D3-confirmed cross-project alias path.
-Broader owner-tool behavior and other null-row creation paths remain unproven
-dynamically.
+For cutover compatibility, Core's loopback-only MCP `retire_agent` accepts
+name-only soft retirement for token-bearing and null-token targets. It emits a
+structured `retire_agent.loopback_authorized` event containing only the
+authorization mode, target identity, and credential-presence booleans. The
+public `registration_token` argument remains available for schema compatibility
+and a future project-administrator credential design.
+
+This matches the live dashboard's end-to-end EXIT capability but intentionally
+differs from the frozen published MCP tool for token-bearing targets. The
+manifest therefore records `loopback-retire-target-token-omission` as a safety
+difference instead of mislabeling the changed MCP behavior as parity.
 
 ### 3. Why implementation and cutover remain no-go
 
-Tokenless macro/legacy identities must remain operable, while a name alone is
-not proof of ownership. `macro_start_session` currently cannot accept or return
-a caller-owned token. The selection therefore cannot be enforced until every
-new-null creation path is stopped and a principal/admin mechanism exists.
-Current behavior is intentionally unchanged.
+Tokenless macro/legacy identities and the operator-used dashboard EXIT must
+remain operable, while a name alone is not proof of ownership.
+`macro_start_session` currently cannot accept or return a caller-owned token.
+The eventual D7 restriction therefore cannot be enforced until every new-null
+creation path is stopped and a principal/admin mechanism exists. The cutover
+patch deliberately keeps the current local-process trust boundary rather than
+claiming agent-owner authentication.
 
-Implementation is ordered after authority cutover. At cutover, D1 remains the
-only intentional upstream difference. D7 and the prerequisite that stops new
+Implementation is ordered after authority cutover. At cutover, the exact
+intentional-difference set is D1, reservation-probe fail-closed behavior, and
+loopback target-token omission. D7 and the prerequisite that stops new
 null-token creation will land together later as one change. The confirmed
 cross-project alias call to `_get_or_create_agent(p, sender.name, ...)` omits a
 token; stopping that currently matching path is itself an intentional upstream
@@ -415,6 +427,7 @@ difference, not a parity-preserving prerequisite. The manifest's machine-readabl
 
 | Option | What breaks / who is affected | Existing-data effect |
 |---|---|---|
+| **Cutover boundary:** bound loopback local process may retire any target without its token, with a structured audit event | Any local process able to reach the loopback MCP endpoint can retire an agent; this preserves the live dashboard trust boundary but does not prove agent ownership | None |
 | Preserve conditional name-only authorization | Any caller knowing a null-token identity name can retire it | None |
 | Require credentials for every owner operation | Tokenless macro/legacy identities cannot retire, restore, deregister, or delete themselves | Null-token rows require claim/enrollment |
 | **Selected, not implemented:** name-only soft retire is limited to idempotent re-retire of an already-retired null-token legacy row; active-null name-only retirement is denied; unretire, hard delete, transfer, and project-wide operations require the future principal/admin | New null-token creation must stop first; the principal/admin mechanism remains unselected; current callers keep current behavior until a separate implementation/cutover approval | Existing retired-null rows retain only a no-mutation retry path; active-null rows require a future authority path |
@@ -431,15 +444,19 @@ machine, not a product invariant.
 
 ### 5. Test that fixes the choice
 
-Split active-null and already-retired-null legacy cohorts. Prove name-only
-re-retire succeeds only for the latter, preserves `retired_at`, and changes no
-DB/profile/archive/signal state. Prove active-null name-only retire is denied;
-unretire, hard delete, transfer, and project-wide operations require the future
-principal/admin authority; and every new-identity path has stopped creating
-null-token rows before enforcement is enabled. Correct/wrong/missing authority,
-macro reuse, and credential non-disclosure remain part of the matrix. These
-tests are prerequisites for `implementation_state: implemented`, not evidence
-that cutover is approved.
+The cutover regression set proves three facts: non-loopback CLI binds are
+rejected before server construction; a token-bearing target can be retired
+without its token through the Core tool; and the structured audit event remains
+without credential material. The first test is mutation-checked by temporarily
+removing the startup rejection and observing it fail before restoring the
+guard.
+
+The eventual D7 gate still must split active-null and already-retired-null
+legacy cohorts. It must prove name-only re-retire succeeds only for the latter,
+preserves `retired_at`, and changes no durable state; active-null name-only
+retire is denied; and stronger operations require future principal/admin
+authority. Correct/wrong/missing authority, macro reuse, and credential
+non-disclosure remain part of that later matrix.
 
 ## D8 — DB persists after archive failure
 
@@ -685,9 +702,9 @@ the selected source root before running either namespace.
 
 Match frozen live. Retirement remains a reversible tombstone operation: it
 preserves active leases and unread receipts, permits retired fetch/ack, and
-rejects later delivery. This keeps the cutover intentional-difference set at
-D1 only. The cost is explicit: peers may stay blocked and senders may wait on
-work owned by a retired agent.
+rejects later delivery. It adds no lifecycle difference beyond the exact
+cutover set recorded in the manifest. The cost is explicit: peers may stay
+blocked and senders may wait on work owned by a retired agent.
 
 ### 4. Options and breakage
 

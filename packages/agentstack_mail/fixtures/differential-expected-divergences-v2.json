@@ -55,6 +55,13 @@
         "frozen_live": "timeout/error is collapsed to matches=[], fs=None, git=None; an inactive owner with no recent mail can therefore become stale and be auto-released",
         "product": "probe_complete=false and activity_unknown=true; stale=false, so activity-probe uncertainty cannot auto-release; explicit TTL expiry remains authoritative",
         "reason": "absence of evidence after an incomplete probe is not evidence of inactivity; avoid erroneous early release while retaining deterministic TTL expiry"
+      },
+      {
+        "id": "loopback-retire-target-token-omission",
+        "selector": "tools.retire_agent.authorization.token_bearing_target_without_registration_token",
+        "frozen_live": "the published MCP tool rejects a token-bearing target when registration_token is omitted, although the live dashboard bypasses that tool through its loopback REST route",
+        "product": "the loopback-only Core MCP tool accepts target-token omission for every target and emits a structured authorization audit event without credential material",
+        "reason": "preserve the operator-used dashboard EXIT behavior at the existing local-process trust boundary during cutover; retain the registration_token field so a project-administrator credential can replace this boundary after cutover"
       }
     ],
     "allowlisted_entries": [
@@ -663,7 +670,7 @@
         "docs/agentstack-mail-cutover.md"
       ],
       "requirements": [
-        "remove stale D1-only first-cutover statements in favor of the exact D1 plus reservation-probe safety difference set",
+        "remove stale first-cutover statements in favor of the exact D1 plus reservation-probe and loopback-retire safety difference set",
         "make the operator runbook name every machine gate and prohibit interpreting missing or unknown evidence as approval",
         "keep reservation-hook documentation consistent with renew-only behavior, owner registration_token non-transmission, isError omitted-or-boolean-false success, strict identity resolution, and the initial-transport-only fail-open boundary"
       ],
@@ -742,8 +749,8 @@
         "kind": "manifest_predicate",
         "evidence_kind": "none",
         "source": "product_decisions[D7].scope.cutover_intentional_difference_set_and_intentional_differences.safety_entries",
-        "predicate": "difference_ids_equal_D1_plus_reservation_probe_incomplete_fail_closed_and_the_safety_entry_exists",
-        "remediation": "restore the exact two-difference cutover set and its safety definition"
+        "predicate": "difference_ids_equal_D1_plus_reservation_probe_incomplete_fail_closed_plus_loopback_retire_target_token_omission_and_both_safety_entries_exist",
+        "remediation": "restore the exact three-difference cutover set and both safety definitions"
       },
       {
         "id": "candidate-source-bound",
@@ -1131,7 +1138,8 @@
         "prerequisite_divergence": "stopping_the_currently_matching_alias_path_is_itself_an_intentional_upstream_difference",
         "cutover_intentional_difference_set": [
           "D1",
-          "reservation-probe-incomplete-fail-closed"
+          "reservation-probe-incomplete-fail-closed",
+          "loopback-retire-target-token-omission"
         ],
         "principal_admin_mechanism": "unselected",
         "lifecycle_disposition": "D11_selected_match_frozen_live"
@@ -1353,7 +1361,7 @@
         "delivery_guarantee": "best_effort_wakeup_with_at_least_once_duplicate_window_not_exactly_once",
         "message_authority": "database_message_remains_fetchable_when_wakeup_is_missing_or_delayed",
         "selection_basis": [
-          "match_frozen_live_and_keep_initial_cutover_difference_set_at_D1_plus_reservation_probe_incomplete_fail_closed",
+          "match_frozen_live_and_keep_initial_cutover_difference_set_at_D1_plus_reservation_probe_incomplete_fail_closed_plus_loopback_retire_target_token_omission",
           "observed_offline_per_message_signals_are_retained_for_session_not_found_retry",
           "operational_cron_detection_reduces_a_missed_wakeup_to_delayed_notification",
           "durable_database_outbox_would_not_close_the_unobservable_external_application_seam"

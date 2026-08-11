@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 DIVERGENCE_MANIFEST = "differential-expected-divergences-v2.json"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "d1b7df5dbd947d94a12017a8ca601763713ba68081c6462270f20f5031e56eb5"
+    "1d769ea851af1c13110a1648b2922ab5e2e83ae9a419a76a0a8e9f5ad0ea5ca8"
 )
 
 EXPECTED_BASELINES = {
@@ -377,6 +377,7 @@ EXPECTED_SELECTED_DECISIONS = {
             "cutover_intentional_difference_set": [
                 "D1",
                 "reservation-probe-incomplete-fail-closed",
+                "loopback-retire-target-token-omission",
             ],
             "principal_admin_mechanism": "unselected",
             "lifecycle_disposition": "D11_selected_match_frozen_live",
@@ -734,7 +735,8 @@ EXPECTED_SELECTED_DECISIONS = {
             "selection_basis": [
                 (
                     "match_frozen_live_and_keep_initial_cutover_difference_set_"
-                    "at_D1_plus_reservation_probe_incomplete_fail_closed"
+                    "at_D1_plus_reservation_probe_incomplete_fail_closed_plus_"
+                    "loopback_retire_target_token_omission"
                 ),
                 (
                     "observed_offline_per_message_signals_are_retained_for_"
@@ -845,7 +847,30 @@ EXPECTED_SAFETY_DIFFERENCES = [
             "inactivity; avoid erroneous early release while retaining deterministic "
             "TTL expiry"
         ),
-    }
+    },
+    {
+        "id": "loopback-retire-target-token-omission",
+        "selector": (
+            "tools.retire_agent.authorization."
+            "token_bearing_target_without_registration_token"
+        ),
+        "frozen_live": (
+            "the published MCP tool rejects a token-bearing target when "
+            "registration_token is omitted, although the live dashboard bypasses "
+            "that tool through its loopback REST route"
+        ),
+        "product": (
+            "the loopback-only Core MCP tool accepts target-token omission for "
+            "every target and emits a structured authorization audit event without "
+            "credential material"
+        ),
+        "reason": (
+            "preserve the operator-used dashboard EXIT behavior at the existing "
+            "local-process trust boundary during cutover; retain the "
+            "registration_token field so a project-administrator credential can "
+            "replace this boundary after cutover"
+        ),
+    },
 ]
 
 EXPECTED_PERFORMANCE_GATES = [
@@ -929,7 +954,7 @@ EXPECTED_FOLLOW_UP_TASK_IDS = [
     "cutover-documentation-consistency",
 ]
 EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
-    "09c31ec08fc31cd32dbc6548626505286ff63a737650a0e97fbd923242fd8df3"
+    "c7af3b6952f966bf2be3a57dc60b1a9251a7b9684f708b91aef4c4bf03dfd106"
 )
 EXPECTED_CUTOVER_CONDITION_IDS = [
     "product-decisions-selected",
@@ -960,7 +985,7 @@ EXPECTED_CUTOVER_CONDITION_IDS = [
     "cutover-documentation-consistency",
 ]
 EXPECTED_CUTOVER_GATE_SHA256 = (
-    "df63b25a99e6a3d1e86de49f8650b92c0b11721f3206779ac0761ed2f363afe7"
+    "73a900e7dc33c46dadf0d202b2261cc94d4acc582a3478df51b7190d3f754e27"
 )
 
 REQUIRED_RUNTIME_MODULES = {
