@@ -4,7 +4,7 @@
 
 > **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。**2–4分はC3のdata copy/verificationだけの実測**であり、client restart/rebindを含む全静止時間は未測定である。
 
-これは maintainer の Mac で後日、上から順に実行するための手順書である。この変更では切替を実行しない。稼働中の `~/mcp_agent_mail`、MCP 設定、launchd、service、port 8765 には触れていない。
+これは maintainer の Mac で後日、上から順に実行するための手順書である。この変更では本番切替を実行しない。稼働中の `~/mcp_agent_mail`、MCP 設定、production launchd job、service、port 8765 には触れない。唯一の例外は、下記の明示許可に束縛された試験専用label 1つのisolated launchd rehearsalである。
 
 ## 切替承認の正本
 
@@ -31,6 +31,25 @@ evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動
 working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。ただし台帳の data-migration-reconciliation evidence handlerは未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
+
+## 2026-08-11 isolated launchd rehearsal の明示許可
+
+maintainer は **2026-08-11**、foregroundではlaunchdが送る停止signal、KeepAliveによるcrash recovery、bootstrap/bootoutのjob状態遷移を代替できず、このままでは切替当日がlaunchd管理下の初回になるため、**隔離した試験専用service 1つでのlaunchd rehearsal**を許可した。
+
+許可は次の範囲に限定する。
+
+- 対象labelは `org.agentstack.mail.rehearsal.<candidate8>.<nonce>` 形式の **1つだけ**とする。
+- 許可された状態変更は、そのexact labelへの `bootstrap` / `enable` / `kickstart` / `bootout` の4操作だけである。
+- `enable` は最初の3操作の列挙後に追加された。実際の `agentstack-mail-service start` が `bootstrap → enable → kickstart` を呼ぶためであり、rehearsalだけ省略すると本番と異なるcontroller経路を試すことになる。
+- 稼働中のdashboard・agent-mail job、production label `org.agentstack.mail`、legacy service、MCP設定・data、port 8765へのnetwork requestは対象外であり、起動・停止・変更しない。8765はprocessを変えない `lsof` listener fingerprintだけをbefore/afterで比較する。
+- plist、ownership、env、state root、DB、archive、signals、log、wheel、venv、receiptは0700の隔離temp配下に置き、隔離portを使う。
+- 実行前にlabelの明示引数化、production既定値の維持、ownership/CLI label不一致のfail-closed、fake launchctl検証を完了する。`launchctl print gui/$UID/<rehearsal_label>` が113以外、production labelと一致、予約prefix外、またはlabelが既存なら、process起動前に中止する。
+- `finally` は試験専用exact labelだけをbootoutする。最後に同labelがprint=113、隔離portのlistenerが0、production labelと8765のfingerprintがbefore/after一致であることを確認する。
+- cleanupに失敗した場合はterminal receiptを出さない。想定外のprocessまたはjobが残り、このsandboxから停止できない場合は、exact label・port・PID・隔離pathを **ProOpusへurgent報告**し、ProOpusが素性を照合してcleanupする。
+
+試験receiptには、foreground receiptとの差の有無に加え、`enable` が隔離temp外に作るlabel単位の永続状態をbefore/afterで実測し、残ったものとcleanupしなかった理由を記録する。推測で「何も残らない」「disableすれば消える」とは扱わない。
+
+現在の状態: **許可とlabel可変化/fake launchctl検証は完了、実launchd rehearsalとそのterminal receiptは未実行**。
 
 ## 今回運ぶもの、運ばないもの
 
