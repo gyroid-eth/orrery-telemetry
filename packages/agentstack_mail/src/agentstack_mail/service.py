@@ -650,10 +650,14 @@ def foreground(
             raise ServiceError("another service process owns this state root") from exc
         environment = os.environ.copy()
         environment["AGENTSTACK_MAIL_ENV_FILE"] = str(env_file.resolve(strict=False))
+        # The child keeps the authority lock descriptor open.  If the wrapper
+        # disappears, a replacement wrapper still cannot start a second writer
+        # for this state root while the original server remains alive.
         process = subprocess.Popen(
             [str(server_executable)],
             env=environment,
             start_new_session=True,
+            pass_fds=(lock_handle.fileno(),),
         )
         shutdown_signal: int | None = None
 

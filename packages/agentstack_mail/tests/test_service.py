@@ -1,18 +1,120 @@
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import json
 import os
 import plistlib
+import shlex
 import signal
+import socket
+import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastmcp import Client
 
 from agentstack_mail import service
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(0.1)
+        return connection.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _wait_port(port: int, *, present: bool, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _port_open(port) is present:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"port {port} did not reach present={present}")
+
+
+async def _touch_real_writer(port: int, project: Path) -> None:
+    async with Client(f"http://127.0.0.1:{port}/mcp", timeout=5) as client:
+        await client.call_tool("ensure_project", {"human_key": str(project)})
+
+
+def _runtime_environment(env_file: Path) -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("AGENTSTACK_MAIL_")
+        and not key.startswith("MCP_AGENT_MAIL_")
+    }
+    environment["AGENTSTACK_MAIL_ENV_FILE"] = str(env_file)
+    environment["PYTHONUNBUFFERED"] = "1"
+    return environment
+
+
+def _service_command(
+    root: Path,
+    env_file: Path,
+    *,
+    server_executable: Path | None = None,
+) -> list[str]:
+    executable_root = Path(sys.executable).parent
+    server_executable = server_executable or executable_root / "agentstack-mail"
+    return [
+        str(executable_root / "agentstack-mail-service"),
+        "foreground",
+        "--server-executable",
+        str(server_executable),
+        "--env-file",
+        str(env_file),
+        "--state-root",
+        str(root),
+    ]
+
+
+def _stop_process_group(process_group: int, *, port: int) -> None:
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not _port_open(port):
+            return
+        time.sleep(0.05)
+    try:
+        if _port_open(port):
+            os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _pid_recording_server(tmp_path: Path) -> tuple[Path, Path]:
+    real_server = Path(sys.executable).parent / "agentstack-mail"
+    pid_file = tmp_path / "server.pid"
+    shim = tmp_path / "pid-recording-agentstack-mail"
+    shim.write_text(
+        "\n".join(
+            (
+                "#!/bin/sh",
+                "umask 077",
+                f"printf '%s\\n' \"$$\" > {shlex.quote(str(pid_file))}",
+                f"exec {shlex.quote(str(real_server))}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return shim, pid_file
 
 
 def _executable(path: Path) -> Path:
@@ -554,6 +656,10 @@ def test_foreground_starts_server_in_an_owned_process_group(
     def fake_popen(arguments: list[str], **kwargs: Any) -> ExitedProcess:
         captured["arguments"] = arguments
         captured["kwargs"] = kwargs
+        captured["passed_fd_modes"] = [
+            stat.S_IFMT(os.fstat(descriptor).st_mode)
+            for descriptor in kwargs["pass_fds"]
+        ]
         return ExitedProcess()
 
     monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
@@ -566,6 +672,124 @@ def test_foreground_starts_server_in_an_owned_process_group(
     ) == 0
     assert captured["arguments"] == [str(server)]
     assert captured["kwargs"]["start_new_session"] is True
+    assert len(captured["kwargs"]["pass_fds"]) == 1
+    assert captured["passed_fd_modes"] == [stat.S_IFREG]
+
+
+def test_wrapper_sigkill_leaves_child_lock_blocking_a_replacement_writer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mail"
+    root.mkdir()
+    (root / "archive").mkdir()
+    (root / "signals").mkdir()
+    (root / "storage.sqlite3").touch()
+    project = tmp_path / "project"
+    project.mkdir()
+    port = _free_port()
+    env_file = _environment(tmp_path / "mail.env", root, port=port)
+    server_shim, child_pid_file = _pid_recording_server(tmp_path)
+    command = _service_command(root, env_file, server_executable=server_shim)
+    wrapper = subprocess.Popen(
+        command,
+        env=_runtime_environment(env_file),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child_pid: int | None = None
+    replacement: subprocess.Popen[str] | None = None
+    try:
+        _wait_port(port, present=True)
+        asyncio.run(_touch_real_writer(port, project))
+        child_pid = int(child_pid_file.read_text(encoding="utf-8").strip())
+        assert child_pid != wrapper.pid
+
+        wrapper.kill()
+        assert wrapper.wait(timeout=5) == -signal.SIGKILL
+        _wait_port(port, present=True)
+
+        replacement = subprocess.Popen(
+            command,
+            env=_runtime_environment(env_file),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _, replacement_stderr = replacement.communicate(timeout=5)
+
+        assert replacement.returncode == 1
+        assert "another service process owns this state root" in replacement_stderr
+        assert int(child_pid_file.read_text(encoding="utf-8").strip()) == child_pid
+        asyncio.run(_touch_real_writer(port, project))
+    finally:
+        if replacement is not None and replacement.poll() is None:
+            replacement.kill()
+            replacement.wait(timeout=5)
+        if child_pid is not None:
+            _stop_process_group(child_pid, port=port)
+        _wait_port(port, present=False)
+
+
+def test_missing_lock_inheritance_mutant_allows_two_real_writers(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mail"
+    root.mkdir()
+    (root / "archive").mkdir()
+    (root / "signals").mkdir()
+    (root / "storage.sqlite3").touch()
+    project = tmp_path / "project"
+    project.mkdir()
+    first_port = _free_port()
+    second_port = _free_port()
+    first_env = _environment(tmp_path / "first.env", root, port=first_port)
+    second_env = _environment(tmp_path / "second.env", root, port=second_port)
+    lock_path = root / "runtime" / "authority.lock"
+    lock_path.parent.mkdir()
+    lock_handle = lock_path.open("a+")
+    fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    server = Path(sys.executable).parent / "agentstack-mail"
+    # This is the exact original mutant: the wrapper owns the lock but does not
+    # pass its descriptor to the real server child.
+    first = subprocess.Popen(
+        [str(server)],
+        env=_runtime_environment(first_env),
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    second: subprocess.Popen[str] | None = None
+    try:
+        _wait_port(first_port, present=True)
+        asyncio.run(_touch_real_writer(first_port, project))
+        lock_handle.close()
+
+        second = subprocess.Popen(
+            _service_command(root, second_env),
+            env=_runtime_environment(second_env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _wait_port(second_port, present=True)
+        asyncio.run(_touch_real_writer(second_port, project))
+
+        assert _port_open(first_port)
+        assert _port_open(second_port)
+        assert first.poll() is None
+        assert second.poll() is None
+    finally:
+        if not lock_handle.closed:
+            lock_handle.close()
+        if second is not None and second.poll() is None:
+            second.send_signal(signal.SIGTERM)
+            second.wait(timeout=15)
+        if first.poll() is None:
+            _stop_process_group(first.pid, port=first_port)
+        _wait_port(first_port, present=False)
+        _wait_port(second_port, present=False)
 
 
 def test_process_group_shutdown_escalates_and_reaps_direct_child(

@@ -58,6 +58,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     ).strip()
     port = args.port if args.port is not None else settings.http.port
     path = args.path if args.path is not None else settings.http.path
+    if settings.agent_name_enforcement_mode != "passthrough":
+        raise RuntimeError(
+            "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough is required"
+        )
     if not _is_loopback_host(host):
         raise RuntimeError(
             "the first AgentStack Mail HTTP entry point is loopback-only; "

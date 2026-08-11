@@ -23,6 +23,7 @@ def _settings(
             bearer_token=bearer_token,
             jwt_enabled=jwt_enabled,
         ),
+        agent_name_enforcement_mode="passthrough",
         log_level="INFO",
     )
 
@@ -134,6 +135,22 @@ def test_cli_non_loopback_override_is_rejected_before_build(
 
     with pytest.raises(RuntimeError, match="loopback-only"):
         cli.main(["--host", "0.0.0.0"])
+
+
+def test_cli_rejects_non_passthrough_identity_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    settings.agent_name_enforcement_mode = "coerce"
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli,
+        "_build_mcp_server",
+        lambda: (_ for _ in ()).throw(AssertionError("must reject before build")),
+    )
+
+    with pytest.raises(RuntimeError, match="passthrough is required"):
+        cli.main([])
 
 
 @pytest.mark.parametrize(
