@@ -104,6 +104,32 @@ artifacts and creates a separate write-once verifier receipt. A subsequent
 `--check-only` call additionally requires the verifier-receipt SHA and repeats
 the computation without changing either receipt or the evidence tree.
 
+`agentstack-mail-evidence restore-rehearsal` is the bounded observer for an
+already accepted production backup family. The caller must pin the canonical
+path, `PRESENT`/`ABSENT` state, SHA-256, size, and mode of main, WAL, and SHM.
+The observer opens every present source once with `O_RDONLY`/`O_NOFOLLOW`,
+passes only those descriptors to an isolated worker, and never lets the worker
+reopen the accepted paths. The worker makes its own copy, consumes a migration-
+generated manifest and cold-backup receipt, performs a non-no-op restore, then
+starts the exact installed candidate wheel on an isolated port. The same
+observer records the read-only production prefix before and after, sampled
+process-tree/lsof isolation, 24-tool API readiness, exact logical/watermark
+state, and bounded SIGTERM shutdown.
+The restore worker has its own 120-second deadline because the accepted 67 MB
+family takes about 29 seconds to copy and verify; candidate readiness,
+SIGTERM wait, and endpoint close retain a separate 20-second deadline.
+
+Success is a two-file reader contract: the final JSON and its external SHA pin
+must both be regular mode-0400 files with `nlink=1`, and the pin must name and
+hash the JSON exactly. Prepared aliases are validated while both final links
+still have `nlink=2`; the second prepared-alias unlink is the only
+reader-visible commit transition. Directory fsync after that transition is
+best-effort because representing it as pre-commit would require a third
+reader-visible marker. Readers therefore run only after the producer command
+has completed. Before the transition, an I/O failure or interrupt leaves no
+canonical final name; an indeterminate final-unlink outcome is reconciled from
+the verified inode/link state or quarantined under a noncanonical name.
+
 Rehearsal success is only the canonical receipt after an observed zero exit and
 separate verification. A `.prepared` or `.unconfirmed` receipt, an ownership
 marker without the canonical receipt, or a nonzero/unknown command result is an
@@ -139,6 +165,23 @@ agentstack-mail-migrate cold-restore-rehearsal-verify --check-only \
   --expected-receipt-sha256 RECEIPT_SHA \
   --expected-verification-receipt-sha256 VERIFIER_SHA \
   --expected-run-id RUN_UUID --expected-candidate-commit FULL_SHA
+agentstack-mail-evidence restore-rehearsal \
+  --run-dir ABSENT_RUN --receipt FINAL_JSON \
+  --receipt-sha256 EXTERNAL_PIN --wheel CANDIDATE_WHEEL \
+  --candidate-repo CLEAN_REPO --candidate-commit FULL_SHA \
+  --backup-main MAIN --backup-main-state PRESENT \
+  --backup-main-sha256 MAIN_SHA --backup-main-size MAIN_SIZE \
+  --backup-main-mode MAIN_MODE \
+  --backup-wal WAL --backup-wal-state PRESENT \
+  --backup-wal-sha256 WAL_SHA --backup-wal-size WAL_SIZE \
+  --backup-wal-mode WAL_MODE \
+  --backup-shm SHM --backup-shm-state PRESENT \
+  --backup-shm-sha256 SHM_SHA --backup-shm-size SHM_SIZE \
+  --backup-shm-mode SHM_MODE --production-db PRODUCTION_DB \
+  --expected-logical-sha256 LOGICAL_SHA \
+  --expected-message-max-id MAX_ID \
+  --expected-message-sha256 MESSAGE_SHA --port ISOLATED_PORT \
+  --worker-timeout-seconds 120 --timeout-seconds 20
 ```
 
 Identical state is a write-free no-op; an active SQLite writer, corrupt input,
@@ -191,14 +234,22 @@ identity exactly.
 Port 8765 is permitted by the pure environment validator so an operator can
 keep existing MCP client URLs unchanged. It is not permitted unconditionally
 at service start. A same-port start requires the exact `/api/` path and a
-configured `AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL`; the product does not embed a
-machine-specific legacy label. `start` rejects a loaded legacy job, an unknown
-legacy job state, or any 8765 listener that is not a direct child of the exact
-owned new launchd wrapper. Its error tells the operator to boot out the legacy
-job and verify the port is free. Port 18765 remains available for isolated
-rehearsals. `status: job_loaded` is still not MCP readiness: the production
-runbook probes the distributed `http://127.0.0.1:8765/api/` path and expected
-database before any client is allowed to write.
+configured `AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL`. It also requires
+`AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT` and its externally pinned
+`AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256`. Before its first `launchctl`
+call, `start` verifies that the write-once receipt has that SHA and binds the
+configured label to its cutover-eligible `definition.label`; the product does
+not embed a machine-specific legacy label. `start` rejects a loaded legacy job,
+an unknown legacy job state, or any 8765 listener that is not a direct child of
+the exact owned new launchd wrapper. Its error tells the operator to boot out
+the legacy job and verify the port is free. Port 18765 remains available for
+isolated rehearsals. `status: job_loaded` is still not MCP readiness. A
+same-port `start` returns success only after two stable wrapper/listener/legacy
+observations enclose an exact health probe to the distributed
+`http://127.0.0.1:8765/api/` path and configured database URL. That health call
+is process/config readiness, not a live database read. The production runbook
+therefore makes a known identity's read-only `whois` on the same distributed
+URL the mandatory cutover-success gate before any client is allowed to write.
 
 The HTTP boundary pins Uvicorn 0.52.1 because its graceful SIGTERM workaround
 depends on that version's signal-capture behavior. Runtime startup rejects a

@@ -45,12 +45,189 @@ def _wait_port(port: int, *, present: bool, timeout: float = 10.0) -> None:
 
 def test_terminal_receipt_is_canonical_exclusive_and_read_only(tmp_path: Path) -> None:
     receipt = tmp_path / "receipt.json"
-    evidence._write_terminal(receipt, {"z": 1, "a": "日本語"})
+    digest = evidence._write_terminal(receipt, {"z": 1, "a": "日本語"})
 
     assert receipt.read_bytes() == '{"a":"日本語","z":1}\n'.encode()
+    assert digest == hashlib.sha256(receipt.read_bytes()).hexdigest()
     assert receipt.stat().st_mode & 0o777 == 0o400
     with pytest.raises(FileExistsError):
         evidence._write_terminal(receipt, {"replacement": True})
+
+
+@pytest.mark.parametrize("failure_call", [1, 2])
+def test_terminal_receipt_fsync_failure_leaves_no_canonical_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_call: int,
+) -> None:
+    receipt = tmp_path / "receipt.json"
+    real_fsync = evidence.os.fsync
+    calls = 0
+
+    def fail_selected(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise OSError("injected fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(evidence.os, "fsync", fail_selected)
+
+    with pytest.raises(OSError, match="injected fsync failure"):
+        evidence._write_terminal(receipt, {"status": "passed"})
+
+    assert not receipt.exists()
+    assert len(list(tmp_path.glob(".receipt.json.*.unconfirmed"))) == 1
+
+
+def test_terminal_receipt_digest_failure_precedes_canonical_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setattr(
+        evidence,
+        "_sha256_bytes",
+        lambda _payload: (_ for _ in ()).throw(OSError("digest failed")),
+    )
+
+    with pytest.raises(OSError, match="digest failed"):
+        evidence._write_terminal(receipt, {"status": "passed"})
+
+    assert not receipt.exists()
+
+
+def test_terminal_receipt_interrupt_quarantines_canonical_success_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setattr(
+        evidence.os,
+        "fsync",
+        lambda _descriptor: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        evidence._write_terminal(receipt, {"status": "passed"})
+
+    assert not receipt.exists()
+    assert len(list(tmp_path.glob(".receipt.json.*.unconfirmed"))) == 1
+
+
+@pytest.mark.parametrize("failure_type", (OSError, KeyboardInterrupt))
+def test_terminal_receipt_open_mutation_then_raise_quarantines_canonical_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[BaseException],
+) -> None:
+    receipt = tmp_path / "receipt.json"
+    real_open = evidence.os.open
+    injected = False
+
+    def open_then_raise(path: object, flags: int, mode: int = 0o777) -> int:
+        nonlocal injected
+        descriptor = real_open(path, flags, mode)
+        if Path(path) == receipt and flags & evidence.os.O_EXCL and not injected:
+            injected = True
+            evidence.os.close(descriptor)
+            raise failure_type("injected after terminal open mutation")
+        return descriptor
+
+    monkeypatch.setattr(evidence.os, "open", open_then_raise)
+    with pytest.raises(failure_type, match="after terminal open mutation"):
+        evidence._write_terminal(receipt, {"status": "passed"})
+
+    assert injected
+    assert not receipt.exists()
+    assert len(list(tmp_path.glob(".receipt.json.*.unconfirmed"))) == 1
+
+
+@pytest.mark.parametrize("failure_type", (OSError, KeyboardInterrupt))
+def test_terminal_set_call_return_interrupt_quarantines_current_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[BaseException],
+) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    real_write = evidence._write_terminal
+    injected = False
+
+    def write_then_raise(path: Path, value: object) -> str:
+        nonlocal injected
+        digest = real_write(path, value)
+        if path == first and not injected:
+            injected = True
+            raise failure_type("injected after terminal call return")
+        return digest
+
+    monkeypatch.setattr(evidence, "_write_terminal", write_then_raise)
+    with pytest.raises(failure_type, match="after terminal call return"):
+        evidence._publish_terminal_set(
+            ((first, {"status": "passed"}), (second, {"status": "passed"}))
+        )
+
+    assert injected
+    assert not first.exists()
+    assert not second.exists()
+    assert len(list(tmp_path.glob(".first.json.*.unconfirmed"))) == 1
+
+
+def test_terminal_set_failure_quarantines_earlier_canonical_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    real_write = evidence._write_terminal
+    calls = 0
+
+    def fail_second(path: Path, value: object) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("second publication failed")
+        return real_write(path, value)
+
+    monkeypatch.setattr(evidence, "_write_terminal", fail_second)
+
+    with pytest.raises(OSError, match="second publication failed"):
+        evidence._publish_terminal_set(
+            ((first, {"status": "passed"}), (second, {"status": "passed"}))
+        )
+
+    assert not first.exists()
+    assert not second.exists()
+    assert len(list(tmp_path.glob(".first.json.*.unconfirmed"))) == 1
+
+
+def test_terminal_set_interrupt_quarantines_earlier_canonical_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    real_write = evidence._write_terminal
+    calls = 0
+
+    def interrupt_second(path: Path, value: object) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt()
+        return real_write(path, value)
+
+    monkeypatch.setattr(evidence, "_write_terminal", interrupt_second)
+
+    with pytest.raises(KeyboardInterrupt):
+        evidence._publish_terminal_set(
+            ((first, {"status": "passed"}), (second, {"status": "passed"}))
+        )
+
+    assert not first.exists()
+    assert not second.exists()
+    assert len(list(tmp_path.glob(".first.json.*.unconfirmed"))) == 1
 
 
 def test_listener_owner_query_finds_only_the_isolated_server(tmp_path: Path) -> None:

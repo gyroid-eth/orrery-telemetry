@@ -27,6 +27,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from urllib.parse import unquote, urlparse
 
 
@@ -42,6 +44,10 @@ class ServiceError(RuntimeError):
     """A service artifact or ownership check failed."""
 
 
+class HandoffConflictError(ServiceError):
+    """A same-port observation found another authority; retrying is unsafe."""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     host: str
@@ -52,6 +58,8 @@ class RuntimeConfig:
     signals: Path
     state_root: Path
     legacy_launchd_label: str | None
+    legacy_launchd_receipt: Path | None
+    legacy_launchd_receipt_sha256: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +196,25 @@ def runtime_config(env_file: Path, state_root: Path) -> RuntimeConfig:
     )
     if legacy_launchd_label is not None:
         legacy_launchd_label = _external_launchd_label(legacy_launchd_label)
+    legacy_receipt_raw = values.get(
+        "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT", ""
+    ).strip()
+    legacy_launchd_receipt = Path(legacy_receipt_raw).expanduser() if legacy_receipt_raw else None
+    legacy_launchd_receipt_sha256 = (
+        values.get("AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256", "").strip()
+        or None
+    )
+    if (legacy_launchd_receipt is None) != (legacy_launchd_receipt_sha256 is None):
+        raise ServiceError(
+            "legacy launchd receipt path and SHA-256 must be configured together"
+        )
+    if legacy_launchd_receipt is not None and not legacy_launchd_receipt.is_absolute():
+        raise ServiceError("legacy launchd receipt must be an absolute path")
+    if legacy_launchd_receipt_sha256 is not None and (
+        len(legacy_launchd_receipt_sha256) != 64
+        or set(legacy_launchd_receipt_sha256) - set("0123456789abcdef")
+    ):
+        raise ServiceError("legacy launchd receipt SHA-256 must be lowercase hex")
     mode = values.get("AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE")
     if mode != "passthrough":
         raise ServiceError(
@@ -247,6 +274,8 @@ def runtime_config(env_file: Path, state_root: Path) -> RuntimeConfig:
         signals=signals,
         state_root=state_root,
         legacy_launchd_label=legacy_launchd_label,
+        legacy_launchd_receipt=legacy_launchd_receipt,
+        legacy_launchd_receipt_sha256=legacy_launchd_receipt_sha256,
     )
 
 
@@ -483,26 +512,40 @@ def _parse_launchd_record(output: str) -> tuple[str | None, str | None, list[str
 
 
 def _parse_launchd_pid(output: str) -> int | None:
+    pids: list[int] = []
     for line in output.splitlines():
         stripped = line.strip()
         if stripped.startswith("pid = "):
             try:
                 pid = int(stripped[6:].strip())
             except ValueError:
-                return None
-            return pid if pid > 0 else None
-    return None
+                raise ServiceError("launchd returned a malformed wrapper PID") from None
+            if pid <= 0:
+                raise ServiceError("launchd returned a non-positive wrapper PID")
+            pids.append(pid)
+    if len(pids) > 1:
+        raise ServiceError("launchd returned multiple wrapper PIDs")
+    return pids[0] if pids else None
 
 
-def _listener_process_ids(port: int) -> list[int]:
+def _listener_process_ids(
+    port: int,
+    *,
+    timeout_seconds: float = 5.0,
+) -> list[int]:
     executable = shutil.which("lsof") or "/usr/sbin/lsof"
-    result = subprocess.run(
-        [executable, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    try:
+        result = subprocess.run(
+            [executable, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServiceError(
+            f"cannot inspect listeners on port {port}: {exc}"
+        ) from exc
     if result.returncode == 1 and not result.stdout.strip():
         return []
     if result.returncode != 0:
@@ -515,15 +558,24 @@ def _listener_process_ids(port: int) -> list[int]:
         raise ServiceError(f"listener inspection returned an invalid PID for port {port}") from exc
 
 
-def _process_parent_pid(process_id: int) -> int:
+def _process_parent_pid(
+    process_id: int,
+    *,
+    timeout_seconds: float = 5.0,
+) -> int:
     executable = shutil.which("lsof") or "/usr/sbin/lsof"
-    result = subprocess.run(
-        [executable, "-nP", "-p", str(process_id), "-FpR"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    try:
+        result = subprocess.run(
+            [executable, "-nP", "-p", str(process_id), "-FpR"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServiceError(
+            f"cannot inspect parent of listener PID {process_id}: {exc}"
+        ) from exc
     if result.returncode != 0:
         raise ServiceError(
             f"cannot inspect parent of listener PID {process_id}: {result.stderr.strip()}"
@@ -541,6 +593,78 @@ def _process_parent_pid(process_id: int) -> int:
     return parent
 
 
+def _mcp_health_probe(
+    config: RuntimeConfig,
+    *,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    """Read the exact distributed MCP path without changing coordination state."""
+
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": "service-start-readiness",
+            "method": "tools/call",
+            "params": {"name": "health_check", "arguments": {}},
+        }
+    ).encode("utf-8")
+    endpoint = f"http://{config.host}:{config.port}{config.path}"
+    request = urllib_request.Request(
+        endpoint,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except (OSError, UnicodeError, urllib_error.URLError) as exc:
+        raise ServiceError(f"MCP readiness request failed at {endpoint}: {exc}") from exc
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ServiceError("MCP readiness returned malformed JSON") from exc
+    if not isinstance(envelope, dict) or "error" in envelope:
+        raise ServiceError("MCP readiness returned a JSON-RPC error")
+    result = envelope.get("result")
+    if not isinstance(result, dict) or result.get("isError") is True:
+        raise ServiceError("MCP readiness returned a failed tool result")
+    health = result.get("structuredContent")
+    if health is None:
+        for block in result.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "text":
+                try:
+                    health = json.loads(block.get("text") or "")
+                except json.JSONDecodeError as exc:
+                    raise ServiceError(
+                        "MCP readiness returned malformed text content"
+                    ) from exc
+                break
+    expected_database = f"sqlite+aiosqlite:///{config.database}"
+    if health != {
+        "status": "ok",
+        "environment": health.get("environment") if isinstance(health, dict) else None,
+        "http_host": config.host,
+        "http_port": config.port,
+        "database_url": expected_database,
+    }:
+        raise ServiceError("MCP readiness did not match the expected path and database")
+    return {
+        "status": "verified",
+        "endpoint": endpoint,
+        "http_host": config.host,
+        "http_port": config.port,
+        "database_url": expected_database,
+    }
+
+
 def _launchctl_not_found(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode == 113
 
@@ -552,13 +676,17 @@ def _launchctl(
 ) -> subprocess.CompletedProcess[str]:
     if runner is None:
         runner = subprocess.run
-    return runner(
-        ["launchctl", *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        return runner(
+            ["launchctl", *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        operation = arguments[0] if arguments else "request"
+        raise ServiceError(f"launchctl {operation} could not complete: {exc}") from exc
 
 
 def require_rehearsal_job_absent(
@@ -637,11 +765,17 @@ def _compensate_bootstrap(
     label: str,
     runner: Runner,
 ) -> str:
-    current = service_status(ownership_path, label=label, runner=runner)
+    try:
+        current = service_status(ownership_path, label=label, runner=runner)
+    except ServiceError as exc:
+        return f"loaded job could not be inspected for compensation: {exc}"
     if current["status"] != "job_loaded" or not current["owned"]:
         return "loaded job could not be proven owned; no bootout attempted"
     identity = f"gui/{os.getuid()}/{label}"
-    bootout = _launchctl(["bootout", identity], runner=runner)
+    try:
+        bootout = _launchctl(["bootout", identity], runner=runner)
+    except ServiceError as exc:
+        return f"owned compensation bootout could not complete: {exc}"
     if bootout.returncode != 0:
         return f"owned compensation bootout failed: {bootout.stderr.strip()}"
     try:
@@ -653,6 +787,27 @@ def _compensate_bootstrap(
     except ServiceError as exc:
         return f"owned compensation bootout did not reach stopped state: {exc}"
     return "owned bootstrap was compensated and verified stopped"
+
+
+def _safe_compensate_bootstrap(
+    ownership_path: Path,
+    *,
+    label: str,
+    runner: Runner,
+) -> str:
+    """Attempt compensation without allowing a second exception to mask the first."""
+
+    try:
+        return _compensate_bootstrap(
+            ownership_path,
+            label=label,
+            runner=runner,
+        )
+    except BaseException as exc:
+        return (
+            "compensation itself did not complete: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 def _wait_for_service_stopped(
@@ -698,10 +853,243 @@ def _wait_for_service_stopped(
         time.sleep(0.05)
 
 
+def _verified_legacy_launchd_receipt(config: RuntimeConfig) -> dict[str, Any]:
+    """Bind the configured legacy label to one sealed C1 definition receipt."""
+
+    label = config.legacy_launchd_label
+    receipt_path = config.legacy_launchd_receipt
+    expected_sha256 = config.legacy_launchd_receipt_sha256
+    if label is None or receipt_path is None or expected_sha256 is None:
+        raise ServiceError(
+            "same-port production start requires the legacy launchd label, sealed "
+            "receipt path, and receipt SHA-256"
+        )
+    try:
+        resolved = receipt_path.resolve(strict=True)
+        info = receipt_path.lstat()
+    except OSError as exc:
+        raise ServiceError(f"legacy launchd receipt is unavailable: {receipt_path}") from exc
+    if resolved != receipt_path or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ServiceError(
+            "legacy launchd receipt must be one canonical, non-linked regular file"
+        )
+    if stat.S_IMODE(info.st_mode) != 0o400:
+        raise ServiceError("legacy launchd receipt must retain write-once mode 0400")
+    try:
+        payload = receipt_path.read_bytes()
+    except OSError as exc:
+        raise ServiceError(f"legacy launchd receipt is unreadable: {receipt_path}") from exc
+    actual_sha256 = _sha256_bytes(payload)
+    if actual_sha256 != expected_sha256:
+        raise ServiceError("legacy launchd receipt SHA-256 does not match configuration")
+    try:
+        receipt = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ServiceError("legacy launchd receipt is malformed JSON") from exc
+    definition = receipt.get("definition") if isinstance(receipt, dict) else None
+    runtime = receipt.get("runtime") if isinstance(receipt, dict) else None
+    if (
+        not isinstance(definition, dict)
+        or not isinstance(runtime, dict)
+        or receipt.get("kind") != "legacy-launchd-definition"
+        or receipt.get("cutover_eligible") is not True
+        or definition.get("state") != "loaded"
+        or definition.get("loaded_path_program_arguments_match_plist") is not True
+        or runtime.get("listener_port") != LEGACY_PORT
+        or runtime.get("listener_is_wrapper_child") is not True
+        or runtime.get("network_requests_sent") != 0
+    ):
+        raise ServiceError("legacy launchd receipt is not cutover-eligible")
+    sealed_label = definition.get("label")
+    if sealed_label != label:
+        raise ServiceError(
+            "configured legacy launchd label does not match the sealed C1 receipt: "
+            f"configured={label!r}, sealed={sealed_label!r}"
+        )
+    return {
+        "status": "verified",
+        "path": str(receipt_path),
+        "sha256": actual_sha256,
+        "definition_label": sealed_label,
+    }
+
+
+def _require_legacy_job_absent(
+    legacy_label: str,
+    *,
+    runner: Runner,
+) -> dict[str, Any]:
+    identity = f"gui/{os.getuid()}/{legacy_label}"
+    result = _launchctl(["print", identity], runner=runner)
+    if _launchctl_not_found(result):
+        return {
+            "label": legacy_label,
+            "identity": identity,
+            "launchctl_print_returncode": result.returncode,
+            "state": "absent",
+        }
+    if result.returncode == 0:
+        raise HandoffConflictError(
+            f"same-port handoff blocked: bootout legacy launchd job {legacy_label!r} "
+            "and verify port 8765 is free before starting"
+        )
+    raise HandoffConflictError(
+        "same-port handoff blocked: legacy launchd job state is unknown; "
+        f"bootout {legacy_label!r} only after identifying its exact state"
+    )
+
+
+def _same_port_runtime_snapshot(
+    ownership_path: Path,
+    config: RuntimeConfig,
+    *,
+    label: str,
+    runner: Runner,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """Require one stable, ready authority across two topology observations."""
+
+    legacy_label = config.legacy_launchd_label
+    if legacy_label is None:
+        raise ServiceError("same-port runtime snapshot lacks a legacy launchd label")
+
+    def remaining(default: float) -> float:
+        if deadline is None:
+            return default
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise ServiceError("same-port readiness deadline expired")
+        return min(default, budget)
+
+    def bounded_runner(
+        arguments: Sequence[str],
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
+        requested = float(kwargs.get("timeout", 20.0))
+        kwargs["timeout"] = remaining(requested)
+        return runner(arguments, **kwargs)
+
+    first_job = service_status(ownership_path, label=label, runner=bounded_runner)
+    if (
+        first_job["status"] != "job_loaded"
+        or not first_job["owned"]
+        or first_job.get("environment_drift") is not False
+    ):
+        raise ServiceError("same-port new launchd job is not exact and drift-free")
+    wrapper_pid = first_job.get("launchd_pid")
+    if isinstance(wrapper_pid, bool) or not isinstance(wrapper_pid, int):
+        raise ServiceError("same-port new launchd wrapper PID is unavailable")
+
+    first_legacy = _require_legacy_job_absent(
+        legacy_label,
+        runner=bounded_runner,
+    )
+    first_listeners = _listener_process_ids(
+        LEGACY_PORT,
+        timeout_seconds=remaining(5.0),
+    )
+    if not first_listeners:
+        raise ServiceError(
+            "same-port readiness requires exactly one listener on port 8765"
+        )
+    if len(first_listeners) != 1:
+        raise HandoffConflictError(
+            "same-port readiness found multiple listeners on port 8765"
+        )
+    listener_pid = first_listeners[0]
+    if _process_parent_pid(
+        listener_pid,
+        timeout_seconds=remaining(5.0),
+    ) != wrapper_pid:
+        raise HandoffConflictError(
+            f"same-port listener PID {listener_pid} is not a child of the owned "
+            "launchd wrapper"
+        )
+
+    health = _mcp_health_probe(config, timeout_seconds=remaining(2.0))
+
+    second_job = service_status(ownership_path, label=label, runner=bounded_runner)
+    if (
+        second_job["status"] != "job_loaded"
+        or not second_job["owned"]
+        or second_job.get("environment_drift") is not False
+        or second_job.get("launchd_pid") != wrapper_pid
+    ):
+        raise ServiceError("same-port launchd identity changed during readiness")
+    second_legacy = _require_legacy_job_absent(
+        legacy_label,
+        runner=bounded_runner,
+    )
+    second_listeners = _listener_process_ids(
+        LEGACY_PORT,
+        timeout_seconds=remaining(5.0),
+    )
+    if second_listeners != [listener_pid]:
+        raise ServiceError("same-port listener identity changed during readiness")
+    if _process_parent_pid(
+        listener_pid,
+        timeout_seconds=remaining(5.0),
+    ) != wrapper_pid:
+        raise ServiceError(
+            "same-port listener parent changed during readiness"
+        )
+    remaining(0.0)
+    return {
+        "status": "verified",
+        "wrapper_pid": wrapper_pid,
+        "listener_pid": listener_pid,
+        "listener_observations": [first_listeners, second_listeners],
+        "legacy_observations": [first_legacy, second_legacy],
+        "mcp": health,
+    }
+
+
+def _wait_for_same_port_ready(
+    ownership_path: Path,
+    config: RuntimeConfig,
+    *,
+    label: str,
+    runner: Runner,
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
+    if timeout_seconds <= 0:
+        raise ServiceError("same-port readiness timeout must be positive")
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    last_error = "endpoint did not answer"
+    while time.monotonic() < deadline:
+        try:
+            snapshot = _same_port_runtime_snapshot(
+                ownership_path,
+                config,
+                label=label,
+                runner=runner,
+                deadline=deadline,
+            )
+        except HandoffConflictError:
+            raise
+        except ServiceError as exc:
+            last_error = str(exc)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+            continue
+        elapsed = time.monotonic() - started
+        if elapsed > timeout_seconds:
+            raise ServiceError("same-port readiness deadline expired after verification")
+        return {
+            **snapshot,
+            "bounded_ready_ms": round(elapsed * 1000, 3),
+            "deadline_seconds": timeout_seconds,
+        }
+    raise ServiceError(f"same-port readiness deadline expired: {last_error}")
+
+
 def _same_port_start_preflight(
     config: RuntimeConfig,
     current: Mapping[str, Any],
     *,
+    legacy_receipt: Mapping[str, Any],
     runner: Runner,
 ) -> dict[str, Any] | None:
     """Prevent the new launchd job from racing a legacy owner of port 8765."""
@@ -720,28 +1108,22 @@ def _same_port_start_preflight(
             "identity, boot it out, and retry"
         )
 
-    legacy_identity = f"gui/{os.getuid()}/{legacy_label}"
-    legacy = _launchctl(["print", legacy_identity], runner=runner)
-    if legacy.returncode == 0:
-        raise ServiceError(
-            f"same-port handoff blocked: bootout legacy launchd job {legacy_label!r} "
-            "and verify port 8765 is free before starting"
-        )
-    if not _launchctl_not_found(legacy):
-        raise ServiceError(
-            "same-port handoff blocked: legacy launchd job state is unknown; "
-            f"bootout {legacy_label!r} only after identifying its exact state"
-        )
+    legacy = _require_legacy_job_absent(legacy_label, runner=runner)
 
     listeners = _listener_process_ids(LEGACY_PORT)
     if current["status"] == "stopped":
         foreign = listeners
     else:
         wrapper_pid = current.get("launchd_pid")
-        if listeners and (isinstance(wrapper_pid, bool) or not isinstance(wrapper_pid, int)):
+        if isinstance(wrapper_pid, bool) or not isinstance(wrapper_pid, int):
             raise ServiceError(
-                "same-port handoff blocked: the owned launchd job has listeners but "
-                "its wrapper PID could not be proven"
+                "same-port handoff blocked: the owned launchd wrapper PID could not "
+                "be proven"
+            )
+        if len(listeners) != 1:
+            raise ServiceError(
+                "same-port handoff blocked: a loaded owned job must have exactly one "
+                "listener on port 8765"
             )
         foreign = [
             process_id
@@ -759,7 +1141,8 @@ def _same_port_start_preflight(
         "port": LEGACY_PORT,
         "path": config.path,
         "legacy_launchd_label": legacy_label,
-        "legacy_launchd_state": "absent",
+        "legacy_launchd_state": legacy["state"],
+        "legacy_launchd_receipt": dict(legacy_receipt),
         "listener_pids": listeners,
     }
 
@@ -782,11 +1165,17 @@ def service_start(
         Path(str(ownership["env_file"])),
         Path(str(ownership["state_root"])),
     )
+    legacy_receipt: dict[str, Any] | None = None
     if config.port == LEGACY_PORT:
         if label != LAUNCHD_LABEL:
             raise ServiceError(
                 "port 8765 is reserved for the production launchd identity; "
                 "use an isolated port for rehearsal"
+            )
+        if config.host != "127.0.0.1":
+            raise ServiceError(
+                "same-port production start requires "
+                "AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1"
             )
         if config.path != "/api/":
             raise ServiceError(
@@ -798,14 +1187,31 @@ def service_start(
                 "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL; configure the legacy job "
                 "identity, boot it out, and retry"
             )
+        legacy_receipt = _verified_legacy_launchd_receipt(config)
     current = service_status(ownership_path, label=label, runner=runner)
     if current["status"] not in {"job_loaded", "stopped"}:
         raise ServiceError("refusing to replace a foreign or unknown launchd job")
-    same_port_preflight = _same_port_start_preflight(config, current, runner=runner)
+    same_port_preflight = _same_port_start_preflight(
+        config,
+        current,
+        legacy_receipt=legacy_receipt or {},
+        runner=runner,
+    )
     if current["status"] == "job_loaded":
+        same_port_readiness = (
+            _wait_for_same_port_ready(
+                ownership_path,
+                config,
+                label=label,
+                runner=runner,
+            )
+            if same_port_preflight is not None
+            else None
+        )
         return {
             **current,
             "action": "noop",
+            "mcp_readiness": same_port_readiness or current["mcp_readiness"],
             **(
                 {"same_port_preflight": same_port_preflight}
                 if same_port_preflight is not None
@@ -819,88 +1225,92 @@ def service_start(
         ["enable", f"{domain}/{label}"],
         ["kickstart", f"{domain}/{label}"],
     )
-    bootstrapped = False
     bootstrap_outcome = "loaded"
     bootstrap_eio_recheck: dict[str, Any] | None = None
-    for arguments in commands:
-        result = _launchctl(arguments, runner=runner)
-        if result.returncode != 0:
-            if arguments[0] == "bootstrap" and result.returncode == errno.EIO:
-                try:
+    failure_prefix = "launchd service mutation outcome is unknown"
+    try:
+        for arguments in commands:
+            failure_prefix = f"launchctl {arguments[0]} outcome is unknown"
+            result = _launchctl(arguments, runner=runner)
+            if result.returncode != 0:
+                if arguments[0] == "bootstrap" and result.returncode == errno.EIO:
                     after_eio = service_status(
                         ownership_path,
                         label=label,
                         runner=runner,
                     )
-                except ServiceError as exc:
-                    raise ServiceError(
-                        "launchctl bootstrap returned EIO; the exact label may already "
-                        "be loaded, but its state could not be proven; no further "
-                        "launchd mutation was attempted"
-                    ) from exc
-                if after_eio["status"] == "job_loaded" and after_eio["owned"]:
-                    if after_eio.get("environment_drift") is not False:
-                        compensation = _compensate_bootstrap(
-                            ownership_path,
-                            label=label,
-                            runner=runner,
-                        )
+                    if after_eio["status"] == "job_loaded" and after_eio["owned"]:
+                        if after_eio.get("environment_drift") is not False:
+                            raise ServiceError(
+                                "launchctl bootstrap returned EIO and the exact loaded "
+                                "job has environment drift"
+                            )
+                        # EIO does not prove absence: an already-bootstrapped identity
+                        # is one known cause. Only the exact loaded definition is safe
+                        # to continue without issuing bootstrap a second time.
+                        bootstrap_outcome = "exact_job_already_loaded_after_eio"
+                        bootstrap_eio_recheck = after_eio
+                        continue
+                    if after_eio["status"] == "stopped":
                         raise ServiceError(
-                            "launchctl bootstrap returned EIO and the exact loaded job "
-                            f"has environment drift; {compensation}"
+                            "launchctl bootstrap returned EIO and the exact label "
+                            "remains absent; bootstrap did not establish the owned job"
                         )
-                    # EIO does not prove absence: an already-bootstrapped identity is
-                    # one known cause.  Only the exact loaded definition is safe to
-                    # continue without issuing bootstrap a second time.
-                    bootstrapped = True
-                    bootstrap_outcome = "exact_job_already_loaded_after_eio"
-                    bootstrap_eio_recheck = after_eio
-                    continue
-                if after_eio["status"] == "stopped":
                     raise ServiceError(
-                        "launchctl bootstrap returned EIO and the exact label remains "
-                        "absent; bootstrap did not establish the owned job"
+                        "launchctl bootstrap returned EIO but the loaded label is "
+                        "foreign or unknown; no further launchd mutation was attempted"
                     )
                 raise ServiceError(
-                    "launchctl bootstrap returned EIO but the loaded label is foreign "
-                    "or unknown; no further launchd mutation was attempted"
+                    f"launchctl {' '.join(arguments)} failed: "
+                    f"{result.stderr.strip()}"
                 )
-            compensation = (
-                _compensate_bootstrap(ownership_path, label=label, runner=runner)
-                if bootstrapped
-                else "bootstrap did not succeed; no compensation needed"
-            )
+        failure_prefix = "launchd service failed post-bootstrap verification"
+        started = service_status(ownership_path, label=label, runner=runner)
+        if started["status"] != "job_loaded" or not started["owned"]:
+            raise ServiceError("launchd job did not reach the exact owned job state")
+        if started.get("environment_drift") is not False:
             raise ServiceError(
-                f"launchctl {' '.join(arguments)} failed: {result.stderr.strip()}; "
-                f"{compensation}"
+                "launchd job reached the owned definition with environment drift"
             )
-        if arguments[0] == "bootstrap":
-            bootstrapped = True
-    started = service_status(ownership_path, label=label, runner=runner)
-    if started["status"] != "job_loaded" or not started["owned"]:
-        raise ServiceError("launchd job did not reach the exact owned job state")
-    if started.get("environment_drift") is not False:
-        compensation = _compensate_bootstrap(
+        same_port_readiness: dict[str, Any] | None = None
+        if same_port_preflight is not None:
+            same_port_readiness = _wait_for_same_port_ready(
+                ownership_path,
+                config,
+                label=label,
+                runner=runner,
+            )
+        return {
+            **started,
+            "action": "started",
+            "mcp_readiness": same_port_readiness or started["mcp_readiness"],
+            "bootstrap_outcome": bootstrap_outcome,
+            "bootstrap_preflight": current,
+            "bootstrap_eio_recheck": bootstrap_eio_recheck,
+            **(
+                {"same_port_preflight": same_port_preflight}
+                if same_port_preflight is not None
+                else {}
+            ),
+        }
+    except BaseException as exc:
+        # Every instruction after the first state-changing launchctl call stays
+        # inside this boundary, including result inspection and loop transitions.
+        compensation = _safe_compensate_bootstrap(
             ownership_path,
             label=label,
             runner=runner,
         )
-        raise ServiceError(
-            "launchd job reached the owned definition with environment drift; "
-            f"{compensation}"
-        )
-    return {
-        **started,
-        "action": "started",
-        "bootstrap_outcome": bootstrap_outcome,
-        "bootstrap_preflight": current,
-        "bootstrap_eio_recheck": bootstrap_eio_recheck,
-        **(
-            {"same_port_preflight": same_port_preflight}
-            if same_port_preflight is not None
-            else {}
-        ),
-    }
+        if isinstance(exc, ServiceError):
+            raise ServiceError(
+                f"{failure_prefix}: {exc}; {compensation}"
+            ) from exc
+        add_note = getattr(exc, "add_note", None)
+        if callable(add_note):
+            add_note(
+                f"{failure_prefix}; {compensation}"
+            )
+        raise
 
 
 def service_stop(

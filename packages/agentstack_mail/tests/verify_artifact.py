@@ -968,6 +968,7 @@ EXPECTED_POST_CUTOVER_TASK_IDS = [
     "d2-d3-worker-progress-diagnostics",
     "d2-d3-timeout-process-group-cleanup",
     "d10-diagnostic-liveness-timeout",
+    "external-process-boundary-hardening",
     "provenance-regression-sync",
     "reservation-performance-release-gate",
     "installer-core-integration",
@@ -987,7 +988,7 @@ EXPECTED_POST_CUTOVER_TASK_IDS = [
     "selected-pytest-evidence-executor-contract",
 ]
 EXPECTED_POST_CUTOVER_TASKS_SHA256 = (
-    "3979315d4d70c8218107980bbcb5d3986bcdc0bd0793f90723a2116ce065cae5"
+    "378d58944e2532d673fee438c80da59cb303f6d3db8f8878551d11c5c64e2cce"
 )
 EXPECTED_CURRENT_GATE_ACTIVATION_REQUIREMENTS_SHA256 = (
     "04e5aaa801bc35929d38d0008d23a7a0010d086e9e2831cac4bc2dd15360700a"
@@ -1033,6 +1034,7 @@ REQUIRED_RUNTIME_MODULES = {
     "model_normalize.py",
     "models.py",
     "rich_logger.py",
+    "restore_acceptance.py",
     "service.py",
     "storage.py",
     "utils.py",
@@ -1071,6 +1073,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d10.py",
     "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_migration.py",
+    "/tests/test_restore_acceptance.py",
     "/tests/test_consumer.py",
     "/tests/test_cutover_evidence.py",
     "/tests/test_service.py",

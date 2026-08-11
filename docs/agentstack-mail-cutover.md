@@ -9,7 +9,7 @@ agent:
 
 > **ここを越えると初回切替の手順では戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。将来の `post-authority-reverse-transform` は台帳に残すが、実装・rehearsal・別承認が済むまでは初回切替のrollback根拠にしない。
 
-> **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。**2–4分はC3のdata copy/verificationだけの実測**であり、自動再接続とoperational smokeを含む全静止時間は未測定である。
+> **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。例外は、maintenance shellがH9で実行するexact read-only `health_check`/`whois`と、H0で名前とsessionをsealした既存session 1つがH10で行う最初のread-only `health_check` 1回だけである。`fetch_inbox`、再試行、fallback、明示reconnectは例外に含めない。**2–4分はC3のdata copy/verificationだけの実測**であり、自動再接続とoperational smokeを含む全静止時間は未測定である。
 
 これは maintainer の Mac で後日、上から順に実行するための手順書であり、本番authority切替自体はまだ実行していない。切替前実測として、明示許可に束縛した試験専用label 1つのisolated launchd rehearsalと、maintainer承認下のlegacy production job 1回のstop/startだけを実行した。後者は同じplist・DB・endpointで再起動し、MCP設定・data・port 8765を変更していない。
 
@@ -20,13 +20,13 @@ maintainer承認下の本番legacy server 1回再起動で、listener消滅はst
 このlocalhost・単独利用の初回切替で、切替前に残す作業は次の4点だけである。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。4点が揃った後にだけ、authorityの4遷移を固定するcommitted testを追加する。
 
 1. production backupを、本番とcanonical path・symlink・inodeまで異なる故意破損済みの隔離targetへ非no-op復元すること。receiptの`target.kind=rehearsal-copy` / `production_source=false`、停止直前の最新行watermark、exact candidate PIDによるtarget DB familyのopen、起動後full logical snapshot一致を確認する。本番側はbyte不変ではなく、main/WAL/SHMの同一性、停止直前までのmessage prefix不変、通常の新着だけ、実演process treeが本番familyをopenしていないことを確認する。
-2. 旧`com.operator.mcp-agent-mail`のbootoutから新`org.orrery.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。
+2. final clean candidateへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成・独立検算したうえで、旧`com.operator.mcp-agent-mail`のbootoutから新`org.orrery.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。旧namespaceのreceiptは流用しない。
 3. 逆順のnew bootoutからlegacy bootstrapまでを、一つの不可分なrollbackとして実行できること。new labelのenabled overrideは正常な残留として記録すること。
 4. 利用側が新endpointで70個のpermission/hook selectorに承認prompt 0を確認すること。この確認は利用側担当が行い、PluckyEinsteinは重複実装しない。
 
 ### operator用1行チェックリスト（正本）
 
-ProOpusは次の順に1行ずつ実行し、生のstdout/stderr/rcを返す。ここでいう「不可分」はatomic syscallではなく、H3からH9までを別ticket・別operator・session再開点へ分けず、全consumerを黙らせた同じmaintenance shellで完走する運用契約である。任意のSTOPで通常運用を再開せず、first durable write前は対応するRBへ、write後はfix-forwardへ進む。
+ProOpusは次の順に1行ずつ実行し、生のstdout/stderr/rcを返す。ここでいう「不可分」はatomic syscallではなく、H3からH14までを別ticket・別operator・session再開点へ分けず、全consumerを黙らせた同じmaintenance shellで完走する運用契約である。任意のSTOPで通常運用を再開せず、first durable write前は対応するRBへ、write後はfix-forwardへ進む。
 
 | ID | 実行する1行 | 期待 | STOP |
 |---|---|---|---|
@@ -38,8 +38,8 @@ ProOpusは次の順に1行ずつ実行し、生のstdout/stderr/rcを返す。�
 | H5 | C2Bの`cold-backup` exact block | rc0、`status=backed_up`、外部pin生成 | receipt/pin不一致・staging残留 |
 | H6 | C3の`copy`と`verify` exact block | 両方rc0、6照合一致、migration baseline固定 | source drift・lock・partial publish |
 | H7 | `assert_legacy_writer_absent c4 && assert_new_writer_absent c4` | H4と同じ不在をfresh再取得 | C2の古い観測しかない |
-| H8 | C4の`$SERVICE_BIN start`とsame-port receipt assertion | rc0、new exact job loaded、legacy absent、preflight listener `[]`、path `/api/` | legacy loaded・foreign 8765・EIO未照合・receipt差異 |
-| H9 | C4の`status`と`bounded_mail_probe http://127.0.0.1:8765/api/ ...` | rc0、期待DB、既存identity、実配布pathでready | `/mcp`だけ成功・listenerだけopen・20秒超過 |
+| H8 | C4の`$SERVICE_BIN start`とsame-port receipt assertion | rc0、sealed C1 receipt SHA/label一致、new exact job loaded、legacy absent、preflight listener `[]`、path `/api/`。これはprocess/configの暫定readyであり切替成功ではない | receipt欠落・SHA/label差異・legacy loaded・foreign 8765・EIO未照合 |
+| H9 | C4の`status`と`bounded_mail_probe http://127.0.0.1:8765/api/ ...` | health 200の後、既知identityのexact `whois`がrc0、期待DB、実配布pathでlive read成功。ここが最初の必須切替成功gate | `/mcp`だけ成功・listener/healthだけ成功・whois不一致・20秒超過ならH10へ進まずRB0 |
 | H10 | 既存session一つの最初のread-only再試行とclient設定seal比較 | 明示reconnect/restartなしで成功、key/URL/token/mtime/content不変 | config変化・手動fallbackが必要 |
 | H11 | maintainerがfirst durable write境界を再確認 | 明示continue | 未確認 |
 | H12 | 専用sender/recipientの1通send/readとDB/archive edge照合 | request/response name、本文、edge、canonical file一致 | 一項目でも不一致 |
@@ -59,7 +59,7 @@ first durable write前にH3以降で止まった場合は、次を一続きで�
 
 ### production backupの復元実演（再実行待ち）
 
-ProOpusが2026-08-11 21:57 JSTに作成した`/private/tmp/agent-mail-backup-20260811-215721.sqlite3`は67,293,184 bytes、SHA-256 `c80bdf9ddb59ab712c0ef23a60be08fbe8ec78f4fa523f02918fb1bae35eea02`、`integrity_check: ok`だった。このsealed backupの正しいfull logical SHA-256は`afb50ad0a331b233c865db8d0e9512248c9ef5d75aa129c859198d9002317818`、message watermarkは`max_id=8829`、列順を固定した11-column typed row digestは`2fbec7a7ae95dcecb3d785ce7c94b90d9b4ad95ac5b28ef42ea932655c8861c5`である。以前記載した`2c3164...`はcanonicalization recipeと結び付かず、撤回する。
+ProOpusが2026-08-11 21:57 JSTに作成し、定期削除対象外の`/Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3`へ退避したbackupは67,293,184 bytes、SHA-256 `c80bdf9ddb59ab712c0ef23a60be08fbe8ec78f4fa523f02918fb1bae35eea02`、`integrity_check: ok`だった。このsealed backupの正しいfull logical SHA-256は`afb50ad0a331b233c865db8d0e9512248c9ef5d75aa129c859198d9002317818`、message watermarkは`max_id=8829`、observer実装の列順固定11-column typed-array canonicalizationで再計算したrow digestは`1cc1f6636c3755d1404c2df953b64cc00e0e8a168ae75b1ccd2dfeada1430713`である。以前記載した`2c3164...`と`2fbec7...`はこの実装のcanonicalization recipeと一致しないため撤回する。
 
 `/private/tmp/plucky-restore-accept.fAPn0f`の予備実演は、故意破損targetへの非no-op restore、isolated serverによるtarget family open、24-tool list、full logical snapshot、正常SIGTERMまでは観測した。しかしraw observationを一つのwrite-once artifactへ保存せず、production不変条件も通常通信可能なDBへbyte equalityを要求していた。そのため合格証跡としては**HOLD**であり、完了扱いしない。
 
@@ -67,11 +67,139 @@ ProOpusが2026-08-11 21:57 JSTに作成した`/private/tmp/agent-mail-backup-202
 
 1. 本番main/WAL/SHMのcanonical path、存在集合、dev/inode、mode、nlink、no-symlinkをbefore/afterで一致させる。
 2. beforeの`max_id`以下に対する列順固定11-column typed digestをbefore/afterで一致させる。新規IDは空または`before_max+1..after_max`の連続列とし、count差と新規ID数を一致させる。
-3. restoreとisolated serverの全process treeが本番DB familyを一度もopenせず、候補serverだけが隔離target main/WAL/SHMをopenする。
+3. 採取する全lsof sampleでrestoreとisolated serverの全process treeによる本番DB familyのopenが観測されず、候補serverだけが隔離target main/WAL/SHMをopenする。
 4. 故意破損targetが`file is not a database`で失敗した後、`cold-restore`のreceiptが`target.kind=rehearsal-copy`、`production_source=false`を持ち、復元後と起動中のfull logical SHAおよびwatermarkがsealed backupと一致する。
 5. 実配布wheelの候補serverが隔離portでexact 24 toolsと期待DB URLを返し、SIGTERM後20秒以内にrc 0、port close、子process 0へ収束する。
 
 raw JSONは列名順、canonicalization recipe、入力row digest、candidate commit、wheel SHA、固定入力3点のSHA、production before/after、process-tree/lsof観測を含む。全条件通過後だけ0400のwrite-once artifactと外部SHA pinを発行する。再実行前にcandidateをcommitするとidentityが変わるため、手順書とproductのclean commitを先に固定する。
+
+内部reviewだけでは復元実演のHOLDを解除しない。producerのclean candidateを元の照合子が先に承認した後、ProOpusが次のblockを一度だけ実行する。照合子が受け取る正本は`$RESTORE_ACCEPTANCE_RECEIPT`と`$RESTORE_ACCEPTANCE_PIN`の2 fileだけであり、command stdout、run directory、`.prepared`、`.unconfirmed`、後付け転記を合格証跡に使わない。readerは両fileがregular・mode 0400・nlink 1で、pinがreceiptのSHA-256とbasenameに一致する場合だけcommit済みとみなす。
+
+```sh
+set -eu
+REPO='/Users/operator/OSS/worktrees/PluckyMailDifferential'
+MAINT='/Users/operator/.agentstack/cutover-maintenance'
+UV_BIN='/Users/operator/.local/bin/uv'
+CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
+CANDIDATE_ARTIFACT_ROOT="$MAINT/final-candidate-$CANDIDATE_COMMIT"
+CANDIDATE_DIST="$CANDIDATE_ARTIFACT_ROOT/dist"
+CANDIDATE_VENV="$CANDIDATE_ARTIFACT_ROOT/venv"
+UV_CACHE_DIR="$MAINT/uv-cache"
+EVIDENCE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-evidence"
+RESTORE_ACCEPTANCE_PARENT="$MAINT/production-backup-restore-acceptance-$CANDIDATE_COMMIT"
+RESTORE_ACCEPTANCE_RUN="$RESTORE_ACCEPTANCE_PARENT/run"
+RESTORE_ACCEPTANCE_RECEIPT="$RESTORE_ACCEPTANCE_PARENT/final.json"
+RESTORE_ACCEPTANCE_PIN="$RESTORE_ACCEPTANCE_PARENT/final.sha256"
+RESTORE_ACCEPTANCE_COMMAND="$MAINT/production-backup-restore-acceptance-command.json"
+test -x "$UV_BIN"
+test -z "$(git -C "$REPO" status --porcelain)"
+test ! -e "$CANDIDATE_ARTIFACT_ROOT" && test ! -L "$CANDIDATE_ARTIFACT_ROOT"
+test ! -e "$RESTORE_ACCEPTANCE_PARENT" && test ! -L "$RESTORE_ACCEPTANCE_PARENT"
+test ! -e "$RESTORE_ACCEPTANCE_COMMAND" && test ! -L "$RESTORE_ACCEPTANCE_COMMAND"
+install -d -m 700 "$MAINT" "$CANDIDATE_ARTIFACT_ROOT" "$CANDIDATE_DIST" \
+  "$UV_CACHE_DIR" "$RESTORE_ACCEPTANCE_PARENT"
+UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_BIN" build --wheel \
+  --out-dir "$CANDIDATE_DIST" "$REPO/packages/agentstack_mail" \
+  > "$CANDIDATE_ARTIFACT_ROOT/uv-build.txt" || exit 1
+CANDIDATE_WHEEL=$(python3 - "$CANDIDATE_DIST" <<'PY'
+import pathlib, sys
+wheels = sorted(pathlib.Path(sys.argv[1]).glob("agentstack_mail-*.whl"))
+assert len(wheels) == 1, wheels
+print(wheels[0])
+PY
+)
+UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_BIN" venv --python "$(command -v python3)" \
+  "$CANDIDATE_VENV" > "$CANDIDATE_ARTIFACT_ROOT/uv-venv.txt" || exit 1
+UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_BIN" pip install \
+  --python "$CANDIDATE_VENV/bin/python" "$CANDIDATE_WHEEL" \
+  > "$CANDIDATE_ARTIFACT_ROOT/uv-install.txt" || exit 1
+UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_BIN" pip check \
+  --python "$CANDIDATE_VENV/bin/python" \
+  > "$CANDIDATE_ARTIFACT_ROOT/uv-check.txt" || exit 1
+test -x "$EVIDENCE_BIN"
+test -f "$CANDIDATE_WHEEL" && test ! -L "$CANDIDATE_WHEEL"
+test -z "$(git -C "$REPO" status --porcelain)"
+shasum -a 256 "$CANDIDATE_WHEEL" \
+  > "$CANDIDATE_ARTIFACT_ROOT/candidate-wheel.sha256"
+
+"$EVIDENCE_BIN" restore-rehearsal \
+  --run-dir "$RESTORE_ACCEPTANCE_RUN" \
+  --receipt "$RESTORE_ACCEPTANCE_RECEIPT" \
+  --receipt-sha256 "$RESTORE_ACCEPTANCE_PIN" \
+  --wheel "$CANDIDATE_WHEEL" \
+  --candidate-repo "$REPO" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --backup-main /Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3 \
+  --backup-main-state PRESENT \
+  --backup-main-sha256 c80bdf9ddb59ab712c0ef23a60be08fbe8ec78f4fa523f02918fb1bae35eea02 \
+  --backup-main-size 67293184 \
+  --backup-main-mode 0644 \
+  --backup-wal /Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3-wal \
+  --backup-wal-state PRESENT \
+  --backup-wal-sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+  --backup-wal-size 0 \
+  --backup-wal-mode 0644 \
+  --backup-shm /Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3-shm \
+  --backup-shm-state PRESENT \
+  --backup-shm-sha256 fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb \
+  --backup-shm-size 32768 \
+  --backup-shm-mode 0644 \
+  --production-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --expected-logical-sha256 afb50ad0a331b233c865db8d0e9512248c9ef5d75aa129c859198d9002317818 \
+  --expected-message-max-id 8829 \
+  --expected-message-sha256 1cc1f6636c3755d1404c2df953b64cc00e0e8a168ae75b1ccd2dfeada1430713 \
+  --port 28770 \
+  --worker-timeout-seconds 120 \
+  --timeout-seconds 20 \
+  > "$RESTORE_ACCEPTANCE_COMMAND" || exit 1
+
+python3 - "$RESTORE_ACCEPTANCE_COMMAND" "$RESTORE_ACCEPTANCE_RECEIPT" \
+  "$RESTORE_ACCEPTANCE_PIN" "$CANDIDATE_COMMIT" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+command_arg, receipt_arg, pin_arg, candidate = sys.argv[1:]
+command_path = pathlib.Path(command_arg)
+receipt_path = pathlib.Path(receipt_arg)
+pin_path = pathlib.Path(pin_arg)
+command = json.loads(command_path.read_text(encoding="utf-8"))
+receipt_raw = receipt_path.read_bytes()
+receipt = json.loads(receipt_raw)
+pin_raw = pin_path.read_bytes()
+receipt_info = receipt_path.lstat()
+pin_info = pin_path.lstat()
+assert command["status"] == "completed"
+assert command["candidate_commit"] == candidate
+assert command["receipt"] == str(receipt_path)
+assert command["pin"] == str(pin_path)
+assert receipt["status"] == "passed"
+assert receipt["candidate_commit"] == candidate
+assert all(receipt["gates"].values())
+assert all(receipt["production"]["invariants"].values())
+assert receipt["observer"]["production_write_calls"] == 0
+assert receipt["observer"]["production_network_requests"] == 0
+assert receipt["deadlines"] == {
+    "restore_worker_seconds": 120,
+    "candidate_runtime_seconds": 20,
+}
+assert receipt["restore_worker"]["deadline_seconds"] == 120
+assert receipt["candidate_server"]["readiness"]["deadline_seconds"] == 20
+assert receipt["candidate_server"]["shutdown"]["deadline_seconds"] == 20
+assert receipt["candidate_server"]["shutdown"]["bounded_shutdown_ms"] <= 20000
+assert receipt["candidate_server"]["shutdown"]["endpoint"]["deadline_seconds"] <= 20
+assert receipt["publication_contract"]["commit_transition"] == (
+    "second_prepared_alias_unlink_returns"
+)
+for info in (receipt_info, pin_info):
+    assert stat.S_ISREG(info.st_mode)
+    assert not stat.S_ISLNK(info.st_mode)
+    assert stat.S_IMODE(info.st_mode) == 0o400
+    assert info.st_nlink == 1
+digest = hashlib.sha256(receipt_raw).hexdigest()
+assert command["receipt_sha256"] == digest
+assert pin_raw == f"{digest}  {receipt_path.name}\n".encode("ascii")
+PY
+```
+
+この2-file contractでは、2本目のprepared aliasが消えて両canonical名がnlink 1になった瞬間がreader-visible commitである。その直後のdirectory fsync失敗をpre-commitへ戻すには第3のreader-visible markerが必要になるため、既存裁定どおりmarkerや`RENAME_EXCL`は追加せず、receiptの`publication_contract.post_commit_directory_fsync=best_effort_durability_only`へ既知限界を明記する。command完了前に照合子を並行起動しない。
 
 同日の本番legacy stop/start後に、採取済み`legacy-launchd-definition-v1.json`のdefinitionと再起動後loaded definitionをread-onlyで比較し、plist bytes/path、program/arguments、working directory、RunAtLoad、KeepAliveを含むdefinition全体が一致した。legacy listenerはPID 77623/port 8765、wrapperはPID 77599で復帰した。これはrollback tailで採取済みlegacy定義から同じjobが戻ることの実機確認である。
 
@@ -192,12 +320,14 @@ AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1
 AGENTSTACK_MAIL_HTTP_PORT=8765
 AGENTSTACK_MAIL_HTTP_PATH=/api/
 AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail
+AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT=/Users/operator/.agentstack/cutover-maintenance/legacy-launchd-definition-v1.json
+AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256=<C1で外部pinした64桁lowercase hex>
 AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3
 AGENTSTACK_MAIL_STORAGE_ROOT=/Users/operator/.agentstack/mail/archive
 AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=/Users/operator/.agentstack/mail/signals
 ```
 
-旧 root/env key への fallback は持たせない。port/path/client keyは既存sessionの自動再接続を維持するため変えない。`AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL`は配布物にmaintainer固有labelをhardcodeせず、このproduction envでだけ設定する。`ProOpus`、`AirSonnet`、`BiomatterBot`、`SeminarBot` は隔離環境で request name と response `name` の完全一致を確認してから使う。
+旧 root/env key への fallback は持たせない。port/path/client keyは既存sessionの自動再接続を維持するため変えない。legacy label・receipt path・receipt SHA-256の3値は配布物にmaintainer固有値をhardcodeせず、C1 receiptの作成・外部pin後にこのproduction envでだけ設定する。`ProOpus`、`AirSonnet`、`BiomatterBot`、`SeminarBot` は隔離環境で request name と response `name` の完全一致を確認してから使う。
 
 ## 切替前に完了させる consumer compatibility
 
@@ -322,7 +452,7 @@ hook/watcherのrepo実装とtestはC2前の前提条件にする。strict identi
 
 ```sh
 set -eu
-REPO='/Users/operator/Syncthing/<vault-directory>/21_Coding Projects/claude-agent-stack'
+REPO='/Users/operator/OSS/worktrees/PluckyMailDifferential'
 MAINT='/Users/operator/.agentstack/cutover-maintenance'
 PATCH_DIR="$REPO/docs/agentstack-mail-cutover-patches"
 READINESS="$REPO/packages/agentstack_mail/tests/cutover_readiness.py"
@@ -1062,30 +1192,6 @@ for executable in \
 done
 install -d -m 700 "$MAINT/render"
 umask 077
-cat > "$NEW_ENV" <<'EOF'
-AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough
-AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1
-AGENTSTACK_MAIL_HTTP_PORT=8765
-AGENTSTACK_MAIL_HTTP_PATH=/api/
-AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail
-AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3
-AGENTSTACK_MAIL_STORAGE_ROOT=/Users/operator/.agentstack/mail/archive
-AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=/Users/operator/.agentstack/mail/signals
-EOF
-"$SERVICE_BIN" render \
-  --output-dir "$MAINT/render" \
-  --service-executable "$SERVICE_BIN" \
-  --server-executable "$SERVER_BIN" \
-  --env-file "$NEW_ENV" \
-  --state-root "$NEW_STATE_ROOT" \
-  > "$MAINT/c1-service-render.json" || exit 1
-python3 - "$MAINT/c1-service-render.json" "$NEW_OWNERSHIP" <<'PY'
-import json, pathlib, sys
-result = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert result["status"] in {"rendered", "noop"}
-assert result["ownership_manifest"] == sys.argv[2]
-assert pathlib.Path(sys.argv[2]).is_file()
-PY
 ```
 
 旧jobがまだliveで、新candidate labelが未loadのこの時点に、戻し先のloaded定義とplist bytesをexact candidateへ束縛して1回だけsealする。producerは`com.operator.mcp-agent-mail`のloaded path/ProgramArgumentsをplistとread-onlyで照合し、plistの完全bytes、KeepAlive、RunAtLoad、WorkingDirectoryを保存し、wrapper PIDと8765 listener PIDの親子関係を証明する。8765へnetwork requestは送らない。出力はwrite-once 0400で、旧job不在、listenerがexact 1でない、plist/loaded record不一致、新labelが既にload、candidate/wheel不一致なら公開しない。
@@ -1118,6 +1224,41 @@ assert receipt["runtime"]["listener_port"] == 8765
 assert receipt["runtime"]["listener_is_wrapper_child"] is True
 assert receipt["runtime"]["network_requests_sent"] == 0
 assert receipt["new_candidate_label"]["state"] == "absent"
+PY
+```
+
+sealed receiptを作って外部pinを固定した**後**にだけ、production envとlaunchd artifactをrenderする。設定labelは単独の自由入力にせず、receiptのabsolute pathと期待SHA-256を同じenvへ入れる。`service start`はreceipt bytesのSHA、0400/non-link、`definition.label`、loaded topologyを最初の`launchctl` callより前に照合するため、label typoでは旧listenerが一時的に0でもbootstrapへ到達しない。
+
+```sh
+LEGACY_LAUNCHD_RECEIPT_SHA256=$(awk 'NR == 1 {print $1}' \
+  "$MAINT/legacy-launchd-definition-v1.sha256")
+printf '%s\n' "$LEGACY_LAUNCHD_RECEIPT_SHA256" | \
+  grep -Eq '^[0-9a-f]{64}$'
+cat > "$NEW_ENV" <<EOF
+AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough
+AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1
+AGENTSTACK_MAIL_HTTP_PORT=8765
+AGENTSTACK_MAIL_HTTP_PATH=/api/
+AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail
+AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT=$LEGACY_LAUNCHD_RECEIPT
+AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256=$LEGACY_LAUNCHD_RECEIPT_SHA256
+AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3
+AGENTSTACK_MAIL_STORAGE_ROOT=/Users/operator/.agentstack/mail/archive
+AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=/Users/operator/.agentstack/mail/signals
+EOF
+"$SERVICE_BIN" render \
+  --output-dir "$MAINT/render" \
+  --service-executable "$SERVICE_BIN" \
+  --server-executable "$SERVER_BIN" \
+  --env-file "$NEW_ENV" \
+  --state-root "$NEW_STATE_ROOT" \
+  > "$MAINT/c1-service-render.json" || exit 1
+python3 - "$MAINT/c1-service-render.json" "$NEW_OWNERSHIP" <<'PY'
+import json, pathlib, sys
+result = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] in {"rendered", "noop"}
+assert result["ownership_manifest"] == sys.argv[2]
+assert pathlib.Path(sys.argv[2]).is_file()
 PY
 ```
 
@@ -1295,7 +1436,7 @@ working-tree scope migration は次を一つの staging generation 内で行う�
 6. working treeの全 path/content/mode、signals、33 file attachments、選んだGit開始状態を確認する。
 7. fsync後、同一 filesystem上の一回のdirectory renameで `~/.agentstack/mail` を公開する。失敗時は部分treeを canonical path に残さない。file descriptor/inode/link/container identity検査で実測したsource差替を拒否するが、same-UIDの非協調filesystem writerを完全な敵対者としては扱わない。destination不在checkとrenameの間のraceも単一operator前提で明記して受け入れ、未実装の`RENAME_EXCL`を安全保証として数えない。
 
-以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、14条件がGOになるまで稼働dataへ実行しない。**
+以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、現行のoperator用正本でH0〜H5が順に合格した後、H6としてだけ稼働dataへ実行する。切替後hardeningへ延期した旧14条件evaluatorのGOは、このH6の前提にしない。**
 
 ```sh
 "$MIGRATE_BIN" copy \
@@ -1330,10 +1471,15 @@ assert_new_writer_absent c4 || exit 1
   > "$MAINT/c4-status.json" || exit 1
 assert_service_state "$MAINT/c4-start.json" job_loaded started
 assert_service_state "$MAINT/c4-status.json" job_loaded -
-python3 - "$MAINT/c4-start.json" <<'PY'
+python3 - "$MAINT/c4-start.json" "$LEGACY_LAUNCHD_RECEIPT" \
+  "$MAINT/legacy-launchd-definition-v1.sha256" <<'PY'
 import json, pathlib, sys
 result = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert result["same_port_preflight"] == {
+receipt_path = pathlib.Path(sys.argv[2])
+receipt_sha256 = pathlib.Path(sys.argv[3]).read_text(encoding="utf-8").split()[0]
+preflight = result["same_port_preflight"]
+binding = preflight.pop("legacy_launchd_receipt")
+assert preflight == {
     "status": "accepted",
     "port": 8765,
     "path": "/api/",
@@ -1341,23 +1487,38 @@ assert result["same_port_preflight"] == {
     "legacy_launchd_state": "absent",
     "listener_pids": [],
 }
+assert binding == {
+    "status": "verified",
+    "path": str(receipt_path),
+    "sha256": receipt_sha256,
+    "definition_label": "com.operator.mcp-agent-mail",
+}
+readiness = result["mcp_readiness"]
+assert readiness["status"] == "verified"
+assert len(readiness["listener_observations"]) == 2
+assert readiness["listener_observations"][0] == readiness["listener_observations"][1]
+assert len(readiness["listener_observations"][0]) == 1
+assert readiness["mcp"]["endpoint"] == "http://127.0.0.1:8765/api/"
+assert readiness["mcp"]["database_url"] == (
+    "sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3"
+)
 PY
 bounded_mail_probe \
   'http://127.0.0.1:8765/api/' 8765 \
   'sqlite+aiosqlite:////Users/operator/.agentstack/mail/storage.sqlite3' || exit 1
 ```
 
-`status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。bounded probeは**実際に全clientへ配っている**`http://127.0.0.1:8765/api/`へPOSTし、`health_check`のport/DBと、既存 identity の read-only `whois(include_recent_commits=false)`を確認する。`/mcp`へのfallbackや単なるlistener openを成功扱いにしない。この段階では `fetch_inbox`も呼ばない。notification有効時の`fetch_inbox`はsignal fileをclearし、migration baselineそのものを変え得るためである。`register_agent`、send、receipt変更、reservation変更も行わない。
+`status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。`start`結果内のhealth 200と`database_url`一致も、processが期待設定で応答した証拠であり、DBへのlive connection testではない。bounded probeは**実際に全clientへ配っている**`http://127.0.0.1:8765/api/`へ、(1) `health_check`、(2) H0でsealした既知identityのread-only `whois(include_recent_commits=false)`の順にPOSTする。2が期待identityを返して初めてDBのlive readと切替成功を認める。H9は省略不可であり、失敗時はH10以降へ進まず、同じmaintenance shellで直ちにRB0からrollbackする。`/mcp`へのfallback、単なるlistener open、healthだけの成功を切替成功扱いにしない。この段階では `fetch_inbox`も呼ばない。notification有効時の`fetch_inbox`はsignal fileをclearし、migration baselineそのものを変え得るためである。`register_agent`、send、receipt変更、reservation変更も行わない。
 
 `start`結果の`bootstrap_preflight`は`launchctl_print_returncode=113`かつ`launchctl_print_state=absent`でなければならない。bootstrapがEIOを返した場合、controllerは直後にexact labelを再照合する。ownershipのpath/program/argumentsと一致したloaded jobだけを`bootstrap_outcome=exact_job_already_loaded_after_eio`として二重bootstrapせず`enable → kickstart`へ進め、`bootstrap_eio_recheck`を記録する。EIO後もabsent、foreign、またはstate unknownなら後続の状態変更を行わず中止する。EIOの原因名はreceiptから推測しない。
 
-新 root が migration baseline と同一で、旧jobが停止し、共有8765を新`org.orrery.mail`の子listenerだけが所有して`/api/`でreadyであることを確認する。readinessが期限内に通らなければC4 rollbackへ進む。
+新 root が migration baseline と同一で、旧jobが停止し、共有8765を新`org.orrery.mail`の子listenerだけが所有し、`/api/`のhealthに続く既知identityのwhoisでDBをlive readできることを確認する。whoisまで期限内に通らなければ切替成功を宣言せずC4 rollbackへ進む。
 
 ### C5: 同じendpointで自動再接続を確認し、最初の1通で実動確認する
 
 この切替ではclient key、URL、port、path、tokenを一文字も変更しない。Claudeは`mcp-agent-mail`、Codexは`agent-mail`、endpointは`http://127.0.0.1:8765/api/`のままである。したがって`agentstack-mail-consumers apply`、個別config編集、session restart/rebindを行わない。停止中のchild configも削除・移送せず、そのままresume資産として保持する。
 
-C4のread-only probeが通った後、切替前から生きているsessionを一つだけ選び、既存transportの最初の再試行が同じURLで成功することを確認する。設定fileのmtime/content、loaded client key、URL、tokenが切替前sealと一致しなければ停止する。明示的なreconnect、`/mcp` fallback、session再起動で成功を作らない。
+C4のread-only probeが通った後、H0で名前とsessionをsealした切替前から生きているsession一つだけが、既存transportから`health_check`を**1回だけ**呼び、同じURLで成功することを確認する。失敗時にそのsessionから再試行しない。設定fileのmtime/content、loaded client key、URL、tokenが切替前sealと一致しなければ停止する。`fetch_inbox`、`whois`、明示的なreconnect、`/mcp` fallback、session再起動で成功を作らない。
 
 strict版`check-file-reservation.sh`はC2前にliveへdeploy・両方向確認済みであり、C5で再deployしない。untargeted tmux fallbackは無く、unresolved/placeholder identityとmetadata-session不一致はHTTPを送る前にexit 2であることを、既存のsealed test結果と実動確認の両方で扱う。
 
@@ -1613,11 +1774,11 @@ bounded_mail_probe \
 
 これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の4点だけを追う。
 
-- **復元の実演: HOLD。** 予備実演は復元自体に成功したがraw観測が一つのwrite-once artifactへ保存されず、watermark digestとproduction不変条件にも誤りがあった。final clean candidate wheelで上記5条件を再実行する。
-- **二重service防止: product guard実装・手順補正中。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`もconfigured legacy jobまたはforeign 8765 listenerが残る場合に拒否する。actual authority交代は切替当日にだけ実行する。
-- **戻し手順: 手順補正中・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、同じ8765 `/api/`への復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
+- **復元の実演: producer実装済み・HOLD。** accepted 67MB familyを使うjoined E2Eと内部reviewは通った。final clean candidateのproducerを元の照合子が承認した後だけ、上のexact blockをProOpusが実行し、照合子へwrite-once final JSONと外部pinを渡す。内部subagentのPASSだけでHOLDを解除しない。
+- **二重service防止: product guard・手順は完了、final ORRERY rehearsal証跡は未完了、実切替は未実行。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`はsealed legacy label/receipt SHA不一致、configured legacy job残留、foreign 8765 listenerをlaunchctl前に拒否する。clean commitへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成して元の照合経路で検算するまでH0は通さない。actual authority交代は切替当日にだけ実行する。
+- **戻し手順: 補正完了・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、同じ8765 `/api/`への復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
 - **permission/hook selector 70件: 利用側確認中。** project `.mcp.json`へ新serverを足さず、既存`mcp-agent-mail` keyのURL/authだけを差し替える。N=1の9-tool隔離probeはpermission/trust prompt 0、error 0で、全70件は利用側担当が確認する。PluckyEinstein側の追加実装はない。
 
-hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。4点完了後にauthority 4遷移のcommitted testだけを追加するまでは、本番切替は未承認である。
+hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。復元実演の照合と利用側selector確認が閉じ、authority 4遷移のcommitted testを追加するまでは、本番切替は未承認である。
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。

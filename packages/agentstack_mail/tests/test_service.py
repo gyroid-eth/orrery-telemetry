@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import plistlib
@@ -134,6 +135,8 @@ def _environment(
     port: int = 18765,
     http_path: str = "/mcp",
     legacy_launchd_label: str | None = None,
+    legacy_launchd_receipt: Path | None = None,
+    legacy_launchd_receipt_sha256: str | None = None,
 ) -> Path:
     lines = [
         f"AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE={mode}",
@@ -148,6 +151,15 @@ def _environment(
         lines.append(
             f"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL={legacy_launchd_label}"
         )
+    if legacy_launchd_receipt is not None:
+        lines.append(
+            f"AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT={legacy_launchd_receipt}"
+        )
+    if legacy_launchd_receipt_sha256 is not None:
+        lines.append(
+            "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256="
+            f"{legacy_launchd_receipt_sha256}"
+        )
     path.write_text(
         "\n".join(lines)
         + "\n",
@@ -157,6 +169,33 @@ def _environment(
     return path
 
 
+def _sealed_legacy_receipt(path: Path, label: str) -> tuple[Path, str]:
+    payload = (
+        json.dumps(
+            {
+                "kind": "legacy-launchd-definition",
+                "cutover_eligible": True,
+                "definition": {
+                    "label": label,
+                    "state": "loaded",
+                    "loaded_path_program_arguments_match_plist": True,
+                },
+                "runtime": {
+                    "listener_port": 8765,
+                    "listener_is_wrapper_child": True,
+                    "network_requests_sent": 0,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+    path.write_bytes(payload)
+    path.chmod(0o400)
+    return path.resolve(), hashlib.sha256(payload).hexdigest()
+
+
 def _rendered(
     tmp_path: Path,
     *,
@@ -164,15 +203,25 @@ def _rendered(
     port: int = 18765,
     http_path: str = "/mcp",
     legacy_launchd_label: str | None = None,
+    legacy_receipt_label: str | None = None,
 ) -> tuple[service.RenderResult, Path, Path]:
     root = (tmp_path / "mail").resolve()
     root.mkdir(parents=True)
+    legacy_receipt = None
+    legacy_receipt_sha256 = None
+    if legacy_launchd_label is not None:
+        legacy_receipt, legacy_receipt_sha256 = _sealed_legacy_receipt(
+            tmp_path / "legacy-launchd-definition-v1.json",
+            legacy_receipt_label or legacy_launchd_label,
+        )
     env_file = _environment(
         tmp_path / "mail.env",
         root,
         port=port,
         http_path=http_path,
         legacy_launchd_label=legacy_launchd_label,
+        legacy_launchd_receipt=legacy_receipt,
+        legacy_launchd_receipt_sha256=legacy_receipt_sha256,
     )
     service_executable = _executable(tmp_path / "agentstack-mail-service")
     server_executable = _executable(tmp_path / "agentstack-mail")
@@ -390,6 +439,152 @@ def _runner_with_legacy_job(
     return runner
 
 
+def _verified_health(
+    config: service.RuntimeConfig,
+    **_kwargs: Any,
+) -> dict[str, Any]:
+    return {
+        "status": "verified",
+        "endpoint": f"http://{config.host}:{config.port}{config.path}",
+        "http_host": config.host,
+        "http_port": config.port,
+        "database_url": f"sqlite+aiosqlite:///{config.database}",
+    }
+
+
+def test_launchd_pid_parser_rejects_malformed_nonpositive_and_multiple() -> None:
+    assert service._parse_launchd_pid("state = running\npid = 42\n") == 42
+    assert service._parse_launchd_pid("state = waiting\n") is None
+    for output, diagnostic in (
+        ("pid = nope\n", "malformed"),
+        ("pid = 0\n", "non-positive"),
+        ("pid = 41\npid = 42\n", "multiple"),
+    ):
+        with pytest.raises(service.ServiceError, match=diagnostic):
+            service._parse_launchd_pid(output)
+
+
+def test_lsof_timeout_is_normalized_for_bounded_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(["lsof"], 5)
+
+    monkeypatch.setattr(service.subprocess, "run", timeout)
+
+    with pytest.raises(service.ServiceError, match="inspect listeners"):
+        service._listener_process_ids(8765)
+    with pytest.raises(service.ServiceError, match="inspect parent"):
+        service._process_parent_pid(9001)
+
+
+def test_mcp_health_probe_uses_exact_api_path_and_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+    ownership = json.loads(Path(rendered.ownership_manifest).read_text())
+    config = service.runtime_config(
+        Path(ownership["env_file"]), Path(ownership["state_root"])
+    )
+    requests: list[Any] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            health = {
+                "status": "ok",
+                "environment": "test",
+                "http_host": "127.0.0.1",
+                "http_port": 8765,
+                "database_url": f"sqlite+aiosqlite:///{config.database}",
+            }
+            return json.dumps(
+                {"jsonrpc": "2.0", "id": "service-start-readiness", "result": {
+                    "isError": False,
+                    "structuredContent": health,
+                }}
+            ).encode()
+
+    def urlopen(request: Any, *, timeout: float) -> Response:
+        requests.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr(service.urllib_request, "urlopen", urlopen)
+
+    result = service._mcp_health_probe(config)
+
+    request, timeout = requests[0]
+    assert request.full_url == "http://127.0.0.1:8765/api/"
+    assert request.get_method() == "POST"
+    assert request.headers["Accept"] == "application/json, text/event-stream"
+    assert timeout == 2
+    assert result["status"] == "verified"
+    assert result["database_url"] == f"sqlite+aiosqlite:///{config.database}"
+
+
+def test_mcp_health_probe_rejects_wrong_database_without_path_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+    ownership = json.loads(Path(rendered.ownership_manifest).read_text())
+    config = service.runtime_config(
+        Path(ownership["env_file"]), Path(ownership["state_root"])
+    )
+    requested_urls: list[str] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "service-start-readiness",
+                    "result": {
+                        "structuredContent": {
+                            "status": "ok",
+                            "environment": "test",
+                            "http_host": "127.0.0.1",
+                            "http_port": 8765,
+                            "database_url": "sqlite+aiosqlite:////wrong.sqlite3",
+                        }
+                    },
+                }
+            ).encode()
+
+    def urlopen(request: Any, *, timeout: float) -> Response:
+        requested_urls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(service.urllib_request, "urlopen", urlopen)
+
+    with pytest.raises(service.ServiceError, match="expected path and database"):
+        service._mcp_health_probe(config)
+
+    assert requested_urls == ["http://127.0.0.1:8765/api/"]
+
+
 def test_same_port_start_requires_api_and_configured_legacy_label(
     tmp_path: Path,
 ) -> None:
@@ -437,6 +632,79 @@ def test_same_port_start_requires_api_and_configured_legacy_label(
             Path(missing_label.ownership_manifest), runner=missing_label_fake
         )
     assert missing_label_fake.calls == []
+
+
+def test_same_port_start_rejects_typo_label_bound_to_real_sealed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual_label = "org.example.legacy-mail"
+    configured_typo = "org.example.legacy-mai"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=configured_typo,
+        legacy_receipt_label=actual_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    actual_identity = f"gui/{os.getuid()}/{actual_label}"
+
+    def actual_legacy_is_loaded(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[1:] == ["print", actual_identity]:
+            fake.calls.append(arguments)
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "path = /legacy/service.plist\nprogram = /legacy/service\n",
+                "",
+            )
+        return fake(arguments, **kwargs)
+
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [],
+    )
+    precondition = actual_legacy_is_loaded(
+        ["launchctl", "print", actual_identity]
+    )
+    assert precondition.returncode == 0
+    fake.calls.clear()
+
+    with pytest.raises(
+        service.ServiceError,
+        match="configured legacy launchd label does not match the sealed C1 receipt",
+    ):
+        service.service_start(ownership, runner=actual_legacy_is_loaded)
+
+    assert fake.calls == []
+
+
+def test_same_port_start_rejects_changed_sealed_receipt_before_launchctl(
+    tmp_path: Path,
+) -> None:
+    label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    receipt = tmp_path / "legacy-launchd-definition-v1.json"
+    receipt.chmod(0o600)
+    receipt.write_bytes(receipt.read_bytes() + b"\n")
+    receipt.chmod(0o400)
+    fake = _FakeLaunchctl(ownership, running=False)
+
+    with pytest.raises(service.ServiceError, match="SHA-256 does not match"):
+        service.service_start(ownership, runner=fake)
+
+    assert fake.calls == []
 
 
 def test_same_port_start_rejects_loaded_legacy_job_before_bootstrap(
@@ -517,7 +785,11 @@ def test_same_port_start_rejects_foreign_listener_before_bootstrap(
         legacy_label=legacy_label,
         loaded=False,
     )
-    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9001])
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [9001],
+    )
 
     with pytest.raises(service.ServiceError, match="listener.*9001.*bootout"):
         service.service_start(ownership, runner=runner)
@@ -543,11 +815,24 @@ def test_same_port_start_runs_only_after_legacy_and_listener_are_absent(
         legacy_label=legacy_label,
         loaded=False,
     )
-    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [])
+    listener_observations = iter(([], [9001], [9001]))
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: next(listener_observations),
+    )
+    monkeypatch.setattr(
+        service,
+        "_process_parent_pid",
+        lambda _pid, **_kwargs: fake.wrapper_pid,
+    )
+    monkeypatch.setattr(service, "_mcp_health_probe", _verified_health)
 
     started = service.service_start(ownership, runner=runner)
 
-    assert started["same_port_preflight"] == {
+    preflight = started["same_port_preflight"]
+    receipt_binding = preflight.pop("legacy_launchd_receipt")
+    assert preflight == {
         "status": "accepted",
         "port": 8765,
         "path": "/api/",
@@ -555,6 +840,14 @@ def test_same_port_start_runs_only_after_legacy_and_listener_are_absent(
         "legacy_launchd_state": "absent",
         "listener_pids": [],
     }
+    assert receipt_binding["status"] == "verified"
+    assert receipt_binding["definition_label"] == legacy_label
+    assert len(receipt_binding["sha256"]) == 64
+    assert started["mcp_readiness"]["status"] == "verified"
+    assert started["mcp_readiness"]["listener_observations"] == [
+        [9001],
+        [9001],
+    ]
     assert [call[1] for call in fake.calls][:3] == ["print", "print", "bootstrap"]
 
 
@@ -576,10 +869,46 @@ def test_same_port_noop_rejects_listener_outside_owned_job(
         legacy_label=legacy_label,
         loaded=False,
     )
-    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9002])
-    monkeypatch.setattr(service, "_process_parent_pid", lambda _pid: 9999)
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [9002],
+    )
+    monkeypatch.setattr(
+        service,
+        "_process_parent_pid",
+        lambda _pid, **_kwargs: 9999,
+    )
 
     with pytest.raises(service.ServiceError, match="listener.*9002.*owned launchd job"):
+        service.service_start(ownership, runner=runner)
+
+    assert "bootstrap" not in [call[1] for call in fake.calls]
+
+
+@pytest.mark.parametrize("listeners", [[], [9001, 9002]])
+def test_same_port_noop_rejects_zero_or_multiple_owned_listeners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listeners: list[int],
+) -> None:
+    label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=True)
+    runner = _runner_with_legacy_job(fake, legacy_label=label, loaded=False)
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: listeners,
+    )
+
+    with pytest.raises(service.ServiceError, match="exactly one listener"):
         service.service_start(ownership, runner=runner)
 
     assert "bootstrap" not in [call[1] for call in fake.calls]
@@ -603,18 +932,329 @@ def test_same_port_noop_accepts_only_listener_child_of_owned_job(
         legacy_label=legacy_label,
         loaded=False,
     )
-    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9003])
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [9003],
+    )
     monkeypatch.setattr(
         service,
         "_process_parent_pid",
-        lambda _pid: fake.wrapper_pid,
+        lambda _pid, **_kwargs: fake.wrapper_pid,
     )
+    monkeypatch.setattr(service, "_mcp_health_probe", _verified_health)
 
     started = service.service_start(ownership, runner=runner)
 
     assert started["action"] == "noop"
     assert started["same_port_preflight"]["listener_pids"] == [9003]
+    assert started["mcp_readiness"]["status"] == "verified"
+    assert started["mcp_readiness"]["listener_observations"] == [
+        [9003],
+        [9003],
+    ]
     assert "bootstrap" not in [call[1] for call in fake.calls]
+
+
+def test_same_port_readiness_does_not_retry_a_legacy_authority_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=label,
+    )
+    ownership = json.loads(Path(rendered.ownership_manifest).read_text())
+    config = service.runtime_config(
+        Path(ownership["env_file"]), Path(ownership["state_root"])
+    )
+    observations = 0
+
+    def conflict(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal observations
+        observations += 1
+        raise service.HandoffConflictError("legacy authority appeared")
+
+    monkeypatch.setattr(service, "_same_port_runtime_snapshot", conflict)
+    monkeypatch.setattr(
+        service.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("unsafe authority conflicts must not be retried")
+        ),
+    )
+
+    with pytest.raises(service.HandoffConflictError, match="appeared"):
+        service._wait_for_same_port_ready(
+            Path(rendered.ownership_manifest),
+            config,
+            label=service.LAUNCHD_LABEL,
+            runner=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+        )
+
+    assert observations == 1
+
+
+def test_same_port_readiness_rejects_a_snapshot_completed_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+    ownership = json.loads(Path(rendered.ownership_manifest).read_text())
+    config = service.runtime_config(
+        Path(ownership["env_file"]), Path(ownership["state_root"])
+    )
+    monotonic_values = iter((0.0, 0.0, 21.0))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(
+        service,
+        "_same_port_runtime_snapshot",
+        lambda *_args, **_kwargs: {"status": "verified"},
+    )
+
+    with pytest.raises(service.ServiceError, match="deadline expired"):
+        service._wait_for_same_port_ready(
+            Path(rendered.ownership_manifest),
+            config,
+            label=service.LAUNCHD_LABEL,
+            runner=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+            timeout_seconds=20,
+        )
+
+
+def test_same_port_post_bootstrap_readiness_failure_boots_out_new_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    runner = _runner_with_legacy_job(fake, legacy_label=label, loaded=False)
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        service,
+        "_wait_for_same_port_ready",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            service.ServiceError("exact /api/ health never became ready")
+        ),
+    )
+
+    with pytest.raises(service.ServiceError, match="post-bootstrap verification"):
+        service.service_start(ownership, runner=runner)
+
+    operations = [call[1] for call in fake.calls]
+    assert "bootstrap" in operations
+    assert "bootout" in operations
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+
+
+def test_post_bootstrap_launchctl_timeout_boots_out_owned_new_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    legacy_runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+    loaded_new_prints = 0
+
+    def timeout_once_after_bootstrap(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal loaded_new_prints
+        if arguments[1] == "print" and fake.running:
+            loaded_new_prints += 1
+            if loaded_new_prints == 2:
+                raise subprocess.TimeoutExpired(arguments, 20)
+        return legacy_runner(arguments, **kwargs)
+
+    listener_observations = iter(([], [9001]))
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: next(listener_observations),
+    )
+    monotonic_values = iter((0.0, 0.0, 0.0, 21.0))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        service,
+        "_wait_for_service_stopped",
+        lambda *_args, **_kwargs: (
+            {"status": "stopped", "owned": True},
+            {"poll_count": 1},
+        ),
+    )
+
+    with pytest.raises(
+        service.ServiceError,
+        match="post-bootstrap verification.*launchctl print could not complete",
+    ):
+        service.service_start(ownership, runner=timeout_once_after_bootstrap)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count("bootstrap") == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+
+
+@pytest.mark.parametrize("operation", ["bootstrap", "enable", "kickstart"])
+def test_mutating_launchctl_timeout_reconciles_and_boots_out_exact_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    legacy_runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+
+    def timeout_after_possible_mutation(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[1] == operation:
+            fake.calls.append(arguments)
+            if operation == "bootstrap":
+                fake.running = True
+            raise subprocess.TimeoutExpired(arguments, 20)
+        return legacy_runner(arguments, **kwargs)
+
+    monkeypatch.setattr(
+        service,
+        "_listener_process_ids",
+        lambda _port, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        service,
+        "_wait_for_service_stopped",
+        lambda *_args, **_kwargs: (
+            {"status": "stopped", "owned": True},
+            {"poll_count": 1},
+        ),
+    )
+
+    with pytest.raises(
+        service.ServiceError,
+        match=rf"launchctl {operation} outcome is unknown",
+    ):
+        service.service_start(ownership, runner=timeout_after_possible_mutation)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count(operation) == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index(operation)
+    assert fake.running is False
+
+
+@pytest.mark.parametrize("operation", ["bootstrap", "enable", "kickstart"])
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_mutating_launchctl_baseexception_reconciles_and_preserves_interrupt(
+    tmp_path: Path,
+    operation: str,
+    exception_type: type[BaseException],
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    interrupted = False
+
+    def interrupt_after_mutation(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal interrupted
+        result = fake(arguments, **kwargs)
+        if arguments[1] == operation and not interrupted:
+            interrupted = True
+            raise exception_type()
+        return result
+
+    with pytest.raises(exception_type) as raised:
+        service.service_start(ownership, runner=interrupt_after_mutation)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count(operation) == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index(operation)
+    assert fake.running is False
+    if hasattr(raised.value, "add_note"):
+        assert any(
+            "compensated and verified stopped" in note
+            for note in getattr(raised.value, "__notes__", [])
+        )
+
+
+def test_post_bootstrap_baseexception_compensates_and_preserves_interrupt(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    interrupted = False
+
+    def interrupt_after_final_status_read(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal interrupted
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "print" and fake.running and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        service.service_start(ownership, runner=interrupt_after_final_status_read)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count("bootstrap") == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+    if hasattr(raised.value, "add_note"):
+        assert any(
+            "post-bootstrap verification" in note
+            and "compensated and verified stopped" in note
+            for note in getattr(raised.value, "__notes__", [])
+        )
 
 
 def test_owned_start_and_stop_use_explicit_launchctl_only(tmp_path: Path) -> None:
@@ -896,6 +1536,118 @@ def test_bootstrap_eio_is_reconciled_only_when_exact_job_is_loaded(
     assert [call[1] for call in fake.calls].count("bootstrap") == 1
 
 
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_bootstrap_eio_recheck_baseexception_compensates_loaded_job(
+    tmp_path: Path,
+    exception_type: type[BaseException],
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+        failed_bootstrap_loads=True,
+    )
+    interrupted = False
+
+    def interrupt_eio_recheck_after_observation(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal interrupted
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "print" and fake.running and not interrupted:
+            interrupted = True
+            raise exception_type()
+        return result
+
+    with pytest.raises(exception_type) as raised:
+        service.service_start(ownership, runner=interrupt_eio_recheck_after_observation)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count("bootstrap") == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+    if hasattr(raised.value, "add_note"):
+        assert any(
+            "launchctl bootstrap outcome is unknown" in note
+            and "compensated and verified stopped" in note
+            for note in getattr(raised.value, "__notes__", [])
+        )
+
+
+def test_bootstrap_nonzero_after_mutation_compensates_loaded_job(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+
+    def nonzero_after_bootstrap_mutation(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "bootstrap":
+            return subprocess.CompletedProcess(
+                arguments,
+                64,
+                result.stdout,
+                "bootstrap returned an application error",
+            )
+        return result
+
+    with pytest.raises(
+        service.ServiceError,
+        match="bootstrap returned an application error.*compensated and verified stopped",
+    ):
+        service.service_start(ownership, runner=nonzero_after_bootstrap_mutation)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count("bootstrap") == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+
+
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_bootstrap_result_inspection_baseexception_compensates_loaded_job(
+    tmp_path: Path,
+    exception_type: type[BaseException],
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+
+    class InterruptedResult:
+        @property
+        def returncode(self) -> int:
+            raise exception_type()
+
+    def interrupt_result_inspection(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str] | InterruptedResult:
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "bootstrap":
+            return InterruptedResult()
+        return result
+
+    with pytest.raises(exception_type) as raised:
+        service.service_start(ownership, runner=interrupt_result_inspection)
+
+    operations = [call[1] for call in fake.calls]
+    assert operations.count("bootstrap") == 1
+    assert operations.count("bootout") == 1
+    assert operations.index("bootout") > operations.index("bootstrap")
+    assert fake.running is False
+    if hasattr(raised.value, "add_note"):
+        assert any(
+            "launchctl bootstrap outcome is unknown" in note
+            and "compensated and verified stopped" in note
+            for note in getattr(raised.value, "__notes__", [])
+        )
+
+
 def test_bootstrap_eio_with_absent_job_fails_without_more_mutation(
     tmp_path: Path,
 ) -> None:
@@ -910,7 +1662,12 @@ def test_bootstrap_eio_with_absent_job_fails_without_more_mutation(
     with pytest.raises(service.ServiceError, match="exact label remains absent"):
         service.service_start(ownership, runner=fake)
 
-    assert [call[1] for call in fake.calls] == ["print", "bootstrap", "print"]
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "print",
+        "print",
+    ]
 
 
 def test_bootstrap_eio_with_environment_drift_is_compensated(

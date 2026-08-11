@@ -149,9 +149,54 @@ def test_cutover_runbook_keeps_the_production_endpoint_stable() -> None:
         "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail"
         in runbook
     )
+    assert "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT=" in runbook
+    assert "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256=" in runbook
+    assert 'binding = preflight.pop("legacy_launchd_receipt")' in runbook
+    assert '"definition_label": "com.operator.mcp-agent-mail"' in runbook
+    assert "ここが最初の必須切替成功gate" in runbook
+    assert "H9は省略不可" in runbook
+    assert "healthだけの成功を切替成功扱いにしない" in runbook
     assert "'http://127.0.0.1:8765/api/' 8765" in runbook
     assert "AGENTSTACK_MAIL_HTTP_PORT=18765" not in runbook
     assert "AGENTSTACK_MAIL_HTTP_PATH=/mcp" not in runbook
     assert '"new_mcp_url": "http://127.0.0.1:18765/mcp"' not in runbook
     assert "新 job/18765" not in runbook
     assert "新job/18765" not in runbook
+
+
+def test_cutover_runbook_pins_the_accepted_restore_observer_contract() -> None:
+    runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
+
+    assert "REPO='/Users/operator/OSS/worktrees/PluckyMailDifferential'" in runbook
+    assert '"$EVIDENCE_BIN" restore-rehearsal' in runbook
+    assert "--backup-main-size 67293184" in runbook
+    assert (
+        "--backup-main-sha256 "
+        "c80bdf9ddb59ab712c0ef23a60be08fbe8ec78f4fa523f02918fb1bae35eea02"
+        in runbook
+    )
+    assert (
+        "--backup-wal-sha256 "
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        in runbook
+    )
+    assert (
+        "--backup-shm-sha256 "
+        "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+        in runbook
+    )
+    assert (
+        "--expected-logical-sha256 "
+        "afb50ad0a331b233c865db8d0e9512248c9ef5d75aa129c859198d9002317818"
+        in runbook
+    )
+    assert "--expected-message-max-id 8829" in runbook
+    assert (
+        "--expected-message-sha256 "
+        "1cc1f6636c3755d1404c2df953b64cc00e0e8a168ae75b1ccd2dfeada1430713"
+        in runbook
+    )
+    assert "両fileがregular・mode 0400・nlink 1" in runbook
+    assert 'assert info.st_nlink == 1' in runbook
+    assert "second_prepared_alias_unlink_returns" in runbook
+    assert "command完了前に照合子を並行起動しない" in runbook

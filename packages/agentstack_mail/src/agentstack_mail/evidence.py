@@ -41,6 +41,7 @@ from typing import Any, Final
 
 from fastmcp import Client
 
+from . import restore_acceptance
 from . import service as service_runtime
 from .contract import COMPATIBILITY_TOOLS
 
@@ -79,23 +80,83 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _write_terminal(path: Path, value: object) -> None:
-    payload = _canonical_json(value)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+def _quarantine_terminal(path: Path) -> Path | None:
+    """Remove a canonical success name after an unconfirmed publication."""
+
+    if not path.exists() and not path.is_symlink():
+        return None
+    unconfirmed = path.parent / (
+        f".{path.name}.{os.getpid()}.{time.time_ns()}.unconfirmed"
+    )
     try:
+        os.replace(path, unconfirmed)
+    except OSError as exc:
+        raise AssertionError(
+            f"failed evidence publication retained canonical receipt: {path}"
+        ) from exc
+    try:
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        # The canonical name is already gone. Keep the non-canonical incident
+        # artifact even when durability of the secondary quarantine is unknown.
+        pass
+    return unconfirmed
+
+
+def _write_terminal(path: Path, value: object) -> str:
+    payload = _canonical_json(value)
+    digest = _sha256_bytes(payload)
+    descriptor = -1
+    created = False
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        created = True
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = -1
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-    finally:
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except FileExistsError:
         if descriptor >= 0:
             os.close(descriptor)
-    directory = os.open(path.parent, os.O_RDONLY)
+        raise
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if created or path.exists() or path.is_symlink():
+            _quarantine_terminal(path)
+        raise
+    return digest
+
+
+def _publish_terminal_set(
+    entries: Sequence[tuple[Path, object]],
+) -> dict[str, str]:
+    """Publish a receipt set or leave no canonical success name on failure."""
+
+    for path, _value in entries:
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(path)
+    attempted: list[Path] = []
+    digests: dict[str, str] = {}
     try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+        for path, value in entries:
+            attempted.append(path)
+            digests[str(path)] = _write_terminal(path, value)
+    except BaseException:
+        for path in reversed(attempted):
+            _quarantine_terminal(path)
+        raise
+    return digests
 
 
 def _canonical_absolute(path: Path, *, label: str) -> Path:
@@ -1557,23 +1618,24 @@ def _run_runtime_rehearsal(
         "writer_lock_path": str(state_root / "runtime" / "authority.lock"),
         "maximum_observed_ready_services": 1,
     }
-    _write_terminal(output_directory / HTTP_RECEIPT_NAME, http_receipt)
-    _write_terminal(output_directory / LIFECYCLE_RECEIPT_NAME, lifecycle_receipt)
     marker.unlink()
     directory = os.open(output_directory, os.O_RDONLY)
     try:
         os.fsync(directory)
     finally:
         os.close(directory)
+    http_path = output_directory / HTTP_RECEIPT_NAME
+    lifecycle_path = output_directory / LIFECYCLE_RECEIPT_NAME
+    terminal_sha256 = _publish_terminal_set(
+        ((http_path, http_receipt), (lifecycle_path, lifecycle_receipt))
+    )
     return {
         "status": "completed",
         "candidate_commit": candidate_commit,
-        "http_receipt": str(output_directory / HTTP_RECEIPT_NAME),
-        "http_receipt_sha256": _sha256_file(output_directory / HTTP_RECEIPT_NAME),
-        "lifecycle_receipt": str(output_directory / LIFECYCLE_RECEIPT_NAME),
-        "lifecycle_receipt_sha256": _sha256_file(
-            output_directory / LIFECYCLE_RECEIPT_NAME
-        ),
+        "http_receipt": str(http_path),
+        "http_receipt_sha256": terminal_sha256[str(http_path)],
+        "lifecycle_receipt": str(lifecycle_path),
+        "lifecycle_receipt_sha256": terminal_sha256[str(lifecycle_path)],
     }
 
 
@@ -2265,13 +2327,13 @@ def _run_launchd_rehearsal(
         os.fsync(directory)
     finally:
         os.close(directory)
-    _write_terminal(receipt_path, receipt)
+    receipt_sha256 = _write_terminal(receipt_path, receipt)
     return {
         "status": "completed",
         "candidate_commit": candidate_commit,
         "label": label,
         "receipt": str(receipt_path),
-        "receipt_sha256": _sha256_file(receipt_path),
+        "receipt_sha256": receipt_sha256,
     }
 
 
@@ -2358,11 +2420,11 @@ def write_legacy_launchd_snapshot(
         },
         "new_candidate_label": new_candidate_label,
     }
-    _write_terminal(output_path, receipt)
+    receipt_sha256 = _write_terminal(output_path, receipt)
     return {
         "status": "completed",
         "receipt": str(output_path),
-        "receipt_sha256": _sha256_file(output_path),
+        "receipt_sha256": receipt_sha256,
     }
 
 
@@ -2393,6 +2455,7 @@ def _parser() -> argparse.ArgumentParser:
     legacy.add_argument("--wheel", required=True)
     legacy.add_argument("--candidate-repo", required=True)
     legacy.add_argument("--candidate-commit", required=True)
+    restore_acceptance.add_evidence_subcommand(subparsers)
     return parser
 
 
@@ -2429,10 +2492,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                 candidate_repository=Path(args.candidate_repo),
                 candidate_commit=args.candidate_commit,
             )
+        elif args.command == "restore-rehearsal":
+            result = restore_acceptance.run_from_evidence_args(args)
         else:  # pragma: no cover - argparse owns it
             raise EvidenceError(f"unsupported evidence command: {args.command}")
     except (
         EvidenceError,
+        restore_acceptance.RestoreAcceptanceError,
+        restore_acceptance.migration.MigrationError,
         OSError,
         service_runtime.ServiceError,
         sqlite3.Error,

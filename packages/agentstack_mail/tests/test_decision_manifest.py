@@ -365,7 +365,7 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
         "rollback-revert-procedure",
         "notification-layout-consumer-compatibility",
     ]
-    assert [task["id"] for task in post][12:14] == [
+    assert [task["id"] for task in post][13:15] == [
         "post-authority-reverse-transform",
         "client-key-rename-and-stale-selector-cleanup",
     ]
@@ -377,13 +377,26 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
         "fresh-install-startup-port-race",
         "selected-pytest-evidence-executor-contract",
     ]
-    assert len(post) == 20
+    assert len(post) == 21
     assert all(
         task["implementation_order"] == "post_cutover"
         and task["cutover_blocking"] is False
         and task["activation_condition"]
         for task in post
     )
+
+    process_boundaries = _post_cutover_task(
+        manifest, "external-process-boundary-hardening"
+    )
+    assert len(process_boundaries["scope"]) == 17
+    assert "eight currently unbounded" in " ".join(
+        process_boundaries["requirements"]
+    )
+    assert "post-cutover hardening" in process_boundaries["activation_condition"]
+    assert "eight unbounded calls become urgent" in process_boundaries[
+        "activation_condition"
+    ]
+    assert process_boundaries["cutover_blocking"] is False
 
     safety = _follow_up_task(manifest, "reservation-probe-safety-release-gate")
     assert safety["implementation_state"] == "implemented"

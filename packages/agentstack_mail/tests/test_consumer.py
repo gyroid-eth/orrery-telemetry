@@ -679,6 +679,221 @@ def test_terminal_receipt_not_mutable_journal_authorizes_commit(tmp_path: Path) 
     assert stat.S_IMODE((bundle / "committed.json").stat().st_mode) == 0o400
 
 
+@pytest.mark.parametrize(
+    ("direction", "phase", "receipt_name"),
+    [
+        ("apply", "COMMITTED", consumer.COMMITTED_RECEIPT_NAME),
+        ("rollback", "ROLLED_BACK", consumer.ROLLED_BACK_RECEIPT_NAME),
+    ],
+)
+@pytest.mark.parametrize(
+    "boundary",
+    ["journal", "return", "receipt_replace", "receipt_fsync"],
+)
+def test_terminal_failure_never_leaves_canonical_success_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    phase: str,
+    receipt_name: str,
+    boundary: str,
+) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    prepared = prepare(inventory, bundle)
+    digest = _digest(prepared)
+    if direction == "rollback":
+        apply(bundle, digest)
+    receipt = bundle / receipt_name
+    assert not receipt.exists()
+
+    fault_hook = None
+    if boundary in {"journal", "return"}:
+        fail_at = (
+            f"after_journal:{phase}"
+            if boundary == "journal"
+            else f"after_terminal_recheck:{phase}"
+        )
+
+        def fail_boundary(observed: str) -> None:
+            if observed == fail_at:
+                raise OSError(f"injected {boundary} failure")
+
+        fault_hook = fail_boundary
+    elif boundary == "receipt_replace":
+        real_replace = consumer.os.replace
+        failed = False
+
+        def fail_receipt_replace(source: object, destination: object) -> None:
+            nonlocal failed
+            if Path(destination) == receipt and not failed:
+                failed = True
+                raise OSError("injected receipt_replace failure")
+            real_replace(source, destination)
+
+        monkeypatch.setattr(consumer.os, "replace", fail_receipt_replace)
+    else:
+        real_fsync_directory = consumer._fsync_directory
+        failed = False
+
+        def fail_receipt_fsync(path: Path) -> None:
+            nonlocal failed
+            if path == bundle and receipt.exists() and not failed:
+                failed = True
+                raise OSError("injected receipt_fsync failure")
+            real_fsync_directory(path)
+
+        monkeypatch.setattr(consumer, "_fsync_directory", fail_receipt_fsync)
+
+    operation = apply if direction == "apply" else _rollback
+    with pytest.raises(OSError, match=f"injected {boundary}"):
+        operation(bundle, digest, fault_hook=fault_hook)
+
+    assert not receipt.exists()
+    failed_status = status(bundle, digest)
+    assert failed_status["status"] == (
+        "all_after_uncommitted" if direction == "apply" else "all_before_uncommitted"
+    )
+    if boundary == "receipt_fsync":
+        quarantined = list(bundle.glob(f".unconfirmed.{receipt_name}.*"))
+        assert len(quarantined) == 1
+        assert stat.S_IMODE(quarantined[0].stat().st_mode) == 0o400
+        assert quarantined[0].read_bytes() == consumer._receipt_payload(
+            str(prepared["operation_id"]), digest, phase
+        )
+
+    recovered = operation(bundle, digest)
+    assert recovered["status"] == (
+        "committed" if direction == "apply" else "rolled_back"
+    )
+    assert receipt.is_file()
+
+
+@pytest.mark.parametrize("direction", ["apply", "rollback"])
+def test_terminal_receipt_publish_is_the_last_observed_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    prepared = prepare(inventory, bundle)
+    digest = _digest(prepared)
+    if direction == "rollback":
+        apply(bundle, digest)
+
+    published = False
+    real_write_receipt = consumer._write_receipt
+    real_fsync_directory = consumer._fsync_directory
+
+    def mark_receipt_published(*args: object, **kwargs: object) -> None:
+        nonlocal published
+        real_write_receipt(*args, **kwargs)  # type: ignore[arg-type]
+        published = True
+
+    def forbid_post_receipt_fsync(path: Path) -> None:
+        if published:
+            raise OSError("I/O occurred after canonical receipt publication")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(consumer, "_write_receipt", mark_receipt_published)
+    monkeypatch.setattr(consumer, "_fsync_directory", forbid_post_receipt_fsync)
+    monkeypatch.setattr(
+        consumer,
+        "status",
+        lambda *_: (_ for _ in ()).throw(
+            OSError("status was recomputed after canonical receipt publication")
+        ),
+    )
+
+    operation = apply if direction == "apply" else _rollback
+    result = operation(bundle, digest)
+
+    assert published is True
+    assert result["status"] == ("committed" if direction == "apply" else "rolled_back")
+
+
+@pytest.mark.parametrize(
+    ("direction", "receipt_name"),
+    [
+        ("apply", consumer.COMMITTED_RECEIPT_NAME),
+        ("rollback", consumer.ROLLED_BACK_RECEIPT_NAME),
+    ],
+)
+@pytest.mark.parametrize("failure_type", (OSError, KeyboardInterrupt))
+def test_terminal_receipt_replace_mutation_then_raise_quarantines_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    receipt_name: str,
+    failure_type: type[BaseException],
+) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    prepared = prepare(inventory, bundle)
+    digest = _digest(prepared)
+    if direction == "rollback":
+        apply(bundle, digest)
+    receipt = bundle / receipt_name
+    real_replace = consumer.os.replace
+    injected = False
+
+    def replace_then_raise(source: object, destination: object) -> None:
+        nonlocal injected
+        real_replace(source, destination)
+        if Path(destination) == receipt and not injected:
+            injected = True
+            raise failure_type("injected after receipt replace mutation")
+
+    monkeypatch.setattr(consumer.os, "replace", replace_then_raise)
+    operation = apply if direction == "apply" else _rollback
+    with pytest.raises(failure_type, match="after receipt replace mutation"):
+        operation(bundle, digest)
+
+    assert injected
+    assert not receipt.exists()
+    assert len(list(bundle.glob(f".unconfirmed.{receipt_name}.*"))) == 1
+    assert status(bundle, digest)["status"] == (
+        "all_after_uncommitted" if direction == "apply" else "all_before_uncommitted"
+    )
+
+
+@pytest.mark.parametrize(
+    ("direction", "receipt_name"),
+    [
+        ("apply", consumer.COMMITTED_RECEIPT_NAME),
+        ("rollback", consumer.ROLLED_BACK_RECEIPT_NAME),
+    ],
+)
+def test_terminal_interrupt_during_receipt_fsync_quarantines_canonical_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    receipt_name: str,
+) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    prepared = prepare(inventory, bundle)
+    digest = _digest(prepared)
+    if direction == "rollback":
+        apply(bundle, digest)
+    receipt = bundle / receipt_name
+    real_fsync_directory = consumer._fsync_directory
+    interrupted = False
+
+    def interrupt_receipt_fsync(path: Path) -> None:
+        nonlocal interrupted
+        if path == bundle and receipt.exists() and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("injected receipt fsync interrupt")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(consumer, "_fsync_directory", interrupt_receipt_fsync)
+    operation = apply if direction == "apply" else _rollback
+    with pytest.raises(KeyboardInterrupt, match="injected receipt fsync interrupt"):
+        operation(bundle, digest)
+
+    assert not receipt.exists()
+    quarantined = list(bundle.glob(f".unconfirmed.{receipt_name}.*"))
+    assert len(quarantined) == 1
+
+
 def test_invalid_terminal_receipt_is_an_incident(tmp_path: Path) -> None:
     inventory, bundle, _ = _fixture(tmp_path)
     prepared = prepare(inventory, bundle)

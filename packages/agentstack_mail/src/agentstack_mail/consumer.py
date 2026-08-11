@@ -1611,12 +1611,115 @@ def _write_receipt(
                 pending.unlink()
     if not pending.exists():
         _write_private(pending, payload, mode=0o400)
+    quarantine = bundle / (
+        f".unconfirmed.{path.name}.{operation_id}.{uuid.uuid4().hex}"
+    )
     try:
         os.replace(pending, path)
+        _fsync_directory(bundle)
     except FileExistsError:
         if not _has_valid_receipt(bundle, operation_id, manifest_digest, phase):
             raise ConsumerError(f"consumer {phase.lower()} receipt raced")
-    _fsync_directory(bundle)
+        return
+    except BaseException:
+        # Keep rename, result handling, and directory durability in one
+        # interrupt boundary. A signal between Python statements must not leave
+        # a canonical success receipt behind.
+        try:
+            os.replace(path, quarantine)
+        except FileNotFoundError:
+            pass
+        except OSError as quarantine_exc:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as unlink_exc:
+                raise ConsumerError(
+                    "consumer terminal receipt publication outcome is unknown and "
+                    "the canonical receipt could not be quarantined"
+                ) from unlink_exc
+            if path.exists() or path.is_symlink():
+                raise ConsumerError(
+                    "consumer terminal receipt publication outcome is unknown and "
+                    "the canonical receipt remains"
+                ) from quarantine_exc
+        try:
+            _fsync_directory(bundle)
+        except OSError:
+            pass
+        raise
+
+
+def _precompose_terminal_result(
+    bundle: Path,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    operation_id: str,
+    manifest_digest: str,
+    phase: str,
+) -> dict[str, Any]:
+    destination = "after" if phase == "COMMITTED" else "before"
+    states = _classify_all(bundle, entries)
+    if any(state not in {destination, "both"} for state in states):
+        raise ConsumerError(
+            f"consumer vector changed before {phase.lower()} receipt publication"
+        )
+    journal_phase = _journal_phase(bundle, operation_id)
+    if journal_phase != phase:
+        raise ConsumerError(
+            f"consumer terminal journal was not durable before receipt: {journal_phase}"
+        )
+    committed_receipt = _has_valid_receipt(
+        bundle, operation_id, manifest_digest, "COMMITTED"
+    )
+    rolled_back_receipt = _has_valid_receipt(
+        bundle, operation_id, manifest_digest, "ROLLED_BACK"
+    )
+    if phase == "COMMITTED":
+        committed_receipt = True
+        result_status = "committed"
+    elif phase == "ROLLED_BACK":
+        rolled_back_receipt = True
+        result_status = "rolled_back"
+    else:  # pragma: no cover - internal callers use the two terminal phases.
+        raise ConsumerError(f"unsupported terminal phase: {phase}")
+    return {
+        "status": result_status,
+        "journal_phase": phase,
+        "committed_receipt": committed_receipt,
+        "rolled_back_receipt": rolled_back_receipt,
+        "receipt_invalid": False,
+        "operation_id": operation_id,
+        "consumer_count": len(entries),
+        "before": states.count("before"),
+        "after": states.count("after"),
+        "unchanged": states.count("both"),
+        "third": states.count("third"),
+    }
+
+
+def _finish_operation(
+    bundle: Path,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    operation_id: str,
+    manifest_digest: str,
+    phase: str,
+    fault_hook: FaultHook | None,
+) -> dict[str, Any]:
+    _call_fault(fault_hook, f"before_journal:{phase}")
+    _write_journal(bundle, operation_id, phase)
+    _call_fault(fault_hook, f"after_journal:{phase}")
+    result = _precompose_terminal_result(
+        bundle,
+        entries,
+        operation_id=operation_id,
+        manifest_digest=manifest_digest,
+        phase=phase,
+    )
+    _call_fault(fault_hook, f"after_terminal_recheck:{phase}")
+    _call_fault(fault_hook, f"before_receipt:{phase}")
+    _write_receipt(bundle, operation_id, manifest_digest, phase)
+    return result
 
 
 def _assert_data_reversible(migration_manifest: Path, cutover_stage: str) -> None:
@@ -1647,11 +1750,14 @@ def apply(
                 direction="apply",
                 fault_hook=fault_hook,
             )
-            _write_receipt(
-                bundle, manifest["operation_id"], expected_digest, "COMMITTED"
+            return _finish_operation(
+                bundle,
+                entries,
+                operation_id=manifest["operation_id"],
+                manifest_digest=expected_digest,
+                phase="COMMITTED",
+                fault_hook=fault_hook,
             )
-            _write_journal(bundle, manifest["operation_id"], "COMMITTED")
-    return status(bundle, expected_digest)
 
 
 def rollback(
@@ -1678,11 +1784,14 @@ def rollback(
                     fault_hook=fault_hook,
                     pre_publish_check=authority_check,
                 )
-                _write_receipt(
-                    bundle, manifest["operation_id"], expected_digest, "ROLLED_BACK"
+                return _finish_operation(
+                    bundle,
+                    entries,
+                    operation_id=manifest["operation_id"],
+                    manifest_digest=expected_digest,
+                    phase="ROLLED_BACK",
+                    fault_hook=fault_hook,
                 )
-                _write_journal(bundle, manifest["operation_id"], "ROLLED_BACK")
-    return status(bundle, expected_digest)
 
 
 def status(bundle: Path, expected_digest: str) -> dict[str, Any]:

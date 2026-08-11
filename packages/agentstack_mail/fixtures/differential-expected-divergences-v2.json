@@ -1146,6 +1146,38 @@
       "activation_condition": "when D10 diagnostic runners become blocking evidence or their supported runner set changes"
     },
     {
+      "id": "external-process-boundary-hardening",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_looks_like_toon_rust_encoder --help",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_looks_like_toon_rust_encoder --version",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_run_toon_encode",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_xattr_names",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_read_xattrs",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_write_xattrs delete",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_write_xattrs write",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_reject_acl",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_candidate_checkout_identity git show",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_load_seed_provenance git show",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_verify_cold_rehearsal_payload git show",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_latest_git_activity_before_deadline",
+        "packages/agentstack_mail/src/agentstack_mail/evidence.py::_listener_process_ids",
+        "packages/agentstack_mail/src/agentstack_mail/evidence.py::_spawn",
+        "packages/agentstack_mail/src/agentstack_mail/restore_acceptance.py::_run_restore_worker",
+        "packages/agentstack_mail/src/agentstack_mail/restore_acceptance.py::_run_candidate_server",
+        "packages/agentstack_mail/src/agentstack_mail/service.py::foreground"
+      ],
+      "requirements": [
+        "bound the eight currently unbounded toon and filesystem metadata subprocess calls and normalize TimeoutExpired and OSError into their owning domain errors",
+        "normalize the three bounded read-only git show boundaries into their owning domain errors while preserving partial diagnostic output",
+        "retain bounded process-group termination, complete descendant reaping, and partial diagnostic capture for the six isolated or best-effort inspection and cleanup boundaries"
+      ],
+      "acceptance": "all 17 known non-blocking external-process boundaries have fault-injection coverage for timeout and spawn failure, no bounded caller can hang indefinitely or bypass cleanup, and the original error remains distinguishable from cleanup diagnostics",
+      "cutover_blocking": false,
+      "activation_condition": "post-cutover hardening; the eight unbounded calls become urgent if any is placed on a blocking service, consumer, or release path"
+    },
+    {
       "id": "provenance-regression-sync",
       "implementation_state": "not_implemented",
       "implementation_order": "post_cutover",
