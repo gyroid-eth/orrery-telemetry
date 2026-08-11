@@ -23,7 +23,7 @@ maintainer承認下の本番legacy server 1回再起動で、listener消滅はst
 2. final clean candidateへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成・独立検算したうえで、旧`com.operator.mcp-agent-mail`のbootoutから新`org.orrery.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。旧namespaceのreceiptは流用しない。
 3. 逆順のnew bootoutからlegacy bootstrapまでを、一つの不可分なrollbackとして実行できること。new labelのenabled overrideは正常な残留として記録すること。
 
-permission/hook selector確認は完了済みなので残作業へ数えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。同じ既存keyと同じendpointを使った9 toolは9/9 selector一致、permission/trust prompt 0、error 0だった。
+permission/hook selector確認は完了済みなので残作業へ数えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。既存keyとisolated candidate endpointを使った9 toolは9/9 selector一致、permission/trust prompt 0、error 0だった。
 
 ### operator用1行チェックリスト（正本）
 
@@ -67,7 +67,7 @@ ProOpusが2026-08-11 21:57 JSTに作成し、定期削除対象外の`/Users/ope
 再実行はfinal clean candidate commitから作ったwheelだけを使い、同じobserver processが次の5条件を一続きで採取する。途中で一つでも失敗した場合はterminal raw JSONを発行しない。
 
 1. 本番main/WAL/SHMのcanonical path、存在集合、dev/inode、mode、nlink、no-symlinkをbefore/afterで一致させる。
-2. beforeの`max_id`以下に対する列順固定11-column typed digestをbefore/afterで一致させる。新規IDは空または`before_max+1..after_max`の連続列とし、count差と新規ID数を一致させる。
+2. beforeの`max_id`以下に対する列順固定11-column typed digestをbefore/afterで一致させ、count差と新規ID数を一致させる。新規ID列とgap有無はreceiptへ残すが、SQLiteの正当な採番gapを不合格にせずreport-only observationとして扱う。
 3. 採取する全lsof sampleでrestoreとisolated serverの全process treeによる本番DB familyのopenが観測されず、候補serverだけが隔離target main/WAL/SHMをopenする。
 4. 故意破損targetが`file is not a database`で失敗した後、`cold-restore`のreceiptが`target.kind=rehearsal-copy`、`production_source=false`を持ち、復元後と起動中のfull logical SHAおよびwatermarkがsealed backupと一致する。
 5. 実配布wheelの候補serverが隔離portでexact 24 toolsと期待DB URLを返し、SIGTERM後20秒以内にrc 0、port close、子process 0へ収束する。
@@ -174,7 +174,20 @@ assert command["pin"] == str(pin_path)
 assert receipt["status"] == "passed"
 assert receipt["candidate_commit"] == candidate
 assert all(receipt["gates"].values())
-assert all(receipt["production"]["invariants"].values())
+required_invariants = {
+    "family_identity_unchanged",
+    "maximum_did_not_decrease",
+    "prefix_bound_is_before_max",
+    "prefix_count_unchanged",
+    "prefix_digest_unchanged",
+    "count_delta_matches_new_ids",
+}
+invariants = receipt["production"]["invariants"]
+assert set(invariants) == required_invariants
+assert all(type(value) is bool and value for value in invariants.values())
+observations = receipt["production"]["observations"]
+assert set(observations) == {"new_ids_are_contiguous"}
+assert type(observations["new_ids_are_contiguous"]) is bool
 assert receipt["observer"]["production_write_calls"] == 0
 assert receipt["observer"]["production_network_requests"] == 0
 assert receipt["deadlines"] == {
@@ -443,7 +456,7 @@ hook/watcherのrepo実装とtestはC2前の前提条件にする。strict identi
 
 ### client key と stale selector の切替後整理
 
-初回切替ではClaude `mcp-agent-mail`、Codex `agent-mail`を互換ABIとして維持し、permission/hook selectorを変更しない。**projectの`.mcp.json`へ新しいMCP server entryを追加しない。** client設定はkey / URL / port / path / tokenのいずれも変更しない。2026-08-11 22:04:49 JSTの隔離N=1では新しいproject serverとして置くとtool call前にMCP trust promptが1件出た一方、strict configと`--setting-sources user,project`で既存keyを使った22:06:24–22:07:20 JSTの9 toolはpermission/trust prompt 0、error 0だった。証跡は`/private/tmp/agentstack-mail-rehearsal-52594f6.UP4e5q/receipts/selector-probe/n1-user-selector-key-stability.json`、SHA-256 `338a8fc8574146fc0ef974ae3d92c06ba50f4826d5b88740e07f57e309cbc423`である。
+初回切替ではClaude `mcp-agent-mail`、Codex `agent-mail`を互換ABIとして維持し、permission/hook selectorを変更しない。**projectの`.mcp.json`へ新しいMCP server entryを追加しない。** 運用切替では、client設定はkey / URL / port / path / tokenのいずれも変更しない。これとは別のselector証跡として、2026-08-11 22:04:49 JSTの隔離N=1では新しいproject serverとして置くとtool call前にMCP trust promptが1件出た一方、strict configと`--setting-sources user,project`で既存keyとisolated candidate endpointを使った22:06:24–22:07:20 JSTの9 toolはpermission/trust prompt 0、error 0だった。証跡は`/private/tmp/agentstack-mail-rehearsal-52594f6.UP4e5q/receipts/selector-probe/n1-user-selector-key-stability.json`、SHA-256 `338a8fc8574146fc0ef974ae3d92c06ba50f4826d5b88740e07f57e309cbc423`である。
 
 任意のkey改名、24-tool境界に無いstale permission 21 occurrence（10 tool名）、Lifeの旧8765 raw curl selector 4件、dormantな`deregister_agent` optionは別のnon-blocking post-cutover taskで扱う。これらは未コミットmachine-local観測 `2026-08-11T15:18:49 JST` の値であり、実行時の正本ではない。将来toolが再公開されるとstale permissionが自動的に有効化され得るため、post作業でも新しいone-run sealed inventory、maintainerへのexact file/line preview、明示承認を必須にする。`retire-agent-by-name.sh`を再有効化する場合は、dormant optionだけでなく旧DB・8765・bearer前提も同時に置換して検証する。
 
@@ -469,6 +482,7 @@ NEW_ENV="$MAINT/render/agentstack-mail.env"
 NEW_STATE_ROOT='/Users/operator/.agentstack/mail'
 CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
 CANDIDATE_ARTIFACT_ROOT="$MAINT/final-candidate-$CANDIDATE_COMMIT"
+CODEX_TOKEN_CENSUS="$MAINT/running-codex-token-census-$CANDIDATE_COMMIT.json"
 CANDIDATE_VENV="$CANDIDATE_ARTIFACT_ROOT/venv"
 CANDIDATE_WHEEL_PIN="$CANDIDATE_ARTIFACT_ROOT/candidate-wheel.sha256"
 MIGRATE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-migrate"
@@ -552,7 +566,7 @@ fi
 import json, pathlib, sys
 from agentstack_mail.cutover_client import (
     EXPECTED_ENDPOINT,
-    read_pinned_client_authorization,
+    read_pinned_client_config_state,
     write_client_config_seal,
 )
 mode, seal_arg, pin_arg, claude_arg, codex_arg, env_arg = sys.argv[1:]
@@ -567,12 +581,40 @@ if mode == "create":
     write_client_config_seal(**paths)
 elif mode != "verify":
     raise SystemExit("invalid client config seal mode")
-read_pinned_client_authorization(**paths)
-print(json.dumps({"status": "verified", "endpoint": EXPECTED_ENDPOINT}))
+state, _authorization = read_pinned_client_config_state(**paths)
+print(json.dumps({
+    "status": "verified",
+    "endpoint": EXPECTED_ENDPOINT,
+    "codex_process_environment": state["bearer"]["codex_process_environment"],
+}))
 PY
 }
 initialize_client_config_seal || exit 1
+
+capture_running_codex_token_census() {
+  assert_cutover_client_provenance || return 1
+  "$CUTOVER_PYTHON" -I - \
+    "$CODEX_TOKEN_CENSUS" "$CLAUDE_CLIENT_CONFIG" \
+    "$CODEX_CLIENT_CONFIG" "$LEGACY_CLIENT_ENV" <<'PY'
+import json, pathlib, sys
+from agentstack_mail.cutover_client import write_running_codex_token_census
+output_arg, claude_arg, codex_arg, env_arg = sys.argv[1:]
+census = write_running_codex_token_census(
+    output_path=pathlib.Path(output_arg),
+    claude_config=pathlib.Path(claude_arg),
+    codex_config=pathlib.Path(codex_arg),
+    legacy_env=pathlib.Path(env_arg),
+)
+assert census["status"] == "observed"
+assert census["report_only"] is True
+assert census["raw_values_emitted"] is False
+print(json.dumps(census, sort_keys=True))
+PY
+}
+capture_running_codex_token_census || exit 1
 ```
+
+ここで採るprocess censusは実行必須だが判定はreport-onlyである。`drift_process_count`が非zeroでも切替を止めず、legacyへ戻した場合に既存sessionが持つ元来のtoken driftとしてmaintainerへ提示する。生のprocess table、token、digest値はartifactにもstdoutにも出さない。probe自身のenvは別扱いで、存在する場合は設定sourceと一致しなければ上のseal/censusをnetwork前にfail-closedし、存在しない場合はsealへ`not_present_unverified`を残す。
 
 この時点で、後続のC4/C5とR1–R6が使うassertionを一度だけ定義する。関数定義より前に利用しない。
 
@@ -585,17 +627,21 @@ assert_client_config_seal() {
 import json, pathlib, sys
 from agentstack_mail.cutover_client import (
     EXPECTED_ENDPOINT,
-    read_pinned_client_authorization,
+    read_pinned_client_config_state,
 )
 seal_arg, pin_arg, claude_arg, codex_arg, env_arg = sys.argv[1:]
-read_pinned_client_authorization(
+state, _authorization = read_pinned_client_config_state(
     seal_path=pathlib.Path(seal_arg),
     pin_path=pathlib.Path(pin_arg),
     claude_config=pathlib.Path(claude_arg),
     codex_config=pathlib.Path(codex_arg),
     legacy_env=pathlib.Path(env_arg),
 )
-print(json.dumps({"status": "verified", "endpoint": EXPECTED_ENDPOINT}))
+print(json.dumps({
+    "status": "verified",
+    "endpoint": EXPECTED_ENDPOINT,
+    "codex_process_environment": state["bearer"]["codex_process_environment"],
+}))
 PY
 }
 
@@ -1430,7 +1476,7 @@ grep -Eq '^[0-9a-f]{64}$' "$MAINT/consumer-manifest.sha256"
 ```
 
 maintenance shellを再開した場合は`PINNED_MANIFEST_SHA256=$(cat "$MAINT/consumer-manifest.sha256")`で同じexternal pinを復元し、正規表現を再検査する。
-6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。初回切替ではglobal 1件とlocal 15件のClaude settingsにあるpermission/hook selectorを一つも変えないため、これら16 fileはすべて`changed=false`でなければ止まる。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。同じ既存keyと同じendpointを使った9 toolは9/9 selector一致、permission/trust prompt 0、error 0であり、確認済みなのでpre-cutover残作業には数えない。helperは**列挙したfile内**の複数recognized key、未知endpoint、endpoint/root混在をfailさせるが、key名だけでauthorityを判定しない。inventory外のfileは見えないため、上のhidden/ignored completeness対照を含むsealed inventoryで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
+6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。初回切替ではglobal 1件とlocal 15件のClaude settingsにあるpermission/hook selectorを一つも変えないため、これら16 fileはすべて`changed=false`でなければ止まる。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。既存keyとisolated candidate endpointを使った9 toolは9/9 selector一致、permission/trust prompt 0、error 0であり、確認済みなのでpre-cutover残作業には数えない。helperは**列挙したfile内**の複数recognized key、未知endpoint、endpoint/root混在をfailさせるが、key名だけでauthorityを判定しない。inventory外のfileは見えないため、上のhidden/ignored completeness対照を含むsealed inventoryで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
 7. readinessが`go`でmaintainerがpreviewを承認した後だけ、versioned display patch chainを適用する。これは本番pathへの最初の変更なので、markerが作られる前の失敗では続行せず、現物を検査して旧before-imageへ戻す。全5 patch適用後にJSON、Python AST、repo/live plistを検査し、after digestを保存してからmarkerを作る。
 
 ```sh
@@ -1922,7 +1968,7 @@ bounded_mail_probe \
 - **二重service防止: product guard・手順は完了、final candidateへのORRERY証跡再束縛待ち、実切替は未実行。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`はsealed legacy label/receipt SHA不一致、configured legacy job残留、foreign 8765 listenerをlaunchctl前に拒否する。`e0b1110`のforeground、legacy snapshot、launchd rehearsal receiptは独立検算PASS済みだが、この訂正後は履歴証跡である。新しいclean commitへ全4 receiptを再束縛して元の照合経路で検算するまでH0は通さない。actual authority交代は切替当日にだけ実行する。
 - **戻し手順: 補正完了・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、同じ8765 `/api/`への復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
 
-permission/hook selector確認は完了済みで、pre-cutover残タスクではない。project `.mcp.json`へ新serverを足さず、client設定のkey / URL / port / path / tokenを一文字も変えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。9-tool隔離probeは9/9一致、permission/trust prompt 0、error 0だった。C0のwrite-once sealはClaude/Codex/token sourceのfull-file SHA-256とmetadataを外部pinへ固定する。seal verifierはfinal candidate wheelを入れた専用venvからだけ読む。H9/RB4/R6の共通probeは現在値がsealへexact一致した後だけBearer headerを値非表示で読み、欠落・同形別token・config driftではrequest前にfail-closedする。
+permission/hook selector確認は完了済みで、pre-cutover残タスクではない。project `.mcp.json`へ新serverを足さず、client設定のkey / URL / port / path / tokenを一文字も変えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。既存keyとisolated candidate endpointを使った9-tool隔離probeは9/9一致、permission/trust prompt 0、error 0だった。C0のwrite-once sealはClaude/Codex/token sourceのfull-file SHA-256とmetadataを外部pinへ固定する。probe自身に`MCP_AGENT_MAIL_TOKEN`がある場合は同じdigestであることもsealし、無い場合は`not_present_unverified`をreceiptへ残す。稼働中process群は個別sealの対象にせず、切替前の一回採取でtoken-bearing process数、distinct digest数、DRIFT数だけをwrite-once report-only artifactへ記録する。したがって「token完全据え置き」は設定fileとprobe processの観測範囲に限定し、全sessionを個別にsealしたとは主張しない。seal verifierはfinal candidate wheelを入れた専用venvからだけ読む。H9/RB4/R6の共通probeは現在値がsealへexact一致した後だけBearer headerを値非表示で読み、欠落・同形別token・config driftではrequest前にfail-closedする。
 
 hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。復元実演の外部HOLDを解除し、その後に訂正後final candidateへのORRERY namespace再束縛・独立検算を閉じ、最後にだけauthority 4遷移のcommitted testを追加する。それまでは本番切替は未承認である。再束縛結果は外部receipt/pinを正本とし、そのPASSを転記するだけのcandidate変更は行わない。
 

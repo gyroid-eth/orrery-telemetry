@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,13 @@ from agentstack_mail import cutover_client
 
 CANARY = "cutover-client-canary-value"
 OTHER_SAME_LENGTH = "x" * len(CANARY)
+
+
+@pytest.fixture(autouse=True)
+def _matching_codex_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cutover_client.CODEX_BEARER_ENV, CANARY)
 
 
 def _assert_secret_absent(secret: str, value: str | bytes) -> None:
@@ -97,6 +105,8 @@ def _read_header(
 def test_write_once_seal_verifies_exact_unchanged_clients(tmp_path: Path) -> None:
     seal, pin, claude, codex, legacy_env = _write_seal(tmp_path)
 
+    sealed = json.loads(seal.read_text(encoding="utf-8"))
+    assert sealed["bearer"]["codex_process_environment"] == {"status": "matched"}
     authorization = _read_header(seal, pin, claude, codex, legacy_env)
     assert authorization.startswith("Bearer ")
     assert hashlib.sha256(authorization[7:].encode()).digest() == hashlib.sha256(
@@ -117,7 +127,10 @@ def test_write_once_seal_verifies_exact_unchanged_clients(tmp_path: Path) -> Non
     assert pin.exists()
 
 
-def test_same_shape_bearer_change_fails_without_secret_in_error(tmp_path: Path) -> None:
+def test_same_shape_bearer_change_fails_without_secret_in_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seal, pin, claude, codex, legacy_env = _write_seal(tmp_path)
     claude_info = claude.stat()
     legacy_info = legacy_env.stat()
@@ -129,6 +142,7 @@ def test_same_shape_bearer_change_fails_without_secret_in_error(tmp_path: Path) 
     legacy_env.write_text(
         f"HTTP_BEARER_TOKEN={OTHER_SAME_LENGTH}\n", encoding="utf-8"
     )
+    monkeypatch.setenv(cutover_client.CODEX_BEARER_ENV, OTHER_SAME_LENGTH)
     os.utime(
         claude,
         ns=(claude_info.st_atime_ns, claude_info.st_mtime_ns),
@@ -140,6 +154,158 @@ def test_same_shape_bearer_change_fails_without_secret_in_error(tmp_path: Path) 
 
     with pytest.raises(cutover_client.ClientConfigSealError) as raised:
         _read_header(seal, pin, claude, codex, legacy_env)
+
+    message = str(raised.value)
+    _assert_secret_absent(CANARY, message)
+    _assert_secret_absent(OTHER_SAME_LENGTH, message)
+
+
+def test_same_shape_codex_process_token_drift_fails_without_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seal, pin, claude, codex, legacy_env = _write_seal(tmp_path)
+    monkeypatch.setenv(cutover_client.CODEX_BEARER_ENV, OTHER_SAME_LENGTH)
+
+    with pytest.raises(cutover_client.ClientConfigSealError) as raised:
+        _read_header(seal, pin, claude, codex, legacy_env)
+
+    message = str(raised.value)
+    _assert_secret_absent(CANARY, message)
+    _assert_secret_absent(OTHER_SAME_LENGTH, message)
+
+
+def test_absent_codex_process_token_is_explicitly_unverified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(cutover_client.CODEX_BEARER_ENV)
+    seal, pin, claude, codex, legacy_env = _write_seal(tmp_path)
+
+    sealed = json.loads(seal.read_text(encoding="utf-8"))
+    assert sealed["bearer"]["codex_process_environment"] == {
+        "status": "not_present_unverified"
+    }
+    assert _read_header(seal, pin, claude, codex, legacy_env).startswith("Bearer ")
+
+
+def test_running_token_census_reports_counts_without_values() -> None:
+    process_table = "\n".join(
+        (
+            f"101 codex MCP_AGENT_MAIL_TOKEN={CANARY}",
+            f"102 codex MCP_AGENT_MAIL_TOKEN={CANARY}",
+            f"103 codex MCP_AGENT_MAIL_TOKEN={OTHER_SAME_LENGTH}",
+            "104 unrelated",
+        )
+    )
+
+    census = cutover_client._summarize_running_codex_tokens(
+        process_table,
+        canonical_bearer=CANARY,
+    )
+
+    assert census == {
+        "kind": "orrery-mail-running-codex-token-census",
+        "status": "observed",
+        "report_only": True,
+        "environment_variable": "MCP_AGENT_MAIL_TOKEN",
+        "token_bearing_process_count": 3,
+        "distinct_digest_count": 2,
+        "drift_process_count": 1,
+        "raw_values_emitted": False,
+    }
+    serialized = json.dumps(census)
+    _assert_secret_absent(CANARY, serialized)
+    _assert_secret_absent(OTHER_SAME_LENGTH, serialized)
+
+
+def test_running_token_census_uses_configured_canonical_without_disclosure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude, codex, legacy_env = _write_inputs(tmp_path)
+    process_table = f"101 codex MCP_AGENT_MAIL_TOKEN={CANARY}\n"
+    monkeypatch.setattr(
+        cutover_client.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=process_table.encode(), stderr=b""
+        ),
+    )
+
+    census = cutover_client.capture_running_codex_token_census(
+        claude_config=claude,
+        codex_config=codex,
+        legacy_env=legacy_env,
+    )
+
+    assert census["status"] == "observed"
+    assert census["distinct_digest_count"] == 1
+    assert census["drift_process_count"] == 0
+    assert census["captured_at"].endswith("+00:00")
+    _assert_secret_absent(CANARY, json.dumps(census))
+
+
+def test_running_token_census_is_written_once_without_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude, codex, legacy_env = _write_inputs(tmp_path)
+    process_table = f"101 codex MCP_AGENT_MAIL_TOKEN={CANARY}\n"
+    monkeypatch.setattr(
+        cutover_client.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=process_table.encode(), stderr=b""
+        ),
+    )
+    output = tmp_path / "running-token-census.json"
+
+    census = cutover_client.write_running_codex_token_census(
+        output_path=output,
+        claude_config=claude,
+        codex_config=codex,
+        legacy_env=legacy_env,
+    )
+
+    assert json.loads(output.read_text(encoding="utf-8")) == census
+    assert stat.S_IMODE(output.stat().st_mode) == 0o400
+    assert output.stat().st_nlink == 1
+    _assert_secret_absent(CANARY, output.read_bytes())
+    with pytest.raises(
+        cutover_client.ClientConfigSealError,
+        match="already exists",
+    ):
+        cutover_client.write_running_codex_token_census(
+            output_path=output,
+            claude_config=claude,
+            codex_config=codex,
+            legacy_env=legacy_env,
+        )
+
+
+def test_running_token_census_failure_does_not_disclose_process_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude, codex, legacy_env = _write_inputs(tmp_path)
+    monkeypatch.setattr(
+        cutover_client.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout=CANARY.encode(),
+            stderr=OTHER_SAME_LENGTH.encode(),
+        ),
+    )
+
+    with pytest.raises(cutover_client.ClientConfigSealError) as raised:
+        cutover_client.capture_running_codex_token_census(
+            claude_config=claude,
+            codex_config=codex,
+            legacy_env=legacy_env,
+        )
 
     message = str(raised.value)
     _assert_secret_absent(CANARY, message)

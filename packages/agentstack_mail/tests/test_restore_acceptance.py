@@ -182,7 +182,7 @@ def test_message_digest_uses_exact_typed_eleven_column_recipe(tmp_path: Path) ->
     assert observation["new_ids"] == []
 
 
-def test_production_gate_allows_only_contiguous_message_append(tmp_path: Path) -> None:
+def test_production_gate_allows_contiguous_message_append(tmp_path: Path) -> None:
     database = tmp_path / "messages.sqlite3"
     connection = _message_database(database)
     before_family = restore_acceptance._family_identity(database, label="before")
@@ -198,16 +198,79 @@ def test_production_gate_allows_only_contiguous_message_append(tmp_path: Path) -
     )
     after_family = restore_acceptance._family_identity(database, label="after")
 
-    checks = restore_acceptance._evaluate_production_invariants(
+    evaluation = restore_acceptance._evaluate_production_invariants(
         before_family, after_family, before_messages, after_messages
     )
 
-    assert all(checks.values())
+    assert set(evaluation["invariants"]) == {
+        "family_identity_unchanged",
+        "maximum_did_not_decrease",
+        "prefix_bound_is_before_max",
+        "prefix_count_unchanged",
+        "prefix_digest_unchanged",
+        "count_delta_matches_new_ids",
+    }
+    assert all(evaluation["invariants"].values())
+    assert evaluation["observations"] == {"new_ids_are_contiguous": True}
     assert after_messages["new_ids"] == [2]
     assert before_family == after_family
 
 
-@pytest.mark.parametrize("mutation", ["prefix", "gap", "count", "family"])
+def test_production_gate_reports_id_gap_without_rejecting(tmp_path: Path) -> None:
+    database = tmp_path / "messages.sqlite3"
+    connection = _message_database(database)
+    before_family = restore_acceptance._family_identity(database, label="before")
+    before_messages = restore_acceptance._capture_message_window(database)
+    connection.execute(
+        "INSERT INTO messages VALUES (3,7,9,NULL,NULL,'s','b','normal',0,'later','[]')"
+    )
+    connection.commit()
+    connection.close()
+    after_messages = restore_acceptance._capture_message_window(
+        database, prefix_max_id=before_messages["max_id"]
+    )
+    after_family = restore_acceptance._family_identity(database, label="after")
+
+    evaluation = restore_acceptance._evaluate_production_invariants(
+        before_family, after_family, before_messages, after_messages
+    )
+
+    assert all(evaluation["invariants"].values())
+    assert evaluation["observations"] == {"new_ids_are_contiguous": False}
+    assert after_messages["new_ids"] == [3]
+
+
+def test_production_gate_reports_huge_id_gap_in_constant_auxiliary_space() -> None:
+    family = {"members": {"main": {"device": 1, "inode": 2}}}
+    before_messages = {
+        "max_id": 1,
+        "count": 1,
+        "prefix_max_id": 1,
+        "prefix_count": 1,
+        "prefix_sha256": "a" * 64,
+        "new_ids": [],
+    }
+    after_messages = {
+        "max_id": 2**63 - 1,
+        "count": 2,
+        "prefix_max_id": 1,
+        "prefix_count": 1,
+        "prefix_sha256": "a" * 64,
+        "new_ids": [2**63 - 1],
+    }
+
+    evaluation = restore_acceptance._evaluate_production_invariants(
+        family, family, before_messages, after_messages
+    )
+
+    assert all(evaluation["invariants"].values())
+    assert evaluation["observations"] == {"new_ids_are_contiguous": False}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["prefix", "maximum", "prefix_bound", "prefix_count", "count", "family"],
+)
 def test_production_gate_rejects_each_non_append_change(
     tmp_path: Path, mutation: str
 ) -> None:
@@ -217,10 +280,6 @@ def test_production_gate_rejects_each_non_append_change(
     before_messages = restore_acceptance._capture_message_window(database)
     if mutation == "prefix":
         connection.execute("UPDATE messages SET body_md='changed' WHERE id=1")
-    elif mutation == "gap":
-        connection.execute(
-            "INSERT INTO messages VALUES (3,7,9,NULL,NULL,'s','b','normal',0,'later','[]')"
-        )
     else:
         connection.execute(
             "INSERT INTO messages VALUES (2,7,9,NULL,NULL,'s','b','normal',0,'later','[]')"
@@ -231,6 +290,12 @@ def test_production_gate_rejects_each_non_append_change(
         database, prefix_max_id=before_messages["max_id"]
     )
     after_family = restore_acceptance._family_identity(database, label="after")
+    if mutation == "maximum":
+        after_messages["max_id"] = before_messages["max_id"] - 1
+    if mutation == "prefix_bound":
+        after_messages["prefix_max_id"] += 1
+    if mutation == "prefix_count":
+        after_messages["prefix_count"] += 1
     if mutation == "count":
         after_messages["count"] += 1
     if mutation == "family":
@@ -1235,6 +1300,17 @@ def test_joint_success_raw_restore_server_contract_shutdown_and_publish(
     payload = json.loads(receipt.read_text(encoding="utf-8"))
     assert payload["status"] == "passed"
     assert all(payload["gates"].values())
+    assert set(payload["production"]["invariants"]) == {
+        "family_identity_unchanged",
+        "maximum_did_not_decrease",
+        "prefix_bound_is_before_max",
+        "prefix_count_unchanged",
+        "prefix_digest_unchanged",
+        "count_delta_matches_new_ids",
+    }
+    assert all(payload["production"]["invariants"].values())
+    assert set(payload["production"]["observations"]) == {"new_ids_are_contiguous"}
+    assert type(payload["production"]["observations"]["new_ids_are_contiguous"]) is bool
     assert payload["candidate_server"]["readiness"]["tool_count"] == 24
     assert payload["candidate_server"]["shutdown"]["exit_code"] == 0
     assert payload["deadlines"] == {

@@ -1,9 +1,10 @@
-"""Write-once client configuration seal for the same-endpoint cutover.
+"""Client configuration and secret-free token observations for cutover.
 
 The seal contains only file metadata and cryptographic digests.  The bearer
 value is held in memory just long enough to compare the Claude and legacy
-sources and to construct a verified request header; it is never serialized or
-included in an exception message.
+sources, conditionally compare the current probe process, and construct a
+verified request header.  Raw bearer values and process-table output are never
+serialized or included in an exception message.
 """
 
 from __future__ import annotations
@@ -11,7 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
@@ -101,6 +105,19 @@ def _bearer_value(raw_env: bytes) -> str:
     return values[0]
 
 
+def _codex_process_environment_state(bearer: str) -> dict[str, Any]:
+    value = os.environ.get(CODEX_BEARER_ENV)
+    if value is None:
+        return {"status": "not_present_unverified"}
+    if not value or any(character.isspace() for character in value):
+        raise ClientConfigSealError("Codex bearer process environment is invalid")
+    if value != bearer:
+        raise ClientConfigSealError(
+            "Codex bearer process environment does not match configured sources"
+        )
+    return {"status": "matched"}
+
+
 def _inspect_client_config(
     *,
     claude_config: Path,
@@ -144,6 +161,7 @@ def _inspect_client_config(
     bearer = authorization[7:]
     if _bearer_value(legacy_raw) != bearer:
         raise ClientConfigSealError("configured bearer sources do not match")
+    codex_process_environment = _codex_process_environment_state(bearer)
     bearer_raw = bearer.encode("utf-8")
     state = {
         "kind": SEAL_KIND,
@@ -164,6 +182,7 @@ def _inspect_client_config(
             "value_bytes": len(bearer_raw),
             "sha256": hashlib.sha256(bearer_raw).hexdigest(),
             "sources_match": True,
+            "codex_process_environment": codex_process_environment,
         },
     }
     return state, authorization
@@ -283,15 +302,15 @@ def _read_write_once(path: Path) -> bytes:
     return raw
 
 
-def read_pinned_client_authorization(
+def read_pinned_client_config_state(
     *,
     seal_path: Path,
     pin_path: Path,
     claude_config: Path,
     codex_config: Path,
     legacy_env: Path,
-) -> str:
-    """Verify the external pin and live bytes, then return the in-memory header."""
+) -> tuple[dict[str, Any], str]:
+    """Verify the external pin and live bytes, returning state plus header."""
 
     seal_raw = _read_write_once(seal_path)
     pin_raw = _read_write_once(pin_path)
@@ -306,9 +325,120 @@ def read_pinned_client_authorization(
         raise ClientConfigSealError("client configuration seal is invalid") from exc
     if not isinstance(expected, dict):
         raise ClientConfigSealError("client configuration seal is invalid")
-    return verified_authorization_header(
+    authorization = verified_authorization_header(
         expected,
         claude_config=claude_config,
         codex_config=codex_config,
         legacy_env=legacy_env,
     )
+    return expected, authorization
+
+
+def read_pinned_client_authorization(
+    *,
+    seal_path: Path,
+    pin_path: Path,
+    claude_config: Path,
+    codex_config: Path,
+    legacy_env: Path,
+) -> str:
+    """Verify the external pin and live bytes, then return the in-memory header."""
+
+    _state, authorization = read_pinned_client_config_state(
+        seal_path=seal_path,
+        pin_path=pin_path,
+        claude_config=claude_config,
+        codex_config=codex_config,
+        legacy_env=legacy_env,
+    )
+    return authorization
+
+
+def _summarize_running_codex_tokens(
+    process_table: str,
+    *,
+    canonical_bearer: str,
+) -> dict[str, Any]:
+    pattern = re.compile(rf"(?:^|\s){re.escape(CODEX_BEARER_ENV)}=([^\s]+)")
+    canonical_digest = hashlib.sha256(canonical_bearer.encode("utf-8")).digest()
+    token_bearing_processes = 0
+    drift_processes = 0
+    distinct_digests: set[bytes] = set()
+    for row in process_table.splitlines():
+        values = pattern.findall(row)
+        if not values:
+            continue
+        token_bearing_processes += 1
+        row_digests = {
+            hashlib.sha256(value.encode("utf-8")).digest() for value in values
+        }
+        distinct_digests.update(row_digests)
+        if row_digests != {canonical_digest}:
+            drift_processes += 1
+    return {
+        "kind": "orrery-mail-running-codex-token-census",
+        "status": "observed",
+        "report_only": True,
+        "environment_variable": CODEX_BEARER_ENV,
+        "token_bearing_process_count": token_bearing_processes,
+        "distinct_digest_count": len(distinct_digests),
+        "drift_process_count": drift_processes,
+        "raw_values_emitted": False,
+    }
+
+
+def capture_running_codex_token_census(
+    *,
+    claude_config: Path,
+    codex_config: Path,
+    legacy_env: Path,
+) -> dict[str, Any]:
+    """Count live token digests without emitting process rows or token values."""
+
+    _state, authorization = _inspect_client_config(
+        claude_config=claude_config,
+        codex_config=codex_config,
+        legacy_env=legacy_env,
+    )
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "eww", "-axo", "pid=,command="],
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ClientConfigSealError(
+            "running Codex bearer census could not be captured"
+        ) from exc
+    if result.returncode != 0:
+        raise ClientConfigSealError("running Codex bearer census could not be captured")
+    census = _summarize_running_codex_tokens(
+        result.stdout.decode("utf-8", errors="replace"),
+        canonical_bearer=authorization[7:],
+    )
+    census["captured_at"] = datetime.now(timezone.utc).isoformat()
+    return census
+
+
+def write_running_codex_token_census(
+    *,
+    output_path: Path,
+    claude_config: Path,
+    codex_config: Path,
+    legacy_env: Path,
+) -> dict[str, Any]:
+    """Capture and write one secret-free process census with no overwrite path."""
+
+    if output_path.exists() or output_path.is_symlink():
+        raise ClientConfigSealError("running Codex bearer census already exists")
+    census = capture_running_codex_token_census(
+        claude_config=claude_config,
+        codex_config=codex_config,
+        legacy_env=legacy_env,
+    )
+    raw = (json.dumps(census, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
+    _write_once(output_path, raw)
+    return census

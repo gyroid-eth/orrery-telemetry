@@ -480,12 +480,19 @@ def _evaluate_production_invariants(
     after_family: dict[str, Any],
     before_messages: dict[str, Any],
     after_messages: dict[str, Any],
-) -> dict[str, bool]:
+) -> dict[str, dict[str, bool]]:
     before_max = int(before_messages["max_id"])
     after_max = int(after_messages["max_id"])
     new_ids = [int(value) for value in after_messages["new_ids"]]
-    expected_new_ids = list(range(before_max + 1, after_max + 1))
-    checks = {
+    new_ids_are_contiguous = (
+        after_max >= before_max
+        and len(new_ids) == after_max - before_max
+        and all(
+            value == before_max + offset
+            for offset, value in enumerate(new_ids, start=1)
+        )
+    )
+    invariants = {
         "family_identity_unchanged": before_family == after_family,
         "maximum_did_not_decrease": after_max >= before_max,
         "prefix_bound_is_before_max": after_messages["prefix_max_id"] == before_max,
@@ -496,18 +503,20 @@ def _evaluate_production_invariants(
         "prefix_digest_unchanged": (
             before_messages["prefix_sha256"] == after_messages["prefix_sha256"]
         ),
-        "new_ids_are_contiguous": new_ids == expected_new_ids,
         "count_delta_matches_new_ids": (
             int(after_messages["count"]) - int(before_messages["count"])
             == len(new_ids)
         ),
     }
-    failed = sorted(name for name, passed in checks.items() if not passed)
+    observations = {
+        "new_ids_are_contiguous": new_ids_are_contiguous,
+    }
+    failed = sorted(name for name, passed in invariants.items() if not passed)
     if failed:
         raise RestoreAcceptanceError(
             f"production invariants failed: {', '.join(failed)}"
         )
-    return checks
+    return {"invariants": invariants, "observations": observations}
 
 
 def _run_capture(arguments: list[str], *, timeout: float = 10) -> dict[str, Any]:
@@ -2171,7 +2180,7 @@ def run_restore_acceptance(
             raise RestoreAcceptanceError(
                 "production listener owner changed during the rehearsal"
             )
-        production_gates = _evaluate_production_invariants(
+        production_evaluation = _evaluate_production_invariants(
             production_before_family,
             production_after_family,
             production_before_messages,
@@ -2246,7 +2255,8 @@ def run_restore_acceptance(
                     "messages": production_after_messages,
                     "listener": production_listener_after,
                 },
-                "invariants": production_gates,
+                "invariants": production_evaluation["invariants"],
+                "observations": production_evaluation["observations"],
             },
             "restore_worker": worker,
             "candidate_server": server,

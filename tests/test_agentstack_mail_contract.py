@@ -1,5 +1,6 @@
 import hashlib
 import json
+import runpy
 import sys
 from pathlib import Path
 
@@ -92,6 +93,16 @@ def test_tracked_live_source_is_content_addressed() -> None:
     )
 
 
+def test_distribution_contract_lists_every_runtime_module_and_cutover_test() -> None:
+    verifier = runpy.run_path(str(PACKAGE / "tests" / "verify_artifact.py"))
+    runtime_modules = {
+        path.name for path in (PACKAGE_SRC / "agentstack_mail").glob("*.py")
+    }
+
+    assert verifier["REQUIRED_RUNTIME_MODULES"] == runtime_modules
+    assert "/tests/test_cutover_client.py" in verifier["SDIST_REQUIRED_SUFFIXES"]
+
+
 def test_cutover_runbook_names_every_machine_gate_exactly_once() -> None:
     manifest = json.loads(
         (
@@ -128,6 +139,8 @@ def test_cutover_runbook_pins_selector_and_unchanged_client_header_contract() ->
     assert "39件" not in runbook
     assert "旧「70件」は誤集計" not in runbook
     assert "URLと認証だけを切り替える" not in runbook
+    assert "同じ既存keyと同じendpoint" not in runbook
+    assert "既存keyとisolated candidate endpoint" in runbook
     assert (
         "client設定はkey / URL / port / path / tokenのいずれも変更しない"
         in runbook
@@ -152,8 +165,17 @@ def test_cutover_runbook_pins_selector_and_unchanged_client_header_contract() ->
     assert runbook.index("initialize_client_config_seal || exit 1") < runbook.index(
         "### 現行v1の停止点（normative）"
     )
-    assert runbook.count("assert_cutover_client_provenance || return 1") == 3
+    assert runbook.count("assert_cutover_client_provenance || return 1") == 4
     assert 'archive.read("agentstack_mail/cutover_client.py")' in runbook
+    assert (
+        'CODEX_TOKEN_CENSUS="$MAINT/running-codex-token-census-'
+        '$CANDIDATE_COMMIT.json"' in runbook
+    )
+    assert "write_running_codex_token_census" in runbook
+    assert "not_present_unverified" in runbook
+    assert "drift_process_count" in runbook
+    assert "raw_values_emitted" in runbook
+    assert "全sessionを個別にsealしたとは主張しない" in runbook
 
 
 def test_cutover_runbook_pins_the_versioned_display_patch_chain() -> None:
@@ -242,3 +264,6 @@ def test_cutover_runbook_pins_the_accepted_restore_observer_contract() -> None:
     assert 'assert info.st_nlink == 1' in runbook
     assert "second_prepared_alias_unlink_returns" in runbook
     assert "command完了前に照合子を並行起動しない" in runbook
+    assert 'assert set(observations) == {"new_ids_are_contiguous"}' in runbook
+    assert 'assert type(observations["new_ids_are_contiguous"]) is bool' in runbook
+    assert "正当な採番gapを不合格にせずreport-only observation" in runbook
