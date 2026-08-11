@@ -17,7 +17,9 @@ agent:
 
 maintainer承認下の本番legacy server 1回再起動で、listener消滅はstopから5.41秒、同じendpointの自動復帰は15.72秒だった。既存clientは停止中の`fetch_inbox`が1回transport errorとなった後、session再起動も`/mcp`手動再接続もなく最初の再試行で成功した。PIDは28395から77623へ変わり、復帰後の`health_check`、DB `integrity_check`、件数は正常だった。したがって同じkey・同じURL/portでのclient再接続は実測済みとし、追加の隔離client rehearsalは行わない。
 
-このlocalhost・単独利用の初回切替で、切替前に満たすprerequisiteは次の3点だけである。各項目の現在状態は末尾のblocker digestを正本とし、この列挙自体を進捗表にしない。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。順序は、復元実演の外部HOLD解除 → final candidateへのORRERY証跡再束縛・独立検算 → authorityの4遷移を固定するcommitted testであり、前段を飛ばさない。
+このlocalhost・単独利用の初回切替で、切替前に満たすprerequisiteは次の3点だけである。各項目の現在状態は末尾のblocker digestを正本とし、この列挙自体を進捗表にしない。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。順序は、launchdのfail-closed 4遷移を固定するcommitted testとこの手順訂正を同じclean commitへ入れる → そのcommitをfinal candidateとして固定する → 同じSHAで復元実演を外部検算する → 同じSHAへORRERY証跡を再束縛・独立検算する、である。以後はreceiptのPASSを転記するcommitも作らない。
+
+ここでいう4遷移は、`bootstrap`がEIOを返した後の`foreign` / `unknown`、`service_stop`のbootout後poll中の`exact-owned → foreign`、isolated launchd rehearsal cleanupの同じownership driftである。旧/new authorityのbootout/bootstrap 4 edgeを指さない。
 
 1. production backupを、本番とcanonical path・symlink・inodeまで異なる故意破損済みの隔離targetへ非no-op復元すること。receiptの`target.kind=rehearsal-copy` / `production_source=false`、停止直前の最新行watermark、exact candidate PIDによるtarget DB familyのopen、起動後full logical snapshot一致を確認する。本番側はbyte不変ではなく、main/WAL/SHMの同一性、停止直前までのmessage prefix不変、通常の新着だけ、実演process treeが本番familyをopenしていないことを確認する。
 2. final clean candidateへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成・独立検算したうえで、旧`com.operator.mcp-agent-mail`のbootoutから新`org.orrery.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。旧namespaceのreceiptは流用しない。
@@ -1964,12 +1966,12 @@ bounded_mail_probe \
 
 これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の3点だけを追う。
 
-- **復元の実演: producer実装済み・HOLD。** accepted 67MB familyを使うjoined E2Eと内部reviewは通った。final clean candidateのproducerを元の照合子が承認した後だけ、上のexact blockをProOpusが実行し、照合子へwrite-once final JSONと外部pinを渡す。内部subagentのPASSだけでHOLDを解除しない。
+- **復元の実演: `4d41f80`で外部検算PASS・次のfinal candidateでは再束縛待ち。** `4d41f80`のwrite-once final JSONと外部pinは元の照合子がacceptして旧HOLDを解除した。ただしfail-closed 4遷移testをcandidate ancestryとsdistへ入れるcommitが先行するため、その新SHAでは同じcomplete operator blockを1回だけ再実行し、元の照合経路で再検算する。`4d41f80`のreceiptを新SHAのH0へ流用しない。
 - **二重service防止: product guard・手順は完了、final candidateへのORRERY証跡再束縛待ち、実切替は未実行。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`はsealed legacy label/receipt SHA不一致、configured legacy job残留、foreign 8765 listenerをlaunchctl前に拒否する。`e0b1110`のforeground、legacy snapshot、launchd rehearsal receiptは独立検算PASS済みだが、この訂正後は履歴証跡である。新しいclean commitへ全4 receiptを再束縛して元の照合経路で検算するまでH0は通さない。actual authority交代は切替当日にだけ実行する。
 - **戻し手順: 補正完了・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、同じ8765 `/api/`への復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
 
 permission/hook selector確認は完了済みで、pre-cutover残タスクではない。project `.mcp.json`へ新serverを足さず、client設定のkey / URL / port / path / tokenを一文字も変えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。既存keyとisolated candidate endpointを使った9-tool隔離probeは9/9一致、permission/trust prompt 0、error 0だった。C0のwrite-once sealはClaude/Codex/token sourceのfull-file SHA-256とmetadataを外部pinへ固定する。probe自身に`MCP_AGENT_MAIL_TOKEN`がある場合は同じdigestであることもsealし、無い場合は`not_present_unverified`をreceiptへ残す。稼働中process群は個別sealの対象にせず、切替前の一回採取でtoken-bearing process数、distinct digest数、DRIFT数だけをwrite-once report-only artifactへ記録する。したがって「token完全据え置き」は設定fileとprobe processの観測範囲に限定し、全sessionを個別にsealしたとは主張しない。seal verifierはfinal candidate wheelを入れた専用venvからだけ読む。H9/RB4/R6の共通probeは現在値がsealへexact一致した後だけBearer headerを値非表示で読み、欠落・同形別token・config driftではrequest前にfail-closedする。
 
-hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。復元実演の外部HOLDを解除し、その後に訂正後final candidateへのORRERY namespace再束縛・独立検算を閉じ、最後にだけauthority 4遷移のcommitted testを追加する。それまでは本番切替は未承認である。再束縛結果は外部receipt/pinを正本とし、そのPASSを転記するだけのcandidate変更は行わない。
+hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。まずlaunchdのfail-closed 4遷移testと手順訂正をcommitしてfinal candidateを固定し、その同じSHAで復元実演の外部検算とORRERY namespace 4 receiptの再束縛・独立検算を閉じる。それまでは本番切替は未承認である。再束縛結果は外部receipt/pinを正本とし、そのPASSを転記するだけのcandidate変更は行わない。
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。

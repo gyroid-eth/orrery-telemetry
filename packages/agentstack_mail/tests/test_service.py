@@ -1789,6 +1789,80 @@ def test_bootstrap_eio_with_absent_job_fails_without_more_mutation(
     ]
 
 
+def test_bootstrap_eio_with_foreign_job_fails_without_more_mutation(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+        failed_bootstrap_loads=True,
+    )
+
+    def foreign_after_bootstrap(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "bootstrap":
+            fake.foreign = True
+        return result
+
+    with pytest.raises(
+        service.ServiceError,
+        match="loaded label is foreign or unknown.*no bootout attempted",
+    ):
+        service.service_start(ownership, runner=foreign_after_bootstrap)
+
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "print",
+        "print",
+    ]
+    assert not {"enable", "kickstart", "bootout"}.intersection(
+        call[1] for call in fake.calls
+    )
+
+
+def test_bootstrap_eio_with_unknown_job_fails_without_more_mutation(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+        failed_bootstrap_loads=True,
+    )
+
+    def unknown_after_bootstrap(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        result = fake(arguments, **kwargs)
+        if arguments[1] == "bootstrap":
+            fake.print_returncode = 5
+        return result
+
+    with pytest.raises(
+        service.ServiceError,
+        match="job state is unknown.*could not be inspected",
+    ):
+        service.service_start(ownership, runner=unknown_after_bootstrap)
+
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "print",
+        "print",
+    ]
+    assert not {"enable", "kickstart", "bootout"}.intersection(
+        call[1] for call in fake.calls
+    )
+
+
 def test_bootstrap_eio_with_environment_drift_is_compensated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1868,6 +1942,46 @@ def test_service_stop_waits_for_asynchronous_bootout(
         "print",
         "print",
     ]
+
+
+def test_service_stop_rejects_ownership_change_during_bootout_poll(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=True,
+        bootout_delay_prints=10,
+    )
+    bootout_seen = False
+    poll_count = 0
+
+    def foreign_during_poll(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal bootout_seen, poll_count
+        operation = arguments[1]
+        if operation == "bootout":
+            bootout_seen = True
+        elif operation == "print" and bootout_seen:
+            poll_count += 1
+            if poll_count == 2:
+                fake.foreign = True
+        return fake(arguments, **kwargs)
+
+    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
+    with pytest.raises(service.ServiceError, match="changed ownership"):
+        service.service_stop(ownership, runner=foreign_during_poll)
+
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootout",
+        "print",
+        "print",
+    ]
+    assert sum(call[1] == "bootout" for call in fake.calls) == 1
 
 
 def test_service_stop_rejects_stopped_observation_after_deadline(

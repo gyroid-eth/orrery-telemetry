@@ -753,6 +753,56 @@ arguments = {
     ]
 
 
+def test_rehearsal_cleanup_rejects_ownership_change_during_bootout_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = "org.orrery.mail.rehearsal.12345678.foreign"
+    calls: list[list[str]] = []
+    definition = {
+        "path": "/private/tmp/rehearsal.plist",
+        "program": "/private/tmp/bin/service",
+        "arguments": ["/private/tmp/bin/service"],
+    }
+    loaded = """path = /private/tmp/rehearsal.plist
+program = /private/tmp/bin/service
+arguments = {
+    /private/tmp/bin/service
+}
+"""
+    foreign = """path = /private/tmp/foreign.plist
+program = /private/tmp/bin/foreign
+arguments = {
+    /private/tmp/bin/foreign
+}
+"""
+
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        if arguments[1] == "bootout":
+            return _completed(arguments)
+        print_count = sum(call[1] == "print" for call in calls)
+        return _completed(arguments, stdout=loaded if print_count <= 2 else foreign)
+
+    monkeypatch.setattr(evidence.time, "sleep", lambda _seconds: None)
+    with pytest.raises(evidence.EvidenceError, match="changed ownership"):
+        evidence._ensure_rehearsal_job_absent(
+            label,
+            expected_definition_sha256=evidence._sha256_bytes(
+                evidence._canonical_json(definition)
+            ),
+            runner=runner,
+            timeout_seconds=1,
+        )
+
+    assert [call[1] for call in calls] == [
+        "print",
+        "bootout",
+        "print",
+        "print",
+    ]
+    assert sum(call[1] == "bootout" for call in calls) == 1
+
+
 def test_rehearsal_cleanup_rejects_absence_observed_after_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
