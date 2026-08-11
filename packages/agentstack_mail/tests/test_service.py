@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.request as urllib_request
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -24,6 +25,12 @@ from agentstack_mail import service
 
 
 REHEARSAL_LABEL = f"{service.LAUNCHD_REHEARSAL_PREFIX}e6c76c4.a1b2"
+LEGACY_BEARER_CANARY = "unchanged-legacy-client-token-canary"
+
+
+def _assert_secret_absent(secret: str, value: str) -> None:
+    if secret in value:
+        pytest.fail("secret material was disclosed", pytrace=False)
 
 
 def _free_port() -> int:
@@ -50,6 +57,48 @@ def _wait_port(port: int, *, present: bool, timeout: float = 15.0) -> None:
 async def _touch_real_writer(port: int, project: Path) -> None:
     async with Client(f"http://127.0.0.1:{port}/mcp", timeout=5) as client:
         await client.call_tool("ensure_project", {"human_key": str(project)})
+
+
+def _call_real_mcp_with_legacy_bearer(
+    port: int,
+    name: str,
+    arguments: dict[str, Any],
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": name,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+    ).encode("utf-8")
+    request = urllib_request.Request(
+        f"http://127.0.0.1:{port}/api/",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {LEGACY_BEARER_CANARY}",
+        },
+    )
+    with urllib_request.urlopen(request, timeout=5) as response:
+        status = response.status
+        raw = response.read().decode("utf-8")
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    envelope = json.loads(raw)
+    result = envelope["result"]
+    value = result.get("structuredContent")
+    if value is None:
+        value = next(
+            json.loads(block["text"])
+            for block in result.get("content", [])
+            if block.get("type") == "text"
+        )
+    return status, envelope, value
 
 
 def _runtime_environment(env_file: Path) -> dict[str, str]:
@@ -295,6 +344,76 @@ def test_render_is_pure_content_aware_and_parseable(tmp_path: Path) -> None:
 
 def stat_mode(path: Path) -> int:
     return path.stat().st_mode & 0o777
+
+
+def test_unexpected_legacy_bearer_header_is_ignored_by_http_entrypoint(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mail"
+    root.mkdir()
+    port = _free_port()
+    env_file = _environment(tmp_path / "mail.env", root, port=port, http_path="/api/")
+    server = Path(sys.executable).parent / "agentstack-mail"
+    project = tmp_path / "probe-project"
+    project.mkdir()
+    process = subprocess.Popen(
+        [str(server)],
+        env=_runtime_environment(env_file),
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    server_output = ""
+    try:
+        _wait_port(port, present=True)
+        calls = [
+            _call_real_mcp_with_legacy_bearer(
+                port,
+                "ensure_project",
+                {"human_key": str(project)},
+            ),
+            _call_real_mcp_with_legacy_bearer(
+                port,
+                "register_agent",
+                {
+                    "project_key": str(project),
+                    "program": "pytest",
+                    "model": "fixture",
+                    "name": "BlueLake",
+                },
+            ),
+            _call_real_mcp_with_legacy_bearer(port, "health_check", {}),
+            _call_real_mcp_with_legacy_bearer(
+                port,
+                "whois",
+                {
+                    "project_key": str(project),
+                    "agent_name": "BlueLake",
+                    "include_recent_commits": False,
+                },
+            ),
+        ]
+        assert [status for status, _envelope, _value in calls] == [200] * 4
+        for _status, envelope, _value in calls:
+            _assert_secret_absent(LEGACY_BEARER_CANARY, json.dumps(envelope))
+        health = calls[2][2]
+        assert health["status"] == "ok"
+        assert health["http_host"] == "127.0.0.1"
+        assert health["http_port"] == port
+        assert health["database_url"] == (
+            f"sqlite+aiosqlite:///{root / 'storage.sqlite3'}"
+        )
+        whois = calls[3][2]
+        assert whois["name"] == "BlueLake"
+        assert whois.get("recent_commits", []) == []
+    finally:
+        if process.poll() is None:
+            _stop_process_group(process.pid, port=port)
+        stdout, stderr = process.communicate(timeout=15)
+        server_output = stdout + stderr
+        _wait_port(port, present=False)
+    _assert_secret_absent(LEGACY_BEARER_CANARY, server_output)
 
 
 def test_runtime_preflight_fails_before_artifact(tmp_path: Path) -> None:

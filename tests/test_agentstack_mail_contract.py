@@ -114,6 +114,48 @@ def test_cutover_runbook_names_every_machine_gate_exactly_once() -> None:
     assert "22-tool" not in runbook
 
 
+def test_cutover_runbook_pins_selector_and_unchanged_client_header_contract() -> None:
+    runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
+    probe = runbook.split("bounded_mail_probe() {", 1)[1].split("\n}\n", 1)[0]
+    selector_census = (
+        "permission `allow`のraw occurrenceは68件（global "
+        "`~/.claude/settings.json` 28件、local `settings.local.json` "
+        "15ファイル40件）、hook matcherは2件で合計70件である。"
+        "distinct unionは34（global 28 / local 28 / local-only 6）。"
+    )
+
+    assert runbook.count(selector_census) == 3
+    assert "39件" not in runbook
+    assert "旧「70件」は誤集計" not in runbook
+    assert "URLと認証だけを切り替える" not in runbook
+    assert (
+        "client設定はkey / URL / port / path / tokenのいずれも変更しない"
+        in runbook
+    )
+    assert '"Authorization": authorization' in probe
+    assert probe.index(
+        "authorization = read_pinned_client_authorization("
+    ) < probe.index("urllib.request.Request")
+    assert "print(authorization)" not in probe
+    assert "{last}" not in probe
+    assert 'raise SystemExit("bounded MCP read probe failed")' in probe
+    assert "headerなしや現在値への追随をせずfail-closed" in runbook
+    assert "この同じ関数をH9、RB4、R6で使う" in runbook
+    assert (
+        "生のtokenはstdout、stderr、receipt、assertion messageへ出さず" in runbook
+    )
+    assert runbook.count("bounded_mail_probe \\") == 3
+    assert runbook.count("assert_client_config_seal >") == 3
+    assert 'CANDIDATE_VENV="$CANDIDATE_ARTIFACT_ROOT/venv"' in runbook
+    assert 'CUTOVER_PYTHON="$CANDIDATE_VENV/bin/python"' in runbook
+    assert "CUTOVER_PYTHONPATH" not in runbook
+    assert runbook.index("initialize_client_config_seal || exit 1") < runbook.index(
+        "### 現行v1の停止点（normative）"
+    )
+    assert runbook.count("assert_cutover_client_provenance || return 1") == 3
+    assert 'archive.read("agentstack_mail/cutover_client.py")' in runbook
+
+
 def test_cutover_runbook_pins_the_versioned_display_patch_chain() -> None:
     runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
     patch_root = ROOT / "docs" / "agentstack-mail-cutover-patches"

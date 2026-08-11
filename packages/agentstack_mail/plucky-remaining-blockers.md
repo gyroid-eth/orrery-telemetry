@@ -1,15 +1,21 @@
 # AgentStack Mail remaining blockers — PluckyEinstein checkpoint
 
+> **Frozen historical checkpoint:** this file records the state at candidate
+> `3e6062d` and is not the current cutover status.  The non-normative blocker
+> digest in `docs/agentstack-mail-cutover.md` is the current progress view;
+> do not reuse the six-item remainder or estimate below as a live plan.
+
 Canonical decisions: AgentMail #8379, #8381, #8387. Audit baseline: clean
 `5ff73d9cda3fac9a032fb73c05d2639514e2a608`. Status vocabulary is exactly
 `済 / 未 / 検証不能`.
 
-This checkpoint travels in the ledger-reflection candidate. Its exact clean
-commit SHA is recorded in the external commit receipt after the commit exists;
-the document deliberately does not contain a self-referential candidate SHA.
+This checkpoint travelled in its ledger-reflection candidate. Its exact clean
+commit SHA was recorded in the external commit receipt after that commit
+existed; this frozen document deliberately does not acquire a current or
+future candidate SHA.
 
-This file is a working checkpoint, not a second cutover authority. The
-versioned fixture and `cutover_readiness.py` remain normative.
+This file is a frozen checkpoint, not a second cutover authority. The current
+runbook and its routed machine contracts remain normative.
 
 ## Parent's original six items
 
@@ -134,3 +140,5 @@ engineering critical path is roughly 12–24 hours. The current safe schedule is
 therefore **2–4 focused workdays**, plus maintainer's preview and final
 exact-candidate approval. This estimate excludes deferred post-cutover work and
 does not authorize live cutover actions.
+
+#codex
