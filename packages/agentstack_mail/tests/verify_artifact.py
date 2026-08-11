@@ -26,7 +26,7 @@ EXPECTED_BASELINES = {
     },
     "core": {
         "python_namespace": "agentstack_mail",
-        "approved_base": "de625ed1928fec533a85700b9f1b2892b5a61dc5",
+        "approved_base": "8dffb09cca07d03214c7eab4c3121f83632666ce",
         "contract_fixture": "compatibility-tools-v1.json",
     },
 }
@@ -929,7 +929,7 @@ EXPECTED_FOLLOW_UP_TASK_IDS = [
     "cutover-documentation-consistency",
 ]
 EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
-    "10cb46db7813f0d4f4f8ae8fcea41c863e5c0bc06498d433c5162bd7918a846c"
+    "09c31ec08fc31cd32dbc6548626505286ff63a737650a0e97fbd923242fd8df3"
 )
 EXPECTED_CUTOVER_CONDITION_IDS = [
     "product-decisions-selected",

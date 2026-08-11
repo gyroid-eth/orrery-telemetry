@@ -240,15 +240,16 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
 
 ## Hook が `FILE RESERVATION REQUIRED` で block する
 
-protected root 内の Edit / Write では、hook が現在の agent の既存 reservation を renew し、なければ exact relative path の auto-acquire を試します。それでも block する場合:
+protected root 内の Edit / Write では、hook が exact identity を確定してから既存 reservation を相対/絶対 path の両方で renew-only 確認します。auto-acquire はしません。block する場合:
 
 1. `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` が reservation を作った project と一致するか確認
-2. tmux session 名、`AGENT_NAME`、pane metadata が同じ canonical identity を指すか確認
+2. `AGENT_NAME`、または`TMUX_PANE`で明示したtmux sessionがcanonical identityを指すか確認。pane metadataとの不一致は`AGENT IDENTITY CONFLICT`として先に直す
 3. exact path または最小の glob を `file_reservation_paths` で予約
 4. conflict が返ったら holder へ agent-mail で連絡し、release または expiry を待つ
-5. token-strict server で renew が0なら `agentstack-reregister` で owner token state を復旧
 
-server 到達不能または protected root 未設定では hook は fail-open します。block を消すために guard を無効化せず、project / identity / reservation の不一致を直してください。
+owner `registration_token` はこのhookのtool argumentsへ送られず、legacy HTTP bearerとは別物です。`isError`は省略またはboolean `false`だけを成功とします。exact identityとprotected scopeの確定後、最初の照会がtransport unreachableの場合だけfail-openです。HTTP/MCP/schema rejection、malformed response、definitive zero後のtransport failureはblockします。pathなし・protected root外はenforcement対象外なのでexit 0です。
+
+strict版はcutover C5の全client restart/rebind後にdeployします。raw non-tmux Claudeやidentity sourceのない旧sessionは対応せず、`agent-start`経由で再起動してください。guardを無効化したり、untargeted tmux sessionやstale metadataをidentityとして採用したりしないでください。
 
 ## Spawned child が自分の inbox を読めない
 

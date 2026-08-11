@@ -18,6 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "check-file-reservation.sh"
+RESOLVER = ROOT / "hooks" / "resolve-agent-name.sh"
 
 
 class _Server:
@@ -62,6 +63,56 @@ class _Server:
         self.httpd.server_close()
 
 
+class _OneShotZeroServer:
+    """Return renewed=0 once, then make the retry fail at transport."""
+
+    def __init__(self) -> None:
+        self.listener = socket.socket()
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(1)
+        self.thread = threading.Thread(target=self._serve_once, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self.listener.getsockname()
+        return f"http://{host}:{port}/mcp"
+
+    def _serve_once(self) -> None:
+        connection, _address = self.listener.accept()
+        with connection:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += connection.recv(4096)
+            header, body = request.split(b"\r\n\r\n", 1)
+            content_length = 0
+            for line in header.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    content_length = int(line.split(b":", 1)[1].strip())
+            while len(body) < content_length:
+                body += connection.recv(4096)
+            response = _mcp_result(0)
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(response)}\r\n".encode()
+                + b"Connection: close\r\n\r\n"
+                + response
+            )
+        self.listener.close()
+
+    def __enter__(self) -> _OneShotZeroServer:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        try:
+            self.listener.close()
+        except OSError:
+            pass
+        self.thread.join(timeout=2)
+
+
 def _mcp_result(renewed: Any) -> bytes:
     return json.dumps(
         {
@@ -74,19 +125,32 @@ def _mcp_result(renewed: Any) -> bytes:
 
 class ReservationHookTests(unittest.TestCase):
     def run_hook(
-        self, url: str, root: Path, *, bearer: str = ""
+        self,
+        url: str,
+        root: Path,
+        *,
+        bearer: str = "",
+        agent_name: str | None = "PluckyEinstein",
+        tmux_pane: str | None = None,
+        metadata_agent: str | None = None,
+        install_resolver: bool = False,
+        tmux_session_agent: str | None = None,
+        file_path: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         runtime = root / "runtime"
         hooks = root / "isolated-hooks"
         runtime.mkdir(exist_ok=True)
         hooks.mkdir(exist_ok=True)
+        if install_resolver:
+            (hooks / "resolve-agent-name.sh").write_bytes(RESOLVER.read_bytes())
         (runtime / "agent_token_PluckyEinstein").write_text(
             "sentinel-owner-token\n", encoding="utf-8"
         )
         env = os.environ.copy()
+        for name in ("AGENT_NAME", "TMUX", "TMUX_PANE"):
+            env.pop(name, None)
         env.update(
             {
-                "AGENT_NAME": "PluckyEinstein",
                 "AGENTSTACK_PROJECT_KEY": str(root),
                 "AGENTSTACK_PROTECTED_ROOTS": str(root),
                 "AGENTSTACK_HOOKS_DIR": str(hooks),
@@ -97,7 +161,30 @@ class ReservationHookTests(unittest.TestCase):
                 "FILE_RESERVATION_RETRY_DELAY_SECONDS": "0",
             }
         )
-        payload = json.dumps({"tool_input": {"file_path": str(root / "note.md")}})
+        if agent_name is not None:
+            env["AGENT_NAME"] = agent_name
+        if tmux_pane is not None:
+            env["TMUX_PANE"] = tmux_pane
+        if metadata_agent is not None:
+            if tmux_pane is None:
+                raise AssertionError("metadata_agent requires tmux_pane")
+            pane_key = tmux_pane.replace("%", "_")
+            (runtime / f"agent_name_{pane_key}").write_text(
+                metadata_agent + "\n", encoding="utf-8"
+            )
+        if tmux_session_agent is not None:
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir(exist_ok=True)
+            fake_tmux = fake_bin / "tmux"
+            fake_tmux.write_text(
+                "#!/bin/sh\nprintf '%s\\n' " + tmux_session_agent + "\n",
+                encoding="utf-8",
+            )
+            fake_tmux.chmod(0o755)
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+        payload = json.dumps(
+            {"tool_input": {"file_path": str(file_path or root / "note.md")}}
+        )
         return subprocess.run(
             ["/bin/bash", str(HOOK)],
             input=payload,
@@ -220,6 +307,116 @@ class ReservationHookTests(unittest.TestCase):
             result = self.run_hook(f"http://127.0.0.1:{port}/mcp", Path(directory))
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_transport_failure_after_definitive_zero_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _OneShotZeroServer() as server:
+            result = self.run_hook(server.url, Path(directory))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("became unreachable", result.stderr)
+
+    def test_unresolved_identity_blocks_without_using_ambient_tmux_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name=None,
+                install_resolver=True,
+                tmux_session_agent="WrongAgent",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("AGENT IDENTITY REQUIRED", result.stderr)
+        self.assertEqual(server.requests, [])
+
+    def test_exact_pane_metadata_identity_can_confirm_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name=None,
+                tmux_pane="%77",
+                metadata_agent="PluckyEinstein",
+                install_resolver=True,
+                tmux_session_agent="PluckyEinstein",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = server.requests[0]["json"]["params"]["arguments"]
+        self.assertEqual(arguments["agent_name"], "PluckyEinstein")
+
+    def test_stale_pane_metadata_conflict_blocks_without_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name=None,
+                tmux_pane="%77",
+                metadata_agent="StaleAgent",
+                install_resolver=True,
+                tmux_session_agent="PluckyEinstein",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("AGENT IDENTITY CONFLICT", result.stderr)
+        self.assertEqual(server.requests, [])
+
+    def test_exact_targeted_tmux_session_without_metadata_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name=None,
+                tmux_pane="%77",
+                install_resolver=True,
+                tmux_session_agent="PluckyEinstein",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = server.requests[0]["json"]["params"]["arguments"]
+        self.assertEqual(arguments["agent_name"], "PluckyEinstein")
+
+    def test_placeholder_targeted_session_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name=None,
+                tmux_pane="%77",
+                install_resolver=True,
+                tmux_session_agent="warm-123",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("AGENT IDENTITY REQUIRED", result.stderr)
+        self.assertEqual(server.requests, [])
+
+    def test_unresolved_identity_outside_protected_root_still_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            root = Path(directory)
+            result = self.run_hook(
+                server.url,
+                root,
+                agent_name=None,
+                install_resolver=True,
+                tmux_session_agent="WrongAgent",
+                file_path=root.parent / f"outside-{root.name}.md",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(server.requests, [])
 
     def test_rejection_after_definitive_zero_still_blocks(self) -> None:
         def respond(count: int) -> tuple[int, bytes]:

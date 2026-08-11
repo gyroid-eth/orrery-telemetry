@@ -29,21 +29,15 @@ resolve_agent_name() {
     if [[ -f "$HOOKS_DIR/resolve-agent-name.sh" ]]; then
         # shellcheck disable=SC1091
         source "$HOOKS_DIR/resolve-agent-name.sh"
+        if [[ "${RESOLVED_AGENT_SRC:-}" == "identity-conflict" ]]; then
+            echo "AGENT IDENTITY CONFLICT: pane metadata does not match the exact tmux session." >&2
+        fi
         printf '%s\n' "${RESOLVED_AGENT:-}"
         return 0
     fi
     if [[ -n "${AGENT_NAME:-}" ]]; then
         printf '%s\n' "$AGENT_NAME"
         return 0
-    fi
-    if [[ -n "${TMUX_PANE:-}" ]]; then
-        local pane_key metadata_file
-        pane_key="${TMUX_PANE//%/_}"
-        metadata_file="$RUNTIME_DIR/agent_name_${pane_key}"
-        if [[ -f "$metadata_file" ]]; then
-            tr -d '[:space:]' < "$metadata_file" 2>/dev/null
-            return 0
-        fi
     fi
     return 0
 }
@@ -137,7 +131,11 @@ if [[ "$REL_PATH" == "$FILE_PATH" ]]; then
 fi
 RESERVATION_PROJECT_KEY="${PROJECT_KEY:-$MATCHED_ROOT}"
 AGENT="$(resolve_agent_name)"
-[ -z "$AGENT" ] && exit 0
+if [ -z "$AGENT" ]; then
+    echo "AGENT IDENTITY REQUIRED: cannot verify a reservation for $FILE_PATH" >&2
+    echo "Set AGENT_NAME or restore exact TMUX_PANE identity metadata before editing." >&2
+    exit 2
+fi
 
 case "$AGENT" in
     pending-*)

@@ -16,7 +16,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | --- | --- | --- | --- |
 | `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | startup / resume / `/clear` / compact の直後 | 既知の identity を pane metadata、tmux session、terminal title 用 clipboard、managed agent list へ反映 |
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | agent-mail health と既存 identity を確認し、同名再登録または登録手順と `fetch_inbox` を session context へ出力 |
-| `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の exact path reservation を renew / auto-acquire。競合または取得失敗は exit 2 で block |
+| `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の既存 exact path reservation を renew-only で確認。0件は1回だけ再確認し、なお0件なら exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
 | `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__mcp-agent-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
 
@@ -37,8 +37,10 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 ### `check-file-reservation.sh`
 
 - **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
-- **動作:** pane に紐づく canonical agent と owner token を解決し、既存 reservation を相対 path / absolute path の両方で renew します。見つからなければ exact relative path の exclusive reservation を auto-acquire します。
-- **判定:** 競合、認証済み renew / acquire の失敗、pending identity は exit 2 で tool call を block します。protected root 外、session を識別できない場合、server に到達できない場合は hook 自体の誤検知で全作業を止めない fail-open path があります。
+- **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。raw non-tmux Claude は対象外で、`agent-start` 経由の再起動が必要です。
+- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential です。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
+- **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
+- **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
 ### `check-agent-registered.sh`
 
@@ -73,7 +75,7 @@ PostToolUse payload から agent-mail の数値 ID、canonical name、Claude `se
 
 ### `resolve-agent-name.sh`
 
-source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返します。優先順位は `AGENT_NAME`、`TMUX_PANE` metadata、対象 pane の exact tmux session です。`pending-*`、`warm-*`、`claimed-*`、`mail-watcher` は identity と見なしません。解決不能時は空文字を返し、block するか fail-open にするかは caller が決めます。
+source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返します。優先順位は `AGENT_NAME`、次に`TMUX_PANE`で明示した pane の exact tmux session です。pane metadata は権威ではなく一致確認にだけ使い、不一致なら`identity-conflict`を返します。`pending-*`、`warm-*`、`claimed-*`、`mail-watcher`はidentityと見なしません。pane指定なしでambient tmux sessionを照会せず、解決不能時は空文字を返してcallerが境界を適用します。
 
 ### `spawn_child.sh`
 

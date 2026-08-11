@@ -134,7 +134,7 @@ repo版と`~/.claude/hooks/`のlive版は同一物と仮定しない。C0でexac
 | warm-pool / launchd helper | 旧`/mail` route、8765、legacy labelを新18765 `/mcp`とexact ownershipへ置換し、旧jobを起動・停止しないことをtestする |
 | `check-agent-registered.sh`ほかraw HTTP caller | 新MCP key/endpointとexact identity responseへ語彙を揃え、全raw HTTP callに必要な`Accept`を付ける |
 
-hook deployment/sync自体をC2前の前提条件にする。repo版だけ直してlive版を未更新のまま進めない。
+hook/watcherのrepo実装とtestはC2前の前提条件にする。liveへのdeployも原則C2前だが、`check-file-reservation.sh`のstrict identity版だけは既存sessionを途中で止めないため、C5の全client restart/rebindとexact identity確認の**後**にdeployする。repo版だけ直してlive版を未更新のまま実動確認へ進めない。
 
 ## 上から順に実行する操作
 
@@ -229,7 +229,7 @@ agentstack-mail-consumers status \
   --expected-manifest-sha256 "$PINNED_MANIFEST_SHA256"
 ```
 
-`status=committed`以外ではconsumerを再開しない。対象は明示inventoryに入れたClaude/Codex direct config、tool permissions、AgentStack/Codex App envとinstall receipt、停止時に存在したchild resume configである。Bridge自身の client key `agentstack` は変えない。repo-managed launcher/hook/watcher/skillsとOrrery/dashboardは、C2より前に新旧env両対応artifactとしてdeploy済みであることが前提であり、C5でsourceを文字列置換しない。
+`status=committed`以外ではconsumerを再開しない。対象は明示inventoryに入れたClaude/Codex direct config、tool permissions、AgentStack/Codex App envとinstall receipt、停止時に存在したchild resume configである。Bridge自身の client key `agentstack` は変えない。repo-managed launcher/watcher/skillsとOrrery/dashboardはC2より前に新旧env両対応artifactとしてdeploy済みであることを前提とし、C5でsourceを文字列置換しない。例外はstrict identity版のreservation hookだけで、下記restart/rebind後にexact repo artifactをdeployする。
 
 helperは列挙済みfile内の未知aliasを拒否するが、**inventoryから漏れたfileを発見するscannerではない**。C0のlive inventory reviewが別のhard gateである。inventory schema v1は次の全fieldを明示し、pathは全てabsoluteにする（値は本番用maintenance artifactにのみ書き、repoへcommitしない）。
 
@@ -258,7 +258,9 @@ live residual Codex child config 4件は、read-only inventory時点で全てper
 }
 ```
 
-全config置換後、**既に起動していたclientは設定file変更だけでは新endpointへ移らない**。各Claude/Codex parent、Codex App、停止時に存在したchildを明示的にrestart/rebindし、loaded MCP keyが`agentstack-mail`、endpointが127.0.0.1:18765、新keyのtool surfaceが期待値、旧key/8765のconnectionが無いことをread-onlyに確認する。確認前はtest pairを含め誰もcallしない。
+全config置換後、**既に起動していたclientは設定file変更だけでは新endpointへ移らない**。各Claude/Codex parent、Codex App、停止時に存在したchildを`agent-start`等のmanaged launcherで明示的にrestart/rebindする。raw non-tmux Claudeは対応せず、同じmanaged経路で再起動する。各sessionの`AGENT_NAME`、または`TMUX_PANE`で明示したtargeted tmux sessionがcanonical identityと一致し、stale pane metadataとの不一致が無いことを先に確認する。続いてloaded MCP keyが`agentstack-mail`、endpointが127.0.0.1:18765、新keyのtool surfaceが期待値、旧key/8765のconnectionが無いことをread-onlyに確認する。確認前はtest pairを含め誰もcallしない。
+
+restart/rebindとidentity確認が全件終わった後にだけ、strict版`check-file-reservation.sh`と`resolve-agent-name.sh`をrepoのexact digestからliveへdeployする。untargeted tmux fallbackは無く、unresolved/placeholder identityとmetadata-session不一致はHTTPを送る前にexit 2であることを負方向testで確認する。deploy前に予約guardの実動確認へ進まない。
 
 最初の clientが `register_agent` またはwriteを成功させる直前に、maintainerが冒頭の不可逆境界を再確認する。成功した瞬間から旧 authorityへのrollbackは禁止である。
 

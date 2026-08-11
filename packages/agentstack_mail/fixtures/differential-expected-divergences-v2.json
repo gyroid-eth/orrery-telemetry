@@ -18,7 +18,7 @@
     },
     "core": {
       "python_namespace": "agentstack_mail",
-      "approved_base": "de625ed1928fec533a85700b9f1b2892b5a61dc5",
+      "approved_base": "8dffb09cca07d03214c7eab4c3121f83632666ce",
       "contract_fixture": "compatibility-tools-v1.json"
     }
   },
@@ -497,15 +497,18 @@
         "Claude MCP configuration",
         "Codex MCP configuration",
         "bridge, hooks, skills, and permissions",
-        "versioned supported consumer inventory including Orrery and dashboard authority selectors"
+        "versioned supported consumer inventory including Orrery and dashboard authority selectors",
+        "strict reservation-hook identity deployment after managed client restart and rebind"
       ],
       "requirements": [
         "move every declared consumer to the agentstack-mail MCP key as one reversible operation",
         "do not register mcp-agent-mail as an alias for the new service",
         "require Orrery to select the new mail database by absolute path without a legacy database fallback",
-        "require dashboard startup to fail closed unless AGENTSTACK_MAIL_DB, AGENTSTACK_MCP_URL, and AGENTSTACK_SIGNALS_DIR explicitly select the new authority"
+        "require dashboard startup to fail closed unless AGENTSTACK_MAIL_DB, AGENTSTACK_MCP_URL, and AGENTSTACK_SIGNALS_DIR explicitly select the new authority",
+        "restart every supported client through a managed launcher before deploying the strict reservation hook; reject raw non-tmux sessions, unresolved or placeholder identity, untargeted ambient tmux fallback, and pane metadata that disagrees with the exact targeted session before any reservation request",
+        "record stale agent_name_* metadata cleanup as deferred maintenance and never treat those files alone as first-cutover identity authority"
       ],
-      "acceptance": "N and N-1 fixture tests show all declared consumers resolve the new key; the sealed selector set rejects missing, legacy, wrong, malformed, relative-database, or cross-authority-mixed values before consumers resume; Orrery reads the exact selected new database and refuses an absent selector instead of falling back; dashboard refuses startup when any required database, MCP URL, or signals selector is absent; no consumer writes through the old service after authority switch; and the prior configuration can be restored exactly",
+      "acceptance": "N and N-1 fixture tests show all declared consumers resolve the new key; the sealed selector set rejects missing, legacy, wrong, malformed, relative-database, or cross-authority-mixed values before consumers resume; Orrery reads the exact selected new database and refuses an absent selector instead of falling back; dashboard refuses startup when any required database, MCP URL, or signals selector is absent; after every supported client restarts through a managed launcher, the strict hook is deployed and tests prove exact env or targeted-pane identity passes, stale metadata mismatch and unresolved, placeholder, raw non-tmux, or ambient-only identity fail before HTTP, and reservation-present versus reservation-absent paths pass and block respectively; no consumer writes through the old service after authority switch; and the prior configuration can be restored exactly",
       "verification_gate": "mcp-client-reregistration-cutover"
     },
     {
@@ -651,18 +654,20 @@
         "docs/agentstack-mail-performance-gate.md",
         "docs/install.md",
         "docs/configuration.md",
+        "docs/hooks.md",
         "docs/troubleshooting.md",
         "README.md",
         "claude/CLAUDE.md",
         "codex/AGENTS.md",
         "packages/agentstack_mail/README.md",
-        "cutover operator runbook"
+        "docs/agentstack-mail-cutover.md"
       ],
       "requirements": [
         "remove stale D1-only first-cutover statements in favor of the exact D1 plus reservation-probe safety difference set",
-        "make the operator runbook name every machine gate and prohibit interpreting missing or unknown evidence as approval"
+        "make the operator runbook name every machine gate and prohibit interpreting missing or unknown evidence as approval",
+        "keep reservation-hook documentation consistent with renew-only behavior, owner registration_token non-transmission, isError omitted-or-boolean-false success, strict identity resolution, and the initial-transport-only fail-open boundary"
       ],
-      "acceptance": "a documentation consistency gate finds no conflicting cutover difference set, authority order, gate identifier, or rollback instruction",
+      "acceptance": "a documentation consistency gate finds no conflicting cutover difference set, authority order, gate identifier, rollback instruction, reservation ownership credential, renew-only behavior, identity boundary, isError contract, or transport fail-open description",
       "verification_gate": "cutover-documentation-consistency"
     }
   ],
