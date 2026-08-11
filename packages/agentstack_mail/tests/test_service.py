@@ -603,6 +603,42 @@ def test_process_group_shutdown_escalates_and_reaps_direct_child(
     assert process.returncode == -signal.SIGKILL
 
 
+def test_process_group_shutdown_does_not_repeat_forwarded_term(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signals: list[tuple[int, int]] = []
+
+    class HungProcess:
+        pid = 616161
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            if timeout is not None:
+                raise subprocess.TimeoutExpired("server", timeout)
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    monkeypatch.setattr(service, "_process_group_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        service,
+        "_signal_process_group",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+    process = HungProcess()
+
+    service._terminate_process_group(  # type: ignore[arg-type]
+        process,
+        grace_seconds=0.01,
+        term_already_sent=True,
+    )
+
+    assert signals == [(process.pid, signal.SIGKILL)]
+    assert process.returncode == -signal.SIGKILL
+
+
 def test_ownership_manifest_does_not_copy_dotenv_secrets(tmp_path: Path) -> None:
     rendered, _, _ = _rendered(tmp_path)
     env_file = tmp_path / "mail.env"

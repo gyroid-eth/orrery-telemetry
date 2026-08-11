@@ -33,6 +33,7 @@ from typing import Any, AsyncContextManager, Callable, Optional, Protocol, cast
 from urllib.parse import parse_qsl
 import uuid
 
+import anyio
 from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
@@ -51,8 +52,8 @@ from .boundary import CompatibilityFastMCP
 from .config import Settings, get_settings
 from .model_normalize import display_model, normalize_model
 from .db import (
+    dispose_database_for_shutdown,
     ensure_schema,
-    get_engine,
     get_query_tracker,
     get_session,
     init_engine,
@@ -804,25 +805,14 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
         try:
             yield
         finally:
-            cancelled: BaseException | None = None
-            dispose_task: asyncio.Task[None] | None = None
-            with suppress(Exception):
-                engine = get_engine()
-                dispose_task = asyncio.create_task(engine.dispose())
-            if dispose_task is not None:
-                try:
-                    await asyncio.shield(dispose_task)
-                except asyncio.CancelledError as exc:
-                    cancelled = exc
-                    with suppress(BaseException):
-                        await dispose_task
-                except Exception:
-                    with suppress(BaseException):
-                        await dispose_task
-            with suppress(BaseException):
-                clear_repo_cache()
-            if cancelled is not None:
-                raise cancelled
+            # FastMCP's in-process Client tears down its session through an
+            # AnyIO cancel scope. asyncio.shield() cannot protect a child task
+            # that the scope cancels directly, so use the matching AnyIO
+            # shield and finish aiosqlite worker shutdown before loop close.
+            with anyio.CancelScope(shield=True):
+                await dispose_database_for_shutdown()
+                with suppress(BaseException):
+                    clear_repo_cache()
 
     return lifespan
 

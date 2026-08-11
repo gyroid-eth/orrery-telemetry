@@ -6,11 +6,16 @@ import argparse
 import ast
 import hashlib
 import json
+import re
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
 DIVERGENCE_MANIFEST = "differential-expected-divergences-v2.json"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
     "1d769ea851af1c13110a1648b2922ab5e2e83ae9a419a76a0a8e9f5ad0ea5ca8"
@@ -26,7 +31,6 @@ EXPECTED_BASELINES = {
     },
     "core": {
         "python_namespace": "agentstack_mail",
-        "approved_base": "8dffb09cca07d03214c7eab4c3121f83632666ce",
         "contract_fixture": "compatibility-tools-v1.json",
     },
 }
@@ -71,12 +75,20 @@ EXPECTED_STATIC_ALLOWLIST = {
         "live": {
             "distribution": "mcp-agent-mail",
             "python_package": "mcp_agent_mail",
-            "mcp_server_key": "mcp-agent-mail",
+            "mcp_provider_identity": "mcp-agent-mail",
+            "client_mcp_keys": {
+                "claude": "mcp-agent-mail",
+                "codex": "agent-mail",
+            },
         },
         "core": {
             "distribution": "agentstack-mail",
             "python_package": "agentstack_mail",
-            "mcp_server_key": "agentstack-mail",
+            "mcp_provider_identity": "agentstack-mail",
+            "client_mcp_keys": {
+                "claude": "mcp-agent-mail",
+                "codex": "agent-mail",
+            },
         },
     },
     "isolation.environment": {
@@ -933,28 +945,55 @@ EXPECTED_PERFORMANCE_GATES = [
 ]
 
 EXPECTED_FOLLOW_UP_TASK_IDS = [
+    "reservation-probe-safety-release-gate",
+    "http-cli-transport-entrypoints",
+    "service-lifecycle-supervision",
+    "mcp-client-reregistration-cutover",
+    "data-migration-reconciliation",
+    "rollback-revert-procedure",
+    "notification-layout-consumer-compatibility",
+]
+EXPECTED_FOLLOW_UP_TASK_STATES = {
+    task_id: (
+        "implemented"
+        if task_id == "reservation-probe-safety-release-gate"
+        else "not_implemented"
+    )
+    for task_id in EXPECTED_FOLLOW_UP_TASK_IDS
+}
+EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
+    "47ba7d1ec23bb939a005de98116cf9e4f0d44d7f5ed0a1f625957db03eb4de36"
+)
+EXPECTED_POST_CUTOVER_TASK_IDS = [
     "d2-d3-worker-progress-diagnostics",
     "d2-d3-timeout-process-group-cleanup",
     "d10-diagnostic-liveness-timeout",
     "provenance-regression-sync",
-    "reservation-probe-safety-release-gate",
     "reservation-performance-release-gate",
-    "http-cli-transport-entrypoints",
-    "service-lifecycle-supervision",
     "installer-core-integration",
-    "mcp-client-reregistration-cutover",
-    "data-migration-reconciliation",
-    "rollback-revert-procedure",
     "coexistence-fault-soak-gates",
     "full-performance-load-soak-matrix",
-    "notification-layout-consumer-compatibility",
     "full-repository-release-gate",
     "installed-wheel-contract-release-gate",
     "cutover-evidence-provenance-gate",
     "cutover-documentation-consistency",
+    "post-authority-reverse-transform",
+    "client-key-rename-and-stale-selector-cleanup",
+    "reservation-performance-input-tree-binding",
+    "reservation-performance-runner-binding",
+    "blocking-ci-environment-pinning",
+    "fresh-install-network-separation",
+    "fresh-install-startup-port-race",
+    "selected-pytest-evidence-executor-contract",
 ]
-EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
-    "c7af3b6952f966bf2be3a57dc60b1a9251a7b9684f708b91aef4c4bf03dfd106"
+EXPECTED_POST_CUTOVER_TASKS_SHA256 = (
+    "3979315d4d70c8218107980bbcb5d3986bcdc0bd0793f90723a2116ce065cae5"
+)
+EXPECTED_CURRENT_GATE_ACTIVATION_REQUIREMENTS_SHA256 = (
+    "04e5aaa801bc35929d38d0008d23a7a0010d086e9e2831cac4bc2dd15360700a"
+)
+EXPECTED_POST_CUTOVER_GATE_CONTRACT_DEFECTS_SHA256 = (
+    "68ddb85125dbb9ed101b74f3f4efccce3e3d31942cb8b804891346a485c5ede8"
 )
 EXPECTED_CUTOVER_CONDITION_IDS = [
     "product-decisions-selected",
@@ -964,28 +1003,16 @@ EXPECTED_CUTOVER_CONDITION_IDS = [
     "product-decision-cutover-approval",
     "selected-behavior-release-gate",
     "distribution-artifact-release-gate",
-    "d2-d3-worker-progress-diagnostics",
-    "d2-d3-timeout-process-group-cleanup",
-    "d10-diagnostic-liveness-timeout",
-    "provenance-regression-sync",
     "reservation-probe-safety-release-gate",
-    "reservation-performance-release-gate",
     "http-cli-transport-entrypoints",
     "service-lifecycle-supervision",
-    "installer-core-integration",
     "mcp-client-reregistration-cutover",
     "data-migration-reconciliation",
     "rollback-revert-procedure",
-    "coexistence-fault-soak-gates",
-    "full-performance-load-soak-matrix",
     "notification-layout-consumer-compatibility",
-    "full-repository-release-gate",
-    "installed-wheel-contract-release-gate",
-    "cutover-evidence-provenance-gate",
-    "cutover-documentation-consistency",
 ]
 EXPECTED_CUTOVER_GATE_SHA256 = (
-    "73a900e7dc33c46dadf0d202b2261cc94d4acc582a3478df51b7190d3f754e27"
+    "07824f651387b62bcf750e0fa863ad01fe88434dbf72a6a8f8a7213aad195b6b"
 )
 
 REQUIRED_RUNTIME_MODULES = {
@@ -996,6 +1023,7 @@ REQUIRED_RUNTIME_MODULES = {
     "cli.py",
     "config.py",
     "consumer.py",
+    "consumer_inventory.py",
     "contract.py",
     "db.py",
     "guard.py",
@@ -1052,8 +1080,10 @@ SDIST_REQUIRED_SUFFIXES = {
 REQUIRED_METADATA = {
     "Name: agentstack-mail",
     "License-Expression: LicenseRef-PolyForm-Perimeter-1.0.1 AND LicenseRef-MCP-Agent-Mail",
+    "Requires-Dist: anyio<5,>=4.5",
     "Requires-Dist: fastmcp==2.13.0.2",
     "Requires-Dist: pydantic==2.12.5",
+    "Requires-Dist: uvicorn==0.52.1",
 }
 
 CONSOLE_ENTRY_POINTS = {
@@ -1072,6 +1102,10 @@ CONSOLE_ENTRY_POINTS = {
     "agentstack-mail-consumers": (
         "agentstack-mail-consumers = agentstack_mail.consumer:main",
         'agentstack-mail-consumers = "agentstack_mail.consumer:main"',
+    ),
+    "agentstack-mail-consumer-inventory": (
+        "agentstack-mail-consumer-inventory = agentstack_mail.consumer_inventory:main",
+        'agentstack-mail-consumer-inventory = "agentstack_mail.consumer_inventory:main"',
     ),
 }
 
@@ -1203,6 +1237,118 @@ def _canonical_json_sha256(value: object) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _approved_base_from_manifest(
+    manifest_content: bytes,
+    *,
+    artifact: str,
+) -> str:
+    manifest = _json_object(
+        manifest_content,
+        label=DIVERGENCE_MANIFEST,
+        artifact=artifact,
+    )
+    try:
+        approved_base = manifest["baselines"]["core"]["approved_base"]
+    except (KeyError, TypeError) as exc:
+        raise SystemExit(f"{artifact} is missing baselines.core.approved_base") from exc
+    if not isinstance(approved_base, str) or FULL_GIT_SHA_PATTERN.fullmatch(
+        approved_base
+    ) is None:
+        raise SystemExit(
+            f"{artifact} baselines.core.approved_base must be one full lowercase "
+            "40-hex commit"
+        )
+    return approved_base
+
+
+def _assert_approved_base_reachable(
+    approved_base: str,
+    *,
+    repository_root: Path,
+    artifact: str,
+) -> None:
+    object_check = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "cat-file",
+            "-e",
+            f"{approved_base}^{{commit}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if object_check.returncode != 0:
+        raise SystemExit(
+            f"{artifact} approved_base object is unavailable; the checkout may "
+            "be shallow or the history was not fetched: "
+            f"{approved_base}"
+        )
+
+    ref_check = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "for-each-ref",
+            "--format=%(refname)",
+            f"--contains={approved_base}",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ref_check.returncode != 0:
+        detail = ref_check.stderr.strip() or "git for-each-ref failed"
+        raise SystemExit(
+            f"{artifact} could not inspect persistent refs for approved_base: "
+            f"{detail}"
+        )
+    persistent_refs = [line for line in ref_check.stdout.splitlines() if line]
+    if not persistent_refs:
+        raise SystemExit(
+            f"{artifact} approved_base object exists but is unreachable from "
+            "persistent refs/heads, refs/remotes, or refs/tags: "
+            f"{approved_base}"
+        )
+
+
+def _assert_checkout_manifest_binding(
+    manifest_content: bytes,
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+    package_root: Path = PACKAGE_ROOT,
+    artifact: str,
+) -> None:
+    fixture_path = package_root / "fixtures" / DIVERGENCE_MANIFEST
+    try:
+        checkout_content = fixture_path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(
+            f"{artifact} cannot read the checkout's canonical divergence fixture: "
+            f"{fixture_path}"
+        ) from exc
+    if manifest_content != checkout_content:
+        raise SystemExit(
+            f"{artifact} divergence fixture does not byte-match the checkout "
+            "fixture"
+        )
+    approved_base = _approved_base_from_manifest(
+        manifest_content,
+        artifact=artifact,
+    )
+    _assert_approved_base_reachable(
+        approved_base,
+        repository_root=repository_root,
+        artifact=artifact,
+    )
+
+
 def _assert_authorization_fixture(
     content: bytes,
     compatibility_content: bytes,
@@ -1236,7 +1382,7 @@ def _assert_authorization_fixture(
     if fixture.get("default_principal_candidate") != "local-single-principal":
         raise SystemExit(f"{artifact} authorization default principal changed")
     if fixture.get("rule_status") != (
-        "prospective_non_binding_except_selected_D7_retire_boundary"
+        "current_loopback_retire_boundary_other_rules_prospective_non_binding"
     ):
         raise SystemExit(f"{artifact} authorization rule status changed")
     if fixture.get("default_policy") != {
@@ -1295,6 +1441,9 @@ def _assert_expected_divergences_manifest(
         "intentional_differences",
         "performance_gates",
         "follow_up_tasks",
+        "post_cutover_follow_up_tasks",
+        "current_gate_activation_requirements",
+        "post_cutover_gate_contract_defects",
         "cutover_gate",
         "product_decisions",
     }
@@ -1315,8 +1464,25 @@ def _assert_expected_divergences_manifest(
     }
     if manifest["comparison_policy"] != expected_policy:
         raise SystemExit(f"{artifact} divergence manifest is not fail-closed")
-    if manifest["baselines"] != EXPECTED_BASELINES:
+    baselines = manifest["baselines"]
+    if not isinstance(baselines, dict) or set(baselines) != {"live", "core"}:
         raise SystemExit(f"{artifact} divergence manifest baselines changed")
+    if baselines["live"] != EXPECTED_BASELINES["live"]:
+        raise SystemExit(f"{artifact} divergence manifest live baseline changed")
+    core_baseline = baselines["core"]
+    if (
+        not isinstance(core_baseline, dict)
+        or set(core_baseline) != {*EXPECTED_BASELINES["core"], "approved_base"}
+        or {
+            key: value
+            for key, value in core_baseline.items()
+            if key != "approved_base"
+        }
+        != EXPECTED_BASELINES["core"]
+        or not isinstance(core_baseline["approved_base"], str)
+        or FULL_GIT_SHA_PATTERN.fullmatch(core_baseline["approved_base"]) is None
+    ):
+        raise SystemExit(f"{artifact} divergence manifest core baseline changed")
 
     intentional = manifest["intentional_differences"]
     if not isinstance(intentional, dict) or set(intentional) != {
@@ -1343,7 +1509,8 @@ def _assert_expected_divergences_manifest(
     if task_ids != EXPECTED_FOLLOW_UP_TASK_IDS:
         raise SystemExit(f"{artifact} follow-up tasks changed")
     if any(
-        task.get("implementation_state") != "not_implemented"
+        task.get("implementation_state")
+        != EXPECTED_FOLLOW_UP_TASK_STATES.get(task.get("id"))
         or task.get("implementation_order") != "pre_cutover"
         or task.get("verification_gate") != task.get("id")
         or not isinstance(task.get("scope"), list)
@@ -1357,6 +1524,75 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(f"{artifact} follow-up tasks changed")
     if _canonical_json_sha256(follow_up_tasks) != EXPECTED_FOLLOW_UP_TASKS_SHA256:
         raise SystemExit(f"{artifact} follow-up tasks changed")
+
+    post_cutover_tasks = manifest["post_cutover_follow_up_tasks"]
+    if not isinstance(post_cutover_tasks, list) or not all(
+        isinstance(task, dict) for task in post_cutover_tasks
+    ):
+        raise SystemExit(f"{artifact} post-cutover tasks must be a list")
+    post_cutover_ids = [task.get("id") for task in post_cutover_tasks]
+    if post_cutover_ids != EXPECTED_POST_CUTOVER_TASK_IDS:
+        raise SystemExit(f"{artifact} post-cutover tasks changed")
+    if any(
+        set(task)
+        != (
+            {
+                "id",
+                "implementation_state",
+                "implementation_order",
+                "cutover_blocking",
+                "activation_condition",
+                "scope",
+                "requirements",
+                "acceptance",
+            }
+            | (
+                {"performance_separation"}
+                if task.get("id") == "d10-diagnostic-liveness-timeout"
+                else set()
+            )
+        )
+        or task.get("implementation_state") != "not_implemented"
+        or task.get("implementation_order") != "post_cutover"
+        or task.get("cutover_blocking") is not False
+        or not isinstance(task.get("activation_condition"), str)
+        or not task["activation_condition"].strip()
+        or not isinstance(task.get("scope"), list)
+        or not task["scope"]
+        or not isinstance(task.get("requirements"), list)
+        or not task["requirements"]
+        or not isinstance(task.get("acceptance"), str)
+        or not task["acceptance"].strip()
+        for task in post_cutover_tasks
+    ):
+        raise SystemExit(f"{artifact} post-cutover tasks changed")
+    if (
+        _canonical_json_sha256(post_cutover_tasks)
+        != EXPECTED_POST_CUTOVER_TASKS_SHA256
+    ):
+        raise SystemExit(f"{artifact} post-cutover tasks changed")
+
+    current_gate_requirements = manifest["current_gate_activation_requirements"]
+    if (
+        not isinstance(current_gate_requirements, list)
+        or [item.get("id") for item in current_gate_requirements]
+        != ["approved-base-persistent-ref-reachability"]
+        or _canonical_json_sha256(current_gate_requirements)
+        != EXPECTED_CURRENT_GATE_ACTIVATION_REQUIREMENTS_SHA256
+    ):
+        raise SystemExit(f"{artifact} current gate activation requirements changed")
+
+    post_cutover_contract_defects = manifest[
+        "post_cutover_gate_contract_defects"
+    ]
+    if (
+        not isinstance(post_cutover_contract_defects, list)
+        or [item.get("id") for item in post_cutover_contract_defects]
+        != ["reservation-performance-producer-verifier-contract"]
+        or _canonical_json_sha256(post_cutover_contract_defects)
+        != EXPECTED_POST_CUTOVER_GATE_CONTRACT_DEFECTS_SHA256
+    ):
+        raise SystemExit(f"{artifact} post-cutover gate contract defects changed")
 
     cutover_gate = manifest["cutover_gate"]
     if not isinstance(cutover_gate, dict) or set(cutover_gate) != {
@@ -1633,12 +1869,14 @@ def verify_wheel(path: Path) -> None:
         _content_with_suffix(files, ".dist-info/entry_points.txt", artifact="wheel"),
         artifact="wheel",
     )
+    manifest_content = _content_with_suffix(
+        files,
+        f"agentstack_mail/fixtures/{DIVERGENCE_MANIFEST}",
+        artifact="wheel",
+    )
+    _assert_checkout_manifest_binding(manifest_content, artifact="wheel")
     _assert_expected_divergences_manifest(
-        _content_with_suffix(
-            files,
-            f"agentstack_mail/fixtures/{DIVERGENCE_MANIFEST}",
-            artifact="wheel",
-        ),
+        manifest_content,
         _content_with_suffix(
             files,
             "agentstack_mail/fixtures/compatibility-tools-v1.json",
@@ -1724,12 +1962,14 @@ def verify_sdist(path: Path) -> None:
         _content_with_suffix(files, "/pyproject.toml", artifact="sdist"),
         artifact="sdist",
     )
+    manifest_content = _content_with_suffix(
+        files,
+        f"/fixtures/{DIVERGENCE_MANIFEST}",
+        artifact="sdist",
+    )
+    _assert_checkout_manifest_binding(manifest_content, artifact="sdist")
     _assert_expected_divergences_manifest(
-        _content_with_suffix(
-            files,
-            f"/fixtures/{DIVERGENCE_MANIFEST}",
-            artifact="sdist",
-        ),
+        manifest_content,
         _content_with_suffix(
             files,
             "/fixtures/compatibility-tools-v1.json",

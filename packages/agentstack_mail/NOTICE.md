@@ -28,8 +28,9 @@ Implemented in the core extraction:
 
 - distribution and import namespace renamed to `agentstack-mail` and
   `agentstack_mail`;
-- MCP server key, service labels, environment namespace, port, database,
-  archive, and signal roots isolated from AgentMail defaults;
+- MCP provider identity, service labels, environment namespace, port, database,
+  archive, and signal roots isolated from AgentMail defaults while the existing
+  Claude `mcp-agent-mail` and Codex `agent-mail` client keys remain stable;
 - only AgentStack's audited 24-tool compatibility surface is published;
 - live-derived tool bodies remain temporarily internal until differential
   tests permit removal of the non-compatibility bodies;

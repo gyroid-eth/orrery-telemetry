@@ -28,15 +28,17 @@ The first implementation train is:
    behavior with differential tests against the live source;
 4. port HTTP and lifecycle stability without the machine-specific notify and
    tmux daemons;
-5. update installer, doctor, bridge, hooks, skills, and permissions atomically
-   to the new MCP key;
+5. update installer, doctor, bridge, and hooks atomically to the new endpoint
+   and authentication while preserving each client's existing MCP key;
 6. run coexistence, migration, rollback, fault, and real-machine soak gates
    before any authority switch.
 
-The old `mcp-agent-mail` MCP key is not registered as an alias by default,
-because doing so would recreate the collision this package is intended to
-remove. Existing record compatibility is a data/schema requirement, separate
-from tool-prefix compatibility.
+The provider identity remains `agentstack-mail`, but it is not the client
+registration key. First cutover preserves Claude's `mcp-agent-mail` and
+Codex's `agent-mail` keys so fully qualified tool names, permissions, and hook
+matchers do not change. The authority is determined by endpoint, data roots,
+and ownership, never by the client-visible key. Optional key renaming and stale
+selector cleanup are separate post-cutover work.
 
 ## Current core boundary
 
@@ -76,7 +78,10 @@ Codex has no equivalent PostToolUse hook: reserved bootstrap and
 reregister paths already stop on mismatch, while direct spawn, raw MCP calls,
 and Codex App reauthentication remain follow-up coverage rather than a substitute
 for the required cutover setting.
-Supervisor, migration, and installer switching are not implemented yet.
+The service helper/controller and copy/verify/rollback-assess migration
+commands are implemented. Their clean candidate-bound release evidence and the
+installer/client authority switch are not complete, so the corresponding
+cutover conditions remain `no_go`.
 
 File-reservation activity probes converge on upstream #240's one-pathspec Git
 walk, then add a process-global concurrency limit of eight, a three-second
@@ -95,9 +100,21 @@ licenses, and the versioned fixtures.
 
 ## Behavior differential gate
 
-The approved Core base is `de625ed`. Behavior tests authenticate and reconstruct
-the frozen live baseline from the checked-in Git bundle and dirty patch, then
-start live and Core in separate subprocesses. Worker environments inherit only
+The approved Core base full SHA is owned only by
+`fixtures/differential-expected-divergences-v2.json`; prose does not mirror
+it. Artifact verification byte-matches the packaged fixture to that checkout
+fixture and accepts the base only when its commit object is reachable from a
+persistent local branch, remote-tracking branch, or tag. CI fetches full
+history so a shallow/unfetched object and an existing-but-unreachable object
+produce distinct failures. The approved base is a review anchor, not the
+candidate: local and push lanes use the exact checked-out `HEAD`, while a
+pull-request lane uses the exact synthetic merge `HEAD` checked out by that
+lane. That same full candidate SHA must be supplied to exact-checkout,
+`candidate-source-bound`, and every candidate-bound evidence verifier; the
+two SHAs are never substituted for one another. Behavior tests authenticate
+and reconstruct the frozen live baseline from the checked-in Git bundle and
+dirty patch, then start live and Core in separate subprocesses. Worker
+environments inherit only
 an OS bootstrap allowlist; database, archive, signals, home, temporary files,
 Git identity, port, and import roots are explicitly isolated. Test inputs and
 outputs are private, symlink escape and source-origin drift fail closed, and no

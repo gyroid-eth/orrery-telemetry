@@ -128,7 +128,7 @@ def test_passthrough_public_registration_preserves_real_runtime_names(
                 returned = _payload(result)
                 assert returned["name"] == requested_name
                 returned_names.append(returned["name"])
-        await db.get_engine().dispose()
+        await db.dispose_database_for_shutdown()
         return returned_names
 
     try:
@@ -161,7 +161,7 @@ def test_default_coerce_exposes_substituted_name_in_public_response(
                 },
                 raise_on_error=False,
             )
-        await db.get_engine().dispose()
+        await db.dispose_database_for_shutdown()
         return result
 
     try:
@@ -197,7 +197,7 @@ def test_passthrough_keeps_frozen_name_sanitization_behavior(
                 },
                 raise_on_error=False,
             )
-        await db.get_engine().dispose()
+        await db.dispose_database_for_shutdown()
         return result
 
     try:
@@ -259,7 +259,7 @@ def test_loopback_retire_accepts_token_bearing_target_without_target_token(
                 raise_on_error=False,
             )
             assert retired.is_error is False
-        await db.get_engine().dispose()
+        await db.dispose_database_for_shutdown()
         return _payload(retired)
 
     try:
@@ -305,7 +305,7 @@ def test_loopback_retire_emits_audit_event_without_exposing_token(
                 raise_on_error=False,
             )
             assert retired.is_error is False
-        await db.get_engine().dispose()
+        await db.dispose_database_for_shutdown()
 
     try:
         asyncio.run(retire_without_target_token())

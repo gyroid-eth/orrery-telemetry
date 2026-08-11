@@ -99,7 +99,10 @@ SERVICE_IDENTITY = MappingProxyType(
         "distribution": "agentstack-mail",
         "python_package": "agentstack_mail",
         "cli": "agentstack-mail",
-        "mcp_server_key": "agentstack-mail",
+        "mcp_provider_identity": "agentstack-mail",
+        "claude_client_key": "mcp-agent-mail",
+        "codex_client_key": "agent-mail",
+        "client_key_policy": "preserve_existing",
         "launchd_label": "org.agentstack.mail",
         "systemd_unit": "agentstack-mail.service",
         "environment_prefix": "AGENTSTACK_MAIL_",
@@ -136,7 +139,7 @@ ISOLATION_DEFAULTS = IsolationDefaults()
 LEGACY_COLLISION_VALUES = MappingProxyType(
     {
         "python_package": "mcp_agent_mail",
-        "mcp_server_key": "mcp-agent-mail",
+        "mcp_provider_identity": "mcp-agent-mail",
         "port": 8765,
         "database": "./storage.sqlite3",
         "archive": "~/.mcp_agent_mail_git_mailbox_repo",

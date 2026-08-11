@@ -10,6 +10,9 @@ from typing import Any
 from .config import get_settings
 
 
+_GRACEFUL_SHUTDOWN_SECONDS = 8.0
+
+
 def _normalized_path(raw_path: str) -> str:
     path = raw_path.strip()
     if not path:
@@ -75,7 +78,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         log_level=settings.log_level.lower(),
         json_response=True,
         stateless_http=True,
-        uvicorn_config={"loop": "asyncio", "ws": "none"},
+        # FastMCP 2.13 otherwise supplies zero seconds, which immediately
+        # cancels lifespan cleanup and leaves SQLite WAL/SHM sidecars behind.
+        # Keep this below the service supervisor's 10-second TERM grace.
+        uvicorn_config={
+            "loop": "asyncio",
+            "ws": "none",
+            "timeout_graceful_shutdown": _GRACEFUL_SHUTDOWN_SECONDS,
+        },
     )
 
 

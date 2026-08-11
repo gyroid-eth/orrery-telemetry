@@ -478,7 +478,7 @@ def test_claude_child_falls_back_to_legacy_name_on_legacy_endpoint():
         assert list(config["mcpServers"]) == ["mcp-agent-mail"]
 
 
-def test_claude_child_falls_back_to_new_name_on_new_endpoint():
+def test_claude_child_keeps_default_name_on_new_endpoint():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
         runner = tmpdir / "run-mcp.sh"
@@ -501,7 +501,7 @@ def test_claude_child_falls_back_to_new_name_on_new_endpoint():
             check=False,
         )
         config = json.loads(pathlib.Path(proc.stdout.strip()).read_text(encoding="utf-8"))
-        assert list(config["mcpServers"]) == ["agentstack-mail"]
+        assert list(config["mcpServers"]) == ["mcp-agent-mail"]
 
 
 def test_codex_child_replaces_every_agent_mail_spelling():
@@ -557,7 +557,7 @@ def test_codex_child_replaces_the_new_agentstack_mail_direct_transport():
         assert "[mcp_servers.notion]" in text
 
 
-def test_codex_child_falls_back_to_new_name_on_new_endpoint():
+def test_codex_child_keeps_default_name_on_new_endpoint():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
         runner = tmpdir / "run-mcp.sh"
@@ -581,9 +581,9 @@ def test_codex_child_falls_back_to_new_name_on_new_endpoint():
             check=False,
         )
         text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text()
-        assert '[mcp_servers."agentstack-mail"]' in text
-        assert '[mcp_servers."agent-mail"]' not in text
-        _assert_proxy_tool_approvals(text, ("agentstack-mail", "agentstack"))
+        assert '[mcp_servers."agent-mail"]' in text
+        assert '[mcp_servers."agentstack-mail"]' not in text
+        _assert_proxy_tool_approvals(text, ("agent-mail", "agentstack"))
 
 
 def test_doctor_reports_the_fallback_instead_of_staying_silent():

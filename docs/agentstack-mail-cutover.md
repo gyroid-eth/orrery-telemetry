@@ -1,6 +1,6 @@
 # AgentStack Mail working-tree 切替手順（未実行）
 
-> **ここを越えると戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。
+> **ここを越えると初回切替の手順では戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。将来の `post-authority-reverse-transform` は台帳に残すが、実装・rehearsal・別承認が済むまでは初回切替のrollback根拠にしない。
 
 > **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。**2–4分はC3のdata copy/verificationだけの実測**であり、client restart/rebindを含む全静止時間は未測定である。
 
@@ -8,20 +8,19 @@
 
 ## 切替承認の正本
 
-本番切替の合格線は、この文書のチェック項目数ではなく、`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json` の `cutover_gate` である。exact manifest bytes、clean な exact candidate commit、condition definition、raw evidence のdigestを結び付け、`packages/agentstack_mail/tests/cutover_readiness.py` が **26条件すべてをexactly onceで再計算して `cutover_state: go` を返した場合だけ** C0へ進める。missing、duplicate、extra、unknown、手書きの`status: pass`、candidate不一致はいずれも`no_go`である。operatorは判定を書き換えず、同じcandidateとmanifestに束縛された出力であることを確認する。
+本番切替の合格線は、この文書のチェック項目数ではなく、`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json` の `cutover_gate` である。exact manifest bytes、clean な exact candidate commit、condition definition、raw evidence のdigestを結び付け、`packages/agentstack_mail/tests/cutover_readiness.py` が **14条件すべてをexactly onceで再計算して `cutover_state: go` を返した場合だけ** C0へ進める。missing、duplicate、extra、unknown、手書きの`status: pass`、candidate不一致はいずれも`no_go`である。operatorは判定を書き換えず、同じcandidateとmanifestに束縛された出力であることを確認する。
 
-次の表は26個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は台帳が正本であり、表の説明は置換しない。現在の台帳ではpre-cutover follow-up taskが`not_implemented`のため、**現時点は明示的にNO-GO**である。
+次の表は14個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は台帳が正本であり、表の説明は置換しない。19件の旧follow-up集合は、切替窓での不可逆化、切替・戻しの完走、初日consumer故障という3基準で、7件のpre-cutover taskと12件のnon-blocking post-cutover taskへ仕分け済みである。rollbackのpost-authority reverse transform、任意のclient-key改名＋stale selector整理、発火条件付きの環境差6件も別々のpost-cutover taskとして保持するため、post recordは合計20件である。現在の7件は狭いpre条件に対して再照合中であり、**現時点は明示的にNO-GO**である。
 
 | 段階 | machine gate ID（台帳とexact match） | operatorが確認する意味 |
 |---|---|---|
 | 決定・candidate固定 | `product-decisions-selected`<br>`pre-cutover-product-decisions-implemented`<br>`initial-cutover-difference-set-exact`<br>`candidate-source-bound`<br>`product-decision-cutover-approval` | D1–D12、初回差異集合、clean candidate、maintainer承認が同じcandidateへ固定されている |
-| behavior・build・release | `selected-behavior-release-gate`<br>`distribution-artifact-release-gate`<br>`provenance-regression-sync`<br>`full-repository-release-gate`<br>`installed-wheel-contract-release-gate` | 選択挙動、wheel/sdist、source provenance、exact CI、fresh installed wheelが同じcandidateで通っている |
-| 診断・予約・性能 | `d2-d3-worker-progress-diagnostics`<br>`d2-d3-timeout-process-group-cleanup`<br>`d10-diagnostic-liveness-timeout`<br>`reservation-probe-safety-release-gate`<br>`reservation-performance-release-gate`<br>`full-performance-load-soak-matrix` | timeout診断、予約のfail-closed安全性、独立した予約性能とfull load/soakがraw evidenceから再計算されている |
-| runtime・deploy・consumer | `http-cli-transport-entrypoints`<br>`service-lifecycle-supervision`<br>`installer-core-integration`<br>`mcp-client-reregistration-cutover`<br>`notification-layout-consumer-compatibility` | HTTP/CLI、単一writer supervision、install、全client切替、通知layoutと実consumerの互換性が通っている |
-| authority移行・復旧 | `data-migration-reconciliation`<br>`rollback-revert-procedure`<br>`coexistence-fault-soak-gates` | data照合、段階別rollback、新旧隔離とfault rehearsalが一つのauthority遷移を証明している |
-| 証跡・文書 | `cutover-evidence-provenance-gate`<br>`cutover-documentation-consistency` | 証跡のissuer/candidate bindingと、この手順書を含む文書整合が通っている |
+| behavior・build | `selected-behavior-release-gate`<br>`distribution-artifact-release-gate` | 選択挙動と、実際に使うwheel/sdistが同じcandidateへ束縛されている |
+| 予約安全 | `reservation-probe-safety-release-gate` | timeout/error/filesystem-incompleteで予約を誤解放せず、TTL expiryだけがreleaseされる |
+| runtime・deploy・consumer | `http-cli-transport-entrypoints`<br>`service-lifecycle-supervision`<br>`mcp-client-reregistration-cutover`<br>`notification-layout-consumer-compatibility` | exact wheelからの24-tool起動、単一writer lifecycle、全clientの可逆切替、通知layoutと実consumerの互換性が通っている |
+| authority移行・復旧 | `data-migration-reconciliation`<br>`rollback-revert-procedure` | data照合とfirst durable write前までのrollbackが、一つのauthority遷移を証明している |
 
-C5の専用test sender/recipientによる5項目とreservation guardの4観測は、GO判定後にauthority switchが実際に機能したことを見る**post-switch operational smoke check**である。26条件の代替でも、切替承認を作る第二の合格線でもない。
+C5の専用test sender/recipientによる5項目とreservation guardの4観測は、GO判定後にauthority switchが実際に機能したことを見る**post-switch operational smoke check**である。14条件の代替でも、切替承認を作る第二の合格線でもない。
 
 evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動変更しない。C0/C2/C5のhuman hold pointは実行を止められるが、`no_go`を承認で上書きできない。
 
@@ -29,7 +28,7 @@ evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。ただし台帳の`data-migration-reconciliation` evidence handlerは未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。ただし台帳の data-migration-reconciliation evidence handlerは未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -84,7 +83,7 @@ Aでもlegacy commit SHA、author/time series、reflogは新repoに持ち込ま�
 | SQLite | `~/mcp_agent_mail/storage.sqlite3` | `~/.agentstack/mail/storage.sqlite3` |
 | archive | `~/.mcp_agent_mail_git_mailbox_repo` | `~/.agentstack/mail/archive` |
 | signals | `~/.mcp_agent_mail/signals` | `~/.agentstack/mail/signals` |
-| MCP key | `mcp-agent-mail` / Codex の `agent-mail` | `agentstack-mail` |
+| provider identity / client key | provider `mcp-agent-mail`; Claude `mcp-agent-mail`; Codex `agent-mail` | provider `agentstack-mail`; Claude `mcp-agent-mail`; Codex `agent-mail`（初回切替では維持） |
 | launchd label | `com.operator.mcp-agent-mail` | `org.agentstack.mail` |
 
 新 service の env は少なくとも次を固定する。
@@ -109,11 +108,85 @@ Orrery と dashboard は C5 helper が検出して後回しにする対象では
 |---|---|---|
 | Orrery | `~/.orrery/config.json` にabsoluteな`mail_db=/Users/operator/.agentstack/mail/storage.sqlite3`を必須にする実装と切替操作を用意し、Finder起動でも実画面が新DBのmessage/agent更新を読むことを確認する。selectorの欠落・relative path・旧値・誤値では旧DBへfallbackせず起動前にfail-closedする | 現在のconfigには`mail_db`がなく、Finder起動はshell envを継承しないため、Orreryのmail roster/railだけ旧DBの静止snapshotを読み続ける |
 | dashboard DB | 実際にport 8770で動く`~/.claude/tools/agent-dashboard/server.py`と`graph_data.py`の固定`~/mcp_agent_mail/storage.sqlite3`を、`AGENTSTACK_MAIL_DB` / `AGENTSTACK_MCP_URL` / `AGENTSTACK_SIGNALS_DIR`の明示selectorへ置換する。欠落・旧値・誤値・新旧混在をsealed inventory照合で拒否し、欠落時はdashboard自身も起動しない | 一覧・graph・timeline・telemetryが旧authorityの静止snapshotを表示し続ける |
-| dashboard retire | 旧 `POST /mail/api/retire-agent` を24-tool MCPの `retire_agent` 呼出しへ置換する前にcredential経路を決め、token付きagentを含むrequest/responseと失敗表示を検証する。現toolはtoken付きagentの`registration_token`を要求し、dashboardは現在`agent_id`しか持たない | 新serviceには旧REST routeがない。単純なMCP置換もtoken付きagentで失敗し、現在の後続tmux killだけが進むと「paneは消えたがagentはactive」の不整合になる |
+| dashboard retire | 旧 `POST /mail/api/retire-agent` を24-tool MCPの `retire_agent` 呼出しへ置換し、token付きagentを含むrequest/responseと失敗表示を検証する。初回cutoverで採用したloopback local-process境界ではlocal principalがtargetの`registration_token`なしでretireでき、schema fieldは保持し、credential-freeな`retire_agent.loopback_authorized` auditを残す | 新serviceには旧REST routeがない。MCP置換と失敗判定が無いまま後続tmux killだけが進むと「paneは消えたがagentはactive」の不整合になる |
 | dashboard unretire | repo版の旧 `POST /mail/api/unretire-agent` を初回24-tool境界では無効化し、「未対応」を明示する。`unretire_agent`を無断で公開しない | 存在しないroute/toolを呼び、成功したように見えるUIまたは操作失敗になる |
 | dashboard import | live dashboardの `~/mcp_agent_mail/src` 挿入と `from mcp_agent_mail import utils` を除き、repo版が既に使う`bin/lib/agentstack-scientists.sh`等のAgentStack-owned語彙へ統一してpickerを検証する | 旧source撤去時に即死はせずfrozen語彙へsilent fallbackするが、語彙正本との同期を失い、upstream依存ゼロも満たさない |
 | dashboard auth | `HTTP_BEARER_TOKEN` 必須読出しと常時`Authorization: Bearer ...`送信を除き、認証未実装の新loopback MCP入口に合わせる | token fileが無ければregister/sendの呼出し前にhard failする。一方、新serviceはbearer/JWT設定があると起動自体を拒否するため、旧auth前提との両立経路はない |
 | dashboard signals | live固定 `~/.mcp_agent_mail/signals` とrepo版旧defaultを `AGENTSTACK_SIGNALS_DIR=~/.agentstack/mail/signals` へ揃える | 通知・offline表示が旧signal treeを監視し続ける |
+
+準備済みpatchはsource用4本（`0001 → 0002 → 0003 → 0004a`）とlive LaunchAgent専用`0002b`に分ける。0003はexact 0002-after baseから再生成し、0004aはplain unified diffへ正規化してtrailing-garbage warningを除いた。liveの `~/Library/LaunchAgents/com.operator.agentdashboard.plist` は手編集やrepo plistの直接copyで置換せず、sealed before-image digestが一致したときだけ0002bのstrict dry-run後に適用する。rollbackは`0004a → 0003 → 0002b → 0002 → 0001`の逆順で全patchをstrict dry-runしてから戻し、旧jobをreloadする。
+
+当日のliteral invocationは次へ固定する。`--fuzz=0`だけではoffsetを拒否しないため、dry-run/applyの出力に`offset`、`fuzz`、`Ignoring`、`malformed`、`misordered`のどれかがあればrc 0でも停止する。`.orig` / `.rej` が一つでも生成された場合も停止する。
+
+```sh
+PATCH_ROOT=${PATCH_ROOT:-/Users/operator}
+strict_patch() {
+  direction=$1
+  phase=$2
+  patch_file=$3
+  dry_arg=
+  test "$phase" = apply || dry_arg=--dry-run
+  output=$(patch --batch "$direction" --fuzz=0 --no-backup-if-mismatch \
+    $dry_arg -d "$PATCH_ROOT" -p1 < "$patch_file" 2>&1) || {
+      printf '%s\n' "$output" >&2
+      return 1
+    }
+  printf '%s\n' "$output"
+  if printf '%s\n' "$output" | grep -Eiq 'offset|fuzz|Ignoring|malformed|misordered'; then
+    return 1
+  fi
+  test -z "$(find \
+    "$PATCH_ROOT/.orrery" \
+    "$PATCH_ROOT/OSS/orrery/bridge" \
+    "$PATCH_ROOT/.claude/tools/agent-dashboard" \
+    "$PATCH_ROOT/Library/LaunchAgents" \
+    -type f \( -name '*.orig' -o -name '*.rej' \) -print -quit)"
+}
+
+verify_display_patch_bundle() {
+  (
+    cd "$PATCH_DIR"
+    shasum -a 256 -c <<'EOF'
+bc4b7d9d379c4770408bb45a09d8778307f1038ed5e679d1b71a3ad5c57506d1  0001-orrery-mail-db-selector.patch
+fb57b50157931255c9a9efb4dd1b7d1a93c3008374a10fd566d73d95883bb658  0002-dashboard-mail-cutover-selectors.patch
+5df21b01757d5829b038ed785a72f248613f54be6d2ec12e4444feabcde9a470  0002b-dashboard-live-launchagent-selectors.patch
+42b95c21d5b71163bff7be842b5183b2ff4897d6598f7f60b27a939dc9485748  0003-dashboard-agentstack-mail-no-bearer.patch
+f0c62d81f383951eb5daa4d6af3c9581fe8f5f9d4dbc37cb4420b9c1d3dd55c9  0004a-dashboard-loopback-retire-exit.patch
+EOF
+  )
+}
+
+apply_display_patches() {
+  verify_display_patch_bundle || return 1
+  for patch_name in \
+    0001-orrery-mail-db-selector.patch \
+    0002-dashboard-mail-cutover-selectors.patch \
+    0002b-dashboard-live-launchagent-selectors.patch \
+    0003-dashboard-agentstack-mail-no-bearer.patch \
+    0004a-dashboard-loopback-retire-exit.patch
+  do
+    strict_patch --forward dry "$PATCH_DIR/$patch_name" || return 1
+    strict_patch --forward apply "$PATCH_DIR/$patch_name" || return 1
+  done
+}
+
+rollback_display_patches() {
+  verify_display_patch_bundle || return 1
+  # rollback only; never call after the first durable write on new authority
+  for patch_name in \
+    0004a-dashboard-loopback-retire-exit.patch \
+    0003-dashboard-agentstack-mail-no-bearer.patch \
+    0002b-dashboard-live-launchagent-selectors.patch \
+    0002-dashboard-mail-cutover-selectors.patch \
+    0001-orrery-mail-db-selector.patch
+  do
+    strict_patch --reverse dry "$PATCH_DIR/$patch_name" || return 1
+    strict_patch --reverse apply "$PATCH_DIR/$patch_name" || return 1
+  done
+}
+```
+
+再生成後の隔離自己検証は`/private/tmp/agentstack-display-chain-rebuilt.AwNxke`で2026-08-11T15:48 JSTに実施した。source 5 fileとlive plistの複製だけへ`0001 → 0002 → 0002b → 0003 → 0004a`を上記flagsで各dry-run→applyし、JSON、plist 2 file、Python 3 fileを検査した後、逆順の各dry-run→reverseでbaselineとのbyte-exact diff 0、`.orig/.rej` 0を確認した。これは使い捨て複製の証跡であり、liveへの適用証跡ではない。
 
 加えて、`~/.zshrc` の旧 `MCP_AGENT_MAIL_TOKEN` export、旧health URLを直接叩くhook/watcher、dashboard/Codex Appの旧fallbackを、新旧envの両方で動くrepo-managed artifactへ先に置換する。ここは任意文字列置換をせず個別testを持つ。旧source自身の `.mcp.json` / `.codex/config.toml`、frozen differential fixture、backup/historyは通常consumer inventoryへ入れない。
 
@@ -124,7 +197,7 @@ repo版と`~/.claude/hooks/`のlive版は同一物と仮定しない。C0でexac
 | live artifact | 切替前の必要変更と検証 |
 |---|---|
 | `check-file-reservation.sh` | 新endpoint selector、`Accept: application/json, text/event-stream`、global bearer optional、agent `registration_token`非送信へ揃える。初回のtransport unreachableだけfail-open、HTTP 406・JSON-RPC error・MCP `isError`・malformed response・definitive zero後の失敗はfail-closed。予約なしはexit 2、既存予約はexit 0を両方向で実証する |
-| `spawn_child.sh` | 新MCP key/endpointを選び、global bearerを必須にしない。requested identityと`register_agent` response nameが不一致なら警告継続ではなくfail-closedにし、作りかけのchild/session/configをcleanupする |
+| `spawn_child.sh` | 親が使う既存client keyを維持したまま新endpointを選び、key名ではなくendpoint/root/ownershipでauthorityを判定し、global bearerを必須にしない。requested identityと`register_agent` response nameが不一致なら警告継続ではなくfail-closedにし、作りかけのchild/session/configをcleanupする |
 | `mark-agent-registered.sh` | responseのexact nameを検証してからsuccess markerを更新する。失敗responseや名前すり替えで登録済みにしない |
 | `get-mcp-agent-mail-token.sh` | 新loopback endpointではglobal bearer取得を起動条件にしない。legacy endpointだけに必要な互換経路として隔離する |
 | reservation release worker / release-all / child cleanup | old URL、常時bearer、legacy response shapeへの固定を除き、新endpointのexact MCP responseをfail-closedで扱う |
@@ -132,9 +205,13 @@ repo版と`~/.claude/hooks/`のlive版は同一物と仮定しない。C0でexac
 | `session-start-reminder.sh` / readiness check | 旧REST liveness URLをbounded MCP `health_check`へ置換し、HTTP rejectionをunreachable扱いにしない |
 | `watch_agent_mail_signals.sh` / stale-signal cleanup | signal rootを`~/.agentstack/mail/signals`へ切り替え、per-messageとlegacy layoutの移行testを通す。旧DB/signal rootのsilent fallbackを残さない |
 | warm-pool / launchd helper | 旧`/mail` route、8765、legacy labelを新18765 `/mcp`とexact ownershipへ置換し、旧jobを起動・停止しないことをtestする |
-| `check-agent-registered.sh`ほかraw HTTP caller | 新MCP key/endpointとexact identity responseへ語彙を揃え、全raw HTTP callに必要な`Accept`を付ける |
+| `check-agent-registered.sh`ほかraw HTTP caller | 既存client keyを維持して新endpointとexact identity responseへ語彙を揃え、全raw HTTP callに必要な`Accept`を付ける |
 
 hook/watcherのrepo実装とtestはC2前の前提条件にする。liveへのdeployも原則C2前だが、`check-file-reservation.sh`のstrict identity版だけは既存sessionを途中で止めないため、C5の全client restart/rebindとexact identity確認の**後**にdeployする。repo版だけ直してlive版を未更新のまま実動確認へ進めない。
+
+### client key と stale selector の切替後整理
+
+初回切替ではClaude `mcp-agent-mail`、Codex `agent-mail`を互換ABIとして維持し、permission/hook selectorを変更しない。任意のkey改名、24-tool境界に無いstale permission 21 occurrence（10 tool名）、Lifeの旧8765 raw curl selector 4件、dormantな`deregister_agent` optionは別のnon-blocking post-cutover taskで扱う。これらは未コミットmachine-local観測 `2026-08-11T15:18:49 JST` の値であり、実行時の正本ではない。将来toolが再公開されるとstale permissionが自動的に有効化され得るため、post作業でも新しいone-run sealed inventory、maintainerへのexact file/line preview、明示承認を必須にする。`retire-agent-by-name.sh`を再有効化する場合は、dormant optionだけでなく旧DB・8765・bearer前提も同時に置換して検証する。
 
 ## 上から順に実行する操作
 
@@ -146,6 +223,7 @@ hook/watcherのrepo実装とtestはC2前の前提条件にする。liveへのdep
 set -eu
 REPO='/Users/operator/Syncthing/<vault-directory>/21_Coding Projects/claude-agent-stack'
 MAINT='/Users/operator/.agentstack/cutover-maintenance'
+PATCH_DIR="$REPO/docs/agentstack-mail-cutover-patches"
 READINESS="$REPO/packages/agentstack_mail/tests/cutover_readiness.py"
 CUTOVER_MANIFEST="$REPO/packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json"
 EVIDENCE_INDEX="$MAINT/evidence-index.json"
@@ -533,17 +611,17 @@ assert p["damage_control"] == "physical_and_logical_non_noop"
 PY
 ```
 
-runnerはsource/backup/damaged/restoredの4 raw familyを同一run IDへ束縛し、built-in damageがmainを実際に変え、backup時ABSENTだったsidecarを作って除去branchを通したことを要求する。no-op damage、restore skip、PRESENT replace skip、ABSENT unlink skipは各mutation testで赤くなる。raw artifact、terminal receipt、separate verifier receipt、run directory外の3 SHA pinは、将来の`data-migration-reconciliation` handlerへの入力として保持する。`rollback-revert-procedure`は同じartifactを別名で再登録せず、C3–C6/R2–R6を再計算する独立handlerと独立recordを必要とする。最終booleanだけはevidenceに数えない。
+runnerはsource/backup/damaged/restoredの4 raw familyを同一run IDへ束縛し、built-in damageがmainを実際に変え、backup時ABSENTだったsidecarを作って除去branchを通したことを要求する。no-op damage、restore skip、PRESENT replace skip、ABSENT unlink skipは各mutation testで赤くなる。raw artifact、terminal receipt、separate verifier receipt、run directory外の3 SHA pinは、将来の data-migration-reconciliation handlerへの入力として保持する。rollback-revert-procedure は同じartifactを別名で再登録せず、C3–C5/R1–R5のfirst durable write前だけを再計算する独立handlerと独立recordを必要とする。post-authority reverse transformは別のnon-blocking post-cutover taskであり、このconditionへ混ぜない。最終booleanだけはevidenceに数えない。
 
 canonical rehearsal receiptが無い、command rc0を観測できない、`.prepared`/`.unconfirmed`/ownership markerだけが残る、または初回verifier/check-onlyのどちらかが失敗した場合は未完了である。prepared/unconfirmedを手動renameしない。receipt内の`fsync`/`atomic_replace`という文字列は自己証明ではなく、それらはcode pathとEIO fault testでのみ照合する。producerが実際に走ったことの暗号学的証明ではなく、保持raw artifactsから独立再計算できるところが保証の上限である。
 
 ### 現行v1の停止点（normative）
 
-現在のversioned manifestでは`data-migration-reconciliation`と`rollback-revert-procedure`がともに`unimplemented_v1`である。この状態ではartifactやindexへ何も書かず、非0で停止する。両conditionのversioned handlerと別々のevidence recordが実装され、readiness evaluatorが両recordを再計算して受理するまで次へ進まない。
+現在のversioned manifestでは data-migration-reconciliation と rollback-revert-procedure がともに`unimplemented_v1`である。この状態ではartifactやindexへ何も書かず、非0で停止する。両conditionのversioned handlerと別々のevidence recordが実装され、readiness evaluatorが両recordを再計算して受理するまで次へ進まない。
 
 ### handler実装後のfuture skeleton（現行では実行禁止）
 
-次のproducerは、将来`data-migration-reconciliation`用のversioned handlerが実装された後に、rehearsalの3つの外部pinとcanonical raw evidenceから同条件の1 recordだけを作るためのskeletonである。現在の`unimplemented_v1`では先頭で意図的に非0となる。これは`rollback-revert-procedure`のproducer/handlerを実装せず、未知の将来`evidence_kind`も固定していないため、現行の実行可能契約ではない。handler実装後もcondition IDを増やさず、review済みのversioned `evidence_kind`と同じ値だけを受け入れる。
+次のproducerは、将来 data-migration-reconciliation 用のversioned handlerが実装された後に、rehearsalの3つの外部pinとcanonical raw evidenceから同条件の1 recordだけを作るためのskeletonである。現在の`unimplemented_v1`では先頭で意図的に非0となる。これは rollback-revert-procedure のproducer/handlerを実装せず、未知の将来`evidence_kind`も固定していないため、現行の実行可能契約ではない。handler実装後もcondition IDを増やさず、review済みのversioned `evidence_kind`と同じ値だけを受け入れる。
 
 ```sh
 python3 - "$CUTOVER_MANIFEST" "$CANDIDATE_COMMIT" "$REHEARSAL_RUN" \
@@ -632,7 +710,7 @@ finally:
 PY
 ```
 
-1. 将来版で`data-migration-reconciliation`と`rollback-revert-procedure`のversioned handlerおよび別々のevidence recordが実装され、両recordを含むindexをreadiness evaluatorが再計算して受理できた場合にだけ、clean checkoutでfull candidate commit、exact manifest、digest-verified evidenceを次のexact commandへ渡す。現行v1ではここへ進まない。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
+1. 将来版で data-migration-reconciliation と rollback-revert-procedure のversioned handlerおよび別々のevidence recordが実装され、両recordを含むindexをreadiness evaluatorが再計算して受理できた場合にだけ、clean checkoutでfull candidate commit、exact manifest、digest-verified evidenceを次のexact commandへ渡す。現行v1ではここへ進まない。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
 
 ```sh
 CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
@@ -647,9 +725,9 @@ import json, pathlib, sys
 p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert p["evaluation_state"] == "valid"
 assert p["cutover_state"] == "go"
-assert p["condition_count"] == 26
-assert len(p["passed_condition_ids"]) == 26
-assert len(set(p["passed_condition_ids"])) == 26
+assert p["condition_count"] == 14
+assert len(p["passed_condition_ids"]) == 14
+assert len(set(p["passed_condition_ids"])) == 14
 assert p["missing_conditions"] == []
 assert p["invalid_reasons"] == []
 PY
@@ -673,7 +751,7 @@ shasum -a 256 "$LEGACY_PLIST" > "$MAINT/legacy-plist.sha256"
 `passed_condition_ids`の集合と順序は台帳の`cutover_gate.required_condition_ids`とexact一致することもmaintenance記録へsealする。旧jobを戻す可能性があるR1–R5では、bootstrap直前に必ず`shasum -a 256 -c "$MAINT/legacy-plist.sha256"`を再実行する。
 2. baseline開始方法はmaintainer裁定済みの **A（copied filesを1 baseline commitにする）** をversioned migration inputとmaintenance記録へ固定する。選択のcandidate/evidence bindingがmachine gateに含まれることも確認する。
 3. working-tree scope migration、bounded MCP readiness probe、上のOrrery/dashboard互換変更とlive hooks変更が実装・検証済みであることを確認する。`agentstack-mail-consumers` は確定artifact上でcopy-only rehearsalが通ることを確認する。一つでも未実装ならここで止まる。
-4. `distribution-artifact-release-gate`がindexへ束縛するのは現在wheel/sdistまでで、transitive dependency closureとinterpreter identityはまだ束縛しない。したがって現行v1は専用venvを作る前でNO-GOであり、以下はfuture-only skeletonとしてもそのまま実行しない。将来のdistribution/install evidenceは、interpreter identity、hash-lockされたrequirements、全dependency wheelのname/SHAを持つsealed wheelhouse manifest、install receiptを同じcandidateへ束縛する。installerは`--no-index --find-links <sealed-wheelhouse> --require-hashes -r <sealed-lock>`でcandidate wheelをlock内から導入し、`pip check`を通してからrenderへ進む。live `~/Library/LaunchAgents`ではないstaging directoryだけを使い、bare PATH entrypointやlaunchctlは使わない。
+4. distribution-artifact-release-gate がindexへ束縛するのは現在wheel/sdistまでで、transitive dependency closureとinterpreter identityはまだ束縛しない。したがって現行v1は専用venvを作る前でNO-GOであり、以下はfuture-only skeletonとしてもそのまま実行しない。将来のdistribution/install evidenceは、interpreter identity、hash-lockされたrequirements、全dependency wheelのname/SHAを持つsealed wheelhouse manifest、install receiptを同じcandidateへ束縛する。installerは`--no-index --find-links <sealed-wheelhouse> --require-hashes -r <sealed-lock>`でcandidate wheelをlock内から導入し、`pip check`を通してからrenderへ進む。live `~/Library/LaunchAgents`ではないstaging directoryだけを使い、bare PATH entrypointやlaunchctlは使わない。
 
 ```sh
 CANDIDATE_WHEEL=$(python3 - "$EVIDENCE_INDEX" "$EVIDENCE_ROOT" <<'PY'
@@ -731,11 +809,24 @@ assert result["ownership_manifest"] == sys.argv[2]
 assert pathlib.Path(sys.argv[2]).is_file()
 PY
 ```
-5. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerを`$MAINT/consumer-inventory.json`へtyped inventoryとして列挙し、次のexact commandで0600/0400のbefore/after bundleを作る。標準出力のmanifest SHA-256をbundle外へpinし、同じmaintenance shellの変数へ代入する。
+5. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerをtyped inventoryとして列挙する。**file採取は`agentstack-mail-consumer-inventory`の一つのbounded runで一度だけ行い、開始/終了時刻、path、count、digestを同じsealへ入れる。CLIのliteral `--hidden --no-ignore` を両方必須とし、(a)既知のselectorがhitする検索liveness対照と、(b)既定でignoreされる既知pathが列挙されるcompleteness対照を別々に通す。** collectorはGit ignoreを参照せず、片方のflag/control欠落、曖昧rule、途中変化、上限超過ではbundleを公開しない。ただし現行v1が封じるのはfile consumerだけで、同じ瞬間のtmux session・稼働/停止child・reservation状態を一つの正本へ結合するorchestrationと、rule集合のoperator承認は未実装である。したがって手書き一覧やfile seal単独で代用せず、overall gateはNO-GOのままにする。実装済みfile collectorのexact commandは次であり、0600/0400のbefore/after bundleにはその出力inventoryだけを渡す。
 
 ```sh
+INVENTORY_BIN="$CANDIDATE_VENV/bin/agentstack-mail-consumer-inventory"
+INVENTORY_SNAPSHOT="$MAINT/consumer-inventory-snapshot"
+"$INVENTORY_BIN" \
+  --spec "$MAINT/consumer-inventory-spec.json" \
+  --bundle "$INVENTORY_SNAPSHOT" \
+  --hidden \
+  --no-ignore \
+  --max-files 100000 \
+  --deadline-seconds 60 \
+  > "$MAINT/c0-consumer-inventory-collect.json" || exit 1
+CONSUMER_INVENTORY="$INVENTORY_SNAPSHOT/inventory.json"
+test -r "$INVENTORY_SNAPSHOT/seal.json"
+
 "$CONSUMERS_BIN" prepare \
-  --inventory "$MAINT/consumer-inventory.json" \
+  --inventory "$CONSUMER_INVENTORY" \
   --bundle "$CONSUMER_BUNDLE" \
   > "$MAINT/c0-consumer-prepare.json" || exit 1
 PINNED_MANIFEST_SHA256=$(python3 - "$MAINT/c0-consumer-prepare.json" <<'PY'
@@ -753,8 +844,40 @@ grep -Eq '^[0-9a-f]{64}$' "$MAINT/consumer-manifest.sha256"
 ```
 
 maintenance shellを再開した場合は`PINNED_MANIFEST_SHA256=$(cat "$MAINT/consumer-manifest.sha256")`で同じexternal pinを復元し、正規表現を再検査する。
-6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。特にlive inventoryでtool permission/hookを確認した15個の `.claude/settings.local.json` は、対象fileと変更行を一件ずつ事前承認されるまでapplyしない。helperは**列挙したfile内**の旧alias、old/new併存、未知endpointをfailさせる。inventory外のfileは見えないため、別のlive inventory reviewで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
-7. 全 sender に開始時刻、C3の2–4分見込み、C5 test合格まで無通信が続くことを事前通知する。ProOpus 自身も、停止後は agent-mail を送受信せず同じ maintenance shell だけを使う。
+6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。初回切替ではglobal 1件とlocal 15件のClaude settingsにあるpermission/hook selectorを一つも変えないため、これら16 fileはすべて`changed=false`でなければ止まる。未コミットmachine-local観測 `2026-08-11T15:18:49 JST` はallow 68 + hook matcher 2 = 70 selectorであり、採取器の正本値ではない。helperは**列挙したfile内**の複数recognized key、未知endpoint、endpoint/root混在をfailさせるが、key名だけでauthorityを判定しない。inventory外のfileは見えないため、上のhidden/ignored completeness対照を含むsealed inventoryで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
+7. readinessが`go`でmaintainerがpreviewを承認した後だけ、versioned display patch chainを適用する。これは本番pathへの最初の変更なので、markerが作られる前の失敗では続行せず、現物を検査して旧before-imageへ戻す。全5 patch適用後にJSON、Python AST、repo/live plistを検査し、after digestを保存してからmarkerを作る。
+
+```sh
+test ! -e "$MAINT/display-patches.applied"
+apply_display_patches || exit 1
+python3 - <<'PY'
+import ast, json, pathlib
+root = pathlib.Path("/Users/operator")
+json.loads((root / ".orrery/config.json").read_text(encoding="utf-8"))
+for relative in (
+    "OSS/orrery/bridge/orrery_backend.py",
+    ".claude/tools/agent-dashboard/server.py",
+    ".claude/tools/agent-dashboard/graph_data.py",
+):
+    path = root / relative
+    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+PY
+plutil -lint \
+  /Users/operator/.claude/tools/agent-dashboard/com.operator.agentdashboard.plist \
+  /Users/operator/Library/LaunchAgents/com.operator.agentdashboard.plist
+shasum -a 256 \
+  /Users/operator/.orrery/config.json \
+  /Users/operator/OSS/orrery/bridge/orrery_backend.py \
+  /Users/operator/.claude/tools/agent-dashboard/server.py \
+  /Users/operator/.claude/tools/agent-dashboard/graph_data.py \
+  /Users/operator/.claude/tools/agent-dashboard/com.operator.agentdashboard.plist \
+  /Users/operator/Library/LaunchAgents/com.operator.agentdashboard.plist \
+  > "$MAINT/display-patches-after.sha256"
+touch "$MAINT/display-patches.applied"
+```
+
+8. 全 sender に開始時刻、C3の2–4分見込み、C5 test合格まで無通信が続くことを事前通知する。ProOpus 自身も、停止後は agent-mail を送受信せず同じ maintenance shell だけを使う。
+9. 停止時間を計測するT0–T1の全区間は、MacをAC電源へ接続し、蓋を開けたまま実行する。`caffeinate` processの生存だけを物理条件の証明にしない。T0直前・各phase終端・T1直後に、記録したPIDのsleep assertion所有、AC接続、clamshell stateを検査し、別のhash-chain guardでAC/clamshellを毎秒記録する。AC切断、蓋閉じ、guard停止または許容上限を超えるsampling gap、事後power-state logのsleep/wake/clamshell eventが一つでもあれば、切替の成否とは分けて**停止時間の計測を無効**とし、25分予測の検証値には使わない。この環境では蓋閉じsleepがblackbox記録に17,342秒の空白を作り、sleepを除外しなかった監視の緊急警報6通が全て誤報になった実例がある。またlocalの`caffeinate(8)`では`-s` assertionはAC電源時だけ有効である。
 
 ### C2A: cold backup前に全 sender と旧 writer を静止する
 
@@ -863,7 +986,7 @@ shasum -a 256 "$COLD_BACKUP_DIR/cold-backup-receipt.json" \
 
 ### C3: DB + signals + working tree を一単位として複製・検証する
 
-C2Bのmachine-readable cold backup receiptとbundle外SHA-256 pinが揃った後だけ開始する。`cold-backup`の取得成功はrestore可能性の証明ではないため、本番C0の`data-migration-reconciliation` evidenceには、後述の非production rehearsal receiptも必要である。
+C2Bのmachine-readable cold backup receiptとbundle外SHA-256 pinが揃った後だけ開始する。`cold-backup`の取得成功はrestore可能性の証明ではないため、本番C0の data-migration-reconciliation evidenceには、後述の非production rehearsal receiptも必要である。
 
 working-tree scope migration は次を一つの staging generation 内で行う。
 
@@ -875,7 +998,7 @@ working-tree scope migration は次を一つの staging generation 内で行う�
 6. working treeの全 path/content/mode、signals、33 file attachments、選んだGit開始状態を確認する。
 7. fsync後、同一 filesystem上の一回のdirectory renameで `~/.agentstack/mail` を公開する。失敗時は部分treeを canonical path に残さない。file descriptor/inode/link/container identity検査で実測したsource差替を拒否するが、same-UIDの非協調filesystem writerを完全な敵対者としては扱わない。destination不在checkとrenameの間のraceも単一operator前提で明記して受け入れ、未実装の`RENAME_EXCL`を安全保証として数えない。
 
-以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、26条件がGOになるまで稼働dataへ実行しない。**
+以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、14条件がGOになるまで稼働dataへ実行しない。**
 
 ```sh
 "$MIGRATE_BIN" copy \
@@ -935,7 +1058,7 @@ assert_consumer_state "$MAINT/c5-consumer-status.json" committed
 
 helperは列挙済みfile内の未知aliasを拒否するが、**inventoryから漏れたfileを発見するscannerではない**。C0のlive inventory reviewが別のhard gateである。inventory schema v1は次の全fieldを明示し、pathは全てabsoluteにする（値は本番用maintenance artifactにのみ書き、repoへcommitしない）。
 
-live residual Codex child config 4件は、read-only inventory時点で全てper-tool policy tableが0件だった。helperは存在するproxy 8-tool policyだけを保存し、欠落policyを製造しない。C0で各artifactを「resume対象」または「staleなのでexcludeし、更新済みspawn経路から再生成」に分類し、未分類のchild configはinventoryへ入れない。
+停止中のchild config 6件（Claude 2、Codex 4）はresume資産なので削除しない。sealed inventoryへ全件を含め、client keyを維持したままendpoint/authenticationだけを移し、更新済みmanaged launcherからのみ再開する。未コミットmachine-local観測 `2026-08-11T15:06:46 JST` では全6件が8765とlegacy envをpinしていたため、未移送の直接resumeは禁止する。live residual Codex child config 4件は同時点で全てper-tool policy tableが0件だった。helperは存在するpolicyだけを保存し、欠落policyを製造しない。
 
 ```json
 {
@@ -950,7 +1073,9 @@ live residual Codex child config 4件は、read-only inventory時点で全てper
     "legacy_mail_home": "/absolute/legacy/mail-home",
     "new_mail_home": "/absolute/new/mail",
     "legacy_signals_dir": "/absolute/legacy/signals",
-    "new_signals_dir": "/absolute/new/mail/signals"
+    "new_signals_dir": "/absolute/new/mail/signals",
+    "claude_mcp_key": "mcp-agent-mail",
+    "codex_mcp_key": "agent-mail"
   },
   "consumers": [
     {"kind": "claude_mcp", "path": "/absolute/copied/.claude.json"},
@@ -960,7 +1085,7 @@ live residual Codex child config 4件は、read-only inventory時点で全てper
 }
 ```
 
-全config置換後、**既に起動していたclientは設定file変更だけでは新endpointへ移らない**。各Claude/Codex parent、Codex App、停止時に存在したchildを`agent-start`等のmanaged launcherで明示的にrestart/rebindする。raw non-tmux Claudeは対応せず、同じmanaged経路で再起動する。各sessionの`AGENT_NAME`、または`TMUX_PANE`で明示したtargeted tmux sessionがcanonical identityと一致し、stale pane metadataとの不一致が無いことを先に確認する。続いてloaded MCP keyが`agentstack-mail`、endpointが127.0.0.1:18765、新keyのtool surfaceが期待値、旧key/8765のconnectionが無いことをread-onlyに確認する。確認前はtest pairを含め誰もcallしない。
+全config置換後、**既に起動していたclientは設定file変更だけでは新endpointへ移らない**。各Claude/Codex parent、Codex App、停止時に存在したchildを`agent-start`等のmanaged launcherで明示的にrestart/rebindする。raw non-tmux Claudeは対応せず、同じmanaged経路で再起動する。各sessionの`AGENT_NAME`、または`TMUX_PANE`で明示したtargeted tmux sessionがcanonical identityと一致し、stale pane metadataとの不一致が無いことを先に確認する。続いてloaded client keyがClaudeでは`mcp-agent-mail`、Codexでは`agent-mail`のまま、endpointが127.0.0.1:18765、実HTTP `tools/list` がversioned 24-tool集合とmissing/extra 0で一致し、8765 connectionが無いことをread-onlyに確認する。providerのserverInfo identityが`agentstack-mail`でもclient keyの変更とは扱わない。確認前はtest pairを含め誰もcallしない。
 
 restart/rebindとidentity確認が全件終わった後にだけ、strict版`check-file-reservation.sh`と`resolve-agent-name.sh`をrepoのexact digestからliveへdeployする。untargeted tmux fallbackは無く、unresolved/placeholder identityとmetadata-session不一致はHTTPを送る前にexit 2であることを負方向testで確認する。deploy前に予約guardの実動確認へ進まない。
 
@@ -991,13 +1116,24 @@ pre-open cold backupはmain / `-wal` / `-shm`のbyte recovery原本として保�
 
 ### R0 — C0/C1、旧authority未停止
 
-新artifactを使わない。旧authorityは動いたままなのでservice/config/data変更はない。C0 readiness出力と中止理由だけをmaintenance記録へ残す。
+新artifactを使わない。display patch markerが無ければ旧authorityは動いたままでservice/config/data変更はないため、C0 readiness出力と中止理由だけをmaintenance記録へ残す。markerがある場合は、全senderを止めてから次の共通display rollbackを完走し、markerを消すまで旧dashboard/clientを再開しない。
+
+```sh
+if [ -e "$MAINT/display-patches.applied" ]; then
+  rollback_display_patches || exit 1
+  rm "$MAINT/display-patches.applied"
+fi
+```
 
 ### R1 — C2A、cold backup前
 
 全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。`shasum -a 256 -c "$MAINT/legacy-plist.sha256"`が成功した場合だけ旧jobを戻す。
 
 ```sh
+if [ -e "$MAINT/display-patches.applied" ]; then
+  rollback_display_patches || exit 1
+  rm "$MAINT/display-patches.applied"
+fi
 shasum -a 256 -c "$MAINT/legacy-plist.sha256" || exit 1
 launchctl bootstrap "gui/$(id -u)" "$LEGACY_PLIST" || exit 1
 bounded_mail_probe \
@@ -1117,9 +1253,11 @@ assert_consumer_state "$MAINT/r5-consumer-status.json" rolled_back
 
 `status=rolled_back`、terminal receipt有効、third state 0、after state 0をmachine確認した後だけR1のlegacy tailへ進む。first durable write、external edit、authority lock失敗、assessment `no_go`はいずれもR6へ進む。
 
-### R6 — C6またはfirst durable write後（fix-forward only）
+### R6 — C6またはfirst durable write後（初回cutoverはfix-forward only）
 
 **旧plist照合/bootstrap、consumer rollback、旧endpoint handshakeは行わない。** canonical stageは`C6_NEW_AUTHORITY_VERIFIED`だけであり、snapshotがfresh baselineでも`rollback-assess`は無条件`no_go`を返す。`C6_CUTOVER_COMPLETE`を含む別名は受け入れず、operatorが同じ境界に二つの名前を使わない。新authorityだけを次の順序で止め、`status=stopped, owned=true`を確認し、incident固有repair後にstartする。loaded jobへstartを直接撃ってrestart扱いにしない。
+
+このsequenceを本番で使う前に、exact candidateを隔離root/port 18765で起動し、launchd相当の`SIGTERM`で停止して、tracebackなし、正常exit、endpoint閉鎖、SQLite main/WAL/SHMの物理mapと再open integrityをreceiptへ残す。さらにshutdown完了前のforced killを負対照として、残ったsidecarと次回startの回復結果を記録する。Ctrl-Cの`SIGINT`/exit 130はこの証跡の代用にならない。dirty working treeを使った隔離direct probeではSIGTERM clean shutdownとforced-kill後の回復を確認済みだが、clean exact candidateへ束縛したsealed receiptと、実controllerによる`stop → status=stopped → start → bounded health` receiptは未生成である。したがってservice-lifecycle conditionはNO-GOのままとする。
 
 ```sh
 set +e
@@ -1157,12 +1295,13 @@ bounded_mail_probe \
 
 ## 現在の blocker digest（non-normative）
 
-これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。現在は少なくとも次が未完了なので、本番切替は未承認である。
+これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。#2 C6 hard no-goと#4 full-scale restore rehearsalはclean candidate `5ff73d9cda3fac9a032fb73c05d2639514e2a608`で独立照合までclosedである。後続変更後のfinal candidateでは同じ意味条件を再審議せず、candidate bindingだけを再生成する。現在は少なくとも次が未完了なので、本番切替は未承認である。
 
-- versioned generatorと手順は実装済みだが、clean candidateに対するproduction-shaped rehearsal/独立verifier/check-onlyのrelease receiptはまだ未生成。active-writer/6回照合/中断/alias/object-store/corruptionの残りraw evidenceも未完了
+- exact candidate wheelからのreal HTTP/CLI 24-tool起動、bounded service lifecycle、legacy endpoint/root無変更の証跡
+- clean exact candidateに束縛した隔離serviceのSIGTERM/forced-kill sealed receiptと、実controllerのstop→stopped→start→bounded health証跡
 - 実機consumerとlive hooksのexact inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
-- bounded MCP readiness probe
-- clean candidateのwheel/sdistとfresh installed wheel verification
-- 台帳で`not_implemented`のpre-cutover follow-up taskと、それぞれのdigest-bound raw evidence
+- production-shaped full working-tree migration、first durable write前rollback、real notification-layout transitionの各handlerとcandidate-bound evidence
+- clean final candidateのselected-behavior、wheel/sdist、reservation-safety、およびclosed #2/#4のbinding再生成
+- exact candidateに対するmaintainerの一回のproduct-decision cutover approval
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。

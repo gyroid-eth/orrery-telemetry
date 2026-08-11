@@ -16,6 +16,10 @@ jobs:
     name: tests (python ${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
+        with:
+          # approved_base is accepted only when a persistent branch, remote, or
+          # tag reaches it; shallow history would make that gate inconclusive.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -46,6 +50,8 @@ jobs:
       AGENTSTACK_E2E_CI: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"

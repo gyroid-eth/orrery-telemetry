@@ -545,6 +545,21 @@ def get_engine() -> AsyncEngine:
     return _engine
 
 
+async def dispose_database_for_shutdown() -> None:
+    """Dispose the process-wide engine and make stale reuse impossible."""
+
+    global _engine, _session_factory, _schema_ready, _schema_lock
+    engine = _engine
+    try:
+        if engine is not None:
+            await engine.dispose()
+    finally:
+        _engine = None
+        _session_factory = None
+        _schema_ready = False
+        _schema_lock = None
+
+
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         init_engine()

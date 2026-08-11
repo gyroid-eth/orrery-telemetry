@@ -1,0 +1,53 @@
+# 0004a / display-only EXIT route switch (prepared only; not applied)
+#
+# Scope: .claude/tools/agent-dashboard/server.py only.
+# Purpose: replace the removed legacy /mail/api/retire-agent REST call with
+# AgentStack Mail MCP retire_agent(project_key, agent_name).
+#
+# Preconditions:
+# - apply after 0001, 0002, and 0003
+# - the selected AgentStack Mail product branch must already contain option B:
+#   loopback retire_agent accepts target-token omission and emits its audit event
+#
+# Rollback:
+# - reverse 0004a before reversing 0003/0002
+# - restore the legacy REST call only after old 8765 is again the selected authority
+#
+# This artifact changes no product source, ledger, test, live service, or port.
+# Apply only after a strict dry-run from /Users/operator:
+# patch --batch --forward --fuzz=0 --no-backup-if-mismatch -p1 < 0004a-dashboard-loopback-retire-exit.patch
+--- a/.claude/tools/agent-dashboard/server.py
++++ b/.claude/tools/agent-dashboard/server.py
+@@ -2765,19 +2765,20 @@ def do_kill(session: str, mode: str = "both") -> dict:
+         elif row["retired_at"]:
+             actions.append("retire-already")
+         else:
+-            req = urllib.request.Request(
+-                "http://127.0.0.1:8765/mail/api/retire-agent",
+-                data=json.dumps({"agent_id": row["id"]}).encode(),
+-                headers={"Content-Type": "application/json"},
+-                method="POST",
++            retired = _mcp_call(
++                "retire_agent",
++                {"project_key": VAULT, "agent_name": session},
++                timeout=4,
+             )
+-            try:
+-                with urllib.request.urlopen(req, timeout=4) as r:
+-                    body = json.loads(r.read())
+-                    actions.append("retired" if body.get("success")
+-                                   else f"retire-fail:{body}")
+-            except Exception as e:
+-                actions.append(f"retire-err:{e}")
++            if not retired["ok"]:
++                actions.append(f"retire-err:{retired['error']}")
++            else:
++                body = retired.get("data")
++                actions.append(
++                    "retired"
++                    if isinstance(body, dict) and body.get("status") == "retired"
++                    else f"retire-fail:{body}"
++                )
+ 
+     # 2) tmux kill (husk shell があれば)
+     if mode in ("both", "tmux"):

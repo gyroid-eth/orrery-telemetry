@@ -644,9 +644,7 @@ if isinstance(projects, dict):
 for scope in scopes:
     if isinstance(scope, dict):
         names.update(name for name in scope if looks_like_agent_mail(name))
-if "agentstack-mail" in names or ":18765/" in mcp_url:
-    names = {"agentstack-mail"}
-elif not names:
+if not names:
     names = {"mcp-agent-mail"}
 
 config = dict(mcpServers=dict((name, server) for name in sorted(names)))
@@ -776,9 +774,7 @@ for line in text.splitlines():
                 claimed.append(name)
     if not skipping:
         lines.append(line)
-if "agentstack-mail" in claimed or ":18765/" in mcp_url:
-    claimed = ["agentstack-mail"]
-elif not claimed:
+if not claimed:
     claimed = ["agent-mail"]
 # Codex's deferred tool registry identifies this proxy by serverInfo.name
 # (`agentstack`), while direct MCP calls use the configured server key. Claim

@@ -14,7 +14,11 @@ authors = [
   { name = "AgentStack contributors" },
 ]
 dependencies = [
+  "anyio>=4.5,<5",
   "fastmcp==2.13.0.2",
+  # boundary.py intentionally follows Uvicorn's signal-capture contract so
+  # FastMCP's outer database lifespan can finish after SIGTERM.
+  "uvicorn==0.52.1",
   # FastMCP's generated outputSchema changed in Pydantic 2.13.  The live
   # behavior source uses 2.12.5, so pin it until a versioned schema migration.
   "pydantic==2.12.5",
@@ -46,6 +50,7 @@ agentstack-mail = "agentstack_mail.cli:main"
 agentstack-mail-migrate = "agentstack_mail.migration:main"
 agentstack-mail-service = "agentstack_mail.service:main"
 agentstack-mail-consumers = "agentstack_mail.consumer:main"
+agentstack-mail-consumer-inventory = "agentstack_mail.consumer_inventory:main"
 
 [project.optional-dependencies]
 legacy-llm = [
@@ -64,7 +69,11 @@ packages = ["src/agentstack_mail"]
 # The reconstructible live Git bundle and dirty patch are repository audit
 # inputs, not runtime source-distribution payloads. NOTICE, both licenses,
 # fixtures, source, and tests remain in the sdist.
-exclude = ["/provenance"]
+exclude = [
+  "/provenance",
+  "/plucky-requirements-2-4.md",
+  "/plucky-remaining-blockers.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

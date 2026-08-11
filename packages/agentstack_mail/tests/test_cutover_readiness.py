@@ -59,7 +59,7 @@ def test_checked_in_ledger_is_valid_no_go_with_exact_missing_tasks() -> None:
     assert result["evaluation_state"] == "valid"
     assert result["cutover_state"] == "no_go"
     assert result["invalid_reasons"] == []
-    assert result["condition_count"] == 26
+    assert result["condition_count"] == 14
     assert result["passed_condition_ids"] == list(EXPECTED_CONDITION_IDS[:4])
     assert [item["id"] for item in result["missing_conditions"]] == list(
         EXPECTED_CONDITION_IDS[4:]
@@ -79,6 +79,18 @@ def test_checked_in_ledger_is_valid_no_go_with_exact_missing_tasks() -> None:
         "D9",
     ]
     assert approval["observed"]["d7_exact_deferred_no_go"] is True
+    safety = next(
+        item
+        for item in result["missing_conditions"]
+        if item["id"] == "reservation-probe-safety-release-gate"
+    )
+    assert safety["reason"] == "digest-verified raw machine evidence is missing"
+    http = next(
+        item
+        for item in result["missing_conditions"]
+        if item["id"] == "http-cli-transport-entrypoints"
+    )
+    assert http["observed"] == "not_implemented"
 
 
 def test_dirty_or_different_candidate_is_no_go() -> None:
@@ -555,7 +567,7 @@ def test_caller_authored_status_field_is_invalid(tmp_path: Path) -> None:
 
 def test_implementation_state_cannot_green_unimplemented_handler() -> None:
     manifest = _manifest()
-    task_id = "d2-d3-worker-progress-diagnostics"
+    task_id = "http-cli-transport-entrypoints"
     next(item for item in manifest["follow_up_tasks"] if item["id"] == task_id)[
         "implementation_state"
     ] = "implemented"

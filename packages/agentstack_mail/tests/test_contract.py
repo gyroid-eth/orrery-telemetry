@@ -19,7 +19,17 @@ def test_service_identity_is_independent() -> None:
     assert CONTRACT_VERSION == 1
     assert SERVICE_IDENTITY["distribution"] == "agentstack-mail"
     assert SERVICE_IDENTITY["python_package"] != LEGACY_COLLISION_VALUES["python_package"]
-    assert SERVICE_IDENTITY["mcp_server_key"] != LEGACY_COLLISION_VALUES["mcp_server_key"]
+    assert (
+        SERVICE_IDENTITY["mcp_provider_identity"]
+        != LEGACY_COLLISION_VALUES["mcp_provider_identity"]
+    )
+    assert SERVICE_IDENTITY["claude_client_key"] == "mcp-agent-mail"
+    assert SERVICE_IDENTITY["codex_client_key"] == "agent-mail"
+    assert SERVICE_IDENTITY["client_key_policy"] == "preserve_existing"
+    assert SERVICE_IDENTITY["mcp_provider_identity"] not in {
+        SERVICE_IDENTITY["claude_client_key"],
+        SERVICE_IDENTITY["codex_client_key"],
+    }
     assert SERVICE_IDENTITY["environment_prefix"] == "AGENTSTACK_MAIL_"
 
 

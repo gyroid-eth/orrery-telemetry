@@ -53,7 +53,11 @@ def test_main_runs_the_exact_http_transport(
             "log_level": "info",
             "json_response": True,
             "stateless_http": True,
-            "uvicorn_config": {"loop": "asyncio", "ws": "none"},
+            "uvicorn_config": {
+                "loop": "asyncio",
+                "ws": "none",
+                "timeout_graceful_shutdown": 8.0,
+            },
         }
     ]
 

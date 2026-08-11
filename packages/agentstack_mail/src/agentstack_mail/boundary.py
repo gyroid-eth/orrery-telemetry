@@ -8,12 +8,48 @@ resource from becoming reachable by accident.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import signal
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 
+import uvicorn
 from fastmcp import FastMCP
 
 from .contract import COMPATIBILITY_TOOLS
+
+_EXPECTED_UVICORN_VERSION = "0.52.1"
+
+
+def _assert_uvicorn_signal_contract() -> None:
+    actual = getattr(uvicorn, "__version__", "unknown")
+    if actual != _EXPECTED_UVICORN_VERSION:
+        raise RuntimeError(
+            "AgentStack Mail requires Uvicorn "
+            f"{_EXPECTED_UVICORN_VERSION}, found {actual}; the SIGTERM re-raise "
+            "suppression is pinned because it depends on that version's "
+            "internal signal-capture behavior"
+        )
+
+
+class _AgentStackUvicornServer(uvicorn.Server):
+    """Allow FastMCP's outer lifespan to finish after a graceful SIGTERM."""
+
+    @contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        # Delegate handler installation and restoration to the pinned Uvicorn
+        # implementation. Before its context exits and re-raises captured
+        # signals, suppress only TERM so FastMCP's outer database lifespan can
+        # finish; preserve Ctrl-C/SIGINT's conventional exit 130 behavior.
+        with super().capture_signals():
+            try:
+                yield
+            finally:
+                self._captured_signals[:] = [
+                    captured
+                    for captured in self._captured_signals
+                    if captured != signal.SIGTERM
+                ]
 
 
 class CompatibilityFastMCP(FastMCP):
@@ -24,6 +60,17 @@ class CompatibilityFastMCP(FastMCP):
         self._agentstack_declared_tools: set[str] = set()
         self._agentstack_published_tools: set[str] = set()
         self._agentstack_declared_resources: set[str] = set()
+
+    async def run_http_async(self, *args: Any, **kwargs: Any) -> None:
+        """Run HTTP with a TERM path that reaches the FastMCP lifespan exit."""
+
+        _assert_uvicorn_signal_contract()
+        original_server = uvicorn.Server
+        uvicorn.Server = _AgentStackUvicornServer
+        try:
+            await super().run_http_async(*args, **kwargs)
+        finally:
+            uvicorn.Server = original_server
 
     def tool(
         self,

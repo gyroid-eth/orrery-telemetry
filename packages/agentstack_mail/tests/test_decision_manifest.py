@@ -6,12 +6,18 @@ import ast
 import copy
 import json
 import re
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from verify_artifact import _assert_expected_divergences_manifest
+from verify_artifact import (
+    _approved_base_from_manifest,
+    _assert_approved_base_reachable,
+    _assert_checkout_manifest_binding,
+    _assert_expected_divergences_manifest,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = PACKAGE_ROOT / "fixtures"
@@ -42,6 +48,13 @@ def _decision(manifest: dict[str, Any], decision_id: str) -> dict[str, Any]:
 
 def _follow_up_task(manifest: dict[str, Any], task_id: str) -> dict[str, Any]:
     return next(item for item in manifest["follow_up_tasks"] if item["id"] == task_id)
+
+
+def _post_cutover_task(manifest: dict[str, Any], task_id: str) -> dict[str, Any]:
+    return next(
+        item for item in manifest["post_cutover_follow_up_tasks"]
+        if item["id"] == task_id
+    )
 
 
 def _drop_d1(manifest: dict[str, Any]) -> None:
@@ -225,13 +238,33 @@ def _drop_follow_up_task(manifest: dict[str, Any]) -> None:
 
 
 def _pretend_follow_up_task_is_implemented(manifest: dict[str, Any]) -> None:
-    manifest["follow_up_tasks"][0]["implementation_state"] = "implemented"
+    _follow_up_task(manifest, "http-cli-transport-entrypoints")[
+        "implementation_state"
+    ] = "implemented"
 
 
 def _merge_d10_liveness_and_performance_gates(manifest: dict[str, Any]) -> None:
-    manifest["follow_up_tasks"][2]["performance_separation"] = (
+    _post_cutover_task(manifest, "d10-diagnostic-liveness-timeout")[
+        "performance_separation"
+    ] = (
         "the outer deadline is the reservation performance threshold"
     )
+
+
+def _drop_post_cutover_task(manifest: dict[str, Any]) -> None:
+    manifest["post_cutover_follow_up_tasks"].pop()
+
+
+def _make_post_cutover_task_blocking(manifest: dict[str, Any]) -> None:
+    manifest["post_cutover_follow_up_tasks"][0]["cutover_blocking"] = True
+
+
+def _drop_current_gate_activation_requirement(manifest: dict[str, Any]) -> None:
+    manifest["current_gate_activation_requirements"].clear()
+
+
+def _drop_post_cutover_gate_contract_defect(manifest: dict[str, Any]) -> None:
+    manifest["post_cutover_gate_contract_defects"].clear()
 
 
 def _drop_cutover_required_id(manifest: dict[str, Any]) -> None:
@@ -258,7 +291,7 @@ def test_cutover_consumer_migration_and_provenance_scope_is_explicit() -> None:
     manifest = _canonical_manifest()
     client_cutover = _follow_up_task(manifest, "mcp-client-reregistration-cutover")
     migration = _follow_up_task(manifest, "data-migration-reconciliation")
-    provenance = _follow_up_task(manifest, "cutover-evidence-provenance-gate")
+    provenance = _post_cutover_task(manifest, "cutover-evidence-provenance-gate")
 
     client_contract = " ".join(
         [
@@ -316,6 +349,192 @@ def test_cutover_consumer_migration_and_provenance_scope_is_explicit() -> None:
         term not in client_contract
         for term in ("bearer", "retire", "registration_token")
     )
+
+
+def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
+    manifest = _canonical_manifest()
+    pre = manifest["follow_up_tasks"]
+    post = manifest["post_cutover_follow_up_tasks"]
+
+    assert [task["id"] for task in pre] == [
+        "reservation-probe-safety-release-gate",
+        "http-cli-transport-entrypoints",
+        "service-lifecycle-supervision",
+        "mcp-client-reregistration-cutover",
+        "data-migration-reconciliation",
+        "rollback-revert-procedure",
+        "notification-layout-consumer-compatibility",
+    ]
+    assert [task["id"] for task in post][12:14] == [
+        "post-authority-reverse-transform",
+        "client-key-rename-and-stale-selector-cleanup",
+    ]
+    assert [task["id"] for task in post][-6:] == [
+        "reservation-performance-input-tree-binding",
+        "reservation-performance-runner-binding",
+        "blocking-ci-environment-pinning",
+        "fresh-install-network-separation",
+        "fresh-install-startup-port-race",
+        "selected-pytest-evidence-executor-contract",
+    ]
+    assert len(post) == 20
+    assert all(
+        task["implementation_order"] == "post_cutover"
+        and task["cutover_blocking"] is False
+        and task["activation_condition"]
+        for task in post
+    )
+
+    safety = _follow_up_task(manifest, "reservation-probe-safety-release-gate")
+    assert safety["implementation_state"] == "implemented"
+    assert all(
+        task["implementation_state"] == "not_implemented"
+        for task in pre
+        if task is not safety
+    )
+
+    http = _follow_up_task(manifest, "http-cli-transport-entrypoints")
+    service = _follow_up_task(manifest, "service-lifecycle-supervision")
+    client = _follow_up_task(manifest, "mcp-client-reregistration-cutover")
+    migration = _follow_up_task(manifest, "data-migration-reconciliation")
+    rollback = _follow_up_task(manifest, "rollback-revert-procedure")
+    assert "exact candidate wheel" in " ".join(http["requirements"])
+    assert "exact 24-tool boundary" in " ".join(http["requirements"])
+    assert "never share the provider identity, port, database, archive, or signals" in " ".join(
+        service["requirements"]
+    )
+    assert "launchd-equivalent SIGTERM" in " ".join(service["requirements"])
+    client_contract = " ".join([*client["requirements"], client["acceptance"]])
+    assert "preserve Claude mcp-agent-mail and Codex agent-mail" in client_contract
+    assert "rather than from a client-visible key" in client_contract
+    assert "one bounded read-only collection run" in client_contract
+    assert "stopped Claude and Codex child configs" in client_contract
+    assert "never have two concurrent writers" in " ".join(migration["requirements"])
+    assert "post-authority" not in " ".join(
+        [*rollback["scope"], *rollback["requirements"], rollback["acceptance"]]
+    )
+    reverse = _post_cutover_task(manifest, "post-authority-reverse-transform")
+    assert "durable post-baseline records" in reverse["acceptance"]
+    cleanup = _post_cutover_task(
+        manifest,
+        "client-key-rename-and-stale-selector-cleanup",
+    )
+    assert "21 observed stale Claude allow occurrences" in " ".join(cleanup["scope"])
+
+    assert manifest["cutover_gate"]["required_condition_ids"][-7:] == [
+        task["id"] for task in pre
+    ]
+    assert [
+        item["id"] for item in manifest["current_gate_activation_requirements"]
+    ] == ["approved-base-persistent-ref-reachability"]
+    assert [
+        item["id"] for item in manifest["post_cutover_gate_contract_defects"]
+    ] == ["reservation-performance-producer-verifier-contract"]
+
+
+def _git(repository: Path, *arguments: str, input_text: str | None = None) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        input=input_text,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_approved_base_requires_a_persistent_ref_and_distinct_diagnostics(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.name", "Artifact Test")
+    _git(repository, "config", "user.email", "artifact@example.invalid")
+    (repository / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(repository, "add", "tracked.txt")
+    _git(repository, "commit", "-m", "base")
+    reachable = _git(repository, "rev-parse", "HEAD")
+
+    _assert_approved_base_reachable(
+        reachable,
+        repository_root=repository,
+        artifact="test",
+    )
+
+    tree = _git(repository, "rev-parse", "HEAD^{tree}")
+    unreachable = _git(
+        repository,
+        "commit-tree",
+        tree,
+        "-p",
+        reachable,
+        input_text="unreachable\n",
+    )
+    _git(repository, "update-ref", "refs/stash", unreachable)
+    with pytest.raises(
+        SystemExit,
+        match="object exists but is unreachable from persistent refs/heads",
+    ):
+        _assert_approved_base_reachable(
+            unreachable,
+            repository_root=repository,
+            artifact="test",
+        )
+
+    _git(repository, "tag", "approved-base-test", unreachable)
+    _assert_approved_base_reachable(
+        unreachable,
+        repository_root=repository,
+        artifact="test",
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="object is unavailable; the checkout may be shallow or the history was not fetched",
+    ):
+        _assert_approved_base_reachable(
+            "f" * 40,
+            repository_root=repository,
+            artifact="test",
+        )
+
+
+def test_artifact_manifest_must_byte_match_checkout_fixture(tmp_path: Path) -> None:
+    package_root = tmp_path / "package"
+    fixtures = package_root / "fixtures"
+    fixtures.mkdir(parents=True)
+    canonical = MANIFEST.read_bytes()
+    (fixtures / MANIFEST.name).write_bytes(canonical)
+
+    with pytest.raises(
+        SystemExit,
+        match="does not byte-match the checkout fixture",
+    ):
+        _assert_checkout_manifest_binding(
+            canonical + b"\n",
+            repository_root=PACKAGE_ROOT.parents[1],
+            package_root=package_root,
+            artifact="test",
+        )
+
+
+def test_approved_base_is_fixture_owned_full_sha() -> None:
+    manifest_content = MANIFEST.read_bytes()
+    approved_base = _approved_base_from_manifest(
+        manifest_content,
+        artifact="test",
+    )
+    assert approved_base == _canonical_manifest()["baselines"]["core"]["approved_base"]
+    assert re.fullmatch(r"[0-9a-f]{40}", approved_base)
+
+    manifest = _canonical_manifest()
+    manifest["baselines"]["core"]["approved_base"] = "not-a-full-sha"
+    with pytest.raises(SystemExit, match="must be one full lowercase 40-hex commit"):
+        _approved_base_from_manifest(
+            json.dumps(manifest).encode(),
+            artifact="test",
+        )
 
 
 def test_all_decisions_have_independent_required_states() -> None:
@@ -479,7 +698,17 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_restore_d12_d1_only_basis, "selected product decision D12 changed"),
         (_drop_follow_up_task, "follow-up tasks changed"),
         (_pretend_follow_up_task_is_implemented, "follow-up tasks changed"),
-        (_merge_d10_liveness_and_performance_gates, "follow-up tasks changed"),
+        (_merge_d10_liveness_and_performance_gates, "post-cutover tasks changed"),
+        (_drop_post_cutover_task, "post-cutover tasks changed"),
+        (_make_post_cutover_task_blocking, "post-cutover tasks changed"),
+        (
+            _drop_current_gate_activation_requirement,
+            "current gate activation requirements changed",
+        ),
+        (
+            _drop_post_cutover_gate_contract_defect,
+            "post-cutover gate contract defects changed",
+        ),
         (_drop_cutover_required_id, "cutover gate is not fail-closed"),
         (_drop_cutover_condition, "cutover condition ids changed"),
         (_weaken_cutover_unknown_policy, "cutover gate is not fail-closed"),

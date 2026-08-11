@@ -9,10 +9,21 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 
+is_agent_name_placeholder() {
+    case "$1" in
+        ""|pending-*|warm-*|claimed-*|mail-watcher) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # 1. Environment variable (launcher-created sessions and child agents).
 if [ -n "${AGENT_NAME:-}" ]; then
-    RESOLVED_AGENT="$AGENT_NAME"
-    RESOLVED_AGENT_SRC="env"
+    if is_agent_name_placeholder "$AGENT_NAME"; then
+        RESOLVED_AGENT_SRC="placeholder-env"
+    else
+        RESOLVED_AGENT="$AGENT_NAME"
+        RESOLVED_AGENT_SRC="env"
+    fi
     return 0 2>/dev/null || exit 0
 fi
 
@@ -26,9 +37,9 @@ if [ -n "${TMUX_PANE:-}" ]; then
         PANE_METADATA=$(tr -d '[:space:]' < "$METADATA_FILE" 2>/dev/null)
     fi
     PANE_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null)
-    case "$PANE_SESSION" in
-        ""|pending-*|warm-*|claimed-*|mail-watcher) PANE_SESSION="" ;;
-    esac
+    if is_agent_name_placeholder "$PANE_SESSION"; then
+        PANE_SESSION=""
+    fi
     if [ -n "$PANE_SESSION" ] && [ -n "$PANE_METADATA" ] \
         && [ "$PANE_SESSION" != "$PANE_METADATA" ]; then
         RESOLVED_AGENT_SRC="identity-conflict"

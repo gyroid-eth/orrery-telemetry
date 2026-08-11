@@ -134,6 +134,7 @@ class ReservationHookTests(unittest.TestCase):
         tmux_pane: str | None = None,
         metadata_agent: str | None = None,
         install_resolver: bool = False,
+        resolver_bytes: bytes | None = None,
         tmux_session_agent: str | None = None,
         file_path: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -142,7 +143,9 @@ class ReservationHookTests(unittest.TestCase):
         runtime.mkdir(exist_ok=True)
         hooks.mkdir(exist_ok=True)
         if install_resolver:
-            (hooks / "resolve-agent-name.sh").write_bytes(RESOLVER.read_bytes())
+            (hooks / "resolve-agent-name.sh").write_bytes(
+                RESOLVER.read_bytes() if resolver_bytes is None else resolver_bytes
+            )
         (runtime / "agent_token_PluckyEinstein").write_text(
             "sentinel-owner-token\n", encoding="utf-8"
         )
@@ -400,6 +403,49 @@ class ReservationHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("AGENT IDENTITY REQUIRED", result.stderr)
         self.assertEqual(server.requests, [])
+
+    def test_all_environment_placeholders_block_before_http(self) -> None:
+        for placeholder in (
+            "pending-123",
+            "warm-123",
+            "claimed-123",
+            "mail-watcher",
+        ):
+            with self.subTest(placeholder=placeholder), tempfile.TemporaryDirectory() as directory, _Server(
+                lambda _count: (200, _mcp_result(1))
+            ) as server:
+                result = self.run_hook(
+                    server.url,
+                    Path(directory),
+                    agent_name=placeholder,
+                    install_resolver=True,
+                )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("AGENT IDENTITY REQUIRED", result.stderr)
+            self.assertEqual(server.requests, [])
+
+    def test_placeholder_validator_mutation_is_observable(self) -> None:
+        original = RESOLVER.read_bytes()
+        mutated = original.replace(
+            b'""|pending-*|warm-*|claimed-*|mail-watcher',
+            b'""|pending-*|claimed-*|mail-watcher',
+        )
+        self.assertNotEqual(mutated, original)
+
+        with tempfile.TemporaryDirectory() as directory, _Server(
+            lambda _count: (200, _mcp_result(1))
+        ) as server:
+            result = self.run_hook(
+                server.url,
+                Path(directory),
+                agent_name="warm-123",
+                install_resolver=True,
+                resolver_bytes=mutated,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(server.requests), 1)
 
     def test_unresolved_identity_outside_protected_root_still_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _Server(

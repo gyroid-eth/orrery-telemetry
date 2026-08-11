@@ -3,11 +3,12 @@
 This subtree contains the contract, provenance, and first bootable core for an
 AgentStack-owned coordination mail service. It is not a production server yet.
 
-The implementation will be a semantic extraction from the live Python
-AgentMail checkout that AgentStack currently uses. It will preserve the
-selected public tool contracts and existing data model while moving the Python
-namespace, MCP server key, port, database, archive, signal directory, and
-service labels into an AgentStack-owned namespace.
+The implementation is a semantic extraction from the live Python AgentMail
+checkout that AgentStack currently uses. It preserves the selected public tool
+contracts and existing data model while moving the Python namespace, provider
+identity, port, database, archive, signal directory, and service labels into
+an AgentStack-owned namespace. The client compatibility keys stay Claude
+`mcp-agent-mail` and Codex `agent-mail` during the initial cutover.
 
 Contract v1 contains 24 upstream tools: 12 required by executable AgentStack
 runtime paths, 23 visible through shipped model permissions or the delegate
@@ -153,9 +154,13 @@ single-operator model; the final destination check/rename has no `RENAME_EXCL`
 guarantee. `verify` and `rollback-assess` take one-transaction logical read
 snapshots without acquiring the copy-only writer fence. Rollback reports
 post-baseline writes after client switching as `no_go` because no verified
-reverse transform exists. Both accepted C6 spellings are unconditionally
-`no_go`, even when files still equal the baseline, because the caller-asserted
-C6 stage is at or beyond the durable-write boundary and is fix-forward-only.
+reverse transform exists. The sole canonical
+`C6_NEW_AUTHORITY_VERIFIED` spelling is unconditionally `no_go`, even when
+files still equal the baseline, because the caller-asserted C6 stage is at or
+beyond the durable-write boundary and the initial cutover is fix-forward-only.
+Aliases such as `C6_CUTOVER_COMPLETE` fail at argparse. A separately
+implemented, rehearsed, and approved post-authority reverse transform remains a
+post-cutover task rather than an initial-cutover rollback claim.
 
 `agentstack-mail-service` renders a content-aware launchd plist and ownership
 manifest without registering it. Its explicit start/stop controller refuses
@@ -171,6 +176,13 @@ manifest therefore continues to mark the overall service-lifecycle, migration,
 and rollback gates `not_implemented`; these tools alone are not release-ready.
 The normal cutover must not cross its documented first-write boundary until
 those gaps are resolved.
+
+The HTTP boundary pins Uvicorn 0.52.1 because its graceful SIGTERM workaround
+depends on that version's signal-capture behavior. Runtime startup rejects a
+different reported version before opening the listener. SIGTERM is suppressed
+only after Uvicorn records it so FastMCP's outer database lifespan can finish;
+SIGINT remains the conventional exit 130 path. Any pin change therefore
+requires the version-drift negative control and lifecycle evidence to be rerun.
 
 `agentstack-mail-consumers` is the separate settings cutover helper. Its
 `prepare` command accepts only an explicit typed JSON inventory and writes a
@@ -203,6 +215,20 @@ the explicitly listed inventory and is not a filesystem scanner. It does not
 rewrite runtime source; Orrery and dashboard compatibility are explicit
 pre-cutover prerequisites in the runbook.
 
+`agentstack-mail-consumer-inventory` is the read-only file-discovery stage
+that feeds that explicit inventory. It requires the literal `--hidden` and
+`--no-ignore` flags, walks every declared root without consulting Git ignore
+rules, and publishes nothing unless two independent controls pass: a declared
+known-positive selector is present and a declared normally ignored path is in
+the matched set. One bounded run seals start/end timestamps, every matched
+absolute path, per-file digest and metadata, counts by kind, the generated
+inventory digest, and both control results in a private 0700 directory with
+0400 artifacts. The collector never prints file contents or selector text.
+Its rule spec, exclusions, and controls are explicit and reviewable; this is
+not permission to treat a partial rule set as a complete live inventory.
+Dynamic tmux/session/reservation capture and operator approval remain separate
+cutover gates.
+
 `authorization.py` is the machine-readable inventory for the exact 24-tool
 surface. Each entry records the prospective subject, action, resource, current
 required arguments, existing credential arguments, and future authorization
@@ -232,7 +258,11 @@ allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
 surface versus Core 24-tool surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
 and Core 24/0/0/0. Service namespace/default isolation is also an exact,
-versioned allowance. The manifest's single `product_decisions` ledger keeps
+versioned allowance. The provider identity remains `agentstack-mail`, while
+first cutover preserves Claude's `mcp-agent-mail` and Codex's `agent-mail`
+client keys. Authority is validated from endpoint, data roots, and ownership;
+client-visible keys are compatibility ABI rather than authority selectors. The
+manifest's single `product_decisions` ledger keeps
 `decision_state`, `implementation_state`, and `cutover_state` independent and
 mandatory. A choice can therefore be selected without pretending it is
 implemented or approved for cutover. Unselected and selected-but-unimplemented
@@ -244,13 +274,27 @@ differences and must pass their exact selected-behavior tests.
 The same manifest now carries a versioned `cutover_gate`. Its result is a
 read-only computation, not an approval record: the evaluator never updates a
 decision, creates an authority file, starts or stops a service, changes a
-client, or performs migration. `go` is possible only when the exact 26-condition
+client, or performs migration. `go` is possible only when the exact 14-condition
 registry is present and every condition passes. D1-D6 and D8-D12 must already
 contain the operator's explicit `cutover_state: go`; D7 must remain the exact
 selected, unimplemented, post-cutover deferral recorded as `no_go`. Every
 pre-cutover task must be implemented and backed by its named machine gate.
 Missing, duplicate, extra, malformed, skipped, failed, or unknown inputs all
 produce `no_go`.
+
+The former 19-task pre-cutover set is split by actual cutover harm: seven tasks
+remain pre-cutover and twelve broad diagnostics, performance, CI, installer,
+soak, provenance, and documentation tasks are non-blocking post-cutover work.
+The post-authority reverse transform is retained as a thirteenth post-cutover
+record rather than being silently discarded. Optional client-key rename and
+stale-selector cleanup is a fourteenth post-cutover record; first cutover does
+not rewrite permission or hook selectors. Six activation-bound environment
+follow-ups bring the non-blocking post-cutover list to 20. Approved-base
+persistent-ref reachability is a current gate activation requirement, while the
+reservation performance producer/verifier mismatch is a separate all-environment
+contract defect. Minimum wheel install/start, root and writer separation, and
+normative command/rollback requirements were moved into the seven narrow
+pre-cutover contracts before the broad tasks were deferred.
 
 The interim dashboard EXIT boundary is separate from the deferred D7 owner
 model: because the HTTP service is loopback-only, `retire_agent` accepts a
@@ -275,55 +319,52 @@ the evaluator repeats both observations before returning.
 The checked-in ledger intentionally returns exit 1 and `cutover_state: no_go`.
 In a clean checkout whose explicit full candidate commit equals `HEAD`, four
 conditions pass without external evidence; a dirty checkout passes only the
-three ledger-only conditions. That is 22 or 23 missing conditions,
+three ledger-only conditions. That is 10 or 11 missing conditions,
 respectively. The returned `missing_conditions` array is the
 canonical remaining-task list: the candidate-source binding itself when the
 checkout is dirty or mismatched; decision cutover approvals; candidate-bound
-behavior, distribution, reservation-safety, and reservation-performance
-implementation and evidence; three timeout-diagnostic tasks; stale provenance
-regression assertions; HTTP/CLI transport; service supervision; installer
-integration; MCP client re-registration; data migration and reconciliation;
-rollback; coexistence/fault/soak gates; the full performance/load/soak matrix;
-notification-layout consumer compatibility; full-repository and installed-wheel
-release gates; trusted evidence and operator-approval provenance; and
-cutover-document consistency.
+behavior and distribution evidence; reservation-safety evidence; HTTP/CLI
+transport; service supervision; MCP client re-registration; data migration and
+reconciliation; pre-write rollback; and notification-layout consumer
+compatibility.
 
 Machine results are supplied separately with `--evidence`; they are not stored
 as mutable verdicts in the ledger. Evidence schema v1 binds raw artifacts to
 the exact candidate commit, manifest bytes, and canonical condition definition.
 Condition-specific handlers recompute the result from exact pytest node
-outcomes, wheel and source-distribution contents, five-run performance data, or
-the required adverse safety controls. Caller-authored `status`, `passed`,
+outcomes, wheel and source-distribution contents, or the required adverse
+safety controls. Caller-authored `status`, `passed`,
 `verdict`, and generic exit-code claims are invalid. Tasks whose current
 evidence kind is `unimplemented_v1` cannot pass at all; implementing a task must
 also add and review a versioned raw-artifact handler. Exit codes are 0 for
 `go`, 1 for a valid `no_go`, and 2 for invalid ledger or evidence. This guards
 accidental and single-field falsification. Raw artifact hashes prove integrity,
-not producer identity: the independent
-`cutover-evidence-provenance-gate` therefore remains a mandatory pre-cutover
-task until protected CI or cryptographic attestations bind the producer,
-commands, candidate, manifest, condition definitions, artifacts, and operator
-approval. Hand-authored or replayed raw JSON is not sufficient for global
-`go`.
+not producer identity. For the local first cutover, ProOpus and maintainer inspect
+the retained raw artifacts and exact candidate directly; protected-CI or
+cryptographic producer and operator attestations remain a versioned
+post-cutover hardening task with an explicit activation condition.
 
 The production-shaped restore rehearsal bundle is only a future input to
-`data-migration-reconciliation`; `rollback-revert-procedure` requires a
-separate handler and evidence record. In v1 both remain `unimplemented_v1`, so
-the runbook stops before readiness without writing either record.
+`data-migration-reconciliation`; the narrow pre-write
+`rollback-revert-procedure` requires a separate handler and evidence record.
+In v1 both remain `unimplemented_v1`, so the runbook stops before readiness
+without writing either record. Reconciliation after durable new-authority
+writes is a distinct non-blocking post-cutover reverse-transform task.
 
 The candidate wheel/source-distribution gate also does not bind the transitive
 dependency closure. Production venv creation remains NO-GO until an
 interpreter-bound, hash-locked offline wheelhouse and install receipt are
 versioned evidence; the current runbook install block is future-only.
 
-This v1 snapshot deliberately has no reachable `go`: the canonical artifact
-validator pins every listed follow-up task as `not_implemented` and pins the
-current decision approvals as `no_go`. A future task may become satisfiable
-only in a reviewed change that updates its implementation state, introduces its
-versioned raw handler, and updates the canonical manifest pin together. The
-first future-ready candidate must add an end-to-end fixture that reaches `go`
-through both the canonical artifact validator and the readiness evaluator; a
-synthetic unpinned manifest is not sufficient.
+This checked-in snapshot deliberately returns `no_go`: reservation safety is
+implemented but still lacks final-candidate raw evidence, the other six narrow
+pre-cutover tasks remain `not_implemented`, and current decision approvals are
+`no_go`. A task becomes satisfiable only in a reviewed change that updates its
+implementation state, introduces its versioned raw handler, and updates the
+canonical manifest pin together. The first ready candidate must add an
+end-to-end fixture that reaches `go` through both the canonical artifact
+validator and the readiness evaluator; a synthetic unpinned manifest is not
+sufficient.
 
 Run the focused gate from the repository root with:
 

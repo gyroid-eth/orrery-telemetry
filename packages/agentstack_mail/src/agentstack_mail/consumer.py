@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlparse
 
-from .contract import COMPATIBILITY_TOOLS, LOCAL_ONLY_TOOLS
 from .migration import ASSESSABLE_STAGES, MigrationError, assess_rollback
 
 try:  # pragma: no cover - Python 3.10 uses the declared tomli dependency.
@@ -49,11 +48,7 @@ ROLLED_BACK_RECEIPT_NAME: Final[str] = "rolled-back.json"
 SCHEMA_VERSION: Final[int] = 1
 OLD_CLAUDE_KEY: Final[str] = "mcp-agent-mail"
 OLD_CODEX_KEY: Final[str] = "agent-mail"
-NEW_KEY: Final[str] = "agentstack-mail"
-NEW_TOOLS: Final[frozenset[str]] = COMPATIBILITY_TOOLS
-PROXY_TOOLS: Final[frozenset[str]] = LOCAL_ONLY_TOOLS | frozenset(
-    {"acknowledge_message", "fetch_inbox", "send_message"}
-)
+PROVIDER_IDENTITY: Final[str] = "agentstack-mail"
 SUPPORTED_KINDS: Final[frozenset[str]] = frozenset(
     {
         "claude_mcp",
@@ -89,10 +84,12 @@ class Desired:
     new_mail_home: str
     legacy_signals_dir: str
     new_signals_dir: str
+    claude_mcp_key: str = OLD_CLAUDE_KEY
+    codex_mcp_key: str = OLD_CODEX_KEY
 
     @classmethod
     def from_payload(cls, value: Any) -> Desired:
-        if not isinstance(value, dict) or set(value) != {
+        required = {
             "legacy_mcp_url",
             "new_mcp_url",
             "legacy_mail_db",
@@ -103,11 +100,23 @@ class Desired:
             "new_mail_home",
             "legacy_signals_dir",
             "new_signals_dir",
-        }:
+        }
+        optional = {"claude_mcp_key", "codex_mcp_key"}
+        if (
+            not isinstance(value, dict)
+            or not required <= set(value)
+            or set(value) - required - optional
+        ):
             raise ConsumerError("inventory desired object has missing or extra fields")
         if not all(isinstance(item, str) and item for item in value.values()):
             raise ConsumerError("every desired value must be a non-empty string")
-        desired = cls(**value)
+        payload = dict(value)
+        payload.setdefault("claude_mcp_key", OLD_CLAUDE_KEY)
+        payload.setdefault("codex_mcp_key", OLD_CODEX_KEY)
+        for field in ("claude_mcp_key", "codex_mcp_key"):
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", payload[field]):
+                raise ConsumerError(f"{field} must be a simple MCP client key")
+        desired = cls(**payload)
         old = urlparse(desired.legacy_mcp_url)
         new = urlparse(desired.new_mcp_url)
         if (
@@ -229,23 +238,50 @@ def _require_lossless_json(raw: bytes, value: Any, terminal_newline: bool, name:
 def _rename_mapping_key(mapping: dict[str, Any], old: str, new: str) -> dict[str, Any]:
     if old not in mapping:
         return dict(mapping)
+    if old == new:
+        return dict(mapping)
     if new in mapping:
         raise ConsumerError(f"both old and new MCP keys are present: {old}, {new}")
     return {new if key == old else key: value for key, value in mapping.items()}
 
 
-def _validate_direct_entry(entry: Any, desired: Desired, *, old: bool) -> None:
+def _recognized_client_keys(legacy_key: str, target_key: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((legacy_key, PROVIDER_IDENTITY, target_key)))
+
+
+def _source_client_key(
+    mapping: Mapping[str, Any],
+    *,
+    legacy_key: str,
+    target_key: str,
+    consumer: str,
+) -> str | None:
+    present = [
+        key
+        for key in _recognized_client_keys(legacy_key, target_key)
+        if key in mapping
+    ]
+    if len(present) > 1:
+        raise ConsumerError(
+            f"{consumer} contains multiple recognized MCP keys: {', '.join(present)}"
+        )
+    return present[0] if present else None
+
+
+def _validate_direct_entry(entry: Any, desired: Desired) -> None:
     if not isinstance(entry, dict):
         raise ConsumerError("direct Claude MCP entry must be an object")
-    allowed = {"type", "url", "headers"} if old else {"type", "url"}
+    url = entry.get("url")
+    legacy = url in desired.old_urls()
+    current = url == desired.new_mcp_url
+    if not legacy and not current:
+        raise ConsumerError("direct Claude MCP entry points at an unexpected endpoint")
+    allowed = {"type", "url", "headers"} if legacy else {"type", "url"}
     if set(entry) - allowed:
         raise ConsumerError("direct Claude MCP entry has unsupported transport fields")
     if entry.get("type") != "http":
         raise ConsumerError("direct Claude MCP entry must use HTTP")
-    expected_urls = desired.old_urls() if old else frozenset({desired.new_mcp_url})
-    if entry.get("url") not in expected_urls:
-        raise ConsumerError("direct Claude MCP entry points at an unexpected endpoint")
-    if old and "headers" in entry:
+    if legacy and "headers" in entry:
         headers = entry["headers"]
         if not isinstance(headers, dict) or set(headers) != {"Authorization"}:
             raise ConsumerError("legacy Claude MCP entry has unknown headers")
@@ -256,21 +292,27 @@ def _transform_claude_scope(scope: Any, desired: Desired) -> tuple[Any, bool]:
         return scope, False
     if not isinstance(scope, dict):
         raise ConsumerError("mcpServers must be an object")
+    recognized = set(_recognized_client_keys(OLD_CLAUDE_KEY, desired.claude_mcp_key))
+    authority_urls = set(desired.old_urls()) | {desired.new_mcp_url}
     for name, entry in scope.items():
-        if name not in {OLD_CLAUDE_KEY, NEW_KEY} and isinstance(entry, dict):
-            if entry.get("url") in desired.old_urls():
-                raise ConsumerError(f"undeclared Claude legacy endpoint alias: {name}")
-    if OLD_CLAUDE_KEY in scope and NEW_KEY in scope:
-        raise ConsumerError("Claude scope contains both old and new MCP keys")
-    if OLD_CLAUDE_KEY in scope:
-        _validate_direct_entry(scope[OLD_CLAUDE_KEY], desired, old=True)
-        renamed = _rename_mapping_key(scope, OLD_CLAUDE_KEY, NEW_KEY)
-        renamed[NEW_KEY] = {"type": "http", "url": desired.new_mcp_url}
-        return renamed, True
-    if NEW_KEY in scope:
-        _validate_direct_entry(scope[NEW_KEY], desired, old=False)
-        return dict(scope), True
-    return dict(scope), False
+        if name not in recognized and isinstance(entry, dict):
+            if entry.get("url") in authority_urls:
+                raise ConsumerError(f"undeclared Claude authority endpoint alias: {name}")
+    source = _source_client_key(
+        scope,
+        legacy_key=OLD_CLAUDE_KEY,
+        target_key=desired.claude_mcp_key,
+        consumer="Claude scope",
+    )
+    if source is None:
+        return dict(scope), False
+    _validate_direct_entry(scope[source], desired)
+    rendered = _rename_mapping_key(scope, source, desired.claude_mcp_key)
+    rendered[desired.claude_mcp_key] = {
+        "type": "http",
+        "url": desired.new_mcp_url,
+    }
+    return rendered, True
 
 
 def _transform_claude_mcp(raw: bytes, desired: Desired) -> bytes:
@@ -303,37 +345,37 @@ def _transform_claude_mcp(raw: bytes, desired: Desired) -> bytes:
             new_projects[project] = project_payload
         result["projects"] = new_projects
     if not found:
-        raise ConsumerError("Claude config has no declared old or new MCP entry")
+        raise ConsumerError("Claude config has no declared supported MCP client key")
     return _render_json(result, newline)
 
 
-def _transform_permission(value: str, *, deny: bool) -> str | None:
-    old_prefix = f"mcp__{OLD_CLAUDE_KEY}__"
-    new_prefix = f"mcp__{NEW_KEY}__"
-    if not value.startswith(old_prefix):
-        if value.startswith(new_prefix):
-            tool = value[len(new_prefix) :]
-            if tool not in NEW_TOOLS:
-                raise ConsumerError(f"new Claude permission names non-contract tool: {tool}")
-        return value
-    tool = value[len(old_prefix) :]
-    if deny and tool not in NEW_TOOLS:
-        raise ConsumerError(
-            f"legacy-only deny rule requires an explicit operator decision: {tool}"
+def _claude_tool_prefixes(desired: Desired) -> tuple[str, ...]:
+    return tuple(
+        f"mcp__{key}__"
+        for key in _recognized_client_keys(
+            OLD_CLAUDE_KEY,
+            desired.claude_mcp_key,
         )
-    return new_prefix + tool if tool in NEW_TOOLS else None
+    )
+
+
+def _transform_permission(value: str, desired: Desired) -> str:
+    target_prefix = f"mcp__{desired.claude_mcp_key}__"
+    for prefix in _claude_tool_prefixes(desired):
+        if value.startswith(prefix):
+            return target_prefix + value[len(prefix) :]
+    return value
 
 
 def _transform_claude_settings(raw: bytes, desired: Desired) -> bytes:
-    del desired
     value, newline = _load_json(raw, "Claude settings")
     if not isinstance(value, dict):
         raise ConsumerError("Claude settings top-level must be an object")
     _require_lossless_json(raw, value, newline, "Claude settings")
     result = json.loads(json.dumps(value))
     declared_selector = False
-    old_prefix = f"mcp__{OLD_CLAUDE_KEY}__"
-    new_prefix = f"mcp__{NEW_KEY}__"
+    prefixes = _claude_tool_prefixes(desired)
+    target_prefix = f"mcp__{desired.claude_mcp_key}__"
     permissions = result.get("permissions")
     if permissions is not None:
         if not isinstance(permissions, dict):
@@ -346,13 +388,12 @@ def _transform_claude_settings(raw: bytes, desired: Desired) -> bytes:
                 raise ConsumerError(f"Claude permissions.{field} must be a string list")
             transformed: list[str] = []
             for entry in entries:
-                if entry.startswith((old_prefix, new_prefix)):
+                if entry.startswith(prefixes):
                     declared_selector = True
-                replacement = _transform_permission(entry, deny=field == "deny")
-                if replacement is not None:
-                    if replacement in transformed:
-                        raise ConsumerError("permission rename would create a duplicate")
-                    transformed.append(replacement)
+                replacement = _transform_permission(entry, desired)
+                if replacement in transformed:
+                    raise ConsumerError("permission rename would create a duplicate")
+                transformed.append(replacement)
             permissions[field] = transformed
     hooks = result.get("hooks")
     if hooks is not None:
@@ -365,23 +406,24 @@ def _transform_claude_settings(raw: bytes, desired: Desired) -> bytes:
                 if not isinstance(group, dict):
                     continue
                 matcher = group.get("matcher")
-                if isinstance(matcher, str) and matcher.startswith(new_prefix):
+                if not isinstance(matcher, str):
+                    continue
+                matched = [prefix for prefix in prefixes if prefix in matcher]
+                if matched:
+                    if (
+                        len(matched) != 1
+                        or not matcher.startswith(matched[0])
+                        or matcher.count(matched[0]) != 1
+                    ):
+                        raise ConsumerError("compound MCP hook matcher is unsupported")
                     declared_selector = True
-                    if matcher[len(new_prefix) :] not in NEW_TOOLS:
-                        raise ConsumerError("new Claude hook matcher names a non-contract tool")
-                if isinstance(matcher, str) and old_prefix in matcher:
-                    declared_selector = True
-                    if not matcher.startswith(old_prefix) or matcher.count(old_prefix) != 1:
-                        raise ConsumerError("compound legacy hook matcher is unsupported")
-                    tool = matcher[len(old_prefix) :]
-                    if tool not in NEW_TOOLS:
-                        raise ConsumerError("legacy-only hook matcher cannot be translated")
-                    group["matcher"] = new_prefix + tool
+                    group["matcher"] = target_prefix + matcher[len(matched[0]) :]
     rendered = _render_json(result, newline)
-    if old_prefix.encode() in rendered:
-        raise ConsumerError("legacy Claude tool prefix remains outside known selectors")
     if not declared_selector:
-        raise ConsumerError("Claude settings has no declared old or new tool selector")
+        raise ConsumerError("Claude settings has no declared supported tool selector")
+    stale_prefixes = [prefix for prefix in prefixes if prefix != target_prefix]
+    if any(prefix.encode() in rendered for prefix in stale_prefixes):
+        raise ConsumerError("non-target Claude tool prefix remains outside known selectors")
     return rendered
 
 
@@ -442,16 +484,21 @@ def _transform_codex_mcp(raw: bytes, desired: Desired, *, child: bool = False) -
     servers = parsed.get("mcp_servers")
     if not isinstance(servers, dict):
         raise ConsumerError("Codex config has no mcp_servers table")
-    if OLD_CODEX_KEY in servers and NEW_KEY in servers:
-        raise ConsumerError("Codex config contains both old and new MCP keys")
     old_urls = desired.old_urls()
+    recognized = set(_recognized_client_keys(OLD_CODEX_KEY, desired.codex_mcp_key))
+    authority_urls = set(old_urls) | {desired.new_mcp_url}
     for name, entry in servers.items():
-        if name not in {OLD_CODEX_KEY, NEW_KEY} and isinstance(entry, dict):
-            if entry.get("url") in old_urls:
-                raise ConsumerError(f"undeclared Codex legacy endpoint alias: {name}")
-    source_key = OLD_CODEX_KEY if OLD_CODEX_KEY in servers else NEW_KEY if NEW_KEY in servers else None
+        if name not in recognized and isinstance(entry, dict):
+            if entry.get("url") in authority_urls:
+                raise ConsumerError(f"undeclared Codex authority endpoint alias: {name}")
+    source_key = _source_client_key(
+        servers,
+        legacy_key=OLD_CODEX_KEY,
+        target_key=desired.codex_mcp_key,
+        consumer="Codex config",
+    )
     if source_key is None:
-        raise ConsumerError("Codex config has no declared old or new MCP entry")
+        raise ConsumerError("Codex config has no declared supported MCP client key")
     entry = servers[source_key]
     if not isinstance(entry, dict):
         raise ConsumerError("Codex MCP server entry must be a table")
@@ -465,13 +512,14 @@ def _transform_codex_mcp(raw: bytes, desired: Desired, *, child: bool = False) -
     else:
         if set(entry) - {"url", "bearer_token_env_var", "tools"}:
             raise ConsumerError("Codex direct MCP entry has mixed or unknown transport fields")
-        expected = old_urls if source_key == OLD_CODEX_KEY else {desired.new_mcp_url}
-        if entry.get("url") not in expected:
+        legacy_entry = entry.get("url") in old_urls
+        current_entry = entry.get("url") == desired.new_mcp_url
+        if not legacy_entry and not current_entry:
             raise ConsumerError("Codex MCP entry points at an unexpected endpoint")
         bearer = entry.get("bearer_token_env_var")
-        if source_key == OLD_CODEX_KEY and bearer not in {None, "MCP_AGENT_MAIL_TOKEN"}:
+        if legacy_entry and bearer not in {None, "MCP_AGENT_MAIL_TOKEN"}:
             raise ConsumerError("Codex direct MCP entry uses an unknown bearer selector")
-        if source_key == NEW_KEY and bearer is not None:
+        if current_entry and bearer is not None:
             raise ConsumerError("new Codex MCP entry still carries bearer auth")
     lines = text.splitlines(keepends=True)
     output: list[str] = []
@@ -479,33 +527,26 @@ def _transform_codex_mcp(raw: bytes, desired: Desired, *, child: bool = False) -
     saw_root = False
     saw_url = False
     child_env_seen: set[str] = set()
-    tool_surface = PROXY_TOOLS if child else NEW_TOOLS
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("["):
             current = _toml_path(stripped)
             if current[:2] == ("mcp_servers", source_key):
-                if len(current) >= 4 and current[2] == "tools" and current[3] not in tool_surface:
-                    current = ("__drop__",)
-                    continue
-                renamed = ("mcp_servers", NEW_KEY, *current[2:])
+                renamed = ("mcp_servers", desired.codex_mcp_key, *current[2:])
                 if len(current) == 2:
                     saw_root = True
                 newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
                 output.append(_toml_header(renamed) + newline)
                 current = renamed
                 continue
-        if current == ("__drop__",):
-            continue
-        if current == ("mcp_servers", NEW_KEY):
+        if current == ("mcp_servers", desired.codex_mcp_key):
             assignment = _toml_assignment(line)
             if assignment:
                 key, value, match = assignment
                 if key == "url":
                     if child:
                         raise ConsumerError("Codex child proxy unexpectedly contains direct url")
-                    expected = old_urls if source_key == OLD_CODEX_KEY else {desired.new_mcp_url}
-                    if value not in expected:
+                    if value not in authority_urls:
                         raise ConsumerError("Codex root url changed during render")
                     replacement = json.dumps(desired.new_mcp_url)
                     line = (
@@ -516,10 +557,10 @@ def _transform_codex_mcp(raw: bytes, desired: Desired, *, child: bool = False) -
                     )
                     saw_url = True
                 elif key == "bearer_token_env_var":
-                    if source_key == NEW_KEY:
+                    if entry.get("url") == desired.new_mcp_url:
                         raise ConsumerError("new Codex MCP entry still carries bearer auth")
                     continue
-        if child and current == ("mcp_servers", NEW_KEY, "env"):
+        if child and current == ("mcp_servers", desired.codex_mcp_key, "env"):
             assignment = _toml_assignment(line)
             if assignment:
                 key, value, match = assignment
@@ -557,9 +598,9 @@ def _transform_codex_mcp(raw: bytes, desired: Desired, *, child: bool = False) -
         reparsed = tomllib.loads(rendered.decode("utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ConsumerError(f"rendered Codex config is invalid: {exc}") from exc
-    new_entry = reparsed.get("mcp_servers", {}).get(NEW_KEY)
+    new_entry = reparsed.get("mcp_servers", {}).get(desired.codex_mcp_key)
     if not isinstance(new_entry, dict):
-        raise ConsumerError("rendered Codex config lacks the new MCP key")
+        raise ConsumerError("rendered Codex config lacks the target MCP client key")
     if not child and new_entry.get("url") != desired.new_mcp_url:
         raise ConsumerError("rendered Codex config lacks the new endpoint")
     if "bearer_token_env_var" in new_entry:
@@ -705,11 +746,14 @@ def _transform_claude_child(raw: bytes, desired: Desired) -> bytes:
     servers = value.get("mcpServers")
     if not isinstance(servers, dict):
         raise ConsumerError("Claude child MCP config has no mcpServers object")
-    if OLD_CLAUDE_KEY in servers and NEW_KEY in servers:
-        raise ConsumerError("Claude child has both old and new MCP keys")
-    source = OLD_CLAUDE_KEY if OLD_CLAUDE_KEY in servers else NEW_KEY if NEW_KEY in servers else None
+    source = _source_client_key(
+        servers,
+        legacy_key=OLD_CLAUDE_KEY,
+        target_key=desired.claude_mcp_key,
+        consumer="Claude child",
+    )
     if source is None:
-        raise ConsumerError("Claude child has no declared old or new MCP key")
+        raise ConsumerError("Claude child has no declared supported MCP client key")
     entry = servers[source]
     if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
         raise ConsumerError("Claude child MCP entry is not a stdio proxy")
@@ -729,12 +773,12 @@ def _transform_claude_child(raw: bytes, desired: Desired) -> bytes:
             raise ConsumerError(f"Claude child {key} has an unexpected value")
         env[key] = new
     result = dict(value)
-    result["mcpServers"] = (
-        dict(servers)
-        if source == NEW_KEY
-        else _rename_mapping_key(servers, source, NEW_KEY)
+    result["mcpServers"] = _rename_mapping_key(
+        servers,
+        source,
+        desired.claude_mcp_key,
     )
-    result["mcpServers"][NEW_KEY] = entry
+    result["mcpServers"][desired.claude_mcp_key] = entry
     return _render_json(result, newline)
 
 

@@ -1,0 +1,162 @@
+# Purpose: prepare D1/D2/D6/D7 only: require the new DB/MCP/signal selectors
+# and replace the legacy mcp_agent_mail vocabulary import with AgentStack data.
+# Rollback: restore the four LaunchAgent values and the previous constants/import.
+# D3 bearer and D4/D5 retire/owner-token behavior are intentionally unchanged.
+# Apply from /Users/operator with: patch -p1 < 0002-dashboard-mail-cutover-selectors.patch
+--- a/.claude/tools/agent-dashboard/server.py
++++ b/.claude/tools/agent-dashboard/server.py
+@@ -38,7 +38,23 @@
+ PORT = int(os.environ.get("PORT", 8770))
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ INDEX_HTML = os.path.join(HERE, "index.html")
+-DB_PATH = "/Users/operator/mcp_agent_mail/storage.sqlite3"
++
++
++def _required_env(name: str) -> str:
++    value = os.environ.get(name, "").strip()
++    if not value:
++        raise RuntimeError(f"required environment variable is unset: {name}")
++    return value
++
++
++def _required_env_path(name: str) -> str:
++    path = os.path.expanduser(_required_env(name))
++    if not os.path.isabs(path):
++        raise RuntimeError(f"{name} must be an absolute path")
++    return path
++
++
++DB_PATH = _required_env_path("AGENTSTACK_MAIL_DB")
+ VAULT = "/Users/operator/Syncthing/<vault-directory>"
+ PORT_64 = os.path.join(HERE, "portraits_64")
+ # true hi-res B&W set (53, synced from ~/OSS/orrery/assets/portraits).
+@@ -2786,7 +2802,7 @@
+ #   4) spawn_child.sh --pre-registered を background で起動 (tmux + Ghostty)
+ #   観測専用だった dashboard を control plane として完結させる。
+ # --------------------------------------------------------------------------- #
+-MCP_HTTP_URL = "http://127.0.0.1:8765/mcp"
++MCP_HTTP_URL = _required_env("AGENTSTACK_MCP_URL")
+ MAIL_ENV_PATH = os.path.expanduser("~/mcp_agent_mail/.env")
+ SPAWN_SCRIPT = os.path.expanduser("~/.claude/hooks/spawn_child.sh")
+ SPAWN_CATALOG_PATH = os.path.join(HERE, "spawn_catalog.json")
+@@ -2801,9 +2817,14 @@
+ _SPAWN_CATALOG_CACHE: dict = {"ts": 0.0, "data": None}
+ _SPAWN_CATALOG_LOCK = threading.Lock()
+ _NAMING_VOCAB_CACHE: tuple[tuple[str, ...], tuple[str, ...]] | None = None
++SPAWN_SCIENTISTS_SCRIPT = os.path.expanduser(
++    os.environ.get(
++        "AGENTSTACK_SCIENTISTS_SCRIPT",
++        "~/.agentstack/bin/lib/agentstack-scientists.sh",
++    )
++)
+ 
+-# mcp-agent-mail import が壊れていても picker を空にしない frozen fallback。
+-# 正本: ~/mcp_agent_mail/src/mcp_agent_mail/utils.py (2026-07-30 snapshot)。
++# AgentStack-owned helper が壊れていても picker を空にしない frozen fallback。
+ _FROZEN_SIMPLE_ADJECTIVES = (
+     "Red", "Orange", "Pink", "Black", "Purple", "Blue", "Brown", "White",
+     "Green", "Gold", "Gray", "Navy", "Silver", "Amber", "Coral", "Crimson",
+@@ -2837,22 +2858,36 @@
+ 
+ 
+ def _naming_vocabulary() -> tuple[tuple[str, ...], tuple[str, ...]]:
+-    """agent-mail の adjective/scientist 語彙を返す（import 失敗時は凍結版）。"""
++    """AgentStack の adjective/scientist 語彙を返す（失敗時は凍結版）。"""
+     global _NAMING_VOCAB_CACHE
+     if _NAMING_VOCAB_CACHE is not None:
+         return _NAMING_VOCAB_CACHE
+-    source_root = os.path.expanduser("~/mcp_agent_mail/src")
+     try:
+-        if source_root not in sys.path:
+-            sys.path.insert(0, source_root)
+-        from mcp_agent_mail import utils as mail_utils
+-        adjectives = tuple(mail_utils.SIMPLE_ADJECTIVES)
+-        scientists = tuple(mail_utils.SCIENTIST_NOUNS)
++        output = subprocess.run(
++            [
++                "bash",
++                "-c",
++                'source "$1" && ags_adjective_list && printf "\\036" && '
++                "ags_scientist_list",
++                "agent-dashboard-naming",
++                SPAWN_SCIENTISTS_SCRIPT,
++            ],
++            capture_output=True,
++            text=True,
++            timeout=3,
++            check=True,
++        ).stdout
++        adjective_text, separator, scientist_text = output.partition("\x1e")
++        if not separator:
++            raise ValueError("naming vocabulary separator missing")
++        adjectives = tuple(line for line in adjective_text.splitlines() if line)
++        scientists = tuple(line for line in scientist_text.splitlines() if line)
+         if not adjectives or not scientists:
+             raise ValueError("empty naming vocabulary")
+-        source = getattr(mail_utils, "__file__", source_root)
+-        print(f"[spawn-catalog] naming vocabulary: import {source}",
+-              file=sys.stderr)
++        print(
++            f"[spawn-catalog] naming vocabulary: {SPAWN_SCIENTISTS_SCRIPT}",
++            file=sys.stderr,
++        )
+     except Exception as e:  # noqa: BLE001
+         adjectives = _FROZEN_SIMPLE_ADJECTIVES
+         scientists = _FROZEN_SCIENTIST_NOUNS
+@@ -3494,8 +3529,15 @@
+ # Mail health (notify-daemon + watcher 可観測性)
+ # --------------------------------------------------------------------------- #
+ NOTIFY_STATE_FILE = os.path.expanduser("~/.claude/runtime/notify-state.json")
+-SIGNAL_DIR = os.path.expanduser(
+-    "~/.mcp_agent_mail/signals/projects/users-operator-syncthing-obsidian-for-xiaomi/agents"
++SIGNALS_ROOT = _required_env_path("AGENTSTACK_SIGNALS_DIR")
++SIGNAL_PROJECT_SLUG = (
++    re.sub(r"[^a-z0-9]+", "-", VAULT.strip().lower()).strip("-") or "project"
++)
++SIGNAL_DIR = os.path.join(
++    SIGNALS_ROOT,
++    "projects",
++    SIGNAL_PROJECT_SLUG,
++    "agents",
+ )
+ _MAIL_HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
+ 
+--- a/.claude/tools/agent-dashboard/graph_data.py
++++ b/.claude/tools/agent-dashboard/graph_data.py
+@@ -2,7 +2,18 @@
+ import sqlite3
+ from datetime import datetime, timezone
+ 
+-DB_PATH = "/Users/operator/mcp_agent_mail/storage.sqlite3"
++
++def _required_env_path(name: str) -> str:
++    value = os.environ.get(name, "").strip()
++    if not value:
++        raise RuntimeError(f"required environment variable is unset: {name}")
++    path = os.path.expanduser(value)
++    if not os.path.isabs(path):
++        raise RuntimeError(f"{name} must be an absolute path")
++    return path
++
++
++DB_PATH = _required_env_path("AGENTSTACK_MAIL_DB")
+ # vault の human_key。project id は DB から slug 解決する（build_graph 内）。
+ # Pro では vault=project id 1 だが、Air は agent-mail DB が別実体（split-brain）で
+ # vault=id 2 のように異なるため、id をハードコードしない（旧 PROJECT_ID=1 は Air で
+--- a/.claude/tools/agent-dashboard/com.operator.agentdashboard.plist
++++ b/.claude/tools/agent-dashboard/com.operator.agentdashboard.plist
+@@ -24,6 +24,14 @@
+   <dict>
+     <key>PATH</key>
+     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
++    <key>AGENTSTACK_MAIL_DB</key>
++    <string>/Users/operator/.agentstack/mail/storage.sqlite3</string>
++    <key>AGENTSTACK_MCP_URL</key>
++    <string>http://127.0.0.1:18765/mcp</string>
++    <key>AGENTSTACK_SIGNALS_DIR</key>
++    <string>/Users/operator/.agentstack/mail/signals</string>
++    <key>AGENTSTACK_SCIENTISTS_SCRIPT</key>
++    <string>/Users/operator/.agentstack/bin/lib/agentstack-scientists.sh</string>
+   </dict>
+ </dict>
+ </plist>

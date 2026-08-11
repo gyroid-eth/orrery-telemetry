@@ -278,6 +278,13 @@ def _digest(result: dict[str, object]) -> str:
     return str(result["manifest_sha256"])
 
 
+def _set_client_keys(inventory: Path, *, claude: str, codex: str) -> None:
+    payload = json.loads(inventory.read_text(encoding="utf-8"))
+    payload["desired"]["claude_mcp_key"] = claude
+    payload["desired"]["codex_mcp_key"] = codex
+    _json(inventory, payload, newline=True)
+
+
 def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     inventory, bundle, before = _fixture(tmp_path)
     prepared = prepare(inventory, bundle)
@@ -288,7 +295,7 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     assert stat.S_IMODE((bundle / "manifest.json").stat().st_mode) == 0o400
     planned = preview(bundle, _digest(prepared))
     assert planned["contents_redacted"] is True
-    assert planned["files_changed"] == 10
+    assert planned["files_changed"] == 8
     assert all(set(item) == {"path", "kind", "changed", "hunks"} for item in planned["changes"])
 
     digest = _digest(prepared)
@@ -296,23 +303,28 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     assert committed["status"] == "committed"
 
     claude = json.loads(next(path for path in before if path.name == ".claude.json").read_text())
-    assert "mcp-agent-mail" not in claude["mcpServers"]
-    assert claude["mcpServers"]["agentstack-mail"] == {
+    assert "agentstack-mail" not in claude["mcpServers"]
+    assert claude["mcpServers"]["mcp-agent-mail"] == {
         "type": "http",
         "url": "http://127.0.0.1:18765/mcp",
     }
     settings_path = next(path for path in before if path.name == "settings.json")
     settings = settings_path.read_text()
-    assert "mcp__mcp-agent-mail__" not in settings
-    assert "mcp__agentstack-mail__register_agent" in settings
-    assert "mcp__agentstack-mail__search_messages" in settings
-    assert "mcp__agentstack-mail__summarize_thread" in settings
+    assert settings_path.read_bytes() == before[settings_path][0]
+    assert "mcp__mcp-agent-mail__register_agent" in settings
+    assert "mcp__mcp-agent-mail__search_messages" in settings
+    assert "mcp__mcp-agent-mail__summarize_thread" in settings
+    local_settings_path = next(
+        path for path in before if path.name == "settings.local.json"
+    )
+    assert local_settings_path.read_bytes() == before[local_settings_path][0]
     codex_path = next(path for path in before if path.name == "config.toml" and ".codex" in str(path))
     codex = codex_path.read_text()
-    assert "[mcp_servers.agentstack-mail]" in codex
+    assert "[mcp_servers.agent-mail]" in codex
+    assert "[mcp_servers.agentstack-mail]" not in codex
     assert "bearer_token_env_var" not in codex
-    assert "[mcp_servers.agentstack-mail.tools.search_messages]" in codex
-    assert "[mcp_servers.agentstack-mail.tools.summarize_thread]" in codex
+    assert "[mcp_servers.agent-mail.tools.search_messages]" in codex
+    assert "[mcp_servers.agent-mail.tools.summarize_thread]" in codex
     assert "# preserve this comment" in codex
 
     restored = _rollback(bundle, digest)
@@ -320,6 +332,57 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     for path, (payload, mode) in before.items():
         assert path.read_bytes() == payload
         assert stat.S_IMODE(path.stat().st_mode) == mode
+
+
+def test_default_client_keys_are_independent_from_provider_identity(
+    tmp_path: Path,
+) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    desired = consumer.Desired.from_payload(
+        json.loads(inventory.read_text(encoding="utf-8"))["desired"]
+    )
+
+    assert consumer.PROVIDER_IDENTITY == "agentstack-mail"
+    assert desired.claude_mcp_key == "mcp-agent-mail"
+    assert desired.codex_mcp_key == "agent-mail"
+    assert consumer.PROVIDER_IDENTITY not in {
+        desired.claude_mcp_key,
+        desired.codex_mcp_key,
+    }
+
+    prepared = prepare(inventory, bundle)
+    apply(bundle, _digest(prepared))
+    claude_path = _target_from_inventory(inventory, "claude_mcp")
+    codex_path = _target_from_inventory(inventory, "codex_mcp")
+    assert set(json.loads(claude_path.read_text())["mcpServers"]) >= {
+        "mcp-agent-mail"
+    }
+    assert "[mcp_servers.agent-mail]" in codex_path.read_text(encoding="utf-8")
+
+
+def test_explicit_client_key_rename_remains_available(tmp_path: Path) -> None:
+    inventory, bundle, _ = _fixture(tmp_path)
+    _set_client_keys(
+        inventory,
+        claude="agentstack-mail",
+        codex="agentstack-mail",
+    )
+
+    prepared = prepare(inventory, bundle)
+    apply(bundle, _digest(prepared))
+
+    claude_path = _target_from_inventory(inventory, "claude_mcp")
+    claude = json.loads(claude_path.read_text(encoding="utf-8"))
+    assert "mcp-agent-mail" not in claude["mcpServers"]
+    assert claude["mcpServers"]["agentstack-mail"]["url"].endswith(":18765/mcp")
+    settings_path = _target_from_inventory(inventory, "claude_settings")
+    settings = settings_path.read_text(encoding="utf-8")
+    assert "mcp__mcp-agent-mail__" not in settings
+    assert "mcp__agentstack-mail__register_agent" in settings
+    codex_path = _target_from_inventory(inventory, "codex_mcp")
+    codex = codex_path.read_text(encoding="utf-8")
+    assert "[mcp_servers.agentstack-mail]" in codex
+    assert "[mcp_servers.agent-mail]" not in codex
 
 
 def test_prepare_is_read_only_and_external_edit_aborts_apply(tmp_path: Path) -> None:
@@ -919,7 +982,7 @@ def test_before_replace_race_is_detected_before_first_canonical_write(
         assert path.read_bytes() == payload
 
 
-def test_child_proxy_keeps_only_its_eight_tool_surface(tmp_path: Path) -> None:
+def test_child_proxy_preserves_tool_settings_while_endpoint_changes(tmp_path: Path) -> None:
     inventory, bundle, _ = _fixture(tmp_path)
     path = _target_from_inventory(inventory, "codex_child_mcp")
     path.write_text(
@@ -934,7 +997,9 @@ def test_child_proxy_keeps_only_its_eight_tool_surface(tmp_path: Path) -> None:
     rendered = path.read_text(encoding="utf-8")
     assert "tools.bootstrap" in rendered
     assert "tools.fetch_inbox" in rendered
-    assert "tools.health_check" not in rendered
+    assert "tools.health_check" in rendered
+    assert "[mcp_servers.agent-mail" in rendered
+    assert "[mcp_servers.agentstack-mail" not in rendered
 
 
 def test_already_new_claude_child_is_idempotent(tmp_path: Path) -> None:
@@ -951,19 +1016,19 @@ def test_already_new_claude_child_is_idempotent(tmp_path: Path) -> None:
 
     prepared = prepare(inventory, bundle)
     assert apply(bundle, _digest(prepared))["status"] == "committed"
-    assert "agentstack-mail" in json.loads(path.read_text())["mcpServers"]
+    rendered = json.loads(path.read_text())["mcpServers"]
+    assert "mcp-agent-mail" in rendered
+    assert "agentstack-mail" not in rendered
 
 
 @pytest.mark.parametrize(
     ("case", "error"),
     [
         ("child_missing_env", "lacks explicit endpoint"),
-        ("loopback_alias", "undeclared Claude legacy endpoint alias"),
+        ("loopback_alias", "undeclared Claude authority endpoint alias"),
         ("codex_mixed_transport", "mixed or unknown transport"),
         ("codex_unknown_bearer", "unknown bearer selector"),
-        ("legacy_only_deny", "explicit operator decision"),
-        ("new_noncontract_permission", "non-contract tool"),
-        ("new_selector_only_in_note", "no declared old or new tool selector"),
+        ("new_selector_only_in_note", "no declared supported tool selector"),
         ("invalid_new_db", "new_mail_db must be"),
     ],
 )
@@ -1005,18 +1070,6 @@ def test_ambiguous_or_incomplete_consumer_inputs_fail_closed(
             ),
             encoding="utf-8",
         )
-    elif case == "legacy_only_deny":
-        path = _target_from_inventory(inventory, "claude_settings")
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value["permissions"]["deny"] = ["mcp__mcp-agent-mail__summarize_recent"]
-        _json(path, value, newline=True)
-    elif case == "new_noncontract_permission":
-        path = _target_from_inventory(inventory, "claude_settings")
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value["permissions"]["allow"].append(
-            "mcp__agentstack-mail__summarize_recent"
-        )
-        _json(path, value, newline=True)
     elif case == "new_selector_only_in_note":
         path = _target_from_inventory(inventory, "claude_settings")
         _json(

@@ -594,7 +594,10 @@ def _signal_process_group(process_group: int, signum: int) -> None:
 
 
 def _terminate_process_group(
-    process: subprocess.Popen[Any], *, grace_seconds: float = 10.0
+    process: subprocess.Popen[Any],
+    *,
+    grace_seconds: float = 10.0,
+    term_already_sent: bool = False,
 ) -> None:
     """Terminate the whole child session and reap the direct child."""
 
@@ -603,7 +606,8 @@ def _terminate_process_group(
         if process.poll() is None:
             process.wait(timeout=grace_seconds)
         return
-    _signal_process_group(process_group, signal.SIGTERM)
+    if not term_already_sent:
+        _signal_process_group(process_group, signal.SIGTERM)
     deadline = time.monotonic() + grace_seconds
     if process.poll() is None:
         try:
@@ -668,7 +672,7 @@ def foreground(
                     return process.wait(timeout=0.25)
                 except subprocess.TimeoutExpired:
                     if shutdown_signal is not None:
-                        _terminate_process_group(process)
+                        _terminate_process_group(process, term_already_sent=True)
                         return int(
                             process.returncode
                             if process.returncode is not None
