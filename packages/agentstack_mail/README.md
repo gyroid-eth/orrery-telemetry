@@ -54,18 +54,35 @@ Codex launch paths have separate, partial comparison coverage documented in the
 cutover procedure.
 
 The separate `agentstack-mail-migrate` console copies a quiesced SQLite
-database, Git archive, and signal tree into one sibling staging generation,
-compares full logical rows and relationship projections, and publishes the
-three surfaces with one directory rename. Identical state is a write-free
-no-op; corrupt input, source mutation, a different existing destination, and
-pre-publication I/O failures fail closed. An interruption after atomic publish
-leaves a complete marker-owned generation that must be reverified and finalized
-by rerunning `copy`; the foreground service refuses that marker. Destination
-absence is rechecked immediately before publish, but the remaining check/rename
-TOCTOU is accepted only under the documented single-operator assumption and is
-not safe for concurrent migration writers. Its read-only `rollback-assess`
-command reports post-baseline writes after client switching as `no_go` because
-no verified reverse transform exists.
+database, the legacy archive working tree without its `.git` or `server.pid`,
+and the signal tree into one sibling staging generation. It holds SQLite's
+writer slot with `BEGIN IMMEDIATE` on a `mode=rw` connection, then marks that
+guard connection query-only for the full copy. It compares logical rows and
+relationship projections, creates one unrelated root commit whose tree exactly
+matches the copied archive, and publishes all three surfaces with one directory
+rename. Read-only WAL opens may create `-wal`/`-shm`; closing the deliberately
+read-write writer guard may additionally checkpoint or remove them and change
+main-file bytes. The manifest's `database_policy` therefore excludes sidecar
+presence and bytes and compares the main database's schema, rows,
+relationships, and PRAGMAs instead. The guard is retained because an external
+process check cannot prevent a writer from appearing immediately after the
+check. The cutover procedure requires a byte-exact cold copy before this cost
+is incurred. The migration does not perform its own sidecar cleanup.
+
+Identical state is a write-free no-op; an active SQLite writer, corrupt input,
+source mutation, aliases or hard links, a different existing destination,
+unreachable destination Git objects, and pre-publication I/O failures fail
+closed. An interruption after atomic publish leaves a complete marker-owned
+generation that must be reverified and finalized by rerunning `copy`; the
+foreground service refuses that marker. Destination absence is rechecked
+immediately before publish. File descriptors, inode/link checks, and
+parent-directory change detection close the observed substitution races, but
+non-cooperating same-UID filesystem mutation is still outside the documented
+single-operator model; the final destination check/rename has no `RENAME_EXCL`
+guarantee. `verify` and `rollback-assess` take one-transaction logical read
+snapshots without acquiring the copy-only writer fence. Rollback reports
+post-baseline writes after client switching as `no_go` because no verified
+reverse transform exists.
 
 `agentstack-mail-service` renders a content-aware launchd plist and ownership
 manifest without registering it. Its explicit start/stop controller refuses

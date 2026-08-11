@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -145,6 +147,178 @@ def test_copy_then_identical_rerun_is_true_noop(tmp_path: Path) -> None:
         connection.close()
 
 
+def test_copy_keeps_all_six_state_snapshots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    original = migration.snapshot_state
+    calls: list[StatePaths] = []
+
+    def recording_snapshot(paths: StatePaths, **kwargs: object) -> dict[str, object]:
+        calls.append(paths.resolved())
+        return original(paths, **kwargs)
+
+    monkeypatch.setattr(migration, "snapshot_state", recording_snapshot)
+    try:
+        copy_state(source, destination)
+        source_calls = [paths for paths in calls if paths.database == source.database]
+        assert len(calls) == 6
+        assert len(source_calls) == 4
+    finally:
+        connection.close()
+
+
+def test_copy_replaces_legacy_history_with_one_exact_baseline_commit(
+    tmp_path: Path,
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    legacy_extra = source.archive / "legacy-extra.md"
+    legacy_extra.write_text("second legacy commit\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source.archive), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(source.archive), "commit", "-q", "-m", "legacy second"],
+        check=True,
+    )
+    legacy_head = subprocess.run(
+        ["git", "-C", str(source.archive), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (source.archive / "server.pid").write_text("123\n", encoding="utf-8")
+    try:
+        copy_state(source, destination)
+        archive = destination / "archive"
+        new_head = subprocess.run(
+            ["git", "-C", str(archive), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        commit_count = subprocess.run(
+            ["git", "-C", str(archive), "rev-list", "--all", "--count"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        roots = subprocess.run(
+            ["git", "-C", str(archive), "rev-list", "--all", "--max-parents=0", "--count"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "-C", str(archive), "status", "--porcelain=v1", "--untracked-files=all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        manifest = json.loads((destination / MANIFEST_NAME).read_text(encoding="utf-8"))
+        git_baseline = manifest["destination_git"]["baseline"]
+
+        assert new_head != legacy_head
+        assert commit_count == "1"
+        assert roots == "1"
+        assert status == ""
+        assert not (archive / "server.pid").exists()
+        assert legacy_extra.read_bytes() == (archive / "legacy-extra.md").read_bytes()
+        assert manifest["archive_policy"] == {
+            "copied": "working_tree",
+            "excluded_root_names": [".git", "server.pid"],
+            "legacy_git_history": "not_copied",
+            "new_git_history": "single_root_baseline_commit",
+        }
+        assert manifest["database_policy"] == {
+            "copied": "sqlite_logical_backup_including_committed_wal",
+            "compared": "main_database_schema_rows_relations_and_pragmas",
+            "sqlite_runtime_sidecars": (
+                "excluded_ro_may_create_rw_guard_may_checkpoint_or_remove"
+            ),
+        }
+        assert git_baseline["commit_count"] == 1
+        assert git_baseline["root_count"] == 1
+        assert git_baseline["branch"] == "main"
+        assert git_baseline["author_name"] == "AgentStack Mail Migration"
+        assert git_baseline["author_email"] == "agentstack-mail-migration@localhost"
+        assert git_baseline["author_date"] == manifest["created_at"]
+        assert git_baseline["committer_date"] == manifest["created_at"]
+        assert git_baseline["subject"] == "AgentStack Mail migration baseline"
+        assert (
+            f"Authority-Data-SHA256: {manifest['baseline']['state_sha256']}"
+            in git_baseline["message"]
+        )
+        assert verify_copy(source, destination)["status"] == "verified"
+    finally:
+        connection.close()
+
+
+def test_destination_git_history_or_tree_tampering_is_rejected(
+    tmp_path: Path,
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        archive = destination / "archive"
+        (archive / "post-baseline.md").write_text("tamper\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(archive), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Tamper",
+                "-c",
+                "user.email=tamper@example.test",
+                "-C",
+                str(archive),
+                "commit",
+                "-q",
+                "-m",
+                "tamper",
+            ],
+            check=True,
+        )
+
+        with pytest.raises(VerificationError, match="exactly one root commit"):
+            verify_copy(source, destination)
+        rollback = assess_rollback(
+            destination / MANIFEST_NAME,
+            "C5_CLIENT_SWITCHING",
+        )
+        assert rollback["status"] == "no_go"
+        assert rollback["destination_matches_baseline"] is False
+        assert "exactly one root commit" in rollback["destination_verification_error"]
+    finally:
+        connection.close()
+
+
+def test_unreachable_destination_git_object_is_rejected(tmp_path: Path) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        archive = destination / "archive"
+        subprocess.run(
+            ["git", "-C", str(archive), "hash-object", "-w", "--stdin"],
+            input="unreachable legacy residue\n",
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+
+        with pytest.raises(VerificationError, match="exactly its reachable set"):
+            verify_copy(source, destination)
+        rollback = assess_rollback(
+            destination / MANIFEST_NAME,
+            "C4_NEW_SERVICE_READY",
+        )
+        assert rollback["status"] == "no_go"
+        assert rollback["destination_matches_baseline"] is False
+        assert "reachable set" in rollback["destination_verification_error"]
+    finally:
+        connection.close()
+
+
 def test_exact_same_source_and_destination_is_noop(tmp_path: Path) -> None:
     source, connection = _source(tmp_path)
     root = source.database.parent
@@ -179,6 +353,49 @@ def test_sqlite_backup_includes_committed_wal_content(tmp_path: Path) -> None:
             copied.close()
     finally:
         writer.close()
+
+
+def test_copy_preserves_logical_rows_from_a_crashed_committed_wal(
+    tmp_path: Path,
+) -> None:
+    source, writer = _source(tmp_path, wal=True)
+    writer.close()
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import os
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+connection.execute("PRAGMA wal_autocheckpoint=0")
+connection.execute(
+    "INSERT INTO messages VALUES (21, 1, 10, 'thread-7', 'wal', "
+    "'committed-before-crash', 'normal', 0, '2026-08-10T00:05:00', '[]')"
+)
+connection.execute(
+    "INSERT INTO message_recipients VALUES (21, 11, 'to', NULL, NULL)"
+)
+connection.commit()
+os._exit(0)
+""",
+            str(source.database),
+        ],
+        check=True,
+    )
+    assert source.database.with_name(f"{source.database.name}-wal").exists()
+    assert source.database.with_name(f"{source.database.name}-shm").exists()
+
+    destination = tmp_path / "new"
+    copy_state(source, destination)
+
+    source_state = snapshot_state(source)
+    destination_state = snapshot_state(StatePaths.from_root(destination))
+    assert source_state["database"]["tables"]["messages"]["count"] == 2
+    assert destination_state["database"]["tables"]["messages"]["count"] == 2
+    assert source_state["state_sha256"] == destination_state["state_sha256"]
 
 
 def test_relational_change_with_equal_counts_is_detected(tmp_path: Path) -> None:
@@ -294,7 +511,7 @@ def test_existing_different_destination_is_never_overwritten(tmp_path: Path) -> 
 
 def test_retry_removes_only_marker_owned_abandoned_staging(tmp_path: Path) -> None:
     source, connection = _source(tmp_path)
-    operation_id = "abandoned"
+    operation_id = "8a5f32be-65d8-4bdf-918e-dc35b9ce6e8d"
     owned = tmp_path / f".new.migration-{operation_id}"
     owned.mkdir()
     (owned / ".agentstack-mail-migration-staging.json").write_text(
@@ -319,7 +536,33 @@ def test_retry_removes_only_marker_owned_abandoned_staging(tmp_path: Path) -> No
         connection.close()
 
 
-def test_source_mutation_during_copy_fails_before_publish(tmp_path: Path) -> None:
+def test_retry_does_not_trust_a_symlinked_staging_marker(tmp_path: Path) -> None:
+    source, connection = _source(tmp_path)
+    operation_id = "8a5f32be-65d8-4bdf-918e-dc35b9ce6e8d"
+    candidate = tmp_path / f".new.migration-{operation_id}"
+    candidate.mkdir()
+    sentinel = candidate / "keep"
+    sentinel.write_text("not owned", encoding="utf-8")
+    external = tmp_path / "external-marker.json"
+    external.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "kind": "owned-staging",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate / migration.STAGING_MARKER).symlink_to(external)
+    try:
+        assert copy_state(source, tmp_path / "new").status == "copied"
+        assert sentinel.read_text(encoding="utf-8") == "not owned"
+    finally:
+        connection.close()
+
+
+def test_source_mutation_during_copy_is_blocked_before_publish(tmp_path: Path) -> None:
     source, connection = _source(tmp_path)
     destination = tmp_path / "new"
 
@@ -329,14 +572,14 @@ def test_source_mutation_during_copy_fails_before_publish(tmp_path: Path) -> Non
             connection.commit()
 
     try:
-        with pytest.raises(VerificationError, match="source changed"):
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
             copy_state(source, destination, fault_hook=fault)
         assert not destination.exists()
     finally:
         connection.close()
 
 
-def test_source_mutation_after_fsync_still_fails_before_publish(tmp_path: Path) -> None:
+def test_source_mutation_after_fsync_is_blocked_before_publish(tmp_path: Path) -> None:
     source, connection = _source(tmp_path)
     destination = tmp_path / "new"
 
@@ -346,14 +589,14 @@ def test_source_mutation_after_fsync_still_fails_before_publish(tmp_path: Path) 
             connection.commit()
 
     try:
-        with pytest.raises(VerificationError, match="before migration publication"):
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
             copy_state(source, destination, fault_hook=fault)
         assert not destination.exists()
     finally:
         connection.close()
 
 
-def test_source_mutation_at_final_pre_publish_seam_is_detected(tmp_path: Path) -> None:
+def test_source_mutation_at_final_pre_publish_seam_is_blocked(tmp_path: Path) -> None:
     source, connection = _source(tmp_path)
     destination = tmp_path / "new"
 
@@ -363,7 +606,7 @@ def test_source_mutation_at_final_pre_publish_seam_is_detected(tmp_path: Path) -
             connection.commit()
 
     try:
-        with pytest.raises(VerificationError, match="before migration publication"):
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
             copy_state(source, destination, fault_hook=fault)
         assert not destination.exists()
     finally:
@@ -390,7 +633,7 @@ def test_atomic_publish_never_replaces_a_concurrently_created_destination(
         connection.close()
 
 
-def test_source_mutation_at_post_publish_seam_keeps_generation_unconfirmed(
+def test_source_mutation_at_post_publish_seam_is_blocked_and_unconfirmed(
     tmp_path: Path,
 ) -> None:
     source, connection = _source(tmp_path)
@@ -402,12 +645,12 @@ def test_source_mutation_at_post_publish_seam_keeps_generation_unconfirmed(
             connection.commit()
 
     try:
-        with pytest.raises(VerificationError, match="no longer matches its source baseline"):
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
             copy_state(source, destination, fault_hook=fault)
         assert destination.is_dir()
         assert (destination / ".agentstack-mail-migration-staging.json").is_file()
-        with pytest.raises(VerificationError, match="does not match"):
-            verify_copy(source, destination)
+        assert verify_copy(source, destination)["status"] == "verified"
+        assert (destination / ".agentstack-mail-migration-staging.json").is_file()
     finally:
         connection.close()
 
@@ -450,6 +693,7 @@ def test_retry_finalizes_complete_generation_after_post_publish_interruption(
         assert destination.is_dir()
         assert (destination / ".agentstack-mail-migration-staging.json").is_file()
         assert verify_copy(source, destination)["status"] == "verified"
+        assert (destination / ".agentstack-mail-migration-staging.json").is_file()
 
         recovered = copy_state(source, destination)
 
@@ -488,8 +732,12 @@ def test_normal_and_recovery_paths_share_one_confirmation_function(
         calls: list[Path] = []
 
         def broken_common_confirmation(
-            destination_root: Path, _source_paths: StatePaths
+            destination_root: Path,
+            _source_paths: StatePaths,
+            *,
+            _source_database_connection: sqlite3.Connection | None = None,
         ) -> tuple[str, str] | None:
+            assert _source_database_connection is not None
             calls.append(destination_root)
             raise VerificationError("mutated common confirmation")
 
@@ -552,6 +800,284 @@ def test_writer_lock_at_any_archive_depth_is_rejected(tmp_path: Path) -> None:
     try:
         with pytest.raises(VerificationError, match="writer lock"):
             copy_state(source, tmp_path / "new")
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("relative", "message"),
+    (
+        (Path("projects/project/write.lock.owner.json"), "writer lock"),
+        (Path(".git/index.lock"), "Git writer lock"),
+    ),
+)
+def test_all_lock_artifact_forms_are_rejected(
+    tmp_path: Path,
+    relative: Path,
+    message: str,
+) -> None:
+    source, connection = _source(tmp_path)
+    lock = source.archive / relative
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("writer", encoding="utf-8")
+    try:
+        with pytest.raises(VerificationError, match=message):
+            copy_state(source, tmp_path / "new")
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    (
+        ("symlink", "symbolic links"),
+        ("hardlink", "hard-linked"),
+        ("fifo", "special filesystem entry"),
+        ("nested_git", "nested Git repositories"),
+    ),
+)
+def test_archive_rejects_non_regular_or_nested_repository_entries(
+    tmp_path: Path,
+    kind: str,
+    message: str,
+) -> None:
+    source, connection = _source(tmp_path)
+    target = source.archive / "projects" / "project" / f"unsafe-{kind}"
+    if kind == "symlink":
+        target.symlink_to(source.archive / "projects")
+    elif kind == "hardlink":
+        os.link(
+            source.archive
+            / "projects"
+            / "project"
+            / "messages"
+            / "threads"
+            / "thread-7.md",
+            target,
+        )
+    elif kind == "fifo":
+        os.mkfifo(target)
+    else:
+        (target / ".git").mkdir(parents=True)
+    try:
+        with pytest.raises(VerificationError, match=message):
+            copy_state(source, tmp_path / "new")
+    finally:
+        connection.close()
+
+
+def test_excluded_server_pid_must_be_a_regular_single_link_file(
+    tmp_path: Path,
+) -> None:
+    source, connection = _source(tmp_path)
+    (source.archive / "server.pid").symlink_to(source.archive / "projects")
+    try:
+        with pytest.raises(VerificationError, match="excluded runtime files"):
+            copy_state(source, tmp_path / "new")
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("kind", ("symlink", "hardlink"))
+def test_source_database_aliases_are_rejected(tmp_path: Path, kind: str) -> None:
+    source, connection = _source(tmp_path)
+    if kind == "symlink":
+        real_database = source.database.with_name("real.sqlite3")
+        source.database.rename(real_database)
+        source.database.symlink_to(real_database)
+        match = "symbolic path components"
+    else:
+        os.link(source.database, source.database.with_name("database-hardlink"))
+        match = "hard-linked databases"
+    try:
+        with pytest.raises(VerificationError, match=match):
+            copy_state(source, tmp_path / "new")
+        assert not (tmp_path / "new").exists()
+    finally:
+        connection.close()
+
+
+def test_destination_database_hardlink_is_rejected_by_verify_and_rollback(
+    tmp_path: Path,
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        destination_database = destination / "storage.sqlite3"
+        external = tmp_path / "external.sqlite3"
+        external.write_bytes(destination_database.read_bytes())
+        destination_database.unlink()
+        os.link(external, destination_database)
+
+        with pytest.raises(VerificationError, match="hard-linked databases"):
+            verify_copy(source, destination)
+        rollback = assess_rollback(
+            destination / MANIFEST_NAME,
+            "C4_NEW_SERVICE_READY",
+        )
+        assert rollback["status"] == "no_go"
+        assert rollback["destination_matches_baseline"] is False
+        assert "hard-linked databases" in rollback["destination_verification_error"]
+    finally:
+        connection.close()
+
+
+def test_active_source_database_writer_is_rejected(tmp_path: Path) -> None:
+    source, writer = _source(tmp_path, wal=True)
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("UPDATE messages SET body_md='uncommitted' WHERE id=20")
+    try:
+        with pytest.raises(VerificationError, match="active writer"):
+            copy_state(source, tmp_path / "new")
+        assert not (tmp_path / "new").exists()
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_generic_snapshot_does_not_take_the_copy_writer_fence(tmp_path: Path) -> None:
+    source, writer = _source(tmp_path, wal=True)
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("UPDATE messages SET body_md='uncommitted' WHERE id=20")
+    try:
+        snapshot = snapshot_state(source)
+        assert snapshot["database"]["tables"]["messages"]["count"] == 1
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_generic_snapshot_uses_one_read_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, writer = _source(tmp_path, wal=True)
+    baseline = snapshot_state(source)
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("UPDATE agents SET model='changed-during-snapshot' WHERE id=10")
+    original_rows_digest = migration._rows_digest
+    committed = False
+
+    def commit_after_agents_digest(
+        connection: sqlite3.Connection, query: str
+    ) -> dict[str, object]:
+        nonlocal committed
+        result = original_rows_digest(connection, query)
+        if 'FROM "agents"' in query and not committed:
+            writer.commit()
+            committed = True
+        return result
+
+    monkeypatch.setattr(migration, "_rows_digest", commit_after_agents_digest)
+    try:
+        during = snapshot_state(source)
+        assert committed is True
+        assert during["database"]["logical_sha256"] == baseline["database"][
+            "logical_sha256"
+        ]
+        after = snapshot_state(source)
+        assert after["database"]["logical_sha256"] != baseline["database"][
+            "logical_sha256"
+        ]
+    finally:
+        if writer.in_transaction:
+            writer.rollback()
+        writer.close()
+
+
+def test_source_root_and_destination_parent_symlinks_are_rejected(
+    tmp_path: Path,
+) -> None:
+    source_base = tmp_path / "source-case"
+    source_base.mkdir()
+    source, connection = _source(source_base)
+    real_archive = source.archive.with_name("real-archive")
+    source.archive.rename(real_archive)
+    source.archive.symlink_to(real_archive, target_is_directory=True)
+    try:
+        with pytest.raises(VerificationError, match="symbolic path components"):
+            copy_state(source, source_base / "new")
+    finally:
+        connection.close()
+
+    destination_case = tmp_path / "destination-case"
+    destination_case.mkdir()
+    source, connection = _source(destination_case)
+    real_parent = destination_case / "real-parent"
+    real_parent.mkdir()
+    alias_parent = destination_case / "alias-parent"
+    alias_parent.symlink_to(real_parent, target_is_directory=True)
+    try:
+        with pytest.raises(VerificationError, match="symbolic path components"):
+            copy_state(source, alias_parent / "new")
+        assert not (real_parent / "new").exists()
+    finally:
+        connection.close()
+
+
+def test_database_parent_swap_and_restore_during_connect_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary_base = tmp_path / "primary"
+    primary_base.mkdir()
+    source, source_connection = _source(primary_base)
+    source_connection.close()
+    alternate_base = tmp_path / "alternate"
+    alternate_base.mkdir()
+    alternate, alternate_connection = _source(alternate_base)
+    alternate_connection.execute("UPDATE agents SET model='alternate' WHERE id=10")
+    alternate_connection.commit()
+    alternate_connection.close()
+    source_root = source.database.parent
+    saved_root = source_root.with_name("legacy-saved")
+    real_connect = sqlite3.connect
+    swapped = False
+
+    def connect_after_parent_swap(*args: object, **kwargs: object) -> sqlite3.Connection:
+        nonlocal swapped
+        database = str(args[0]) if args else str(kwargs.get("database", ""))
+        if not swapped and str(source.database) in database:
+            swapped = True
+            source_root.rename(saved_root)
+            source_root.symlink_to(alternate.database.parent, target_is_directory=True)
+            try:
+                return real_connect(*args, **kwargs)
+            finally:
+                source_root.unlink()
+                saved_root.rename(source_root)
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(migration.sqlite3, "connect", connect_after_parent_swap)
+    with pytest.raises(VerificationError, match="database parent changed"):
+        copy_state(source, tmp_path / "new")
+    assert swapped is True
+    assert not (tmp_path / "new").exists()
+
+
+def test_source_file_mutation_during_copy_is_detected(tmp_path: Path) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    message = (
+        source.archive
+        / "projects"
+        / "project"
+        / "messages"
+        / "threads"
+        / "thread-7.md"
+    )
+    mutated = False
+
+    def fault(phase: str) -> None:
+        nonlocal mutated
+        if phase == "archive_copy:copy_chunk" and not mutated:
+            mutated = True
+            message.write_text("mutated during copy\n", encoding="utf-8")
+
+    try:
+        with pytest.raises(VerificationError, match="changed while it was copied"):
+            copy_state(source, destination, fault_hook=fault)
+        assert mutated is True
+        assert not destination.exists()
     finally:
         connection.close()
 
@@ -642,6 +1168,39 @@ def test_rollback_assessment_rejects_non_verified_manifest_status(
         connection.close()
 
 
+@pytest.mark.parametrize("policy", ("archive_policy", "database_policy"))
+def test_manifest_copy_policy_tampering_is_rejected(
+    tmp_path: Path, policy: str
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        manifest_path = destination / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[policy]["copied"] = "legacy_git_history"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        with pytest.raises(MigrationError, match="unexpected .* policy"):
+            verify_copy(source, destination)
+        with pytest.raises(MigrationError, match="unexpected .* policy"):
+            assess_rollback(manifest_path, "C4_NEW_SERVICE_READY")
+    finally:
+        connection.close()
+
+
+def test_database_paths_with_uri_metacharacters_are_supported(tmp_path: Path) -> None:
+    root = tmp_path / "mail #1?"
+    root.mkdir()
+    source, connection = _source(root)
+    destination = root / "new #2?"
+    try:
+        assert copy_state(source, destination).status == "copied"
+        assert verify_copy(source, destination)["status"] == "verified"
+    finally:
+        connection.close()
+
+
 @pytest.mark.parametrize("surface", ("archive", "signals"))
 def test_rollback_rejects_non_database_destination_divergence(
     tmp_path: Path,
@@ -658,6 +1217,10 @@ def test_rollback_rejects_non_database_destination_divergence(
         )
         assert result["status"] == "no_go"
         assert result["destination_matches_baseline"] is False
+        if surface == "archive":
+            assert "working tree is not clean" in result[
+                "destination_verification_error"
+            ]
     finally:
         connection.close()
 
@@ -701,6 +1264,154 @@ def test_rollback_cli_returns_one_for_post_baseline_write(
             )
         assert exited.value.code == 1
         assert json.loads(capsys.readouterr().out)["status"] == "no_go"
+    finally:
+        connection.close()
+
+
+def test_copy_cli_help_names_the_selected_working_tree_policy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        migration._parser().parse_args(["copy", "--help"])
+    output = " ".join(capsys.readouterr().out.split())
+    assert exited.value.code == 0
+    assert "archive working tree" in output
+    assert "exclude legacy .git/server.pid" in output
+    assert "canonical absolute" in output
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "legacy/storage.sqlite3",
+        "/private/tmp/../tmp/storage.sqlite3",
+        "~/storage.sqlite3",
+        "/private/tmp//storage.sqlite3",
+    ),
+)
+def test_cli_paths_reject_noncanonical_text(value: str) -> None:
+    with pytest.raises(MigrationError, match="canonical absolute"):
+        migration._canonical_absolute_path(value, label="test path")
+
+
+def test_copy_cli_rejects_relative_paths_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    monkeypatch.chdir(tmp_path)
+    try:
+        with pytest.raises(SystemExit) as exited:
+            main(
+                [
+                    "copy",
+                    "--source-db",
+                    source.database.relative_to(tmp_path).as_posix(),
+                    "--source-archive",
+                    str(source.archive),
+                    "--source-signals",
+                    str(source.signals),
+                    "--destination-root",
+                    str(destination),
+                ]
+            )
+        stderr = capsys.readouterr().err
+        assert exited.value.code == 1
+        assert "canonical absolute" in stderr
+        assert "Traceback" not in stderr
+        assert len(stderr.splitlines()) == 1
+        assert not destination.exists()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("kind", ("symlink", "hardlink", "fifo", "oversize"))
+def test_manifest_reader_rejects_unsafe_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    manifest = tmp_path / MANIFEST_NAME
+    external = tmp_path / "external.json"
+    if kind == "symlink":
+        external.write_text("{}", encoding="utf-8")
+        manifest.symlink_to(external)
+    elif kind == "hardlink":
+        external.write_text("{}", encoding="utf-8")
+        os.link(external, manifest)
+    elif kind == "fifo":
+        os.mkfifo(manifest)
+    else:
+        monkeypatch.setattr(migration, "OWNERSHIP_JSON_MAX_BYTES", 8)
+        manifest.write_bytes(b"123456789")
+
+    with pytest.raises(MigrationError):
+        migration._load_manifest(manifest)
+
+
+def test_manifest_rejects_duplicate_bool_uuid_and_missing_fields(tmp_path: Path) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        manifest_path = destination / MANIFEST_NAME
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        duplicate = json.dumps(original, separators=(",", ":"))
+        duplicate = duplicate[:-1] + ',"schema_version":1}'
+        manifest_path.write_text(duplicate, encoding="utf-8")
+        with pytest.raises(MigrationError, match="duplicate key"):
+            verify_copy(source, destination)
+
+        for key in original:
+            missing = dict(original)
+            missing.pop(key)
+            manifest_path.write_text(json.dumps(missing), encoding="utf-8")
+            with pytest.raises(MigrationError):
+                verify_copy(source, destination)
+
+        boolean_schema = dict(original)
+        boolean_schema["schema_version"] = True
+        manifest_path.write_text(json.dumps(boolean_schema), encoding="utf-8")
+        with pytest.raises(MigrationError, match="schema version"):
+            verify_copy(source, destination)
+
+        non_uuid = dict(original)
+        non_uuid["operation_id"] = "not-a-uuid"
+        manifest_path.write_text(json.dumps(non_uuid), encoding="utf-8")
+        with pytest.raises(MigrationError, match="UUID"):
+            verify_copy(source, destination)
+    finally:
+        connection.close()
+
+
+def test_rollback_cli_bounds_missing_manifest_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+    try:
+        copy_state(source, destination)
+        manifest_path = destination / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["source"].pop("database")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exited:
+            main(
+                [
+                    "rollback-assess",
+                    "--manifest",
+                    str(manifest_path),
+                    "--cutover-stage",
+                    "C4_NEW_SERVICE_READY",
+                ]
+            )
+        stderr = capsys.readouterr().err
+        assert exited.value.code == 1
+        assert "source paths are malformed" in stderr
+        assert "Traceback" not in stderr
+        assert len(stderr.splitlines()) == 1
     finally:
         connection.close()
 

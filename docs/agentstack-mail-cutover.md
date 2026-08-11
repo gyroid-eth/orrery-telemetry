@@ -29,7 +29,7 @@ evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-ただし working-tree scope の migration command はまだ未実装である。現在の `agentstack-mail-migrate copy` は legacy `.git` まで複製するため、この手順の代用に使わない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` は実装済みである。ただし台帳の`data-migration-reconciliation`はproduction-shaped rehearsalとcandidate-bound raw evidenceが未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -37,7 +37,7 @@ consumer設定用の `agentstack-mail-consumers` は実装済みである。明�
 
 | 対象 | 扱い |
 |---|---|
-| SQLite | 約59 MiB。WAL の committed row を含む logical backup を作る |
+| SQLite | 約59 MiB。WAL の committed row を含む logical backupを作り、main DBのschema・全row・関係・PRAGMAを比較する。`-wal`/`-shm`はruntime sidecarとして比較対象外 |
 | signals | 約404 KiB。全 file の content/mode を照合する |
 | archive working tree | 約230 MiB、約49k files。現 Markdown、profile、reservation JSON、attachment を運ぶ |
 | legacy `.git` | **運ばない。** 約1.3 GiB、43,380 commits、reflog、unreachable/deleted-file recovery を新 authority へ継承しない |
@@ -47,7 +47,7 @@ SQLite の `messages.attachments` を read-only の `json_each` で再集計し�
 
 失う通常挙動は、`whois(include_recent_commits=true)` が legacy commit history を返さなくなることだけである。新規 write 後の commit は新 repo に蓄積される。live 40 toolsのうち24を公開し、suppressed 16に含まれるGit-enriched resource/UI/time-travelは初回boundaryでは公開しない。
 
-legacy DB、signals、working tree、`.git` は移動も削除も変更もしない。成功後も元の場所に cold copy として残し、旧 service を起動しないことで**運用上 read-only**にする。`chmod`、gc、reflog expire、archive cleanup は行わない。
+legacy main DBの論理record、signals、working tree、`.git`は移動も削除も変更もしない。成功後も元の場所にcold copyとして残し、旧serviceを起動しないことで**運用上 read-only**にする。`mode=ro`のWAL readでもlegacy DB directoryへ`-wal`/`-shm`を生成し得る。一方、既存sidecarをmain DBへcheckpointして除去し、main-file bytesを変え得る直接原因は、copy全体のquiesceを強制するために選んだ`mode=rw` writer guardのcloseである。外部process確認だけでは確認直後のwriter発生を防げないためguardは残し、その代償をSQLiteを開く前のcold byte backupで吸収する。したがって**source byte-for-byte untouchedやsidecar不変とは言わない**。migration/rollbackの受け入れ不変条件はmain DBのschema・全row・関係・PRAGMAであり、sidecarの存在とbytesはfile一覧比較から明示除外する。migration自身のsidecar cleanupは行わない。`immutable=1`はcommitted WALを無視し得るため使わない。`chmod`、gc、reflog expire、archive cleanupは行わない。
 
 ## 裁定済み: baseline-commit-A
 
@@ -189,17 +189,69 @@ find /Users/operator/.mcp_agent_mail_git_mailbox_repo \
 
 ### C3: DB + signals + working tree を一単位として複製・検証する
 
+**SQLiteを一度でも開く前に**、C2でquiesce済みのmain / `-wal` / `-shm`を通常file copyで別directoryへcold退避する。これは`mode=rw` guardのcloseでcheckpointが起きた後にもbytes単位で戻せる原本であり、migration destinationではない。mainは必須、sidecarは存在時にcopyし、不在時もreceiptへ`ABSENT`を残す。各copyはsourceとbackupのMD5が一致した場合だけ合格とする。
+
+```sh
+COLD_BACKUP_DIR=/Users/operator/agentstack-mail-cold-backup-20260811T000000
+mkdir -m 700 "$COLD_BACKUP_DIR"
+SOURCE_DB_MAIN=/Users/operator/mcp_agent_mail/storage.sqlite3
+if [ ! -f "$SOURCE_DB_MAIN" ] || [ -L "$SOURCE_DB_MAIN" ]; then
+  echo "canonical SQLite main file is missing or is a symlink" >&2
+  exit 1
+fi
+
+for SQLITE_SUFFIX in '' '-wal' '-shm'; do
+  SQLITE_NAME="storage.sqlite3${SQLITE_SUFFIX}"
+  SOURCE_DB_FILE="/Users/operator/mcp_agent_mail/${SQLITE_NAME}"
+  BACKUP_DB_FILE="${COLD_BACKUP_DIR}/${SQLITE_NAME}"
+  if [ -L "$SOURCE_DB_FILE" ]; then
+    echo "SQLite source is a symlink: $SOURCE_DB_FILE" >&2
+    exit 1
+  elif [ -f "$SOURCE_DB_FILE" ]; then
+    md5 -q "$SOURCE_DB_FILE" > "${COLD_BACKUP_DIR}/${SQLITE_NAME}.source.md5"
+    cp -p "$SOURCE_DB_FILE" "$BACKUP_DB_FILE"
+    md5 -q "$BACKUP_DB_FILE" > "${COLD_BACKUP_DIR}/${SQLITE_NAME}.backup.md5"
+    cmp -s \
+      "${COLD_BACKUP_DIR}/${SQLITE_NAME}.source.md5" \
+      "${COLD_BACKUP_DIR}/${SQLITE_NAME}.backup.md5" || exit 1
+    printf 'PRESENT %s\n' "$SQLITE_NAME" \
+      >> "${COLD_BACKUP_DIR}/cold-backup-receipt.txt"
+  else
+    printf 'ABSENT %s\n' "$SOURCE_DB_FILE" \
+      >> "${COLD_BACKUP_DIR}/cold-backup-receipt.txt"
+  fi
+done
+```
+
+上記はこの変更では実行しない。実行時はtimestamp部分を実時刻へ置換し、directoryが新規であること、`cold-backup-receipt.txt`が3行でmainは`PRESENT`、各`PRESENT` fileのsource/backup MD5 pairが一致していることを確認する。cold backupはbyte recoveryの正本だが、戻し後の受け入れ判定はbytes一致ではなくschema・全row・関係・PRAGMAの論理一致で行う。
+
 working-tree scope migration は次を一つの staging generation 内で行う。
 
-1. SQLite read-only connection の `backup()` で committed WAL を含む copy を作る。
+1. cold backup receiptが揃った後、source DBのSQLite writer slotを`mode=rw`の`BEGIN IMMEDIATE`で全copy期間保持し、直後に`query_only=ON`へ固定する。active writerがいれば即failする。別のread-only connectionの`backup()`でcommitted WALを含むcopyを作る。外部process確認直後にwriterが現れるraceを閉じる価値を優先してguardを残す。通常のsnapshot/verifyはwriter slotを取らず、単一read transactionのpoint-in-time snapshotを返す。
 2. signals と archive working tree を copyする。legacy `.git` と `server.pid` は対象外。lock artifact、symlink、special file、権限不足、容量不足は fail-closedにする。
 3. maintainer の A/B 選択どおり、新 archive に legacy と無関係な新 Git repo を作る。
 4. SQLite `integrity_check`、`foreign_key_check`、schema、全 table digestに加え、agent→project、message→project/sender/thread、message→recipient/read/ack、reservation→project/agent、thread membershipを比較する。
 5. `source_before`、`staged_state`、`source_after`、`source_final`、finalizer の `source_now` と `destination_now` という既存6回の照合を working-tree scope で維持する。検証回数・粒度を最適化しない。
 6. working treeの全 path/content/mode、signals、33 file attachments、選んだGit開始状態を確認する。
-7. fsync後、同一 filesystem上の一回のdirectory renameで `~/.agentstack/mail` を公開する。失敗時は部分treeを canonical path に残さない。
+7. fsync後、同一 filesystem上の一回のdirectory renameで `~/.agentstack/mail` を公開する。失敗時は部分treeを canonical path に残さない。file descriptor/inode/link/container identity検査で実測したsource差替を拒否するが、same-UIDの非協調filesystem writerを完全な敵対者としては扱わない。destination不在checkとrenameの間のraceも単一operator前提で明記して受け入れ、未実装の`RENAME_EXCL`を安全保証として数えない。
 
-**この操作の実行コマンドはまだ存在しない。** 現在の `agentstack-mail-migrate copy` / `verify` は legacy `.git` を含む契約なので使わない。working-tree scope が実装されるまで、この節は仕様であって実行可能手順ではない。
+以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、26条件がGOになるまで稼働dataへ実行しない。**
+
+```sh
+agentstack-mail-migrate copy \
+  --source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --source-archive /Users/operator/.mcp_agent_mail_git_mailbox_repo \
+  --source-signals /Users/operator/.mcp_agent_mail/signals \
+  --destination-root /Users/operator/.agentstack/mail
+
+agentstack-mail-migrate verify \
+  --source-db /Users/operator/mcp_agent_mail/storage.sqlite3 \
+  --source-archive /Users/operator/.mcp_agent_mail_git_mailbox_repo \
+  --source-signals /Users/operator/.mcp_agent_mail/signals \
+  --destination-root /Users/operator/.agentstack/mail
+```
+
+manifestは`archive_policy`でworking treeのみ・legacy `.git`/`server.pid`非継承・unrelated single-root baselineを固定し、`database_policy`でmain DBのlogical comparisonとSQLite sidecar除外を明記する。`copy`の正常再実行はwrite-free `noop`、atomic publish直後の中断はowned markerをread-only再検証して`recovered`、異なる既存destinationは上書きせず失敗する。`verify`はowned markerを削除しない。
 
 ### C4: 新 service を起動し、read-only readiness を確認する
 
@@ -283,10 +335,12 @@ restart/rebindとidentity確認が全件終わった後にだけ、strict版`che
 
 ## 失敗時の戻し方
 
+pre-open cold backupはmain / `-wal` / `-shm`のbyte recovery原本として保持する。ただしwriter guardの正常checkpointだけでもmain bytesとsidecar有無は変わるため、戻しの合格をMD5同一では判定しない。旧authorityを再開できるのは、復元後にschema・全row digest・関係projection・PRAGMAがmigration baselineと一致し、新authorityにpost-baseline durable writeがない場合だけである。
+
 | 失敗した段階 | 戻し方 |
 |---|---|
 | C0–C1 | 新 artifactを使わない。旧 authorityは動いたままなので変更なし |
-| C2、destination未公開 | 新 serviceを起動せず、旧 source fingerprint不変を確認し、旧jobだけをbootstrapする |
+| C2、destination未公開 | 新 serviceを起動せず、cold backup receiptと旧sourceの論理baseline一致を確認し、旧jobだけをbootstrapする |
 | C3、copy検証済み | 新 copyは診断用に保持する。両service停止下でbaselineを確認し、旧jobだけをbootstrapする |
 | C4、新service ready・consumer未切替 | exact ownershipで新jobをstopし、新rootがbaselineと同一なら旧jobだけをbootstrapする |
 | C5、config切替済み・新rootがまだbaseline | 新jobをstopし、`agentstack-mail-consumers rollback --bundle ... --expected-manifest-sha256 ... --migration-manifest ~/.agentstack/mail/migration-manifest.json --cutover-stage C5_CLIENT_SWITCHING` の1操作でserviceのauthority lockを取得し、data baselineを再検査してからexact before-imageへ戻す。`status=rolled_back`を確認して旧jobをbootstrapする。新jobがlockを保持中、外部編集、post-baseline writeのいずれかを検出した場合は一つも上書きせずincidentにする |
@@ -308,7 +362,7 @@ durable write後にnew jobがreadyにならない場合は、旧を起動して�
 
 これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。現在は少なくとも次が未完了なので、本番切替は未承認である。
 
-- working-tree scope migration commandと、その6回照合・中断・source mutation・destination occupation・corruptionの負方向テスト
+- working-tree scope migrationのproduction-shaped rehearsal、active-writer/6回照合/中断/alias/object-store/corruptionのcandidate-bound raw evidence
 - 実機consumerとlive hooksのexact inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
 - bounded MCP readiness probe
 - clean candidateのwheel/sdistとfresh installed wheel verification
