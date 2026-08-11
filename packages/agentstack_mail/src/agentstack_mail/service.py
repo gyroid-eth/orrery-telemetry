@@ -17,6 +17,7 @@ import os
 import plistlib
 import pwd
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -29,10 +30,10 @@ from typing import Any, Final
 from urllib.parse import unquote, urlparse
 
 
-LAUNCHD_LABEL: Final[str] = "org.agentstack.mail"
+LAUNCHD_LABEL: Final[str] = "org.orrery.mail"
 LAUNCHD_REHEARSAL_PREFIX: Final[str] = f"{LAUNCHD_LABEL}.rehearsal."
-OWNERSHIP_NAME: Final[str] = "org.agentstack.mail.ownership.json"
-PLIST_NAME: Final[str] = "org.agentstack.mail.plist"
+OWNERSHIP_NAME: Final[str] = f"{LAUNCHD_LABEL}.ownership.json"
+PLIST_NAME: Final[str] = f"{LAUNCHD_LABEL}.plist"
 LEGACY_PORT: Final[int] = 8765
 MIGRATION_STAGING_MARKER: Final[str] = ".agentstack-mail-migration-staging.json"
 
@@ -50,6 +51,7 @@ class RuntimeConfig:
     archive: Path
     signals: Path
     state_root: Path
+    legacy_launchd_label: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +88,17 @@ def rehearsal_launchd_label(label: str) -> str:
     label = _launchd_label(label)
     if label == LAUNCHD_LABEL:
         raise ServiceError("rehearsal label must not equal the production launchd label")
+    return label
+
+
+def _external_launchd_label(label: str) -> str:
+    """Validate a configured launchd identity without assuming a user-specific name."""
+
+    segment = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    if len(label) > 128 or re.fullmatch(rf"{segment}(?:\.{segment})*", label) is None:
+        raise ServiceError("configured legacy launchd label is invalid")
+    if label == LAUNCHD_LABEL:
+        raise ServiceError("legacy launchd label must differ from the new service label")
     return label
 
 
@@ -170,6 +183,11 @@ def runtime_config(env_file: Path, state_root: Path) -> RuntimeConfig:
     except ValueError as exc:
         raise ServiceError("AGENTSTACK_MAIL_HTTP_PORT is not an integer") from exc
     path = values.get("AGENTSTACK_MAIL_HTTP_PATH", "/mcp").strip()
+    legacy_launchd_label = (
+        values.get("AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL", "").strip() or None
+    )
+    if legacy_launchd_label is not None:
+        legacy_launchd_label = _external_launchd_label(legacy_launchd_label)
     mode = values.get("AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE")
     if mode != "passthrough":
         raise ServiceError(
@@ -177,8 +195,6 @@ def runtime_config(env_file: Path, state_root: Path) -> RuntimeConfig:
         )
     if not _loopback(host):
         raise ServiceError("service host must be loopback-only")
-    if port == LEGACY_PORT:
-        raise ServiceError("refusing the legacy AgentMail port 8765")
     if not 1 <= port <= 65535:
         raise ServiceError("service port is outside 1..65535")
     if not path.startswith("/") or not path:
@@ -230,6 +246,7 @@ def runtime_config(env_file: Path, state_root: Path) -> RuntimeConfig:
         archive=archive,
         signals=signals,
         state_root=state_root,
+        legacy_launchd_label=legacy_launchd_label,
     )
 
 
@@ -465,6 +482,65 @@ def _parse_launchd_record(output: str) -> tuple[str | None, str | None, list[str
     return path, program, arguments
 
 
+def _parse_launchd_pid(output: str) -> int | None:
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("pid = "):
+            try:
+                pid = int(stripped[6:].strip())
+            except ValueError:
+                return None
+            return pid if pid > 0 else None
+    return None
+
+
+def _listener_process_ids(port: int) -> list[int]:
+    executable = shutil.which("lsof") or "/usr/sbin/lsof"
+    result = subprocess.run(
+        [executable, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode == 1 and not result.stdout.strip():
+        return []
+    if result.returncode != 0:
+        raise ServiceError(
+            f"cannot inspect listeners on port {port}: {result.stderr.strip()}"
+        )
+    try:
+        return sorted({int(line) for line in result.stdout.splitlines() if line.strip()})
+    except ValueError as exc:
+        raise ServiceError(f"listener inspection returned an invalid PID for port {port}") from exc
+
+
+def _process_parent_pid(process_id: int) -> int:
+    executable = shutil.which("lsof") or "/usr/sbin/lsof"
+    result = subprocess.run(
+        [executable, "-nP", "-p", str(process_id), "-FpR"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        raise ServiceError(
+            f"cannot inspect parent of listener PID {process_id}: {result.stderr.strip()}"
+        )
+    try:
+        parent = next(
+            int(line[1:]) for line in result.stdout.splitlines() if line.startswith("R")
+        )
+    except (StopIteration, ValueError) as exc:
+        raise ServiceError(
+            f"listener PID {process_id} returned an invalid parent process"
+        ) from exc
+    if parent <= 0:
+        raise ServiceError(f"listener PID {process_id} has no valid parent process")
+    return parent
+
+
 def _launchctl_not_found(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode == 113
 
@@ -547,6 +623,7 @@ def service_status(
         "status": "job_loaded",
         "owned": True,
         "label": label,
+        "launchd_pid": _parse_launchd_pid(result.stdout),
         "environment_drift": env_drift,
         "mcp_readiness": "unverified",
         "launchctl_print_returncode": result.returncode,
@@ -621,6 +698,72 @@ def _wait_for_service_stopped(
         time.sleep(0.05)
 
 
+def _same_port_start_preflight(
+    config: RuntimeConfig,
+    current: Mapping[str, Any],
+    *,
+    runner: Runner,
+) -> dict[str, Any] | None:
+    """Prevent the new launchd job from racing a legacy owner of port 8765."""
+
+    if config.port != LEGACY_PORT:
+        return None
+    if config.path != "/api/":
+        raise ServiceError(
+            "same-port production start requires AGENTSTACK_MAIL_HTTP_PATH=/api/"
+        )
+    legacy_label = config.legacy_launchd_label
+    if legacy_label is None:
+        raise ServiceError(
+            "same-port production start requires "
+            "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL; configure the legacy job "
+            "identity, boot it out, and retry"
+        )
+
+    legacy_identity = f"gui/{os.getuid()}/{legacy_label}"
+    legacy = _launchctl(["print", legacy_identity], runner=runner)
+    if legacy.returncode == 0:
+        raise ServiceError(
+            f"same-port handoff blocked: bootout legacy launchd job {legacy_label!r} "
+            "and verify port 8765 is free before starting"
+        )
+    if not _launchctl_not_found(legacy):
+        raise ServiceError(
+            "same-port handoff blocked: legacy launchd job state is unknown; "
+            f"bootout {legacy_label!r} only after identifying its exact state"
+        )
+
+    listeners = _listener_process_ids(LEGACY_PORT)
+    if current["status"] == "stopped":
+        foreign = listeners
+    else:
+        wrapper_pid = current.get("launchd_pid")
+        if listeners and (isinstance(wrapper_pid, bool) or not isinstance(wrapper_pid, int)):
+            raise ServiceError(
+                "same-port handoff blocked: the owned launchd job has listeners but "
+                "its wrapper PID could not be proven"
+            )
+        foreign = [
+            process_id
+            for process_id in listeners
+            if _process_parent_pid(process_id) != wrapper_pid
+        ]
+    if foreign:
+        raise ServiceError(
+            f"same-port handoff blocked: listener PIDs {foreign} on port 8765 are "
+            "not children of the owned launchd job; bootout the legacy service and "
+            "verify the port is free before starting"
+        )
+    return {
+        "status": "accepted",
+        "port": LEGACY_PORT,
+        "path": config.path,
+        "legacy_launchd_label": legacy_label,
+        "legacy_launchd_state": "absent",
+        "listener_pids": listeners,
+    }
+
+
 def service_start(
     ownership_path: Path,
     *,
@@ -635,15 +778,40 @@ def service_start(
         raise ServiceError(
             "environment file changed after render; re-render before starting"
         )
-    runtime_config(
+    config = runtime_config(
         Path(str(ownership["env_file"])),
         Path(str(ownership["state_root"])),
     )
+    if config.port == LEGACY_PORT:
+        if label != LAUNCHD_LABEL:
+            raise ServiceError(
+                "port 8765 is reserved for the production launchd identity; "
+                "use an isolated port for rehearsal"
+            )
+        if config.path != "/api/":
+            raise ServiceError(
+                "same-port production start requires AGENTSTACK_MAIL_HTTP_PATH=/api/"
+            )
+        if config.legacy_launchd_label is None:
+            raise ServiceError(
+                "same-port production start requires "
+                "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL; configure the legacy job "
+                "identity, boot it out, and retry"
+            )
     current = service_status(ownership_path, label=label, runner=runner)
-    if current["status"] == "job_loaded":
-        return {**current, "action": "noop"}
-    if current["status"] != "stopped":
+    if current["status"] not in {"job_loaded", "stopped"}:
         raise ServiceError("refusing to replace a foreign or unknown launchd job")
+    same_port_preflight = _same_port_start_preflight(config, current, runner=runner)
+    if current["status"] == "job_loaded":
+        return {
+            **current,
+            "action": "noop",
+            **(
+                {"same_port_preflight": same_port_preflight}
+                if same_port_preflight is not None
+                else {}
+            ),
+        }
     domain = f"gui/{os.getuid()}"
     artifact = str(ownership["artifact"])
     commands = (
@@ -727,6 +895,11 @@ def service_start(
         "bootstrap_outcome": bootstrap_outcome,
         "bootstrap_preflight": current,
         "bootstrap_eio_recheck": bootstrap_eio_recheck,
+        **(
+            {"same_port_preflight": same_port_preflight}
+            if same_port_preflight is not None
+            else {}
+        ),
     }
 
 

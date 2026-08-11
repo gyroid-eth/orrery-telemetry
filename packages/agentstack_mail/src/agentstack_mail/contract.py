@@ -103,7 +103,7 @@ SERVICE_IDENTITY = MappingProxyType(
         "claude_client_key": "mcp-agent-mail",
         "codex_client_key": "agent-mail",
         "client_key_policy": "preserve_existing",
-        "launchd_label": "org.agentstack.mail",
+        "launchd_label": "org.orrery.mail",
         "systemd_unit": "agentstack-mail.service",
         "environment_prefix": "AGENTSTACK_MAIL_",
     }

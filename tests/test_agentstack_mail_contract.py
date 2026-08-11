@@ -69,6 +69,7 @@ def test_contract_documents_isolated_namespaces() -> None:
     assert SERVICE_IDENTITY["claude_client_key"] == "mcp-agent-mail"
     assert SERVICE_IDENTITY["codex_client_key"] == "agent-mail"
     assert SERVICE_IDENTITY["client_key_policy"] == "preserve_existing"
+    assert SERVICE_IDENTITY["launchd_label"] == "org.orrery.mail"
     assert len(COMPATIBILITY_TOOLS) == 24
     assert (
         "authority is determined by endpoint, data roots, and ownership"
@@ -137,3 +138,20 @@ def test_cutover_runbook_pins_the_versioned_display_patch_chain() -> None:
         rollback_body.index(name) for name in reversed(names)
     )
     assert 'PATCH_DIR="$REPO/docs/agentstack-mail-cutover-patches"' in runbook
+
+
+def test_cutover_runbook_keeps_the_production_endpoint_stable() -> None:
+    runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
+
+    assert "AGENTSTACK_MAIL_HTTP_PORT=8765" in runbook
+    assert "AGENTSTACK_MAIL_HTTP_PATH=/api/" in runbook
+    assert (
+        "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail"
+        in runbook
+    )
+    assert "'http://127.0.0.1:8765/api/' 8765" in runbook
+    assert "AGENTSTACK_MAIL_HTTP_PORT=18765" not in runbook
+    assert "AGENTSTACK_MAIL_HTTP_PATH=/mcp" not in runbook
+    assert '"new_mcp_url": "http://127.0.0.1:18765/mcp"' not in runbook
+    assert "新 job/18765" not in runbook
+    assert "新job/18765" not in runbook

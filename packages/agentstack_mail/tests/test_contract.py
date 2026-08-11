@@ -26,6 +26,7 @@ def test_service_identity_is_independent() -> None:
     assert SERVICE_IDENTITY["claude_client_key"] == "mcp-agent-mail"
     assert SERVICE_IDENTITY["codex_client_key"] == "agent-mail"
     assert SERVICE_IDENTITY["client_key_policy"] == "preserve_existing"
+    assert SERVICE_IDENTITY["launchd_label"] == "org.orrery.mail"
     assert SERVICE_IDENTITY["mcp_provider_identity"] not in {
         SERVICE_IDENTITY["claude_client_key"],
         SERVICE_IDENTITY["codex_client_key"],

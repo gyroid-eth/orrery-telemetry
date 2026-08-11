@@ -22,7 +22,7 @@ from fastmcp import Client
 from agentstack_mail import service
 
 
-REHEARSAL_LABEL = "org.agentstack.mail.rehearsal.e6c76c4.a1b2"
+REHEARSAL_LABEL = f"{service.LAUNCHD_REHEARSAL_PREFIX}e6c76c4.a1b2"
 
 
 def _free_port() -> int:
@@ -126,19 +126,30 @@ def _executable(path: Path) -> Path:
     return path.resolve()
 
 
-def _environment(path: Path, root: Path, *, mode: str = "passthrough", port: int = 18765) -> Path:
-    path.write_text(
-        "\n".join(
-            (
-                f"AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE={mode}",
-                "AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1",
-                f"AGENTSTACK_MAIL_HTTP_PORT={port}",
-                "AGENTSTACK_MAIL_HTTP_PATH=/mcp",
-                f"AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///{root / 'storage.sqlite3'}",
-                f"AGENTSTACK_MAIL_STORAGE_ROOT={root / 'archive'}",
-                f"AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR={root / 'signals'}",
-            )
+def _environment(
+    path: Path,
+    root: Path,
+    *,
+    mode: str = "passthrough",
+    port: int = 18765,
+    http_path: str = "/mcp",
+    legacy_launchd_label: str | None = None,
+) -> Path:
+    lines = [
+        f"AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE={mode}",
+        "AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1",
+        f"AGENTSTACK_MAIL_HTTP_PORT={port}",
+        f"AGENTSTACK_MAIL_HTTP_PATH={http_path}",
+        f"AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///{root / 'storage.sqlite3'}",
+        f"AGENTSTACK_MAIL_STORAGE_ROOT={root / 'archive'}",
+        f"AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR={root / 'signals'}",
+    ]
+    if legacy_launchd_label is not None:
+        lines.append(
+            f"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL={legacy_launchd_label}"
         )
+    path.write_text(
+        "\n".join(lines)
         + "\n",
         encoding="utf-8",
     )
@@ -150,10 +161,19 @@ def _rendered(
     tmp_path: Path,
     *,
     label: str = service.LAUNCHD_LABEL,
+    port: int = 18765,
+    http_path: str = "/mcp",
+    legacy_launchd_label: str | None = None,
 ) -> tuple[service.RenderResult, Path, Path]:
     root = (tmp_path / "mail").resolve()
-    root.mkdir()
-    env_file = _environment(tmp_path / "mail.env", root)
+    root.mkdir(parents=True)
+    env_file = _environment(
+        tmp_path / "mail.env",
+        root,
+        port=port,
+        http_path=http_path,
+        legacy_launchd_label=legacy_launchd_label,
+    )
     service_executable = _executable(tmp_path / "agentstack-mail-service")
     server_executable = _executable(tmp_path / "agentstack-mail")
     output = tmp_path / "artifacts"
@@ -187,12 +207,16 @@ def test_render_is_pure_content_aware_and_parseable(tmp_path: Path) -> None:
 
     assert first.status == "rendered"
     assert second.status == "noop"
+    assert service.LAUNCHD_LABEL == "org.orrery.mail"
+    assert service.LAUNCHD_REHEARSAL_PREFIX == "org.orrery.mail.rehearsal."
+    assert artifact.name == service.PLIST_NAME
+    assert ownership.name == service.OWNERSHIP_NAME
     assert {
         path: (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
         for path in (artifact, ownership)
     } == before
     plist = plistlib.loads(artifact.read_bytes())
-    assert plist["Label"] == "org.agentstack.mail"
+    assert plist["Label"] == service.LAUNCHD_LABEL
     assert plist["ProgramArguments"] == [
         str(service_executable),
         "foreground",
@@ -224,23 +248,11 @@ def stat_mode(path: Path) -> int:
     return path.stat().st_mode & 0o777
 
 
-@pytest.mark.parametrize(
-    ("mode", "port", "message"),
-    (
-        ("coerce", 18765, "passthrough is required"),
-        ("passthrough", 8765, "legacy AgentMail port 8765"),
-    ),
-)
-def test_runtime_preflight_fails_before_artifact(
-    tmp_path: Path,
-    mode: str,
-    port: int,
-    message: str,
-) -> None:
+def test_runtime_preflight_fails_before_artifact(tmp_path: Path) -> None:
     root = tmp_path / "mail"
     root.mkdir()
-    env_file = _environment(tmp_path / "mail.env", root, mode=mode, port=port)
-    with pytest.raises(service.ServiceError, match=message):
+    env_file = _environment(tmp_path / "mail.env", root, mode="coerce")
+    with pytest.raises(service.ServiceError, match="passthrough is required"):
         service.render_launchd(
             output_dir=tmp_path / "artifacts",
             service_executable=_executable(tmp_path / "service"),
@@ -249,6 +261,18 @@ def test_runtime_preflight_fails_before_artifact(
             state_root=root,
         )
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_runtime_config_allows_same_port_without_manager_io(tmp_path: Path) -> None:
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+
+    ownership = json.loads(Path(rendered.ownership_manifest).read_text(encoding="utf-8"))
+    assert ownership["endpoint"] == "http://127.0.0.1:8765/api/"
 
 
 def test_render_rejects_relative_executable(tmp_path: Path) -> None:
@@ -289,6 +313,7 @@ class _FakeLaunchctl:
         self.failed_bootstrap_loads = failed_bootstrap_loads
         self.bootout_delay_prints = bootout_delay_prints
         self.remaining_bootout_prints: int | None = None
+        self.wrapper_pid = 4242
         self.calls: list[list[str]] = []
 
     def __call__(self, arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -317,6 +342,7 @@ class _FakeLaunchctl:
                 (
                     f"path = {artifact}",
                     f"program = {program_arguments[0]}",
+                    f"pid = {self.wrapper_pid}",
                     "arguments = {",
                     *(f"\t{argument}" for argument in program_arguments),
                     "}",
@@ -336,6 +362,259 @@ class _FakeLaunchctl:
             else:
                 self.running = False
         return subprocess.CompletedProcess(arguments, 0, "", "")
+
+
+def _runner_with_legacy_job(
+    fake: _FakeLaunchctl,
+    *,
+    legacy_label: str,
+    loaded: bool,
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    identity = f"gui/{os.getuid()}/{legacy_label}"
+
+    def runner(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[1:] == ["print", identity]:
+            fake.calls.append(arguments)
+            if loaded:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    "path = /legacy/service.plist\nprogram = /legacy/service\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(arguments, 113, "", "not found")
+        return fake(arguments, **kwargs)
+
+    return runner
+
+
+def test_same_port_start_requires_api_and_configured_legacy_label(
+    tmp_path: Path,
+) -> None:
+    rehearsal, _, _ = _rendered(
+        tmp_path / "rehearsal",
+        label=REHEARSAL_LABEL,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+    rehearsal_fake = _FakeLaunchctl(
+        Path(rehearsal.ownership_manifest), running=False
+    )
+    with pytest.raises(service.ServiceError, match="reserved for the production"):
+        service.service_start(
+            Path(rehearsal.ownership_manifest),
+            label=REHEARSAL_LABEL,
+            runner=rehearsal_fake,
+        )
+    assert rehearsal_fake.calls == []
+
+    wrong_path, _, _ = _rendered(
+        tmp_path / "wrong-path",
+        port=8765,
+        legacy_launchd_label="org.example.legacy-mail",
+    )
+    wrong_path_fake = _FakeLaunchctl(Path(wrong_path.ownership_manifest), running=False)
+    with pytest.raises(service.ServiceError, match="AGENTSTACK_MAIL_HTTP_PATH=/api/"):
+        service.service_start(Path(wrong_path.ownership_manifest), runner=wrong_path_fake)
+    assert wrong_path_fake.calls == []
+
+    missing_label, _, _ = _rendered(
+        tmp_path / "missing-label",
+        port=8765,
+        http_path="/api/",
+    )
+    missing_label_fake = _FakeLaunchctl(
+        Path(missing_label.ownership_manifest), running=False
+    )
+    with pytest.raises(
+        service.ServiceError,
+        match="AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL",
+    ):
+        service.service_start(
+            Path(missing_label.ownership_manifest), runner=missing_label_fake
+        )
+    assert missing_label_fake.calls == []
+
+
+def test_same_port_start_rejects_loaded_legacy_job_before_bootstrap(
+    tmp_path: Path,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=True,
+    )
+
+    with pytest.raises(service.ServiceError, match="bootout.*legacy"):
+        service.service_start(ownership, runner=runner)
+
+    assert [call[1] for call in fake.calls] == ["print", "print"]
+
+
+def test_same_port_start_rejects_unknown_legacy_job_state_before_listener_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    legacy_identity = f"gui/{os.getuid()}/{legacy_label}"
+
+    def runner(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if arguments[1:] == ["print", legacy_identity]:
+            fake.calls.append(arguments)
+            return subprocess.CompletedProcess(
+                arguments, 5, "", "launchd query unavailable"
+            )
+        return fake(arguments, **kwargs)
+
+    def unexpected_listener_probe(_port: int) -> list[int]:
+        raise AssertionError("listener inspection must follow an exact legacy absence")
+
+    monkeypatch.setattr(service, "_listener_process_ids", unexpected_listener_probe)
+
+    with pytest.raises(service.ServiceError, match="legacy launchd job state is unknown"):
+        service.service_start(ownership, runner=runner)
+
+    assert "bootstrap" not in [call[1] for call in fake.calls]
+
+
+def test_same_port_start_rejects_foreign_listener_before_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9001])
+
+    with pytest.raises(service.ServiceError, match="listener.*9001.*bootout"):
+        service.service_start(ownership, runner=runner)
+
+    assert "bootstrap" not in [call[1] for call in fake.calls]
+
+
+def test_same_port_start_runs_only_after_legacy_and_listener_are_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [])
+
+    started = service.service_start(ownership, runner=runner)
+
+    assert started["same_port_preflight"] == {
+        "status": "accepted",
+        "port": 8765,
+        "path": "/api/",
+        "legacy_launchd_label": legacy_label,
+        "legacy_launchd_state": "absent",
+        "listener_pids": [],
+    }
+    assert [call[1] for call in fake.calls][:3] == ["print", "print", "bootstrap"]
+
+
+def test_same_port_noop_rejects_listener_outside_owned_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=True)
+    runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9002])
+    monkeypatch.setattr(service, "_process_parent_pid", lambda _pid: 9999)
+
+    with pytest.raises(service.ServiceError, match="listener.*9002.*owned launchd job"):
+        service.service_start(ownership, runner=runner)
+
+    assert "bootstrap" not in [call[1] for call in fake.calls]
+
+
+def test_same_port_noop_accepts_only_listener_child_of_owned_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_label = "org.example.legacy-mail"
+    rendered, _, _ = _rendered(
+        tmp_path,
+        port=8765,
+        http_path="/api/",
+        legacy_launchd_label=legacy_label,
+    )
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=True)
+    runner = _runner_with_legacy_job(
+        fake,
+        legacy_label=legacy_label,
+        loaded=False,
+    )
+    monkeypatch.setattr(service, "_listener_process_ids", lambda _port: [9003])
+    monkeypatch.setattr(
+        service,
+        "_process_parent_pid",
+        lambda _pid: fake.wrapper_pid,
+    )
+
+    started = service.service_start(ownership, runner=runner)
+
+    assert started["action"] == "noop"
+    assert started["same_port_preflight"]["listener_pids"] == [9003]
+    assert "bootstrap" not in [call[1] for call in fake.calls]
 
 
 def test_owned_start_and_stop_use_explicit_launchctl_only(tmp_path: Path) -> None:

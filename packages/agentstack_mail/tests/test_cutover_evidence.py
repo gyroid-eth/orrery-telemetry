@@ -179,7 +179,7 @@ def test_terminal_receipt_payload_has_no_caller_authored_verdict(tmp_path: Path)
 def test_disabled_override_snapshot_retains_only_exact_label() -> None:
     raw = """disabled services = {
         \"unrelated.private.job\" => disabled
-        \"org.agentstack.mail.rehearsal.12345678.once\" => enabled
+        \"org.orrery.mail.rehearsal.12345678.once\" => enabled
     }
 """
     calls: list[list[str]] = []
@@ -189,14 +189,14 @@ def test_disabled_override_snapshot_retains_only_exact_label() -> None:
         return _completed(arguments, stdout=raw)
 
     result = evidence._disabled_override_snapshot(
-        "org.agentstack.mail.rehearsal.12345678.once",
+        "org.orrery.mail.rehearsal.12345678.once",
         runner=runner,
     )
 
     assert calls[0][1:] == ["print-disabled", f"gui/{evidence.os.getuid()}"]
     assert result == {
         "method": "launchctl-print-disabled-exact-label-only",
-        "label": "org.agentstack.mail.rehearsal.12345678.once",
+        "label": "org.orrery.mail.rehearsal.12345678.once",
         "entry_present": True,
         "disabled": False,
         "raw_domain_output_retained": False,
@@ -205,7 +205,7 @@ def test_disabled_override_snapshot_retains_only_exact_label() -> None:
 
 
 def test_disabled_override_snapshot_rejects_duplicate_exact_label() -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.once"
+    label = "org.orrery.mail.rehearsal.12345678.once"
 
     def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return _completed(
@@ -242,8 +242,8 @@ arguments = {
     def runner(_arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return next(outputs)
 
-    absent = evidence._launchd_job_fingerprint("org.agentstack.mail", runner=runner)
-    loaded = evidence._launchd_job_fingerprint("org.agentstack.mail", runner=runner)
+    absent = evidence._launchd_job_fingerprint("org.orrery.mail", runner=runner)
+    loaded = evidence._launchd_job_fingerprint("org.orrery.mail", runner=runner)
 
     assert absent["state"] == "absent"
     assert loaded["state"] == "loaded"
@@ -433,7 +433,7 @@ def test_legacy_launchd_receipt_is_candidate_bound_and_write_once(
     monkeypatch.setattr(
         evidence,
         "_launchd_job_fingerprint",
-        lambda _label: {"identity": "gui/501/org.agentstack.mail", "state": "absent"},
+        lambda _label: {"identity": "gui/501/org.orrery.mail", "state": "absent"},
     )
 
     result = evidence.write_legacy_launchd_snapshot(
@@ -455,7 +455,7 @@ def test_legacy_launchd_receipt_is_candidate_bound_and_write_once(
     monkeypatch.setattr(
         evidence,
         "_launchd_job_fingerprint",
-        lambda _label: {"identity": "gui/501/org.agentstack.mail", "state": "loaded"},
+        lambda _label: {"identity": "gui/501/org.orrery.mail", "state": "loaded"},
     )
     with pytest.raises(evidence.EvidenceError, match="new candidate"):
         evidence.write_legacy_launchd_snapshot(
@@ -474,7 +474,7 @@ def test_legacy_launchd_receipt_is_candidate_bound_and_write_once(
 
 
 def test_rehearsal_cleanup_boots_out_only_exact_loaded_identity() -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.once"
+    label = "org.orrery.mail.rehearsal.12345678.once"
     calls: list[list[str]] = []
 
     def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -532,7 +532,7 @@ def test_rehearsal_cleanup_rejects_production_before_launchctl() -> None:
 def test_rehearsal_cleanup_waits_for_asynchronous_bootout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.async"
+    label = "org.orrery.mail.rehearsal.12345678.async"
     calls: list[list[str]] = []
     definition = {
         "path": "/private/tmp/rehearsal.plist",
@@ -579,7 +579,7 @@ arguments = {
 def test_rehearsal_cleanup_rejects_absence_observed_after_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.deadline"
+    label = "org.orrery.mail.rehearsal.12345678.deadline"
 
     def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return _completed(arguments, returncode=113, stderr="not found")
@@ -597,12 +597,12 @@ def test_rehearsal_cleanup_rejects_absence_observed_after_deadline(
 
 def test_candidate_rehearsal_label_requires_exact_candidate8() -> None:
     candidate = "12345678" + "a" * 32
-    label = "org.agentstack.mail.rehearsal.12345678.once"
+    label = "org.orrery.mail.rehearsal.12345678.once"
 
     assert evidence._candidate_rehearsal_label(label, candidate) == label
     with pytest.raises(evidence.EvidenceError, match="candidate8"):
         evidence._candidate_rehearsal_label(
-            "org.agentstack.mail.rehearsal.87654321.once",
+            "org.orrery.mail.rehearsal.87654321.once",
             candidate,
         )
 
@@ -676,7 +676,7 @@ def test_foreground_receipt_identity_requires_same_candidate_and_wrapper_loss(
 
 
 def test_disabled_override_snapshot_rejects_malformed_exact_entry() -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.once"
+    label = "org.orrery.mail.rehearsal.12345678.once"
 
     def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return _completed(
@@ -712,7 +712,7 @@ def test_disabled_override_transition_is_exact() -> None:
 
 
 def test_rehearsal_cleanup_refuses_foreign_definition_without_bootout() -> None:
-    label = "org.agentstack.mail.rehearsal.12345678.once"
+    label = "org.orrery.mail.rehearsal.12345678.once"
     calls: list[list[str]] = []
 
     def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -755,7 +755,7 @@ def test_python_level_interruption_always_runs_exact_cleanup(
         evidence._execute_with_launchd_cleanup(
             action=action,
             cleanup=cleanup,
-            label="org.agentstack.mail.rehearsal.12345678.once",
+            label="org.orrery.mail.rehearsal.12345678.once",
             port=28765,
             output_directory=tmp_path,
         )
@@ -781,7 +781,7 @@ def test_terminating_signal_is_converted_to_cleanup_then_failure(
         evidence._execute_with_launchd_cleanup(
             action=action,
             cleanup=cleanup,
-            label="org.agentstack.mail.rehearsal.12345678.once",
+            label="org.orrery.mail.rehearsal.12345678.once",
             port=28765,
             output_directory=tmp_path,
         )
@@ -798,7 +798,7 @@ def test_signal_during_cleanup_is_deferred_then_fails(tmp_path: Path) -> None:
         evidence._execute_with_launchd_cleanup(
             action=lambda: {"mutated": True},
             cleanup=cleanup,
-            label="org.agentstack.mail.rehearsal.12345678.once",
+            label="org.orrery.mail.rehearsal.12345678.once",
             port=28765,
             output_directory=tmp_path,
         )
@@ -839,7 +839,7 @@ try:
     evidence._execute_with_launchd_cleanup(
         action=lambda: {{"mutated": True}},
         cleanup=cleanup,
-        label="org.agentstack.mail.rehearsal.12345678.once",
+        label="org.orrery.mail.rehearsal.12345678.once",
         port=28765,
         output_directory=marker.parent,
     )
@@ -875,7 +875,7 @@ def test_cleanup_failure_never_creates_terminal_receipt(
             cleanup=lambda: (_ for _ in ()).throw(
                 evidence.EvidenceError("bootout failed")
             ),
-            label="org.agentstack.mail.rehearsal.12345678.once",
+            label="org.orrery.mail.rehearsal.12345678.once",
             port=28765,
             output_directory=tmp_path,
         )
@@ -978,7 +978,7 @@ def test_fake_launchd_sequence_uses_exact_actions_and_owned_crash_pid(
         state_root=tmp_path / "state",
         output_directory=tmp_path,
         controller=["--ownership-manifest", "/tmp/owned", "--label", "test"],
-        label="org.agentstack.mail.rehearsal.12345678.once",
+        label="org.orrery.mail.rehearsal.12345678.once",
         expected_definition_sha256="a" * 64,
         url="http://127.0.0.1:28765/mcp",
         project=tmp_path / "project",
@@ -1030,7 +1030,7 @@ def test_listener_ownership_rejects_foreign_parent_before_crash_signal(
 
     with pytest.raises(evidence.EvidenceError, match="not a child"):
         evidence._owned_launchd_listener(
-            label="org.agentstack.mail.rehearsal.12345678.once",
+            label="org.orrery.mail.rehearsal.12345678.once",
             port=28765,
             expected_definition_sha256="a" * 64,
             service_executable=tmp_path / "service",

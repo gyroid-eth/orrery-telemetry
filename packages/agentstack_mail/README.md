@@ -178,8 +178,8 @@ The normal cutover must not cross its documented first-write boundary until
 those gaps are resolved.
 
 The service label defaults to the production-compatible
-`org.agentstack.mail`. An explicit custom `--label` is accepted only below
-`org.agentstack.mail.rehearsal.` with a bounded lowercase ASCII suffix. Render,
+`org.orrery.mail`. An explicit custom `--label` is accepted only below
+`org.orrery.mail.rehearsal.` with a bounded lowercase ASCII suffix. Render,
 ownership, status, start, and stop all use the same selected label; an
 ownership/CLI mismatch fails before `launchctl` is called. A rehearsal must
 also call the read-only absence preflight before render/start: the production
@@ -187,6 +187,18 @@ label, an unreserved label, an existing job, or an unknown manager result all
 fail closed. The custom label does not weaken endpoint or state-root isolation,
 and omitting `--label` preserves the original artifact names and controller
 identity exactly.
+
+Port 8765 is permitted by the pure environment validator so an operator can
+keep existing MCP client URLs unchanged. It is not permitted unconditionally
+at service start. A same-port start requires the exact `/api/` path and a
+configured `AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL`; the product does not embed a
+machine-specific legacy label. `start` rejects a loaded legacy job, an unknown
+legacy job state, or any 8765 listener that is not a direct child of the exact
+owned new launchd wrapper. Its error tells the operator to boot out the legacy
+job and verify the port is free. Port 18765 remains available for isolated
+rehearsals. `status: job_loaded` is still not MCP readiness: the production
+runbook probes the distributed `http://127.0.0.1:8765/api/` path and expected
+database before any client is allowed to write.
 
 The HTTP boundary pins Uvicorn 0.52.1 because its graceful SIGTERM workaround
 depends on that version's signal-capture behavior. Runtime startup rejects a
@@ -408,7 +420,7 @@ agentstack-mail-evidence launchd-rehearsal \
   --candidate-commit 0123456789abcdef0123456789abcdef01234567 \
   --foreground-receipt /absolute/service-lifecycle-v1.json \
   --foreground-receipt-sha256 "$FOREGROUND_RECEIPT_SHA256" \
-  --label org.agentstack.mail.rehearsal.01234567.one-use-nonce \
+  --label org.orrery.mail.rehearsal.01234567.one-use-nonce \
   --port 28765
 ```
 
@@ -429,7 +441,7 @@ candidate, checks the loaded path/program/arguments against the plist, retains
 the complete plist bytes as base64 plus its digest and
 `KeepAlive`/`RunAtLoad`/working directory, and proves the
 single 8765 listener is a child of the loaded wrapper. The new
-`org.agentstack.mail` identity must still be absent. The write-once receipt has
+`org.orrery.mail` identity must still be absent. The write-once receipt has
 mode 0400; a missing or foreign job, topology drift, or an existing output
 fails closed. Complete bytes are accepted only for the exact legacy label and
 an allowlisted plist shape; environment keys other than `HOME` and `PATH` are
