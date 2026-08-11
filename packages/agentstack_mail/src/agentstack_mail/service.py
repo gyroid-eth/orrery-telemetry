@@ -15,6 +15,7 @@ import json
 import os
 import plistlib
 import pwd
+import re
 import signal
 import stat
 import subprocess
@@ -28,6 +29,7 @@ from urllib.parse import unquote, urlparse
 
 
 LAUNCHD_LABEL: Final[str] = "org.agentstack.mail"
+LAUNCHD_REHEARSAL_PREFIX: Final[str] = f"{LAUNCHD_LABEL}.rehearsal."
 OWNERSHIP_NAME: Final[str] = "org.agentstack.mail.ownership.json"
 PLIST_NAME: Final[str] = "org.agentstack.mail.plist"
 LEGACY_PORT: Final[int] = 8765
@@ -58,6 +60,38 @@ class RenderResult:
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _launchd_label(label: str) -> str:
+    if label == LAUNCHD_LABEL:
+        return label
+    if not label.startswith(LAUNCHD_REHEARSAL_PREFIX):
+        raise ServiceError(
+            f"custom launchd label must use {LAUNCHD_REHEARSAL_PREFIX!r}"
+        )
+    suffix = label.removeprefix(LAUNCHD_REHEARSAL_PREFIX)
+    segment = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+    if (
+        len(label) > 128
+        or re.fullmatch(rf"{segment}(?:\.{segment})*", suffix) is None
+    ):
+        raise ServiceError("custom launchd label has an invalid rehearsal suffix")
+    return label
+
+
+def rehearsal_launchd_label(label: str) -> str:
+    """Validate a non-production label reserved for an isolated rehearsal."""
+
+    label = _launchd_label(label)
+    if label == LAUNCHD_LABEL:
+        raise ServiceError("rehearsal label must not equal the production launchd label")
+    return label
+
+
+def _launchd_artifact_names(label: str) -> tuple[str, str]:
+    if label == LAUNCHD_LABEL:
+        return PLIST_NAME, OWNERSHIP_NAME
+    return f"{label}.plist", f"{label}.ownership.json"
 
 
 def _overlap(first: Path, second: Path) -> bool:
@@ -252,9 +286,11 @@ def render_launchd(
     server_executable: Path,
     env_file: Path,
     state_root: Path,
+    label: str = LAUNCHD_LABEL,
 ) -> RenderResult:
     """Render a launchd definition and ownership record without registering it."""
 
+    label = _launchd_label(label)
     service_executable = _require_absolute_executable(
         service_executable, "service executable"
     )
@@ -283,7 +319,7 @@ def render_launchd(
         directory_changed = True
     runtime_dir = config.state_root / "runtime"
     plist = {
-        "Label": LAUNCHD_LABEL,
+        "Label": label,
         "ProgramArguments": [
             str(service_executable),
             "foreground",
@@ -307,14 +343,15 @@ def render_launchd(
         },
     }
     artifact_payload = plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
-    artifact_path = output_dir / PLIST_NAME
+    plist_name, ownership_name = _launchd_artifact_names(label)
+    artifact_path = output_dir / plist_name
     artifact_status = _atomic_content_write(artifact_path, artifact_payload, 0o644)
     artifact_digest = _sha256_bytes(artifact_payload)
     ownership = {
         "schema_version": 1,
         "tool": "agentstack-mail-service",
         "platform": "launchd",
-        "label": LAUNCHD_LABEL,
+        "label": label,
         "artifact": str(artifact_path),
         "artifact_sha256": artifact_digest,
         "service_executable": str(service_executable),
@@ -324,7 +361,7 @@ def render_launchd(
         "state_root": str(config.state_root),
         "endpoint": f"http://{config.host}:{config.port}{config.path}",
     }
-    ownership_path = output_dir / OWNERSHIP_NAME
+    ownership_path = output_dir / ownership_name
     ownership_status = _atomic_content_write(
         ownership_path,
         json.dumps(ownership, sort_keys=True, separators=(",", ":")).encode() + b"\n",
@@ -342,7 +379,12 @@ def render_launchd(
     )
 
 
-def _load_ownership(path: Path) -> dict[str, Any]:
+def _load_ownership(
+    path: Path,
+    *,
+    expected_label: str = LAUNCHD_LABEL,
+) -> dict[str, Any]:
+    expected_label = _launchd_label(expected_label)
     try:
         ownership = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -351,7 +393,7 @@ def _load_ownership(path: Path) -> dict[str, Any]:
         "schema_version": 1,
         "tool": "agentstack-mail-service",
         "platform": "launchd",
-        "label": LAUNCHD_LABEL,
+        "label": expected_label,
     }
     if not isinstance(ownership, dict) or any(
         ownership.get(key) != value for key, value in required.items()
@@ -369,7 +411,7 @@ def _load_ownership(path: Path) -> dict[str, Any]:
         raise ServiceError(f"owned service artifact is not a valid plist: {exc}") from exc
     expected_arguments = plist.get("ProgramArguments") if isinstance(plist, dict) else None
     if (
-        plist.get("Label") != LAUNCHD_LABEL
+        plist.get("Label") != expected_label
         or not isinstance(expected_arguments, list)
         or not all(isinstance(argument, str) for argument in expected_arguments)
     ):
@@ -441,19 +483,42 @@ def _launchctl(
     )
 
 
-def service_status(
-    ownership_path: Path, *, runner: Runner | None = None
+def require_rehearsal_job_absent(
+    label: str,
+    *,
+    runner: Runner | None = None,
 ) -> dict[str, Any]:
-    ownership = _load_ownership(ownership_path)
+    """Fail closed unless the exact non-production launchd identity is absent."""
+
+    label = rehearsal_launchd_label(label)
+    identity = f"gui/{os.getuid()}/{label}"
+    result = _launchctl(["print", identity], runner=runner)
+    if _launchctl_not_found(result):
+        return {"status": "absent", "label": label, "identity": identity}
+    if result.returncode == 0:
+        raise ServiceError(f"rehearsal launchd job already exists: {identity}")
+    raise ServiceError(
+        f"rehearsal launchd job state is unknown: {result.stderr.strip()}"
+    )
+
+
+def service_status(
+    ownership_path: Path,
+    *,
+    label: str = LAUNCHD_LABEL,
+    runner: Runner | None = None,
+) -> dict[str, Any]:
+    label = _launchd_label(label)
+    ownership = _load_ownership(ownership_path, expected_label=label)
     env_drift = _environment_drift(ownership)
-    identity = f"gui/{os.getuid()}/{LAUNCHD_LABEL}"
+    identity = f"gui/{os.getuid()}/{label}"
     result = _launchctl(["print", identity], runner=runner)
     if result.returncode != 0:
         if _launchctl_not_found(result):
             return {
                 "status": "stopped",
                 "owned": True,
-                "label": LAUNCHD_LABEL,
+                "label": label,
                 "environment_drift": env_drift,
             }
         raise ServiceError(
@@ -469,13 +534,13 @@ def service_status(
         return {
             "status": "foreign_or_unknown",
             "owned": False,
-            "label": LAUNCHD_LABEL,
+            "label": label,
             "environment_drift": env_drift,
         }
     return {
         "status": "job_loaded",
         "owned": True,
-        "label": LAUNCHD_LABEL,
+        "label": label,
         "environment_drift": env_drift,
         "mcp_readiness": "unverified",
     }
@@ -484,27 +549,32 @@ def service_status(
 def _compensate_bootstrap(
     ownership_path: Path,
     *,
+    label: str,
     runner: Runner,
 ) -> str:
-    current = service_status(ownership_path, runner=runner)
+    current = service_status(ownership_path, label=label, runner=runner)
     if current["status"] != "job_loaded" or not current["owned"]:
         return "loaded job could not be proven owned; no bootout attempted"
-    identity = f"gui/{os.getuid()}/{LAUNCHD_LABEL}"
+    identity = f"gui/{os.getuid()}/{label}"
     bootout = _launchctl(["bootout", identity], runner=runner)
     if bootout.returncode != 0:
         return f"owned compensation bootout failed: {bootout.stderr.strip()}"
-    stopped = service_status(ownership_path, runner=runner)
+    stopped = service_status(ownership_path, label=label, runner=runner)
     if stopped["status"] != "stopped":
         return "owned compensation bootout did not reach stopped state"
     return "owned bootstrap was compensated and verified stopped"
 
 
 def service_start(
-    ownership_path: Path, *, runner: Runner | None = None
+    ownership_path: Path,
+    *,
+    label: str = LAUNCHD_LABEL,
+    runner: Runner | None = None,
 ) -> dict[str, Any]:
     if runner is None:
         runner = subprocess.run
-    ownership = _load_ownership(ownership_path)
+    label = _launchd_label(label)
+    ownership = _load_ownership(ownership_path, expected_label=label)
     if _environment_drift(ownership):
         raise ServiceError(
             "environment file changed after render; re-render before starting"
@@ -513,7 +583,7 @@ def service_start(
         Path(str(ownership["env_file"])),
         Path(str(ownership["state_root"])),
     )
-    current = service_status(ownership_path, runner=runner)
+    current = service_status(ownership_path, label=label, runner=runner)
     if current["status"] == "job_loaded":
         return {**current, "action": "noop"}
     if current["status"] != "stopped":
@@ -522,15 +592,15 @@ def service_start(
     artifact = str(ownership["artifact"])
     commands = (
         ["bootstrap", domain, artifact],
-        ["enable", f"{domain}/{LAUNCHD_LABEL}"],
-        ["kickstart", f"{domain}/{LAUNCHD_LABEL}"],
+        ["enable", f"{domain}/{label}"],
+        ["kickstart", f"{domain}/{label}"],
     )
     bootstrapped = False
     for arguments in commands:
         result = _launchctl(arguments, runner=runner)
         if result.returncode != 0:
             compensation = (
-                _compensate_bootstrap(ownership_path, runner=runner)
+                _compensate_bootstrap(ownership_path, label=label, runner=runner)
                 if bootstrapped
                 else "bootstrap did not succeed; no compensation needed"
             )
@@ -540,34 +610,38 @@ def service_start(
             )
         if arguments[0] == "bootstrap":
             bootstrapped = True
-    started = service_status(ownership_path, runner=runner)
+    started = service_status(ownership_path, label=label, runner=runner)
     if started["status"] != "job_loaded" or not started["owned"]:
         raise ServiceError("launchd job did not reach the exact owned job state")
     return {**started, "action": "started"}
 
 
 def service_stop(
-    ownership_path: Path, *, runner: Runner | None = None
+    ownership_path: Path,
+    *,
+    label: str = LAUNCHD_LABEL,
+    runner: Runner | None = None,
 ) -> dict[str, Any]:
     if runner is None:
         runner = subprocess.run
-    _load_ownership(ownership_path)
-    current = service_status(ownership_path, runner=runner)
+    label = _launchd_label(label)
+    _load_ownership(ownership_path, expected_label=label)
+    current = service_status(ownership_path, label=label, runner=runner)
     if current["status"] == "stopped":
         return {**current, "action": "noop"}
     if current["status"] != "job_loaded" or not current["owned"]:
         raise ServiceError("refusing to stop a foreign or unknown launchd job")
-    identity = f"gui/{os.getuid()}/{LAUNCHD_LABEL}"
+    identity = f"gui/{os.getuid()}/{label}"
     result = _launchctl(["bootout", identity], runner=runner)
     if result.returncode != 0:
         raise ServiceError(f"launchctl bootout failed: {result.stderr.strip()}")
-    stopped = service_status(ownership_path, runner=runner)
+    stopped = service_status(ownership_path, label=label, runner=runner)
     if stopped["status"] != "stopped":
         raise ServiceError("launchd job did not reach the stopped state")
     return {
         "status": "stopped",
         "owned": True,
-        "label": LAUNCHD_LABEL,
+        "label": label,
         "action": "stopped",
     }
 
@@ -702,6 +776,7 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("--server-executable", required=True)
     render.add_argument("--env-file", required=True)
     render.add_argument("--state-root", required=True)
+    render.add_argument("--label", default=LAUNCHD_LABEL)
     foreground_parser = subparsers.add_parser("foreground")
     foreground_parser.add_argument("--server-executable", required=True)
     foreground_parser.add_argument("--env-file", required=True)
@@ -709,6 +784,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("start", "stop", "status"):
         command = subparsers.add_parser(name)
         command.add_argument("--ownership-manifest", required=True)
+        command.add_argument("--label", default=LAUNCHD_LABEL)
     return parser
 
 
@@ -723,6 +799,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     server_executable=Path(args.server_executable),
                     env_file=Path(args.env_file),
                     state_root=Path(args.state_root),
+                    label=args.label,
                 )
             )
         elif args.command == "foreground":
@@ -734,11 +811,20 @@ def main(argv: Sequence[str] | None = None) -> None:
                 )
             )
         elif args.command == "start":
-            result = service_start(Path(args.ownership_manifest))
+            result = service_start(
+                Path(args.ownership_manifest),
+                label=args.label,
+            )
         elif args.command == "stop":
-            result = service_stop(Path(args.ownership_manifest))
+            result = service_stop(
+                Path(args.ownership_manifest),
+                label=args.label,
+            )
         else:
-            result = service_status(Path(args.ownership_manifest))
+            result = service_status(
+                Path(args.ownership_manifest),
+                label=args.label,
+            )
     except (OSError, ServiceError, subprocess.SubprocessError) as exc:
         print(f"agentstack-mail-service: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

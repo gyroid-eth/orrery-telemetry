@@ -177,6 +177,17 @@ and rollback gates `not_implemented`; these tools alone are not release-ready.
 The normal cutover must not cross its documented first-write boundary until
 those gaps are resolved.
 
+The service label defaults to the production-compatible
+`org.agentstack.mail`. An explicit custom `--label` is accepted only below
+`org.agentstack.mail.rehearsal.` with a bounded lowercase ASCII suffix. Render,
+ownership, status, start, and stop all use the same selected label; an
+ownership/CLI mismatch fails before `launchctl` is called. A rehearsal must
+also call the read-only absence preflight before render/start: the production
+label, an unreserved label, an existing job, or an unknown manager result all
+fail closed. The custom label does not weaken endpoint or state-root isolation,
+and omitting `--label` preserves the original artifact names and controller
+identity exactly.
+
 The HTTP boundary pins Uvicorn 0.52.1 because its graceful SIGTERM workaround
 depends on that version's signal-capture behavior. Runtime startup rejects a
 different reported version before opening the listener. SIGTERM is suppressed

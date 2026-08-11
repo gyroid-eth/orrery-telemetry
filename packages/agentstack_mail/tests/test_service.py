@@ -22,6 +22,9 @@ from fastmcp import Client
 from agentstack_mail import service
 
 
+REHEARSAL_LABEL = "org.agentstack.mail.rehearsal.e6c76c4.a1b2"
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
@@ -143,7 +146,11 @@ def _environment(path: Path, root: Path, *, mode: str = "passthrough", port: int
     return path
 
 
-def _rendered(tmp_path: Path) -> tuple[service.RenderResult, Path, Path]:
+def _rendered(
+    tmp_path: Path,
+    *,
+    label: str = service.LAUNCHD_LABEL,
+) -> tuple[service.RenderResult, Path, Path]:
     root = (tmp_path / "mail").resolve()
     root.mkdir()
     env_file = _environment(tmp_path / "mail.env", root)
@@ -156,6 +163,7 @@ def _rendered(tmp_path: Path) -> tuple[service.RenderResult, Path, Path]:
         server_executable=server_executable,
         env_file=env_file,
         state_root=root,
+        label=label,
     )
     return result, service_executable, server_executable
 
@@ -271,6 +279,7 @@ class _FakeLaunchctl:
         plist = plistlib.loads(Path(ownership["artifact"]).read_bytes())
         self.artifact = str(Path(ownership["artifact"]).resolve())
         self.arguments = list(plist["ProgramArguments"])
+        self.label = str(ownership["label"])
         self.running = running
         self.foreign = foreign
         self.print_returncode = print_returncode
@@ -337,6 +346,125 @@ def test_owned_start_and_stop_use_explicit_launchctl_only(tmp_path: Path) -> Non
         "print",
     ]
     assert all(call[0] == "launchctl" for call in fake.calls)
+
+
+def test_rehearsal_label_flows_through_owned_render_start_status_and_stop(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path, label=REHEARSAL_LABEL)
+    ownership = Path(rendered.ownership_manifest)
+    artifact = Path(rendered.artifact)
+    fake = _FakeLaunchctl(ownership, running=False)
+
+    started = service.service_start(ownership, label=REHEARSAL_LABEL, runner=fake)
+    status = service.service_status(ownership, label=REHEARSAL_LABEL, runner=fake)
+    stopped = service.service_stop(ownership, label=REHEARSAL_LABEL, runner=fake)
+
+    assert artifact.name == f"{REHEARSAL_LABEL}.plist"
+    assert ownership.name == f"{REHEARSAL_LABEL}.ownership.json"
+    assert plistlib.loads(artifact.read_bytes())["Label"] == REHEARSAL_LABEL
+    assert json.loads(ownership.read_text(encoding="utf-8"))["label"] == REHEARSAL_LABEL
+    assert started["label"] == status["label"] == stopped["label"] == REHEARSAL_LABEL
+    rehearsal_identity = f"gui/{os.getuid()}/{REHEARSAL_LABEL}"
+    production_identity = f"gui/{os.getuid()}/{service.LAUNCHD_LABEL}"
+    flattened = [argument for call in fake.calls for argument in call]
+    assert rehearsal_identity in flattened
+    assert production_identity not in flattened
+
+
+def test_ownership_and_cli_label_mismatch_fails_before_launchctl(tmp_path: Path) -> None:
+    rendered, _, _ = _rendered(tmp_path, label=REHEARSAL_LABEL)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+
+    with pytest.raises(service.ServiceError, match="wrong identity"):
+        service.service_start(ownership, runner=fake)
+    with pytest.raises(service.ServiceError, match="wrong identity"):
+        service.service_start(
+            ownership,
+            label=f"{REHEARSAL_LABEL}.other",
+            runner=fake,
+        )
+
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "label",
+    (
+        "",
+        "com.operator.agentstack-mail-rehearsal",
+        service.LAUNCHD_REHEARSAL_PREFIX,
+        f"{service.LAUNCHD_REHEARSAL_PREFIX}Uppercase",
+        f"{service.LAUNCHD_REHEARSAL_PREFIX}slash/value",
+        f"{service.LAUNCHD_REHEARSAL_PREFIX}double..dot",
+        f"{service.LAUNCHD_REHEARSAL_PREFIX}trailing-",
+        f"{service.LAUNCHD_REHEARSAL_PREFIX}{'a' * 129}",
+    ),
+)
+def test_render_rejects_unreserved_or_malformed_custom_label_before_artifact(
+    tmp_path: Path,
+    label: str,
+) -> None:
+    root = tmp_path / "mail"
+    root.mkdir()
+    env_file = _environment(tmp_path / "mail.env", root)
+
+    with pytest.raises(service.ServiceError, match="launchd label"):
+        service.render_launchd(
+            output_dir=tmp_path / "artifacts",
+            service_executable=_executable(tmp_path / "service"),
+            server_executable=_executable(tmp_path / "server"),
+            env_file=env_file,
+            state_root=root,
+            label=label,
+        )
+
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_rehearsal_absence_preflight_rejects_production_and_existing_job(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path, label=REHEARSAL_LABEL)
+    ownership = Path(rendered.ownership_manifest)
+    missing = _FakeLaunchctl(ownership, running=False)
+    existing = _FakeLaunchctl(ownership, running=True)
+
+    with pytest.raises(service.ServiceError, match="must not equal the production"):
+        service.require_rehearsal_job_absent(service.LAUNCHD_LABEL, runner=missing)
+    assert missing.calls == []
+
+    absent = service.require_rehearsal_job_absent(
+        REHEARSAL_LABEL,
+        runner=missing,
+    )
+    assert absent == {
+        "status": "absent",
+        "label": REHEARSAL_LABEL,
+        "identity": f"gui/{os.getuid()}/{REHEARSAL_LABEL}",
+    }
+    with pytest.raises(service.ServiceError, match="already exists"):
+        service.require_rehearsal_job_absent(REHEARSAL_LABEL, runner=existing)
+    assert [call[1] for call in existing.calls] == ["print"]
+
+
+def test_cli_parser_defaults_production_and_accepts_explicit_rehearsal_label() -> None:
+    default = service._parser().parse_args(
+        ["status", "--ownership-manifest", "/tmp/ownership.json"]
+    )
+    rehearsal = service._parser().parse_args(
+        [
+            "status",
+            "--ownership-manifest",
+            "/tmp/ownership.json",
+            "--label",
+            REHEARSAL_LABEL,
+        ]
+    )
+
+    assert default.label == service.LAUNCHD_LABEL
+    assert rehearsal.label == REHEARSAL_LABEL
 
 
 def test_stop_refuses_foreign_job_without_bootout(tmp_path: Path) -> None:
