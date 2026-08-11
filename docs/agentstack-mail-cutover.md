@@ -17,12 +17,13 @@ agent:
 
 maintainer承認下の本番legacy server 1回再起動で、listener消滅はstopから5.41秒、同じendpointの自動復帰は15.72秒だった。既存clientは停止中の`fetch_inbox`が1回transport errorとなった後、session再起動も`/mcp`手動再接続もなく最初の再試行で成功した。PIDは28395から77623へ変わり、復帰後の`health_check`、DB `integrity_check`、件数は正常だった。したがって同じkey・同じURL/portでのclient再接続は実測済みとし、追加の隔離client rehearsalは行わない。
 
-このlocalhost・単独利用の初回切替で、切替前に残す作業は次の4点だけである。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。4点が揃った後にだけ、authorityの4遷移を固定するcommitted testを追加する。
+このlocalhost・単独利用の初回切替で、切替前に残す作業は次の3点だけである。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。3点が揃った後にだけ、authorityの4遷移を固定するcommitted testを追加する。
 
 1. production backupを、本番とcanonical path・symlink・inodeまで異なる故意破損済みの隔離targetへ非no-op復元すること。receiptの`target.kind=rehearsal-copy` / `production_source=false`、停止直前の最新行watermark、exact candidate PIDによるtarget DB familyのopen、起動後full logical snapshot一致を確認する。本番側はbyte不変ではなく、main/WAL/SHMの同一性、停止直前までのmessage prefix不変、通常の新着だけ、実演process treeが本番familyをopenしていないことを確認する。
 2. final clean candidateへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成・独立検算したうえで、旧`com.operator.mcp-agent-mail`のbootoutから新`org.orrery.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。旧namespaceのreceiptは流用しない。
 3. 逆順のnew bootoutからlegacy bootstrapまでを、一つの不可分なrollbackとして実行できること。new labelのenabled overrideは正常な残留として記録すること。
-4. 利用側が新endpointで70個のpermission/hook selectorに承認prompt 0を確認すること。この確認は利用側担当が行い、PluckyEinsteinは重複実装しない。
+
+permission/hook selector確認は完了済みであり、残作業へ数えない。利用側の再集計はClaude settingsのpermission selectorが`settings.json` 28件 + `settings.local.json` 11件 = 39件、hook matcherが別に2件である。同じ既存keyと新endpointを使った9 toolは9/9一致、permission/trust prompt 0だった。旧「70件」は誤集計として撤回する。
 
 ### operator用1行チェックリスト（正本）
 
@@ -205,7 +206,7 @@ PY
 
 ## 旧14条件 evaluator（切替後hardeningへ延期）
 
-`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`と`packages/agentstack_mail/tests/cutover_readiness.py`の14条件evaluatorは、配布製品相当のfull evidence gateとしてfail-closedのまま保持する。ただし2026-08-11の簡素化裁定後は、この単独localhost切替のpre-cutover hard stopには使わず、未実装handlerを埋める作業も切替後へ延期する。以下の表と旧C0 producerは履歴・将来hardening用であり、上の4点へ作業範囲を再拡張しない。
+`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`と`packages/agentstack_mail/tests/cutover_readiness.py`の14条件evaluatorは、配布製品相当のfull evidence gateとしてfail-closedのまま保持する。ただし2026-08-11の簡素化裁定後は、この単独localhost切替のpre-cutover hard stopには使わず、未実装handlerを埋める作業も切替後へ延期する。以下の表と旧C0 producerは履歴・将来hardening用であり、上の3点へ作業範囲を再拡張しない。
 
 次の表は旧14個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は旧台帳のまま保持し、表の説明は置換しない。
 
@@ -225,7 +226,7 @@ evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。台帳のdata-migration-reconciliation evidence handlerは未実装だが、簡素化裁定によりhandler自体は切替後backlogである。以下の旧C0 command例はfull-evidence pathの参照として残し、今回の4点を満たすために実行しない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。台帳のdata-migration-reconciliation evidence handlerは未実装だが、簡素化裁定によりhandler自体は切替後backlogである。以下の旧C0 command例はfull-evidence pathの参照として残し、今回の3点を満たすために実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -1297,7 +1298,7 @@ grep -Eq '^[0-9a-f]{64}$' "$MAINT/consumer-manifest.sha256"
 ```
 
 maintenance shellを再開した場合は`PINNED_MANIFEST_SHA256=$(cat "$MAINT/consumer-manifest.sha256")`で同じexternal pinを復元し、正規表現を再検査する。
-6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。初回切替ではglobal 1件とlocal 15件のClaude settingsにあるpermission/hook selectorを一つも変えないため、これら16 fileはすべて`changed=false`でなければ止まる。未コミットmachine-local観測 `2026-08-11T15:18:49 JST` はallow 68 + hook matcher 2 = 70 selectorであり、採取器の正本値ではない。helperは**列挙したfile内**の複数recognized key、未知endpoint、endpoint/root混在をfailさせるが、key名だけでauthorityを判定しない。inventory外のfileは見えないため、上のhidden/ignored completeness対照を含むsealed inventoryで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
+6. `agentstack-mail-consumers preview`のcontent-redactedなfile pathとbefore/after line rangeをmaintainerへ提示する。初回切替ではglobal 1件とlocal 15件のClaude settingsにあるpermission/hook selectorを一つも変えないため、これら16 fileはすべて`changed=false`でなければ止まる。利用側の再集計ではpermission selectorは`settings.json` 28件 + `settings.local.json` 11件 = 39件、hook matcherは別に2件であり、同じ既存keyと新endpointを使った9 toolは9/9一致、permission/trust prompt 0だった。旧「70件」は誤集計として撤回し、この確認は完了済みである。helperは**列挙したfile内**の複数recognized key、未知endpoint、endpoint/root混在をfailさせるが、key名だけでauthorityを判定しない。inventory外のfileは見えないため、上のhidden/ignored completeness対照を含むsealed inventoryで漏れ0を承認する。旧source tree自身の`09_MCP/mcp-agent-mail/.mcp.json`、`.codex/config.toml`、`.claude/settings.local.json`（最後のfileは旧sourceの`enabledMcpjsonServers=["mcp-agent-mail"]`だけを選ぶ開発用設定）はcutover consumerではないためexact pathで明示excludeし、理由をmaintenance記録へ残す。
 7. readinessが`go`でmaintainerがpreviewを承認した後だけ、versioned display patch chainを適用する。これは本番pathへの最初の変更なので、markerが作られる前の失敗では続行せず、現物を検査して旧before-imageへ戻す。全5 patch適用後にJSON、Python AST、repo/live plistを検査し、after digestを保存してからmarkerを作る。
 
 ```sh
@@ -1772,13 +1773,14 @@ bounded_mail_probe \
 
 ## 現在の blocker digest（non-normative）
 
-これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の4点だけを追う。
+これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の3点だけを追う。
 
 - **復元の実演: producer実装済み・HOLD。** accepted 67MB familyを使うjoined E2Eと内部reviewは通った。final clean candidateのproducerを元の照合子が承認した後だけ、上のexact blockをProOpusが実行し、照合子へwrite-once final JSONと外部pinを渡す。内部subagentのPASSだけでHOLDを解除しない。
 - **二重service防止: product guard・手順は完了、final ORRERY rehearsal証跡は未完了、実切替は未実行。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`はsealed legacy label/receipt SHA不一致、configured legacy job残留、foreign 8765 listenerをlaunchctl前に拒否する。clean commitへ束縛した`org.orrery.mail`のforeground、legacy snapshot、launchd rehearsal receiptを再生成して元の照合経路で検算するまでH0は通さない。actual authority交代は切替当日にだけ実行する。
 - **戻し手順: 補正完了・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、同じ8765 `/api/`への復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
-- **permission/hook selector 70件: 利用側確認中。** project `.mcp.json`へ新serverを足さず、既存`mcp-agent-mail` keyのURL/authだけを差し替える。N=1の9-tool隔離probeはpermission/trust prompt 0、error 0で、全70件は利用側担当が確認する。PluckyEinstein側の追加実装はない。
 
-hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。復元実演の照合と利用側selector確認が閉じ、authority 4遷移のcommitted testを追加するまでは、本番切替は未承認である。
+permission/hook selector確認は完了済みで、pre-cutover残タスクではない。project `.mcp.json`へ新serverを足さず、既存`mcp-agent-mail` keyのURL/authだけを差し替える。利用側の正しい集計はpermission selector 39件 + hook matcher 2件で、9-tool隔離probeは9/9一致、permission/trust prompt 0、error 0だった。
+
+hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。復元実演の照合とfinal ORRERY namespace rehearsalを閉じ、authority 4遷移のcommitted testを追加するまでは、本番切替は未承認である。
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。
