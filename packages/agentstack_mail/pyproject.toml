@@ -51,6 +51,7 @@ agentstack-mail-migrate = "agentstack_mail.migration:main"
 agentstack-mail-service = "agentstack_mail.service:main"
 agentstack-mail-consumers = "agentstack_mail.consumer:main"
 agentstack-mail-consumer-inventory = "agentstack_mail.consumer_inventory:main"
+agentstack-mail-evidence = "agentstack_mail.evidence:main"
 
 [project.optional-dependencies]
 legacy-llm = [

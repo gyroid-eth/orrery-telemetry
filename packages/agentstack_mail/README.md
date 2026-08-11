@@ -356,6 +356,42 @@ dependency closure. Production venv creation remains NO-GO until an
 interpreter-bound, hash-locked offline wheelhouse and install receipt are
 versioned evidence; the current runbook install block is future-only.
 
+### Candidate-bound runtime rehearsal
+
+`agentstack-mail-evidence runtime-rehearsal` is the isolated runtime evidence
+producer. It must itself run from an installed candidate wheel, byte-compares
+every installed `agentstack_mail` member with that wheel, requires the named
+clean candidate commit to equal checkout `HEAD`, and requires its own source
+blob to match the same commit. The output directory must not exist. Receipts
+are written once with mode 0400; an interrupted run retains its in-progress
+marker and cannot be mistaken for a terminal result.
+
+```console
+agentstack-mail-evidence runtime-rehearsal \
+  --output-dir /absolute/absent/evidence-directory \
+  --wheel /absolute/candidate/agentstack_mail-0.0.0-py3-none-any.whl \
+  --candidate-repo /absolute/clean/candidate-checkout \
+  --candidate-commit 0123456789abcdef0123456789abcdef01234567 \
+  --port 18765
+```
+
+The producer uses only the specified isolated port and roots. It observes the
+legacy 8765 listener with a read-only `lsof` table and sends that listener zero
+network requests. It exercises both installed entrypoints, the exact 24-tool
+surface, normal stop/restart, duplicate rejection, child crash/recovery, and
+the wrapper-SIGKILL case where the surviving server must retain the authority
+lock. Any failed run stops every process it spawned and then removes only a
+listener on the explicitly selected isolated port. The
+`--allow-missing-legacy-listener` option is for an offline test machine, not a
+cutover receipt.
+
+This producer does not install its own environment and does not claim that a
+dependency closure is hash-locked. Therefore adding it alone does not change
+either `http-cli-transport-entrypoints` or
+`service-lifecycle-supervision` to implemented; the canonical manifest remains
+NO-GO until the relevant reviewed evidence handler and all named prerequisites
+exist.
+
 This checked-in snapshot deliberately returns `no_go`: reservation safety is
 implemented but still lacks final-candidate raw evidence, the other six narrow
 pre-cutover tasks remain `not_implemented`, and current decision approvals are

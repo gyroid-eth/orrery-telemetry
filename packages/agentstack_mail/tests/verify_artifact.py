@@ -1026,6 +1026,7 @@ REQUIRED_RUNTIME_MODULES = {
     "consumer_inventory.py",
     "contract.py",
     "db.py",
+    "evidence.py",
     "guard.py",
     "llm.py",
     "migration.py",
@@ -1071,6 +1072,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_migration.py",
     "/tests/test_consumer.py",
+    "/tests/test_cutover_evidence.py",
     "/tests/test_service.py",
     "/tests/test_upstream_parity_d2.py",
     "/tests/verify_installed_contract.py",
@@ -1106,6 +1108,10 @@ CONSOLE_ENTRY_POINTS = {
     "agentstack-mail-consumer-inventory": (
         "agentstack-mail-consumer-inventory = agentstack_mail.consumer_inventory:main",
         'agentstack-mail-consumer-inventory = "agentstack_mail.consumer_inventory:main"',
+    ),
+    "agentstack-mail-evidence": (
+        "agentstack-mail-evidence = agentstack_mail.evidence:main",
+        'agentstack-mail-evidence = "agentstack_mail.evidence:main"',
     ),
 }
 
