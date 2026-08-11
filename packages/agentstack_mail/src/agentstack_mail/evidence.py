@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import base64
 import configparser
 import csv
 import hashlib
@@ -20,6 +21,7 @@ import importlib.metadata
 import io
 import json
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -48,6 +50,7 @@ LIFECYCLE_RECEIPT_NAME: Final[str] = "service-lifecycle-v1.json"
 LAUNCHD_RECEIPT_NAME: Final[str] = "service-launchd-lifecycle-v1.json"
 RUNTIME_SCHEMA_VERSION: Final[int] = 1
 LEGACY_PORT: Final[int] = 8765
+LEGACY_LAUNCHD_LABEL: Final[str] = "com.operator.mcp-agent-mail"
 PACKAGE_EVIDENCE_PATH: Final[str] = (
     "packages/agentstack_mail/src/agentstack_mail/evidence.py"
 )
@@ -455,6 +458,79 @@ def _launchd_job_runtime(
     }
 
 
+def _launchd_definition_snapshot(
+    label: str,
+    *,
+    runner: Any | None = None,
+    allow_absent: bool = False,
+) -> dict[str, Any]:
+    """Capture the loaded definition needed to return to the legacy job."""
+
+    if label != LEGACY_LAUNCHD_LABEL:
+        raise EvidenceError("legacy launchd snapshot is restricted to the exact live label")
+    identity = f"gui/{os.getuid()}/{label}"
+    result = _launchctl(["print", identity], runner=runner)
+    if result.returncode == 113 and allow_absent:
+        return {"identity": identity, "label": label, "state": "absent"}
+    if result.returncode != 0:
+        raise EvidenceError(f"legacy launchd job is not loaded: {identity}")
+    path_value, program, arguments = service_runtime._parse_launchd_record(result.stdout)
+    if path_value is None or program is None or arguments is None:
+        raise EvidenceError("legacy launchd record is incomplete")
+    plist_path = _canonical_absolute(Path(path_value), label="legacy launchd plist")
+    if not plist_path.is_file() or plist_path.is_symlink():
+        raise EvidenceError("legacy launchd plist must be a regular file")
+    payload = plist_path.read_bytes()
+    try:
+        definition = plistlib.loads(payload)
+    except Exception as exc:
+        raise EvidenceError("legacy launchd plist is malformed") from exc
+    if (
+        not isinstance(definition, dict)
+        or definition.get("Label") != label
+        or definition.get("ProgramArguments") != arguments
+        or not arguments
+        or arguments[0] != program
+    ):
+        raise EvidenceError("loaded legacy job differs from its plist definition")
+    keep_alive = definition.get("KeepAlive", False)
+    if not isinstance(keep_alive, (bool, dict)):
+        raise EvidenceError("legacy launchd KeepAlive has an unexpected type")
+    allowed_keys = {
+        "EnvironmentVariables",
+        "KeepAlive",
+        "Label",
+        "ProcessType",
+        "ProgramArguments",
+        "RunAtLoad",
+        "StandardErrorPath",
+        "StandardOutPath",
+        "ThrottleInterval",
+        "WorkingDirectory",
+    }
+    if set(definition) - allowed_keys:
+        raise EvidenceError("legacy launchd plist contains unsupported keys")
+    environment = definition.get("EnvironmentVariables", {})
+    if not isinstance(environment, dict) or set(environment) - {"HOME", "PATH"}:
+        raise EvidenceError("legacy launchd plist contains unsealable environment keys")
+    return {
+        "identity": identity,
+        "label": label,
+        "state": "loaded",
+        "plist_path": str(plist_path),
+        "plist_sha256": _sha256_bytes(payload),
+        "program": program,
+        "program_arguments": arguments,
+        "keep_alive": keep_alive,
+        "run_at_load": definition.get("RunAtLoad", False),
+        "working_directory": definition.get("WorkingDirectory"),
+        "plist_bytes": len(payload),
+        "plist_bytes_base64": base64.b64encode(payload).decode("ascii"),
+        "raw_launchctl_output_retained": False,
+        "loaded_path_program_arguments_match_plist": True,
+    }
+
+
 def _process_record(process_id: int) -> dict[str, Any]:
     executable = shutil.which("ps") or "/bin/ps"
     result = subprocess.run(
@@ -475,6 +551,63 @@ def _process_record(process_id: int) -> dict[str, Any]:
     except ValueError as exc:
         raise EvidenceError(f"process {process_id} command is unparseable") from exc
     return {"pid": process_id, "ppid": int(parts[0]), "arguments": arguments}
+
+
+def _legacy_launchd_observation(*, require_loaded: bool) -> dict[str, Any]:
+    """Observe one internally consistent live or explicitly offline legacy state."""
+
+    definition = _launchd_definition_snapshot(
+        LEGACY_LAUNCHD_LABEL,
+        allow_absent=not require_loaded,
+    )
+    listener = _listener_fingerprint(LEGACY_PORT)
+    if not require_loaded:
+        if definition["state"] != "absent" or listener["listener_count"] != 0:
+            raise EvidenceError(
+                "offline legacy observation requires both job and listener absence"
+            )
+        return {
+            "definition": definition,
+            "listener": listener,
+            "runtime": None,
+            "cutover_eligible": False,
+            "network_requests_sent": 0,
+        }
+    if definition["state"] != "loaded" or listener["listener_count"] != 1:
+        raise EvidenceError(
+            "live legacy observation requires one loaded job and exactly one listener"
+        )
+    runtime = _launchd_job_runtime(LEGACY_LAUNCHD_LABEL)
+    stable_definition = {
+        "path": definition["plist_path"],
+        "program": definition["program"],
+        "arguments": definition["program_arguments"],
+    }
+    if runtime["definition_sha256"] != _sha256_bytes(
+        _canonical_json(stable_definition)
+    ):
+        raise EvidenceError("legacy launchd runtime changed during the observation")
+    listener_pids = _listener_process_ids(LEGACY_PORT)
+    if len(listener_pids) != 1:
+        raise EvidenceError("legacy endpoint must have exactly one listener PID")
+    wrapper = _process_record(int(runtime["wrapper_pid"]))
+    listener_process = _process_record(listener_pids[0])
+    if wrapper["pid"] != runtime["wrapper_pid"] or listener_process["ppid"] != wrapper["pid"]:
+        raise EvidenceError("legacy listener is not a child of the loaded legacy job")
+    return {
+        "definition": definition,
+        "listener": listener,
+        "runtime": {
+            "identity": runtime["identity"],
+            "definition_sha256": runtime["definition_sha256"],
+            "wrapper_pid": wrapper["pid"],
+            "listener_pid": listener_pids[0],
+            "listener_port": LEGACY_PORT,
+            "listener_is_wrapper_child": True,
+        },
+        "cutover_eligible": True,
+        "network_requests_sent": 0,
+    }
 
 
 def _owned_launchd_listener(
@@ -571,8 +704,11 @@ def _ensure_rehearsal_job_absent(
     *,
     expected_definition_sha256: str,
     runner: Any | None = None,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     label = service_runtime.rehearsal_launchd_label(label)
+    if timeout_seconds <= 0:
+        raise EvidenceError("launchd cleanup timeout must be positive")
     before = _launchd_job_fingerprint(label, runner=runner)
     bootout: dict[str, Any] | None = None
     if before["state"] == "loaded":
@@ -593,10 +729,48 @@ def _ensure_rehearsal_job_absent(
             raise EvidenceError(
                 f"rehearsal cleanup bootout failed: {result.stderr.strip()}"
             )
-    after = _launchd_job_fingerprint(label, runner=runner)
-    if after["state"] != "absent":
-        raise EvidenceError("rehearsal launchd identity remained loaded after cleanup")
-    return {"before": before, "bootout": bootout, "after": after}
+    wait_started = time.monotonic()
+    polls = 0
+    while True:
+        remaining = timeout_seconds - (time.monotonic() - wait_started)
+        if remaining <= 0:
+            raise EvidenceError(
+                "rehearsal launchd identity did not retire before cleanup deadline"
+            )
+
+        def bounded_runner(
+            arguments: list[str],
+            **kwargs: Any,
+        ) -> subprocess.CompletedProcess[str]:
+            kwargs["timeout"] = min(float(kwargs.get("timeout", remaining)), remaining)
+            if runner is None:
+                return subprocess.run(arguments, **kwargs)
+            return runner(arguments, **kwargs)
+
+        polls += 1
+        after = _launchd_job_fingerprint(label, runner=bounded_runner)
+        elapsed = time.monotonic() - wait_started
+        if elapsed > timeout_seconds:
+            raise EvidenceError(
+                "rehearsal launchd identity did not retire before cleanup deadline"
+            )
+        if after["state"] == "absent":
+            break
+        if after.get("definition_sha256") != expected_definition_sha256:
+            raise EvidenceError(
+                "rehearsal label changed ownership while waiting for bootout"
+            )
+        time.sleep(0.05)
+    return {
+        "before": before,
+        "bootout": bootout,
+        "after": after,
+        "retire_wait": {
+            "poll_count": polls,
+            "bounded_absent_ms": round(elapsed * 1000, 3),
+            "deadline_seconds": timeout_seconds,
+        },
+    }
 
 
 def _candidate_rehearsal_label(label: str, candidate_commit: str) -> str:
@@ -621,6 +795,7 @@ def _foreground_receipt_identity(
     candidate_commit: str,
     expected_sha256: str,
     wheel_sha256: str,
+    require_legacy_listener: bool,
 ) -> dict[str, Any]:
     path = _canonical_absolute(path, label="foreground lifecycle receipt")
     if not path.is_file() or path.is_symlink():
@@ -660,6 +835,7 @@ def _foreground_receipt_identity(
         or wheel.get("console_scripts_candidate_bound") is not True
         or value.get("maximum_observed_ready_services") != 1
         or not isinstance(legacy, dict)
+        or legacy.get("required") is not require_legacy_listener
         or legacy.get("network_requests_sent") != 0
         or legacy.get("before") != legacy.get("after")
     ):
@@ -1862,6 +2038,7 @@ def _run_launchd_rehearsal(
         candidate_commit=candidate_commit,
         expected_sha256=foreground_receipt_sha256,
         wheel_sha256=str(installed_wheel["sha256"]),
+        require_legacy_listener=require_legacy_listener,
     )
 
     started_at = datetime.now(UTC).isoformat()
@@ -1898,9 +2075,11 @@ def _run_launchd_rehearsal(
     _write_env(env_file, state_root, port, mode="passthrough")
     url = f"http://127.0.0.1:{port}/mcp"
 
-    legacy_before = _listener_fingerprint(LEGACY_PORT)
-    if require_legacy_listener and legacy_before["listener_count"] < 1:
-        raise EvidenceError("legacy listener was required but not observed")
+    legacy_observation_before = _legacy_launchd_observation(
+        require_loaded=require_legacy_listener,
+    )
+    legacy_before = legacy_observation_before["listener"]
+    legacy_launchd_before = legacy_observation_before["definition"]
     production_before = _launchd_job_fingerprint(service_runtime.LAUNCHD_LABEL)
     disabled_before = _disabled_override_snapshot(label)
     rehearsal_before = _launchd_job_fingerprint(label)
@@ -1971,6 +2150,7 @@ def _run_launchd_rehearsal(
         launchd_cleanup = _ensure_rehearsal_job_absent(
             label,
             expected_definition_sha256=expected_definition_sha256,
+            timeout_seconds=timeout_seconds,
         )
         endpoint = _wait_closed(port, timeout_seconds=timeout_seconds)
         remaining_pids = _listener_process_ids(port)
@@ -1997,11 +2177,19 @@ def _run_launchd_rehearsal(
     disabled_after = _disabled_override_snapshot(label)
     _require_disabled_override_after(disabled_after)
     production_after = _launchd_job_fingerprint(service_runtime.LAUNCHD_LABEL)
-    legacy_after = _listener_fingerprint(LEGACY_PORT)
+    legacy_observation_after = _legacy_launchd_observation(
+        require_loaded=require_legacy_listener,
+    )
+    legacy_launchd_after = legacy_observation_after["definition"]
+    legacy_after = legacy_observation_after["listener"]
     if production_after != production_before:
         raise EvidenceError("production launchd label changed during rehearsal")
     if legacy_after != legacy_before:
         raise EvidenceError("legacy listener identity changed during launchd rehearsal")
+    if legacy_launchd_after != legacy_launchd_before:
+        raise EvidenceError("live legacy launchd definition changed during rehearsal")
+    if legacy_observation_after != legacy_observation_before:
+        raise EvidenceError("legacy launchd topology changed during rehearsal")
     if _launchd_job_fingerprint(label)["state"] != "absent":
         raise EvidenceError("rehearsal label was not absent at terminal publication")
     runtime_logs = _launchd_runtime_logs(state_root)
@@ -2040,6 +2228,16 @@ def _run_launchd_rehearsal(
             "after": production_after,
             "unchanged": True,
         },
+        "legacy_launchd_label": {
+            "before": legacy_launchd_before,
+            "after": legacy_launchd_after,
+            "unchanged": True,
+        },
+        "legacy_runtime_topology": {
+            "before": legacy_observation_before["runtime"],
+            "after": legacy_observation_after["runtime"],
+            "unchanged": True,
+        },
         "legacy_listener": {
             "required": require_legacy_listener,
             "before": legacy_before,
@@ -2047,6 +2245,7 @@ def _run_launchd_rehearsal(
             "network_requests_sent": 0,
             "unchanged": True,
         },
+        "cutover_eligible": require_legacy_listener,
         "sqlite_after_cleanup": sqlite,
         "runtime_logs_after_cleanup": runtime_logs,
         "foreground_comparison": {
@@ -2105,6 +2304,68 @@ def run_launchd_rehearsal(
     )
 
 
+def write_legacy_launchd_snapshot(
+    *,
+    output_path: Path,
+    wheel: Path,
+    candidate_repository: Path,
+    candidate_commit: str,
+) -> dict[str, Any]:
+    """Seal the read-only definition and process topology of the live legacy job."""
+
+    output_path = _canonical_absolute(output_path, label="legacy snapshot output")
+    if output_path.exists() or output_path.is_symlink():
+        raise EvidenceError(f"legacy snapshot output must be absent: {output_path}")
+    if not output_path.parent.is_dir() or output_path.parent.is_symlink():
+        raise EvidenceError("legacy snapshot output parent must be a real directory")
+    wheel = _canonical_absolute(wheel, label="wheel")
+    candidate_repository = _canonical_absolute(
+        candidate_repository,
+        label="candidate repository",
+    )
+    candidate = _candidate_identity(candidate_repository, candidate_commit)
+    installed_wheel = _verify_running_from_wheel(
+        wheel,
+        candidate_repository=candidate_repository,
+        candidate_commit=candidate_commit,
+    )
+    observation = _legacy_launchd_observation(require_loaded=True)
+    definition = observation["definition"]
+    runtime = observation["runtime"]
+    if not isinstance(runtime, dict):  # pragma: no cover - live helper invariant
+        raise EvidenceError("legacy launchd runtime observation is missing")
+    new_candidate_label = _launchd_job_fingerprint(service_runtime.LAUNCHD_LABEL)
+    if new_candidate_label["state"] != "absent":
+        raise EvidenceError("new candidate launchd label must be absent during capture")
+    receipt = {
+        "schema_version": RUNTIME_SCHEMA_VERSION,
+        "kind": "legacy-launchd-definition",
+        "captured_at": datetime.now(UTC).isoformat(),
+        "producer_sha256": _sha256_file(Path(__file__)),
+        "candidate_commit": candidate_commit,
+        "candidate_checkout": candidate,
+        "wheel": installed_wheel,
+        "cutover_eligible": True,
+        "definition": definition,
+        "runtime": {
+            "identity": runtime["identity"],
+            "definition_sha256": runtime["definition_sha256"],
+            "wrapper_pid": runtime["wrapper_pid"],
+            "listener_pid": runtime["listener_pid"],
+            "listener_port": LEGACY_PORT,
+            "listener_is_wrapper_child": True,
+            "network_requests_sent": observation["network_requests_sent"],
+        },
+        "new_candidate_label": new_candidate_label,
+    }
+    _write_terminal(output_path, receipt)
+    return {
+        "status": "completed",
+        "receipt": str(output_path),
+        "receipt_sha256": _sha256_file(output_path),
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentstack-mail-evidence")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2127,6 +2388,11 @@ def _parser() -> argparse.ArgumentParser:
     launchd.add_argument("--port", type=int, required=True)
     launchd.add_argument("--timeout-seconds", type=float, default=30.0)
     launchd.add_argument("--allow-missing-legacy-listener", action="store_true")
+    legacy = subparsers.add_parser("legacy-launchd-snapshot")
+    legacy.add_argument("--output", required=True)
+    legacy.add_argument("--wheel", required=True)
+    legacy.add_argument("--candidate-repo", required=True)
+    legacy.add_argument("--candidate-commit", required=True)
     return parser
 
 
@@ -2155,6 +2421,13 @@ def main(argv: Sequence[str] | None = None) -> None:
                 port=args.port,
                 timeout_seconds=args.timeout_seconds,
                 require_legacy_listener=not args.allow_missing_legacy_listener,
+            )
+        elif args.command == "legacy-launchd-snapshot":
+            result = write_legacy_launchd_snapshot(
+                output_path=Path(args.output),
+                wheel=Path(args.wheel),
+                candidate_repository=Path(args.candidate_repo),
+                candidate_commit=args.candidate_commit,
             )
         else:  # pragma: no cover - argparse owns it
             raise EvidenceError(f"unsupported evidence command: {args.command}")

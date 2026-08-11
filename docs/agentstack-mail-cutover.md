@@ -42,7 +42,7 @@ maintainer は **2026-08-11**、foregroundではlaunchdが送る停止signal、K
 - launchdへの読み取り専用操作は許可する。`print`、`print-disabled`、`list`等を含むが、receiptへ保存するのは試験専用exact labelに関係する値だけとする。
 - 許可された状態変更は、そのexact labelへの `bootstrap` / `enable` / `kickstart` / `bootout` の4操作だけである。これ以外の状態変更が必要になった場合は実行前にProOpusへ確認する。
 - `enable` は最初の3操作の列挙後に追加された。実際の `agentstack-mail-service start` が `bootstrap → enable → kickstart` を呼ぶためであり、rehearsalだけ省略すると本番と異なるcontroller経路を試すことになる。
-- 稼働中のdashboard・agent-mail job、production label `org.agentstack.mail`、legacy service、MCP設定・data、port 8765は対象外であり、起動・停止・変更しない。production labelと8765が不変であることを確認するread-only観測だけを例外とし、8765はnetwork requestを送らず `lsof` listener fingerprintだけをbefore/afterで比較する。
+- 稼働中のdashboardとlegacy agent-mail job `com.operator.mcp-agent-mail`、新candidateのproduction label `org.agentstack.mail`、MCP設定・data、port 8765は対象外であり、起動・停止・変更しない。両labelと8765が不変であることを確認するread-only観測だけを例外とし、8765はnetwork requestを送らず `lsof` listener fingerprintだけをbefore/afterで比較する。
 - plist、ownership、env、state root、DB、archive、signals、log、wheel、venv、receiptは0700の隔離temp配下に置き、隔離portを使う。
 - 実行前にlabelの明示引数化、production既定値の維持、ownership/CLI label不一致のfail-closed、fake launchctl検証を完了する。`launchctl print gui/$UID/<rehearsal_label>` が113以外、production labelと一致、予約prefix外、またはlabelが既存なら、process起動前に中止する。
 - `finally` は試験専用exact labelだけをbootoutする。最後に同labelがprint=113、隔離portのlistenerが0、production labelと8765のfingerprintがbefore/after一致であることを確認する。
@@ -51,7 +51,11 @@ maintainer は **2026-08-11**、foregroundではlaunchdが送る停止signal、K
 
 試験receiptには、foreground receiptとの差の有無に加え、`enable` が隔離temp外に作るlabel単位の永続overrideをbefore/afterで実測し、残ったものとcleanupしなかった理由を記録する。exact nonce labelのoverrideは永続残留として受け入れ、許可外の`disable`やdomain全体へ作用する`reset-disabled`では消さない。推測で「何も残らない」とは扱わない。
 
-現在の状態: **許可とlabel可変化/fake launchctl検証は完了、実launchd rehearsalとそのterminal receiptは未実行**。
+現在の状態: **許可とlabel可変化/fake launchctl検証、exact candidate `fdb9839` のforeground rehearsalは完了したが、実launchd rehearsalのterminal receiptは未生成**である。`org.agentstack.mail.rehearsal.fdb98391.once-204052` は直前のcontroller `status`が`stopped`（内部的にexact `print` rc 113）だった後、最初の`bootstrap`がrc 5/EIOを返した。EIO直後のjob stateは未記録なので、load成功/失敗を推測しない。`finally`後はexact labelがrc 113、隔離port 28765がlistener 0、runtime logなし、8765のPID/fingerprint不変、terminal receiptなし、in-progress marker残留である。
+
+別途ProOpusが許可した`/bin/sleep 30`だけの最小diagnostic plistは、同一内容・新規label・事前print rc 113を揃えた比較で **Codex sandbox内からはEIO、sandbox外のProOpus shellからはrc 0**となった。temp配置、0700 parent、plist payloadではなく、sandbox内からのstate-changing launchctl呼出しが原因である。次回はPluckyEinsteinがexact candidateのplist、whole CLI command、受け入れ条件を作り、ProOpusがsandbox外で **`agentstack-mail-evidence launchd-rehearsal` 全体**を実行する。CLI自身がcontroller実行とwrite-once receipt生成を一体で行い、ProOpusは生のrc/stdout/stderr/timeとartifact pathを返す。PluckyEinsteinはreceiptを別のread-only検算で判定する。状態変更部分だけを切り出したり、結果からreceiptを手書きしない。
+
+controller側でもEIOを「未load」とみなさず、bootstrap前のrc 113とEIO直後のexact loaded/absent再照合を別fieldでreceiptへ残す。`bootout`は非同期なので、cleanupはexact ownershipを毎回再確認しながらrc 113までbounded pollする。foreign化は即failとする。両試験labelはbootout済み、disabled override残留0、標準`~/Library/LaunchAgents` probeは不要である。
 
 ## 今回運ぶもの、運ばないもの
 
@@ -250,6 +254,7 @@ CUTOVER_MANIFEST="$REPO/packages/agentstack_mail/fixtures/differential-expected-
 EVIDENCE_INDEX="$MAINT/evidence-index.json"
 EVIDENCE_ROOT="$MAINT/evidence"
 LEGACY_PLIST='/Users/operator/Library/LaunchAgents/com.operator.mcp-agent-mail.plist'
+LEGACY_LAUNCHD_RECEIPT="$MAINT/legacy-launchd-definition-v1.json"
 NEW_OWNERSHIP="$MAINT/render/org.agentstack.mail.ownership.json"
 NEW_ENV="$MAINT/render/agentstack-mail.env"
 NEW_STATE_ROOT='/Users/operator/.agentstack/mail'
@@ -258,6 +263,7 @@ MIGRATE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-migrate"
 SERVICE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-service"
 CONSUMERS_BIN="$CANDIDATE_VENV/bin/agentstack-mail-consumers"
 SERVER_BIN="$CANDIDATE_VENV/bin/agentstack-mail"
+EVIDENCE_BIN="$CANDIDATE_VENV/bin/agentstack-mail-evidence"
 MIGRATION_MANIFEST='/Users/operator/.agentstack/mail/migration-manifest.json'
 COLD_BACKUP_DIR="$MAINT/cold-backup"
 CONSUMER_BUNDLE="$MAINT/consumer-bundle"
@@ -337,6 +343,166 @@ raise SystemExit(f"bounded MCP read probe failed: {last}")
 PY
 }
 
+assert_legacy_writer_absent() {
+  phase="$1"
+  : > "$MAINT/${phase}-legacy-retire-poll.tsv"
+  legacy_retire_deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    set +e
+    launchctl print "gui/$(id -u)/com.operator.mcp-agent-mail" \
+      > "$MAINT/${phase}-legacy-launchctl-print.txt" 2>&1
+    legacy_print_rc=$?
+    set -e
+    printf '%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$legacy_print_rc" \
+      >> "$MAINT/${phase}-legacy-retire-poll.tsv"
+    if [ "$legacy_print_rc" -eq 113 ]; then
+      break
+    fi
+    if [ "$legacy_print_rc" -ne 0 ]; then
+      echo "legacy launchd state is unknown: rc=$legacy_print_rc" >&2
+      return 1
+    fi
+    "$CANDIDATE_VENV/bin/python" - \
+      "$MAINT/${phase}-legacy-launchctl-print.txt" \
+      "$LEGACY_LAUNCHD_RECEIPT" <<'PY' || return 1
+import json, pathlib, sys
+from agentstack_mail.service import _parse_launchd_record
+record = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+receipt = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+path, program, arguments = _parse_launchd_record(record)
+definition = receipt["definition"]
+assert path == definition["plist_path"]
+assert program == definition["program"]
+assert arguments == definition["program_arguments"]
+PY
+    if [ "$(date +%s)" -ge "$legacy_retire_deadline" ]; then
+      echo "legacy job did not retire within 60 seconds" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  set +e
+  lsof -nP -iTCP:8765 -sTCP:LISTEN \
+    > "$MAINT/${phase}-listener-lsof.txt" \
+    2> "$MAINT/${phase}-listener-lsof.err"
+  listener_lsof_rc=$?
+  set -e
+  if [ "$listener_lsof_rc" -eq 0 ]; then
+    echo "legacy listener is still present" >&2
+    return 1
+  fi
+  if [ "$listener_lsof_rc" -ne 1 ] || \
+     [ -s "$MAINT/${phase}-listener-lsof.err" ]; then
+    echo "cannot prove legacy listener absence" >&2
+    return 1
+  fi
+
+  : > "$MAINT/${phase}-db-lsof.txt"
+  : > "$MAINT/${phase}-db-lsof.err"
+  for path in \
+    /Users/operator/mcp_agent_mail/storage.sqlite3 \
+    /Users/operator/mcp_agent_mail/storage.sqlite3-wal \
+    /Users/operator/mcp_agent_mail/storage.sqlite3-shm; do
+    if [ -e "$path" ]; then
+      set +e
+      lsof -- "$path" \
+        >> "$MAINT/${phase}-db-lsof.txt" \
+        2>> "$MAINT/${phase}-db-lsof.err"
+      db_lsof_rc=$?
+      set -e
+      if [ "$db_lsof_rc" -eq 0 ]; then
+        echo "legacy database still has an open holder: $path" >&2
+        return 1
+      fi
+      if [ "$db_lsof_rc" -ne 1 ]; then
+        echo "cannot prove holder absence for: $path" >&2
+        return 1
+      fi
+    fi
+  done
+  if [ -s "$MAINT/${phase}-db-lsof.err" ]; then
+    echo "legacy database holder probe wrote stderr" >&2
+    return 1
+  fi
+}
+
+assert_new_writer_absent() {
+  phase="$1"
+  set +e
+  launchctl print "gui/$(id -u)/org.agentstack.mail" \
+    > "$MAINT/${phase}-new-launchctl-print.txt" 2>&1
+  new_print_rc=$?
+  set -e
+  test "$new_print_rc" -eq 113 || return 1
+  set +e
+  lsof -nP -iTCP:18765 -sTCP:LISTEN \
+    > "$MAINT/${phase}-new-listener-lsof.txt" \
+    2> "$MAINT/${phase}-new-listener-lsof.err"
+  new_listener_rc=$?
+  set -e
+  test "$new_listener_rc" -eq 1 || return 1
+  test ! -s "$MAINT/${phase}-new-listener-lsof.err" || return 1
+  : > "$MAINT/${phase}-new-db-lsof.txt"
+  : > "$MAINT/${phase}-new-db-lsof.err"
+  for path in \
+    /Users/operator/.agentstack/mail/storage.sqlite3 \
+    /Users/operator/.agentstack/mail/storage.sqlite3-wal \
+    /Users/operator/.agentstack/mail/storage.sqlite3-shm; do
+    if [ -e "$path" ]; then
+      set +e
+      lsof -- "$path" \
+        >> "$MAINT/${phase}-new-db-lsof.txt" \
+        2>> "$MAINT/${phase}-new-db-lsof.err"
+      new_db_lsof_rc=$?
+      set -e
+      test "$new_db_lsof_rc" -eq 1 || return 1
+    fi
+  done
+  test ! -s "$MAINT/${phase}-new-db-lsof.err" || return 1
+}
+
+capture_legacy_state_snapshot() {
+  output="$1"
+  test ! -e "$output" || return 1
+  "$CANDIDATE_VENV/bin/python" - "$output" <<'PY'
+import os, pathlib, sys
+from agentstack_mail.migration import (
+    ARCHIVE_EXCLUDED_ROOT_NAMES,
+    _canonical_json,
+    snapshot_database,
+    snapshot_tree,
+)
+output = pathlib.Path(os.path.abspath(os.path.expanduser(sys.argv[1])))
+state = {
+    "kind": "legacy-authority-state",
+    "database": snapshot_database(
+        pathlib.Path("/Users/operator/mcp_agent_mail/storage.sqlite3")
+    ),
+    "archive": snapshot_tree(
+        pathlib.Path("/Users/operator/.mcp_agent_mail_git_mailbox_repo"),
+        required=True,
+        excluded_root_names=ARCHIVE_EXCLUDED_ROOT_NAMES,
+    ),
+    "signals": snapshot_tree(
+        pathlib.Path("/Users/operator/.mcp_agent_mail/signals"),
+        required=False,
+    ),
+}
+payload = _canonical_json(state)
+descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(descriptor, "wb") as stream:
+    stream.write(payload)
+    stream.flush()
+    os.fsync(stream.fileno())
+directory = os.open(output.parent, os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+}
+
 assert_service_state() {
   python3 - "$1" "$2" "$3" <<'PY'
 import json, pathlib, sys
@@ -348,6 +514,27 @@ if "environment_drift" in p:
     assert p["environment_drift"] is False
 if sys.argv[3] != "-":
     assert p["action"] == sys.argv[3]
+if sys.argv[3] == "started":
+    preflight = p["bootstrap_preflight"]
+    assert preflight["status"] == "stopped"
+    assert preflight["owned"] is True
+    assert preflight["launchctl_print_returncode"] == 113
+    assert preflight["launchctl_print_state"] == "absent"
+    if p["bootstrap_outcome"] == "loaded":
+        assert p["bootstrap_eio_recheck"] is None
+    elif p["bootstrap_outcome"] == "exact_job_already_loaded_after_eio":
+        recheck = p["bootstrap_eio_recheck"]
+        assert recheck["status"] == "job_loaded"
+        assert recheck["owned"] is True
+        assert recheck["launchctl_print_returncode"] == 0
+        assert recheck["launchctl_print_state"] == "loaded"
+    else:
+        raise AssertionError("unsupported bootstrap outcome")
+elif sys.argv[3] == "stopped":
+    wait = p["stop_wait"]
+    assert wait["poll_count"] >= 1
+    assert wait["bounded_stopped_ms"] >= 0
+    assert wait["deadline_seconds"] == 30.0
 PY
 }
 
@@ -801,7 +988,8 @@ python3 -m venv "$CANDIDATE_VENV"
   -r "$SEALED_LOCK" > "$MAINT/c1-pip-install.txt" || exit 1
 "$CANDIDATE_VENV/bin/python" -m pip check \
   > "$MAINT/c1-pip-check.txt" || exit 1
-for executable in "$MIGRATE_BIN" "$SERVICE_BIN" "$CONSUMERS_BIN" "$SERVER_BIN"; do
+for executable in \
+  "$MIGRATE_BIN" "$SERVICE_BIN" "$CONSUMERS_BIN" "$SERVER_BIN" "$EVIDENCE_BIN"; do
   test -x "$executable"
 done
 install -d -m 700 "$MAINT/render"
@@ -830,7 +1018,41 @@ assert result["ownership_manifest"] == sys.argv[2]
 assert pathlib.Path(sys.argv[2]).is_file()
 PY
 ```
-5. 旧 DB/archive/signals の read-only fingerprintと旧 launchd plistを保存する。全consumerをtyped inventoryとして列挙する。**file採取は`agentstack-mail-consumer-inventory`の一つのbounded runで一度だけ行い、開始/終了時刻、path、count、digestを同じsealへ入れる。CLIのliteral `--hidden --no-ignore` を両方必須とし、(a)既知のselectorがhitする検索liveness対照と、(b)既定でignoreされる既知pathが列挙されるcompleteness対照を別々に通す。** collectorはGit ignoreを参照せず、片方のflag/control欠落、曖昧rule、途中変化、上限超過ではbundleを公開しない。ただし現行v1が封じるのはfile consumerだけで、同じ瞬間のtmux session・稼働/停止child・reservation状態を一つの正本へ結合するorchestrationと、rule集合のoperator承認は未実装である。したがって手書き一覧やfile seal単独で代用せず、overall gateはNO-GOのままにする。実装済みfile collectorのexact commandは次であり、0600/0400のbefore/after bundleにはその出力inventoryだけを渡す。
+
+旧jobがまだliveで、新candidate labelが未loadのこの時点に、戻し先のloaded定義とplist bytesをexact candidateへ束縛して1回だけsealする。producerは`com.operator.mcp-agent-mail`のloaded path/ProgramArgumentsをplistとread-onlyで照合し、plistの完全bytes、KeepAlive、RunAtLoad、WorkingDirectoryを保存し、wrapper PIDと8765 listener PIDの親子関係を証明する。8765へnetwork requestは送らない。出力はwrite-once 0400で、旧job不在、listenerがexact 1でない、plist/loaded record不一致、新labelが既にload、candidate/wheel不一致なら公開しない。
+
+```sh
+test ! -e "$LEGACY_LAUNCHD_RECEIPT"
+"$EVIDENCE_BIN" legacy-launchd-snapshot \
+  --output "$LEGACY_LAUNCHD_RECEIPT" \
+  --wheel "$CANDIDATE_WHEEL" \
+  --candidate-repo "$REPO" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  > "$MAINT/c1-legacy-launchd-snapshot.json" || exit 1
+test "$(stat -f '%Lp' "$LEGACY_LAUNCHD_RECEIPT")" = 400
+shasum -a 256 "$LEGACY_LAUNCHD_RECEIPT" \
+  > "$MAINT/legacy-launchd-definition-v1.sha256"
+python3 - "$LEGACY_LAUNCHD_RECEIPT" "$CANDIDATE_COMMIT" "$LEGACY_PLIST" <<'PY'
+import base64, json, pathlib, sys
+receipt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert receipt["kind"] == "legacy-launchd-definition"
+assert receipt["cutover_eligible"] is True
+assert receipt["candidate_commit"] == sys.argv[2]
+assert receipt["definition"]["label"] == "com.operator.mcp-agent-mail"
+assert receipt["definition"]["state"] == "loaded"
+assert receipt["definition"]["plist_path"] == sys.argv[3]
+assert receipt["definition"]["loaded_path_program_arguments_match_plist"] is True
+assert base64.b64decode(receipt["definition"]["plist_bytes_base64"]) == pathlib.Path(
+    sys.argv[3]
+).read_bytes()
+assert receipt["runtime"]["listener_port"] == 8765
+assert receipt["runtime"]["listener_is_wrapper_child"] is True
+assert receipt["runtime"]["network_requests_sent"] == 0
+assert receipt["new_candidate_label"]["state"] == "absent"
+PY
+```
+
+5. 旧 launchd plistとrollback定義は上で保存済みである。旧 DB/archive/signals のauthoritative fingerprintはactive writer下のC0値を基準にせず、**C2で旧job、8765、DB holderを止めた後に一度だけseal**する。C5とR1はそのquiesced bytesを再生成してexact比較する。ここでは全consumerをtyped inventoryとして列挙する。**file採取は`agentstack-mail-consumer-inventory`の一つのbounded runで一度だけ行い、開始/終了時刻、path、count、digestを同じsealへ入れる。CLIのliteral `--hidden --no-ignore` を両方必須とし、(a)既知のselectorがhitする検索liveness対照と、(b)既定でignoreされる既知pathが列挙されるcompleteness対照を別々に通す。** collectorはGit ignoreを参照せず、片方のflag/control欠落、曖昧rule、途中変化、上限超過ではbundleを公開しない。ただし現行v1が封じるのはfile consumerだけで、同じ瞬間のtmux session・稼働/停止child・reservation状態を一つの正本へ結合するorchestrationと、rule集合のoperator承認は未実装である。したがって手書き一覧やfile seal単独で代用せず、overall gateはNO-GOのままにする。実装済みfile collectorのexact commandは次であり、0600/0400のbefore/after bundleにはその出力inventoryだけを渡す。
 
 ```sh
 INVENTORY_BIN="$CANDIDATE_VENV/bin/agentstack-mail-consumer-inventory"
@@ -904,58 +1126,38 @@ touch "$MAINT/display-patches.applied"
 
 tmux server 全体を kill しない。Claude/Codex parent・childは agent-mail call を止めて idle、`BiomatterBot`、`SeminarBot`、watcher/hook は停止または送信不能状態にする。全員の停止確認を agent-mail 停止前に済ませる。
 
-最後の agent-mail 通知を送った後、operator は通常 shell へ移り、旧 job を止める。
+最後の agent-mail 通知を送った後、operator は通常 shell へ移る。**旧labelをbootoutする前に**、新writerが不在であることと、旧loaded definition/runtime topologyがC1でsealしたreceiptから変わっていないことをread-onlyで再確認する。同名foreign jobや再起動でPID/definitionが変わっていれば停止しない。
 
 ```sh
+assert_new_writer_absent c2-pre || exit 1
+shasum -a 256 -c "$MAINT/legacy-launchd-definition-v1.sha256" || exit 1
+C2_LEGACY_LAUNCHD_RECEIPT="$MAINT/c2-legacy-prebootout.json"
+test ! -e "$C2_LEGACY_LAUNCHD_RECEIPT"
+"$EVIDENCE_BIN" legacy-launchd-snapshot \
+  --output "$C2_LEGACY_LAUNCHD_RECEIPT" \
+  --wheel "$CANDIDATE_WHEEL" \
+  --candidate-repo "$REPO" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  > "$MAINT/c2-legacy-prebootout-command.json" || exit 1
+python3 - "$LEGACY_LAUNCHD_RECEIPT" "$C2_LEGACY_LAUNCHD_RECEIPT" <<'PY'
+import json, pathlib, sys
+before, current = (
+    json.loads(pathlib.Path(path).read_text(encoding="utf-8")) for path in sys.argv[1:]
+)
+assert current["candidate_commit"] == before["candidate_commit"]
+assert current["wheel"] == before["wheel"]
+assert current["definition"] == before["definition"]
+assert current["runtime"] == before["runtime"]
+assert current["new_candidate_label"]["state"] == "absent"
+PY
 launchctl bootout "gui/$(id -u)/com.operator.mcp-agent-mail"
 ```
 
-次を全て確認する。一つでも hit したら copy せず、writer を特定する。
+直後に共通assertionを1回呼ぶ。一つでも失敗したらcopyせず、writerを特定する。同じassertionをC4の新job bootstrap直前にも再実行し、旧job停止から新job開始までを一つのwriter handoffとして閉じる。
 
 ```sh
-set +e
-launchctl print "gui/$(id -u)/com.operator.mcp-agent-mail" \
-  > "$MAINT/c2-legacy-launchctl-print.txt" 2>&1
-LEGACY_PRINT_RC=$?
-set -e
-if [ "$LEGACY_PRINT_RC" -ne 113 ]; then
-  echo "legacy job is loaded or launchd status is unknown: rc=$LEGACY_PRINT_RC" >&2
-  exit 1
-fi
-
-set +e
-lsof -nP -iTCP:8765 -sTCP:LISTEN \
-  > "$MAINT/c2-listener-lsof.txt" 2> "$MAINT/c2-listener-lsof.err"
-LISTENER_LSOF_RC=$?
-set -e
-if [ "$LISTENER_LSOF_RC" -eq 0 ]; then
-  echo "legacy listener is still present" >&2
-  exit 1
-fi
-if [ "$LISTENER_LSOF_RC" -ne 1 ] || [ -s "$MAINT/c2-listener-lsof.err" ]; then
-  echo "cannot prove legacy listener absence" >&2
-  exit 1
-fi
-
-for path in \
-  /Users/operator/mcp_agent_mail/storage.sqlite3 \
-  /Users/operator/mcp_agent_mail/storage.sqlite3-wal \
-  /Users/operator/mcp_agent_mail/storage.sqlite3-shm; do
-  if [ -e "$path" ]; then
-    set +e
-    lsof -- "$path" > "$MAINT/c2-db-lsof.txt" 2> "$MAINT/c2-db-lsof.err"
-    DB_LSOF_RC=$?
-    set -e
-    if [ "$DB_LSOF_RC" -eq 0 ]; then
-      echo "legacy database still has an open holder: $path" >&2
-      exit 1
-    fi
-    if [ "$DB_LSOF_RC" -ne 1 ] || [ -s "$MAINT/c2-db-lsof.err" ]; then
-      echo "cannot prove holder absence for: $path" >&2
-      exit 1
-    fi
-  fi
-done
+assert_legacy_writer_absent c2-post || exit 1
+assert_new_writer_absent c2-post || exit 1
 
 LOCK_HIT=$(find /Users/operator/.mcp_agent_mail_git_mailbox_repo \
   \( -name '*.lock' -o -name '*.lock.owner.json' \) -print -quit) || exit 1
@@ -968,6 +1170,9 @@ if [ -e /Users/operator/.mcp_agent_mail_git_mailbox_repo/.git/index.lock ] || \
   echo "legacy archive Git index is locked" >&2
   exit 1
 fi
+capture_legacy_state_snapshot "$MAINT/legacy-state-quiesced.json" || exit 1
+shasum -a 256 "$MAINT/legacy-state-quiesced.json" \
+  > "$MAINT/legacy-state-quiesced.sha256"
 ```
 
 `launchctl print`はexact rc 113だけをstoppedと扱い、権限・query failureなど別のnonzeroを成功に畳まない。これらは既知 writer の停止を示すが、unknown direct filesystem writer の不在を証明しない。そのため migration 自身の6回の source照合も維持する。
@@ -1039,7 +1244,12 @@ manifestは`archive_policy`でworking treeのみ・legacy `.git`/`server.pid`非
 
 ### C4: 新 service を起動し、read-only readiness を確認する
 
+新jobをbootstrapする**直前**に、旧labelがexact rc 113、8765 listener 0、旧DB family holder 0であることをC2と同じassertionで取り直す。C2時点の古い観測だけでは開始しない。
+
 ```sh
+assert_legacy_writer_absent c4 || exit 1
+assert_new_writer_absent c4 || exit 1
+
 "$SERVICE_BIN" start \
   --ownership-manifest "$NEW_OWNERSHIP" \
   > "$MAINT/c4-start.json" || exit 1
@@ -1055,6 +1265,8 @@ bounded_mail_probe \
 ```
 
 `status: job_loaded` は exact plist/program/arguments が loaded という意味だけで、MCP readiness ではない。bounded probe で新 port 18765 の `health_check`と、既存 identity の read-only `whois(include_recent_commits=false)`を確認する。この段階では `fetch_inbox`も呼ばない。notification有効時の`fetch_inbox`はsignal fileをclearし、migration baselineそのものを変え得るためである。`register_agent`、send、receipt変更、reservation変更も行わない。
+
+`start`結果の`bootstrap_preflight`は`launchctl_print_returncode=113`かつ`launchctl_print_state=absent`でなければならない。bootstrapがEIOを返した場合、controllerは直後にexact labelを再照合する。ownershipのpath/program/argumentsと一致したloaded jobだけを`bootstrap_outcome=exact_job_already_loaded_after_eio`として二重bootstrapせず`enable → kickstart`へ進め、`bootstrap_eio_recheck`を記録する。EIO後もabsent、foreign、またはstate unknownなら後続の状態変更を行わず中止する。EIOの原因名はreceiptから推測しない。
 
 新 root が migration baseline と同一で、旧 job/8765が停止、新 job/18765だけがreadyであることを確認する。readinessが期限内に通らなければC4 rollbackへ進む。
 
@@ -1118,7 +1330,7 @@ restart/rebindとidentity確認が全件終わった後にだけ、strict版`che
 - `send_message` が返したmessage IDをrecipientの `fetch_inbox` が返す。
 - sender、recipient、subject、本文が完全一致する。
 - DBのmessage/recipient edgeと新 working treeのcanonical message fileが一つ増える。
-- legacy DB/archive/signalsのfingerprintがC0から変わっていない。
+- legacy DB/archive/signalsのfingerprintがC2 quiesced sealから変わっていない。
 
 続けて、専用test agentとprotectedなthrowaway pathでreservation guardを実動確認する。
 
@@ -1128,6 +1340,14 @@ restart/rebindとidentity確認が全件終わった後にだけ、strict版`che
 - 隔離stubの初回connection refusalだけは既定どおりexit 0になる。definitive zero回答後のtransport failureはexit 2になる。
 
 単なる `isError: false` はoperational smoke成功にしない。全観測後に全 consumerを再開し、C6として新 authorityだけがwriterであることを再確認する。
+
+全consumerを再開する前に、旧authorityをread-onlyで再走査し、C2 quiesced sealとcanonical bytesが一致することを確認する。
+
+```sh
+shasum -a 256 -c "$MAINT/legacy-state-quiesced.sha256" || exit 1
+capture_legacy_state_snapshot "$MAINT/c5-legacy-state.json" || exit 1
+cmp -s "$MAINT/legacy-state-quiesced.json" "$MAINT/c5-legacy-state.json" || exit 1
+```
 
 ## 失敗時の戻し方
 
@@ -1148,21 +1368,35 @@ fi
 
 ### R1 — C2A、cold backup前
 
-全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。`shasum -a 256 -c "$MAINT/legacy-plist.sha256"`が成功した場合だけ旧jobを戻す。
+全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。これはC4の「旧exact absentを確認してから新をbootstrap」の対称操作であり、**新exact absentを確認してから旧をbootstrap**する。旧plistとC1でsealしたloaded定義receiptの外部pinが両方一致した場合だけ旧jobを戻す。
 
 ```sh
 if [ -e "$MAINT/display-patches.applied" ]; then
   rollback_display_patches || exit 1
   rm "$MAINT/display-patches.applied"
 fi
+assert_legacy_writer_absent r1 || exit 1
+assert_new_writer_absent r1 || exit 1
+shasum -a 256 -c "$MAINT/legacy-launchd-definition-v1.sha256" || exit 1
 shasum -a 256 -c "$MAINT/legacy-plist.sha256" || exit 1
+python3 - "$LEGACY_LAUNCHD_RECEIPT" "$LEGACY_PLIST" <<'PY'
+import base64, json, pathlib, sys
+receipt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert receipt["definition"]["plist_path"] == sys.argv[2]
+assert base64.b64decode(receipt["definition"]["plist_bytes_base64"]) == pathlib.Path(
+    sys.argv[2]
+).read_bytes()
+PY
+shasum -a 256 -c "$MAINT/legacy-state-quiesced.sha256" || exit 1
+capture_legacy_state_snapshot "$MAINT/r1-legacy-state.json" || exit 1
+cmp -s "$MAINT/legacy-state-quiesced.json" "$MAINT/r1-legacy-state.json" || exit 1
 launchctl bootstrap "gui/$(id -u)" "$LEGACY_PLIST" || exit 1
 bounded_mail_probe \
   'http://127.0.0.1:8765/mcp' 8765 \
   'sqlite+aiosqlite:////Users/operator/mcp_agent_mail/storage.sqlite3' || exit 1
 ```
 
-旧DB/archive/signalsがC0 fingerprintと一致してからsenderを再開する。
+旧DB/archive/signalsがC2 quiesced fingerprintと一致してからsenderを再開する。
 
 ### R2 — C2B、cold backup後
 

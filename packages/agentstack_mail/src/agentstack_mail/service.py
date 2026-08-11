@@ -8,6 +8,7 @@ later operator-approved cutover.
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import ipaddress
@@ -521,6 +522,8 @@ def service_status(
                 "owned": True,
                 "label": label,
                 "environment_drift": env_drift,
+                "launchctl_print_returncode": result.returncode,
+                "launchctl_print_state": "absent",
             }
         raise ServiceError(
             f"launchctl print failed; job state is unknown: {result.stderr.strip()}"
@@ -537,6 +540,8 @@ def service_status(
             "owned": False,
             "label": label,
             "environment_drift": env_drift,
+            "launchctl_print_returncode": result.returncode,
+            "launchctl_print_state": "loaded",
         }
     return {
         "status": "job_loaded",
@@ -544,6 +549,8 @@ def service_status(
         "label": label,
         "environment_drift": env_drift,
         "mcp_readiness": "unverified",
+        "launchctl_print_returncode": result.returncode,
+        "launchctl_print_state": "loaded",
     }
 
 
@@ -560,10 +567,58 @@ def _compensate_bootstrap(
     bootout = _launchctl(["bootout", identity], runner=runner)
     if bootout.returncode != 0:
         return f"owned compensation bootout failed: {bootout.stderr.strip()}"
-    stopped = service_status(ownership_path, label=label, runner=runner)
-    if stopped["status"] != "stopped":
-        return "owned compensation bootout did not reach stopped state"
+    try:
+        _wait_for_service_stopped(
+            ownership_path,
+            label=label,
+            runner=runner,
+        )
+    except ServiceError as exc:
+        return f"owned compensation bootout did not reach stopped state: {exc}"
     return "owned bootstrap was compensated and verified stopped"
+
+
+def _wait_for_service_stopped(
+    ownership_path: Path,
+    *,
+    label: str,
+    runner: Runner,
+    timeout_seconds: float = 30.0,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Wait for launchd's asynchronous bootout without accepting ownership drift."""
+
+    if timeout_seconds <= 0:
+        raise ServiceError("launchd stop timeout must be positive")
+    started = time.monotonic()
+    polls = 0
+    while True:
+        remaining = timeout_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ServiceError("launchd job did not retire before the stop deadline")
+
+        def bounded_runner(
+            arguments: Sequence[str],
+            **kwargs: Any,
+        ) -> subprocess.CompletedProcess[str]:
+            kwargs["timeout"] = min(float(kwargs.get("timeout", remaining)), remaining)
+            return runner(arguments, **kwargs)
+
+        polls += 1
+        current = service_status(ownership_path, label=label, runner=bounded_runner)
+        elapsed = time.monotonic() - started
+        if elapsed > timeout_seconds:
+            raise ServiceError("launchd job did not retire before the stop deadline")
+        if current["status"] == "stopped":
+            return current, {
+                "poll_count": polls,
+                "bounded_stopped_ms": round(elapsed * 1000, 3),
+                "deadline_seconds": timeout_seconds,
+            }
+        if current["status"] != "job_loaded" or not current["owned"]:
+            raise ServiceError("launchd label changed ownership while waiting for bootout")
+        if time.monotonic() - started >= timeout_seconds:
+            raise ServiceError("launchd job did not retire before the stop deadline")
+        time.sleep(0.05)
 
 
 def service_start(
@@ -597,9 +652,51 @@ def service_start(
         ["kickstart", f"{domain}/{label}"],
     )
     bootstrapped = False
+    bootstrap_outcome = "loaded"
+    bootstrap_eio_recheck: dict[str, Any] | None = None
     for arguments in commands:
         result = _launchctl(arguments, runner=runner)
         if result.returncode != 0:
+            if arguments[0] == "bootstrap" and result.returncode == errno.EIO:
+                try:
+                    after_eio = service_status(
+                        ownership_path,
+                        label=label,
+                        runner=runner,
+                    )
+                except ServiceError as exc:
+                    raise ServiceError(
+                        "launchctl bootstrap returned EIO; the exact label may already "
+                        "be loaded, but its state could not be proven; no further "
+                        "launchd mutation was attempted"
+                    ) from exc
+                if after_eio["status"] == "job_loaded" and after_eio["owned"]:
+                    if after_eio.get("environment_drift") is not False:
+                        compensation = _compensate_bootstrap(
+                            ownership_path,
+                            label=label,
+                            runner=runner,
+                        )
+                        raise ServiceError(
+                            "launchctl bootstrap returned EIO and the exact loaded job "
+                            f"has environment drift; {compensation}"
+                        )
+                    # EIO does not prove absence: an already-bootstrapped identity is
+                    # one known cause.  Only the exact loaded definition is safe to
+                    # continue without issuing bootstrap a second time.
+                    bootstrapped = True
+                    bootstrap_outcome = "exact_job_already_loaded_after_eio"
+                    bootstrap_eio_recheck = after_eio
+                    continue
+                if after_eio["status"] == "stopped":
+                    raise ServiceError(
+                        "launchctl bootstrap returned EIO and the exact label remains "
+                        "absent; bootstrap did not establish the owned job"
+                    )
+                raise ServiceError(
+                    "launchctl bootstrap returned EIO but the loaded label is foreign "
+                    "or unknown; no further launchd mutation was attempted"
+                )
             compensation = (
                 _compensate_bootstrap(ownership_path, label=label, runner=runner)
                 if bootstrapped
@@ -614,7 +711,23 @@ def service_start(
     started = service_status(ownership_path, label=label, runner=runner)
     if started["status"] != "job_loaded" or not started["owned"]:
         raise ServiceError("launchd job did not reach the exact owned job state")
-    return {**started, "action": "started"}
+    if started.get("environment_drift") is not False:
+        compensation = _compensate_bootstrap(
+            ownership_path,
+            label=label,
+            runner=runner,
+        )
+        raise ServiceError(
+            "launchd job reached the owned definition with environment drift; "
+            f"{compensation}"
+        )
+    return {
+        **started,
+        "action": "started",
+        "bootstrap_outcome": bootstrap_outcome,
+        "bootstrap_preflight": current,
+        "bootstrap_eio_recheck": bootstrap_eio_recheck,
+    }
 
 
 def service_stop(
@@ -636,14 +749,15 @@ def service_stop(
     result = _launchctl(["bootout", identity], runner=runner)
     if result.returncode != 0:
         raise ServiceError(f"launchctl bootout failed: {result.stderr.strip()}")
-    stopped = service_status(ownership_path, label=label, runner=runner)
-    if stopped["status"] != "stopped":
-        raise ServiceError("launchd job did not reach the stopped state")
+    stopped, stop_wait = _wait_for_service_stopped(
+        ownership_path,
+        label=label,
+        runner=runner,
+    )
     return {
-        "status": "stopped",
-        "owned": True,
-        "label": label,
+        **stopped,
         "action": "stopped",
+        "stop_wait": stop_wait,
     }
 
 

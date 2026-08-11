@@ -412,6 +412,29 @@ agentstack-mail-evidence launchd-rehearsal \
   --port 28765
 ```
 
+Before the legacy job is stopped, `legacy-launchd-snapshot` seals the exact
+rollback definition while sending the legacy endpoint zero network requests:
+
+```console
+agentstack-mail-evidence legacy-launchd-snapshot \
+  --output /absolute/absent/legacy-launchd-definition-v1.json \
+  --wheel /absolute/candidate/agentstack_mail-0.0.0-py3-none-any.whl \
+  --candidate-repo /absolute/clean/candidate-checkout \
+  --candidate-commit 0123456789abcdef0123456789abcdef01234567
+```
+
+The producer is restricted to the loaded `com.operator.mcp-agent-mail` job. It
+byte-binds itself and the installed package to the named wheel and clean
+candidate, checks the loaded path/program/arguments against the plist, retains
+the complete plist bytes as base64 plus its digest and
+`KeepAlive`/`RunAtLoad`/working directory, and proves the
+single 8765 listener is a child of the loaded wrapper. The new
+`org.agentstack.mail` identity must still be absent. The write-once receipt has
+mode 0400; a missing or foreign job, topology drift, or an existing output
+fails closed. Complete bytes are accepted only for the exact legacy label and
+an allowlisted plist shape; environment keys other than `HOME` and `PATH` are
+rejected rather than copied into the receipt.
+
 The label must contain the exact candidate's first eight hexadecimal digits.
 This producer may change launchd state only through the installed controller's
 `bootstrap`, `enable`, `kickstart`, and `bootout` calls for that exact label.
@@ -420,6 +443,21 @@ listener. It publishes no terminal receipt unless the rehearsal label is
 absent again, the isolated port is closed, and both production observations
 are unchanged. The receipt retains only the exact test label's disabled
 override value; it never stores the full `print-disabled` domain output.
+
+`launchctl bootstrap` EIO is not treated as proof that no job was loaded. The
+controller immediately re-reads the exact label: only the same owned
+path/program/arguments may continue to `enable` and `kickstart`, without a
+second bootstrap. The result records the rc-113 preflight separately from the
+post-EIO recheck. Absent, foreign, or unknown post-EIO state stops before any
+further mutation. Cleanup likewise polls an exact owned label until launchd's
+asynchronous `bootout` reaches rc 113; ownership drift fails immediately.
+
+On this Mac, state-changing `launchctl` calls from the Codex sandbox return
+EIO while the same new label and plist succeed from the operator shell. The
+entire installed `launchd-rehearsal` command—not isolated launchctl fragments
+and not a hand-authored receipt—must therefore be run by the authorized
+operator outside that sandbox. Its terminal receipt is then verified
+read-only against the external SHA-256 pin.
 
 This producer does not install its own environment and does not claim that a
 dependency closure is hash-locked. Therefore adding it alone does not change

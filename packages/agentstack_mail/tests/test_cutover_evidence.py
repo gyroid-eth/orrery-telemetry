@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import plistlib
 import signal
 import socket
 import subprocess
@@ -249,6 +251,228 @@ arguments = {
     assert "private/tmp" not in json.dumps(loaded)
 
 
+def test_legacy_launchd_definition_snapshot_binds_loaded_job_to_plist(
+    tmp_path: Path,
+) -> None:
+    plist = tmp_path / "com.operator.mcp-agent-mail.plist"
+    definition = {
+        "Label": evidence.LEGACY_LAUNCHD_LABEL,
+        "ProgramArguments": ["/bin/bash", "/private/tmp/run-server.sh"],
+        "KeepAlive": True,
+        "RunAtLoad": True,
+        "WorkingDirectory": "/private/tmp/legacy",
+    }
+    plist.write_bytes(plistlib.dumps(definition))
+
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return _completed(
+            arguments,
+            stdout=f"""path = {plist}
+program = /bin/bash
+arguments = {{
+    /bin/bash
+    /private/tmp/run-server.sh
+}}
+""",
+        )
+
+    snapshot = evidence._launchd_definition_snapshot(
+        evidence.LEGACY_LAUNCHD_LABEL,
+        runner=runner,
+    )
+
+    assert snapshot["plist_path"] == str(plist)
+    assert snapshot["state"] == "loaded"
+    assert snapshot["program_arguments"] == definition["ProgramArguments"]
+    assert snapshot["keep_alive"] is True
+    assert snapshot["working_directory"] == "/private/tmp/legacy"
+    assert snapshot["loaded_path_program_arguments_match_plist"] is True
+    assert base64.b64decode(snapshot["plist_bytes_base64"]) == plist.read_bytes()
+
+
+def test_legacy_launchd_definition_snapshot_allows_explicit_offline_absence() -> None:
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return _completed(arguments, returncode=113, stderr="not found")
+
+    snapshot = evidence._launchd_definition_snapshot(
+        evidence.LEGACY_LAUNCHD_LABEL,
+        runner=runner,
+        allow_absent=True,
+    )
+
+    assert snapshot == {
+        "identity": f"gui/{os.getuid()}/{evidence.LEGACY_LAUNCHD_LABEL}",
+        "label": evidence.LEGACY_LAUNCHD_LABEL,
+        "state": "absent",
+    }
+
+
+def test_legacy_launchd_observation_requires_exact_live_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = {
+        "state": "loaded",
+        "plist_path": "/private/tmp/legacy.plist",
+        "program": "/bin/bash",
+        "program_arguments": ["/bin/bash", "/private/tmp/run.sh"],
+    }
+    stable = {
+        "path": definition["plist_path"],
+        "program": definition["program"],
+        "arguments": definition["program_arguments"],
+    }
+    monkeypatch.setattr(
+        evidence,
+        "_launchd_definition_snapshot",
+        lambda *_args, **_kwargs: definition,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_listener_fingerprint",
+        lambda _port: {"port": 8765, "listener_count": 1},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_launchd_job_runtime",
+        lambda _label: {
+            "identity": "gui/501/com.operator.mcp-agent-mail",
+            "definition_sha256": evidence._sha256_bytes(
+                evidence._canonical_json(stable)
+            ),
+            "wrapper_pid": 101,
+        },
+    )
+    monkeypatch.setattr(evidence, "_listener_process_ids", lambda _port: [202])
+    monkeypatch.setattr(
+        evidence,
+        "_process_record",
+        lambda pid: {"pid": pid, "ppid": 101 if pid == 202 else 1, "arguments": []},
+    )
+
+    observation = evidence._legacy_launchd_observation(require_loaded=True)
+
+    assert observation["cutover_eligible"] is True
+    assert observation["runtime"]["wrapper_pid"] == 101
+    assert observation["runtime"]["listener_pid"] == 202
+    assert observation["runtime"]["listener_is_wrapper_child"] is True
+
+
+def test_offline_legacy_observation_rejects_a_foreign_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        evidence,
+        "_launchd_definition_snapshot",
+        lambda *_args, **_kwargs: {"state": "absent"},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_listener_fingerprint",
+        lambda _port: {"port": 8765, "listener_count": 1},
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="job and listener absence"):
+        evidence._legacy_launchd_observation(require_loaded=False)
+
+
+def test_legacy_launchd_receipt_is_candidate_bound_and_write_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = "1" * 40
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    output = tmp_path / "legacy.json"
+    definition = {
+        "identity": f"gui/{os.getuid()}/{evidence.LEGACY_LAUNCHD_LABEL}",
+        "label": evidence.LEGACY_LAUNCHD_LABEL,
+        "state": "loaded",
+        "plist_path": "/Users/example/Library/LaunchAgents/legacy.plist",
+        "plist_sha256": "2" * 64,
+        "program": "/bin/bash",
+        "program_arguments": ["/bin/bash", "/Users/example/run.sh"],
+        "keep_alive": {"SuccessfulExit": False},
+        "run_at_load": True,
+        "working_directory": "/Users/example/service",
+        "raw_launchctl_output_retained": False,
+        "plist_bytes": 5,
+        "plist_bytes_base64": "cGxpc3Q=",
+        "loaded_path_program_arguments_match_plist": True,
+    }
+    runtime = {
+        "identity": definition["identity"],
+        "definition_sha256": "4" * 64,
+        "wrapper_pid": 101,
+        "listener_pid": 202,
+        "listener_port": 8765,
+        "listener_is_wrapper_child": True,
+    }
+    monkeypatch.setattr(
+        evidence,
+        "_candidate_identity",
+        lambda *_args, **_kwargs: {"head": candidate},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_verify_running_from_wheel",
+        lambda *_args, **_kwargs: {"sha256": "3" * 64},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_legacy_launchd_observation",
+        lambda **_kwargs: {
+            "definition": definition,
+            "listener": {"listener_count": 1, "port": 8765},
+            "runtime": runtime,
+            "cutover_eligible": True,
+            "network_requests_sent": 0,
+        },
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_launchd_job_fingerprint",
+        lambda _label: {"identity": "gui/501/org.agentstack.mail", "state": "absent"},
+    )
+
+    result = evidence.write_legacy_launchd_snapshot(
+        output_path=output,
+        wheel=wheel,
+        candidate_repository=repository,
+        candidate_commit=candidate,
+    )
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result["status"] == "completed"
+    assert output.stat().st_mode & 0o777 == 0o400
+    assert receipt["candidate_commit"] == candidate
+    assert receipt["cutover_eligible"] is True
+    assert receipt["definition"] == definition
+    assert receipt["runtime"]["listener_is_wrapper_child"] is True
+    assert receipt["runtime"]["network_requests_sent"] == 0
+    assert receipt["new_candidate_label"]["state"] == "absent"
+    monkeypatch.setattr(
+        evidence,
+        "_launchd_job_fingerprint",
+        lambda _label: {"identity": "gui/501/org.agentstack.mail", "state": "loaded"},
+    )
+    with pytest.raises(evidence.EvidenceError, match="new candidate"):
+        evidence.write_legacy_launchd_snapshot(
+            output_path=tmp_path / "loaded-new-label.json",
+            wheel=wheel,
+            candidate_repository=repository,
+            candidate_commit=candidate,
+        )
+    with pytest.raises(evidence.EvidenceError, match="must be absent"):
+        evidence.write_legacy_launchd_snapshot(
+            output_path=output,
+            wheel=wheel,
+            candidate_repository=repository,
+            candidate_commit=candidate,
+        )
+
+
 def test_rehearsal_cleanup_boots_out_only_exact_loaded_identity() -> None:
     label = "org.agentstack.mail.rehearsal.12345678.once"
     calls: list[list[str]] = []
@@ -305,6 +529,72 @@ def test_rehearsal_cleanup_rejects_production_before_launchctl() -> None:
         )
 
 
+def test_rehearsal_cleanup_waits_for_asynchronous_bootout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = "org.agentstack.mail.rehearsal.12345678.async"
+    calls: list[list[str]] = []
+    definition = {
+        "path": "/private/tmp/rehearsal.plist",
+        "program": "/private/tmp/bin/service",
+        "arguments": ["/private/tmp/bin/service"],
+    }
+    loaded = """path = /private/tmp/rehearsal.plist
+program = /private/tmp/bin/service
+arguments = {
+    /private/tmp/bin/service
+}
+"""
+
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        if arguments[1] == "bootout":
+            return _completed(arguments)
+        print_count = sum(call[1] == "print" for call in calls)
+        if print_count <= 3:
+            return _completed(arguments, stdout=loaded)
+        return _completed(arguments, returncode=113, stderr="not found")
+
+    monkeypatch.setattr(evidence.time, "sleep", lambda _seconds: None)
+    result = evidence._ensure_rehearsal_job_absent(
+        label,
+        expected_definition_sha256=evidence._sha256_bytes(
+            evidence._canonical_json(definition)
+        ),
+        runner=runner,
+        timeout_seconds=1,
+    )
+
+    assert result["after"]["state"] == "absent"
+    assert result["retire_wait"]["poll_count"] == 3
+    assert [call[1] for call in calls] == [
+        "print",
+        "bootout",
+        "print",
+        "print",
+        "print",
+    ]
+
+
+def test_rehearsal_cleanup_rejects_absence_observed_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = "org.agentstack.mail.rehearsal.12345678.deadline"
+
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return _completed(arguments, returncode=113, stderr="not found")
+
+    observed = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr(evidence.time, "monotonic", lambda: next(observed))
+    with pytest.raises(evidence.EvidenceError, match="cleanup deadline"):
+        evidence._ensure_rehearsal_job_absent(
+            label,
+            expected_definition_sha256="0" * 64,
+            runner=runner,
+            timeout_seconds=30,
+        )
+
+
 def test_candidate_rehearsal_label_requires_exact_candidate8() -> None:
     candidate = "12345678" + "a" * 32
     label = "org.agentstack.mail.rehearsal.12345678.once"
@@ -339,6 +629,7 @@ def test_foreground_receipt_identity_requires_same_candidate_and_wrapper_loss(
                 },
                 "maximum_observed_ready_services": 1,
                 "legacy_listener": {
+                    "required": True,
                     "before": {"listener_count": 1},
                     "after": {"listener_count": 1},
                     "network_requests_sent": 0,
@@ -369,6 +660,7 @@ def test_foreground_receipt_identity_requires_same_candidate_and_wrapper_loss(
         candidate_commit=candidate,
         expected_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest(),
         wheel_sha256="a" * 64,
+        require_legacy_listener=True,
     )
 
     assert identity["candidate_commit"] == candidate
@@ -379,6 +671,7 @@ def test_foreground_receipt_identity_requires_same_candidate_and_wrapper_loss(
             candidate_commit="2" * 40,
             expected_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest(),
             wheel_sha256="a" * 64,
+            require_legacy_listener=True,
         )
 
 

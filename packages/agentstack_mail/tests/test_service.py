@@ -274,6 +274,8 @@ class _FakeLaunchctl:
         foreign: bool = False,
         print_returncode: int | None = None,
         fail_operation: str | None = None,
+        failed_bootstrap_loads: bool = False,
+        bootout_delay_prints: int = 0,
     ) -> None:
         ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
         plist = plistlib.loads(Path(ownership["artifact"]).read_bytes())
@@ -284,12 +286,21 @@ class _FakeLaunchctl:
         self.foreign = foreign
         self.print_returncode = print_returncode
         self.fail_operation = fail_operation
+        self.failed_bootstrap_loads = failed_bootstrap_loads
+        self.bootout_delay_prints = bootout_delay_prints
+        self.remaining_bootout_prints: int | None = None
         self.calls: list[list[str]] = []
 
     def __call__(self, arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         self.calls.append(arguments)
         operation = arguments[1]
         if operation == "print":
+            if self.remaining_bootout_prints is not None:
+                if self.remaining_bootout_prints > 0:
+                    self.remaining_bootout_prints -= 1
+                else:
+                    self.running = False
+                    self.remaining_bootout_prints = None
             if self.print_returncode is not None:
                 return subprocess.CompletedProcess(
                     arguments, self.print_returncode, "", "manager unavailable"
@@ -314,11 +325,16 @@ class _FakeLaunchctl:
             )
             return subprocess.CompletedProcess(arguments, 0, record + "\n", "")
         if operation == self.fail_operation:
+            if operation == "bootstrap" and self.failed_bootstrap_loads:
+                self.running = True
             return subprocess.CompletedProcess(arguments, 5, "", f"{operation} failed")
         if operation == "bootstrap":
             self.running = True
         elif operation == "bootout":
-            self.running = False
+            if self.bootout_delay_prints:
+                self.remaining_bootout_prints = self.bootout_delay_prints
+            else:
+                self.running = False
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
 
@@ -332,6 +348,8 @@ def test_owned_start_and_stop_use_explicit_launchctl_only(tmp_path: Path) -> Non
 
     assert started["status"] == "job_loaded"
     assert started["action"] == "started"
+    assert started["bootstrap_preflight"]["launchctl_print_returncode"] == 113
+    assert started["bootstrap_eio_recheck"] is None
     assert started["mcp_readiness"] == "unverified"
     assert stopped["status"] == "stopped"
     assert stopped["action"] == "stopped"
@@ -567,6 +585,155 @@ def test_partial_start_is_compensated_to_stopped(tmp_path: Path) -> None:
         "bootout",
         "print",
     ]
+
+
+def test_bootstrap_eio_is_reconciled_only_when_exact_job_is_loaded(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+        failed_bootstrap_loads=True,
+    )
+
+    started = service.service_start(ownership, runner=fake)
+
+    assert started["status"] == "job_loaded"
+    assert started["action"] == "started"
+    assert started["bootstrap_outcome"] == "exact_job_already_loaded_after_eio"
+    assert started["bootstrap_preflight"]["launchctl_print_returncode"] == 113
+    assert started["bootstrap_eio_recheck"]["launchctl_print_returncode"] == 0
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "print",
+        "enable",
+        "kickstart",
+        "print",
+    ]
+    assert [call[1] for call in fake.calls].count("bootstrap") == 1
+
+
+def test_bootstrap_eio_with_absent_job_fails_without_more_mutation(
+    tmp_path: Path,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+    )
+
+    with pytest.raises(service.ServiceError, match="exact label remains absent"):
+        service.service_start(ownership, runner=fake)
+
+    assert [call[1] for call in fake.calls] == ["print", "bootstrap", "print"]
+
+
+def test_bootstrap_eio_with_environment_drift_is_compensated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=False,
+        fail_operation="bootstrap",
+        failed_bootstrap_loads=True,
+    )
+    drift = iter((False, False, True, True, True))
+    monkeypatch.setattr(service, "_environment_drift", lambda _ownership: next(drift))
+
+    with pytest.raises(service.ServiceError, match="environment drift"):
+        service.service_start(ownership, runner=fake)
+
+    assert fake.running is False
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "print",
+        "print",
+        "bootout",
+        "print",
+    ]
+
+
+def test_final_started_state_with_environment_drift_is_compensated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    drift = iter((False, False, True, True, True))
+    monkeypatch.setattr(service, "_environment_drift", lambda _ownership: next(drift))
+
+    with pytest.raises(service.ServiceError, match="environment drift"):
+        service.service_start(ownership, runner=fake)
+
+    assert fake.running is False
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootstrap",
+        "enable",
+        "kickstart",
+        "print",
+        "print",
+        "bootout",
+        "print",
+    ]
+
+
+def test_service_stop_waits_for_asynchronous_bootout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(
+        ownership,
+        running=True,
+        bootout_delay_prints=2,
+    )
+    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
+
+    stopped = service.service_stop(ownership, runner=fake)
+
+    assert stopped["status"] == "stopped"
+    assert stopped["stop_wait"]["poll_count"] == 3
+    assert [call[1] for call in fake.calls] == [
+        "print",
+        "bootout",
+        "print",
+        "print",
+        "print",
+    ]
+
+
+def test_service_stop_rejects_stopped_observation_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered, _, _ = _rendered(tmp_path)
+    ownership = Path(rendered.ownership_manifest)
+    fake = _FakeLaunchctl(ownership, running=False)
+    observed = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(observed))
+
+    with pytest.raises(service.ServiceError, match="stop deadline"):
+        service._wait_for_service_stopped(
+            ownership,
+            label=service.LAUNCHD_LABEL,
+            runner=fake,
+            timeout_seconds=30,
+        )
+
+    assert [call[1] for call in fake.calls] == ["print"]
 
 
 def test_default_runner_is_resolved_at_call_time(
