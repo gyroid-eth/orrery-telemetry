@@ -4,13 +4,38 @@
 
 > **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。**2–4分はC3のdata copy/verificationだけの実測**であり、client restart/rebindを含む全静止時間は未測定である。
 
-これは maintainer の Mac で後日、上から順に実行するための手順書である。この変更では本番切替を実行しない。稼働中の `~/mcp_agent_mail`、MCP 設定、production launchd job、service、port 8765 には触れない。唯一の例外は、下記の明示許可に束縛された試験専用label 1つのisolated launchd rehearsalである。
+これは maintainer の Mac で後日、上から順に実行するための手順書であり、本番authority切替自体はまだ実行していない。切替前実測として、明示許可に束縛した試験専用label 1つのisolated launchd rehearsalと、maintainer承認下のlegacy production job 1回のstop/startだけを実行した。後者は同じplist・DB・endpointで再起動し、MCP設定・data・port 8765を変更していない。
 
-## 切替承認の正本
+## 2026-08-11 簡素化後の切替前scope
 
-本番切替の合格線は、この文書のチェック項目数ではなく、`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json` の `cutover_gate` である。exact manifest bytes、clean な exact candidate commit、condition definition、raw evidence のdigestを結び付け、`packages/agentstack_mail/tests/cutover_readiness.py` が **14条件すべてをexactly onceで再計算して `cutover_state: go` を返した場合だけ** C0へ進める。missing、duplicate、extra、unknown、手書きの`status: pass`、candidate不一致はいずれも`no_go`である。operatorは判定を書き換えず、同じcandidateとmanifestに束縛された出力であることを確認する。
+maintainer承認下の本番legacy server 1回再起動で、listener消滅はstopから5.41秒、同じendpointの自動復帰は15.72秒だった。既存clientは停止中の`fetch_inbox`が1回transport errorとなった後、session再起動も`/mcp`手動再接続もなく最初の再試行で成功した。PIDは28395から77623へ変わり、復帰後の`health_check`、DB `integrity_check`、件数は正常だった。したがって同じkey・同じURL/portでのclient再接続は実測済みとし、追加の隔離client rehearsalは行わない。
 
-次の表は14個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は台帳が正本であり、表の説明は置換しない。19件の旧follow-up集合は、切替窓での不可逆化、切替・戻しの完走、初日consumer故障という3基準で、7件のpre-cutover taskと12件のnon-blocking post-cutover taskへ仕分け済みである。rollbackのpost-authority reverse transform、任意のclient-key改名＋stale selector整理、発火条件付きの環境差6件も別々のpost-cutover taskとして保持するため、post recordは合計20件である。現在の7件は狭いpre条件に対して再照合中であり、**現時点は明示的にNO-GO**である。
+このlocalhost・単独利用の初回切替で、切替前に残す作業は次の4点だけである。従来のhash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogへ移す。4点が揃った後にだけ、authorityの4遷移を固定するcommitted testを追加する。
+
+1. production backupを、本番とcanonical path・symlink・inodeまで異なる故意破損済みの隔離targetへ非no-op復元すること。receiptの`target.kind=rehearsal-copy` / `production_source=false`、停止直前の最新行watermark、exact candidate PIDによるtarget DB familyのopen、起動後full logical snapshot一致、本番main/WAL/SHM fingerprintと8765 PIDの前後不変をすべて確認する。
+2. 旧`com.operator.mcp-agent-mail`のbootoutから新`org.agentstack.mail`のbootstrapまでを、一つの不可分なwriter handoffとして実行すること。
+3. 逆順のnew bootoutからlegacy bootstrapまでを、一つの不可分なrollbackとして実行できること。new labelのenabled overrideは正常な残留として記録すること。
+4. 利用側が新endpointで70個のpermission/hook selectorに承認prompt 0を確認すること。この確認は利用側担当が行い、PluckyEinsteinは重複実装しない。
+
+### production backupの復元実演（完了）
+
+ProOpusが2026-08-11 21:57 JSTに作成した`/private/tmp/agent-mail-backup-20260811-215721.sqlite3`は67,293,184 bytes、SHA-256 `c80bdf9ddb59ab712c0ef23a60be08fbe8ec78f4fa523f02918fb1bae35eea02`、`integrity_check: ok`だった。最初にfresh DBへSQLite `.restore`して件数を比較した実演は、故意破損もPIDのopen-file確認も無い予備観測であり、合格証跡には使わない。
+
+受理実演は`/private/tmp/plucky-restore-accept.fAPn0f`で、既存`agentstack-mail-migrate`のcold backup、raw family、組み込みdamage、`cold-restore`だけを使った。元backupとisolated seedはbyte-exactで、sealed cold-backup receiptは`de6c1f0010ca40d4b8b0f05ee6e8d8d0f0823cf233b607345db109467feca2ea`、baseline full logical SHA-256は`afb50ad0a331b233c865db8d0e9512248c9ef5d75aa129c859198d9002317818`である。復元前targetのmainを67,293,184 bytesから3,904 bytesへtruncateして別内容にし、backupではABSENTだったWAL/SHMへ各29 bytesの偽sidecarを作った。物理generationが変わり、logical validatorも`file is not a database`で失敗したため、復元はno-opではない。
+
+既存`cold-restore`はこの故意破損targetを置換し、receipt `/private/tmp/plucky-restore-accept.fAPn0f/receipt/cold-restore-receipt.json`（SHA-256 `a3bcdbb27128b7f3ce08238322ec386c043b062337d0ba4d6fd91abc6479d1a0`）へ`target.kind=rehearsal-copy`、`production_source=false`、fault divergence observed、schema・全table rows・relations・PRAGMAのlogical matchを記録した。target `/private/tmp/plucky-restore-accept.fAPn0f/target-parent/state/storage.sqlite3`はsymlinkではなく、本番mainの`dev/inode=16777232/12149182`に対して`16777232/95663068`で別物だった。
+
+停止直前の最新rowはmessages ID 8829、created `2026-08-11 12:57:05.816025`、全11 columnのcanonical content SHA-256 `2c31643956f5bc603269fea9383321819aea101850a648f1f1f70091eb90358b`である。復元直後とexact product code `48ad386908191ce8d9a9c60a704f91b04065644c`の起動後に同じwatermarkを確認した。wheel SHA-256 `69d47462bfedfe99c3dd9ab9e513f956c913f63f396decfe48668ca5b688d1a5`のinstalled entrypointはisolated port 28768で`health_check`と24-tool listに成功し、PID 56101が復元先main/WAL/SHMを実際にopenしていた。起動中のfull logical SHA-256も`afb50ad0...`のまま一致し、SIGTERM終了はrc 0だった。
+
+同じ実演窓の前後で、本番`/Users/operator/mcp_agent_mail/storage.sqlite3`のmain/WAL/SHMはcanonical path、symlink状態、dev/inode、mode、size、mtime/ctime、SHA-256が完全一致し、8765 listenerもPID 77623のまま同じraw fingerprintだった。本番8765へnetwork requestや停止起動は行っていない。これにより上記1を完了とする。
+
+同日の本番legacy stop/start後に、採取済み`legacy-launchd-definition-v1.json`のdefinitionと再起動後loaded definitionをread-onlyで比較し、plist bytes/path、program/arguments、working directory、RunAtLoad、KeepAliveを含むdefinition全体が一致した。legacy listenerはPID 77623/port 8765、wrapperはPID 77599で復帰した。これはrollback tailで採取済みlegacy定義から同じjobが戻ることの実機確認である。
+
+## 旧14条件 evaluator（切替後hardeningへ延期）
+
+`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`と`packages/agentstack_mail/tests/cutover_readiness.py`の14条件evaluatorは、配布製品相当のfull evidence gateとしてfail-closedのまま保持する。ただし2026-08-11の簡素化裁定後は、この単独localhost切替のpre-cutover hard stopには使わず、未実装handlerを埋める作業も切替後へ延期する。以下の表と旧C0 producerは履歴・将来hardening用であり、上の4点へ作業範囲を再拡張しない。
+
+次の表は旧14個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は旧台帳のまま保持し、表の説明は置換しない。
 
 | 段階 | machine gate ID（台帳とexact match） | operatorが確認する意味 |
 |---|---|---|
@@ -24,11 +49,11 @@ C5の専用test sender/recipientによる5項目とreservation guardの4観測�
 
 evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動変更しない。C0/C2/C5のhuman hold pointは実行を止められるが、`no_go`を承認で上書きできない。
 
-## 現在の hard stop
+## 旧full-evidence hard stop（切替後backlog）
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。ただし台帳の data-migration-reconciliation evidence handlerは未実装なので、本番実行はまだNO-GOである。この手順のcommand例もGO前には実行しない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。台帳のdata-migration-reconciliation evidence handlerは未実装だが、簡素化裁定によりhandler自体は切替後backlogである。以下の旧C0 command例はfull-evidence pathの参照として残し、今回の4点を満たすために実行しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -240,7 +265,9 @@ hook/watcherのrepo実装とtestはC2前の前提条件にする。liveへのdep
 
 ### client key と stale selector の切替後整理
 
-初回切替ではClaude `mcp-agent-mail`、Codex `agent-mail`を互換ABIとして維持し、permission/hook selectorを変更しない。任意のkey改名、24-tool境界に無いstale permission 21 occurrence（10 tool名）、Lifeの旧8765 raw curl selector 4件、dormantな`deregister_agent` optionは別のnon-blocking post-cutover taskで扱う。これらは未コミットmachine-local観測 `2026-08-11T15:18:49 JST` の値であり、実行時の正本ではない。将来toolが再公開されるとstale permissionが自動的に有効化され得るため、post作業でも新しいone-run sealed inventory、maintainerへのexact file/line preview、明示承認を必須にする。`retire-agent-by-name.sh`を再有効化する場合は、dormant optionだけでなく旧DB・8765・bearer前提も同時に置換して検証する。
+初回切替ではClaude `mcp-agent-mail`、Codex `agent-mail`を互換ABIとして維持し、permission/hook selectorを変更しない。**projectの`.mcp.json`へ新しいMCP server entryを追加しない。** 既存key `mcp-agent-mail`を据え置き、そのentryのURLと認証だけを切り替える。2026-08-11 22:04:49 JSTの隔離N=1では新しいproject serverとして置くとtool call前にMCP trust promptが1件出た一方、strict configと`--setting-sources user,project`で既存keyを使った22:06:24–22:07:20 JSTの9 toolはpermission/trust prompt 0、error 0だった。証跡は`/private/tmp/agentstack-mail-rehearsal-52594f6.UP4e5q/receipts/selector-probe/n1-user-selector-key-stability.json`、SHA-256 `338a8fc8574146fc0ef974ae3d92c06ba50f4826d5b88740e07f57e309cbc423`である。
+
+任意のkey改名、24-tool境界に無いstale permission 21 occurrence（10 tool名）、Lifeの旧8765 raw curl selector 4件、dormantな`deregister_agent` optionは別のnon-blocking post-cutover taskで扱う。これらは未コミットmachine-local観測 `2026-08-11T15:18:49 JST` の値であり、実行時の正本ではない。将来toolが再公開されるとstale permissionが自動的に有効化され得るため、post作業でも新しいone-run sealed inventory、maintainerへのexact file/line preview、明示承認を必須にする。`retire-agent-by-name.sh`を再有効化する場合は、dormant optionだけでなく旧DB・8765・bearer前提も同時に置換して検証する。
 
 ## 上から順に実行する操作
 
@@ -1130,6 +1157,8 @@ touch "$MAINT/display-patches.applied"
 
 tmux server 全体を kill しない。Claude/Codex parent・childは agent-mail call を止めて idle、`BiomatterBot`、`SeminarBot`、watcher/hook は停止または送信不能状態にする。全員の停止確認を agent-mail 停止前に済ませる。
 
+**ここからC4のnew readiness完了までは、一つの不可分なwriter handoffである。** 操作上必要なcopy/verifyを間に挟むが、旧bootoutと新bootstrapを別ticket・別operator・別再開点へ分離しない。旧bootout後は全consumerを停止したまま、旧job/8765/旧DB holderの不在を維持し、C4直前に再検査してからnewだけをbootstrapする。途中で通常運用へ戻したり、旧newどちらかを独立に起動したりしない。どこかで失敗した場合は新を起動せず、該当stageのR1–R5へ一続きで移る。
+
 最後の agent-mail 通知を送った後、operator は通常 shell へ移る。**旧labelをbootoutする前に**、新writerが不在であることと、旧loaded definition/runtime topologyがC1でsealしたreceiptから変わっていないことをread-onlyで再確認する。同名foreign jobや再起動でPID/definitionが変わっていれば停止しない。
 
 ```sh
@@ -1374,6 +1403,8 @@ fi
 
 全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。これはC4の「旧exact absentを確認してから新をbootstrap」の対称操作であり、**新exact absentを確認してから旧をbootstrap**する。旧plistとC1でsealしたloaded定義receiptの外部pinが両方一致した場合だけ旧jobを戻す。
 
+**new bootoutからlegacy bootstrapと8765 readiness完了までは、一つの不可分なrollbackである。** R4/R5から来る場合はexact owned newのstop/bootout成功とrc 113を先に確認し、R1へ引き渡す。newが一度もloadedされていないR1–R3では`assert_new_writer_absent`が同じ前半条件を満たす。newを止めた後、別のserviceやconsumerを開始せず、採取済みlegacy definitionとplist raw bytesを照合してからlegacyだけをbootstrapする。
+
 new jobをbootoutしても、上記production override規則どおり`org.agentstack.mail => enabled` entryは残る。R1のjob不在判定はexact `launchctl print` rc 113で行い、override entryは消そうとせずmaintenance記録へ残す。
 
 ```sh
@@ -1556,11 +1587,13 @@ bounded_mail_probe \
 
 ## 現在の blocker digest（non-normative）
 
-これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。#2 C6 hard no-goと#4 full-scale restore rehearsalはclean candidate `5ff73d9cda3fac9a032fb73c05d2639514e2a608`で独立照合までclosedである。後続変更後のfinal candidateでは同じ意味条件を再審議せず、candidate bindingだけを再生成する。exact candidate `48ad386908191ce8d9a9c60a704f91b04065644c`ではinstalled wheelからforeground HTTP/CLI・service lifecycleと隔離launchd controller/KeepAliveのterminal receiptまでaccept済みであり、この2件は現在のblockerではない。現在は少なくとも次が未完了なので、本番切替は未承認である。
+これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の4点だけを追う。
 
-- 実機consumerとlive hooksのexact inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
-- production-shaped full working-tree migration、first durable write前rollback、real notification-layout transitionの各handlerとcandidate-bound evidence
-- clean final candidateのselected-behavior、wheel/sdist、reservation-safety、およびclosed #2/#4のbinding再生成
-- exact candidateに対するmaintainerの一回のproduct-decision cutover approval
+- **復元の実演: closed。** 67 MB production backupを、main truncate＋偽WAL/SHMで物理・論理の両方を故意破損した別inodeの`rehearsal-copy`へ既存cold-restoreで戻した。最新row ID 8829/content digest、exact candidate PIDのtarget family open、起動後full logical SHA、正常終了、本番3ファイルと8765 PIDの前後不変を確認した。
+- **二重service防止: 手順固定済み。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、旧停止・新不在・DB holder不在を直前再検査する。actual authority交代は切替当日にだけ実行する。
+- **戻し手順: 手順・実機tail確認済み。** new bootout→legacy bootstrapを不可分rollbackとし、legacy receiptと再起動後loaded definitionの完全一致、8765復帰、client自動再接続を確認した。production enabled overrideは戻しても残るのが正常である。
+- **permission/hook selector 70件: 利用側確認中。** project `.mcp.json`へ新serverを足さず、既存`mcp-agent-mail` keyのURL/authだけを差し替える。N=1の9-tool隔離probeはpermission/trust prompt 0、error 0で、全70件は利用側担当が確認する。PluckyEinstein側の追加実装はない。
+
+hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。4点完了後にauthority 4遷移のcommitted testだけを追加するまでは、本番切替は未承認である。
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。
