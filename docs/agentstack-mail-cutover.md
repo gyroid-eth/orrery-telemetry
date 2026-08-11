@@ -51,11 +51,15 @@ maintainer は **2026-08-11**、foregroundではlaunchdが送る停止signal、K
 
 試験receiptには、foreground receiptとの差の有無に加え、`enable` が隔離temp外に作るlabel単位の永続overrideをbefore/afterで実測し、残ったものとcleanupしなかった理由を記録する。exact nonce labelのoverrideは永続残留として受け入れ、許可外の`disable`やdomain全体へ作用する`reset-disabled`では消さない。推測で「何も残らない」とは扱わない。
 
-現在の状態: **許可とlabel可変化/fake launchctl検証、exact candidate `fdb9839` のforeground rehearsalは完了したが、実launchd rehearsalのterminal receiptは未生成**である。`org.agentstack.mail.rehearsal.fdb98391.once-204052` は直前のcontroller `status`が`stopped`（内部的にexact `print` rc 113）だった後、最初の`bootstrap`がrc 5/EIOを返した。EIO直後のjob stateは未記録なので、load成功/失敗を推測しない。`finally`後はexact labelがrc 113、隔離port 28765がlistener 0、runtime logなし、8765のPID/fingerprint不変、terminal receiptなし、in-progress marker残留である。
+現在の状態: **exact candidate `48ad386908191ce8d9a9c60a704f91b04065644c` のforeground rehearsalと実launchd rehearsalは完了し、terminal receiptを独立検算してacceptした。** sandbox外でinstalled whole CLIを1回だけ実行し、17秒でrc 0となった。sequenceは`start → stop → start → SIGKILL → KeepAlive別PID復帰 → stop`、2回のstopはrc 113まで7 poll / 743.921 msと8 poll / 784.018 msで収束した。終了時は試験labelがrc 113、port 28766がlistener 0、in-progress markerなし、legacy wrapper 28189・listener 28395/8765と新production label不在がbefore/after一致である。legacy定義receiptは`58ad959fb65748a42ada0825c066711cbc4575c83efa9e9935e8f129465008ef`、launchd terminal receiptは`6431ec9ed0ccc4b32949cbcdceaec4a6cf95ff48769b8dc1871eac6deb2e248b`で、どちらもmode 0400である。このacceptはlaunchd rehearsalだけに対するもので、cutover GOではない。
 
-別途ProOpusが許可した`/bin/sleep 30`だけの最小diagnostic plistは、同一内容・新規label・事前print rc 113を揃えた比較で **Codex sandbox内からはEIO、sandbox外のProOpus shellからはrc 0**となった。temp配置、0700 parent、plist payloadではなく、sandbox内からのstate-changing launchctl呼出しが原因である。次回はPluckyEinsteinがexact candidateのplist、whole CLI command、受け入れ条件を作り、ProOpusがsandbox外で **`agentstack-mail-evidence launchd-rehearsal` 全体**を実行する。CLI自身がcontroller実行とwrite-once receipt生成を一体で行い、ProOpusは生のrc/stdout/stderr/timeとartifact pathを返す。PluckyEinsteinはreceiptを別のread-only検算で判定する。状態変更部分だけを切り出したり、結果からreceiptを手書きしない。
+その前のcandidate `fdb9839` では、`org.agentstack.mail.rehearsal.fdb98391.once-204052` の直前controller `status`が`stopped`（内部的にexact `print` rc 113）だった後、最初の`bootstrap`がrc 5/EIOを返した。EIO直後のjob stateは未記録なので、load成功/失敗を推測しない。`finally`後はexact labelがrc 113、隔離port 28765がlistener 0、runtime logなし、8765のPID/fingerprint不変、terminal receiptなし、in-progress marker残留である。
 
-controller側でもEIOを「未load」とみなさず、bootstrap前のrc 113とEIO直後のexact loaded/absent再照合を別fieldでreceiptへ残す。`bootout`は非同期なので、cleanupはexact ownershipを毎回再確認しながらrc 113までbounded pollする。foreign化は即failとする。両試験labelはbootout済み、disabled override残留0、標準`~/Library/LaunchAgents` probeは不要である。
+別途ProOpusが許可した`/bin/sleep 30`だけの最小diagnostic plistは、同一内容・新規label・事前print rc 113を揃えた比較で **Codex sandbox内からはEIO、sandbox外のProOpus shellからはrc 0**となった。temp配置、0700 parent、plist payloadではなく、sandbox内からのstate-changing launchctl呼出しが原因である。`48ad386`の成功runでは、PluckyEinsteinがexact candidateのplist、whole CLI command、受け入れ条件を作り、ProOpusがsandbox外で **`agentstack-mail-evidence launchd-rehearsal` 全体**を実行した。CLI自身がcontroller実行とwrite-once receipt生成を一体で行い、ProOpusは生のrc/stdout/stderr/timeとartifact pathを返し、PluckyEinsteinがreceiptを別のread-only検算で判定した。今後も状態変更部分だけを切り出したり、結果からreceiptを手書きしない。
+
+controller側でもEIOを「未load」とみなさず、bootstrap前のrc 113とEIO直後のexact loaded/absent再照合を別fieldでreceiptへ残す。`bootout`は非同期なので、cleanupはexact ownershipを毎回再確認しながらrc 113までbounded pollする。foreign化は即failとする。全試験labelのjobとlistenerはbootout済みだが、成功runの`enable`が書いた`org.agentstack.mail.rehearsal.48ad3869.once-215000 => enabled` overrideは永続している。`disable`はentryを消さず`disabled=true`へ悪化させ、`reset-disabled`はdomain全体へ作用するため、どちらもcleanupに使わない。
+
+**production overrideの扱い:** C4で本番`org.agentstack.mail`を`enable`すると、同じlabel単位の`enabled` overrideが永続的に書かれる。後でnew jobをbootoutしてlegacyへ戻してもこのentryは消えない。これは意図したcontroller挙動であり、`launchctl print`のjob不在とは別の状態である。rollback後の保守記録にはoverrideが残ることを記し、「戻したのに痕跡がある」または「enabled entryがあるからjobも動いている」と誤読しない。entryを消す目的の`disable` / `reset-disabled`は実行しない。
 
 ## 今回運ぶもの、運ばないもの
 
@@ -1370,6 +1374,8 @@ fi
 
 全senderを停止したまま、新job/18765が存在しないこと、旧DB holderが0であることを再確認する。これはC4の「旧exact absentを確認してから新をbootstrap」の対称操作であり、**新exact absentを確認してから旧をbootstrap**する。旧plistとC1でsealしたloaded定義receiptの外部pinが両方一致した場合だけ旧jobを戻す。
 
+new jobをbootoutしても、上記production override規則どおり`org.agentstack.mail => enabled` entryは残る。R1のjob不在判定はexact `launchctl print` rc 113で行い、override entryは消そうとせずmaintenance記録へ残す。
+
 ```sh
 if [ -e "$MAINT/display-patches.applied" ]; then
   rollback_display_patches || exit 1
@@ -1550,10 +1556,8 @@ bounded_mail_probe \
 
 ## 現在の blocker digest（non-normative）
 
-これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。#2 C6 hard no-goと#4 full-scale restore rehearsalはclean candidate `5ff73d9cda3fac9a032fb73c05d2639514e2a608`で独立照合までclosedである。後続変更後のfinal candidateでは同じ意味条件を再審議せず、candidate bindingだけを再生成する。現在は少なくとも次が未完了なので、本番切替は未承認である。
+これは進捗を読むための要約であり、別の完了条件ではない。canonicalな残件は冒頭のevaluatorが返す`missing_conditions`である。#2 C6 hard no-goと#4 full-scale restore rehearsalはclean candidate `5ff73d9cda3fac9a032fb73c05d2639514e2a608`で独立照合までclosedである。後続変更後のfinal candidateでは同じ意味条件を再審議せず、candidate bindingだけを再生成する。exact candidate `48ad386908191ce8d9a9c60a704f91b04065644c`ではinstalled wheelからforeground HTTP/CLI・service lifecycleと隔離launchd controller/KeepAliveのterminal receiptまでaccept済みであり、この2件は現在のblockerではない。現在は少なくとも次が未完了なので、本番切替は未承認である。
 
-- exact candidate wheelからのreal HTTP/CLI 24-tool起動、bounded service lifecycle、legacy endpoint/root無変更の証跡
-- clean exact candidateに束縛した隔離serviceのSIGTERM/forced-kill sealed receiptと、実controllerのstop→stopped→start→bounded health証跡
 - 実機consumerとlive hooksのexact inventory、maintainerによる個人settings preview承認、Orrery/dashboardの切替前compatibility
 - production-shaped full working-tree migration、first durable write前rollback、real notification-layout transitionの各handlerとcandidate-bound evidence
 - clean final candidateのselected-behavior、wheel/sdist、reservation-safety、およびclosed #2/#4のbinding再生成
