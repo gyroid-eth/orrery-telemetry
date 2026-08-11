@@ -124,6 +124,58 @@ def _mcp_result(renewed: Any) -> bytes:
 
 
 class ReservationHookTests(unittest.TestCase):
+    def run_hook_with_unconfigured_product_environment(
+        self, root: Path
+    ) -> subprocess.CompletedProcess[str]:
+        """Run with no AgentStack product selectors and a definitive zero renewal."""
+        home = root / "home"
+        vault = home / "Syncthing" / "<vault-directory>"
+        vault.mkdir(parents=True)
+
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir()
+        fake_python = fake_bin / "python3"
+        fake_python.write_text(
+            "#!/bin/sh\n"
+            "if [ \"${1-}\" = \"-c\" ]; then\n"
+            f"    exec {json.dumps(os.sys.executable)} \"$@\"\n"
+            "fi\n"
+            "cat >/dev/null\n"
+            "printf '%s\\n' 'HOOK_RENEWED: 0'\n",
+            encoding="utf-8",
+        )
+        fake_python.chmod(0o755)
+
+        env = os.environ.copy()
+        for name in tuple(env):
+            if name.startswith("AGENTSTACK_") or name in {
+                "PROJECT_KEY",
+                "MCP_URL",
+                "MCP_AGENT_MAIL_TOKEN",
+                "FILE_RESERVATION_RENEW_SECONDS",
+                "FILE_RESERVATION_RETRY_DELAY_SECONDS",
+                "TMUX",
+                "TMUX_PANE",
+            }:
+                env.pop(name, None)
+        env.update(
+            {
+                "AGENT_NAME": "PluckyEinstein",
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:{env.get('PATH', '')}",
+            }
+        )
+        payload = json.dumps({"tool_input": {"file_path": str(vault / "note.md")}})
+        return subprocess.run(
+            ["/bin/bash", str(HOOK)],
+            input=payload,
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+            timeout=10,
+        )
+
     def run_hook(
         self,
         url: str,
@@ -197,6 +249,17 @@ class ReservationHookTests(unittest.TestCase):
             check=False,
             timeout=10,
         )
+
+    def test_unconfigured_defaults_protect_vault_and_block_missing_reservation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_hook_with_unconfigured_product_environment(
+                Path(directory)
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("FILE RESERVATION REQUIRED", result.stderr)
 
     def test_existing_reservation_passes_with_accept_and_without_owner_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _Server(

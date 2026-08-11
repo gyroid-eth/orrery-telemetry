@@ -5,13 +5,11 @@
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
-if [[ -z "$PROTECTED_ROOTS" && -n "$PROJECT_KEY" ]]; then
-    PROTECTED_ROOTS="$PROJECT_KEY"
-fi
-MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
-MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
+DEFAULT_PROJECT_KEY="$HOME/Syncthing/<vault-directory>"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$DEFAULT_PROJECT_KEY}}"
+PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/api/}}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/orrery/mail/.env}"
 RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
@@ -73,7 +71,7 @@ legacy_bearer_enabled() {
             # The cutover helper constrains the native service to loopback
             # port 18765. It deliberately has no legacy server-wide bearer.
             case "$MCP_URL" in
-                http://127.0.0.1:18765/mcp|http://127.0.0.1:18765/mcp/|http://localhost:18765/mcp|http://localhost:18765/mcp/)
+                http://127.0.0.1:18765/mcp|http://127.0.0.1:18765/mcp/|http://localhost:18765/mcp|http://localhost:18765/mcp/|http://127.0.0.1:18765/api|http://127.0.0.1:18765/api/|http://localhost:18765/api|http://localhost:18765/api/)
                     return 1
                     ;;
                 *) return 0 ;;
@@ -174,7 +172,7 @@ agent = os.environ["QUERY_AGENT"]
 rel_path = unicodedata.normalize("NFC", os.environ["QUERY_REL_PATH"])
 abs_path = unicodedata.normalize("NFC", os.environ["QUERY_ABS_PATH"])
 token = os.environ.get("QUERY_TOKEN", "")
-url = os.environ.get("QUERY_URL", "http://127.0.0.1:8765/mcp")
+url = os.environ.get("QUERY_URL", "http://127.0.0.1:18765/api/")
 extend_seconds = int(os.environ.get("QUERY_EXTEND_SECONDS", "900"))
 paths = [rel_path]
 if abs_path != rel_path:
