@@ -31,7 +31,7 @@
         "prompt_count": 0
       },
       "core": {
-        "tool_count": 22,
+        "tool_count": 24,
         "resource_count": 0,
         "resource_template_count": 0,
         "prompt_count": 0
@@ -182,7 +182,7 @@
         ]
       },
       "core": {
-        "tool_count": 22,
+        "tool_count": 24,
         "resource_count": 0,
         "resource_names": [],
         "resource_template_count": 0,
@@ -209,12 +209,14 @@
           "request_contact",
           "respond_contact",
           "retire_agent",
+          "search_messages",
           "send_message",
           "set_contact_policy",
+          "summarize_thread",
           "whois"
         ]
       },
-      "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union while suppressing the 18 non-compatibility live tools and all 21 live resource templates; Core publishes zero concrete resources and zero prompts."
+      "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union while suppressing the 16 non-compatibility live tools and all 21 live resource templates; Core publishes zero concrete resources and zero prompts."
     },
     {
       "id": "isolation.namespace",
@@ -299,9 +301,9 @@
       },
       "core": {
         "legacy_llm_dependency": "optional_extra",
-        "load_policy": "lazy_on_non_compatibility_llm_use"
+        "load_policy": "lazy_only_when_llm_enabled"
       },
-      "reason": "Compatibility tools must boot without the retained non-compatibility LiteLLM seam; entering that seam remains a differential failure."
+      "reason": "summarize_thread is public, but the default deployment keeps LLM support disabled: its heuristic path succeeds without importing the optional LiteLLM seam. The optional extra is required only when LLM support is explicitly enabled."
     }
     ]
   },
@@ -449,7 +451,7 @@
         "CLI service entrypoint"
       ],
       "requirements": [
-        "boot the exact 22-tool boundary through supported HTTP and CLI paths under the agentstack-mail namespace",
+        "boot the exact 24-tool boundary through supported HTTP and CLI paths under the agentstack-mail namespace",
         "use the isolated endpoint and roots without reading legacy unprefixed variables or a working-directory .env"
       ],
       "acceptance": "real transport tests start the service on an isolated endpoint, verify health and the exact MCP publication surface, and leave the live AgentMail endpoint reachable",
@@ -494,13 +496,16 @@
       "scope": [
         "Claude MCP configuration",
         "Codex MCP configuration",
-        "bridge, hooks, skills, and permissions"
+        "bridge, hooks, skills, and permissions",
+        "versioned supported consumer inventory including Orrery and dashboard authority selectors"
       ],
       "requirements": [
         "move every declared consumer to the agentstack-mail MCP key as one reversible operation",
-        "do not register mcp-agent-mail as an alias for the new service"
+        "do not register mcp-agent-mail as an alias for the new service",
+        "require Orrery to select the new mail database by absolute path without a legacy database fallback",
+        "require dashboard startup to fail closed unless AGENTSTACK_MAIL_DB, AGENTSTACK_MCP_URL, and AGENTSTACK_SIGNALS_DIR explicitly select the new authority"
       ],
-      "acceptance": "N and N-1 fixture tests show all consumers resolve the new key, no consumer writes through the old service after authority switch, and the prior configuration can be restored exactly",
+      "acceptance": "N and N-1 fixture tests show all declared consumers resolve the new key; the sealed selector set rejects missing, legacy, wrong, malformed, relative-database, or cross-authority-mixed values before consumers resume; Orrery reads the exact selected new database and refuses an absent selector instead of falling back; dashboard refuses startup when any required database, MCP URL, or signals selector is absent; no consumer writes through the old service after authority switch; and the prior configuration can be restored exactly",
       "verification_gate": "mcp-client-reregistration-cutover"
     },
     {
@@ -509,14 +514,16 @@
       "implementation_order": "pre_cutover",
       "scope": [
         "copied SQLite database",
-        "copied Git archive",
+        "copied signals and archive working tree without legacy Git history",
+        "maintainer-selected baseline-commit-A for the copied working tree",
         "identity, message, recipient, receipt, and reservation records"
       ],
       "requirements": [
         "copy rather than share writable live database and archive roots",
+        "exclude the legacy .git directory and runtime or lock artifacts, initialize an unrelated repository, and create one baseline root commit containing the exact copied working tree",
         "preserve stable identifiers and timestamps and reconcile sqlite_schema objects, indexes, triggers, views, relevant PRAGMAs and schema versions, relationships, receipts, reservations, archive state, and restart or partial-copy recovery"
       ],
-      "acceptance": "a production-shaped migration rehearsal compares canonical sqlite_schema plus relevant PRAGMA and version inventories, reports exact identity or a versioned approved transform, exact record counts, relationship integrity, stable identifiers and timestamps, archive verification, and zero concurrent writers to either authority",
+      "acceptance": "a production-shaped migration rehearsal compares canonical sqlite_schema plus relevant PRAGMA and version inventories, reports exact identity or a versioned approved transform, exact record counts, relationship integrity, stable identifiers and timestamps, signals and archive working-tree verification, absence of the legacy .git and runtime artifacts, one clean unrelated baseline root commit whose tree exactly matches the selected copied files, and zero concurrent writers to either authority",
       "verification_gate": "data-migration-reconciliation"
     },
     {
@@ -556,12 +563,12 @@
       "implementation_state": "not_implemented",
       "implementation_order": "pre_cutover",
       "scope": [
-        "22-tool cold readiness, per-operation, and workflow gates",
+        "24-tool cold readiness, per-operation, and workflow gates",
         "D10 reservation contention, D11 retirement under load, and D12 recovery latency",
         "throughput, memory, file descriptors, queue growth, network, optional LLM paths, and target macOS load"
       ],
       "requirements": [
-        "define absolute and live-relative thresholds for the full 22-tool contract without replacing the independent 57-path reservation gate",
+        "define absolute and live-relative thresholds for the full 24-tool contract without replacing the independent 57-path reservation gate",
         "pin target macOS runner characteristics, calibration, sample counts, and absolute and relative thresholds before running bounded performance fault and resource-degradation soak scenarios with machine-readable resource and latency series"
       ],
       "acceptance": "the candidate satisfies every versioned absolute and relative threshold with no unbounded memory, file-descriptor, queue, recovery, or latency growth",
@@ -588,7 +595,7 @@
       "implementation_state": "not_implemented",
       "implementation_order": "pre_cutover",
       "scope": [
-        "hermetic 22-tool differential",
+        "hermetic 24-tool differential",
         "contract, runtime, authorization, and identity suites",
         "supported Python matrix and required repository CI"
       ],
@@ -610,7 +617,7 @@
       ],
       "requirements": [
         "install the exact candidate wheel into a fresh environment",
-        "run from outside every source checkout, assert import origins resolve only inside the fresh environment site-packages, and verify the installed package publishes the exact 22 tools and zero resources, templates, or prompts"
+        "run from outside every source checkout, assert import origins resolve only inside the fresh environment site-packages, and verify the installed package publishes the exact 24 tools and zero resources, templates, or prompts"
       ],
       "acceptance": "the installed-wheel verifier passes outside the checkout with every agentstack_mail import rooted in fresh-environment site-packages and against the same wheel digest named by the distribution artifact gate",
       "verification_gate": "installed-wheel-contract-release-gate"
@@ -622,13 +629,16 @@
       "scope": [
         "trusted evidence producer identity",
         "candidate, manifest, condition, command, and raw-artifact binding",
-        "operator cutover approval provenance"
+        "operator cutover approval provenance",
+        "maintainer baseline-commit-A selection provenance",
+        "sealed supported-consumer inventory and preview approval provenance"
       ],
       "requirements": [
         "verify a protected-CI or cryptographic attestation that binds the exact full candidate commit, manifest digest, condition-definition digests, generator commands and versions, and raw artifact digests",
-        "bind D1-D6 and D8-D12 operator approval provenance to the same candidate and reject hand-authored evidence, replay, unknown issuers, and candidate mismatch"
+        "bind the exact D1-D6 and D8-D12 operator approval set to the same candidate and reject hand-authored evidence, replay, unknown issuers, and candidate mismatch",
+        "bind maintainer's baseline-commit-A selection and the sealed supported-consumer inventory plus content-redacted preview approval to the same candidate, manifest, inventory digest, approver, and timestamp"
       ],
-      "acceptance": "the evaluator verifies immutable producer and operator provenance, and mutations of issuer, candidate, manifest, command, artifact, approval, or replay identity all remain no_go",
+      "acceptance": "the evaluator verifies immutable producer and operator provenance for the exact D1-D6 and D8-D12 approval set required by product-decision-cutover-approval; the exact baseline-commit-A selection and sealed consumer inventory plus preview approval are candidate-bound; and mutations of issuer, candidate, manifest, command, artifact, approval set, baseline selection, inventory digest, preview approval, or replay identity all remain no_go",
       "verification_gate": "cutover-evidence-provenance-gate"
     },
     {

@@ -26,14 +26,16 @@ async def verify() -> None:
         .joinpath("fixtures/live-tools-list.json")
         .read_text(encoding="utf-8")
     )
+    schema_fields = ("inputSchema", "outputSchema", "_meta")
     expected = {
-        tool["name"]: {
-            "inputSchema": tool["inputSchema"],
-            "outputSchema": tool["outputSchema"],
-            "_meta": tool["_meta"],
-        }
+        tool["name"]: {key: tool[key] for key in schema_fields if key in tool}
         for tool in fixture["tools"]
         if tool["name"] in COMPATIBILITY_TOOLS
+    }
+    expected_read_tool_descriptions = {
+        tool["name"]: tool["description"]
+        for tool in fixture["tools"]
+        if tool["name"] in {"search_messages", "summarize_thread"}
     }
 
     server = build_mcp_server()
@@ -51,13 +53,9 @@ async def verify() -> None:
             by_alias=True,
             exclude_none=True,
         )
-        actual[name] = {
-            "inputSchema": dumped["inputSchema"],
-            "outputSchema": dumped["outputSchema"],
-            "_meta": dumped["_meta"],
-        }
+        actual[name] = {key: dumped[key] for key in schema_fields if key in dumped}
 
-    if set(tools) != COMPATIBILITY_TOOLS or len(tools) != 22:
+    if set(tools) != COMPATIBILITY_TOOLS or len(tools) != 24:
         raise SystemExit(
             "installed wheel tool boundary mismatch: "
             f"missing={sorted(COMPATIBILITY_TOOLS - set(tools))}, "
@@ -74,6 +72,11 @@ async def verify() -> None:
             name for name in expected if actual.get(name) != expected[name]
         )
         raise SystemExit("installed wheel schema mismatch: " + ", ".join(mismatched))
+    actual_read_tool_descriptions = {
+        name: tools[name].description for name in expected_read_tool_descriptions
+    }
+    if actual_read_tool_descriptions != expected_read_tool_descriptions:
+        raise SystemExit("installed wheel read-tool description mismatch")
     if any("resource://agents" in (tool.description or "") for tool in tools.values()):
         raise SystemExit("installed wheel advertises a suppressed roster resource")
 

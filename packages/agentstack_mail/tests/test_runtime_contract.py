@@ -148,7 +148,7 @@ def test_invalid_agent_name_mode_keeps_frozen_coerce_fallback(
         _require_attr(config, "clear_settings_cache")()
 
 
-def test_mcp_server_exposes_only_the_22_compatibility_tools() -> None:
+def test_mcp_server_exposes_only_the_24_compatibility_tools() -> None:
     app = _require_module("agentstack_mail.app")
     build_mcp_server = _require_attr(app, "build_mcp_server")
 
@@ -164,7 +164,7 @@ def test_mcp_server_exposes_only_the_22_compatibility_tools() -> None:
         inspect_server()
     )
 
-    assert len(tool_names) == 22
+    assert len(tool_names) == 24
     assert tool_names == COMPATIBILITY_TOOLS
     assert not resources
     assert not resource_templates
@@ -176,24 +176,22 @@ def test_actual_tool_schemas_match_the_frozen_live_contract() -> None:
     build_mcp_server = _require_attr(app, "build_mcp_server")
     fixture_path = Path(__file__).parents[1] / "fixtures" / "live-tools-list.json"
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    schema_fields = ("inputSchema", "outputSchema", "_meta")
     expected = {
-        tool["name"]: {
-            "inputSchema": tool["inputSchema"],
-            "outputSchema": tool["outputSchema"],
-            "_meta": tool["_meta"],
-        }
+        tool["name"]: {key: tool[key] for key in schema_fields if key in tool}
         for tool in fixture["tools"]
         if tool["name"] in COMPATIBILITY_TOOLS
+    }
+    expected_read_tool_descriptions = {
+        tool["name"]: tool["description"]
+        for tool in fixture["tools"]
+        if tool["name"] in {"search_messages", "summarize_thread"}
     }
 
     async def inspect_server() -> dict[str, dict[str, Any]]:
         tools = await build_mcp_server().get_tools()
         return {
-            name: {
-                "inputSchema": dumped["inputSchema"],
-                "outputSchema": dumped["outputSchema"],
-                "_meta": dumped["_meta"],
-            }
+            name: {key: dumped[key] for key in schema_fields if key in dumped}
             for name, tool in tools.items()
             if (
                 dumped := tool.to_mcp_tool().model_dump(
@@ -207,6 +205,10 @@ def test_actual_tool_schemas_match_the_frozen_live_contract() -> None:
     actual = asyncio.run(inspect_server())
 
     assert actual == expected
+    tools = asyncio.run(build_mcp_server().get_tools())
+    assert {
+        name: tools[name].description for name in expected_read_tool_descriptions
+    } == expected_read_tool_descriptions
 
 
 def test_published_tool_descriptions_do_not_reference_suppressed_resources() -> None:

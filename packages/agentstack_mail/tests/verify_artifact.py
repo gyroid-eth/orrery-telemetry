@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 DIVERGENCE_MANIFEST = "differential-expected-divergences-v2.json"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "c4da3e65c01daf727517490469ab02031764effd718e159cc30a8c2a1d0a0f61"
+    "d1b7df5dbd947d94a12017a8ca601763713ba68081c6462270f20f5031e56eb5"
 )
 
 EXPECTED_BASELINES = {
@@ -129,7 +129,7 @@ EXPECTED_STATIC_ALLOWLIST = {
         "live": {"legacy_llm_dependency": "runtime_baseline"},
         "core": {
             "legacy_llm_dependency": "optional_extra",
-            "load_policy": "lazy_on_non_compatibility_llm_use",
+            "load_policy": "lazy_only_when_llm_enabled",
         },
     },
 }
@@ -929,7 +929,7 @@ EXPECTED_FOLLOW_UP_TASK_IDS = [
     "cutover-documentation-consistency",
 ]
 EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
-    "52fb24b090513075399fdf2846e1e98429adc7ced9d7a6783c7cf69888746466"
+    "10cb46db7813f0d4f4f8ae8fcea41c863e5c0bc06498d433c5162bd7918a846c"
 )
 EXPECTED_CUTOVER_CONDITION_IDS = [
     "product-decisions-selected",
@@ -1498,7 +1498,7 @@ def _assert_expected_divergences_manifest(
         "tool_names": sorted(live_by_name),
     }
     expected_core_topology = {
-        "tool_count": 22,
+        "tool_count": 24,
         "resource_count": 0,
         "resource_names": [],
         "resource_template_count": 0,
@@ -1524,7 +1524,7 @@ def _assert_expected_divergences_manifest(
             "prompt_count": 0,
         },
         "core": {
-            "tool_count": 22,
+            "tool_count": 24,
             "resource_count": 0,
             "resource_template_count": 0,
             "prompt_count": 0,

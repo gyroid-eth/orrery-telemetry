@@ -96,6 +96,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, dict[Path, tuple[bytes, int]]]
                     "mcp__mcp-agent-mail__register_agent",
                     "mcp__mcp-agent-mail__send_message",
                     "mcp__mcp-agent-mail__search_messages",
+                    "mcp__mcp-agent-mail__summarize_thread",
                 ]
             },
             "hooks": {
@@ -139,6 +140,8 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, dict[Path, tuple[bytes, int]]]
         '[mcp_servers.agent-mail.tools.fetch_inbox]\n'
         'approval_mode = "never"\n\n'
         '[mcp_servers.agent-mail.tools.search_messages]\n'
+        'approval_mode = "never"\n\n'
+        '[mcp_servers.agent-mail.tools.summarize_thread]\n'
         'approval_mode = "never"\n\n'
         '[mcp_servers.notion]\n'
         'url = "https://example.test/mcp"\n',
@@ -302,12 +305,14 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     settings = settings_path.read_text()
     assert "mcp__mcp-agent-mail__" not in settings
     assert "mcp__agentstack-mail__register_agent" in settings
-    assert "search_messages" not in settings
+    assert "mcp__agentstack-mail__search_messages" in settings
+    assert "mcp__agentstack-mail__summarize_thread" in settings
     codex_path = next(path for path in before if path.name == "config.toml" and ".codex" in str(path))
     codex = codex_path.read_text()
     assert "[mcp_servers.agentstack-mail]" in codex
     assert "bearer_token_env_var" not in codex
-    assert "search_messages" not in codex
+    assert "[mcp_servers.agentstack-mail.tools.search_messages]" in codex
+    assert "[mcp_servers.agentstack-mail.tools.summarize_thread]" in codex
     assert "# preserve this comment" in codex
 
     restored = _rollback(bundle, digest)
@@ -1003,13 +1008,13 @@ def test_ambiguous_or_incomplete_consumer_inputs_fail_closed(
     elif case == "legacy_only_deny":
         path = _target_from_inventory(inventory, "claude_settings")
         value = json.loads(path.read_text(encoding="utf-8"))
-        value["permissions"]["deny"] = ["mcp__mcp-agent-mail__search_messages"]
+        value["permissions"]["deny"] = ["mcp__mcp-agent-mail__summarize_recent"]
         _json(path, value, newline=True)
     elif case == "new_noncontract_permission":
         path = _target_from_inventory(inventory, "claude_settings")
         value = json.loads(path.read_text(encoding="utf-8"))
         value["permissions"]["allow"].append(
-            "mcp__agentstack-mail__search_messages"
+            "mcp__agentstack-mail__summarize_recent"
         )
         _json(path, value, newline=True)
     elif case == "new_selector_only_in_note":

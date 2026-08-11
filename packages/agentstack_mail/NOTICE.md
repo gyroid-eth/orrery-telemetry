@@ -30,7 +30,7 @@ Implemented in the core extraction:
   `agentstack_mail`;
 - MCP server key, service labels, environment namespace, port, database,
   archive, and signal roots isolated from AgentMail defaults;
-- only AgentStack's audited 22-tool compatibility surface is published;
+- only AgentStack's audited 24-tool compatibility surface is published;
 - live-derived tool bodies remain temporarily internal until differential
   tests permit removal of the non-compatibility bodies;
 - machine-specific daemons, HTTP UI, and presentation policy are excluded;
@@ -44,8 +44,8 @@ The initial derived module snapshot comprises `app.py`, `config.py`, `db.py`,
 `model_normalize.py`, `guard.py`, and `llm.py`. Changes made during the initial
 copy are limited to provenance pointers, the Python namespace rename, isolated
 configuration/defaults, fail-closed tool/resource publication, and lazy loading
-of the temporarily retained non-compatibility LLM helper. Behavioral changes to
-the 22 compatibility tools require a later differential-test manifest.
+of the retained LLM helper used by enabled summarization. Behavioral changes to
+the 24 compatibility tools require a later differential-test manifest.
 
 License boundaries are per component:
 

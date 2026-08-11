@@ -283,16 +283,32 @@ def _assert_module_origin(module: Any, expected_root: str, label: str) -> None:
         ) from exc
 
 
-def _assert_public_content_matches(result: Any, structured: Any) -> None:
+def _assert_public_content_matches(
+    result: Any,
+    structured: Any,
+    *,
+    tool_name: str,
+) -> None:
     text_parts = [
         text
         for item in result.content
         if isinstance((text := getattr(item, "text", None)), str)
     ]
     expected = structured
-    if isinstance(expected, Mapping) and set(expected) == {"result"}:
+    if (
+        tool_name != "search_messages"
+        and isinstance(expected, Mapping)
+        and set(expected) == {"result"}
+    ):
+        # The frozen tools normally project the payload into TextContent.
+        # search_messages alone preserves its result wrapper; keep that
+        # tool-specific quirk exact instead of weakening every tool's oracle.
         expected = expected["result"]
-    if not text_parts and not result.content and expected == []:
+    if (
+        not text_parts
+        and not result.content
+        and expected == []
+    ):
         return
     if len(text_parts) != 1:
         raise AssertionError("tool result must expose exactly one public text projection")
@@ -382,7 +398,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 )
             if _contains_credential_field(payload):
                 raise AssertionError(f"tool {tool_name} disclosed a credential field")
-            _assert_public_content_matches(result, data)
+            _assert_public_content_matches(result, data, tool_name=tool_name)
             return payload
 
         async def checkpoint(event_name: str, result: Any) -> None:

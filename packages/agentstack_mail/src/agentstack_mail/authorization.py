@@ -1,6 +1,6 @@
 """Transport-independent authorization catalog and shadow observations.
 
-The catalog describes the selected 22-tool compatibility surface without
+The catalog describes the selected 24-tool compatibility surface without
 adding credentials to tool schemas. Its rules are prospective and non-binding
 except for the selected, unimplemented D7 retirement boundary. Shadow
 observations are diagnostic only: they never authorize or deny the wrapped
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "c4da3e65c01daf727517490469ab02031764effd718e159cc30a8c2a1d0a0f61"
+    "d1b7df5dbd947d94a12017a8ca601763713ba68081c6462270f20f5031e56eb5"
 )
 
 
@@ -184,6 +184,13 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
         current_credential_arguments=("registration_token",),
         authorization_rule="agent owner or project administrator; name-only is limited to idempotent re-retire of an already-retired null-token legacy row",
     ),
+    "search_messages": _entry(
+        subject=LOCAL_SINGLE_PRINCIPAL,
+        action="search_project_messages",
+        resource="project:{project_key}/messages/search",
+        required_arguments=("project_key", "query"),
+        authorization_rule="project member or project administrator",
+    ),
     "send_message": _entry(
         subject="agent:{sender_name}",
         action="send_message_as_agent",
@@ -198,6 +205,13 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
         resource="project:{project_key}/agent:{agent_name}/contact-policy",
         required_arguments=("project_key", "agent_name", "policy"),
         authorization_rule="agent owner or project administrator",
+    ),
+    "summarize_thread": _entry(
+        subject=LOCAL_SINGLE_PRINCIPAL,
+        action="summarize_project_thread",
+        resource="project:{project_key}/thread:{thread_id}",
+        required_arguments=("project_key", "thread_id"),
+        authorization_rule="project member or project administrator",
     ),
     "whois": _entry(
         subject=LOCAL_SINGLE_PRINCIPAL,

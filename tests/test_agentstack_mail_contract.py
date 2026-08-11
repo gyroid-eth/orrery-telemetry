@@ -37,7 +37,7 @@ def test_provenance_and_live_contract_fixture_are_present() -> None:
     names = {tool["name"] for tool in live_payload["tools"]}
     compatibility = set(contract_payload["compatibility_union"])
     assert len(names) == 40
-    assert len(compatibility) == 22
+    assert len(compatibility) == 24
     assert compatibility <= names
     assert names == compatibility | NON_COMPATIBILITY_UPSTREAM_TOOLS
     assert "create_agent_identity" not in compatibility
@@ -48,7 +48,7 @@ def test_contract_documents_isolated_namespaces() -> None:
     docs = (ROOT / "docs" / "agentstack-mail.md").read_text()
 
     assert SERVICE_IDENTITY["mcp_server_key"] == "agentstack-mail"
-    assert len(COMPATIBILITY_TOOLS) == 22
+    assert len(COMPATIBILITY_TOOLS) == 24
     assert "not registered as an alias by default" in docs
 
 
@@ -65,3 +65,25 @@ def test_tracked_live_source_is_content_addressed() -> None:
         ).hexdigest()
         == LIVE_PATCH_SHA256
     )
+
+
+def test_cutover_runbook_names_every_machine_gate_exactly_once() -> None:
+    manifest = json.loads(
+        (
+            PACKAGE
+            / "fixtures"
+            / "differential-expected-divergences-v2.json"
+        ).read_text()
+    )
+    required_ids = manifest["cutover_gate"]["required_condition_ids"]
+    runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
+
+    assert len(required_ids) == len(set(required_ids)) == 26
+    assert {
+        condition_id: runbook.count(f"`{condition_id}`")
+        for condition_id in required_ids
+    } == {condition_id: 1 for condition_id in required_ids}
+    assert "post-switch operational smoke check" in runbook
+    assert "別の完了条件ではない" in runbook
+    assert "suppressed 16" in runbook
+    assert "22-tool" not in runbook

@@ -40,6 +40,10 @@ def _decision(manifest: dict[str, Any], decision_id: str) -> dict[str, Any]:
     )
 
 
+def _follow_up_task(manifest: dict[str, Any], task_id: str) -> dict[str, Any]:
+    return next(item for item in manifest["follow_up_tasks"] if item["id"] == task_id)
+
+
 def _drop_d1(manifest: dict[str, Any]) -> None:
     manifest["product_decisions"] = [
         item for item in manifest["product_decisions"] if item["id"] != "D1"
@@ -248,6 +252,70 @@ def _weaken_cutover_remediation(manifest: dict[str, Any]) -> None:
 
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
+
+
+def test_cutover_consumer_migration_and_provenance_scope_is_explicit() -> None:
+    manifest = _canonical_manifest()
+    client_cutover = _follow_up_task(manifest, "mcp-client-reregistration-cutover")
+    migration = _follow_up_task(manifest, "data-migration-reconciliation")
+    provenance = _follow_up_task(manifest, "cutover-evidence-provenance-gate")
+
+    client_contract = " ".join(
+        [
+            *client_cutover["scope"],
+            *client_cutover["requirements"],
+            client_cutover["acceptance"],
+        ]
+    )
+    assert all(
+        term in client_contract
+        for term in (
+            "Orrery",
+            "dashboard",
+            "absolute path",
+            "AGENTSTACK_MAIL_DB",
+            "AGENTSTACK_MCP_URL",
+            "AGENTSTACK_SIGNALS_DIR",
+            "missing, legacy, wrong, malformed, relative-database",
+            "cross-authority-mixed",
+            "refuses startup",
+        )
+    )
+
+    migration_contract = " ".join(
+        [*migration["scope"], *migration["requirements"], migration["acceptance"]]
+    )
+    assert all(
+        term in migration_contract
+        for term in (
+            "without legacy Git history",
+            "baseline-commit-A",
+            "exclude the legacy .git",
+            "one baseline root commit",
+            "absence of the legacy .git",
+        )
+    )
+
+    provenance_contract = " ".join(
+        [*provenance["scope"], *provenance["requirements"], provenance["acceptance"]]
+    )
+    assert all(
+        term in provenance_contract
+        for term in (
+            "baseline-commit-A",
+            "sealed supported-consumer inventory",
+            "content-redacted preview approval",
+            "inventory digest",
+            "approver",
+            "timestamp",
+        )
+    )
+    assert "exact D1-D6 and D8-D12" in provenance_contract
+    assert "product-decision-cutover-approval" in provenance_contract
+    assert all(
+        term not in client_contract
+        for term in ("bearer", "retire", "registration_token")
+    )
 
 
 def test_all_decisions_have_independent_required_states() -> None:

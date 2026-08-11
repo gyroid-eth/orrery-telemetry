@@ -9,8 +9,8 @@ selected public tool contracts and existing data model while moving the Python
 namespace, MCP server key, port, database, archive, signal directory, and
 service labels into an AgentStack-owned namespace.
 
-Contract v1 contains 22 upstream tools: 12 required by executable AgentStack
-runtime paths, 21 visible through shipped model permissions or the delegate
+Contract v1 contains 24 upstream tools: 12 required by executable AgentStack
+runtime paths, 23 visible through shipped model permissions or the delegate
 skill, and `retire_agent` as the one runtime-only addition. Bridge-local names
 such as `runtime_status` are not upstream tools, and `create_agent_identity` is
 explicitly excluded.
@@ -37,7 +37,7 @@ tests.
 
 The current core copies the live data, archive, and tool-body seam so it can be
 compared without translating behavior. A fail-closed FastMCP boundary publishes
-exactly the 22 compatibility tools, zero concrete resources, zero resource
+exactly the 24 compatibility tools, zero concrete resources, zero resource
 templates, and zero prompts. Non-compatibility bodies are retained internally
 only until the differential suite proves they can be
 removed. The installed `agentstack-mail` console script serves this boundary at
@@ -113,7 +113,7 @@ the explicitly listed inventory and is not a filesystem scanner. It does not
 rewrite runtime source; Orrery and dashboard compatibility are explicit
 pre-cutover prerequisites in the runbook.
 
-`authorization.py` is the machine-readable inventory for the exact 22-tool
+`authorization.py` is the machine-readable inventory for the exact 24-tool
 surface. Each entry records the prospective subject, action, resource, current
 required arguments, existing credential arguments, and future authorization
 rule without adding credentials to any MCP schema. The runtime emits a
@@ -130,7 +130,7 @@ authenticated repository bundle plus tracked working-tree patch. Live and Core
 then run in separate Python processes with disjoint 0700 state roots, private
 inputs/outputs, fixed import origins, equivalent explicit configuration, and no
 mutable-checkout or network fallback. Three ordered scenarios cover the exact
-22-tool union across identity/contact/message/receipt, reservation/signal, and
+24-tool union across identity/contact/message/receipt/search/thread-summary, reservation/signal, and
 macro/lifecycle behavior. Every checkpoint compares the public MCP
 serialization and durable SQLite, archive, signal, and Git state after raw
 integrity, relationship, TTL, receipt-idempotency, archive-derivation, and
@@ -139,9 +139,9 @@ credential-leak checks.
 Expected differences are fail-closed in
 `fixtures/differential-expected-divergences-v2.json`. The only tool-description
 allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
-surface versus Core 22-tool surface is pinned across all four MCP publication
+surface versus Core 24-tool surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
-and Core 22/0/0/0. Service namespace/default isolation is also an exact,
+and Core 24/0/0/0. Service namespace/default isolation is also an exact,
 versioned allowance. The manifest's single `product_decisions` ledger keeps
 `decision_state`, `implementation_state`, and `cutover_state` independent and
 mandatory. A choice can therefore be selected without pretending it is
@@ -244,7 +244,7 @@ loaded-machine outlier fail the gate. The input and result-shape fingerprints
 exclude activity timestamps, which change as the workspace is committed. The
 configured live-pattern snapshot is also diagnostic only.
 
-The 22-tool contract does not expose an MCP roster resource. Callers obtain
+The 24-tool contract does not expose an MCP roster resource. Callers obtain
 their own assigned identity from the AgentStack runtime, `register_agent`, or
 `macro_start_session`; `list_contacts` returns known contact links and `whois`
 verifies a known name. `send_message(..., to=[], broadcast=true)` is the

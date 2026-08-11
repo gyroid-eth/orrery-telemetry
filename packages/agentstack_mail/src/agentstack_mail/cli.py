@@ -47,7 +47,7 @@ def _build_mcp_server() -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run the exact 22-tool MCP boundary on its isolated HTTP endpoint."""
+    """Run the exact 24-tool MCP boundary on its isolated HTTP endpoint."""
     args = _parser().parse_args(argv)
     settings = get_settings()
     host = (

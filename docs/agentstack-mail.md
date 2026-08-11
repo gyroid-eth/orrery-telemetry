@@ -15,7 +15,7 @@ roots throughout development. No test or installer may point both services at
 one writable database or archive.
 
 The caller-derived compatibility surface is versioned in
-`packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 22 tools
+`packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 24 tools
 are the positive union of executable callers and shipped model-facing
 contracts. Permission deny entries, negative instructions, and Codex
 Bridge-local operations do not become source-extraction roots.
@@ -41,8 +41,8 @@ from tool-prefix compatibility.
 ## Current core boundary
 
 The core train copies the live data/archive/tool-body seam into the renamed
-package and publishes exactly the 22 versioned tools through a fail-closed
-FastMCP subclass. MCP resources and the 18 non-compatibility tools are not
+package and publishes exactly the 24 versioned tools through a fail-closed
+FastMCP subclass. MCP resources and the 16 non-compatibility tools are not
 published. Their bodies remain internal only until the differential train can
 prove that pruning them does not break macro or storage dependencies.
 
@@ -106,13 +106,13 @@ developer AgentMail checkout is consulted.
 The ordered scenarios are:
 
 1. identity, contact, messaging, topic/inbox, mark-read, acknowledgement replay,
-   and reply;
+   reply, full-text search, and heuristic thread summary;
 2. Unicode reservation idempotency/conflict/renew/release plus per-message
    signals and BCC privacy;
 3. health, start-session, reservation-cycle, contact-handshake, summary fetch,
    and retirement lifecycle.
 
-Their union is exactly the versioned 22 tools. Each operation records a call
+Their union is exactly the versioned 24 tools. Each operation records a call
 window so 300/900/604800-second TTL behavior can be checked without a flaky
 wall-clock estimate. The oracle validates public structured/text projections,
 SQLite integrity and foreign keys, schema identity, relational IDs, Git fsck
@@ -124,7 +124,7 @@ and equality classes rather than replacing every timestamp with one wildcard.
 The versioned divergence manifest is packaged into wheel and sdist and is
 validated against the live fixture and Core source. It permits only the exact
 tools/concrete resources/resource templates/prompts publication surfaces of
-live 40/0/21/0 versus Core 22/0/0/0, renamed/isolation defaults, provenance and
+live 40/0/21/0 versus Core 24/0/0/0, renamed/isolation defaults, provenance and
 lazy-LLM boundary, and the three roster-resource description rewrites. The
 manifest's single `product_decisions` array is the normative decision ledger.
 Every entry independently records selection, implementation, and cutover state,

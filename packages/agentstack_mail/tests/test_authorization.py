@@ -1,4 +1,4 @@
-"""Exact gates for the 22-tool authorization catalog and shadow observer."""
+"""Exact gates for the 24-tool authorization catalog and shadow observer."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def _configure_isolated_runtime(
     config.clear_settings_cache()
 
 
-def test_authorization_catalog_exactly_matches_the_22_tool_contract() -> None:
+def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
     catalog = authorization.AUTHORIZATION_CATALOG
     fixture_bytes = AUTHORIZATION_FIXTURE_PATH.read_bytes()
     fixture = json.loads(fixture_bytes)
@@ -87,7 +87,7 @@ def test_authorization_catalog_exactly_matches_the_22_tool_contract() -> None:
     assert authorization.authorization_catalog_is_complete()
     assert authorization.catalog_record_shape() == EXPECTED_FIELDS
     assert set(catalog) == COMPATIBILITY_TOOLS
-    assert len(catalog) == 22
+    assert len(catalog) == 24
     assert set(asyncio.run(app.build_mcp_server().get_tools())) == set(catalog)
     assert hashlib.sha256(fixture_bytes).hexdigest() == (
         authorization.AUTHORIZATION_FIXTURE_SHA256
@@ -158,7 +158,7 @@ def test_missing_or_empty_shadow_policy_denies_nothing(
         for tool_name in sorted(COMPATIBILITY_TOOLS)
     ]
 
-    assert len(observations) == 22
+    assert len(observations) == 24
     assert {item["decision"] for item in observations} == {"would_allow"}
     assert {item["reason"] for item in observations} == {"policy_empty_default_allow"}
     assert not [item for item in observations if item["decision"] == "would_deny"]

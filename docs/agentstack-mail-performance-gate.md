@@ -12,7 +12,7 @@ Core look equal to live. The performance gate must observe latency before that
 normalization and fail independently.
 
 The first gate covers only the existing serial success-path scenarios and the
-versioned 22-tool contract. Concurrent reservations, retirement under load,
+versioned 24-tool contract. Concurrent reservations, retirement under load,
 and crash/stale-signal recovery remain outside it until their pending product
 decisions are resolved. It must use worker-private state reconstructed from the
 checked-in frozen-live provenance; it must not call either installed service or

@@ -78,7 +78,7 @@ class CompatibilityFastMCP(FastMCP):
         The decorator bookkeeping is useful for provenance, but it is not an
         enforcement boundary: FastMCP can add or remove tools after decoration.
         Inspect the pinned FastMCP registry itself so post-registration filters
-        and direct base-class registration cannot bypass the exact-22 contract.
+        and direct base-class registration cannot bypass the exact-24 contract.
         """
 
         manager = getattr(self, "_tool_manager", None)

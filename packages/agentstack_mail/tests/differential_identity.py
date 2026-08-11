@@ -25,8 +25,10 @@ SCENARIO_TOOLS: frozenset[str] = frozenset(
         "reply_message",
         "request_contact",
         "respond_contact",
+        "search_messages",
         "send_message",
         "set_contact_policy",
+        "summarize_thread",
         "whois",
     }
 )
@@ -304,6 +306,59 @@ async def run(
             "limit": 20,
             "include_bodies": True,
             "topic": _TOPIC,
+            "format": "json",
+        },
+    )
+    await record(
+        "19_search_messages_phrase",
+        "search_messages",
+        {
+            "project_key": project_key,
+            "query": '"identity differential chain"',
+            "limit": 20,
+            "format": "json",
+        },
+    )
+    await record(
+        "20_search_messages_unsearchable",
+        "search_messages",
+        {
+            "project_key": project_key,
+            "query": "*",
+            "limit": 20,
+            "format": "json",
+        },
+    )
+    await record(
+        "21_search_messages_like_fallback",
+        "search_messages",
+        {
+            "project_key": project_key,
+            "query": "identity OR",
+            "limit": 20,
+            "format": "json",
+        },
+    )
+    await record(
+        "22_summarize_thread_single_default_llm_mode",
+        "summarize_thread",
+        {
+            "project_key": project_key,
+            "thread_id": str(message_id),
+            "include_examples": True,
+            "per_thread_limit": 50,
+            "format": "json",
+        },
+    )
+    await record(
+        "23_summarize_thread_multi",
+        "summarize_thread",
+        {
+            "project_key": project_key,
+            "thread_id": f"{message_id},missing-thread",
+            "include_examples": False,
+            "llm_mode": False,
+            "per_thread_limit": 50,
             "format": "json",
         },
     )

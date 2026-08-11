@@ -44,8 +44,10 @@ MODEL_COMPATIBILITY_TOOLS = frozenset(
         "reply_message",
         "request_contact",
         "respond_contact",
+        "search_messages",
         "send_message",
         "set_contact_policy",
+        "summarize_thread",
         "whois",
     }
 )
@@ -76,9 +78,7 @@ NON_COMPATIBILITY_UPSTREAM_TOOLS = frozenset(
         "macro_prepare_thread",
         "purge_old_messages",
         "rename_window",
-        "search_messages",
         "summarize_recent",
-        "summarize_thread",
         "unarchive_project",
         "uninstall_precommit_guard",
         "unretire_agent",

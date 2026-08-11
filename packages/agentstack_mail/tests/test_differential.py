@@ -15,6 +15,7 @@ import re
 import secrets
 import subprocess
 import sys
+from types import SimpleNamespace
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ from differential_source import (
     isolated_worker_env,
     reconstruct_live,
 )
+from differential_probe import _assert_public_content_matches
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 TESTS_ROOT = Path(__file__).resolve().parent
@@ -60,6 +62,11 @@ _EXPECTED_EVENTS = {
         "16_acknowledge_message_replay",
         "17_reply_message",
         "18_fetch_green_inbox",
+        "19_search_messages_phrase",
+        "20_search_messages_unsearchable",
+        "21_search_messages_like_fallback",
+        "22_summarize_thread_single_default_llm_mode",
+        "23_summarize_thread_multi",
     ),
     "lifecycle": (
         "01_health_checked",
@@ -115,6 +122,11 @@ _EXPECTED_TOOL_TRACE = {
         "acknowledge_message",
         "reply_message",
         "fetch_inbox",
+        "search_messages",
+        "search_messages",
+        "search_messages",
+        "summarize_thread",
+        "summarize_thread",
     ),
     "lifecycle": (
         "health_check",
@@ -192,6 +204,39 @@ _THREAD_ENTRY_RE = re.compile(
     r"^## ([^\n]+) — [^\n]+\n\n\[View canonical\]\(([^)]+)\)",
     re.MULTILINE,
 )
+
+
+def test_public_text_wrapper_exception_is_search_messages_only() -> None:
+    structured = {"result": [{"id": 1}]}
+    wrapped = SimpleNamespace(
+        content=[SimpleNamespace(text=json.dumps(structured))]
+    )
+    unwrapped = SimpleNamespace(
+        content=[SimpleNamespace(text=json.dumps(structured["result"]))]
+    )
+
+    _assert_public_content_matches(
+        wrapped,
+        structured,
+        tool_name="search_messages",
+    )
+    _assert_public_content_matches(
+        unwrapped,
+        structured,
+        tool_name="fetch_inbox",
+    )
+    with pytest.raises(AssertionError, match="public text projections disagree"):
+        _assert_public_content_matches(
+            wrapped,
+            structured,
+            tool_name="fetch_inbox",
+        )
+    with pytest.raises(AssertionError, match="public text projections disagree"):
+        _assert_public_content_matches(
+            unwrapped,
+            structured,
+            tool_name="search_messages",
+        )
 
 
 def _normalize_rich_timing_presentation(value: str) -> tuple[str, int]:
@@ -698,6 +743,92 @@ def _assert_raw_integrity(
         )
         assert green_inbox[0]["id"] == 3
         assert green_inbox[0]["thread_id"] == "2"
+
+        search_results = _assert_nonempty_record_list(
+            by_event,
+            "19_search_messages_phrase",
+            frozenset(
+                {
+                    "id",
+                    "subject",
+                    "importance",
+                    "ack_required",
+                    "created_ts",
+                    "thread_id",
+                    "from",
+                }
+            ),
+            count=1,
+        )
+        assert search_results[0]["id"] == 2
+        assert search_results[0]["from"] == "GreenCastle"
+        assert "body_md" not in search_results[0]
+
+        assert by_event["20_search_messages_unsearchable"]["result"] == {
+            "result": []
+        }
+        fallback = _assert_nonempty_record_list(
+            by_event,
+            "21_search_messages_like_fallback",
+            frozenset(
+                {
+                    "id",
+                    "subject",
+                    "importance",
+                    "ack_required",
+                    "created_ts",
+                    "thread_id",
+                    "from",
+                }
+            ),
+            count=2,
+        )
+        assert [item["id"] for item in fallback] == [3, 2]
+
+        thread_summary = by_event[
+            "22_summarize_thread_single_default_llm_mode"
+        ]["result"]
+        assert thread_summary["thread_id"] == "2"
+        assert thread_summary["summary"] == {
+            "participants": ["BlueLake", "GreenCastle"],
+            "key_points": [],
+            "action_items": [],
+            "total_messages": 2,
+            "open_actions": 0,
+            "done_actions": 0,
+            "mentions": [],
+        }
+        assert len(thread_summary["examples"]) == 2
+
+        multi = by_event["23_summarize_thread_multi"]["result"]
+        assert [item["thread_id"] for item in multi["threads"]] == [
+            "2",
+            "missing-thread",
+        ]
+        assert multi["threads"][0]["summary"] == thread_summary["summary"]
+        assert multi["threads"][1]["summary"] == {
+            "participants": [],
+            "key_points": [],
+            "action_items": [],
+            "total_messages": 0,
+            "open_actions": 0,
+            "done_actions": 0,
+            "mentions": [],
+        }
+        assert multi["aggregate"] == {
+            "top_mentions": [],
+            "action_items": [],
+            "key_points": [],
+        }
+        read_only_baseline = by_event["18_fetch_green_inbox"]["durable"]
+        for event in (
+            "19_search_messages_phrase",
+            "20_search_messages_unsearchable",
+            "21_search_messages_like_fallback",
+            "22_summarize_thread_single_default_llm_mode",
+            "23_summarize_thread_multi",
+        ):
+            assert by_event[event]["durable"] == read_only_baseline
 
     if scenario == "lifecycle":
         by_event = {checkpoint["event"]: checkpoint for checkpoint in checkpoints}

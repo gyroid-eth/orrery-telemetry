@@ -41,7 +41,7 @@ and does not authorize stricter enforcement. The default deployment model
 remains one local principal with no authorization enforcement; principal
 subdivision is later work.
 
-The 22-tool permission catalog is a prospective, non-binding inventory except
+The 24-tool permission catalog is a prospective, non-binding inventory except
 where its D7 row mirrors the normative ledger. In particular, its candidate
 `send_message` owner/admin rule does not replace D6's selected upstream-parity
 rule, and its other rows do not authorize enforcement.
@@ -523,7 +523,7 @@ than an open choice.
 - Does continuity transfer preserve the canonical name, create an alias, move
   inbox/reservations, or only link audit history?
 - What exact principal/admin credential, delegation, and audit mechanism would
-  turn the prospective 22-tool permission inventory into selected policy?
+  turn the prospective 24-tool permission inventory into selected policy?
 - How should each authority-establishment mechanism handle active reservations,
   unread mail, signals, and concurrent metadata refresh without implicitly
   unretiring or transferring an identity?

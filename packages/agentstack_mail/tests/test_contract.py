@@ -50,10 +50,11 @@ def test_compatibility_surface_matches_caller_audit() -> None:
         == POLICY_EXCLUDED_UPSTREAM_TOOLS
     )
     assert len(RUNTIME_REQUIRED_TOOLS) == 12
-    assert len(MODEL_COMPATIBILITY_TOOLS) == 21
-    assert len(COMPATIBILITY_TOOLS) == 22
+    assert len(MODEL_COMPATIBILITY_TOOLS) == 23
+    assert len(COMPATIBILITY_TOOLS) == 24
     assert "retire_agent" in RUNTIME_REQUIRED_TOOLS - MODEL_COMPATIBILITY_TOOLS
     assert "macro_contact_handshake" in MODEL_COMPATIBILITY_TOOLS
+    assert {"search_messages", "summarize_thread"} <= MODEL_COMPATIBILITY_TOOLS
     assert "create_agent_identity" not in COMPATIBILITY_TOOLS
     assert "runtime_status" not in COMPATIBILITY_TOOLS
     assert POLICY_EXCLUDED_UPSTREAM_TOOLS <= NON_COMPATIBILITY_UPSTREAM_TOOLS

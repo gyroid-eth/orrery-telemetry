@@ -159,6 +159,17 @@
       "resource": "project:{project_key}/agent:{agent_name}",
       "subject": "agent:{agent_name}"
     },
+    "search_messages": {
+      "action": "search_project_messages",
+      "authorization_rule": "project member or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": [
+        "project_key",
+        "query"
+      ],
+      "resource": "project:{project_key}/messages/search",
+      "subject": "local-single-principal"
+    },
     "send_message": {
       "action": "send_message_as_agent",
       "authorization_rule": "sender agent owner or project administrator",
@@ -174,6 +185,17 @@
       "required_arguments": ["project_key", "agent_name", "policy"],
       "resource": "project:{project_key}/agent:{agent_name}/contact-policy",
       "subject": "agent:{agent_name}"
+    },
+    "summarize_thread": {
+      "action": "summarize_project_thread",
+      "authorization_rule": "project member or project administrator",
+      "current_credential_arguments": [],
+      "required_arguments": [
+        "project_key",
+        "thread_id"
+      ],
+      "resource": "project:{project_key}/thread:{thread_id}",
+      "subject": "local-single-principal"
     },
     "whois": {
       "action": "read_agent_profile",

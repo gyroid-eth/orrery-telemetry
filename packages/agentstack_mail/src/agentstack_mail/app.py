@@ -115,7 +115,7 @@ async def complete_system_user(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
 ) -> Any:
-    """Load the temporary non-compatibility LLM implementation only on use."""
+    """Load the compatibility LLM implementation only when an enabled path uses it."""
 
     from .llm import complete_system_user as _complete_system_user
 
@@ -12241,7 +12241,7 @@ def build_mcp_server() -> FastMCP:
 
     # This must remain the final registry mutation gate. A subset filter is
     # incompatible with the frozen compatibility contract and therefore makes
-    # construction fail rather than silently publishing fewer than 22 tools.
+    # construction fail rather than silently publishing fewer than 24 tools.
     mcp.assert_contract_boundary()
     assert_authorization_catalog_boundary(mcp.published_tool_names)
 
