@@ -182,6 +182,49 @@ def test_message_digest_uses_exact_typed_eleven_column_recipe(tmp_path: Path) ->
     assert observation["new_ids"] == []
 
 
+def test_message_window_open_mode_is_read_only_with_write_control(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "messages.sqlite3"
+    connection = _message_database(database)
+    connection.close()
+
+    observation = restore_acceptance._capture_message_window(database)
+    assert observation["open_mode"]["uri"].endswith("?mode=ro")
+    assert observation["open_mode"]["query_only"] == 1
+
+    statement = (
+        "INSERT INTO messages VALUES "
+        "(99, 7, 9, NULL, 'topic', 'subject', 'body', 'normal', 0, 'later', NULL)"
+    )
+    digest_before = hashlib.sha256(database.read_bytes()).hexdigest()
+
+    read_only = sqlite3.connect(
+        restore_acceptance._database_uri(database), uri=True, isolation_level=None
+    )
+    try:
+        read_only.execute("PRAGMA query_only=ON")
+        with pytest.raises(sqlite3.OperationalError, match="read.?only"):
+            read_only.execute(statement)
+    finally:
+        read_only.close()
+
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == digest_before
+    assert restore_acceptance._capture_message_window(database)["max_id"] == 1
+
+    # Negative control: the identical statement is a real write when the same
+    # file is opened without the read-only URI, so the rejection above is the
+    # open mode doing the work and not a statement that never applies.
+    writable = sqlite3.connect(database, isolation_level=None)
+    try:
+        writable.execute(statement)
+    finally:
+        writable.close()
+
+    assert hashlib.sha256(database.read_bytes()).hexdigest() != digest_before
+    assert restore_acceptance._capture_message_window(database)["max_id"] == 99
+
+
 def test_production_gate_allows_contiguous_message_append(tmp_path: Path) -> None:
     database = tmp_path / "messages.sqlite3"
     connection = _message_database(database)
@@ -1311,6 +1354,23 @@ def test_joint_success_raw_restore_server_contract_shutdown_and_publish(
     assert all(payload["production"]["invariants"].values())
     assert set(payload["production"]["observations"]) == {"new_ids_are_contiguous"}
     assert type(payload["production"]["observations"]["new_ids_are_contiguous"]) is bool
+    observer_payload = payload["observer"]
+    # The receipt may not carry a production counter that nothing counts: every
+    # production claim is a declared scope bound to evidence recorded elsewhere.
+    assert [
+        name
+        for name, value in observer_payload.items()
+        if name.startswith("production_") and isinstance(value, (int, float))
+    ] == []
+    assert observer_payload["production_write_claim_scope"]
+    assert observer_payload["production_network_claim_scope"]
+    for phase in ("before", "after"):
+        open_mode = payload["production"][phase]["messages"]["open_mode"]
+        assert open_mode["query_only"] == 1
+        assert open_mode["uri"].endswith("?mode=ro")
+    assert payload["production"]["before"]["listener"]["method"] == (
+        "lsof-listener-table-no-network-connection"
+    )
     assert payload["candidate_server"]["readiness"]["tool_count"] == 24
     assert payload["candidate_server"]["shutdown"]["exit_code"] == 0
     assert payload["deadlines"] == {

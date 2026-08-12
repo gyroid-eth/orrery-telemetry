@@ -417,11 +417,15 @@ def _capture_message_window(
 ) -> dict[str, Any]:
     database = _canonical_absolute(database, label="message database")
     started_at = _utc_now()
-    connection = sqlite3.connect(
-        _database_uri(database), uri=True, isolation_level=None, timeout=5
-    )
+    uri = _database_uri(database)
+    connection = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=5)
     try:
         connection.execute("PRAGMA query_only=ON")
+        query_only = int(connection.execute("PRAGMA query_only").fetchone()[0])
+        if query_only != 1:
+            raise RestoreAcceptanceError(
+                "message window connection did not report query_only=ON"
+            )
         connection.execute("BEGIN")
         columns = [
             str(row[1])
@@ -456,6 +460,11 @@ def _capture_message_window(
         ]
         result = {
             "transaction": "one-read-transaction",
+            "open_mode": {
+                "uri": uri,
+                "query_only": query_only,
+                "readback": "pragma-query-only-read-from-the-open-connection",
+            },
             "started_at": started_at,
             "completed_at": _utc_now(),
             "columns": list(MESSAGE_COLUMNS),
@@ -2091,8 +2100,19 @@ def run_restore_acceptance(
         "pid": os.getpid(),
         "role": "read-only-production-observer-and-terminal-publisher",
         "excluded_from_sampled_rehearsal_process_tree_observation": True,
-        "production_write_calls": 0,
-        "production_network_requests": 0,
+        "production_write_claim_scope": (
+            "no write counter is instrumented; the claim is bounded by "
+            "production.before.messages.open_mode / production.after.messages."
+            "open_mode (SQLite mode=ro URI plus query_only read back from the "
+            "open connection) and by production.invariants over the "
+            "before/after window"
+        ),
+        "production_network_claim_scope": (
+            "no request counter is instrumented; the observer reaches the "
+            "production port only through the lsof listener table "
+            "(production.before.listener.method), and the sampled rehearsal "
+            "process tree rejects any connection to it"
+        ),
         "open_file_claim_scope": "sampled process-tree lsof observations only",
     }
     try:

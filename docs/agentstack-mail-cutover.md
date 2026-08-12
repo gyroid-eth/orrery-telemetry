@@ -190,8 +190,21 @@ assert all(type(value) is bool and value for value in invariants.values())
 observations = receipt["production"]["observations"]
 assert set(observations) == {"new_ids_are_contiguous"}
 assert type(observations["new_ids_are_contiguous"]) is bool
-assert receipt["observer"]["production_write_calls"] == 0
-assert receipt["observer"]["production_network_requests"] == 0
+observer = receipt["observer"]
+assert [
+    name
+    for name, value in observer.items()
+    if name.startswith("production_") and isinstance(value, (int, float))
+] == []
+assert observer["production_write_claim_scope"]
+assert observer["production_network_claim_scope"]
+for phase in ("before", "after"):
+    open_mode = receipt["production"][phase]["messages"]["open_mode"]
+    assert open_mode["query_only"] == 1
+    assert open_mode["uri"].endswith("?mode=ro")
+assert receipt["production"]["before"]["listener"]["method"] == (
+    "lsof-listener-table-no-network-connection"
+)
 assert receipt["deadlines"] == {
     "restore_worker_seconds": 120,
     "candidate_runtime_seconds": 20,
