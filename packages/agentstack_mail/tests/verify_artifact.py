@@ -1036,6 +1036,7 @@ REQUIRED_RUNTIME_MODULES = {
     "models.py",
     "rich_logger.py",
     "restore_acceptance.py",
+    "scale_acceptance.py",
     "service.py",
     "storage.py",
     "utils.py",
