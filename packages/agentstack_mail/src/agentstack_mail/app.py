@@ -50,6 +50,7 @@ from .authorization import (
 )
 from .boundary import CompatibilityFastMCP
 from .config import Settings, get_settings
+from .contract import SERVICE_IDENTITY
 from .model_normalize import display_model, normalize_model
 from .db import (
     dispose_database_for_shutdown,
@@ -4747,13 +4748,15 @@ def build_mcp_server() -> FastMCP:
     lifespan = _lifespan_factory(settings)
 
     instructions = (
-        "You are the AgentStack Mail coordination server. "
+        f"You are the {SERVICE_IDENTITY['display_name']} coordination server. "
         "Provide message routing, coordination tooling, and project context to cooperating agents. "
         "Outputs are JSON by default; pass format='toon' (or set AGENTSTACK_MAIL_OUTPUT_FORMAT=toon) to receive "
         "{format:'toon', data:'<TOON>'}."
     )
 
-    mcp = CompatibilityFastMCP(name="agentstack-mail", instructions=instructions, lifespan=lifespan)
+    mcp = CompatibilityFastMCP(
+        name=SERVICE_IDENTITY["display_name"], instructions=instructions, lifespan=lifespan
+    )
 
     async def _ctx_info_safe(ctx: Context, message: str) -> None:
         try:

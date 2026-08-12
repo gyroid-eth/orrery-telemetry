@@ -34,6 +34,22 @@ def test_service_identity_is_independent() -> None:
     assert SERVICE_IDENTITY["environment_prefix"] == "AGENTSTACK_MAIL_"
 
 
+def test_display_name_is_the_product_name_and_reaches_server_info() -> None:
+    # The display name is the one string a human sees when asking "which
+    # server am I talking to"; the machine identifiers above deliberately
+    # keep their historical values. Assert both the contract value and that
+    # the built server actually carries it — a hardcoded FastMCP name drifted
+    # silently once before (serverInfo stayed "agentstack-mail" for a day
+    # after the ORRERY rename).
+    assert SERVICE_IDENTITY["display_name"] == "ORRERY Mail"
+
+    from agentstack_mail.app import build_mcp_server
+
+    server = build_mcp_server()
+    assert server.name == SERVICE_IDENTITY["display_name"]
+    assert SERVICE_IDENTITY["display_name"] in (server.instructions or "")
+
+
 def test_storage_and_network_defaults_do_not_collide() -> None:
     assert ISOLATION_DEFAULTS.port != LEGACY_COLLISION_VALUES["port"]
     assert ISOLATION_DEFAULTS.database != LEGACY_COLLISION_VALUES["database"]

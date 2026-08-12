@@ -96,6 +96,12 @@ POLICY_EXCLUDED_UPSTREAM_TOOLS = frozenset(
 
 SERVICE_IDENTITY = MappingProxyType(
     {
+        # What humans see (MCP serverInfo.name, banners). The machine
+        # identifiers below stay "agentstack-mail": they are file names, wheel
+        # names, and config keys whose rename would be churn with no visible
+        # payoff, while this one string is the whole "which server am I
+        # talking to" experience.
+        "display_name": "ORRERY Mail",
         "distribution": "agentstack-mail",
         "python_package": "agentstack_mail",
         "cli": "agentstack-mail",
