@@ -16,18 +16,30 @@ jobs:
     name: tests (python ${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
+        with:
+          # approved_base is accepted only when a persistent branch, remote, or
+          # tag reaches it; shallow history would make that gate inconclusive.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pytest
-        run: python3 -m pip install pytest
+      - name: Install test and package-build tools
+        run: python3 -m pip install pytest build -e ./packages/agentstack_mail
       # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
       # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
       # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。
       - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)
         run: |
           set -euo pipefail
-          PYTHONPATH=. python3 -m pytest -q tests/ integrations/
+          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q tests/ integrations/ packages/agentstack_mail/tests/
+      - name: Build and inspect agentstack-mail distribution
+        run: |
+          set -euo pipefail
+          python3 -m build packages/agentstack_mail --outdir /tmp/agentstack-mail-dist
+          python3 packages/agentstack_mail/tests/verify_artifact.py /tmp/agentstack-mail-dist/agentstack_mail-0.0.0-py3-none-any.whl
+          python3 packages/agentstack_mail/tests/verify_artifact.py /tmp/agentstack-mail-dist/agentstack_mail-0.0.0.tar.gz
+          python3 -m pip install --force-reinstall --no-deps /tmp/agentstack-mail-dist/agentstack_mail-0.0.0-py3-none-any.whl
+          python3 packages/agentstack_mail/tests/verify_installed_contract.py
 
   fresh-install-e2e:
     name: fresh install with real upstream agent-mail
@@ -38,6 +50,8 @@ jobs:
       AGENTSTACK_E2E_CI: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"

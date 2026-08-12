@@ -1,0 +1,148 @@
+"""Versioned identity and isolation contract for the extracted service."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+
+CONTRACT_VERSION = 1
+
+RUNTIME_REQUIRED_TOOLS = frozenset(
+    {
+        "acknowledge_message",
+        "ensure_project",
+        "fetch_inbox",
+        "file_reservation_paths",
+        "health_check",
+        "register_agent",
+        "release_file_reservations",
+        "renew_file_reservations",
+        "retire_agent",
+        "send_message",
+        "set_contact_policy",
+        "whois",
+    }
+)
+
+MODEL_COMPATIBILITY_TOOLS = frozenset(
+    {
+        "acknowledge_message",
+        "ensure_project",
+        "fetch_inbox",
+        "fetch_summary",
+        "fetch_topic",
+        "file_reservation_paths",
+        "health_check",
+        "list_contacts",
+        "macro_contact_handshake",
+        "macro_file_reservation_cycle",
+        "macro_start_session",
+        "mark_message_read",
+        "register_agent",
+        "release_file_reservations",
+        "renew_file_reservations",
+        "reply_message",
+        "request_contact",
+        "respond_contact",
+        "search_messages",
+        "send_message",
+        "set_contact_policy",
+        "summarize_thread",
+        "whois",
+    }
+)
+
+COMPATIBILITY_TOOLS = RUNTIME_REQUIRED_TOOLS | MODEL_COMPATIBILITY_TOOLS
+
+LOCAL_ONLY_TOOLS = frozenset(
+    {
+        "bootstrap",
+        "reserve_files",
+        "renew_reservations",
+        "release_reservations",
+        "runtime_status",
+    }
+)
+
+NON_COMPATIBILITY_UPSTREAM_TOOLS = frozenset(
+    {
+        "archive_project",
+        "create_agent_identity",
+        "deregister_agent",
+        "expire_window",
+        "force_release_file_reservation",
+        "hard_delete_agent",
+        "hard_delete_project",
+        "install_precommit_guard",
+        "list_window_identities",
+        "macro_prepare_thread",
+        "purge_old_messages",
+        "rename_window",
+        "summarize_recent",
+        "unarchive_project",
+        "uninstall_precommit_guard",
+        "unretire_agent",
+    }
+)
+
+POLICY_EXCLUDED_UPSTREAM_TOOLS = frozenset(
+    {
+        "create_agent_identity",
+        "hard_delete_agent",
+        "hard_delete_project",
+        "purge_old_messages",
+    }
+)
+
+SERVICE_IDENTITY = MappingProxyType(
+    {
+        "distribution": "agentstack-mail",
+        "python_package": "agentstack_mail",
+        "cli": "agentstack-mail",
+        "mcp_provider_identity": "agentstack-mail",
+        "claude_client_key": "mcp-agent-mail",
+        "codex_client_key": "agent-mail",
+        "client_key_policy": "preserve_existing",
+        "launchd_label": "org.orrery.mail",
+        "systemd_unit": "agentstack-mail.service",
+        "environment_prefix": "AGENTSTACK_MAIL_",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class IsolationDefaults:
+    """Defaults that cannot collide with a stock or existing AgentMail service."""
+
+    host: str = "127.0.0.1"
+    port: int = 18765
+    mcp_path: str = "/mcp"
+    api_path: str = "/api/"
+    home: str = "~/.agentstack/mail"
+    database: str = "~/.agentstack/mail/storage.sqlite3"
+    archive: str = "~/.agentstack/mail/archive"
+    signals: str = "~/.agentstack/mail/signals"
+
+    @property
+    def mcp_url(self) -> str:
+        return f"http://{self.host}:{self.port}{self.mcp_path}"
+
+    @property
+    def api_url(self) -> str:
+        return f"http://{self.host}:{self.port}{self.api_path}"
+
+
+ISOLATION_DEFAULTS = IsolationDefaults()
+
+# The legacy values are test data only. Production code must not fall back to
+# them when an AgentStack-specific value is absent.
+LEGACY_COLLISION_VALUES = MappingProxyType(
+    {
+        "python_package": "mcp_agent_mail",
+        "mcp_provider_identity": "mcp-agent-mail",
+        "port": 8765,
+        "database": "./storage.sqlite3",
+        "archive": "~/.mcp_agent_mail_git_mailbox_repo",
+        "signals": "~/.mcp_agent_mail/signals",
+    }
+)

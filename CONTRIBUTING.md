@@ -62,10 +62,13 @@ for t in tests/test_*.py; do python3 "$t"; done
 
 ## License of contributions
 
-This repository is under the [PolyForm Perimeter License 1.0.1 with an
-OpenAI/Anthropic Rider](LICENSE). It is source-available, not open source in
-the OSI sense: you may use, modify, and redistribute the software for any
-purpose except providing others with a product that competes with it.
+AgentStack-authored work in this repository is under the
+[PolyForm Perimeter License 1.0.1](LICENSE). It is source-available, not open
+source in the OSI sense: you may use, modify, and redistribute the software
+for any purpose except providing others with a product that competes with it.
+The OpenAI/Anthropic Rider belongs only to copied or derived AgentMail
+components; see [the third-party boundary](docs/third-party.md).
 
-By submitting a contribution you agree that it is licensed under those same
-terms.
+By submitting new AgentStack-authored work you agree that it is licensed under
+the PolyForm terms. Changes to derived AgentMail components must retain the
+upstream copyright and full upstream license, including its rider.

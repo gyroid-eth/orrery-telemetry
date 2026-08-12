@@ -1,0 +1,563 @@
+diff --git a/.codex/config.toml b/.codex/config.toml
+index 965e433..d621215 100644
+--- a/.codex/config.toml
++++ b/.codex/config.toml
+@@ -7,4 +7,7 @@ notify = ["/data/projects/mcp_agent_mail/.codex/hooks/notify_wrapper.sh"]
+ # MCP servers configuration
+ [mcp_servers.mcp_agent_mail]
+ url = "http://127.0.0.1:8765/api/"
++
++[mcp_servers.mcp_agent_mail.tools.ensure_project]
++approval_mode = "approve"
+ # headers can be added if needed; localhost allowed without Authorization
+diff --git a/scripts/run_server_with_token.sh b/scripts/run_server_with_token.sh
+index 35d3c24..4f4d0cc 100755
+--- a/scripts/run_server_with_token.sh
++++ b/scripts/run_server_with_token.sh
+@@ -10,7 +10,9 @@ PORT="${AM_PORT:-8765}"
+ HEALTH_URL="http://${HOST}:${PORT}/health/liveness"
+ HEALTH_INTERVAL=30        # ヘルスチェック間隔（秒）
+ HEALTH_TIMEOUT=5          # curl タイムアウト（秒）
+-HEALTH_MAX_FAIL=3          # 連続失敗でリスタート
++# 2026-06-11: 起動直後にイベントループを占有する長い同期処理があり、3 回(約105s)
++# では完走前に kill→無限再起動ループに陥った。完走猶予として 12 回(約7分)に拡大。
++HEALTH_MAX_FAIL=12         # 連続失敗でリスタート
+ LOGFILE="/tmp/am-watchdog.log"
+ WATCHER_SCRIPT="${HOME}/.claude/hooks/watch_agent_mail_signals.sh"
+ # LOCK_DIR は atomic mutex 専用(空ディレクトリ)。pidfile は **lock dir の外** に置く。
+diff --git a/src/mcp_agent_mail/app.py b/src/mcp_agent_mail/app.py
+index 2d88816..14e5188 100644
+--- a/src/mcp_agent_mail/app.py
++++ b/src/mcp_agent_mail/app.py
+@@ -1218,6 +1218,19 @@ class FileReservationStatus:
+ 
+ _GLOB_MARKERS: tuple[str, ...] = ("*", "?", "[")
+ 
++# Guards against event-loop stalls when evaluating file-reservation staleness on
++# large workspaces (e.g. an Obsidian vault under hourly-backup git with thousands
++# of commits). A broad glob like ``runs/*refine*/**`` can otherwise expand to
++# hundreds of files and trigger a full-history ``git log`` walk per file, all
++# synchronously on the event loop. See LOG 2026-07-10.
++#   - _MAX_GLOB_MATCHES: cap ``**`` glob expansion so the filesystem walk is bounded.
++#   - _MAX_GIT_ACTIVITY_MATCHES: above this many matches, skip git-history probing
++#     entirely and fall back to filesystem mtime + mail activity (semantics preserved).
++#   - _GIT_ACTIVITY_TIMEOUT_SECONDS: hard wall-clock cap for the off-loop git probe.
++_MAX_GLOB_MATCHES: int = 500
++_MAX_GIT_ACTIVITY_MATCHES: int = 20
++_GIT_ACTIVITY_TIMEOUT_SECONDS: float = 3.0
++
+ # Virtual namespace prefixes for non-filesystem reservations (bd-14z)
+ _VIRTUAL_NS_PREFIXES: tuple[str, ...] = ("tool://", "resource://", "service://")
+ 
+@@ -1246,7 +1259,12 @@ def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
+     if not normalized:
+         return []
+     if _contains_glob(normalized):
+-        return list(base.glob(normalized))
++        # Bound the walk: a ``**`` pattern on a huge working tree would otherwise
++        # enumerate the entire subtree. islice stops the generator early so we
++        # never materialize (or stat) more than the cap.
++        from itertools import islice
++
++        return list(islice(base.glob(normalized), _MAX_GLOB_MATCHES))
+     candidate = base / normalized
+     if not candidate.exists():
+         return []
+@@ -1267,25 +1285,62 @@ def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
+ 
+ 
+ def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
++    """Most-recent commit timestamp touching any of ``matches``.
++
++    Bounded so it can never stall the event loop:
++      * Skips entirely when there are more than ``_MAX_GIT_ACTIVITY_MATCHES``
++        matches (staleness naturally falls back to fs mtime + mail activity).
++      * Uses a single batched ``git log -1`` over all paths instead of one
++        full-history ``iter_commits`` walk per file.
++    Callers should run this off the event loop (see ``asyncio.to_thread`` in
++    ``_collect_file_reservation_statuses``); it may block for a git subprocess.
++    """
+     if repo is None:
+         return None
++    # Too many matches → a broad reservation whose git history is not worth
++    # (and too expensive to) probe. Fall back to filesystem/mail signals.
++    if len(matches) > _MAX_GIT_ACTIVITY_MATCHES:
++        return None
+     repo_root = Path(repo.working_tree_dir or "").resolve()
+-    commit_times: list[datetime] = []
++    rel_paths: list[str] = []
+     for match in matches:
+         try:
+-            rel_path = match.resolve().relative_to(repo_root)
+-        except Exception:
+-            continue
+-        try:
+-            commit = next(repo.iter_commits(paths=str(rel_path), max_count=1))
+-        except StopIteration:
+-            continue
++            rel_paths.append(str(match.resolve().relative_to(repo_root)))
+         except Exception:
+             continue
+-        commit_times.append(datetime.fromtimestamp(commit.committed_date, tz=timezone.utc))
+-    if not commit_times:
++    if not rel_paths:
++        return None
++    try:
++        # One walk that stops at the first commit touching any of the paths.
++        raw = repo.git.log("-1", "--format=%ct", "--", *rel_paths)
++    except Exception:
++        return None
++    raw = (raw or "").strip()
++    if not raw:
+         return None
+-    return max(commit_times)
++    try:
++        return datetime.fromtimestamp(int(raw.splitlines()[0]), tz=timezone.utc)
++    except (ValueError, OSError, OverflowError):
++        return None
++
++
++def _reservation_activity_probe(
++    workspace: Optional[Path], repo: Optional[Repo], pattern: str
++) -> tuple[list[Path], Optional[datetime], Optional[datetime]]:
++    """Blocking glob + filesystem-mtime + git probe for a single reservation.
++
++    Returns ``(matches, fs_activity, git_activity)``. Designed to be run off the
++    event loop via ``asyncio.to_thread`` so a slow filesystem walk or git
++    subprocess can never stall async request handling.
++    """
++    if workspace is None:
++        return [], None, None
++    matches = _collect_matching_paths(workspace, pattern)
++    if not matches:
++        return [], None, None
++    fs_activity = _latest_filesystem_activity(matches)
++    git_activity = _latest_git_activity(repo, matches)
++    return matches, fs_activity, git_activity
+ 
+ 
+ def _project_workspace_path(project: Project) -> Optional[Path]:
+@@ -3649,10 +3704,19 @@ async def _collect_file_reservation_statuses(
+             git_activity: Optional[datetime] = None
+ 
+             if workspace is not None:
+-                matches = _collect_matching_paths(workspace, reservation.path_pattern)
+-                if matches:
+-                    fs_activity = _latest_filesystem_activity(matches)
+-                    git_activity = _latest_git_activity(repo, matches)
++                # Run the (potentially slow) glob + git probe off the event loop
++                # with a hard timeout so one broad reservation cannot stall the
++                # whole server. On timeout/failure we degrade to no fs/git signal
++                # (staleness still uses agent inactivity + mail activity).
++                try:
++                    matches, fs_activity, git_activity = await asyncio.wait_for(
++                        asyncio.to_thread(
++                            _reservation_activity_probe, workspace, repo, reservation.path_pattern
++                        ),
++                        timeout=_GIT_ACTIVITY_TIMEOUT_SECONDS,
++                    )
++                except (asyncio.TimeoutError, Exception):
++                    matches, fs_activity, git_activity = [], None, None
+ 
+             agent_inactive = (
+                 agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
+@@ -6018,7 +6082,7 @@ def build_mcp_server() -> FastMCP:
+                 data={"argument": "to", "received_type": type(to).__name__},
+             )
+ 
+-        # Check for common recipient mistakes and provide helpful guidance
++        # Validate recipient types up front.
+         for recipient in to:
+             if not isinstance(recipient, str):
+                 raise ToolExecutionError(
+@@ -6027,13 +6091,23 @@ def build_mcp_server() -> FastMCP:
+                     recoverable=True,
+                     data={"argument": "to", "invalid_item": repr(recipient)},
+                 )
++
++        # Name-shape heuristics are a NOT-FOUND diagnostic, not a delivery guard.
++        # A registered recipient (e.g. a bot identity like 'BiomatterBot', which
++        # looks "descriptive") MUST be deliverable. Only surface the helpful
++        # mistake hint when the recipient is not a registered agent — otherwise
++        # delivery to legitimate explicit/passthrough identities is blocked.
++        _to_known = await _get_agents_batch_lenient(project, list(to))
++        for recipient in to:
++            if _to_known.get(recipient) is not None:
++                continue
+             mistake = _detect_agent_name_mistake(recipient)
+             if mistake:
+                 raise ToolExecutionError(
+                     mistake[0],
+-                    f"Invalid recipient '{recipient}': {mistake[1]}",
++                    f"Unknown recipient '{recipient}': {mistake[1]}",
+                     recoverable=True,
+-                    data={"recipient": recipient, "hint": "Use agent names like 'BlueLake', not program/model names"},
++                    data={"recipient": recipient, "hint": "Use a registered agent name; discover via resource://agents/{project_key}"},
+                 )
+ 
+         # Normalize cc/bcc inputs and validate types for friendlier UX
+diff --git a/src/mcp_agent_mail/cli.py b/src/mcp_agent_mail/cli.py
+index a5b17be..ca2e9c2 100644
+--- a/src/mcp_agent_mail/cli.py
++++ b/src/mcp_agent_mail/cli.py
+@@ -703,6 +703,10 @@ def serve_http(
+     _kwargs: dict[str, Any] = {"host": resolved_host, "port": resolved_port, "log_level": "info"}
+     if "ws" in _sig.parameters:
+         _kwargs["ws"] = "none"
++    # uvloop 0.22.1 deadlocks the event loop on Python 3.14 (main thread wedges in
++    # uv_cond_wait minutes after startup; observed 2026-06-11). Pin the stdlib loop.
++    if "loop" in _sig.parameters:
++        _kwargs["loop"] = "asyncio"
+     uvicorn.run(app, **_kwargs)
+ 
+ 
+diff --git a/src/mcp_agent_mail/http.py b/src/mcp_agent_mail/http.py
+index 65d4432..84df047 100644
+--- a/src/mcp_agent_mail/http.py
++++ b/src/mcp_agent_mail/http.py
+@@ -3624,6 +3624,9 @@ def main() -> None:
+     _kwargs: dict[str, Any] = {"host": host, "port": port, "log_level": args.log_level}
+     if "ws" in _sig.parameters:
+         _kwargs["ws"] = "none"
++    # uvloop 0.22.1 deadlocks the event loop on Python 3.14 (see cli.py serve-http).
++    if "loop" in _sig.parameters:
++        _kwargs["loop"] = "asyncio"
+     uvicorn.run(app, **_kwargs)
+ 
+ 
+diff --git a/src/mcp_agent_mail/storage.py b/src/mcp_agent_mail/storage.py
+index 43cc257..a9c3888 100644
+--- a/src/mcp_agent_mail/storage.py
++++ b/src/mcp_agent_mail/storage.py
+@@ -3104,8 +3104,13 @@ async def restore_from_backup(
+ # Signal file path: {signals_dir}/projects/{project_slug}/agents/{agent_name}.signal
+ # Signal file contents: JSON with message metadata (id, from, subject, importance, timestamp)
+ 
+-# Debounce tracking: (project_slug, agent_name) -> last_signal_time
+-_SIGNAL_DEBOUNCE: dict[tuple[str, str], float] = {}
++# Debounce tracking: (project_slug, agent_name, msg_id) -> last_signal_time.
++# Including msg_id ensures distinct messages within the debounce window each emit
++# their own signal — debounce only suppresses duplicate emits of the SAME message
++# (e.g., spurious double-fire), not legitimate back-to-back distinct messages.
++# (Prior behavior used (project_slug, agent_name) which dropped 47% of inject events
++#  in 3-parallel-send bursts to the same recipient during the 2026-05-21 werewolf demo.)
++_SIGNAL_DEBOUNCE: dict[tuple[str, str, Any], float] = {}
+ 
+ 
+ async def emit_notification_signal(
+@@ -3131,20 +3136,30 @@ async def emit_notification_signal(
+     if not settings.notifications.enabled:
+         return False
+ 
+-    # Debounce check: skip if we signaled this agent recently
+-    debounce_key = (project_slug, agent_name)
++    # Debounce check: skip only if we already emitted THIS EXACT message recently.
++    # Different msg_ids each emit independently.
++    msg_id = (message_metadata or {}).get("id") if message_metadata else None
++    debounce_key = (project_slug, agent_name, msg_id)
+     debounce_ms = settings.notifications.debounce_ms
+     now_ms = time.time() * 1000
+ 
+     last_signal = _SIGNAL_DEBOUNCE.get(debounce_key, 0)
+     if now_ms - last_signal < debounce_ms:
+-        return False  # Too soon, skip
++        return False  # Too soon, skip (same message re-emitted)
+ 
+     _SIGNAL_DEBOUNCE[debounce_key] = now_ms
+ 
+-    # Build signal file path
++    # Build signal file path. Per-message file under agents/{agent}/{msg_id}.signal
++    # so concurrent emits to the same recipient don't overwrite each other (the
++    # historical single-file model lost intermediate messages in burst scenarios).
++    # When msg_id is unavailable (legacy/no-metadata callers), fall back to the
++    # original single-file path to preserve compatibility.
+     signals_dir = Path(settings.notifications.signals_dir).expanduser().resolve()
+-    signal_path = signals_dir / "projects" / project_slug / "agents" / f"{agent_name}.signal"
++    base_dir = signals_dir / "projects" / project_slug / "agents"
++    if msg_id is not None:
++        signal_path = base_dir / agent_name / f"{msg_id}.signal"
++    else:
++        signal_path = base_dir / f"{agent_name}.signal"
+ 
+     # Prepare signal content
+     signal_data: dict[str, Any] = {
+@@ -3195,13 +3210,31 @@ async def clear_notification_signal(
+         return False
+ 
+     signals_dir = Path(settings.notifications.signals_dir).expanduser().resolve()
+-    signal_path = signals_dir / "projects" / project_slug / "agents" / f"{agent_name}.signal"
++    base_dir = signals_dir / "projects" / project_slug / "agents"
++    legacy_path = base_dir / f"{agent_name}.signal"
++    per_msg_dir = base_dir / agent_name
+ 
+     def _clear_signal() -> bool:
+-        if signal_path.exists():
+-            signal_path.unlink()
+-            return True
+-        return False
++        cleared = False
++        # Remove legacy single-file signal if present.
++        if legacy_path.exists():
++            legacy_path.unlink()
++            cleared = True
++        # Remove all per-message signal files for this agent (the watcher
++        # normally unlinks each on successful inject; this handles leftovers
++        # such as messages whose recipient session was offline at signal time).
++        if per_msg_dir.is_dir():
++            for p in per_msg_dir.glob("*.signal"):
++                try:
++                    p.unlink()
++                    cleared = True
++                except FileNotFoundError:
++                    pass
++            try:
++                per_msg_dir.rmdir()
++            except OSError:
++                pass  # not empty (raced with new emit) or already gone
++        return cleared
+ 
+     try:
+         return await _to_thread(_clear_signal)
+@@ -3241,7 +3274,9 @@ def list_pending_signals(settings: Settings, project_slug: str | None = None) ->
+         if not agents_dir.exists():
+             continue
+ 
+-        for signal_file in agents_dir.glob("*.signal"):
++        # Legacy single-file layout plus per-message subdirectories.
++        signal_files = list(agents_dir.glob("*.signal")) + list(agents_dir.glob("*/*.signal"))
++        for signal_file in signal_files:
+             try:
+                 data = json.loads(signal_file.read_text(encoding="utf-8"))
+                 results.append(data)
+diff --git a/src/mcp_agent_mail/utils.py b/src/mcp_agent_mail/utils.py
+index 5decba1..b5047d8 100644
+--- a/src/mcp_agent_mail/utils.py
++++ b/src/mcp_agent_mail/utils.py
+@@ -92,6 +92,91 @@ ADJECTIVES: Iterable[str] = (
+     "Noble",
+     "Sturdy",
+     "Curious",
++    # Expanded simple adjectives (2026-06-26) — widen the auto-generated
++    # namespace. SIMPLE_ADJECTIVES x SCIENTIST_NOUNS had saturated at 899 names
++    # (898/899 taken; collision checks count every agent ever registered, incl.
++    # retired, so the namespace is consumed permanently). These also feed
++    # _VALID_AGENT_NAMES so generated names stay valid.
++    "Lucky",
++    "Happy",
++    "Merry",
++    "Jolly",
++    "Lively",
++    "Clever",
++    "Nimble",
++    "Hardy",
++    "Mighty",
++    "Sleek",
++    "Cozy",
++    "Grand",
++    "Royal",
++    "Loyal",
++    "Proud",
++    "Humble",
++    "Eager",
++    "Warm",
++    "Cool",
++    "Fresh",
++    "Crisp",
++    "Pure",
++    "Kind",
++    "Quick",
++    "Wise",
++    "Witty",
++    "Spry",
++    "Brisk",
++    "Steady",
++    "Mellow",
++    "Agile",
++    "Trusty",
++    "Breezy",
++    "Snowy",
++    "Starry",
++    "Wintry",
++    "Sandy",
++    "Rocky",
++    "Leafy",
++    "Mossy",
++    # Further simple adjectives (2026-06-26, round 2) — also feed
++    # _VALID_AGENT_NAMES; kept in sync with SIMPLE_ADJECTIVES.
++    "Tan",
++    "Mint",
++    "Lime",
++    "Aqua",
++    "Slate",
++    "Ash",
++    "Hazel",
++    "Cream",
++    "Peach",
++    "Steel",
++    "Brass",
++    "Plum",
++    "Cherry",
++    "Cocoa",
++    "Icy",
++    "Balmy",
++    "Chilly",
++    "Gusty",
++    "Dewy",
++    "Polar",
++    "Solar",
++    "Lunar",
++    "Cosmic",
++    "Stellar",
++    "Jovial",
++    "Cheery",
++    "Plucky",
++    "Deft",
++    "Astute",
++    "Dapper",
++    "Neat",
++    "Smart",
++    "Hearty",
++    "Snug",
++    "Zesty",
++    "Jaunty",
++    "Rosy",
++    "Lush",
+ )
+ 
+ NOUNS: Iterable[str] = (
+@@ -198,47 +283,65 @@ NOUNS: Iterable[str] = (
+     "Maxwell",
+     "Ramanujan",
+     "Hubble",
++    # Added 2026-06-26 (round 2) — keep in sync with SCIENTIST_NOUNS below.
++    "Galileo",
++    "Copernicus",
++    "Archimedes",
++    "Mendeleev",
++    "Fermi",
++    "Dirac",
++    "Franklin",
++    "Edison",
++    "Koch",
++    "Bell",
++    # Added 2026-06-26 (round 3) — keep in sync with SCIENTIST_NOUNS below.
++    "Yukawa",
++    "Lovelace",
++    "Noether",
++    "Somerville",
++    "Pauling",
++    "Watt",
++    "Hopper",
++    "Lavoisier",
++    "Bose",
++    "Lamarr",
++    "Goodall",
+ )
+ 
+-# Simple adjectives only — used by generate_agent_name().
+-# Removed: complex color names (Chartreuse, Fuchsia, Turquoise…) and
+-# uncommon descriptors (Bald, Rustic, Vivid, Sturdy, Keen…).
+-# ADJECTIVES is kept intact for validate_agent_name_format() backward compatibility.
++# Simple adjectives — the adjective half of auto-generated "adjective+scientist"
++# names (generate_agent_name()). Expanded 2026-06-26: the previous 31-adjective
++# list x 29 scientists = 899 names had saturated (898/899 taken). Collision checks
++# count every agent ever registered (incl. retired), so the namespace is consumed
++# permanently and a too-small pool eventually fails with "Unable to generate a
++# unique agent name". Round 3 (2026-06-26) has 134 adjectives; with 50
++# scientists that is 6700 names. Every entry here is also in ADJECTIVES so
++# validate_agent_name_format() recognizes the output.
+ SIMPLE_ADJECTIVES: Iterable[str] = (
+     # Basic colors
+-    "Red",
+-    "Orange",
+-    "Pink",
+-    "Black",
+-    "Purple",
+-    "Blue",
+-    "Brown",
+-    "White",
+-    "Green",
+-    "Gold",
+-    "Gray",
+-    "Navy",
+-    "Silver",
+-    # Weather
+-    "Sunny",
+-    "Foggy",
+-    "Stormy",
+-    "Windy",
+-    "Frosty",
+-    "Cloudy",
+-    "Rainy",
++    "Red", "Orange", "Pink", "Black", "Purple", "Blue", "Brown", "White",
++    "Green", "Gold", "Gray", "Navy", "Silver",
++    # Extended colors (still simple and memorable)
++    "Amber", "Coral", "Crimson", "Cyan", "Indigo", "Jade", "Olive", "Rose",
++    "Ruby", "Sage", "Scarlet", "Teal", "Violet", "Copper", "Bronze", "Emerald",
++    "Azure",
++    # Weather and nature
++    "Sunny", "Foggy", "Stormy", "Windy", "Frosty", "Cloudy", "Rainy", "Misty",
++    "Hazy", "Dusty", "Breezy", "Snowy", "Starry", "Wintry", "Sandy", "Rocky",
++    "Leafy", "Mossy",
+     # Descriptive
+-    "Swift",
+-    "Quiet",
+-    "Bold",
+-    "Calm",
+-    "Bright",
+-    "Dark",
+-    "Wild",
+-    "Brave",
+-    "Noble",
+-    "Curious",
+-    "Sharp",
++    "Swift", "Quiet", "Bold", "Calm", "Bright", "Dark", "Wild", "Brave",
++    "Noble", "Curious", "Sharp", "Gentle", "Silent", "Keen", "Vivid", "Sturdy",
++    "Lucky", "Happy", "Merry", "Jolly", "Lively", "Clever", "Nimble", "Hardy",
++    "Mighty", "Sleek", "Cozy", "Grand", "Royal", "Loyal", "Proud", "Humble",
++    "Eager", "Warm", "Cool", "Fresh", "Crisp", "Pure", "Kind", "Quick",
++    "Wise", "Witty", "Spry", "Brisk", "Steady", "Mellow", "Agile", "Trusty",
++    # Round 2 (2026-06-26) — extended shades, celestial/weather, descriptors
++    "Tan", "Mint", "Lime", "Aqua", "Slate", "Ash", "Hazel", "Cream", "Peach",
++    "Steel", "Brass", "Plum", "Cherry", "Cocoa",
++    "Icy", "Balmy", "Chilly", "Gusty", "Dewy", "Polar", "Solar", "Lunar",
++    "Cosmic", "Stellar",
++    "Jovial", "Cheery", "Plucky", "Deft", "Astute", "Dapper", "Neat", "Smart",
++    "Hearty", "Snug", "Zesty", "Jaunty", "Rosy", "Lush",
+ )
+ 
+ # Scientist names only — used by generate_agent_name() so auto-generated names
+@@ -274,6 +377,33 @@ SCIENTIST_NOUNS: Iterable[str] = (
+     "Maxwell",
+     "Ramanujan",
+     "Hubble",
++    # Added 2026-06-26 (round 2). Each has a dashboard portrait
++    # (portraits_64/<Name>.png + portraits_pixel/<Name>.png) and an entry in
++    # the index.html SCIENTISTS array + MURMURS.
++    "Galileo",
++    "Copernicus",
++    "Archimedes",
++    "Mendeleev",
++    "Fermi",
++    "Dirac",
++    "Franklin",
++    "Edison",
++    "Koch",
++    "Bell",
++    # Added 2026-06-26 (round 3). Each has a dashboard portrait
++    # (portraits_64/<Name>.png + portraits_pixel/<Name>.png) and an entry in
++    # the index.html SCIENTISTS array + MURMURS.
++    "Yukawa",
++    "Lovelace",
++    "Noether",
++    "Somerville",
++    "Pauling",
++    "Watt",
++    "Hopper",
++    "Lavoisier",
++    "Bose",
++    "Lamarr",
++    "Goodall",
+ )
+ 
+ _SLUG_RE = re.compile(r"[^a-z0-9]+")

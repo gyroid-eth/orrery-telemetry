@@ -1,0 +1,1553 @@
+{
+  "manifest_version": 2,
+  "contract_version": 1,
+  "comparison_policy": {
+    "default": "fail_on_difference",
+    "allowlist": "intentional_differences.allowlisted_entries_only",
+    "unselected_product_decisions": "fail_on_observation",
+    "selected_implemented_product_decisions": "assert_selected_behavior",
+    "selected_not_implemented_product_decisions": "fail_on_observation"
+  },
+  "baselines": {
+    "live": {
+      "python_namespace": "mcp_agent_mail",
+      "source_head": "b8251c1336e5fdca80a91b8b608d843df91b64e8",
+      "bundle_sha256": "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30e37a1e",
+      "tracked_patch_sha256": "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac",
+      "tool_fixture": "live-tools-list.json"
+    },
+    "core": {
+      "python_namespace": "agentstack_mail",
+      "approved_base": "6393f1ea3db6c0fce3188061237299cfae150db9",
+      "contract_fixture": "compatibility-tools-v1.json"
+    }
+  },
+  "intentional_differences": {
+    "server_topology": {
+      "live": {
+        "tool_count": 40,
+        "resource_count": 0,
+        "resource_template_count": 21,
+        "prompt_count": 0
+      },
+      "core": {
+        "tool_count": 24,
+        "resource_count": 0,
+        "resource_template_count": 0,
+        "prompt_count": 0
+      }
+    },
+    "normalization_blind_spots": [
+      {
+        "id": "rich_tool_call_timing_presentation",
+        "scope": "durable Git log Rich tool-call panels only",
+        "ignored": [
+          "measured duration in milliseconds",
+          "duration-derived speed icon and completion footer"
+        ],
+        "consequence": "This behavior differential cannot detect live/Core performance-class regressions; performance must be measured by a separate gate."
+      }
+    ],
+    "safety_entries": [
+      {
+        "id": "reservation-probe-incomplete-fail-closed",
+        "selector": "file_reservation_staleness.activity_probe.{timeout,error,filesystem_incomplete}",
+        "frozen_live": "timeout/error is collapsed to matches=[], fs=None, git=None; an inactive owner with no recent mail can therefore become stale and be auto-released",
+        "product": "probe_complete=false and activity_unknown=true; stale=false, so activity-probe uncertainty cannot auto-release; explicit TTL expiry remains authoritative",
+        "reason": "absence of evidence after an incomplete probe is not evidence of inactivity; avoid erroneous early release while retaining deterministic TTL expiry"
+      },
+      {
+        "id": "loopback-retire-target-token-omission",
+        "selector": "tools.retire_agent.authorization.token_bearing_target_without_registration_token",
+        "frozen_live": "the published MCP tool rejects a token-bearing target when registration_token is omitted, although the live dashboard bypasses that tool through its loopback REST route",
+        "product": "the loopback-only Core MCP tool accepts target-token omission for every target and emits a structured authorization audit event without credential material",
+        "reason": "preserve the operator-used dashboard EXIT behavior at the existing local-process trust boundary during cutover; retain the registration_token field so a project-administrator credential can replace this boundary after cutover"
+      }
+    ],
+    "allowlisted_entries": [
+      {
+        "id": "description.request_contact",
+        "category": "tool_description",
+        "selector": "tools.request_contact.description",
+        "comparator_disposition": "allow",
+        "live": {
+          "utf8_bytes": 791,
+          "sha256": "b57583329712bdd01168c3c576957b049518c0270b0cc5730728eca3ead52b38"
+        },
+        "core": {
+          "utf8_bytes": 736,
+          "sha256": "25e18aad7eaa21282480539b393cb96abdd9f1a7a8ebb7fc6d0b266f114c5db4"
+        },
+        "reason": "The unpublished roster resource was replaced by runtime-assigned or register_agent identities plus whois verification. Input and output schemas are not allowlisted to differ."
+      },
+      {
+        "id": "description.send_message",
+        "category": "tool_description",
+        "selector": "tools.send_message.description",
+        "comparator_disposition": "allow",
+        "live": {
+          "utf8_bytes": 4235,
+          "sha256": "f1c3a155cf961241cd218796c5fcb14082bce82a418c8a0124599a8d7e59fe14"
+        },
+        "core": {
+          "utf8_bytes": 4221,
+          "sha256": "9f2e73cf925371ada7b6d168d8c4b8a7075edd2dca295b44a37f0e444c1f08c1"
+        },
+        "reason": "The unpublished roster resource was replaced by runtime-assigned or register_agent identities plus whois verification. Input and output schemas are not allowlisted to differ."
+      },
+      {
+        "id": "description.whois",
+        "category": "tool_description",
+        "selector": "tools.whois.description",
+        "comparator_disposition": "allow",
+        "live": {
+          "utf8_bytes": 742,
+          "sha256": "139e1ee3071c20421acbda81699f182e6946663e7b61f856ae11bb04fba0ad2c"
+        },
+        "core": {
+          "utf8_bytes": 687,
+          "sha256": "1b1404e6ec24c23b390f37d5e243327df6f15769963a5c7d457aa87828468c65"
+        },
+        "reason": "The unpublished roster resource was replaced by lookup of a known runtime-assigned or register_agent identity. Input and output schemas are not allowlisted to differ."
+      },
+      {
+        "id": "topology.publication_surface",
+        "category": "server_topology",
+        "selector": "server",
+        "comparator_disposition": "allow",
+        "live": {
+          "tool_count": 40,
+          "resource_count": 0,
+          "resource_names": [],
+          "resource_template_count": 21,
+          "resource_template_uris": [
+            "resource://agents/{project_key}{?format}",
+            "resource://config/environment{?format}",
+            "resource://file_reservations/{slug}{?active_only,format}",
+            "resource://inbox/{agent}{?project,since_ts,urgent_only,include_bodies,limit,format}",
+            "resource://mailbox-with-commits/{agent}{?project,limit,format}",
+            "resource://mailbox/{agent}{?project,limit,format}",
+            "resource://message/{message_id}{?project,format}",
+            "resource://outbox/{agent}{?project,limit,include_bodies,since_ts,format}",
+            "resource://project/{slug}{?format}",
+            "resource://projects{?format}",
+            "resource://thread/{thread_id}{?project,include_bodies,format}",
+            "resource://tooling/capabilities/{agent}{?project,format}",
+            "resource://tooling/directory{?format}",
+            "resource://tooling/locks{?format}",
+            "resource://tooling/metrics{?format}",
+            "resource://tooling/recent/{window_seconds}{?agent,project,format}",
+            "resource://tooling/schemas{?format}",
+            "resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit,format}",
+            "resource://views/ack-required/{agent}{?project,limit,format}",
+            "resource://views/acks-stale/{agent}{?project,ttl_seconds,limit,format}",
+            "resource://views/urgent-unread/{agent}{?project,limit,format}"
+          ],
+          "prompt_count": 0,
+          "prompt_names": [],
+          "tool_names": [
+            "acknowledge_message",
+            "archive_project",
+            "create_agent_identity",
+            "deregister_agent",
+            "ensure_project",
+            "expire_window",
+            "fetch_inbox",
+            "fetch_summary",
+            "fetch_topic",
+            "file_reservation_paths",
+            "force_release_file_reservation",
+            "hard_delete_agent",
+            "hard_delete_project",
+            "health_check",
+            "install_precommit_guard",
+            "list_contacts",
+            "list_window_identities",
+            "macro_contact_handshake",
+            "macro_file_reservation_cycle",
+            "macro_prepare_thread",
+            "macro_start_session",
+            "mark_message_read",
+            "purge_old_messages",
+            "register_agent",
+            "release_file_reservations",
+            "rename_window",
+            "renew_file_reservations",
+            "reply_message",
+            "request_contact",
+            "respond_contact",
+            "retire_agent",
+            "search_messages",
+            "send_message",
+            "set_contact_policy",
+            "summarize_recent",
+            "summarize_thread",
+            "unarchive_project",
+            "uninstall_precommit_guard",
+            "unretire_agent",
+            "whois"
+          ]
+        },
+        "core": {
+          "tool_count": 24,
+          "resource_count": 0,
+          "resource_names": [],
+          "resource_template_count": 0,
+          "resource_template_uris": [],
+          "prompt_count": 0,
+          "prompt_names": [],
+          "tool_names": [
+            "acknowledge_message",
+            "ensure_project",
+            "fetch_inbox",
+            "fetch_summary",
+            "fetch_topic",
+            "file_reservation_paths",
+            "health_check",
+            "list_contacts",
+            "macro_contact_handshake",
+            "macro_file_reservation_cycle",
+            "macro_start_session",
+            "mark_message_read",
+            "register_agent",
+            "release_file_reservations",
+            "renew_file_reservations",
+            "reply_message",
+            "request_contact",
+            "respond_contact",
+            "retire_agent",
+            "search_messages",
+            "send_message",
+            "set_contact_policy",
+            "summarize_thread",
+            "whois"
+          ]
+        },
+        "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union while suppressing the 16 non-compatibility live tools and all 21 live resource templates; Core publishes zero concrete resources and zero prompts."
+      },
+      {
+        "id": "isolation.namespace",
+        "category": "service_isolation",
+        "selector": "service.namespace",
+        "comparator_disposition": "allow",
+        "live": {
+          "distribution": "mcp-agent-mail",
+          "python_package": "mcp_agent_mail",
+          "mcp_provider_identity": "mcp-agent-mail",
+          "client_mcp_keys": {
+            "claude": "mcp-agent-mail",
+            "codex": "agent-mail"
+          }
+        },
+        "core": {
+          "distribution": "agentstack-mail",
+          "python_package": "agentstack_mail",
+          "mcp_provider_identity": "agentstack-mail",
+          "client_mcp_keys": {
+            "claude": "mcp-agent-mail",
+            "codex": "agent-mail"
+          }
+        },
+        "reason": "The renamed provider must coexist without import or storage collision while first-cutover client keys remain a compatibility ABI; authority is determined by endpoint, roots, and ownership rather than the client-visible key."
+      },
+      {
+        "id": "isolation.environment",
+        "category": "service_isolation",
+        "selector": "configuration.environment",
+        "comparator_disposition": "allow",
+        "live": {
+          "variable_prefix": "",
+          "default_env_file": ".env"
+        },
+        "core": {
+          "variable_prefix": "AGENTSTACK_MAIL_",
+          "default_env_file": "~/.agentstack/mail/.env",
+          "legacy_unprefixed_fallback": false
+        },
+        "reason": "Core configuration is isolated from legacy variables and a working-directory .env. Differential workers translate equivalent settings into each namespace."
+      },
+      {
+        "id": "isolation.default_paths",
+        "category": "service_isolation",
+        "selector": "configuration.defaults",
+        "comparator_disposition": "allow",
+        "live": {
+          "port": 8765,
+          "database": "./storage.sqlite3",
+          "archive": "~/.mcp_agent_mail_git_mailbox_repo",
+          "signals": "~/.mcp_agent_mail/signals"
+        },
+        "core": {
+          "port": 18765,
+          "database": "~/.agentstack/mail/storage.sqlite3",
+          "archive": "~/.agentstack/mail/archive",
+          "signals": "~/.agentstack/mail/signals"
+        },
+        "reason": "Core defaults are intentionally non-colliding. Differential durable snapshots normalize worker-private absolute roots before comparison."
+      },
+      {
+        "id": "isolation.provenance",
+        "category": "source_provenance",
+        "selector": "source.baseline",
+        "comparator_disposition": "allow",
+        "live": {
+          "kind": "authenticated_git_bundle_plus_tracked_patch",
+          "repository_audit_payload": true
+        },
+        "core": {
+          "kind": "derived_agentstack_distribution",
+          "repository_audit_payload_in_distribution": false,
+          "distribution_evidence": [
+            "NOTICE.md",
+            "AGENTSTACK_LICENSE",
+            "UPSTREAM_LICENSE",
+            "fixtures"
+          ]
+        },
+        "reason": "The bundle and patch reconstruct the frozen live source but are repository-only audit inputs; wheel and sdist retain notices, licenses, and fixtures instead."
+      },
+      {
+        "id": "dependency.lazy_legacy_llm",
+        "category": "dependency_boundary",
+        "selector": "runtime.llm_import",
+        "comparator_disposition": "allow",
+        "live": {
+          "legacy_llm_dependency": "runtime_baseline"
+        },
+        "core": {
+          "legacy_llm_dependency": "optional_extra",
+          "load_policy": "lazy_only_when_llm_enabled"
+        },
+        "reason": "summarize_thread is public, but the default deployment keeps LLM support disabled: its heuristic path succeeds without importing the optional LiteLLM seam. The optional extra is required only when LLM support is explicitly enabled."
+      }
+    ]
+  },
+  "performance_gates": [
+    {
+      "id": "reservation-activity-57-path-wall-time",
+      "selector": "reservation_activity.performance.57_concrete",
+      "script": "packages/agentstack_mail/scripts/reservation_performance_gate.py",
+      "input": {
+        "workspace": "/Users/operator/Syncthing/<vault-directory>",
+        "count": 57,
+        "source_command": "git ls-files -z",
+        "preferred_prefix": "10_Reference/",
+        "preferred_extensions": [
+          ".md",
+          ".png",
+          ".jpg",
+          ".jpeg",
+          ".webp"
+        ],
+        "ordering": "unicode_codepoint_ascending",
+        "sampling": "if preferred has at least count paths use floor(i*(n-1)/(count-1)) for i=0..count-1; otherwise take every preferred path then apply the same formula to nonpreferred for the remainder"
+      },
+      "repetitions": 5,
+      "fresh_process_each_run": true,
+      "statistic": "median_wall_seconds",
+      "threshold_seconds": 6.0,
+      "minimum_complete_runs": 3,
+      "pass_definition": "median wall time across 5 runs <= 6.0s AND at least 3 runs have matched=probe_complete=57; maximum and live snapshot are diagnostic only",
+      "purpose": "detect regression to the approximately 9.5s serial reservation sweep, not distinguish normal 2s versus 3s machine-load variation",
+      "fingerprints": {
+        "input_sha256": "sha256 of canonical JSON UTF-8 input_paths array",
+        "result_shape_sha256": "sha256 of canonical JSON UTF-8 runs[*].results arrays containing only path/matched/probe_complete/filesystem_present/git_present",
+        "excluded": "filesystem and Git activity timestamps; hourly vault commits make them mutable"
+      },
+      "calibration": {
+        "runs": 10,
+        "fresh_process_each_run": true,
+        "median_seconds": 1.5137,
+        "max_seconds": 2.7907,
+        "complete_runs": 10
+      }
+    }
+  ],
+  "follow_up_tasks": [
+    {
+      "id": "reservation-probe-safety-release-gate",
+      "implementation_state": "implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "reservation activity probe timeout, error, and incomplete filesystem observation",
+        "explicit TTL expiry positive control"
+      ],
+      "requirements": [
+        "implement fail-closed activity_unknown semantics so an incomplete probe cannot make a reservation stale or releasable before explicit TTL expiry",
+        "version and run adverse timeout, error, and filesystem-incomplete controls plus the explicit TTL positive control"
+      ],
+      "acceptance": "the implementation and raw safety gate prove every incomplete probe is retained while an explicitly TTL-expired reservation remains releasable",
+      "verification_gate": "reservation-probe-safety-release-gate"
+    },
+    {
+      "id": "http-cli-transport-entrypoints",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "exact candidate wheel installed in the C1 target virtual environment",
+        "HTTP transport entrypoint",
+        "CLI service entrypoint"
+      ],
+      "requirements": [
+        "install the exact candidate wheel into the C1 target virtual environment without changing the live service on partial failure",
+        "boot the exact 24-tool boundary through supported HTTP and CLI paths from that installed wheel under the agentstack-mail namespace",
+        "require passthrough agent-name enforcement at both supported startup entrypoints before application construction",
+        "use the isolated endpoint and roots without reading legacy unprefixed variables or a working-directory .env"
+      ],
+      "acceptance": "the exact C1 wheel starts both supported entrypoints on an isolated endpoint, publishes exactly 24 tools, leaves the live AgentMail endpoint reachable, rejects non-passthrough identity modes before application construction, and leaves no installer-owned partial state after failure",
+      "verification_gate": "http-cli-transport-entrypoints"
+    },
+    {
+      "id": "service-lifecycle-supervision",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "agentstack-mail service start/status/stop/restart",
+        "crash recovery and duplicate-start exclusion"
+      ],
+      "requirements": [
+        "provide bounded start, readiness, status, stop, restart, and crash-recovery behavior",
+        "prove launchd-equivalent SIGTERM closes without traceback or abnormal exit, reconciles SQLite WAL and SHM sidecars, and supports stop then stopped status then start then bounded health; record the residue and recovery result when a forced kill interrupts shutdown",
+        "prove the supervisor cannot start two writers for the same AgentStack Mail roots",
+        "prove live and AgentStack Mail never share the provider identity, port, database, archive, or signals roots and never have two writable authorities",
+        "keep the exact C/R lifecycle commands and partial-failure cleanup in the normative cutover runbook"
+      ],
+      "acceptance": "lifecycle tests exercise normal, partial-failure, SIGTERM, forced-kill, and crash paths, observe one ready service, reap descendants, prove clean SIGTERM has no traceback or abnormal exit and leaves recoverable SQLite sidecar state, complete stop to stopped status to start to bounded health, preserve isolated live roots and endpoint, and execute the normative cutover and pre-write rollback commands without two writers",
+      "verification_gate": "service-lifecycle-supervision"
+    },
+    {
+      "id": "mcp-client-reregistration-cutover",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "Claude MCP configuration",
+        "Codex MCP configuration",
+        "bridge, hooks, skills, and permissions",
+        "versioned supported consumer inventory including Orrery and dashboard authority selectors",
+        "strict reservation-hook identity deployment after managed client restart and rebind"
+      ],
+      "requirements": [
+        "separate the internal agentstack-mail provider identity from client registration keys; by default preserve Claude mcp-agent-mail and Codex agent-mail while changing only endpoint and authentication, and require an explicit post-cutover choice for any rename",
+        "determine authority from the exact endpoint, database, archive, signals roots, and service ownership rather than from a client-visible key",
+        "preserve every existing Claude permission and hook selector during first cutover, including stale selectors, so tool namespaces do not change; defer optional key rename and stale-selector cleanup",
+        "capture the complete consumer, selector, stopped-child, and session inventory in one bounded read-only collection run that includes hidden and ignored paths; require both a known-positive selector control and a known ignored-path completeness control, then seal its timestamp, paths, counts, and digests before preview",
+        "include stopped Claude and Codex child configs in the sealed inventory and migrate their endpoint and authentication without deleting resumable session state; resume them only through the updated managed launcher",
+        "require Orrery to select the new mail database by absolute path without a legacy database fallback",
+        "require dashboard startup to fail closed unless AGENTSTACK_MAIL_DB, AGENTSTACK_MCP_URL, and AGENTSTACK_SIGNALS_DIR explicitly select the new authority",
+        "restart every supported client through a managed launcher before deploying the strict reservation hook; reject raw non-tmux sessions, unresolved or placeholder identity, untargeted ambient tmux fallback, and pane metadata that disagrees with the exact targeted session before any reservation request",
+        "record stale agent_name_* metadata cleanup as deferred maintenance and never treat those files alone as first-cutover identity authority"
+      ],
+      "acceptance": "N and N-1 fixture tests show Claude and Codex retain their exact pre-cutover client keys and fully qualified tool names while endpoint and authentication move to the new provider; a mutation that couples client key to provider identity fails; the one-run sealed inventory passes separate search-liveness and ignored-path-completeness controls, includes every active and stopped consumer, and preserves every first-cutover permission and hook selector; the sealed selector set rejects missing, legacy, wrong, malformed, relative-database, or cross-authority-mixed endpoint or root values before consumers resume without using key names as authority; Orrery reads the exact selected new database and refuses an absent selector instead of falling back; dashboard refuses startup when any required database, MCP URL, or signals selector is absent; after every supported client restarts through a managed launcher, the strict hook is deployed and tests prove exact env or targeted-pane identity passes, stale metadata mismatch and unresolved, placeholder, raw non-tmux, or ambient-only identity fail before HTTP, and reservation-present versus reservation-absent paths pass and block respectively; no consumer writes through the old service after authority switch; and the prior configuration can be restored exactly",
+      "verification_gate": "mcp-client-reregistration-cutover"
+    },
+    {
+      "id": "data-migration-reconciliation",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "copied SQLite database",
+        "copied signals and archive working tree without legacy Git history",
+        "maintainer-selected baseline-commit-A for the copied working tree",
+        "identity, message, recipient, receipt, and reservation records"
+      ],
+      "requirements": [
+        "copy rather than share writable live database and archive roots",
+        "exclude the legacy .git directory and runtime or lock artifacts, initialize an unrelated repository, and create one baseline root commit containing the exact copied working tree",
+        "preserve stable identifiers and timestamps and reconcile sqlite_schema objects, indexes, triggers, views, relevant PRAGMAs and schema versions, relationships, receipts, reservations, archive state, and restart or partial-copy recovery",
+        "prove live and copied authorities never share a writable database, archive, signals root, provider identity, or port and never have two concurrent writers",
+        "keep the exact copy and verification commands in the normative cutover runbook"
+      ],
+      "acceptance": "a production-shaped migration rehearsal compares canonical sqlite_schema plus relevant PRAGMA and version inventories, reports exact identity or a versioned approved transform, exact record counts, relationship integrity, stable identifiers and timestamps, signals and archive working-tree verification, absence of the legacy .git and runtime artifacts, one clean unrelated baseline root commit whose tree exactly matches the selected copied files, and zero concurrent writers to either authority",
+      "verification_gate": "data-migration-reconciliation"
+    },
+    {
+      "id": "rollback-revert-procedure",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "pre-authority abort",
+        "partial client switch before the first durable new-authority write"
+      ],
+      "requirements": [
+        "define one-writer authority transitions and exact client and service restoration steps before the first durable new-authority write",
+        "restore the prior client and service configuration exactly without starting both writable authorities",
+        "keep the exact R1-R5 pre-write rollback commands consistent with the implementation"
+      ],
+      "acceptance": "a rehearsal before the first durable new-authority write restores the prior client and service configuration, proves one writable authority at every checkpoint, and rejects migration or client drift instead of claiming rollback success",
+      "verification_gate": "rollback-revert-procedure"
+    },
+    {
+      "id": "notification-layout-consumer-compatibility",
+      "implementation_state": "not_implemented",
+      "implementation_order": "pre_cutover",
+      "scope": [
+        "per-message notification writer",
+        "legacy single-file notification consumer",
+        "versioned inventory of every supported real consumer"
+      ],
+      "requirements": [
+        "prove canonical writes remain per-message while supported consumers can drain both per-message and legacy layouts",
+        "freeze the exact consumer and version inventory, then exercise every listed transition without losing, duplicating beyond the selected D12 window, or prematurely deleting a notification",
+        "keep the exact signal-root and watcher transition commands in the normative cutover runbook"
+      ],
+      "acceptance": "machine tests cover both layouts and a production-shaped consumer transition with durable message authority and the selected best-effort wakeup contract intact",
+      "verification_gate": "notification-layout-consumer-compatibility"
+    }
+  ],
+  "cutover_gate": {
+    "schema_version": 1,
+    "authority_effect": "read_only_computation_only_never_updates_product_decisions_or_creates_approval_records",
+    "default_state": "no_go",
+    "unknown_state": "no_go",
+    "go_rule": "every required condition id is present exactly once and evaluates pass",
+    "evidence_contract": {
+      "schema_version": 1,
+      "manifest_binding": "sha256_of_exact_manifest_bytes",
+      "candidate_binding": "explicit_full_git_commit_with_clean_tracked_and_untracked_worktree",
+      "condition_binding": "sha256_of_condition_definition_canonical_json",
+      "artifact_index_fields": [
+        "condition_id",
+        "definition_sha256",
+        "kind",
+        "path",
+        "sha256"
+      ],
+      "pass_rule": "condition_specific_handler_recomputes_the_result_from_digest_verified_raw_artifacts_without_status_pass_or_verdict_fields",
+      "missing_duplicate_extra_or_unknown": "no_go"
+    },
+    "required_condition_ids": [
+      "product-decisions-selected",
+      "pre-cutover-product-decisions-implemented",
+      "initial-cutover-difference-set-exact",
+      "candidate-source-bound",
+      "product-decision-cutover-approval",
+      "selected-behavior-release-gate",
+      "distribution-artifact-release-gate",
+      "reservation-probe-safety-release-gate",
+      "http-cli-transport-entrypoints",
+      "service-lifecycle-supervision",
+      "mcp-client-reregistration-cutover",
+      "data-migration-reconciliation",
+      "rollback-revert-procedure",
+      "notification-layout-consumer-compatibility"
+    ],
+    "conditions": [
+      {
+        "id": "product-decisions-selected",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].{id,decision_state}",
+        "predicate": "ids_are_exactly_D1_through_D12_and_every_decision_state_equals_selected",
+        "remediation": "select every versioned product decision without adding, deleting, or duplicating an id"
+      },
+      {
+        "id": "pre-cutover-product-decisions-implemented",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].{implementation_state,implementation_order}",
+        "predicate": "every_decision_is_implemented_except_D7_with_exact_post_cutover_order",
+        "remediation": "implement every pre-cutover product decision; retain only the exact D7 post-cutover deferral"
+      },
+      {
+        "id": "initial-cutover-difference-set-exact",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[D7].scope.cutover_intentional_difference_set_and_intentional_differences.safety_entries",
+        "predicate": "difference_ids_equal_D1_plus_reservation_probe_incomplete_fail_closed_plus_loopback_retire_target_token_omission_and_both_safety_entries_exist",
+        "remediation": "restore the exact three-difference cutover set and both safety definitions"
+      },
+      {
+        "id": "candidate-source-bound",
+        "kind": "checkout_predicate",
+        "evidence_kind": "none",
+        "source": "explicit_full_candidate_commit_and_pre_post_git_status_for_the_evaluator_checkout",
+        "predicate": "explicit_full_candidate_commit_equals_HEAD_and_tracked_plus_untracked_worktree_is_clean_and_unchanged_across_evaluation",
+        "remediation": "commit the complete reviewed candidate, remove unrelated generated files, and rerun with its explicit full commit id"
+      },
+      {
+        "id": "product-decision-cutover-approval",
+        "kind": "manifest_predicate",
+        "evidence_kind": "none",
+        "source": "product_decisions[*].cutover_state",
+        "predicate": "D1_through_D6_and_D8_through_D12_cutover_state_equal_go_while_D7_remains_exact_deferred_no_go",
+        "remediation": "obtain maintainer approval for the initial-cutover decisions while keeping D7 in its exact post-cutover deferred state; the evaluator never writes these fields"
+      },
+      {
+        "id": "selected-behavior-release-gate",
+        "kind": "evidence_gate",
+        "evidence_kind": "pytest_nodes_v1",
+        "source": "product_decisions[*].verification",
+        "predicate": "all_exact_selected_behavior_nodes_pass_on_the_candidate_commit",
+        "remediation": "run the complete selected-behavior suite and attach manifest-bound machine evidence"
+      },
+      {
+        "id": "distribution-artifact-release-gate",
+        "kind": "evidence_gate",
+        "evidence_kind": "distribution_artifacts_v1",
+        "source": "tests/verify_artifact.py_on_fresh_wheel_and_sdist",
+        "predicate": "fresh_wheel_and_sdist_both_pass_the_exact_artifact_verifier",
+        "remediation": "build both distributions from the candidate commit and attach manifest-bound verifier evidence"
+      },
+      {
+        "id": "reservation-probe-safety-release-gate",
+        "kind": "follow_up_task",
+        "evidence_kind": "reservation_safety_v1",
+        "source": "follow_up_tasks[reservation-probe-safety-release-gate] plus intentional_differences.safety_entries[reservation-probe-incomplete-fail-closed]",
+        "predicate": "implementation_state_equals_implemented_and_timeout_error_and_filesystem_incomplete_controls_fail_closed_while_explicit_TTL_expiry_remains_authoritative",
+        "remediation": "implement fail-closed incomplete-probe behavior and verify all adverse controls plus the TTL positive control"
+      },
+      {
+        "id": "http-cli-transport-entrypoints",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[http-cli-transport-entrypoints]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "service-lifecycle-supervision",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[service-lifecycle-supervision]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "mcp-client-reregistration-cutover",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[mcp-client-reregistration-cutover]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "data-migration-reconciliation",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[data-migration-reconciliation]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "rollback-revert-procedure",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[rollback-revert-procedure]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the named pre-cutover train"
+      },
+      {
+        "id": "notification-layout-consumer-compatibility",
+        "kind": "follow_up_task",
+        "evidence_kind": "unimplemented_v1",
+        "source": "follow_up_tasks[notification-layout-consumer-compatibility]",
+        "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
+        "remediation": "complete and verify the per-message plus legacy-layout consumer transition"
+      }
+    ]
+  },
+  "product_decisions": [
+    {
+      "id": "D1",
+      "title": "conflicting token registration mutation",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "core_change",
+      "cutover_state": "no_go",
+      "resolution": "reject_explicit_conflicting_token_before_mutation",
+      "scope": {
+        "explicit_conflicting_token": "reject_without_durable_mutation",
+        "same_token": "metadata_refresh_with_exactly_one_git_commit",
+        "omitted_token": "credential_retention_and_authority_semantics_unchanged_D6_selected_pre_existing_parity_D7_selected_not_implemented_no_go",
+        "concurrent_conflicting_tokens_on_null_identity": "single_atomic_writer_as_retained_unsafe_compatibility_not_claim_proof"
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d1.py::test_conflicting_explicit_token_is_rejected_without_durable_change",
+        "tests/test_pending_decision_d1.py::test_same_explicit_token_updates_metadata_with_exactly_one_git_commit",
+        "tests/test_pending_decision_d1.py::test_omitted_token_preserves_existing_credential_and_update_semantics",
+        "tests/test_pending_decision_d1.py::test_concurrent_explicit_tokens_against_null_identity_are_first_winner"
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "expired contact link accepted",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
+        "same_project_response_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "expired_pending_accept": "reuse_existing_row_approve_and_refresh_expiry",
+        "local_send_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "explicit_cross_project_send_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "explicit_cross_project_reply_expiry_cases": [
+          "past",
+          "future",
+          "null"
+        ],
+        "pending_status_controls": "reject_without_new_message_recipient_archive_signal_or_git_state",
+        "local_reply": "not_claimed_because_it_does_not_query_agent_links",
+        "not_claimed": [
+          "accept_false",
+          "cross_project_response",
+          "concurrency",
+          "future_strict_expiry_denial",
+          "auto_handshake_enabled"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_upstream_parity_d2.py::test_d2_expiry_semantics_match_frozen_live_without_core_change"
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "cross-project intro/reply identity",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "foreign_source_row_intro": "target_project_message_uses_source_project_sender_row",
+        "immediate_target_reply": "foreign_sender_id_unresolvable_in_target_project",
+        "approved_explicit_send": "creates_target_local_same_name_null_token_alias_with_copied_metadata_and_uses_it_as_sender",
+        "reply_after_fresh_process": "targets_alias_in_target_project_preserves_thread_and_does_not_reach_source_inbox",
+        "not_claimed": [
+          "contact_expiry_or_no_pending_response",
+          "invalid_policy_or_sender_token_omission",
+          "pre_existing_same_name_target_agent_or_alias_reuse",
+          "migration_reject_mode_concurrency_or_crash",
+          "ownership_or_safe_enrollment_of_null_alias"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d3.py::test_d3_selected_upstream_parity_requirement"
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "accept response without pending",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_respond_contact_accept_true_without_existing_link",
+        "result": "approved_true_updated_one_returned_expiry_equals_persisted",
+        "created_link": "one_directed_approved_empty_reason_created_equals_updated_expiry_plus_requested_600_seconds",
+        "observed_absences": "no_new_message_or_recipient_and_no_observed_archive_git_or_signal_change",
+        "not_claimed": [
+          "accept_false_or_cross_project",
+          "existing_link_states_or_replay",
+          "concurrency_authorization_or_strict_no_pending",
+          "other_ttl_cases_or_downstream_delivery",
+          "unobserved_database_columns"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d4.py::test_d4_selected_parity_accept_without_pending_creates_approved_link"
+      ]
+    },
+    {
+      "id": "D5",
+      "title": "invalid contact policy coerced auto",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_existing_agent_starting_contacts_only",
+        "invalid_inputs": [
+          "not-a-policy",
+          ""
+        ],
+        "selected_behavior": "succeed_return_auto_and_persist_observed_contact_policy_only_change",
+        "diagnostic_only": "recent_contact_and_followup_message_sequence_not_selected_or_compared",
+        "not_claimed": [
+          "valid_mixed_case_whitespace_or_other_invalid_shapes",
+          "missing_agent_or_project",
+          "warnings_audit_or_strict_transitional_modes",
+          "messaging_contact_link_or_sender_auth_semantics",
+          "concurrency"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d5.py::test_d5_selected_parity_invalid_and_empty_policy_coerce_to_auto"
+      ]
+    },
+    {
+      "id": "D6",
+      "title": "missing sender token succeeds",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_send_message_to_open_recipient",
+        "sender_cohort": "explicitly_registered_non_null_caller_supplied_token",
+        "missing_sender_token": "succeeds_verified_sender_false_and_commits_one_delivery",
+        "wrong_sender_token_control": "rejects_with_observed_durable_projection_unchanged",
+        "credential_non_disclosure": "complete_raw_mcp_results_plus_fixture_transcript_and_output",
+        "not_claimed": [
+          "correct_token_or_generated_unavailable_token",
+          "null_macro_migrated_or_grandfathered_identity",
+          "non_open_contact_policy",
+          "cross_project_or_other_send_entrypoints",
+          "concurrency_rotation_recovery_claim_or_strict_enforcement"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d6.py::test_d6_frozen_live_and_core_match_missing_sender_token_behavior"
+      ]
+    },
+    {
+      "id": "D7",
+      "title": "owner tools name-only auth",
+      "decision_state": "selected",
+      "implementation_state": "not_implemented",
+      "cutover_state": "no_go",
+      "implementation_order": "post_cutover_with_null_token_creation_stop_as_one_change",
+      "resolution": "limit_name_only_retire_to_idempotent_retired_null_legacy",
+      "scope": {
+        "name_only_soft_retire": "only_idempotent_reretire_of_already_retired_null_token_legacy_row_preserving_retired_at_with_zero_durable_mutation",
+        "active_null_token_name_only_retire": "deny",
+        "stronger_owner_operations": "unretire_hard_delete_transfer_and_project_wide_require_future_principal_or_administrator",
+        "enforcement_prerequisite": "stop_all_new_null_token_creation_paths_before_enforcement_ordering_only_not_current_behavior",
+        "confirmed_prerequisite_path": "cross_project_alias_get_or_create_agent_without_token",
+        "prerequisite_divergence": "stopping_the_currently_matching_alias_path_is_itself_an_intentional_upstream_difference",
+        "cutover_intentional_difference_set": [
+          "D1",
+          "reservation-probe-incomplete-fail-closed",
+          "loopback-retire-target-token-omission"
+        ],
+        "principal_admin_mechanism": "unselected",
+        "lifecycle_disposition": "D11_selected_match_frozen_live"
+      },
+      "rationale": [
+        "name_only_retire_is_timing_selectable_receive_denial",
+        "unretire_cannot_restore_rejected_sends",
+        "observed_zero_rows_is_machine_fact_not_product_fact"
+      ],
+      "allowlisted": false,
+      "comparator_disposition": "fail"
+    },
+    {
+      "id": "D8",
+      "title": "DB persists after archive failure",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_send_message_to_open_recipient",
+        "sender_cohort": "explicitly_registered_non_null_caller_supplied_token",
+        "literal_sigkill_seams": [
+          "after_canonical_bundle_write_before_outbox_write",
+          "after_outbox_bundle_write_before_inbox_write",
+          "after_canonical_outbox_inbox_writes_and_index_stage_before_git_commit"
+        ],
+        "database_survival": "one_selected_subject_message_to_recipient_relationship_survives_each_sigkill",
+        "archive_git_projection": {
+          "after_canonical_write": "canonical_only_head_unchanged_staging_empty_no_message_commit",
+          "after_outbox_write": "canonical_and_sender_outbox_only_head_unchanged_staging_empty_no_message_commit",
+          "after_three_copies_staged": "canonical_sender_outbox_recipient_inbox_exist_and_are_staged_head_unchanged_no_message_commit"
+        },
+        "message_bundle_exception": {
+          "tool_failure": "mcp_is_error_true_and_injected_exception_marker_present",
+          "database": "one_selected_subject_message_to_recipient_relationship_persists",
+          "archive": "subject_absent"
+        },
+        "not_claimed": [
+          "ordinary_failures_outside_write_message_bundle",
+          "other_archive_exceptions_or_additive_tool_error_fields",
+          "registration_or_profile_write_failure",
+          "instruction_level_failure_inside_native_git_commit",
+          "restart_retry_reconciliation_or_power_loss",
+          "multi_recipient_attachments_or_threaded_message",
+          "concurrency",
+          "signal_lifecycle_fetch_cleanup_or_D12",
+          "unselected_database_fields"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_database_and_staged_bundle_after_precommit_sigkill",
+        "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_completed_bundle_subset_after_write_sigkill",
+        "tests/test_pending_decision_d8_d9.py::test_d8_selected_parity_message_bundle_exception_leaves_committed_database_without_archive"
+      ]
+    },
+    {
+      "id": "D9",
+      "title": "read/ack partial commit",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_acknowledge_message_for_one_ack_required_direct_to_recipient",
+        "initial_recipient_state": "selected_receipt_read_ts_null_ack_ts_null",
+        "literal_sigkill_seam": "after_committed_read_helper_returns_before_ack_helper_call",
+        "ordinary_exception_seam": "at_ack_helper_entry_after_read_commit",
+        "durable_recipient_state": "read_ts_present_ack_ts_absent_after_each_selected_seam",
+        "not_claimed": [
+          "exact_timestamp_ids_names_recipient_kind_helper_return_or_error_envelope",
+          "missing_recipient_normal_success_or_replay",
+          "other_exception_or_process_crash_windows",
+          "restart_retry_idempotency_reconciliation_or_migration",
+          "concurrency_or_races",
+          "archive_git_or_D8",
+          "signal_lifecycle_fetch_cleanup_or_D12",
+          "other_message_recipient_or_database_fields"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d8_d9.py::test_d9_selected_parity_read_commits_before_ack_after_between_commit_sigkill",
+        "tests/test_pending_decision_d8_d9.py::test_d9_selected_parity_ack_helper_exception_preserves_read_without_ack"
+      ]
+    },
+    {
+      "id": "D10",
+      "title": "concurrent reservation winner and SQLite lock semantics",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "same_project_file_reservation_paths_for_one_exact_exclusive_path_per_trial",
+        "sqlite_lock_timeout": {
+          "trials": 3,
+          "database": "one_shared_SQLite_database_in_WAL_mode",
+          "blocker": "external_BEGIN_IMMEDIATE_writer_held_until_public_call_returns",
+          "production_configuration": "PRAGMA_busy_timeout_60000_and_journal_mode_WAL_read_back",
+          "test_scaling": "checkout_local_PRAGMA_busy_timeout_75_on_same_commit_rollback_retry_path_without_wall_clock_claim",
+          "locked_outcome": "sanitized_database_ToolError_with_zero_reservation_row_and_archive_record_delta",
+          "after_rollback": "one_grant_zero_conflicts_one_row_and_two_archive_records"
+        },
+        "same_process_shared_root": {
+          "trials": 4,
+          "contenders": "two_clients_released_after_both_reach_archive_lock_acquisition_seam",
+          "order": "task_creation_order_reversed_on_alternating_trials",
+          "result_per_trial": "one_grant_one_conflict_one_active_row"
+        },
+        "two_process_shared_root": {
+          "trials": 2,
+          "topology": "one_database_one_preinitialized_archive_and_one_shared_lock_path",
+          "barrier": "both_processes_reach_archive_lock_acquisition_seam_before_release",
+          "order": "process_launch_order_reversed",
+          "result_per_trial": "one_grant_one_conflict_one_active_row"
+        },
+        "two_process_split_roots": {
+          "trials": 2,
+          "topology": "one_database_two_preinitialized_archives_and_distinct_lock_paths",
+          "barrier": "both_processes_pass_conflict_read_before_either_insert",
+          "order": "process_launch_order_reversed",
+          "result_per_trial": "two_grants_zero_conflicts_two_active_rows_with_distinct_holders"
+        },
+        "not_claimed": [
+          "exact_wall_time_or_unscaled_60000ms_runtime_and_internal_timeout_site",
+          "named_winner_FIFO_order_statistical_balance_starvation_freedom_or_fairness",
+          "all_unconstrained_schedules_or_probability_of_split_root_double_grant",
+          "concurrent_first_archive_initialization_or_git_init_races",
+          "exact_ids_timestamps_expiry_reason_payload_order_or_additive_error_fields",
+          "registration_token_authorization_or_credential_lifecycle",
+          "archive_record_contents_or_Git_commit_identity",
+          "glob_overlap_shared_nonexclusive_multiple_path_or_same_agent_reacquisition",
+          "SIGKILL_cancellation_power_loss_stale_lock_recovery_restart_or_retry_beyond_selected_rollback",
+          "network_filesystems_non_SQLite_databases_or_multi_host_lock_reliability",
+          "legacy_overlapping_row_reconciliation_migration_or_new_database_invariants",
+          "retirement_message_notification_signal_or_D11_D12"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d10.py::test_d10_selected_parity_scaled_sqlite_lock_timeout_and_recovery",
+        "tests/test_pending_decision_d10.py::test_d10_selected_parity_same_process_shared_root_rendezvous",
+        "tests/test_pending_decision_d10.py::test_d10_selected_parity_two_process_shared_archive_lock",
+        "tests/test_pending_decision_d10.py::test_d10_selected_parity_two_process_split_roots_preserve_double_grant"
+      ]
+    },
+    {
+      "id": "D11",
+      "title": "retire with active reservations or unread messages",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "measured_path": "authenticated_same_project_retire_agent_with_active_exclusive_future_expiry_reservation_and_two_unread_direct_receipts",
+        "seed_receipts": "one_normal_and_one_ack_required_both_read_ts_null_ack_ts_null",
+        "retirement_disposition": "set_retired_tombstone_preserve_active_reservation_messages_and_unread_receipts",
+        "retired_fetch": "limit_one_succeeds_without_marking_receipts_or_releasing_reservation",
+        "retired_acknowledge": "selected_ack_required_receipt_becomes_read_and_acknowledged_while_other_unread_receipt_and_reservation_remain",
+        "post_retirement_send": "reject_with_retired_causal_diagnostic_and_zero_observed_state_delta",
+        "reservation_races": {
+          "retire_before_create": "reservation_succeeds_and_remains_active_on_retired_agent",
+          "retire_after_create": "reservation_succeeds_and_remains_active_on_retired_agent"
+        },
+        "send_races": {
+          "retire_after_recipient_validation_before_message_create": "send_succeeds_and_persists_direct_and_bcc_receipts",
+          "retire_before_recipient_validation": "send_rejected_with_zero_message_or_recipient_state"
+        },
+        "not_claimed": [
+          "exact_ids_timestamps_expiry_agent_names_subjects_paths_project_keys_response_envelopes_or_additive_error_fields",
+          "inbox_order_body_or_more_than_selected_limit_one_result",
+          "signal_file_payload_emission_clear_or_stale_cleanup_D12",
+          "archive_Git_commit_identity_or_message_bundle_details",
+          "TTL_expiry_stale_auto_release_release_transfer_or_force_retire",
+          "D7_authorization_tokenless_retire_or_credential_lifecycle",
+          "D9_acknowledgement_timestamp_update_mechanics",
+          "D10_reservation_winner_lock_or_unselected_race_schedules",
+          "SIGKILL_cancellation_power_loss_restart_or_convergence",
+          "unretire_reretire_legacy_retired_rows_migration_or_reconciliation"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_preserves_pending_state_and_retired_fetch",
+        "tests/test_pending_decision_d11_d12.py::test_d11_selected_parity_retirement_races_keep_upstream_boundaries"
+      ]
+    },
+    {
+      "id": "D12",
+      "title": "signal cleanup after crash, retirement, or stale consumer",
+      "decision_state": "selected",
+      "implementation_state": "implemented",
+      "implementation_origin": "pre_existing_parity",
+      "cutover_state": "no_go",
+      "resolution": "match_frozen_live",
+      "scope": {
+        "server_delivery_order": "database_message_and_recipients_then_archive_bundle_then_best_effort_signal_attempt",
+        "signal_write_failure": "send_succeeds_with_database_message_and_recipient_preserved_and_no_signal",
+        "signal_recipients": "to_and_cc_receive_per_message_signals_and_bcc_receives_no_signal",
+        "retirement_cleanup": "retirement_preserves_pending_per_message_signals",
+        "fetch_cleanup": "successful_limit_one_or_filtered_empty_fetch_preserves_message_and_recipient_state_and_clears_selected_agent_legacy_and_all_per_message_signals_only",
+        "watcher_retry_contract": "retry_after_30_seconds_and_reclaim_stale_delivery_lease_after_120_seconds",
+        "watcher_crash_windows": {
+          "after_external_injection_before_success_record": "signal_and_lease_remain_then_retry_can_duplicate_external_injection_after_lease_expiry",
+          "after_success_record_before_lease_release": "success_state_signal_and_lease_remain_and_future_attempts_skip",
+          "after_lease_release_before_unlink": "success_state_and_signal_remain_without_lease_and_future_attempts_skip",
+          "normal_completion": "success_state_remains_and_signal_and_lease_are_removed"
+        },
+        "delivery_guarantee": "best_effort_wakeup_with_at_least_once_duplicate_window_not_exactly_once",
+        "message_authority": "database_message_remains_fetchable_when_wakeup_is_missing_or_delayed",
+        "selection_basis": [
+          "match_frozen_live_and_keep_initial_cutover_difference_set_at_D1_plus_reservation_probe_incomplete_fail_closed_plus_loopback_retire_target_token_omission",
+          "observed_offline_per_message_signals_are_retained_for_session_not_found_retry",
+          "operational_cron_detection_reduces_a_missed_wakeup_to_delayed_notification",
+          "durable_database_outbox_would_not_close_the_unobservable_external_application_seam"
+        ],
+        "not_claimed": [
+          "exact_signal_paths_payload_bytes_timestamps_message_ids_agent_names_subjects_or_retry_wall_clock_latency",
+          "exactly_once_external_tmux_application_or_receiver_side_idempotency",
+          "whether_tmux_applied_submitted_bytes_immediately_before_worker_process_death",
+          "cron_monitor_latency_availability_or_end_to_end_delivery_service_level",
+          "corrupt_legacy_signal_quarantine_ttl_sweeping_or_bounded_state_file_growth",
+          "multi_host_network_filesystem_or_non_tmux_notification_consumers"
+        ]
+      },
+      "allowlisted": false,
+      "comparator_disposition": "assert_selected_behavior",
+      "verification": [
+        "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_server_signal_lifecycle_matches_frozen_live",
+        "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_server_source_order_preserves_best_effort_gap",
+        "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic",
+        "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_watcher_failure_cooldown_retries_without_loss",
+        "tests/test_pending_decision_d11_d12.py::test_d12_selected_parity_source_order_exposes_external_application_seam"
+      ]
+    }
+  ],
+  "post_cutover_follow_up_tasks": [
+    {
+      "id": "d2-d3-worker-progress-diagnostics",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "tests/test_upstream_parity_d2.py::_run_worker",
+        "tests/test_pending_decision_d3.py::_run_phase"
+      ],
+      "requirements": [
+        "emit machine-readable phase and case heartbeats before and after each long-running operation",
+        "arm faulthandler before the existing outer timeout and persist the dump with the failing phase or case"
+      ],
+      "acceptance": "a timeout identifies the last completed marker, active phase or case, and Python stacks without waiting for normal stdout completion",
+      "cutover_blocking": false,
+      "activation_condition": "when D2/D3 timeout diagnostics become blocking evidence or repeated timeouts block a later release"
+    },
+    {
+      "id": "d2-d3-timeout-process-group-cleanup",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "tests/test_upstream_parity_d2.py::_run_worker",
+        "tests/test_pending_decision_d3.py::_run_phase"
+      ],
+      "requirements": [
+        "replace subprocess.run with a bounded Popen runner using start_new_session=true or an equivalent isolated process group",
+        "on timeout capture the diagnostic stack plus partial stdout and stderr before terminating and reaping the complete process group"
+      ],
+      "acceptance": "a forced timeout preserves bounded diagnostics and leaves no worker descendants",
+      "cutover_blocking": false,
+      "activation_condition": "when D2/D3 subprocess evidence becomes blocking outside the current local cutover"
+    },
+    {
+      "id": "d10-diagnostic-liveness-timeout",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "tests/test_pending_decision_d10.py::_run_worker",
+        "tests/test_pending_decision_d10.py::_run_initializer",
+        "tests/test_pending_decision_d10.py::_run_two_process_topology"
+      ],
+      "requirements": [
+        "replace the outer 45-second subprocess watchdog with a diagnostic 180-second liveness deadline while retaining the existing bounded internal barrier and rendezvous waits",
+        "emit progress markers and capture faulthandler stacks plus partial transcripts before terminating a timed-out process group"
+      ],
+      "acceptance": "transient Git or SQLite scheduling is not classified as a reservation performance regression, while an internal deadlock still fails at its bounded internal wait",
+      "performance_separation": "the 180-second outer deadline is liveness-only; reservation performance pass or fail remains exclusively governed by performance_gates.reservation-activity-57-path-wall-time, whose 6.0-second median threshold, five repetitions, and minimum-three-complete-runs rule are unchanged",
+      "cutover_blocking": false,
+      "activation_condition": "when D10 diagnostic runners become blocking evidence or their supported runner set changes"
+    },
+    {
+      "id": "external-process-boundary-hardening",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_looks_like_toon_rust_encoder --help",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_looks_like_toon_rust_encoder --version",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_run_toon_encode",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_xattr_names",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_read_xattrs",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_write_xattrs delete",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_write_xattrs write",
+        "packages/agentstack_mail/src/agentstack_mail/consumer.py::_reject_acl",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_candidate_checkout_identity git show",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_load_seed_provenance git show",
+        "packages/agentstack_mail/src/agentstack_mail/migration.py::_verify_cold_rehearsal_payload git show",
+        "packages/agentstack_mail/src/agentstack_mail/app.py::_latest_git_activity_before_deadline",
+        "packages/agentstack_mail/src/agentstack_mail/evidence.py::_listener_process_ids",
+        "packages/agentstack_mail/src/agentstack_mail/evidence.py::_spawn",
+        "packages/agentstack_mail/src/agentstack_mail/restore_acceptance.py::_run_restore_worker",
+        "packages/agentstack_mail/src/agentstack_mail/restore_acceptance.py::_run_candidate_server",
+        "packages/agentstack_mail/src/agentstack_mail/service.py::foreground"
+      ],
+      "requirements": [
+        "bound the eight currently unbounded toon and filesystem metadata subprocess calls and normalize TimeoutExpired and OSError into their owning domain errors",
+        "normalize the three bounded read-only git show boundaries into their owning domain errors while preserving partial diagnostic output",
+        "retain bounded process-group termination, complete descendant reaping, and partial diagnostic capture for the six isolated or best-effort inspection and cleanup boundaries"
+      ],
+      "acceptance": "all 17 known non-blocking external-process boundaries have fault-injection coverage for timeout and spawn failure, no bounded caller can hang indefinitely or bypass cleanup, and the original error remains distinguishable from cleanup diagnostics",
+      "cutover_blocking": false,
+      "activation_condition": "post-cutover hardening; the eight unbounded calls become urgent if any is placed on a blocking service, consumer, or release path"
+    },
+    {
+      "id": "provenance-regression-sync",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "tests/test_agentstack_mail_contract.py",
+        "packages/agentstack_mail/NOTICE.md",
+        "packages/agentstack_mail/provenance/live-head.bundle"
+      ],
+      "requirements": [
+        "make repository-level contract assertions use the current b8251c1 live source head and 2265572d bundle digest",
+        "keep a positive provenance control and the physical signing-key-blob absence check"
+      ],
+      "acceptance": "the repository contract gate passes against the same source head and bundle digest pinned by the packaged manifest and NOTICE",
+      "cutover_blocking": false,
+      "activation_condition": "when the live-source bundle or provenance contract is refreshed for a later release"
+    },
+    {
+      "id": "reservation-performance-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "packages/agentstack_mail/scripts/reservation_performance_gate.py",
+        "57-path reservation activity workload"
+      ],
+      "requirements": [
+        "implement the declared fresh-process five-run performance runner and its canonical 57-path input and per-path result fingerprints",
+        "emit the exact raw report consumed by reservation_performance_v1 without accepting caller-authored aggregate-only claims"
+      ],
+      "acceptance": "the runner exists in the candidate and the evaluator recomputes its script, input, result-shape, completeness, and median gates from the raw report",
+      "cutover_blocking": false,
+      "activation_condition": "when reservation performance evidence becomes a blocking release or cutover condition"
+    },
+    {
+      "id": "installer-core-integration",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "installer",
+        "doctor",
+        "selftest",
+        "uninstaller"
+      ],
+      "requirements": [
+        "install and verify AgentStack Mail without silently reusing the legacy package or service",
+        "preserve explicit human approvals and provide a reversible manifest for every client and service change"
+      ],
+      "acceptance": "fresh-install and upgrade tests prove the installed service works, the legacy installation remains recoverable, and partial failure rolls back the installer-owned changes",
+      "cutover_blocking": false,
+      "activation_condition": "when general fresh-install, upgrade, doctor, selftest, or uninstall support becomes release-blocking; the exact C1 candidate install remains pre-cutover elsewhere"
+    },
+    {
+      "id": "coexistence-fault-soak-gates",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "live and AgentStack Mail coexistence",
+        "migration and rollback fault injection",
+        "real-machine soak"
+      ],
+      "requirements": [
+        "exercise both isolated services concurrently without port, MCP-key, database, archive, signal, or environment collision",
+        "run bounded functional fault and durability soak gates over the selected migration and rollback paths; performance and resource-degradation ownership remains in full-performance-load-soak-matrix"
+      ],
+      "acceptance": "the release evidence contains complete coexistence, fault, and soak reports with no shared writable root, lost durable record, leaked descendant, or unexplained timeout",
+      "cutover_blocking": false,
+      "activation_condition": "when comprehensive coexistence, fault, durability, or real-machine soak becomes release-blocking; minimum root and writer separation remains pre-cutover elsewhere"
+    },
+    {
+      "id": "full-performance-load-soak-matrix",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "24-tool cold readiness, per-operation, and workflow gates",
+        "D10 reservation contention, D11 retirement under load, and D12 recovery latency",
+        "throughput, memory, file descriptors, queue growth, network, optional LLM paths, and target macOS load"
+      ],
+      "requirements": [
+        "define absolute and live-relative thresholds for the full 24-tool contract without replacing the independent 57-path reservation gate",
+        "pin target macOS runner characteristics, calibration, sample counts, and absolute and relative thresholds before running bounded performance fault and resource-degradation soak scenarios with machine-readable resource and latency series"
+      ],
+      "acceptance": "the candidate satisfies every versioned absolute and relative threshold with no unbounded memory, file-descriptor, queue, recovery, or latency growth",
+      "cutover_blocking": false,
+      "activation_condition": "when versioned full-contract performance and resource thresholds are selected as release-blocking"
+    },
+    {
+      "id": "full-repository-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "hermetic 24-tool differential",
+        "contract, runtime, authorization, and identity suites",
+        "supported Python matrix and required repository CI"
+      ],
+      "requirements": [
+        "version the exact required CI job and node inventory for the candidate commit",
+        "reject zero-test, skipped, xfailed, cancelled, missing, duplicate, extra, or unknown required results"
+      ],
+      "acceptance": "every required repository and supported-Python job passes on the clean designated candidate with exact nonzero node inventories",
+      "cutover_blocking": false,
+      "activation_condition": "when repository CI or the supported-Python matrix becomes blocking release evidence"
+    },
+    {
+      "id": "installed-wheel-contract-release-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "fresh environment",
+        "built wheel",
+        "tests/verify_installed_contract.py"
+      ],
+      "requirements": [
+        "install the exact candidate wheel into a fresh environment",
+        "run from outside every source checkout, assert import origins resolve only inside the fresh environment site-packages, and verify the installed package publishes the exact 24 tools and zero resources, templates, or prompts"
+      ],
+      "acceptance": "the installed-wheel verifier passes outside the checkout with every agentstack_mail import rooted in fresh-environment site-packages and against the same wheel digest named by the distribution artifact gate",
+      "cutover_blocking": false,
+      "activation_condition": "when the full fresh-environment import-origin contract becomes release-blocking; the exact C1 wheel start smoke remains pre-cutover elsewhere"
+    },
+    {
+      "id": "cutover-evidence-provenance-gate",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "trusted evidence producer identity",
+        "candidate, manifest, condition, command, and raw-artifact binding",
+        "operator cutover approval provenance",
+        "maintainer baseline-commit-A selection provenance",
+        "sealed supported-consumer inventory and preview approval provenance"
+      ],
+      "requirements": [
+        "verify a protected-CI or cryptographic attestation that binds the exact full candidate commit, manifest digest, condition-definition digests, generator commands and versions, and raw artifact digests",
+        "bind the exact D1-D6 and D8-D12 operator approval set to the same candidate and reject hand-authored evidence, replay, unknown issuers, and candidate mismatch",
+        "bind maintainer's baseline-commit-A selection and the sealed supported-consumer inventory plus content-redacted preview approval to the same candidate, manifest, inventory digest, approver, and timestamp"
+      ],
+      "acceptance": "the evaluator verifies immutable producer and operator provenance for the exact D1-D6 and D8-D12 approval set required by product-decision-cutover-approval; the exact baseline-commit-A selection and sealed consumer inventory plus preview approval are candidate-bound; and mutations of issuer, candidate, manifest, command, artifact, approval set, baseline selection, inventory digest, preview approval, or replay identity all remain no_go",
+      "cutover_blocking": false,
+      "activation_condition": "when protected-CI or cryptographic producer and operator attestations are selected as required governance"
+    },
+    {
+      "id": "cutover-documentation-consistency",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "scope": [
+        "docs/agentstack-mail-decision-packet.md",
+        "docs/agentstack-mail.md",
+        "docs/agentstack-mail-performance-gate.md",
+        "docs/install.md",
+        "docs/configuration.md",
+        "docs/hooks.md",
+        "docs/troubleshooting.md",
+        "README.md",
+        "claude/CLAUDE.md",
+        "codex/AGENTS.md",
+        "packages/agentstack_mail/README.md",
+        "docs/agentstack-mail-cutover.md"
+      ],
+      "requirements": [
+        "remove stale first-cutover statements in favor of the exact D1 plus reservation-probe and loopback-retire safety difference set",
+        "make the operator runbook name every machine gate and prohibit interpreting missing or unknown evidence as approval",
+        "keep reservation-hook documentation consistent with renew-only behavior, owner registration_token non-transmission, isError omitted-or-boolean-false success, strict identity resolution, and the initial-transport-only fail-open boundary"
+      ],
+      "acceptance": "a documentation consistency gate finds no conflicting cutover difference set, authority order, gate identifier, rollback instruction, reservation ownership credential, renew-only behavior, identity boundary, isError contract, or transport fail-open description",
+      "cutover_blocking": false,
+      "activation_condition": "when the broad cross-document consistency checker becomes blocking; normative commands and rollback text remain bound to each pre-cutover task"
+    },
+    {
+      "id": "post-authority-reverse-transform",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "after the new authority has durable post-baseline writes and an operator needs to return those records to the preserved legacy authority",
+      "scope": [
+        "messages, recipients, receipts, reservations, profiles, signals, and archive records created after the authority switch"
+      ],
+      "requirements": [
+        "implement a versioned verified reverse transform into a copy of the preserved legacy authority",
+        "reconcile every post-baseline record and relationship before any authority change",
+        "never reinterpret this future capability as permission to roll back after the first durable new-authority write during the initial cutover"
+      ],
+      "acceptance": "a post-cutover rehearsal imports and reconciles all durable post-baseline records into a legacy-authority copy without dual writers or silent loss before a separately approved authority transition"
+    },
+    {
+      "id": "client-key-rename-and-stale-selector-cleanup",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "after first cutover when an operator explicitly elects to rename a client key or remove permissions and raw command selectors for tools absent from the 24-tool boundary",
+      "scope": [
+        "optional Claude and Codex client-key rename",
+        "21 observed stale Claude allow occurrences across 10 absent tool names",
+        "four Life raw curl selectors pinned to legacy port 8765",
+        "dormant deregister_agent option in retire-agent-by-name.sh"
+      ],
+      "requirements": [
+        "take and seal a fresh one-run selector inventory before editing because settings and sessions change over time",
+        "present exact files and line ranges for operator approval before changing personal settings",
+        "record that stale permissions can become active automatically if an absent tool is later republished",
+        "keep retire-agent-by-name.sh dormant unless its legacy database, endpoint, and bearer assumptions are separately replaced and tested"
+      ],
+      "acceptance": "a separately approved post-cutover change either preserves the client compatibility ABI or migrates every exact selector atomically, removes only the reviewed stale and legacy-endpoint entries, and proves no active hook or supported tool loses authorization"
+    },
+    {
+      "id": "reservation-performance-input-tree-binding",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "reservation-performance-release-gate を implemented または blocking に変更するとき",
+      "scope": [
+        "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json:316-328",
+        "packages/agentstack_mail/tests/cutover_readiness.py:362-399",
+        "packages/agentstack_mail/tests/cutover_readiness.py:490-497"
+      ],
+      "requirements": [
+        "performance evidence の workspace を mutable な current index ではなく full commit/tree に bindする",
+        "検証時の input paths は git ls-tree -r -z <sealed-commit> または同等の immutable tree inventory から再計算する",
+        "exact input path list と tree hash を同じ evidence artifact に封印し、採取後の vault commit/add/rename で candidate 不変の evidence が赤くならないようにする",
+        "Syncthing quiesce 後の designated Pro workspace/tree で証拠を採取する成立条件を文書化する"
+      ],
+      "acceptance": "evidence 採取後に live vault index を変更しても sealed tree の同じ evidence は入力不一致にならず、sealed tree または exact input list の変異だけが失敗する"
+    },
+    {
+      "id": "reservation-performance-runner-binding",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "reservation-performance-release-gate または absolute performance lane を blocking にするとき",
+      "scope": [
+        "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json:316",
+        "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json:330-336",
+        "packages/agentstack_mail/tests/cutover_readiness.py:438-447",
+        "docs/agentstack-mail-performance-gate.md:35-36",
+        "docs/agentstack-mail-performance-gate.md:40-51",
+        "docs/agentstack-mail-performance-gate.md:62-94",
+        "docs/agentstack-mail-performance-gate.md:103-111"
+      ],
+      "requirements": [
+        "runner identity、OS、Python、dependency/source fingerprint、filesystem と calibration identity を performance evidence schema に必須化する",
+        "PR lane は同一 runner 内の paired Core/live ratio、absolute budget は calibrated designated target-macOS runner のみで blocking にする",
+        "Air、CI、loaded Pro の absolute measurement を target Mac の6.0秒判定へ流用しない",
+        "unsupported または calibration 不一致の runner は behavior regression ではなく infrastructure-invalid として識別する"
+      ],
+      "acceptance": "同じ candidate を別 runner または dependency fingerprint で測った artifact は target-Mac regression と誤分類されず、対応する runner policy による evidence または infrastructure-invalid になる"
+    },
+    {
+      "id": "blocking-ci-environment-pinning",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "full-repository-release-gate または GitHub Actions CI を cutover/release の blocking evidence にするとき",
+      "scope": [
+        ".github/workflows/tests.yml:9",
+        ".github/workflows/tests.yml:18-23",
+        ".github/workflows/tests.yml:42",
+        ".github/workflows/tests.yml:48-63",
+        "packages/agentstack_mail/pyproject.toml:16-32"
+      ],
+      "requirements": [
+        "blocking lane の OS image、Actions revisions、pytest/build と runtime dependency resolution を reviewed constraints/lock に bindする",
+        "最新 dependency compatibility matrix は blocking release lane と別名・別判定に分離する",
+        "candidate 不変のまま ubuntu-latest または >= dependency の後日 drift だけで behavior regression と判定しない"
+      ],
+      "acceptance": "blocking evidence は同じ candidate と reviewed environment fingerprint で再現し、latest-dependency lane の外因 failure は candidate regression と区別される"
+    },
+    {
+      "id": "fresh-install-network-separation",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "installer-core-integration または fresh-install E2E を cutover/release の blocking evidence にするとき",
+      "scope": [
+        ".github/workflows/tests.yml:48-63",
+        "scripts/install.sh:37",
+        "scripts/install.sh:1576-1585",
+        "tests/test_fresh_install_e2e.py:24"
+      ],
+      "requirements": [
+        "candidate correctness の blocking install test は vendored pinned bundle または reviewed cache から network-independent に実行する",
+        "GitHub clone、PyPI、apt、Actions download を必要とする fresh-network smoke は別 lane に分離する",
+        "外部 network 不達または pinned upstream object の取得不能を behavior regression ではなく infrastructure-invalid として識別する",
+        "network lane の成立条件と upstream pin reachability maintenance を文書化する"
+      ],
+      "acceptance": "GitHub/PyPI/apt の不達で offline blocking candidate test は赤くならず、network smoke は外因 failure と candidate behavior failure を区別する"
+    },
+    {
+      "id": "fresh-install-startup-port-race",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "fresh-install E2E を cutover/release の blocking evidence にするとき",
+      "scope": [
+        "tests/test_fresh_install_e2e.py:27-30",
+        "tests/test_fresh_install_e2e.py:47-50",
+        "tests/test_fresh_install_e2e.py:175-196",
+        "tests/test_fresh_install_e2e.py:286-306",
+        "tests/test_fresh_install_e2e.py:355-363",
+        "scripts/install.sh:1912-1945"
+      ],
+      "requirements": [
+        "選んだ loopback port は child bind 完了まで予約するか、bind collision を bounded retryする",
+        "dashboard readiness は warning-only の15秒判定後に即POSTせず、E2Eが success必須の bounded readiness を確認する",
+        "HTTPErrorだけでなく connection refusal、URLError、timeout、service process exit を区別する",
+        "slow-but-correct startup または port競合を behavior failure ではなく infrastructure-invalid として識別する"
+      ],
+      "acceptance": "人工的な startup delay と port競合は candidate behavior regression に誤分類されず、実 service failure は bounded diagnostic とともに失敗する"
+    },
+    {
+      "id": "selected-pytest-evidence-executor-contract",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "selected-behavior-release-gate の required evidence を designated Pro/POSIX 以外で生成するとき、または supported runner set を拡張するとき",
+      "scope": [
+        "packages/agentstack_mail/tests/cutover_readiness.py:275-307",
+        "packages/agentstack_mail/tests/test_pending_decision_d8_d9.py:1117-1119",
+        "packages/agentstack_mail/tests/test_pending_decision_d8_d9.py:1162-1164",
+        "packages/agentstack_mail/tests/test_pending_decision_d8_d9.py:1249-1251"
+      ],
+      "requirements": [
+        "required selected-behavior evidence runner を POSIX SIGKILL 対応の target Mac/Linux として文書化する",
+        "pytest evidence に OS、Python、dependency、executor identity を bindする",
+        "SIGKILL 不在で3 selected nodesがskipされる executorは behavior failureではなく unsupported prerequisite または infrastructure-invalid として識別する"
+      ],
+      "acceptance": "同じ candidate が非POSIX executorで required-node skipになっても product behavior regression と誤分類されず、designated POSIX executor の全 selected nodes passed のみが required evidenceになる"
+    }
+  ],
+  "current_gate_activation_requirements": [
+    {
+      "id": "approved-base-persistent-ref-reachability",
+      "classification": "current_gate_activation_requirement",
+      "activation_condition": "approved_base reachability gate を有効化する現在の変更",
+      "scope": [
+        ".github/workflows/tests.yml:18",
+        ".github/workflows/tests.yml:48",
+        "packages/agentstack_mail/tests/cutover_readiness.py:1048-1083",
+        "packages/agentstack_mail/tests/cutover_readiness.py:1085-1107",
+        "packages/agentstack_mail/tests/differential_source.py:158-164",
+        "packages/agentstack_mail/tests/differential_source.py:202-214"
+      ],
+      "requirements": [
+        "CI/clone上で gate を動かす場合は fetch-depth: 0 とし、判定対象の branch、remote-tracking branch、tag refsを取得する",
+        "persistent ref namespace を branch、remote-tracking branch、tagとして定義し、reflog、stash、worktree、bisect等の一時 refを到達性の根拠に数えない",
+        "PR head と synthetic merge のどちらを candidate とするかを定義し、同じ full SHAを exact checkout、candidate-source-bound、reachability検証へ渡す",
+        "object missing due to shallow/unfetched history と、objectは存在するがpersistent refから到達不能を別診断にする",
+        "故意に到達不能な commitで失敗し、persistent refから到達可能な approved_base で成功する対照を確認する"
+      ],
+      "non_applicability": "現 workflow はまだ cutover_readiness を呼ばず、現 differential は checked-in bundleから自前 depth-1 cloneするため、外側 shallow cloneは現 differential の false redではない",
+      "acceptance": "full 40-hex approved_base が取得済みobjectとして解決し、定義済みpersistent ref namespaceの少なくとも1 refから到達可能な場合だけ成功する"
+    }
+  ],
+  "post_cutover_gate_contract_defects": [
+    {
+      "id": "reservation-performance-producer-verifier-contract",
+      "implementation_state": "not_implemented",
+      "implementation_order": "post_cutover",
+      "cutover_blocking": false,
+      "activation_condition": "reservation-performance-release-gate の evidence producer 実装を始めるとき",
+      "classification": "all_environment_producer_verifier_mismatch",
+      "scope": [
+        "packages/agentstack_mail/scripts/reservation_performance_gate.py:56-74",
+        "packages/agentstack_mail/scripts/reservation_performance_gate.py:159-224",
+        "packages/agentstack_mail/tests/cutover_readiness.py:349-359",
+        "packages/agentstack_mail/tests/cutover_readiness.py:417-427",
+        "packages/agentstack_mail/tests/cutover_readiness.py:437-449"
+      ],
+      "requirements": [
+        "producerとverifierが同じ canonical path ordering と even-sampling algorithm を一つの実装から共有する",
+        "producerが verifier の要求する reservation_performance_v1 schemaを直接生成する",
+        "environmentを揃えても直らない contract mismatch として扱い、environment false-red mitigationで閉じない"
+      ],
+      "acceptance": "既存producerが生成した exact artifactを同じcandidateのverifierへ渡して成功し、samplingまたはschemaの変異だけが失敗する"
+    }
+  ]
+}

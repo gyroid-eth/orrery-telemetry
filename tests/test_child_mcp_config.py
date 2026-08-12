@@ -458,9 +458,49 @@ def test_claude_child_proxy_claims_the_users_own_server_name():
         assert "freecad" not in servers
 
 
-def test_claude_child_falls_back_to_a_default_name_without_user_config():
+def test_claude_child_proxy_claims_the_new_agentstack_mail_name():
+    source = """{
+  "mcpServers": {
+    "agentstack-mail": {"type": "http", "url": "http://127.0.0.1:18765/mcp"},
+    "semantic-search": {"command": "semantic"}
+  }
+}
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = _claude_child_config(pathlib.Path(tmp), source)
+        assert list(config["mcpServers"]) == ["agentstack-mail"]
+        assert config["mcpServers"]["agentstack-mail"]["command"].endswith("run-mcp.sh")
+
+
+def test_claude_child_falls_back_to_legacy_name_on_legacy_endpoint():
     with tempfile.TemporaryDirectory() as tmp:
         config = _claude_child_config(pathlib.Path(tmp), None)
+        assert list(config["mcpServers"]) == ["mcp-agent-mail"]
+
+
+def test_claude_child_keeps_default_name_on_new_endpoint():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        runner = tmpdir / "run-mcp.sh"
+        runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        token = tmpdir / "token"
+        token.write_text("child-owner-token", encoding="utf-8")
+        script = (
+            'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
+            + _extract("write_child_mcp_config")
+            + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
+        )
+        env = os.environ.copy()
+        env["AGENTSTACK_MCP_PROXY"] = str(runner)
+        env["AGENTSTACK_CLAUDE_JSON"] = str(tmpdir / "missing.json")
+        proc = subprocess.run(
+            ["bash", "-c", script, "bash", str(tmpdir / "runtime"), "/p",
+             "http://127.0.0.1:18765/mcp", str(tmpdir / "new.env"), str(token)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            check=False,
+        )
+        config = json.loads(pathlib.Path(proc.stdout.strip()).read_text(encoding="utf-8"))
         assert list(config["mcpServers"]) == ["mcp-agent-mail"]
 
 
@@ -497,6 +537,53 @@ def test_codex_child_replaces_every_agent_mail_spelling():
         # Unrelated config survives.
         assert "[mcp_servers.notion]" in text
         assert 'model = "gpt-5.6-sol"' in text
+
+
+def test_codex_child_replaces_the_new_agentstack_mail_direct_transport():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = (
+            '[mcp_servers.agentstack-mail]\n'
+            'url = "http://127.0.0.1:18765/mcp"\n\n'
+            '[mcp_servers.notion]\n'
+            'url = "https://mcp.notion.com/mcp"\n'
+        )
+        home = pathlib.Path(_run_codex_home(tmpdir, config_text=source))
+        text = (home / "config.toml").read_text(encoding="utf-8")
+        assert 'url = "http://127.0.0.1:18765/mcp"' not in text
+        assert '[mcp_servers."agentstack-mail"]' in text
+        assert '[mcp_servers."agentstack"]' in text
+        _assert_proxy_tool_approvals(text, ("agentstack-mail", "agentstack"))
+        assert "[mcp_servers.notion]" in text
+
+
+def test_codex_child_keeps_default_name_on_new_endpoint():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        runner = tmpdir / "run-mcp.sh"
+        runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        token = tmpdir / "token"
+        token.write_text("child-owner-token", encoding="utf-8")
+        source_home = tmpdir / "codex-home"
+        source_home.mkdir()
+        script = (
+            'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
+            + _extract("write_child_codex_home")
+            + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
+        )
+        env = os.environ.copy()
+        env.update({"AGENTSTACK_MCP_PROXY": str(runner), "CODEX_HOME": str(source_home)})
+        proc = subprocess.run(
+            ["bash", "-c", script, "bash", str(tmpdir / "runtime"), "/p",
+             "http://127.0.0.1:18765/mcp", str(tmpdir / "new.env"), str(token)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            check=False,
+        )
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text()
+        assert '[mcp_servers."agent-mail"]' in text
+        assert '[mcp_servers."agentstack-mail"]' not in text
+        _assert_proxy_tool_approvals(text, ("agent-mail", "agentstack"))
 
 
 def test_doctor_reports_the_fallback_instead_of_staying_silent():
