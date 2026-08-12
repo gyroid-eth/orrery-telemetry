@@ -51,6 +51,8 @@ def _git_environment() -> dict[str, str]:
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_COMMON_DIR",
         "GIT_NAMESPACE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
     ):
         environment.pop(name, None)
     environment.update(
@@ -58,6 +60,13 @@ def _git_environment() -> dict[str, str]:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "gc.auto",
+            "GIT_CONFIG_VALUE_0": "0",
+            "GIT_CONFIG_KEY_1": "gc.autoDetach",
+            "GIT_CONFIG_VALUE_1": "false",
+            "GIT_CONFIG_KEY_2": "maintenance.auto",
+            "GIT_CONFIG_VALUE_2": "false",
             "LC_ALL": "C",
         }
     )

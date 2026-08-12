@@ -447,10 +447,7 @@ _DATABASE_CONTAINER_IDENTITY_FIELDS: Final[tuple[str, ...]] = (
     "st_dev",
     "st_ino",
     "st_mode",
-    "st_nlink",
-    "st_size",
-    "st_mtime_ns",
-    "st_ctime_ns",
+    "st_uid",
 )
 
 
@@ -469,10 +466,17 @@ def _database_file_identity(path: Path) -> tuple[int, ...]:
 
 
 def _database_container_identity(path: Path) -> tuple[int, ...]:
-    """Fingerprint the directory whose entry names the database parent."""
+    """Fingerprint the stable identity of the database root container.
+
+    The database lives directly in this directory.  Device/inode/type/owner
+    identity detects replacement of that parent.  The seal intentionally stops
+    here and excludes directory entry metadata: SQLite may legitimately create
+    or retire WAL/SHM siblings, while migration may publish an unrelated sibling
+    in the container above during a large snapshot.
+    """
 
     path = _absolute_without_symlinks(path)
-    container = path.parent.parent
+    container = path.parent
     _assert_no_symlink_components(container)
     try:
         info = container.lstat()
@@ -695,6 +699,8 @@ def _git_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_COMMON_DIR",
         "GIT_NAMESPACE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
     ):
         environment.pop(name, None)
     environment.update(
@@ -702,6 +708,13 @@ def _git_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "gc.auto",
+            "GIT_CONFIG_VALUE_0": "0",
+            "GIT_CONFIG_KEY_1": "gc.autoDetach",
+            "GIT_CONFIG_VALUE_1": "false",
+            "GIT_CONFIG_KEY_2": "maintenance.auto",
+            "GIT_CONFIG_VALUE_2": "false",
             "LC_ALL": "C",
         }
     )
@@ -3959,9 +3972,15 @@ def _copy_state_locked(
             operation_id=operation_id,
             state_sha256=str(source_after["state_sha256"]),
         )
-    except Exception:
+    except Exception as primary:
         if staging.exists():
-            shutil.rmtree(staging)
+            try:
+                shutil.rmtree(staging)
+            except Exception as cleanup:
+                primary.add_note(
+                    "owned staging cleanup also failed: "
+                    f"{type(cleanup).__name__}: {cleanup}"
+                )
         raise
 
 

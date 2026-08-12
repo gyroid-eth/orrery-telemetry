@@ -1047,43 +1047,146 @@ def test_source_root_and_destination_parent_symlinks_are_rejected(
         connection.close()
 
 
-def test_database_parent_swap_and_restore_during_connect_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        pytest.param("parent_swap", "rejected", id="parent-swap-is-rejected"),
+        pytest.param(
+            "container_sibling_churn",
+            "accepted",
+            id="unrelated-container-sibling-churn-is-accepted",
+        ),
+    ],
+)
+def test_database_parent_identity_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected: str,
 ) -> None:
     primary_base = tmp_path / "primary"
     primary_base.mkdir()
     source, source_connection = _source(primary_base)
     source_connection.close()
-    alternate_base = tmp_path / "alternate"
-    alternate_base.mkdir()
-    alternate, alternate_connection = _source(alternate_base)
-    alternate_connection.execute("UPDATE agents SET model='alternate' WHERE id=10")
-    alternate_connection.commit()
-    alternate_connection.close()
-    source_root = source.database.parent
-    saved_root = source_root.with_name("legacy-saved")
     real_connect = sqlite3.connect
-    swapped = False
+    changed = False
 
-    def connect_after_parent_swap(*args: object, **kwargs: object) -> sqlite3.Connection:
-        nonlocal swapped
-        database = str(args[0]) if args else str(kwargs.get("database", ""))
-        if not swapped and str(source.database) in database:
-            swapped = True
-            source_root.rename(saved_root)
-            source_root.symlink_to(alternate.database.parent, target_is_directory=True)
-            try:
-                return real_connect(*args, **kwargs)
-            finally:
-                source_root.unlink()
-                saved_root.rename(source_root)
-        return real_connect(*args, **kwargs)
+    if scenario == "parent_swap":
+        alternate_base = tmp_path / "alternate"
+        alternate_base.mkdir()
+        alternate, alternate_connection = _source(alternate_base)
+        alternate_connection.execute("UPDATE agents SET model='alternate' WHERE id=10")
+        alternate_connection.commit()
+        alternate_connection.close()
+        source_root = source.database.parent
+        saved_root = source_root.with_name("legacy-saved")
 
-    monkeypatch.setattr(migration.sqlite3, "connect", connect_after_parent_swap)
-    with pytest.raises(VerificationError, match="database parent changed"):
-        copy_state(source, tmp_path / "new")
-    assert swapped is True
-    assert not (tmp_path / "new").exists()
+        def connect_after_change(
+            *args: object, **kwargs: object
+        ) -> sqlite3.Connection:
+            nonlocal changed
+            database = str(args[0]) if args else str(kwargs.get("database", ""))
+            if not changed and str(source.database) in database:
+                changed = True
+                source_root.rename(saved_root)
+                shutil.copytree(alternate.database.parent, source_root)
+            return real_connect(*args, **kwargs)
+
+    else:
+
+        def connect_after_change(
+            *args: object, **kwargs: object
+        ) -> sqlite3.Connection:
+            nonlocal changed
+            database = str(args[0]) if args else str(kwargs.get("database", ""))
+            if not changed and str(source.database) in database:
+                changed = True
+                sibling = source.database.parent.parent / "unrelated-sibling"
+                sibling.mkdir()
+                sibling.rmdir()
+            return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(migration.sqlite3, "connect", connect_after_change)
+    destination = tmp_path / "new"
+    if expected == "rejected":
+        try:
+            with pytest.raises(
+                VerificationError, match="database (?:parent )?changed"
+            ):
+                copy_state(source, destination)
+            assert not destination.exists()
+        finally:
+            if source_root.exists():
+                shutil.rmtree(source_root)
+            saved_root.rename(source_root)
+    else:
+        assert copy_state(source, destination).status == "copied"
+    assert changed is True
+
+
+def test_git_environment_disables_all_automatic_maintenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "gc.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_9", "maintenance.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_9", "true")
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'gc.auto=1'")
+    environment = migration._git_environment(None)
+
+    assert "GIT_CONFIG_PARAMETERS" not in environment
+    assert environment["GIT_CONFIG_COUNT"] == "3"
+    assert environment["GIT_CONFIG_KEY_0"] == "gc.auto"
+    assert environment["GIT_CONFIG_VALUE_0"] == "0"
+    assert environment["GIT_CONFIG_KEY_1"] == "gc.autoDetach"
+    assert environment["GIT_CONFIG_VALUE_1"] == "false"
+    assert environment["GIT_CONFIG_KEY_2"] == "maintenance.auto"
+    assert environment["GIT_CONFIG_VALUE_2"] == "false"
+    assert environment["GIT_CONFIG_KEY_9"] == "maintenance.auto"
+
+    observed = {}
+    for key in ("gc.auto", "gc.autoDetach", "maintenance.auto"):
+        completed = subprocess.run(
+            ["git", "config", "--get", key],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=5,
+        )
+        assert completed.returncode == 0 and completed.stderr == ""
+        observed[key] = completed.stdout.strip()
+    assert observed == {
+        "gc.auto": "0",
+        "gc.autoDetach": "false",
+        "maintenance.auto": "false",
+    }
+
+
+def test_cleanup_failure_does_not_mask_primary_migration_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, connection = _source(tmp_path)
+    destination = tmp_path / "new"
+
+    def primary_failure(phase: str) -> None:
+        if phase == "before_verification":
+            raise VerificationError("primary snapshot failure")
+
+    def cleanup_failure(_path: Path) -> None:
+        raise FileNotFoundError(errno.ENOENT, "missing", "gc.pid")
+
+    monkeypatch.setattr(migration.shutil, "rmtree", cleanup_failure)
+    try:
+        with pytest.raises(VerificationError, match="primary snapshot failure") as raised:
+            copy_state(source, destination, fault_hook=primary_failure)
+        assert raised.value.__notes__ == [
+            "owned staging cleanup also failed: "
+            "FileNotFoundError: [Errno 2] missing: 'gc.pid'"
+        ]
+    finally:
+        connection.close()
 
 
 def test_source_file_mutation_during_copy_is_detected(tmp_path: Path) -> None:
