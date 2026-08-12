@@ -1034,6 +1034,7 @@ REQUIRED_RUNTIME_MODULES = {
     "migration.py",
     "model_normalize.py",
     "models.py",
+    "path_alias.py",
     "rich_logger.py",
     "restore_acceptance.py",
     "scale_acceptance.py",

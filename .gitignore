@@ -9,6 +9,9 @@ mcp_agent_mail/
 # otherwise swallow silently: green here, missing fixture in CI.
 !tests/fixtures/agent_mail_stock/src/mcp_agent_mail/
 
+# local dev/test virtualenv (see AGENTS.md for setup)
+.venv/
+
 # runtime / data
 *.sqlite3
 *.sqlite3-shm

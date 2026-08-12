@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .config import get_settings
+from .path_alias import PathAliasMiddleware, expand_alias_paths
 
 
 _GRACEFUL_SHUTDOWN_SECONDS = 8.0
@@ -74,11 +75,25 @@ def main(argv: Sequence[str] | None = None) -> None:
             "AgentStack Mail entry point; refusing to start with auth configured"
         )
 
+    canonical_path = _normalized_path(path)
+    middleware = []
+    if expand_alias_paths(canonical_path, settings.http.path_aliases):
+        from starlette.middleware import Middleware
+
+        middleware.append(
+            Middleware(
+                PathAliasMiddleware,
+                canonical=canonical_path,
+                aliases=tuple(settings.http.path_aliases),
+            )
+        )
+
     _build_mcp_server().run(
         transport="streamable-http",
         host=host,
         port=port,
-        path=_normalized_path(path),
+        path=canonical_path,
+        middleware=middleware,
         log_level=settings.log_level.lower(),
         json_response=True,
         stateless_http=True,

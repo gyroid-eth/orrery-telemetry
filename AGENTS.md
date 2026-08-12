@@ -142,5 +142,7 @@ once instead of over several rounds of questions.
 | Failure modes | `docs/troubleshooting.md` |
 
 If you are changing this repository rather than installing it, read
-`CONTRIBUTING.md` and run `PYTHONPATH=. python3 -m pytest -q` before you
-report a change as done.
+`CONTRIBUTING.md`, create the dev venv once (see "Test environment" there —
+the mail package's dependencies are not importable from a bare `python3`),
+and run `PYTHONPATH=. .venv/bin/python -m pytest -q` before you report a
+change as done.

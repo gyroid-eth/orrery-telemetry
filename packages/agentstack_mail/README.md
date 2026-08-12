@@ -45,7 +45,13 @@ removed. The installed `agentstack-mail` console script serves this boundary at
 the loopback-only default `http://127.0.0.1:18765/mcp`; it rejects non-loopback
 binds and bearer/JWT settings until the HTTP authentication layer is wired.
 `agentstack-mail --help` prints usage without starting the server, and
-`--host`, `--port`, and `--path` override the endpoint for one process. Naming
+`--host`, `--port`, and `--path` override the endpoint for one process. The
+retired third-party server answered on both `/mcp` and `/api/`, and installed
+callers split between the two, so the well-known pair is served on every
+deployment: `AGENTSTACK_MAIL_HTTP_PATH_ALIASES` (default `/mcp,/api`) lists
+alias paths rewritten onto the canonical `--path` before routing, matching
+with and without a trailing slash; set it empty to serve the canonical path
+only. Naming
 mode behavior remains compatible with the frozen source, including default
 `coerce` substitution. Fixed AgentStack identities therefore use
 `AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough`; the unprefixed live

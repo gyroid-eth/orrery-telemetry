@@ -71,6 +71,11 @@ class HttpSettings:
     rbac_readonly_tools: list[str]
     # Dev convenience
     allow_localhost_unauthenticated: bool
+    # Alias request paths rewritten onto `path` (see path_alias.py). The
+    # default restores the retired server's contract of answering on both
+    # well-known MCP paths; an empty AGENTSTACK_MAIL_HTTP_PATH_ALIASES
+    # disables aliasing.
+    path_aliases: list[str]
 
 
 @dataclass(slots=True, frozen=True)
@@ -307,6 +312,7 @@ def get_settings() -> Settings:
         host=decouple_config("AGENTSTACK_MAIL_HTTP_HOST", default="127.0.0.1"),
         port=_int(decouple_config("AGENTSTACK_MAIL_HTTP_PORT", default="18765"), default=18765),
         path=decouple_config("AGENTSTACK_MAIL_HTTP_PATH", default="/mcp"),
+        path_aliases=_csv("AGENTSTACK_MAIL_HTTP_PATH_ALIASES", default="/mcp,/api"),
         bearer_token=decouple_config("AGENTSTACK_MAIL_HTTP_BEARER_TOKEN", default="") or None,
         rate_limit_enabled=_bool(decouple_config("AGENTSTACK_MAIL_HTTP_RATE_LIMIT_ENABLED", default="false"), default=False),
         rate_limit_per_minute=_int(decouple_config("AGENTSTACK_MAIL_HTTP_RATE_LIMIT_PER_MINUTE", default="60"), default=60),

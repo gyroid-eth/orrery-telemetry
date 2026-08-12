@@ -14,6 +14,7 @@ def _settings(
     path: str = "/mcp",
     bearer_token: str | None = None,
     jwt_enabled: bool = False,
+    path_aliases: tuple[str, ...] = (),
 ) -> SimpleNamespace:
     return SimpleNamespace(
         http=SimpleNamespace(
@@ -22,6 +23,7 @@ def _settings(
             path=path,
             bearer_token=bearer_token,
             jwt_enabled=jwt_enabled,
+            path_aliases=list(path_aliases),
         ),
         agent_name_enforcement_mode="passthrough",
         log_level="INFO",
@@ -51,6 +53,7 @@ def test_main_runs_the_exact_http_transport(
             "host": "127.0.0.1",
             "port": 18765,
             "path": "/mcp",
+            "middleware": [],
             "log_level": "info",
             "json_response": True,
             "stateless_http": True,
@@ -61,6 +64,40 @@ def test_main_runs_the_exact_http_transport(
             },
         }
     ]
+
+
+def test_main_wires_path_alias_middleware_for_configured_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server()
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: _settings(path="/api/", path_aliases=("/mcp", "/api")),
+    )
+    monkeypatch.setattr(cli, "_build_mcp_server", lambda: server)
+
+    cli.main([])
+
+    (entry,) = server.calls[0]["middleware"]
+    assert entry.cls is cli.PathAliasMiddleware
+    assert entry.kwargs == {"canonical": "/api/", "aliases": ("/mcp", "/api")}
+
+
+def test_main_skips_middleware_when_aliases_collapse_to_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server()
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: _settings(path="/mcp", path_aliases=("/mcp", "/mcp/")),
+    )
+    monkeypatch.setattr(cli, "_build_mcp_server", lambda: server)
+
+    cli.main([])
+
+    assert server.calls[0]["middleware"] == []
 
 
 def test_help_exits_without_loading_settings_or_building_server(

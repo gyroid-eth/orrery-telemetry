@@ -1,5 +1,30 @@
 # Contributing
 
+## Test environment
+
+`packages/agentstack_mail` has real dependencies (fastmcp, sqlmodel,
+python-decouple, …), so a bare `python3 -m pytest` cannot even collect its
+tests. Create the repo-local venv once and run the suite from it:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e packages/agentstack_mail pytest pytest-asyncio
+PYTHONPATH=. .venv/bin/python -m pytest -q
+```
+
+`.venv/` is gitignored. Do not install anything into a service venv under
+`~/.agentstack/` — those are production artifacts whose contents are pinned
+by cutover receipts.
+
+Two caveats learned by measurement:
+
+- Do not pipe pytest through `tail` without `pipefail`: the pipeline exits
+  with `tail`'s status and a red suite reads as exit 0.
+- Run the suite without other heavy processes (or a second concurrent
+  pytest): the SIGKILL-timing parity tests in
+  `packages/agentstack_mail/tests/test_pending_decision_d8_d9.py` can fail
+  under CPU contention and pass in a clean single run.
+
 ## Regression priority: a truly fresh install first
 
 The first environment this project protects is a machine with no existing
