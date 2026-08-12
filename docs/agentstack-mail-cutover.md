@@ -191,13 +191,20 @@ observations = receipt["production"]["observations"]
 assert set(observations) == {"new_ids_are_contiguous"}
 assert type(observations["new_ids_are_contiguous"]) is bool
 observer = receipt["observer"]
-assert [
-    name
-    for name, value in observer.items()
-    if name.startswith("production_") and isinstance(value, (int, float))
-] == []
-assert observer["production_write_claim_scope"]
-assert observer["production_network_claim_scope"]
+assert set(observer) == {
+    "pid",
+    "role",
+    "excluded_from_sampled_rehearsal_process_tree_observation",
+    "production_write_claim_scope",
+    "production_network_claim_scope",
+    "open_file_claim_scope",
+}
+for name in (
+    "production_write_claim_scope",
+    "production_network_claim_scope",
+    "open_file_claim_scope",
+):
+    assert type(observer[name]) is str and observer[name]
 for phase in ("before", "after"):
     open_mode = receipt["production"][phase]["messages"]["open_mode"]
     assert open_mode["query_only"] == 1

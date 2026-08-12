@@ -1355,15 +1355,24 @@ def test_joint_success_raw_restore_server_contract_shutdown_and_publish(
     assert set(payload["production"]["observations"]) == {"new_ids_are_contiguous"}
     assert type(payload["production"]["observations"]["new_ids_are_contiguous"]) is bool
     observer_payload = payload["observer"]
-    # The receipt may not carry a production counter that nothing counts: every
-    # production claim is a declared scope bound to evidence recorded elsewhere.
-    assert [
-        name
-        for name, value in observer_payload.items()
-        if name.startswith("production_") and isinstance(value, (int, float))
-    ] == []
-    assert observer_payload["production_write_claim_scope"]
-    assert observer_payload["production_network_claim_scope"]
+    # Pin the key set, not a predicate over the values.  A "no numeric
+    # production_* field" rule is satisfied by a counter written as the string
+    # "0", which reads exactly like the uninstrumented counters this record
+    # exists to keep out.  An exact key set cannot be satisfied that way.
+    assert set(observer_payload) == {
+        "pid",
+        "role",
+        "excluded_from_sampled_rehearsal_process_tree_observation",
+        "production_write_claim_scope",
+        "production_network_claim_scope",
+        "open_file_claim_scope",
+    }
+    for name in (
+        "production_write_claim_scope",
+        "production_network_claim_scope",
+        "open_file_claim_scope",
+    ):
+        assert type(observer_payload[name]) is str and observer_payload[name]
     for phase in ("before", "after"):
         open_mode = payload["production"][phase]["messages"]["open_mode"]
         assert open_mode["query_only"] == 1

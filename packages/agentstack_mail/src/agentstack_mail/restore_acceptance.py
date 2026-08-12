@@ -2101,7 +2101,15 @@ def run_restore_acceptance(
         "role": "read-only-production-observer-and-terminal-publisher",
         "excluded_from_sampled_rehearsal_process_tree_observation": True,
         "production_write_claim_scope": (
-            "no write counter is instrumented; the claim is bounded by "
+            "SQL writes to the production main database only; the -wal and -shm "
+            "sidecars are explicitly OUT of scope, because a mode=ro open is "
+            "itself allowed to create or rewrite the -shm in the production "
+            "directory in order to recover the WAL index (measured 2026-08-12: "
+            "with a dirty -wal and no -shm, a mode=ro open succeeds and creates "
+            "the -shm when the directory is writable, and fails when it is "
+            "not). production.invariants therefore constrain the main database "
+            "and its message window, not the sidecar bytes. No write counter is "
+            "instrumented; the claim is bounded by "
             "production.before.messages.open_mode / production.after.messages."
             "open_mode (SQLite mode=ro URI plus query_only read back from the "
             "open connection) and by production.invariants over the "
@@ -2111,7 +2119,12 @@ def run_restore_acceptance(
             "no request counter is instrumented; the observer reaches the "
             "production port only through the lsof listener table "
             "(production.before.listener.method), and the sampled rehearsal "
-            "process tree rejects any connection to it"
+            "process tree rejects any connection to it. That process-tree "
+            "observation does NOT cover the observer process itself, which this "
+            "same record excludes from it: for the observer, the only support "
+            "for the no-connection claim is static — one client construction "
+            "site, and a port argument that is rejected when it equals the "
+            "production port"
         ),
         "open_file_claim_scope": "sampled process-tree lsof observations only",
     }
