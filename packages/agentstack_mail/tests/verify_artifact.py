@@ -13,6 +13,13 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 DIVERGENCE_MANIFEST = "differential-expected-divergences-v2.json"
+EXPECTED_PERSONAL_IDENTIFIER_ALLOWLIST_REASON = (
+    "The recorded workspace is immutable measurement provenance for the "
+    "cutover performance baseline."
+)
+EXPECTED_PERFORMANCE_WORKSPACE_SHA256 = (
+    "afdaaa8f64a13436683a6da248073a400a87519e2e94b40d8af4010a713fbf28"
+)
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -891,7 +898,7 @@ EXPECTED_PERFORMANCE_GATES = [
         "selector": "reservation_activity.performance.57_concrete",
         "script": "packages/agentstack_mail/scripts/reservation_performance_gate.py",
         "input": {
-            "workspace": "/Users/operator/Syncthing/<vault-directory>",
+            "workspace": "<measurement-workspace>",
             "count": 57,
             "source_command": "git ls-files -z",
             "preferred_prefix": "10_Reference/",
@@ -1450,6 +1457,7 @@ def _assert_expected_divergences_manifest(
     expected_top_level = {
         "manifest_version",
         "contract_version",
+        "personal_identifier_allowlist_reason",
         "comparison_policy",
         "baselines",
         "intentional_differences",
@@ -1469,6 +1477,11 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(
             f"{artifact} divergence manifest must be schema version 2, contract 1"
         )
+    if (
+        manifest["personal_identifier_allowlist_reason"]
+        != EXPECTED_PERSONAL_IDENTIFIER_ALLOWLIST_REASON
+    ):
+        raise SystemExit(f"{artifact} personal-identifier allowlist reason changed")
     expected_policy = {
         "default": "fail_on_difference",
         "allowlist": "intentional_differences.allowlisted_entries_only",
@@ -1512,7 +1525,22 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(f"{artifact} normalization blind spots changed")
     if intentional["safety_entries"] != EXPECTED_SAFETY_DIFFERENCES:
         raise SystemExit(f"{artifact} safety differences changed")
-    if manifest["performance_gates"] != EXPECTED_PERFORMANCE_GATES:
+    performance_gates = manifest["performance_gates"]
+    try:
+        performance_workspace = performance_gates[0]["input"]["workspace"]
+    except (IndexError, KeyError, TypeError):
+        raise SystemExit(f"{artifact} performance gates changed") from None
+    if (
+        not isinstance(performance_workspace, str)
+        or hashlib.sha256(performance_workspace.encode()).hexdigest()
+        != EXPECTED_PERFORMANCE_WORKSPACE_SHA256
+    ):
+        raise SystemExit(f"{artifact} performance workspace provenance changed")
+    normalized_performance_gates = json.loads(json.dumps(performance_gates))
+    normalized_performance_gates[0]["input"]["workspace"] = (
+        "<measurement-workspace>"
+    )
+    if normalized_performance_gates != EXPECTED_PERFORMANCE_GATES:
         raise SystemExit(f"{artifact} performance gates changed")
     follow_up_tasks = manifest["follow_up_tasks"]
     if not isinstance(follow_up_tasks, list) or not all(

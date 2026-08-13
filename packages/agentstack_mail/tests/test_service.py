@@ -1449,7 +1449,7 @@ def test_ownership_and_cli_label_mismatch_fails_before_launchctl(tmp_path: Path)
     "label",
     (
         "",
-        "com.operator.agentstack-mail-rehearsal",
+        "com.example.agentstack-mail-rehearsal",
         service.LAUNCHD_REHEARSAL_PREFIX,
         f"{service.LAUNCHD_REHEARSAL_PREFIX}Uppercase",
         f"{service.LAUNCHD_REHEARSAL_PREFIX}slash/value",

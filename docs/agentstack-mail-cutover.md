@@ -5,6 +5,8 @@ agent:
   - PluckyEinstein
 ---
 
+> Allowlist rationale: machine-specific paths and launchd labels are immutable cutover provenance and are required to reconstruct the recorded handoff.
+
 # ORRERY Mail working-tree 切替手順（未実行）
 
 > **ここを越えると初回切替の手順では戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。将来の `post-authority-reverse-transform` は台帳に残すが、実装・rehearsal・別承認が済むまでは初回切替のrollback根拠にしない。
@@ -414,11 +416,11 @@ verify_display_patch_bundle() {
   (
     cd "$PATCH_DIR"
     shasum -a 256 -c <<'EOF'
-bc4b7d9d379c4770408bb45a09d8778307f1038ed5e679d1b71a3ad5c57506d1  0001-orrery-mail-db-selector.patch
-fb57b50157931255c9a9efb4dd1b7d1a93c3008374a10fd566d73d95883bb658  0002-dashboard-mail-cutover-selectors.patch
-5df21b01757d5829b038ed785a72f248613f54be6d2ec12e4444feabcde9a470  0002b-dashboard-live-launchagent-selectors.patch
-42b95c21d5b71163bff7be842b5183b2ff4897d6598f7f60b27a939dc9485748  0003-dashboard-agentstack-mail-no-bearer.patch
-f0c62d81f383951eb5daa4d6af3c9581fe8f5f9d4dbc37cb4420b9c1d3dd55c9  0004a-dashboard-loopback-retire-exit.patch
+31c36321aa0bd4ab40cfc6544ff024b38639a2dc3fc2ab423adb115701e38758  0001-orrery-mail-db-selector.patch
+97833bbe1f866a2dc8a05c8dae92b8be8a6db30b1375c9db607a8659b7d25240  0002-dashboard-mail-cutover-selectors.patch
+5b3cd31c6fbc3fbf3a5c79f08998f0627b12d52d8db3f11bc32c7d3333d09d24  0002b-dashboard-live-launchagent-selectors.patch
+734778af233e1ba7833fbaebc574f7e5b6f76183a14c32b70d9e7aa73b1166f2  0003-dashboard-agentstack-mail-no-bearer.patch
+b134a0953daaa554b2108a25ebc35fc2b94367600c1d6f61bbe0cd8eca447dea  0004a-dashboard-loopback-retire-exit.patch
 EOF
   )
 }

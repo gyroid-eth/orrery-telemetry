@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -21,19 +22,19 @@ LIVE_BUNDLE_SHA256 = "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30
 LIVE_PATCH_SHA256 = "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac"
 CUTOVER_PATCH_SHA256 = {
     "0001-orrery-mail-db-selector.patch": (
-        "bc4b7d9d379c4770408bb45a09d8778307f1038ed5e679d1b71a3ad5c57506d1"
+        "31c36321aa0bd4ab40cfc6544ff024b38639a2dc3fc2ab423adb115701e38758"
     ),
     "0002-dashboard-mail-cutover-selectors.patch": (
-        "fb57b50157931255c9a9efb4dd1b7d1a93c3008374a10fd566d73d95883bb658"
+        "97833bbe1f866a2dc8a05c8dae92b8be8a6db30b1375c9db607a8659b7d25240"
     ),
     "0002b-dashboard-live-launchagent-selectors.patch": (
-        "5df21b01757d5829b038ed785a72f248613f54be6d2ec12e4444feabcde9a470"
+        "5b3cd31c6fbc3fbf3a5c79f08998f0627b12d52d8db3f11bc32c7d3333d09d24"
     ),
     "0003-dashboard-agentstack-mail-no-bearer.patch": (
-        "42b95c21d5b71163bff7be842b5183b2ff4897d6598f7f60b27a939dc9485748"
+        "734778af233e1ba7833fbaebc574f7e5b6f76183a14c32b70d9e7aa73b1166f2"
     ),
     "0004a-dashboard-loopback-retire-exit.patch": (
-        "f0c62d81f383951eb5daa4d6af3c9581fe8f5f9d4dbc37cb4420b9c1d3dd55c9"
+        "b134a0953daaa554b2108a25ebc35fc2b94367600c1d6f61bbe0cd8eca447dea"
     ),
 }
 
@@ -209,14 +210,17 @@ def test_cutover_runbook_keeps_the_production_endpoint_stable() -> None:
 
     assert "AGENTSTACK_MAIL_HTTP_PORT=8765" in runbook
     assert "AGENTSTACK_MAIL_HTTP_PATH=/api/" in runbook
-    assert (
-        "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=com.operator.mcp-agent-mail"
-        in runbook
+    label_match = re.search(
+        r"^AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL=([^\s]+)$", runbook, re.MULTILINE
     )
+    assert label_match is not None
+    legacy_label = label_match.group(1)
+    assert legacy_label.startswith("com.")
+    assert legacy_label.endswith(".mcp-agent-mail")
     assert "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT=" in runbook
     assert "AGENTSTACK_MAIL_LEGACY_LAUNCHD_RECEIPT_SHA256=" in runbook
     assert 'binding = preflight.pop("legacy_launchd_receipt")' in runbook
-    assert '"definition_label": "com.operator.mcp-agent-mail"' in runbook
+    assert f'"definition_label": "{legacy_label}"' in runbook
     assert "ここが最初の必須切替成功gate" in runbook
     assert "H9は省略不可" in runbook
     assert "healthだけの成功を切替成功扱いにしない" in runbook
@@ -231,7 +235,11 @@ def test_cutover_runbook_keeps_the_production_endpoint_stable() -> None:
 def test_cutover_runbook_pins_the_accepted_restore_observer_contract() -> None:
     runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
 
-    assert "REPO='/Users/operator/OSS/worktrees/PluckyMailDifferential'" in runbook
+    assert re.search(
+        r"^REPO='/Users/[^/]+/OSS/worktrees/PluckyMailDifferential'$",
+        runbook,
+        re.MULTILINE,
+    )
     assert '"$EVIDENCE_BIN" restore-rehearsal' in runbook
     assert "--backup-main-size 67293184" in runbook
     assert (

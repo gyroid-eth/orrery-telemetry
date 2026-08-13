@@ -15,6 +15,7 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import threading
@@ -26,6 +27,10 @@ spec = importlib.util.spec_from_loader("await_reply", loader=None)
 await_reply = importlib.util.module_from_spec(spec)
 await_reply.__file__ = str(TOOL)
 exec(compile(TOOL.read_text(encoding="utf-8"), str(TOOL), "exec"), await_reply.__dict__)
+
+
+def test_default_project_key_is_the_invocation_directory():
+    assert await_reply.DEFAULT_PROJECT_KEY == os.getcwd()
 
 
 def _serve(batches):

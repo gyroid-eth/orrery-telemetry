@@ -585,7 +585,7 @@ check('[' + STORY_ID + '] nothing in the fixture came from a real mailbox', () =
      ever appears here, someone exported instead of writing. */
   ['demo_api.js', 'demo_tour.js'].concat(storyFiles()).forEach((f) => {
     const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-    ['Syncthing', '<vault-directory>', 'mcp_agent_mail', '/Users/',
+    ['Syncthing', 'mcp_agent_mail', '/Users/',
      'ProOpus', 'PluckyEinstein', 'biomatterlab',
     ].forEach((needle) => {
       if (src.includes(needle))

@@ -129,8 +129,9 @@ class ReservationHookTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         """Run with no AgentStack product selectors and a definitive zero renewal."""
         home = root / "home"
-        vault = home / "Syncthing" / "<vault-directory>"
-        vault.mkdir(parents=True)
+        workspace = home / "workspace"
+        workspace.mkdir(parents=True)
+        workspace = workspace.resolve()
 
         fake_bin = root / "fake-bin"
         fake_bin.mkdir()
@@ -165,13 +166,16 @@ class ReservationHookTests(unittest.TestCase):
                 "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             }
         )
-        payload = json.dumps({"tool_input": {"file_path": str(vault / "note.md")}})
+        payload = json.dumps(
+            {"tool_input": {"file_path": str(workspace / "note.md")}}
+        )
         return subprocess.run(
             ["/bin/bash", str(HOOK)],
             input=payload,
             text=True,
             capture_output=True,
             env=env,
+            cwd=workspace,
             check=False,
             timeout=10,
         )

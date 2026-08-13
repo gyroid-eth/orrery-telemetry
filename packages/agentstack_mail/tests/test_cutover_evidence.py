@@ -431,7 +431,7 @@ arguments = {
 def test_legacy_launchd_definition_snapshot_binds_loaded_job_to_plist(
     tmp_path: Path,
 ) -> None:
-    plist = tmp_path / "com.operator.mcp-agent-mail.plist"
+    plist = tmp_path / f"{evidence.LEGACY_LAUNCHD_LABEL}.plist"
     definition = {
         "Label": evidence.LEGACY_LAUNCHD_LABEL,
         "ProgramArguments": ["/bin/bash", "/private/tmp/run-server.sh"],
@@ -512,7 +512,7 @@ def test_legacy_launchd_observation_requires_exact_live_topology(
         evidence,
         "_launchd_job_runtime",
         lambda _label: {
-            "identity": "gui/501/com.operator.mcp-agent-mail",
+            "identity": f"gui/501/{evidence.LEGACY_LAUNCHD_LABEL}",
             "definition_sha256": evidence._sha256_bytes(
                 evidence._canonical_json(stable)
             ),

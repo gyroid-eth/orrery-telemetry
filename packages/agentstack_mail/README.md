@@ -502,7 +502,8 @@ agentstack-mail-evidence legacy-launchd-snapshot \
   --candidate-commit 0123456789abcdef0123456789abcdef01234567
 ```
 
-The producer is restricted to the loaded `com.operator.mcp-agent-mail` job. It
+The producer is restricted to the loaded job selected by
+`AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL`. It
 byte-binds itself and the installed package to the named wheel and clean
 candidate, checks the loaded path/program/arguments against the plist, retains
 the complete plist bytes as base64 plus its digest and

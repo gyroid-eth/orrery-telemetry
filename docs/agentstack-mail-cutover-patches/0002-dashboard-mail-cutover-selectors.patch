@@ -2,6 +2,7 @@
 # and replace the legacy mcp_agent_mail vocabulary import with AgentStack data.
 # Rollback: restore the four LaunchAgent values and the previous constants/import.
 # D3 bearer and D4/D5 retire/owner-token behavior are intentionally unchanged.
+# Allowlist rationale: machine-specific paths and labels are immutable cutover provenance.
 # Apply from /Users/operator with: patch -p1 < 0002-dashboard-mail-cutover-selectors.patch
 --- a/.claude/tools/agent-dashboard/server.py
 +++ b/.claude/tools/agent-dashboard/server.py

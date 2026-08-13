@@ -3,6 +3,7 @@
 # Scope: ~/Library/LaunchAgents/com.operator.agentdashboard.plist only.
 # Purpose: keep the installed LaunchAgent environment byte-for-byte aligned
 # with the repo-managed plist after 0002 adds the four AgentStack selectors.
+# Allowlist rationale: machine-specific paths and labels are immutable cutover provenance.
 #
 # Preconditions:
 # - apply 0002 to the repo-managed dashboard copy first

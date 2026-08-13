@@ -42,7 +42,7 @@ import urllib.error
 import urllib.request
 
 DEFAULT_URL = "http://127.0.0.1:8765/api/"
-DEFAULT_PROJECT_KEY = "/Users/operator/Syncthing/<vault-directory>"
+DEFAULT_PROJECT_KEY = os.getcwd()
 
 
 def _mcp_url() -> str:

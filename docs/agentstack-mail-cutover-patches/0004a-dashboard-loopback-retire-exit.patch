@@ -14,6 +14,7 @@
 # - restore the legacy REST call only after old 8765 is again the selected authority
 #
 # This artifact changes no product source, ledger, test, live service, or port.
+# Allowlist rationale: the machine-specific apply path is immutable cutover provenance.
 # Apply only after a strict dry-run from /Users/operator:
 # patch --batch --forward --fuzz=0 --no-backup-if-mismatch -p1 < 0004a-dashboard-loopback-retire-exit.patch
 --- a/.claude/tools/agent-dashboard/server.py

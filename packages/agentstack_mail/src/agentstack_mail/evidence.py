@@ -16,6 +16,7 @@ import base64
 import base64
 import configparser
 import csv
+import getpass
 import hashlib
 import importlib.metadata
 import io
@@ -51,7 +52,10 @@ LIFECYCLE_RECEIPT_NAME: Final[str] = "service-lifecycle-v1.json"
 LAUNCHD_RECEIPT_NAME: Final[str] = "service-launchd-lifecycle-v1.json"
 RUNTIME_SCHEMA_VERSION: Final[int] = 1
 LEGACY_PORT: Final[int] = 8765
-LEGACY_LAUNCHD_LABEL: Final[str] = "com.operator.mcp-agent-mail"
+LEGACY_LAUNCHD_LABEL: Final[str] = os.environ.get(
+    "AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABEL",
+    f"com.{getpass.getuser()}.mcp-agent-mail",
+)
 PACKAGE_EVIDENCE_PATH: Final[str] = (
     "packages/agentstack_mail/src/agentstack_mail/evidence.py"
 )

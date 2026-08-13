@@ -1,6 +1,7 @@
 {
   "manifest_version": 2,
   "contract_version": 1,
+  "personal_identifier_allowlist_reason": "The recorded workspace is immutable measurement provenance for the cutover performance baseline.",
   "comparison_policy": {
     "default": "fail_on_difference",
     "allowlist": "intentional_differences.allowlisted_entries_only",

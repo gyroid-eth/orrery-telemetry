@@ -1,6 +1,7 @@
 # Purpose: point ORRERY at the absolute AgentStack Mail database and remove
 # the legacy ~/mcp_agent_mail fallback; missing configuration becomes fatal.
 # Rollback: restore the previous config entry and backend fallback together.
+# Allowlist rationale: machine-specific paths are immutable cutover provenance.
 # Apply from /Users/operator with: patch -p1 < 0001-orrery-mail-db-selector.patch
 --- a/.orrery/config.json
 +++ b/.orrery/config.json

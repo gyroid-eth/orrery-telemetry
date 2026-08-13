@@ -20,16 +20,14 @@ from agentstack_mail import evidence, restore_acceptance
 from agentstack_mail.contract import COMPATIBILITY_TOOLS
 
 
+ACCEPTED_BACKUP_ROOT = (
+    Path(os.environ.get("AGENTSTACK_ACCEPTED_BACKUP_ROOT", "/nonexistent/agentstack-accepted-backups"))
+)
+ACCEPTED_BACKUP_BASENAME = "agent-mail-backup-20260811-215721.sqlite3"
 ACCEPTED_BACKUP_PATHS = {
-    "main": Path(
-        "/Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3"
-    ),
-    "wal": Path(
-        "/Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3-wal"
-    ),
-    "shm": Path(
-        "/Users/operator/orrery/backups/agent-mail-backup-20260811-215721.sqlite3-shm"
-    ),
+    "main": ACCEPTED_BACKUP_ROOT / ACCEPTED_BACKUP_BASENAME,
+    "wal": ACCEPTED_BACKUP_ROOT / f"{ACCEPTED_BACKUP_BASENAME}-wal",
+    "shm": ACCEPTED_BACKUP_ROOT / f"{ACCEPTED_BACKUP_BASENAME}-shm",
 }
 ACCEPTED_BACKUP_PINS = {
     "main": {

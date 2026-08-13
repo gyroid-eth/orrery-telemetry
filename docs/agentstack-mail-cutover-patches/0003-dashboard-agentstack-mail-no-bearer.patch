@@ -6,6 +6,7 @@
 # Rollback: reverse this patch before pointing AGENTSTACK_MCP_URL back at 8765;
 # that restores the legacy bearer reader/header. Reverting only the URL is broken.
 # D4/D5 retire and owner-token behavior are intentionally unchanged.
+# Allowlist rationale: the machine-specific apply path is immutable cutover provenance.
 # Apply only after a strict dry-run from /Users/operator:
 # patch --batch --forward --fuzz=0 --no-backup-if-mismatch -p1 < 0003-dashboard-agentstack-mail-no-bearer.patch
 --- a/.claude/tools/agent-dashboard/server.py

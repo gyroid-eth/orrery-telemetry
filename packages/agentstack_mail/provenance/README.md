@@ -1,5 +1,7 @@
 # Reconstructing the tracked live baseline
 
+> Allowlist rationale: the original checkout path is immutable source provenance for this captured baseline.
+
 This directory makes the authoritative tracked Python AgentMail source
 reconstructible without relying on the mutable checkout at
 `/Users/operator/mcp_agent_mail`.
