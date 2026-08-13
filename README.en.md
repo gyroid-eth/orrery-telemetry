@@ -8,17 +8,23 @@ A coordination layer and live telemetry dashboard for local Claude Code and Code
 
 The central design principle is to make operating rules executable through launchers, hooks, mail, and visualization instead of merely expecting LLMs to coordinate.
 
-## Requirements
+## Supported environments
 
-- macOS is the primary target; launchers and hooks support the system Bash 3.2
-- Python 3.10 or newer (`python3`), `tmux`, `git`, and `uv`. The full suite is verified on 3.10, 3.12, 3.13, and 3.14; there is no upper bound, and CI runs 3.10, 3.12, and 3.14 on every push
-- Claude Code or the Codex CLI
-- `fswatch` (optional; the mail watcher polls without it)
-- `fzf` (optional directory picker)
-- Ghostty (recommended; falls back to iTerm2, Terminal.app, or `none`)
-- Obsidian (optional `/log` vault/Daily Note integration and links for Output items inside a vault; generic project `logs/` still appear without it; `/log` vault mode requires `AGENTSTACK_OBSIDIAN_APP`)
+| Environment | Support |
+| --- | --- |
+| macOS | **Supported.** Uses launchd and falls back to supervised background mode when the `gui/$UID` domain is unavailable. Launchers and hooks support the system Bash 3.2. |
+| Linux | **Supported.** Prefers an available `systemd --user` session and otherwise uses supervised background mode. |
+| WSL2 | **Limited support.** The localhost dashboard works, but Ghostty click-to-jump does not. |
+| Native Windows | **Unsupported.** |
+| Other operating systems | **Unsupported.** The installer preflight stops before writing. |
 
-On macOS, the installer attempts to bootstrap the launchd `gui/$UID` domain and falls back to a self-restarting background supervisor when that domain is unavailable, including display-sleep and SSH-only sessions. Linux uses a systemd user service when available and the same background supervisor otherwise. Native Windows is not supported. See [Installation](docs/install.md#動作環境) for details.
+Python **3.10 or newer** is required. There is no declared upper bound; the full suite is verified on 3.10, 3.12, 3.13, and 3.14, while CI runs 3.10, 3.12, and 3.14.
+
+The required commands are `git` and `tmux`. `uv` is additionally required only when the installer must provision agent-mail. At runtime, at least one of Claude Code or the Codex CLI is required. `systemctl` enables the Linux user service, with the supervisor as its supported fallback. `fswatch` (mail watcher), `fzf` (directory picker), Ghostty, and Obsidian are optional.
+
+The installer begins by checking the OS, Python, required commands, the agent-mail endpoint (default `127.0.0.1:8765`), and install-directory writability, reporting all detected problems together. An occupied port 8765 is expected when an existing `install-state.json` marks an update. On a fresh install, the installer does not guess ownership from the socket: it reuses the listener only after resolving an agent-mail health response and SQLite database, and stops before its first write for an unrelated or unresolved listener.
+
+Only CI and isolated tests that deliberately replace a platform boundary should bypass an individual check with `AGENTSTACK_PREFLIGHT_SKIP_OS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`, `AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PORT=1`, or `AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1`. A bypass does not supply a dependency or make an unsupported environment supported. See [Installation](docs/install.md#動作環境) for details.
 
 ## Quick start
 

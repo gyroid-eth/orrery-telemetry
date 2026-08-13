@@ -43,6 +43,20 @@ PASSTHROUGH_ENABLED="${AGENTSTACK_AGENT_MAIL_PASSTHROUGH:-1}"
 # Patching it requires a separate, auditable opt-in.
 PATCH_EXISTING_AGENT_MAIL="${AGENTSTACK_PATCH_EXISTING_AGENT_MAIL:-0}"
 
+# These match packages/agentstack_mail/pyproject.toml. A regression test keeps
+# the shell gate and package metadata in lock-step.
+PYTHON_MIN_MAJOR=3
+PYTHON_MIN_MINOR=10
+
+# CI may bypass one preflight category at a time when it deliberately supplies
+# a fake platform boundary. Skipping a check never supplies the dependency the
+# rest of the installer actually needs.
+PREFLIGHT_SKIP_OS="${AGENTSTACK_PREFLIGHT_SKIP_OS:-0}"
+PREFLIGHT_SKIP_PYTHON="${AGENTSTACK_PREFLIGHT_SKIP_PYTHON:-0}"
+PREFLIGHT_SKIP_COMMANDS="${AGENTSTACK_PREFLIGHT_SKIP_COMMANDS:-0}"
+PREFLIGHT_SKIP_PORT="${AGENTSTACK_PREFLIGHT_SKIP_PORT:-0}"
+PREFLIGHT_SKIP_WRITABLE="${AGENTSTACK_PREFLIGHT_SKIP_WRITABLE:-0}"
+
 usage() {
   cat <<'EOF'
 Usage: install.sh [--dry-run] [--dashboard-only|--scoped] [options]
@@ -174,10 +188,115 @@ AGENT_MAIL_SERVICE_KIND=""
 AGENT_MAIL_SERVICE_PATH=""
 AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected agent-mail naming source","warning":"requested-name handling is unknown"}'
+PREFLIGHT_OS=""
+PREFLIGHT_ERRORS=()
+PYTHON_SELECTION_ERROR=""
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+preflight_error() {
+  PREFLIGHT_ERRORS[${#PREFLIGHT_ERRORS[@]}]="$1"
+}
+
+validate_preflight_switches() {
+  local name value
+  for name in \
+    AGENTSTACK_PREFLIGHT_SKIP_OS \
+    AGENTSTACK_PREFLIGHT_SKIP_PYTHON \
+    AGENTSTACK_PREFLIGHT_SKIP_COMMANDS \
+    AGENTSTACK_PREFLIGHT_SKIP_PORT \
+    AGENTSTACK_PREFLIGHT_SKIP_WRITABLE
+  do
+    value="${!name:-0}"
+    if [[ "$value" != "0" && "$value" != "1" ]]; then
+      preflight_error "$name must be 0 or 1; set it to 1 only when a test deliberately replaces that boundary."
+    fi
+  done
+}
+
+preflight_required_commands() {
+  if [[ "$PREFLIGHT_SKIP_COMMANDS" == "1" ]]; then
+    say "preflight: required-command check skipped by AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1"
+    return
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    preflight_error "git is required. Install it with your OS package manager (macOS: xcode-select --install; Debian/Ubuntu: sudo apt install git)."
+  fi
+  if ! command -v tmux >/dev/null 2>&1; then
+    preflight_error "tmux is required at install time and runtime. Install it with Homebrew (brew install tmux) or your Linux package manager."
+  fi
+}
+
+preflight_platform() {
+  PREFLIGHT_OS="$(uname -s 2>/dev/null || true)"
+  if [[ "$PREFLIGHT_SKIP_OS" == "1" ]]; then
+    say "preflight: OS check skipped by AGENTSTACK_PREFLIGHT_SKIP_OS=1"
+    return
+  fi
+
+  case "$PREFLIGHT_OS" in
+    Darwin)
+      if ! command -v launchctl >/dev/null 2>&1; then
+        preflight_error "macOS was detected but launchctl is unavailable. Restore the macOS launchd tools, then re-run install.sh."
+      else
+        say "preflight: supported OS macOS (launchd)"
+      fi
+      ;;
+    Linux)
+      if command -v systemctl >/dev/null 2>&1 && \
+         systemctl --user show-environment >/dev/null 2>&1
+      then
+        say "preflight: supported OS Linux (systemd --user available)"
+      else
+        say "preflight: supported OS Linux (systemd --user unavailable; supervised background mode will be used)"
+      fi
+      ;;
+    *)
+      preflight_error "operating system '${PREFLIGHT_OS:-unknown}' is unsupported. Use macOS or Linux; native Windows and other kernels are not supported."
+      ;;
+  esac
+}
+
+preflight_target_writable() {
+  if [[ "$PREFLIGHT_SKIP_WRITABLE" == "1" ]]; then
+    say "preflight: install-directory write check skipped by AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1"
+    return
+  fi
+
+  local target="$INSTALL_DIR"
+  local ancestor="$target"
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    preflight_error "install target '$target' exists but is not a directory. Move it aside or choose --install-dir PATH."
+    return
+  fi
+  while [[ ! -e "$ancestor" && "$ancestor" != "/" ]]; do
+    ancestor="$(dirname "$ancestor")"
+  done
+  if [[ ! -d "$ancestor" || ! -w "$ancestor" || ! -x "$ancestor" ]]; then
+    preflight_error "install target '$target' is not writable. Fix permissions on '$ancestor' or choose --install-dir PATH."
+    return
+  fi
+  if [[ -d "$target" && ( ! -w "$target" || ! -x "$target" ) ]]; then
+    preflight_error "existing install directory '$target' is not writable. Fix its ownership/permissions or choose --install-dir PATH."
+  fi
+}
+
+preflight_finish() {
+  local count="${#PREFLIGHT_ERRORS[@]}"
+  local item
+  if [[ "$count" -eq 0 ]]; then
+    say "preflight: passed"
+    return 0
+  fi
+  printf 'error: preflight failed with %s problem(s):\n' "$count" >&2
+  for item in "${PREFLIGHT_ERRORS[@]}"; do
+    printf '  - %s\n' "$item" >&2
+  done
+  return 1
+}
 
 # An agent-mail the user already had is not ours to move. Say which version is
 # actually in play, so a later "it works on mine" has something to compare.
@@ -386,12 +505,6 @@ run() {
   fi
 }
 
-need_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    die "missing required dependency '$1'. Install it manually, then re-run install.sh."
-  fi
-}
-
 resolve_python_candidate() {
   case "$1" in
     */*) printf '%s\n' "$1" ;;
@@ -406,21 +519,24 @@ python_version() {
 
 python_is_compatible() {
   [[ -n "$1" && -x "$1" ]] || return 1
-  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
+  "$1" -c "import sys; raise SystemExit(0 if sys.version_info >= ($PYTHON_MIN_MAJOR, $PYTHON_MIN_MINOR) else 1)" \
     >/dev/null 2>&1
 }
 
 select_python() {
   local requested="${AGENTSTACK_PYTHON:-}"
   local candidate version
+  PYTHON_SELECTION_ERROR=""
   if [[ -n "$requested" ]]; then
     candidate="$(resolve_python_candidate "$requested")"
     if [[ -z "$candidate" || ! -x "$candidate" ]]; then
-      die "AGENTSTACK_PYTHON is not an executable Python interpreter: $requested"
+      PYTHON_SELECTION_ERROR="AGENTSTACK_PYTHON is not an executable Python interpreter: $requested. Install Python $PYTHON_MIN_MAJOR.$PYTHON_MIN_MINOR or newer and point AGENTSTACK_PYTHON at it."
+      return 1
     fi
     version="$(python_version "$candidate")"
-    if ! python_is_compatible "$candidate"; then
-      die "AGENTSTACK_PYTHON must be Python 3.10 or newer; found $version at $candidate"
+    if [[ "$PREFLIGHT_SKIP_PYTHON" != "1" ]] && ! python_is_compatible "$candidate"; then
+      PYTHON_SELECTION_ERROR="AGENTSTACK_PYTHON must be Python $PYTHON_MIN_MAJOR.$PYTHON_MIN_MINOR or newer; found $version at $candidate. Install a current Python or choose another AGENTSTACK_PYTHON."
+      return 1
     fi
     PYTHON_BIN="$candidate"
     say "python: $PYTHON_BIN ($version)"
@@ -451,7 +567,7 @@ select_python() {
       checked="$checked, "
     fi
     checked="$checked$candidate ($version)"
-    if python_is_compatible "$candidate"; then
+    if [[ "$PREFLIGHT_SKIP_PYTHON" == "1" ]] || python_is_compatible "$candidate"; then
       PYTHON_BIN="$candidate"
       say "python: $PYTHON_BIN ($version)"
       return
@@ -459,7 +575,17 @@ select_python() {
   done
 
   [[ -n "$checked" ]] || checked="no python3 candidates found"
-  die "Python 3.10 or newer is required; checked: $checked. Install a current Python or set AGENTSTACK_PYTHON."
+  PYTHON_SELECTION_ERROR="Python $PYTHON_MIN_MAJOR.$PYTHON_MIN_MINOR or newer is required; checked: $checked. Install a current Python or set AGENTSTACK_PYTHON."
+  return 1
+}
+
+preflight_python() {
+  if [[ "$PREFLIGHT_SKIP_PYTHON" == "1" ]]; then
+    say "preflight: Python version check skipped by AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1"
+  fi
+  if ! select_python; then
+    preflight_error "$PYTHON_SELECTION_ERROR"
+  fi
 }
 
 normalize_path() {
@@ -513,6 +639,54 @@ try:
 except OSError:
     raise SystemExit(1)
 PY
+}
+
+preflight_agent_mail_port() {
+  if [[ "$PREFLIGHT_SKIP_PORT" == "1" ]]; then
+    say "preflight: agent-mail port check skipped by AGENTSTACK_PREFLIGHT_SKIP_PORT=1"
+    return
+  fi
+  # Port probing needs the selected interpreter. Its own actionable Python
+  # error is already in the aggregate when selection failed.
+  [[ -n "$PYTHON_BIN" ]] || return
+
+  local parts host port
+  parts="$(mcp_endpoint_parts 2>/dev/null)" || {
+    preflight_error "AGENTSTACK_MCP_URL '$MCP_URL' is invalid. Set it to an http(s) agent-mail endpoint, normally http://127.0.0.1:8765/mcp."
+    return
+  }
+  IFS='|' read -r host port <<< "$parts"
+  case "$host" in
+    127.0.0.1|localhost|::1) ;;
+    *)
+      say "preflight: remote agent-mail endpoint $host:$port (local port check not applicable)"
+      return
+      ;;
+  esac
+
+  if ! mcp_endpoint_listening; then
+    say "preflight: agent-mail port $port is available"
+    return
+  fi
+  if [[ -f "$MANIFEST" ]]; then
+    say "preflight: existing AgentStack install detected; occupied agent-mail port $port will be verified for reuse"
+  else
+    # A user may intentionally share an already-running agent-mail across
+    # projects. Do not guess ownership from a listening socket: the existing
+    # resolver verifies its health response/database before the first write.
+    say "preflight: agent-mail port $port is occupied; installer will verify that it is a reusable agent-mail service"
+  fi
+}
+
+run_preflight() {
+  PREFLIGHT_ERRORS=()
+  validate_preflight_switches
+  preflight_required_commands
+  preflight_platform
+  preflight_python
+  preflight_target_writable
+  preflight_agent_mail_port
+  preflight_finish
 }
 
 discover_agent_mail_listener_process() {
@@ -782,12 +956,10 @@ resolve_agent_mail_connection() {
 }
 
 check_dependencies() {
-  need_cmd tmux
-  need_cmd git
   if ! command -v fswatch >/dev/null 2>&1; then
     warn "optional dependency 'fswatch' not found; mail watcher will use polling"
   fi
-  if [[ "$(uname -s)" == "Darwin" ]] && [[ "$TERMINAL" != "none" ]]; then
+  if [[ "$PREFLIGHT_OS" == "Darwin" ]] && [[ "$TERMINAL" != "none" ]]; then
     if [[ ! -d /Applications/Ghostty.app && ! -d "$HOME/Applications/Ghostty.app" ]] && ! command -v ghostty >/dev/null 2>&1; then
       warn "Ghostty not found; AGENTSTACK_TERMINAL=auto will fall back when possible"
     fi
@@ -795,8 +967,14 @@ check_dependencies() {
 }
 
 check_agent_mail_provisioning_dependencies() {
-  if [[ "$PROVISION_AGENT_MAIL" == true ]]; then
-    need_cmd uv
+  if [[ "$PROVISION_AGENT_MAIL" != true || "$PREFLIGHT_SKIP_COMMANDS" == "1" ]]; then
+    return 0
+  fi
+  if ! command -v uv >/dev/null 2>&1; then
+    PREFLIGHT_ERRORS=()
+    preflight_error "uv is required to provision agent-mail. Install it from https://docs.astral.sh/uv/getting-started/installation/ and re-run install.sh."
+    preflight_finish
+    return 1
   fi
 }
 
@@ -946,7 +1124,7 @@ check_port() {
 }
 
 detect_service_kind() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ "$PREFLIGHT_OS" == "Darwin" ]]; then
     echo "launchd"
     return
   fi
@@ -2128,17 +2306,21 @@ main() {
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
   validate_assume_yes
+  if ! run_preflight; then
+    exit 1
+  fi
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."
   elif [[ "$TIER" == "tier2" ]]; then
     say "Phase 3a note: Tier2 project enable is a placeholder; no project settings are modified."
   fi
-  select_python
   check_dependencies
   validate_repo_assets
   check_port
   resolve_agent_mail_connection
-  check_agent_mail_provisioning_dependencies
+  if ! check_agent_mail_provisioning_dependencies; then
+    exit 1
+  fi
   local service_kind
   service_kind="$(detect_service_kind)"
   # detect_service_kind knows which manager to try, not whether it will work:

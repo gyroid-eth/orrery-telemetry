@@ -8,17 +8,23 @@
 
 設計の中心は「LLM に協調を期待するだけでなく、launcher・hook・mail・可視化で運用規約を実行可能にする」ことです。
 
-## 動作要件
+## 対応環境（Supported environments）
 
-- macOS（主対象。launcher / hook は標準 Bash 3.2 対応）
-- Python 3.10 以上（`python3`）、`tmux`、`git`、`uv`。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 で、上限は設けていません（CI が 3.10・3.12・3.14 を毎回回します）
-- Claude Code または Codex CLI
-- `fswatch`（任意。mail watcher。なければ polling）
-- `fzf`（任意。directory picker）
-- Ghostty（推奨。iTerm2、Terminal.app、`none` へ fallback）
-- Obsidian（任意。`/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。未導入でも generic project の `logs/` は Output に表示できます。`/log` の vault mode には `AGENTSTACK_OBSIDIAN_APP` が必要）
+| 環境 | サポート |
+| --- | --- |
+| macOS | **対応**。launchd を使い、`gui/$UID` domain を利用できない場合は supervised background mode へ切り替えます。launcher / hook は標準 Bash 3.2 対応です。 |
+| Linux | **対応**。利用可能な `systemd --user` を優先し、なければ supervised background mode を使います。 |
+| WSL2 | **制限付き対応**。localhost dashboard は利用できますが、Ghostty の click-to-jump は利用できません。 |
+| Windows native | **未対応**。 |
+| その他の OS | **未対応**。installer の preflight が書き込み前に停止します。 |
 
-macOS では launchd の `gui/$UID` domain への bootstrap を試し、画面スリープ中や SSH 専用環境などで利用できなければ自己再起動付きの background supervisor へ切り替えます。Linux では systemd user service、利用できなければ同じ background supervisor を使います。Windows native は対象外です。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
+Python は **3.10 以上**が必須です。上限は設けておらず、全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14（CI は 3.10 / 3.12 / 3.14）です。
+
+必須 command は `git` と `tmux` です。agent-mail を新規 provision する場合だけ `uv` も必須です。実行時には Claude Code または Codex CLI の少なくとも一方が必要です。`systemctl` は Linux の user service 用ですが、利用できなければ supervisor が代替します。`fswatch`（mail watcher）、`fzf`（directory picker）、Ghostty、Obsidian は任意です。
+
+installer は冒頭で OS、Python、必須 command、agent-mail endpoint（既定 `127.0.0.1:8765`）、install directory の書込権限をまとめて検査します。8765 が使用中でも、既存の `install-state.json` があれば上書き更新として扱います。新規 install で使用中の場合も socket の所有者を推測して停止せず、agent-mail の health response と SQLite database を確認できた場合だけ既存 service を再利用します。無関係または解決不能な listener なら、最初の書き込み前に停止します。
+
+CI や isolated test で platform boundary を意図的に偽装する場合に限り、`AGENTSTACK_PREFLIGHT_SKIP_OS=1`、`AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`、`AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`、`AGENTSTACK_PREFLIGHT_SKIP_PORT=1`、`AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1` で各検査を個別に skip できます。skip は依存を提供せず、未対応環境を対応済みに変えるものでもありません。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
 
 ## クイックスタート
 
