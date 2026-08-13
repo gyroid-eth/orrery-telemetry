@@ -1040,6 +1040,7 @@ REQUIRED_RUNTIME_MODULES = {
     "scale_acceptance.py",
     "service.py",
     "storage.py",
+    "tool_descriptions.py",
     "utils.py",
 }
 

@@ -51,7 +51,14 @@ callers split between the two, so the well-known pair is served on every
 deployment: `AGENTSTACK_MAIL_HTTP_PATH_ALIASES` (default `/mcp,/api`) lists
 alias paths rewritten onto the canonical `--path` before routing, matching
 with and without a trailing slash; set it empty to serve the canonical path
-only. Naming
+only. Two token-efficiency switches, both default-off so the frozen
+differential behavior is preserved: `AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=true`
+adds a 400-character `body_snippet` to notification signals so watchers can
+deliver short messages without a fetch round trip, and
+`AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true` drops the body echo from
+send/reply tool results.
+Published tool descriptions come from `tool_descriptions.py`, not the
+in-source docstrings — see that module before editing either. Naming
 mode behavior remains compatible with the frozen source, including default
 `coerce` substitution. Fixed AgentStack identities therefore use
 `AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough`; the unprefixed live

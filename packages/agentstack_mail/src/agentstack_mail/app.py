@@ -4990,6 +4990,16 @@ def build_mcp_server() -> FastMCP:
                     "subject": subject,
                     "importance": importance,
                 }
+                # Carry a body snippet so the notification watcher can show
+                # the message itself: for short messages the recipient can act
+                # without a fetch_inbox round trip, which measured as the
+                # dominant share of notification→reply latency (2026-08-13).
+                # Flag-gated: the frozen differential behavior writes
+                # metadata-only signals.
+                if settings.notifications.include_body:
+                    snippet_limit = 400
+                    message_meta["body_snippet"] = (body_md or "")[:snippet_limit]
+                    message_meta["body_truncated"] = len(body_md or "") > snippet_limit
                 # Signal to/cc recipients (not bcc - blind copies shouldn't trigger visible signals)
                 for agent in to_agents + cc_agents:
                     with suppress(Exception):
@@ -5005,6 +5015,12 @@ def build_mcp_server() -> FastMCP:
         )
         if payload is None:
             raise RuntimeError("Message payload was not generated.")
+        if settings.compact_send_result:
+            # The sender already has the body; echoing it back costs ~2.5×
+            # the body in response tokens. Archive, panel, and signals above
+            # all consumed the full payload — only the tool result shrinks.
+            payload.pop("body_md", None)
+            payload["body_omitted"] = True
         return payload
 
     @mcp.tool(name="health_check", description="Return basic readiness information for the Agent Mail server.")

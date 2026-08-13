@@ -3177,6 +3177,13 @@ async def emit_notification_signal(
             "subject": message_metadata.get("subject"),
             "importance": message_metadata.get("importance", "normal"),
         }
+        # Optional body snippet: lets the notification consumer show the
+        # message without a fetch round trip. Absent for legacy callers.
+        if message_metadata.get("body_snippet"):
+            signal_data["message"]["body_snippet"] = message_metadata["body_snippet"]
+            signal_data["message"]["body_truncated"] = bool(
+                message_metadata.get("body_truncated")
+            )
 
     # Write signal file
     def _write_signal() -> None:

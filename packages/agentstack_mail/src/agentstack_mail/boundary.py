@@ -17,6 +17,7 @@ import uvicorn
 from fastmcp import FastMCP
 
 from .contract import COMPATIBILITY_TOOLS
+from .tool_descriptions import COMPACT_TOOL_DESCRIPTIONS
 
 _EXPECTED_UVICORN_VERSION = "0.52.1"
 
@@ -104,6 +105,16 @@ class CompatibilityFastMCP(FastMCP):
         if tool_name not in COMPATIBILITY_TOOLS:
             return function
         self._agentstack_published_tools.add(tool_name)
+        # Publish the compact description instead of the upstream-derived
+        # docstring: the docstrings are developer documentation measured in
+        # kilobytes, and every connected agent session pays for tools/list.
+        # The table wins even over an explicit description= at the decorator,
+        # so the published surface has one source of truth. Tools absent from
+        # the table (the two frozen read tools) keep their docstring text,
+        # which the runtime contract pins to the fixture.
+        compact = COMPACT_TOOL_DESCRIPTIONS.get(tool_name)
+        if compact is not None:
+            kwargs["description"] = compact
         # Pass the callable directly to the base implementation. Calling the
         # decorator form would create a partial bound to ``self.tool`` and
         # recurse through this publication guard.

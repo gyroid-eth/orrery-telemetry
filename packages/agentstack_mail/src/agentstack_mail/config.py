@@ -180,6 +180,10 @@ class NotificationSettings:
     enabled: bool
     signals_dir: str  # Directory for signal files
     include_metadata: bool  # Include message metadata in signal file
+    # Include a 400-char body snippet in the signal so notification watchers
+    # can deliver short messages without a fetch_inbox round trip. Off by
+    # default: the frozen differential behavior writes metadata-only signals.
+    include_body: bool
     debounce_ms: int  # Debounce multiple signals within this window
 
 
@@ -237,6 +241,11 @@ class Settings:
     toon_bin: str
     # Tools logging
     tools_log_enabled: bool
+    # Omit the body_md echo from send/reply tool results. The echo costs the
+    # SENDER ~2.5× the body in response tokens (text + structuredContent both
+    # carry it) for data the sender already has. Off by default to preserve
+    # upstream-parity response shapes.
+    compact_send_result: bool
     # Query/latency instrumentation
     instrumentation_enabled: bool
     instrumentation_slow_query_ms: int
@@ -417,6 +426,7 @@ def get_settings() -> Settings:
         enabled=_bool(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED", default="false"), default=False),
         signals_dir=decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR", default=_DEFAULT_SIGNALS),
         include_metadata=_bool(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_METADATA", default="true"), default=True),
+        include_body=_bool(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY", default="false"), default=False),
         debounce_ms=_int(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_DEBOUNCE_MS", default="100"), default=100),
     )
 
@@ -469,6 +479,7 @@ def get_settings() -> Settings:
         ack_escalation_claim_exclusive=_bool(decouple_config("AGENTSTACK_MAIL_ACK_ESCALATION_CLAIM_EXCLUSIVE", default="false"), default=False),
         ack_escalation_claim_holder_name=decouple_config("AGENTSTACK_MAIL_ACK_ESCALATION_CLAIM_HOLDER_NAME", default=""),
         tools_log_enabled=_bool(decouple_config("AGENTSTACK_MAIL_TOOLS_LOG_ENABLED", default="true"), default=True),
+        compact_send_result=_bool(decouple_config("AGENTSTACK_MAIL_COMPACT_SEND_RESULT", default="false"), default=False),
         instrumentation_enabled=_bool(decouple_config("AGENTSTACK_MAIL_INSTRUMENTATION_ENABLED", default="false"), default=False),
         instrumentation_slow_query_ms=_int(decouple_config("AGENTSTACK_MAIL_INSTRUMENTATION_SLOW_QUERY_MS", default="250"), default=250),
         log_rich_enabled=_bool(decouple_config("AGENTSTACK_MAIL_LOG_RICH_ENABLED", default="true"), default=True),
