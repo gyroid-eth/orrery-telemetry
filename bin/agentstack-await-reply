@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Block until a mail reply arrives, then print it. The standard way to wait.
+
+Why this exists
+---------------
+Agents that delegate work have to wait for the reply, and until now each one
+improvised its own watcher: one ran a fetch_inbox polling loop that consumed
+the push notification's dirty bit (the reply then sat unread for 45 minutes),
+another ran a tmux pane-diff loop that kept firing stale events after the game
+ended. Both 2026-08-13 incidents came from improvised waiting. This tool is
+the one blessed primitive: call it, get the message (or a timeout), done.
+
+Behavior
+--------
+- Checks the inbox immediately (the reply may already be there), then polls
+  fetch_inbox with --interval until --timeout.
+- Prints the first matching message as JSON on stdout and exits 0.
+- Exit 124 on timeout (the `timeout(1)` convention), 2 on usage errors,
+  1 when the server is unreachable for the whole wait.
+- Safe to run alongside push notifications: the server's signal-clear grace
+  window (AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS) keeps a racing fetch
+  from consuming a fresh notification, and a duplicate notification for a
+  message this tool already returned is harmless.
+
+Usage
+-----
+  agentstack-await-reply --agent-name ME [--project-key K] [--from SENDER]
+      [--after-id N] [--timeout 300] [--interval 3]
+
+  --from      only accept messages from this sender (default: any sender)
+  --after-id  only accept messages with id greater than this (pass the id of
+              the message you just sent, or of the last reply you processed)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = "http://127.0.0.1:8765/api/"
+DEFAULT_PROJECT_KEY = "/Users/operator/Syncthing/<vault-directory>"
+
+
+def _mcp_url() -> str:
+    url = os.environ.get("AGENTSTACK_MCP_URL") or os.environ.get("MCP_URL") or DEFAULT_URL
+    return url
+
+
+def _call(url: str, tool: str, arguments: dict) -> dict:
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    token = os.environ.get("MCP_AGENT_MAIL_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, data=payload, headers=headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _messages(response: dict) -> list[dict]:
+    result = response.get("result") or {}
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict) and isinstance(structured.get("result"), list):
+        return structured["result"]
+    if isinstance(structured, list):
+        return structured
+    for part in result.get("content") or []:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            try:
+                data = json.loads(part["text"])
+            except ValueError:
+                continue
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and isinstance(data.get("result"), list):
+                return data["result"]
+    return []
+
+
+def _pick(messages: list[dict], sender: str | None, after_id: int | None) -> dict | None:
+    candidates = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if sender is not None and message.get("from") != sender:
+            continue
+        message_id = message.get("id")
+        if after_id is not None and (not isinstance(message_id, int) or message_id <= after_id):
+            continue
+        candidates.append(message)
+    if not candidates:
+        return None
+    # fetch_inbox returns newest-first; the caller wants the OLDEST message it
+    # has not seen, so replies are handed over in arrival order.
+    return min(candidates, key=lambda m: m.get("id") or 0)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="agentstack-await-reply", add_help=True)
+    parser.add_argument("--agent-name", required=True)
+    parser.add_argument("--project-key", default=os.environ.get("AGENTSTACK_PROJECT_KEY") or os.environ.get("PROJECT_KEY") or DEFAULT_PROJECT_KEY)
+    parser.add_argument("--from", dest="sender", default=None)
+    parser.add_argument("--after-id", type=int, default=None)
+    parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--interval", type=float, default=3.0)
+    args = parser.parse_args(argv)
+    if args.timeout <= 0 or args.interval <= 0:
+        print("agentstack-await-reply: --timeout and --interval must be positive", file=sys.stderr)
+        return 2
+
+    url = _mcp_url()
+    deadline = time.monotonic() + args.timeout
+    ever_reached = False
+    while True:
+        try:
+            response = _call(
+                url,
+                "fetch_inbox",
+                {
+                    "project_key": args.project_key,
+                    "agent_name": args.agent_name,
+                    "limit": 20,
+                    "include_bodies": True,
+                },
+            )
+        except (urllib.error.URLError, OSError, ValueError):
+            response = None
+        if response is not None:
+            ever_reached = True
+            match = _pick(_messages(response), args.sender, args.after_id)
+            if match is not None:
+                print(json.dumps(match, ensure_ascii=False))
+                return 0
+        if time.monotonic() >= deadline:
+            if not ever_reached:
+                print("agentstack-await-reply: mail server unreachable for the whole wait", file=sys.stderr)
+                return 1
+            waited = args.timeout
+            target = f"from {args.sender}" if args.sender else "any sender"
+            print(
+                f"agentstack-await-reply: no matching message ({target}"
+                + (f", id > {args.after_id}" if args.after_id is not None else "")
+                + f") within {waited:g}s",
+                file=sys.stderr,
+            )
+            return 124
+        time.sleep(min(args.interval, max(0.1, deadline - time.monotonic())))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
