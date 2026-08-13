@@ -100,6 +100,11 @@ class StorageSettings:
     convert_images: bool
     keep_original_images: bool
     allow_absolute_attachment_paths: bool
+    # When true, archive git commits are enqueued without blocking the tool
+    # call. The archive files are written synchronously either way; only the
+    # audit-trail commit is deferred. Trade-off: a commit in flight at hard
+    # shutdown can be lost (the files stay in the working tree, untracked).
+    commit_async: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -381,6 +386,10 @@ def get_settings() -> Settings:
         allow_absolute_attachment_paths=_bool(
             decouple_config("AGENTSTACK_MAIL_ALLOW_ABSOLUTE_ATTACHMENT_PATHS", default=allow_abs_default),
             default=allow_abs_default == "true",
+        ),
+        commit_async=_bool(
+            decouple_config("AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC", default="false"),
+            default=False,
         ),
     )
 

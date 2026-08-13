@@ -149,18 +149,23 @@ class _CommitQueue:
         settings: Settings,
         message: str,
         rel_paths: Sequence[str],
+        *,
+        wait: bool = True,
     ) -> None:
-        """Enqueue a commit request and wait for completion.
+        """Enqueue a commit request and optionally wait for completion.
 
         Args:
             repo_root: Path to git repository root
             settings: Application settings
             message: Commit message
             rel_paths: Relative paths to add and commit
+            wait: When False, return as soon as the request is queued; the
+                commit completes in the background and failures are logged
+                instead of raised.
 
         Raises:
             asyncio.QueueFull: If queue is at capacity
-            Exception: Any exception from the actual commit operation
+            Exception: Any exception from the actual commit operation (wait=True only)
         """
         if not rel_paths:
             return
@@ -175,7 +180,10 @@ class _CommitQueue:
 
         # If queue processor isn't running, fall back to direct commit
         if self._task is None or self._task.done():
-            await _commit_direct(repo_root, settings, message, rel_paths)
+            if wait:
+                await _commit_direct(repo_root, settings, message, rel_paths)
+            else:
+                _spawn_background_commit(repo_root, settings, message, rel_paths)
             return
 
         try:
@@ -183,11 +191,18 @@ class _CommitQueue:
         except asyncio.QueueFull:
             # Queue is full - fall back to direct commit
             _logger.warning("commit_queue.full", extra={"queue_size": self._queue.qsize()})
-            await _commit_direct(repo_root, settings, message, rel_paths)
+            if wait:
+                await _commit_direct(repo_root, settings, message, rel_paths)
+            else:
+                _spawn_background_commit(repo_root, settings, message, rel_paths)
             return
 
-        # Wait for the commit to complete
-        await request.future
+        if wait:
+            # Wait for the commit to complete
+            await request.future
+        else:
+            # Consume the future so failures are logged, not "never retrieved"
+            request.future.add_done_callback(_log_unawaited_commit_result)
 
     async def _process_loop(self) -> None:
         """Background loop that processes queued commits."""
@@ -308,6 +323,33 @@ class _CommitQueue:
 # Global commit queue instance (lazily initialized)
 _COMMIT_QUEUE: _CommitQueue | None = None
 _COMMIT_QUEUE_LOCK: asyncio.Lock | None = None
+
+# Strong references to fire-and-forget commit tasks (commit_async fallback
+# paths); without these the event loop may garbage-collect a running task.
+_BACKGROUND_COMMIT_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _log_unawaited_commit_result(future: "asyncio.Future[None]") -> None:
+    """Consume a background commit future, logging failure instead of raising."""
+    if future.cancelled():
+        _logger.warning("commit_async.cancelled")
+        return
+    exc = future.exception()
+    if exc is not None:
+        _logger.error("commit_async.failed", extra={"error": str(exc)})
+
+
+def _spawn_background_commit(
+    repo_root: Path,
+    settings: Settings,
+    message: str,
+    rel_paths: Sequence[str],
+) -> None:
+    """Run _commit_direct as a tracked fire-and-forget task."""
+    task = asyncio.create_task(_commit_direct(repo_root, settings, message, list(rel_paths)))
+    _BACKGROUND_COMMIT_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_COMMIT_TASKS.discard)
+    task.add_done_callback(_log_unawaited_commit_result)
 
 
 def _get_commit_queue_lock() -> asyncio.Lock:
@@ -1942,13 +1984,19 @@ async def _commit(
         raise ValueError("Repository has no working tree directory")
     repo_root = Path(working_tree).resolve()
 
+    # commit_async defers the audit-trail commit off the request path; the
+    # archive files themselves are already on disk at this point.
+    wait = not settings.storage.commit_async
+
     if use_queue:
         # Use commit queue for batching under high load
         queue = await _get_commit_queue()
-        await queue.enqueue(repo_root, settings, message, rel_paths)
-    else:
+        await queue.enqueue(repo_root, settings, message, rel_paths, wait=wait)
+    elif wait:
         # Direct commit without queue
         await _commit_direct(repo_root, settings, message, rel_paths)
+    else:
+        _spawn_background_commit(repo_root, settings, message, rel_paths)
 
 
 async def heal_archive_locks(settings: Settings) -> dict[str, Any]:
