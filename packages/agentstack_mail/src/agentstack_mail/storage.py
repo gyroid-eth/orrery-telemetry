@@ -3222,11 +3222,24 @@ async def clear_notification_signal(
     base_dir = signals_dir / "projects" / project_slug / "agents"
     legacy_path = base_dir / f"{agent_name}.signal"
     per_msg_dir = base_dir / agent_name
+    grace_seconds = settings.notifications.clear_grace_seconds
+
+    def _within_grace(p: Path) -> bool:
+        # A signal younger than the grace window survives the clear: a fetch
+        # that races the watcher must not consume the push notification's
+        # dirty bit. The watcher deduplicates by message id, so letting the
+        # inject happen after the agent already fetched is harmless.
+        if grace_seconds <= 0:
+            return False
+        try:
+            return (time.time() - p.stat().st_mtime) < grace_seconds
+        except OSError:
+            return False
 
     def _clear_signal() -> bool:
         cleared = False
         # Remove legacy single-file signal if present.
-        if legacy_path.exists():
+        if legacy_path.exists() and not _within_grace(legacy_path):
             legacy_path.unlink()
             cleared = True
         # Remove all per-message signal files for this agent (the watcher
@@ -3234,6 +3247,8 @@ async def clear_notification_signal(
         # such as messages whose recipient session was offline at signal time).
         if per_msg_dir.is_dir():
             for p in per_msg_dir.glob("*.signal"):
+                if _within_grace(p):
+                    continue
                 try:
                     p.unlink()
                     cleared = True
@@ -3242,7 +3257,7 @@ async def clear_notification_signal(
             try:
                 per_msg_dir.rmdir()
             except OSError:
-                pass  # not empty (raced with new emit) or already gone
+                pass  # not empty (raced with new emit or grace) or already gone
         return cleared
 
     try:

@@ -184,6 +184,14 @@ class NotificationSettings:
     # can deliver short messages without a fetch_inbox round trip. Off by
     # default: the frozen differential behavior writes metadata-only signals.
     include_body: bool
+    # fetch_inbox clears an agent's signal files, and a fetch that lands in
+    # the ~1s window between a signal's write and the watcher's inject
+    # annihilates the push notification (measured 2026-08-13: a recipient's
+    # own backup poll consumed the dirty bit, then was killed with the result
+    # unread — the reply sat in the DB unnoticed for 45 minutes). Signals
+    # younger than this many seconds survive the clear so the watcher always
+    # gets its shot; 0 keeps the frozen clear-everything behavior.
+    clear_grace_seconds: float
     debounce_ms: int  # Debounce multiple signals within this window
 
 
@@ -427,6 +435,7 @@ def get_settings() -> Settings:
         signals_dir=decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR", default=_DEFAULT_SIGNALS),
         include_metadata=_bool(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_METADATA", default="true"), default=True),
         include_body=_bool(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY", default="false"), default=False),
+        clear_grace_seconds=_float(decouple_config("AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS", default="0"), default=0.0),
         debounce_ms=_int(decouple_config("AGENTSTACK_MAIL_NOTIFICATIONS_DEBOUNCE_MS", default="100"), default=100),
     )
 

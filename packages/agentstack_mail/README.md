@@ -56,7 +56,10 @@ differential behavior is preserved: `AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=
 adds a 400-character `body_snippet` to notification signals so watchers can
 deliver short messages without a fetch round trip, and
 `AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true` drops the body echo from
-send/reply tool results.
+send/reply tool results. A third, `AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS`
+(default 0), keeps signals younger than that many seconds alive through a
+fetch_inbox clear, so a poll that races the notification watcher cannot
+consume the push notification's dirty bit.
 Published tool descriptions come from `tool_descriptions.py`, not the
 in-source docstrings — see that module before editing either. Naming
 mode behavior remains compatible with the frozen source, including default

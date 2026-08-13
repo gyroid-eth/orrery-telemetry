@@ -291,6 +291,7 @@ def test_signals_are_per_message_debounced_by_message_id_and_fully_cleared(
             enabled=True,
             signals_dir=str(tmp_path),
             include_metadata=True,
+            clear_grace_seconds=0.0,
             debounce_ms=60_000,
         )
     )

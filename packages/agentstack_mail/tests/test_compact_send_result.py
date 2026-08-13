@@ -132,6 +132,71 @@ def test_signal_carries_the_full_body_of_a_short_message(
     assert message["body_truncated"] is False
 
 
+async def _fetch(tmp_path: Path, agent: str) -> None:
+    project_key = str(tmp_path / "project")
+    async with Client(app.build_mcp_server()) as client:
+        await client.call_tool(
+            "fetch_inbox", {"project_key": project_key, "agent_name": agent}
+        )
+
+
+def _signal_files(tmp_path: Path) -> list[Path]:
+    return sorted((tmp_path / "signals").rglob("*.signal"))
+
+
+def test_default_fetch_clears_even_a_fresh_signal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Frozen behavior: no grace, fetch consumes the dirty bit immediately.
+    _configure(
+        monkeypatch, tmp_path, AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true"
+    )
+    asyncio.run(_send(tmp_path, "fresh"))
+    assert _signal_files(tmp_path)
+    asyncio.run(_fetch(tmp_path, "GreenCastle"))
+    assert not _signal_files(tmp_path)
+
+
+def test_grace_window_lets_a_fresh_signal_survive_a_racing_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The 2026-08-13 race: recipient's own poll fetched (clearing signals)
+    # in the window before the watcher injected, and the push notification
+    # vanished. With a grace window the fresh signal survives the fetch.
+    _configure(
+        monkeypatch,
+        tmp_path,
+        AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
+        AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS="30",
+    )
+    asyncio.run(_send(tmp_path, "racing"))
+    assert _signal_files(tmp_path)
+    asyncio.run(_fetch(tmp_path, "GreenCastle"))
+    assert _signal_files(tmp_path), "fresh signal must survive the racing fetch"
+
+
+def test_grace_window_still_clears_signals_older_than_the_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os as _os
+    import time as _time
+
+    _configure(
+        monkeypatch,
+        tmp_path,
+        AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
+        AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS="30",
+    )
+    asyncio.run(_send(tmp_path, "old"))
+    files = _signal_files(tmp_path)
+    assert files
+    aged = _time.time() - 120
+    for f in files:
+        _os.utime(f, (aged, aged))
+    asyncio.run(_fetch(tmp_path, "GreenCastle"))
+    assert not _signal_files(tmp_path), "aged signals are leftovers and must clear"
+
+
 def test_signal_truncates_a_long_body_and_says_so(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
