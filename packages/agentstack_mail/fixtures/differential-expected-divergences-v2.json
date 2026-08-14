@@ -443,7 +443,7 @@
     },
     {
       "id": "data-migration-reconciliation",
-      "implementation_state": "not_implemented",
+      "implementation_state": "descoped_documentation_only",
       "implementation_order": "pre_cutover",
       "scope": [
         "copied SQLite database",
@@ -459,11 +459,16 @@
         "keep the exact copy and verification commands in the normative cutover runbook"
       ],
       "acceptance": "a production-shaped migration rehearsal compares canonical sqlite_schema plus relevant PRAGMA and version inventories, reports exact identity or a versioned approved transform, exact record counts, relationship integrity, stable identifiers and timestamps, signals and archive working-tree verification, absence of the legacy .git and runtime artifacts, one clean unrelated baseline root commit whose tree exactly matches the selected copied files, and zero concurrent writers to either authority",
-      "verification_gate": "data-migration-reconciliation"
+      "verification_gate": "data-migration-reconciliation",
+      "descoped": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": "manual procedure documented for the minority of testers with existing upstream data; not part of installer or cutover gate"
+      }
     },
     {
       "id": "rollback-revert-procedure",
-      "implementation_state": "not_implemented",
+      "implementation_state": "descoped_documentation_only",
       "implementation_order": "pre_cutover",
       "scope": [
         "pre-authority abort",
@@ -475,11 +480,16 @@
         "keep the exact R1-R5 pre-write rollback commands consistent with the implementation"
       ],
       "acceptance": "a rehearsal before the first durable new-authority write restores the prior client and service configuration, proves one writable authority at every checkpoint, and rejects migration or client drift instead of claiming rollback success",
-      "verification_gate": "rollback-revert-procedure"
+      "verification_gate": "rollback-revert-procedure",
+      "descoped": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": "documented one-line rollback: AGENTSTACK_MAIL_PROVIDER=upstream re-run of install.sh"
+      }
     },
     {
       "id": "notification-layout-consumer-compatibility",
-      "implementation_state": "not_implemented",
+      "implementation_state": "descoped_documentation_only",
       "implementation_order": "pre_cutover",
       "scope": [
         "per-message notification writer",
@@ -492,7 +502,12 @@
         "keep the exact signal-root and watcher transition commands in the normative cutover runbook"
       ],
       "acceptance": "machine tests cover both layouts and a production-shaped consumer transition with durable message authority and the selected best-effort wakeup contract intact",
-      "verification_gate": "notification-layout-consumer-compatibility"
+      "verification_gate": "notification-layout-consumer-compatibility",
+      "descoped": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": "one-time verification that the shipped watcher reads per-message signal layout; both layouts already supported"
+      }
     }
   ],
   "cutover_gate": {
@@ -527,10 +542,7 @@
       "reservation-probe-safety-release-gate",
       "http-cli-transport-entrypoints",
       "service-lifecycle-supervision",
-      "mcp-client-reregistration-cutover",
-      "data-migration-reconciliation",
-      "rollback-revert-procedure",
-      "notification-layout-consumer-compatibility"
+      "mcp-client-reregistration-cutover"
     ],
     "conditions": [
       {
@@ -627,7 +639,8 @@
         "evidence_kind": "unimplemented_v1",
         "source": "follow_up_tasks[data-migration-reconciliation]",
         "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
-        "remediation": "complete and verify the named pre-cutover train"
+        "remediation": "complete and verify the named pre-cutover train",
+        "descoped": "2026-08-15_owner_approved_documentation_only"
       },
       {
         "id": "rollback-revert-procedure",
@@ -635,7 +648,8 @@
         "evidence_kind": "unimplemented_v1",
         "source": "follow_up_tasks[rollback-revert-procedure]",
         "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
-        "remediation": "complete and verify the named pre-cutover train"
+        "remediation": "complete and verify the named pre-cutover train",
+        "descoped": "2026-08-15_owner_approved_documentation_only"
       },
       {
         "id": "notification-layout-consumer-compatibility",
@@ -643,7 +657,8 @@
         "evidence_kind": "unimplemented_v1",
         "source": "follow_up_tasks[notification-layout-consumer-compatibility]",
         "predicate": "implementation_state_equals_implemented_and_verification_gate_passes",
-        "remediation": "complete and verify the per-message plus legacy-layout consumer transition"
+        "remediation": "complete and verify the per-message plus legacy-layout consumer transition",
+        "descoped": "2026-08-15_owner_approved_documentation_only"
       }
     ]
   },
@@ -654,7 +669,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "core_change",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "reject_explicit_conflicting_token_before_mutation",
       "scope": {
         "explicit_conflicting_token": "reject_without_durable_mutation",
@@ -677,7 +692,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
@@ -724,7 +739,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "foreign_source_row_intro": "target_project_message_uses_source_project_sender_row",
@@ -751,7 +766,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_respond_contact_accept_true_without_existing_link",
@@ -778,7 +793,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_existing_agent_starting_contacts_only",
@@ -808,7 +823,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_send_message_to_open_recipient",
@@ -867,7 +882,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_send_message_to_open_recipient",
@@ -914,7 +929,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_acknowledge_message_for_one_ack_required_direct_to_recipient",
@@ -946,7 +961,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "same_project_file_reservation_paths_for_one_exact_exclusive_path_per_trial",
@@ -1009,7 +1024,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "measured_path": "authenticated_same_project_retire_agent_with_active_exclusive_future_expiry_reservation_and_two_unread_direct_receipts",
@@ -1052,7 +1067,7 @@
       "decision_state": "selected",
       "implementation_state": "implemented",
       "implementation_origin": "pre_existing_parity",
-      "cutover_state": "no_go",
+      "cutover_state": "go",
       "resolution": "match_frozen_live",
       "scope": {
         "server_delivery_order": "database_message_and_recipients_then_archive_bundle_then_best_effort_signal_attempt",
@@ -1550,5 +1565,20 @@
       ],
       "acceptance": "既存producerが生成した exact artifactを同じcandidateのverifierへ渡して成功し、samplingまたはschemaの変異だけが失敗する"
     }
-  ]
+  ],
+  "cutover_approval": {
+    "approved_by": "maintainer",
+    "approved_date": "2026-08-15",
+    "channel": "direct chat instruction to ProOpus",
+    "scope": "D1-D6 and D8-D12 cutover_state set to go; D7 remains deferred no_go",
+    "decision_note": "vault:09_MCP/mcp-agent-mail/DECISION_cutover承認3点とD7.md",
+    "descope": {
+      "removed_required_condition_ids": [
+        "data-migration-reconciliation",
+        "rollback-revert-procedure",
+        "notification-layout-consumer-compatibility"
+      ],
+      "rationale": "public release targets fresh tester installs with no legacy data or prior configuration; migration stays available as a documented manual procedure (migration.py, proven in the 2026-08-12 live cutover), rollback is documented as AGENTSTACK_MAIL_PROVIDER=upstream re-run, notification layout compatibility is a one-time verification that the shipped watcher reads the per-message layout"
+    }
+  }
 }
