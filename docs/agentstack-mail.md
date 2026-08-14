@@ -33,6 +33,12 @@ The first implementation train is:
 6. run coexistence, migration, rollback, fault, and real-machine soak gates
    before any authority switch.
 
+The first four gates are executable and hermetic via
+[`packages/agentstack_mail/scripts/cutover_gates.py`](../packages/agentstack_mail/scripts/cutover_gates.py).
+The automated contract and the still-manual real-machine soak procedure are in
+[`agentstack-mail-cutover-gates.md`](agentstack-mail-cutover-gates.md). Passing
+them is evidence, not permission to change any decision-ledger `cutover_state`.
+
 The provider identity remains `agentstack-mail`, but it is not the client
 registration key. First cutover preserves Claude's `mcp-agent-mail` and
 Codex's `agent-mail` keys so fully qualified tool names, permissions, and hook

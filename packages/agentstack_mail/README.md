@@ -30,6 +30,21 @@ The first release must satisfy these invariants:
 - every wheel and source distribution carries both license texts and the
   versioned compatibility fixtures.
 
+The pre-authority coexistence, migration, pre-write rollback, and D8/D10/D12
+fault gates are executable from a repository checkout with:
+
+```console
+CANDIDATE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
+.venv/bin/python packages/agentstack_mail/scripts/cutover_gates.py --gate all \
+  --candidate-commit "$CANDIDATE_COMMIT"
+```
+
+They reconstruct frozen live from checked-in provenance, use only disposable
+state and dynamically allocated non-production loopback ports, and require one
+detected broken-state control per gate. The separate manual real-machine soak
+procedure is documented in `docs/agentstack-mail-cutover-gates.md`; neither an
+automated pass nor a soak edits or approves the normative decision ledger.
+
 The reconstructible live Git bundle and dirty patch under `provenance/` are
 repository-only audit inputs. They are intentionally excluded from both wheel
 and source distributions; the package distributions retain `NOTICE.md`, both
