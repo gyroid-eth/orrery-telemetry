@@ -5,8 +5,13 @@ import os
 import pathlib
 import stat
 import subprocess
+import sys
 
 import pytest
+
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -70,6 +75,7 @@ def _fake_launch_env(
         "AGENTSTACK_RUNTIME_DIR": str(runtime),
         "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
         "AGENTSTACK_HOME": str(tmp_path / "agentstack"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_REGISTER_LIB": str(
             ROOT / "bin" / "lib" / "agentstack-register.sh"
         ),
