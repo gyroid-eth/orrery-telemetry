@@ -7,7 +7,8 @@ commit into a 53k-file audit repo — a 1.7s floor per call in isolation and
 before the commit, so deferring only the commit keeps the audit trail while
 taking git out of the request path.
 
-Default stays parity-compatible (commits are awaited).
+Commits are deferred by default; setting the environment variable to false is
+the kill switch that restores synchronous commits.
 """
 
 from __future__ import annotations
@@ -52,8 +53,16 @@ def _commit_count(repo: Repo) -> int:
     return sum(1 for _ in repo.iter_commits())
 
 
-def test_commit_async_defaults_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_commit_async_defaults_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _configure(monkeypatch, tmp_path)
+    settings = config.get_settings()
+    assert settings.storage.commit_async is True
+
+
+def test_commit_async_false_is_kill_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _configure(monkeypatch, tmp_path, AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC="false")
     settings = config.get_settings()
     assert settings.storage.commit_async is False
 
@@ -61,7 +70,7 @@ def test_commit_async_defaults_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 def test_sync_commit_lands_before_return(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, tmp_path, AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC="false")
     settings = config.get_settings()
     repo, root = _make_repo(tmp_path)
     rel = _write_probe(root, "sync.md")
@@ -76,7 +85,7 @@ def test_sync_commit_lands_before_return(
 def test_async_commit_returns_first_then_lands(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _configure(monkeypatch, tmp_path, AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC="true")
+    _configure(monkeypatch, tmp_path)
     settings = config.get_settings()
     assert settings.storage.commit_async is True
     repo, root = _make_repo(tmp_path)
@@ -120,6 +129,25 @@ def test_async_commit_via_queue_lands(
             await queue.stop()
 
     asyncio.run(run())
+
+
+def test_graceful_shutdown_drains_queue_and_preserves_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    settings = config.get_settings()
+    repo, root = _make_repo(tmp_path)
+    rel = _write_probe(root, "shutdown.md")
+    cwd_before = Path.cwd()
+
+    async def run() -> None:
+        before = _commit_count(repo)
+        await storage._commit(repo, settings, "probe: graceful shutdown", [rel])
+        await storage.shutdown_commit_queue()
+        assert _commit_count(repo) == before + 1
+
+    asyncio.run(run())
+    assert Path.cwd() == cwd_before
 
 
 def test_async_commit_failure_is_logged_not_raised(

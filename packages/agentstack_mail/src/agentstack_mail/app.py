@@ -87,6 +87,7 @@ from .storage import (
     get_fd_diagnostics,
     heal_archive_locks,
     process_attachments,
+    shutdown_commit_queue,
     write_agent_profile,
     write_file_reservation_records,
     write_message_bundle,
@@ -793,13 +794,28 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
     async def lifespan(app: FastMCP) -> AsyncIterator[None]:
         init_engine(settings)
         heal_summary = await heal_archive_locks(settings)
-        if heal_summary.get("locks_removed") or heal_summary.get("metadata_removed"):
+        if (
+            heal_summary.get("locks_removed")
+            or heal_summary.get("metadata_removed")
+            or heal_summary.get("recovered_paths")
+            or heal_summary.get("gc_checked")
+        ):
             logger.info(
                 "archive.healed_on_startup",
                 extra={
                     "locks_scanned": heal_summary.get("locks_scanned", 0),
                     "locks_removed": len(heal_summary.get("locks_removed", [])),
                     "metadata_removed": len(heal_summary.get("metadata_removed", [])),
+                    "files_recovered": len(heal_summary.get("recovered_paths", [])),
+                    "gc_checked": bool(heal_summary.get("gc_checked")),
+                },
+            )
+        if heal_summary.get("recovery_error") or heal_summary.get("gc_error"):
+            logger.warning(
+                "archive.heal_failed",
+                extra={
+                    "recovery_error": heal_summary.get("recovery_error"),
+                    "gc_error": heal_summary.get("gc_error"),
                 },
             )
         await ensure_schema(settings)
@@ -811,6 +827,7 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
             # that the scope cancels directly, so use the matching AnyIO
             # shield and finish aiosqlite worker shutdown before loop close.
             with anyio.CancelScope(shield=True):
+                await shutdown_commit_queue()
                 await dispose_database_for_shutdown()
                 with suppress(BaseException):
                     clear_repo_cache()

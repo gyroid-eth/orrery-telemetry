@@ -103,7 +103,7 @@ class StorageSettings:
     # When true, archive git commits are enqueued without blocking the tool
     # call. The archive files are written synchronously either way; only the
     # audit-trail commit is deferred. Trade-off: a commit in flight at hard
-    # shutdown can be lost (the files stay in the working tree, untracked).
+    # shutdown can be lost (the files stay uncommitted in the working tree).
     commit_async: bool
 
 
@@ -388,8 +388,8 @@ def get_settings() -> Settings:
             default=allow_abs_default == "true",
         ),
         commit_async=_bool(
-            decouple_config("AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC", default="false"),
-            default=False,
+            decouple_config("AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC", default="true"),
+            default=True,
         ),
     )
 

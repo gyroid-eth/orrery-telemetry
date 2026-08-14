@@ -27,6 +27,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -45,6 +46,9 @@ from .utils import validate_thread_id_format
 _logger = logging.getLogger(__name__)
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
 _SUBJECT_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+_ARCHIVE_GC_INTERVAL_SECONDS = 24 * 60 * 60
+_ARCHIVE_GC_MARKER_NAME = "agentstack-gc-auto.last"
+_GITPYTHON_INDEX_OPERATION_LOCK = threading.Lock()
 
 
 # =============================================================================
@@ -124,23 +128,21 @@ class _CommitQueue:
 
     async def stop(self, timeout_seconds: float = 5.0) -> None:
         """Stop the queue processor, draining pending commits."""
-        self._stopped = True
-        if self._task is not None:
-            # Signal the processor to wake up and check stopped flag
-            with contextlib.suppress(asyncio.QueueFull):
-                self._queue.put_nowait(_CommitRequest(
-                    repo_root=Path("/dev/null"),  # Sentinel
-                    settings=None,  # type: ignore
-                    message="",
-                    rel_paths=[],
-                ))
-            try:
-                async with asyncio.timeout(timeout_seconds):
-                    await self._task
-            except TimeoutError:
-                self._task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
+        if self._task is None:
+            return
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                await self._queue.join()
+        except TimeoutError:
+            _logger.warning(
+                "commit_queue.drain_timeout",
+                extra={"queue_size": self._queue.qsize()},
+            )
+        finally:
+            self._stopped = True
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
             self._task = None
 
     async def enqueue(
@@ -207,6 +209,7 @@ class _CommitQueue:
     async def _process_loop(self) -> None:
         """Background loop that processes queued commits."""
         while not self._stopped:
+            batch: list[_CommitRequest] = []
             try:
                 # Wait for first request with timeout
                 try:
@@ -215,10 +218,6 @@ class _CommitQueue:
                         timeout=self._max_wait_ms / 1000.0,
                     )
                 except asyncio.TimeoutError:
-                    continue
-
-                # Skip sentinel requests
-                if first.settings is None:
                     continue
 
                 # Collect more requests if available (non-blocking)
@@ -241,6 +240,9 @@ class _CommitQueue:
             except Exception as e:
                 _logger.exception("commit_queue.error", extra={"error": str(e)})
                 await asyncio.sleep(0.1)  # Back off on errors
+            finally:
+                for _request in batch:
+                    self._queue.task_done()
 
     async def _process_batch(self, batch: list[_CommitRequest]) -> None:
         """Process a batch of commit requests.
@@ -370,6 +372,29 @@ async def _get_commit_queue() -> _CommitQueue:
             _COMMIT_QUEUE = _CommitQueue()
             await _COMMIT_QUEUE.start()
         return _COMMIT_QUEUE
+
+
+async def shutdown_commit_queue(timeout_seconds: float = 5.0) -> None:
+    """Drain async archive commits and reset loop-bound global queue state."""
+
+    global _COMMIT_QUEUE, _COMMIT_QUEUE_LOCK
+    queue = _COMMIT_QUEUE
+    _COMMIT_QUEUE = None
+    _COMMIT_QUEUE_LOCK = None
+    if queue is not None:
+        await queue.stop(timeout_seconds=timeout_seconds)
+
+    tasks = list(_BACKGROUND_COMMIT_TASKS)
+    if not tasks:
+        return
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await asyncio.gather(*tasks, return_exceptions=True)
+    except TimeoutError:
+        _logger.warning(
+            "commit_async.drain_timeout",
+            extra={"task_count": len(tasks)},
+        )
 
 
 def get_commit_queue_stats() -> dict[str, Any]:
@@ -1212,6 +1237,13 @@ async def _ensure_repo(root: Path, settings: Settings) -> Repo:
             if not attributes_path.exists():
                 await _write_text(attributes_path, "*.json text\n*.md text\n")
             await _commit(repo, settings, "chore: initialize archive", [".gitattributes"])
+            # A brand-new repository cannot benefit from gc. Seed the rate-limit
+            # marker so an immediate restart does not mutate Git internals just
+            # to confirm that its object count is still below the auto threshold.
+            await _write_text(
+                root / ".git" / _ARCHIVE_GC_MARKER_NAME,
+                datetime.now(timezone.utc).isoformat() + "\n",
+            )
         return repo
 
 
@@ -1827,34 +1859,38 @@ async def _commit_direct(
     attempt_repo = repo  # May diverge from `repo` during EMFILE recovery
 
     def _perform_commit(target_repo: Repo) -> None:
-        target_repo.index.add(rel_paths)
-        if target_repo.is_dirty(index=True, working_tree=True):
-            # Append commit trailers with Agent and optional Thread if present in message text
-            trailers: list[str] = []
-            # Extract simple Agent/Thread heuristics from the message subject line
-            # Expected message formats include:
-            #   mail: <Agent> -> ... | <Subject>
-            #   file_reservation: <Agent> ...
-            try:
-                # Avoid duplicating trailers if already embedded
-                lower_msg = message.lower()
-                have_agent_line = "\nagent:" in lower_msg
-                if message.startswith("mail: ") and not have_agent_line:
-                    head = message[len("mail: ") :]
-                    agent_part = head.split("->", 1)[0].strip()
-                    if agent_part:
-                        trailers.append(f"Agent: {agent_part}")
-                elif message.startswith("file_reservation: ") and not have_agent_line:
-                    head = message[len("file_reservation: ") :]
-                    agent_part = head.split(" ", 1)[0].strip()
-                    if agent_part:
-                        trailers.append(f"Agent: {agent_part}")
-            except Exception:
-                pass
-            final_message = message
-            if trailers:
-                final_message = message + "\n\n" + "\n".join(trailers) + "\n"
-            target_repo.index.commit(final_message, author=actor, committer=actor)
+        # GitPython's index helpers temporarily call process-global os.chdir().
+        # Async commits can otherwise overlap across worker threads and restore
+        # the wrong cwd even when they target different repositories.
+        with _GITPYTHON_INDEX_OPERATION_LOCK:
+            target_repo.index.add(rel_paths)
+            if target_repo.is_dirty(index=True, working_tree=True):
+                # Append commit trailers with Agent and optional Thread if present in message text
+                trailers: list[str] = []
+                # Extract simple Agent/Thread heuristics from the message subject line
+                # Expected message formats include:
+                #   mail: <Agent> -> ... | <Subject>
+                #   file_reservation: <Agent> ...
+                try:
+                    # Avoid duplicating trailers if already embedded
+                    lower_msg = message.lower()
+                    have_agent_line = "\nagent:" in lower_msg
+                    if message.startswith("mail: ") and not have_agent_line:
+                        head = message[len("mail: ") :]
+                        agent_part = head.split("->", 1)[0].strip()
+                        if agent_part:
+                            trailers.append(f"Agent: {agent_part}")
+                    elif message.startswith("file_reservation: ") and not have_agent_line:
+                        head = message[len("file_reservation: ") :]
+                        agent_part = head.split(" ", 1)[0].strip()
+                        if agent_part:
+                            trailers.append(f"Agent: {agent_part}")
+                except Exception:
+                    pass
+                final_message = message
+                if trailers:
+                    final_message = message + "\n\n" + "\n".join(trailers) + "\n"
+                target_repo.index.commit(final_message, author=actor, committer=actor)
 
     commit_lock_path = _commit_lock_path(repo_root, rel_paths)
     await _to_thread(commit_lock_path.parent.mkdir, parents=True, exist_ok=True)
@@ -1999,8 +2035,92 @@ async def _commit(
         _spawn_background_commit(repo_root, settings, message, rel_paths)
 
 
+def _is_archive_lock_artifact(relative_path: str) -> bool:
+    """Return whether a dirty path is transient lock state, not audit data."""
+
+    name = PurePosixPath(relative_path).name
+    return name.endswith(".lock") or name.endswith(".lock.owner.json")
+
+
+def _find_uncommitted_archive_paths(root: Path) -> list[str]:
+    """Find new or modified archive files left outside the current commit."""
+
+    repo = Repo(str(root))
+    try:
+        # Git status normally refreshes stat data in .git/index. Startup heal
+        # must be read-only when there is nothing to recover, so suppress those
+        # optional index writes while asking for NUL-delimited porcelain output.
+        with repo.git.custom_environment(GIT_OPTIONAL_LOCKS="0"):
+            output = repo.git.status(
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            )
+        paths: set[str] = set()
+        records = output.split("\0")
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if not record:
+                continue
+            status = record[:2]
+            candidate = record[3:]
+            if ("R" in status or "C" in status) and index < len(records):
+                # In -z mode the destination is in this record and the source
+                # is the next NUL-delimited field; only the destination needs
+                # staging for recovery.
+                index += 1
+            if candidate and (root / candidate).exists():
+                paths.add(candidate)
+        return sorted(path for path in paths if not _is_archive_lock_artifact(path))
+    finally:
+        repo.close()
+
+
+def _archive_gc_due(root: Path, *, now: float | None = None) -> bool:
+    """Rate-limit Git's own auto-gc threshold check to once per day."""
+
+    marker = root / ".git" / _ARCHIVE_GC_MARKER_NAME
+    try:
+        last_check = marker.stat().st_mtime
+    except FileNotFoundError:
+        return True
+    current = time.time() if now is None else now
+    return current - last_check >= _ARCHIVE_GC_INTERVAL_SECONDS
+
+
+async def _run_archive_gc_auto(root: Path) -> None:
+    """Run Git's threshold-gated gc synchronously and record the successful check."""
+
+    def _run() -> None:
+        repo = Repo(str(root))
+        try:
+            # --auto delegates the expensive-run decision to Git's object-count
+            # thresholds. The config form works on older macOS Git versions
+            # that do not expose gc's newer --no-detach command-line flag.
+            repo.git.execute(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "gc.autoDetach=false",
+                    "gc",
+                    "--auto",
+                    "--quiet",
+                ]
+            )
+        finally:
+            repo.close()
+
+    await _to_thread(_run)
+    marker = root / ".git" / _ARCHIVE_GC_MARKER_NAME
+    await _write_text(marker, datetime.now(timezone.utc).isoformat() + "\n")
+
+
 async def heal_archive_locks(settings: Settings) -> dict[str, Any]:
-    """Scan the archive root for stale lock artifacts and clean them."""
+    """Repair stale locks and uncommitted files, then conditionally check gc."""
 
     root = Path(settings.storage.root).expanduser().resolve()
     await _to_thread(root.mkdir, parents=True, exist_ok=True)
@@ -2008,6 +2128,11 @@ async def heal_archive_locks(settings: Settings) -> dict[str, Any]:
         "locks_scanned": 0,
         "locks_removed": [],
         "metadata_removed": [],
+        "recovered_paths": [],
+        "recovery_error": None,
+        "gc_due": False,
+        "gc_checked": False,
+        "gc_error": None,
     }
     if not root.exists():
         return summary
@@ -2040,6 +2165,33 @@ async def heal_archive_locks(settings: Settings) -> dict[str, Any]:
             continue
         except PermissionError:
             continue
+
+    if not (root / ".git").is_dir():
+        return summary
+
+    try:
+        recovered_paths = await _to_thread(_find_uncommitted_archive_paths, root)
+        if recovered_paths:
+            # Startup recovery is deliberately synchronous even when normal
+            # request commits are async. The service does not accept work until
+            # the prior run's on-disk audit files have reached Git history.
+            await _commit_direct(
+                root,
+                settings,
+                "chore: recover uncommitted archive files",
+                recovered_paths,
+            )
+            summary["recovered_paths"] = recovered_paths
+    except Exception as exc:
+        summary["recovery_error"] = str(exc)
+
+    summary["gc_due"] = _archive_gc_due(root)
+    if summary["gc_due"]:
+        try:
+            await _run_archive_gc_auto(root)
+            summary["gc_checked"] = True
+        except Exception as exc:
+            summary["gc_error"] = str(exc)
 
     return summary
 

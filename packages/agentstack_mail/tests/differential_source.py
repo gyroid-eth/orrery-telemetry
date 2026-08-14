@@ -461,6 +461,11 @@ def isolated_worker_env(
                 "AGENTSTACK_MAIL_HTTP_PORT": "28317",
                 "AGENTSTACK_MAIL_GIT_AUTHOR_NAME": "differential-harness",
                 "AGENTSTACK_MAIL_GIT_AUTHOR_EMAIL": "differential-harness@localhost",
+                # The frozen live side commits synchronously. Keep this parity
+                # harness on the public kill switch so checkpoints observe the
+                # same post-call durability boundary; default-on behavior has
+                # dedicated config, runtime, and latency coverage.
+                "AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC": "false",
             }
         )
 
