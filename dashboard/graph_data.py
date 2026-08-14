@@ -1,7 +1,10 @@
 import json
 import math
 import os
+import shutil
 import sqlite3
+import subprocess
+import time
 from datetime import datetime, timezone
 
 
@@ -10,7 +13,23 @@ def _env_path(name: str, default: str = "") -> str:
     return os.path.expanduser(value) if value else ""
 
 
-DB_PATH = _env_path("AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3")
+def _default_mail_db() -> str:
+    """Prefer this stack's own mail database over a third-party checkout.
+
+    The installer passes AGENTSTACK_MAIL_DB, so this default only applies when
+    the dashboard is run directly. Pointing that case at ~/mcp_agent_mail meant
+    a machine that had migrated still opened the abandoned file: the graph
+    rendered, tmux liveness still animated on top of it, and nothing said the
+    data had stopped two days earlier.
+    """
+    home = os.path.expanduser("~")
+    own = os.path.join(home, ".agentstack", "mail", "storage.sqlite3")
+    if os.path.exists(own):
+        return own
+    return os.path.join(home, "mcp_agent_mail", "storage.sqlite3")
+
+
+DB_PATH = _env_path("AGENTSTACK_MAIL_DB") or _default_mail_db()
 # agent-mail project human_key。未設定なら PROJECT_ID fallback で degrade する。
 PROJECT_HUMAN_KEY = (
     os.environ.get("AGENTSTACK_PROJECT_KEY", "").strip()
@@ -20,6 +39,73 @@ PROJECT_ID = 1  # フォールバック既定（projects に human_key 不一致
 
 # 「活発度」の集計窓（秒）。DB 内の最新メッセージ時刻を基準にする。
 ACT_WINDOW_SEC = 6 * 3600
+
+
+_LIVE_PARENT_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
+_LIVE_PARENT_TTL = 10.0
+
+
+def _live_parents() -> dict[str, str]:
+    """child session name -> parent agent name, read from live tmux sessions.
+
+    The message-derived lineage below infers a parent from the child's oldest
+    high-importance inbound message, which was the delegation mail. Spawning
+    with the task embedded in the prompt removes that mail, and with it the
+    only record that the child had a parent at all -- so a child stayed
+    unattached until it happened to report back. The spawner exports
+    PARENT_AGENT into the child's tmux session, which states the relationship
+    directly and is available the moment the session exists.
+
+    Reading it costs one tmux call per session -- 238ms of a 326ms graph build
+    on a machine with 42 of them -- so the answer is cached briefly. Lineage
+    only changes when something is spawned, and the node itself appears without
+    waiting for this.
+    """
+    now = time.monotonic()
+    cached = _LIVE_PARENT_CACHE["value"]
+    if cached is not None and now - float(_LIVE_PARENT_CACHE["ts"]) < _LIVE_PARENT_TTL:
+        return dict(cached)  # type: ignore[arg-type]
+    tmux = shutil.which("tmux")
+    if not tmux:
+        _LIVE_PARENT_CACHE.update(ts=now, value={})
+        return {}
+    try:
+        listing = subprocess.run(
+            [tmux, "list-sessions", "-F", "#{session_name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if listing.returncode != 0:
+        # No server, or one that was briefly unreachable -- the exit code does
+        # not say which. Only successful listings are cached, so a momentary
+        # failure cannot pin an empty lineage for the whole TTL. Retrying costs
+        # one `list-sessions`; the expensive part is the per-session lookup
+        # below, which this path never reaches.
+        return {}
+    parents: dict[str, str] = {}
+    for session in listing.stdout.split("\n"):
+        session = session.strip()
+        if not session:
+            continue
+        try:
+            shown = subprocess.run(
+                [tmux, "show-environment", "-t", session, "PARENT_AGENT"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if shown.returncode != 0:
+            continue                   # unset for this session
+        value = shown.stdout.strip()
+        # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
+        if not value.startswith("PARENT_AGENT="):
+            continue
+        parent = value.split("=", 1)[1].strip()
+        if parent:
+            parents[session] = parent
+    _LIVE_PARENT_CACHE.update(ts=now, value=dict(parents))
+    return parents
 
 
 class _TimestampDiagnostics:
@@ -287,6 +373,15 @@ def build_graph() -> dict:
         )
         spawn = []
         seen = set()
+        # Live sessions first: PARENT_AGENT is the spawn relationship itself,
+        # not a trace of it, so it holds for a child that has not spoken yet.
+        node_names = {n["name"] for n in nodes}
+        for child, parent in _live_parents().items():
+            if child in node_names and parent in node_names and child != parent:
+                seen.add(child)
+                spawn.append(
+                    {"source": parent, "target": child, "type": "spawn"}
+                )
         for r in cur.fetchall():
             child = r["child"]
             if child in seen:
