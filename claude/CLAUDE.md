@@ -93,7 +93,13 @@ Details and exceptions for the first calls:
 - If registration still fails with a name-conflict or token-mismatch error in a
   child/reserved session, do not register under another name; report the
   missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.
-- Always call
+- Embedded-task exception: when the launch prompt explicitly says registration
+  was completed by the parent, names `--embed-task` semantics, and includes the
+  complete canonical task, do not call `ensure_project`, `register_agent`,
+  `agentstack-reregister`, or `fetch_inbox`. Start that embedded task immediately
+  and report completion to `PARENT_AGENT` with `send_message`. There is no task
+  mail in this mode.
+- Otherwise, always call
   `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`
   after registration. If `PARENT_AGENT` is set, treat the inbox request as the
   canonical task and report completion to that parent with `send_message`.

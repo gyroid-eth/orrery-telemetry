@@ -115,10 +115,15 @@ Failure handling:
 - Treat a session as child/reserved when `PARENT_AGENT` is set, when the tmux
   metadata/session name was preassigned by `spawn_child.sh`, or when your inbox
   task says the name is already reserved. In those cases, never switch names.
-- If `PARENT_AGENT` is set, you are a child agent: read your task from
-  `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`
-  before doing anything, and report completion with `send_message` to the
-  parent. Do not invent a task from context.
+- If `PARENT_AGENT` is set, you are a child agent. When the launch prompt
+  explicitly says registration was completed by the parent, names
+  `--embed-task` semantics, and includes the complete canonical task, skip
+  `ensure_project`, `register_agent`, `agentstack-reregister`, and `fetch_inbox`;
+  start the embedded task immediately and report completion with `send_message`
+  to the parent. There is no task mail in this mode. Otherwise, read the task
+  from `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__",
+  agent_name="$AGENT_NAME")` before doing anything and treat that inbox request
+  as canonical. Do not invent a task from context.
 - If `PARENT_AGENT` is not set and registration or inbox access is truly
   unrecoverable, there is no parent to report to. Leave a short operator-facing
   note and continue the user task without inbox coordination; do not stall or

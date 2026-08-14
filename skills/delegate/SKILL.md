@@ -71,10 +71,10 @@ Give the child a short role label and a concrete task description. Keep them sep
 | Field | Purpose |
 | --- | --- |
 | `role` | Short dashboard label, such as `api-migrate`, `review`, `tests`, or `docs` |
-| `task` | Concrete instruction used in `register_agent.task_description` and the inbox message |
+| `task` | Concrete instruction stored in a task file and embedded in the launch prompt |
 | `group` | Shared cluster name for a set of related child agents |
 
-Task message template:
+Embedded task template:
 
 ```markdown
 ## Role: <role>
@@ -85,15 +85,15 @@ Task message template:
 
 ## Coordination
 - Use project_key from `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY`: <value if known>.
-- First call ensure_project, register_agent, then fetch_inbox for your own name.
-- Treat this inbox message as the canonical task.
+- Registration is already complete; do not call ensure_project, register_agent, or fetch_inbox.
+- Treat the launch prompt and its embedded task as canonical. There is no task mail.
 - Do not modify files outside the declared scope.
-- Report completion to <parent-agent-name> with changed paths, summary, and verification.
+- Report completion to <parent-agent-name> with `send_message` at importance `high`, including changed paths, summary, and verification.
 ```
 
 Use generic task examples such as code review, API migration, test-suite repair, documentation cleanup, or data import validation. Avoid embedding organization-specific project lore in the delegated task unless the current user request requires it.
 
-## 3. Register, Open Contact, Reserve, And Send
+## 3. Register, Open Contact, Reserve, And Spawn
 
 Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
 
@@ -125,15 +125,20 @@ substitute.
    The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
    For a Codex child, pass `--program "codex" --model "gpt-5.5"`.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
-4. Ensure the child can receive the first task message. The stack registration helper sets the child's `contact_policy` to `open` by default. If `AGENTSTACK_CONTACT_POLICY` disables that default, complete a contact handshake or approval before `send_message`.
+4. Ensure the child can send its completion report to the parent. The stack registration helper sets the child's `contact_policy` to `open` by default. If either side uses a restrictive contact policy, complete a contact handshake or approval before spawning.
 5. Reserve file paths if the task edits shared resources.
-6. `send_message(project_key, sender_name=<parent>, to=[<child>], subject=..., body_md=..., importance="high")`.
-   In that message, tell the child to send its **completion report** at `importance="high"` too, and to leave
-   everything else — progress notes, questions that can wait — at the default. A notification is typed
-   straight into the recipient's prompt, so an operator may have set
-   `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high` to stop routine chatter from interrupting a conversation.
-   Under that setting a report sent at the default still reaches the inbox but does not announce itself, and
-   the parent goes on waiting for something that already happened.
+6. Write the complete task to a mode `0600` temporary file without shell interpolation. A quoted heredoc delimiter keeps backticks and `$()` literal:
+
+   ```bash
+   TASK_FILE="$(mktemp "${TMPDIR:-/tmp}/agentstack-task.XXXXXX")"
+   chmod 600 "$TASK_FILE"
+   trap 'rm -f "$CHILD_TOKEN_FILE" "$TASK_FILE"' EXIT
+   cat > "$TASK_FILE" <<'AGENTSTACK_TASK'
+   <complete task text>
+   AGENTSTACK_TASK
+   ```
+
+   Do not also call `send_message` with a task request. In embedded mode the launch prompt is the sole canonical task; task mail would create a second, potentially divergent source of authority. The child still uses `send_message` for its **completion report** at `importance="high"`. Leave routine progress notes and non-urgent questions at the default importance.
 
 Then spawn the pre-registered child:
 
@@ -141,7 +146,8 @@ Then spawn the pre-registered child:
 PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
   --pre-registered "<child-name>" \
   --child-token-file "$CHILD_TOKEN_FILE" \
-  "<task summary>" "<working-directory>"
+  --embed-task --task-file "$TASK_FILE" \
+  "<working-directory>"
 ```
 
 For a Codex child:
@@ -150,8 +156,11 @@ For a Codex child:
 PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
   --pre-registered "<child-name>" --codex \
   --child-token-file "$CHILD_TOKEN_FILE" \
-  "<task summary>" "<working-directory>"
+  --embed-task --task-file "$TASK_FILE" \
+  "<working-directory>"
 ```
+
+`spawn_child.sh --embed-task` requires `--pre-registered`, and `--task-file` takes precedence over a positional task. The launcher reads the file before starting tmux, adds the child and parent names, spawn time, project key, and completion-report instruction, then injects the same canonical prompt into Claude or Codex. It warns on stderr not to send task mail.
 
 `spawn_child.sh --pre-registered` will refuse to start without a child-owned token file or existing `AGENTSTACK_RUNTIME_DIR/child-agents/<child-name>.json` state. It intentionally ignores any ambient `CHILD_REGISTRATION_TOKEN` from the parent so the parent's owner token is not forwarded to the child.
 

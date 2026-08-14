@@ -99,6 +99,8 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。token を transcript、command-line argument、dashboard response に表示しないためです。
 
+`/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
+
 `CHILD_REGISTRATION_TOKEN` は歴史的な変数名ですが、top-level identity の再認証でも使われます。
 
 ## 再登録
@@ -175,8 +177,8 @@ AgentStack の委譲は、必ず先頭の slash を付けて `/delegate ...` と
 
 1. 対象 resource、排他性、失敗点、可逆性から risk と監視頻度を決める
 2. `agentstack-preregister-child` で child-owned token と canonical name を作る
-3. file reservation、contact、正本 task message を準備する
-4. `spawn_child.sh` で Claude / Codex、model、worktree を起動する
+3. file reservation、contact、mode `0600` の正本 task file を準備する
+4. `spawn_child.sh --embed-task --task-file` で Claude / Codex、model、worktree を起動する（task mail は送らない）
 5. agent-mail の完了報告と `monitor_child_agent.sh` を読み、自分で成果物を検証する
 6. reservation を release してから親の結果として報告する
 
