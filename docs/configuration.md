@@ -22,6 +22,7 @@
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | bind address |
 | `AGENTSTACK_MAIL_DB` | `~/mcp_agent_mail/storage.sqlite3` | agent-mail SQLite |
 | `AGENTSTACK_MAIL_ENV` | `~/mcp_agent_mail/.env` | dashboard spawn が bearer token を読む file |
+| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `auto` | `disabled` では legacy Authorization header を付けない。native installer が service definition と env に同時設定 |
 | `AGENTSTACK_PROJECT_KEY` | 未設定 | agent-mail project の human key |
 | `AGENTSTACK_VAULT` | 未設定 | project key 不在時の fallback と、vault 内 Output item の Obsidian link hint |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | `:` 区切りで `LOG_*.md` を再帰走査する root。未設定時は project の `logs/` |
@@ -90,10 +91,18 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | 環境変数 | 既定値 | 意味 |
 | --- | --- | --- |
 | `AGENTSTACK_HOME` | `~/.agentstack` | install root。`--install-dir` でも指定可 |
+| `AGENTSTACK_MAIL_PROVIDER` | `upstream` | `agentstack` を明示した場合だけ bundled native provider を配置・起動 |
 | `AGENTSTACK_MAIL_DIR` | `~/mcp_agent_mail` | upstream clone |
 | `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal / runtime data |
 | `AGENTSTACK_MAIL_DB` | 稼働中 server / 既存 file から自動解決 | dashboard が読む実在する agent-mail SQLite。候補が複数なら明示指定が必要 |
 | `AGENTSTACK_MAIL_ENV` | `$AGENTSTACK_MAIL_DIR/.env` | agent-mail bearer token file。稼働中 server を再利用するときは server cwd / DB 隣接 file も探索 |
+| `AGENTSTACK_MAIL_STATE_ROOT` | `~/.agentstack/mail` | native opt-in の canonical DB / archive / signals root |
+| `AGENTSTACK_MAIL_SERVICE_ROOT` | `$AGENTSTACK_HOME/mail-service` | native candidate、immutable render、runtime log / pidfile |
+| `AGENTSTACK_MAIL_SERVICE_VENV` | candidate ID から導出 | 検証済み native candidate venv を明示的に再利用する場合の path |
+| `AGENTSTACK_MAIL_MIGRATION_SOURCE_DB` | 未設定 | quiesce 済み legacy SQLite。下記 archive / signals と3件同時指定 |
+| `AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE` | 未設定 | quiesce 済み legacy Git archive working tree |
+| `AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS` | 未設定 | quiesce 済み legacy signals root |
+| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `auto` | installed runtime selector。upstream は `auto`、native installer は `disabled` を生成 |
 | `AGENTSTACK_AGENT_MAIL_REPO` | upstream GitHub URL | agent-mail clone source |
 | `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
 | `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
@@ -105,11 +114,17 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |
 | `AGENTSTACK_PYTHON` | `python3` の解決結果 | service 用 Python |
 | `AGENTSTACK_PATH` | Homebrew と system path | service に渡す `PATH` |
-| `AGENTSTACK_MCP_URL` | `http://127.0.0.1:8765/mcp` | launcher / hook の MCP endpoint |
+| `AGENTSTACK_MCP_URL` | upstream: `http://127.0.0.1:8765/mcp`、native opt-in: `http://127.0.0.1:18765/mcp` | launcher / hook / dashboard / Bridge の MCP endpoint |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |
 | `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | `agentstack-claude-setup` が managed block を書く先。`project / global / both` |
 
 `PROJECT_KEY` も fallback として読まれますが、永続設定には `AGENTSTACK_PROJECT_KEY` を推奨します。
+
+`AGENTSTACK_MAIL_PROVIDER=agentstack` のとき、installer は `AGENTSTACK_MAIL_DB`、
+`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS_DIR` を native state / render から導出し、
+`env.sh` へ provider、state root、`AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled`
+を一緒に保存します。provider を指定しない場合はこれらの追加値を生成せず、従来の
+upstream 探索・provisioning のままです。
 
 ## Launcher
 
@@ -197,13 +212,17 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 
 `AGENTSTACK_MCP_URL` は launcher / hook の接続先です。
 
-現在の dashboard `POST /api/spawn` は:
+dashboard `POST /api/spawn` は generated `env.sh` の同じ値を使います。upstream の
+既定は:
 
 ```text
 http://127.0.0.1:8765/mcp
 ```
 
-を固定で使います。別 endpoint を使う場合は、launcher / hook だけでなく dashboard spawn との整合も確認してください。
+です。native opt-in では installer が endpoint を `127.0.0.1:18765` へ、transport
+selector を `disabled` へ同時に切り替えるため、launcher、hook、dashboard spawn、
+Codex App Bridge が同じ authority を見ます。手動で endpoint を上書きする場合も、
+これらを別々に設定しないでください。
 
 ## Spawn directory
 

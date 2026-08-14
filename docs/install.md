@@ -91,6 +91,43 @@ cd claude-agent-stack
 
 環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ明示 opt-in です。command-line の `--assume-yes`（短縮 `-y`）は環境変数より優先されます。この installer 選択は生成する `env.sh` には永続化しません。
 
+mail provider の既定は従来どおり third-party upstream です。同梱の
+`packages/agentstack_mail` を使う経路は、次の環境変数を明示した場合だけ有効に
+なります。
+
+```bash
+AGENTSTACK_MAIL_PROVIDER=agentstack ./scripts/install.sh --dry-run
+AGENTSTACK_MAIL_PROVIDER=agentstack ./scripts/install.sh
+```
+
+この opt-in では endpoint の既定が `http://127.0.0.1:18765/mcp`、state root が
+`~/.agentstack/mail` になり、service env は
+`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` を必須にします。legacy
+HTTP bearer は使わず、各 agent の owner token は従来どおり tool argument / local
+proxy で扱います。Claude の MCP key は `mcp-agent-mail`、Codex の MCP key は
+`agent-mail` のままです。provider 名へ key を改名しません。
+
+既存 upstream state を移す場合は、先に legacy writer を quiesce し、DB、archive、
+signals の3 path をすべて明示します。installer は実装済みの
+`agentstack-mail-migrate copy`、`verify`、`rollback-assess` を順に実行し、別の
+state root へ copy してから native service を起動します。
+
+```bash
+LEGACY_DB="/absolute/path/reported-for-the-quiesced-legacy-database"
+LEGACY_ARCHIVE="/absolute/path/reported-for-the-quiesced-legacy-archive"
+LEGACY_SIGNALS="/absolute/path/reported-for-the-quiesced-legacy-signals"
+AGENTSTACK_MAIL_PROVIDER=agentstack \
+AGENTSTACK_MAIL_MIGRATION_SOURCE_DB="$LEGACY_DB" \
+AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE="$LEGACY_ARCHIVE" \
+AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS="$LEGACY_SIGNALS" \
+./scripts/install.sh --dry-run
+```
+
+3 path の一部だけを指定した場合は停止します。source と destination の DB / archive
+を共有する構成も migration helper と service controller が拒否します。これは
+coexistence と検証のための opt-in であり、decision ledger の `cutover_state` を変更
+したり、既定 authority の切替を承認したりするものではありません。
+
 installer は次を行います。
 
 1. dependency、dashboard port、agent-mail endpoint を検査
@@ -103,6 +140,12 @@ installer は次を行います。
 agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
 
 完全な新規環境では agent-mail を同梱せず、`AGENTSTACK_AGENT_MAIL_REPO`（既定は upstream GitHub repository）を `AGENTSTACK_MAIL_DIR` へ clone します。installer は `uv sync --no-dev` 後に restart loop 付きの supervised process として起動し、`$AGENTSTACK_MAIL_HOME/agent-mail.pid` と `agent-mail.log` を残します。endpoint の health check と実 DB path の確認が成功してから dashboard setup を続行し、起動した process は `install-state.json` に記録して uninstall 時に停止します。既存 server/DB を再利用する install では `uv` を要求しません。
+
+`AGENTSTACK_MAIL_PROVIDER=agentstack` の新規環境では、bundled package を exact
+candidate venv へ配置し、candidate ID ごとの immutable service env / runner を
+render します。空 state は一度だけ scratch authority として初期化し、その後は
+実装済み service helper の `foreground` controller で起動します。health response
+が設定した canonical DB を返した場合だけ install を続行します。
 
 サービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。実際の常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 
@@ -200,6 +243,9 @@ Tier 1 installer は `AGENTSTACK_CLAUDE_JSON`（既定 `~/.claude.json`）の `m
 
 diff preview では bearer token を `<redacted>` に置き換えます。対話で `yes` と答えた場合、またはユーザーが明示した `--assume-yes` の場合だけ mode `0600` で atomic write し、元 file を `~/.agentstack/backups` に保存します。非対話で未承認なら書き込まず、installer と `agentstack-doctor` が安全な preview / apply コマンドを表示します。`agentstack-selftest` は HTTP server の動作だけでなく、この固定名・endpoint・authorization の登録も検査します。
 
+native opt-in では同じ `mcp-agent-mail` entry の URL だけを native endpoint へ更新し、
+`headers.Authorization` は付けません。既存の他 MCP entry は保持します。
+
 既存 install で登録が無い場合は、まず doctor の出力に従って preview してください。
 
 ```bash
@@ -209,10 +255,13 @@ diff preview では bearer token を `<redacted>` に置き換えます。対話
 Codex child は launcher が child-scoped MCP proxy config を自動生成します。top-level Codex CLI を `agent-start-codex` から使う場合は、`$CODEX_HOME/config.toml` に次を一度設定します。bootstrap が `MCP_AGENT_MAIL_TOKEN` を process environment に読み込むため、token 自体を TOML に保存する必要はありません。
 
 ```toml
-[mcp_servers."mcp-agent-mail"]
+[mcp_servers.agent-mail]
 url = "http://127.0.0.1:8765/mcp"
 bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"
 ```
+
+native opt-in でも key は `[mcp_servers.agent-mail]` のまま URL を
+`http://127.0.0.1:18765/mcp` にし、legacy bearer の設定は省きます。
 
 ### Managed instruction helper
 

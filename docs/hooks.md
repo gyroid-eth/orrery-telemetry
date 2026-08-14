@@ -22,6 +22,15 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 
 `Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。
 
+installer は endpoint と transport credential selector を同じ generated `env.sh` で
+配布します。既定の upstream 経路は
+`AGENTSTACK_MAIL_HTTP_BEARER_MODE=auto` 相当で、従来どおり Keychain / `.env` の
+legacy HTTP bearer を使います。`AGENTSTACK_MAIL_PROVIDER=agentstack` の明示
+opt-in だけは `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を生成し、hook と
+`spawn_child.sh` / `cleanup-child-agent.sh` は Authorization header を付けず native
+endpoint へ接続します。agent owner token はこれとは別の identity credential で、
+child token file と tool argument の既存境界を変えません。
+
 ### `set-ghostty-title.sh`
 
 - **発火:** `SessionStart`。さらに `mark-agent-registered.sh` が現在 session 自身の canonical name を取得した後にも background で呼びます。
@@ -38,7 +47,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 
 - **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
 - **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。raw non-tmux Claude は対象外で、`agent-start` 経由の再起動が必要です。
-- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential です。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
+- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
