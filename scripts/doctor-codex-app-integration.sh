@@ -217,7 +217,12 @@ if [[ "$CLEANUP_ORPHANS" == true ]]; then
   if [[ -z "${AGENTSTACK_MCP_URL:-}" || -z "$RUNTIME_DIR" || -z "$SNAPSHOT_PATH" ]]; then
     fail "cleanup requires agent-mail URL, runtime dir, and snapshot path"
   else
-    if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
+    HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+    if [[ "$HTTP_BEARER_MODE" == "disabled" ]]; then
+      unset MCP_AGENT_MAIL_TOKEN
+    elif [[ "$HTTP_BEARER_MODE" != "auto" && "$HTTP_BEARER_MODE" != "enabled" ]]; then
+      fail "invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE"
+    elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
       export MCP_AGENT_MAIL_TOKEN
       IFS= read -r MCP_AGENT_MAIL_TOKEN < <(
         "$PYTHON_BIN" - "${AGENTSTACK_MAIL_ENV}" <<'PY'

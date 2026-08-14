@@ -73,6 +73,9 @@ THEME_ASSETS = {
 }
 DB_PATH = _env_path("AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3")
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/mcp_agent_mail/.env")
+MAIL_HTTP_BEARER_MODE = _env_text(
+    "AGENTSTACK_MAIL_HTTP_BEARER_MODE", "auto"
+).lower()
 VAULT = _env_path("AGENTSTACK_VAULT", "")
 PROJECT_KEY = _env_text("AGENTSTACK_PROJECT_KEY", "")
 LABEL_PREFIX = _env_text("AGENTSTACK_LABEL_PREFIX", "org.agentstack")
@@ -3585,10 +3588,27 @@ def _mcp_bearer() -> str:
     return ""
 
 
+def _legacy_mail_bearer_enabled() -> bool:
+    """Select the legacy transport credential without changing its default."""
+    if MAIL_HTTP_BEARER_MODE == "enabled":
+        return True
+    if MAIL_HTTP_BEARER_MODE == "disabled":
+        return False
+    if MAIL_HTTP_BEARER_MODE == "auto":
+        return True
+    raise ValueError(
+        "AGENTSTACK_MAIL_HTTP_BEARER_MODE must be auto, enabled, or disabled"
+    )
+
+
 def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
-    """Send one authenticated MCP request and normalize JSON/SSE envelopes."""
-    token = _mcp_bearer()
-    if not token:
+    """Send one selected-authority MCP request and normalize its envelope."""
+    try:
+        bearer_enabled = _legacy_mail_bearer_enabled()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    token = _mcp_bearer() if bearer_enabled else ""
+    if bearer_enabled and not token:
         return {"ok": False, "error": "HTTP_BEARER_TOKEN missing (~/mcp_agent_mail/.env)"}
     payload = json.dumps({
         # MCP servers may cache/replay duplicate JSON-RPC ids.  A fixed id made
@@ -3596,13 +3616,15 @@ def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
         "jsonrpc": "2.0", "id": secrets.token_hex(8), "method": method,
         "params": params,
     }).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         MCP_HTTP_URL, data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "Authorization": f"Bearer {token}",
-        },
+        headers=headers,
         method="POST",
     )
     try:

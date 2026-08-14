@@ -100,10 +100,76 @@ else
   status=1
 fi
 
+if [[ "${AGENTSTACK_MAIL_PROVIDER:-upstream}" == "agentstack" ]]; then
+  if [[ "${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-}" == "disabled" ]]; then
+    echo "ok: AgentStack Mail transport uses owner tokens without a legacy HTTP bearer"
+  else
+    echo "missing: native AgentStack Mail requires AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled" >&2
+    status=1
+  fi
+  NATIVE_MAIL_HEALTH="$("$PYTHON_BIN" - \
+    "${AGENTSTACK_MCP_URL:-}" "$MAIL_DB_PATH" <<'PY' 2>/dev/null || true
+import json
+import pathlib
+import sys
+import urllib.request
+
+url, expected_raw = sys.argv[1:]
+expected = pathlib.Path(expected_raw).expanduser().resolve(strict=False)
+payload = json.dumps({
+    "jsonrpc": "2.0",
+    "id": "agentstack-doctor-native-health",
+    "method": "tools/call",
+    "params": {"name": "health_check", "arguments": {}},
+}).encode()
+request = urllib.request.Request(
+    url,
+    data=payload,
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    },
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=3) as response:
+    raw = response.read().decode("utf-8", errors="replace")
+for line in raw.splitlines():
+    if line.startswith("data:"):
+        raw = line[5:].strip()
+        break
+body = json.loads(raw)
+result = body.get("result") or {}
+health = result.get("structuredContent") or {}
+if not health:
+    for block in result.get("content") or []:
+        if block.get("type") == "text":
+            health = json.loads(block.get("text") or "{}")
+            break
+database_url = str(health.get("database_url") or "")
+for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+    if database_url.startswith(prefix):
+        actual = pathlib.Path(database_url[len(prefix):]).resolve(strict=False)
+        break
+else:
+    raise SystemExit(1)
+if health.get("status") != "ok" or actual != expected:
+    raise SystemExit(1)
+print(actual)
+PY
+)"
+  if [[ -n "$NATIVE_MAIL_HEALTH" ]]; then
+    echo "ok: AgentStack Mail health serving $NATIVE_MAIL_HEALTH"
+  else
+    echo "missing: AgentStack Mail health does not serve the configured native database at ${AGENTSTACK_MCP_URL:-<unset>}" >&2
+    status=1
+  fi
+fi
+
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
-CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$SCRIPT_DIR/lib" <<'PY' 2>/dev/null || true
+CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$SCRIPT_DIR/lib" \
+  "${AGENTSTACK_MAIL_PROVIDER:-upstream}" <<'PY' 2>/dev/null || true
 import json
 import pathlib
 import sys
@@ -138,11 +204,17 @@ else:
         if isinstance(entry, dict)
         else None
     )
+    provider = sys.argv[5]
+    transport_auth_ok = (
+        authorization is None
+        if provider == "agentstack"
+        else (not bearer or authorization == f"Bearer {bearer}")
+    )
     if (
         isinstance(entry, dict)
         and entry.get("type") == "http"
         and same_endpoint(str(entry.get("url", "")), sys.argv[2])
-        and (not bearer or authorization == f"Bearer {bearer}")
+        and transport_auth_ok
     ):
         print("configured")
     else:

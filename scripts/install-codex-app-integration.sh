@@ -15,6 +15,7 @@ MCP_URL="${AGENTSTACK_MCP_URL:-}"
 # intentionally separate runtime/archive root used for signal data.
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$HOME/.mcp_agent_mail/signals}"
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 LABEL="${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}"
 MARKETPLACE_NAME="${AGENTSTACK_CODEX_APP_MARKETPLACE:-agentstack-local}"
 WAKE_LIMIT="${AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR:-12}"
@@ -148,6 +149,9 @@ validate() {
     || die "AGENTSTACK_CODEX_APP_RESTART_DELAY must be 0..3600"
   [[ "$SKIP_GIT_CHECK" == "0" || "$SKIP_GIT_CHECK" == "1" ]] \
     || die "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK must be 0 or 1"
+  [[ "$HTTP_BEARER_MODE" == "auto" || "$HTTP_BEARER_MODE" == "enabled" || \
+     "$HTTP_BEARER_MODE" == "disabled" ]] || \
+    die "AGENTSTACK_MAIL_HTTP_BEARER_MODE must be auto, enabled, or disabled"
   if [[ "$NO_PLUGIN" != true ]]; then
     [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
   fi
@@ -206,7 +210,7 @@ write_env() {
     "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$WAKE_LIMIT" \
     "$STALE_AFTER" "$RETRY_MAX_ATTEMPTS" "$RETRY_MAX_AGE" \
     "$RETRY_MAX_BACKOFF" "$MARKETPLACE_NAME" "$SKIP_GIT_CHECK" \
-    "$CODEX_BIN" "$PYTHON_BIN" "$RESTART_DELAY" <<'PY'
+    "$CODEX_BIN" "$PYTHON_BIN" "$RESTART_DELAY" "$HTTP_BEARER_MODE" <<'PY'
 import pathlib
 import shlex
 import sys
@@ -230,6 +234,7 @@ import sys
     codex_bin,
     python_bin,
     restart_delay,
+    http_bearer_mode,
 ) = sys.argv[1:]
 values = {
     "AGENTSTACK_CODEX_APP_INSTALL_DIR": install_dir,
@@ -240,6 +245,7 @@ values = {
     "AGENTSTACK_PROJECT_KEY": project_key,
     "AGENTSTACK_MCP_URL": mcp_url,
     "AGENTSTACK_MAIL_ENV": mail_env,
+    "AGENTSTACK_MAIL_HTTP_BEARER_MODE": http_bearer_mode,
     "AGENTSTACK_SIGNALS_DIR": signals_dir,
     "AGENTSTACK_CODEX_APP_LAUNCHD_LABEL": label,
     "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR": wake_limit,

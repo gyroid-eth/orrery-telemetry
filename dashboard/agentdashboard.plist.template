@@ -34,6 +34,8 @@
     <string>__MAIL_ENV__</string>
     <key>AGENTSTACK_MAIL_HOME</key>
     <string>__MAIL_HOME__</string>
+    <key>AGENTSTACK_MAIL_HTTP_BEARER_MODE</key>
+    <string>__MAIL_HTTP_BEARER_MODE__</string>
     <key>AGENTSTACK_SIGNALS_DIR</key>
     <string>__SIGNALS_DIR__</string>
     <key>AGENTSTACK_MCP_URL</key>

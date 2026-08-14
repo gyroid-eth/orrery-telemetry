@@ -19,6 +19,7 @@ TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-$HOME/mcp_agent_mail/storage.sqlite3}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
+MAIL_HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$HOME/.mcp_agent_mail/signals}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
@@ -53,6 +54,7 @@ render_plist() {
     -e "s|__MAIL_DB__|$(sed_escape "$MAIL_DB")|g" \
     -e "s|__MAIL_ENV__|$(sed_escape "$MAIL_ENV")|g" \
     -e "s|__MAIL_HOME__|$(sed_escape "$MAIL_HOME")|g" \
+    -e "s|__MAIL_HTTP_BEARER_MODE__|$(sed_escape "$MAIL_HTTP_BEARER_MODE")|g" \
     -e "s|__SIGNALS_DIR__|$(sed_escape "$SIGNALS_DIR")|g" \
     -e "s|__MCP_URL__|$(sed_escape "$MCP_URL")|g" \
     -e "s|__TERMINAL__|$(sed_escape "$TERMINAL")|g" \
@@ -94,6 +96,7 @@ export_background_env() {
   export AGENTSTACK_MAIL_DB="$MAIL_DB"
   export AGENTSTACK_MAIL_ENV="$MAIL_ENV"
   export AGENTSTACK_MAIL_HOME="$MAIL_HOME"
+  export AGENTSTACK_MAIL_HTTP_BEARER_MODE="$MAIL_HTTP_BEARER_MODE"
   export AGENTSTACK_SIGNALS_DIR="$SIGNALS_DIR"
   export AGENTSTACK_MCP_URL="$MCP_URL"
   export AGENTSTACK_TERMINAL="$TERMINAL"

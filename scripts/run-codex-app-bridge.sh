@@ -14,7 +14,13 @@ printf '{"event":"bridge_launcher_start","pid":%d,"timestamp":"%s"}\n' \
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 
-if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+if [[ "$HTTP_BEARER_MODE" == "disabled" ]]; then
+  unset MCP_AGENT_MAIL_TOKEN
+elif [[ "$HTTP_BEARER_MODE" != "auto" && "$HTTP_BEARER_MODE" != "enabled" ]]; then
+  echo "invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE" >&2
+  exit 1
+elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
   export MCP_AGENT_MAIL_TOKEN
   IFS= read -r MCP_AGENT_MAIL_TOKEN < <(
     python3 - "${AGENTSTACK_MAIL_ENV}" <<'PY'

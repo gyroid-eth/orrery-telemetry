@@ -18,6 +18,7 @@ _AGS_CALLER_KEYS=(
   AGENTSTACK_PROJECT_KEY
   AGENTSTACK_MCP_URL
   AGENTSTACK_MAIL_ENV
+  AGENTSTACK_MAIL_HTTP_BEARER_MODE
   AGENTSTACK_RUNTIME_DIR
   AGENTSTACK_CODEX_APP_RUNTIME_DIR
   MCP_AGENT_MAIL_TOKEN
@@ -43,7 +44,13 @@ while [[ $_ags_i -lt ${#_ags_saved_names[@]} ]]; do
 done
 unset _ags_key _ags_i _ags_saved_names _ags_saved_values _AGS_CALLER_KEYS
 
-if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+if [[ "$HTTP_BEARER_MODE" == "disabled" ]]; then
+  unset MCP_AGENT_MAIL_TOKEN
+elif [[ "$HTTP_BEARER_MODE" != "auto" && "$HTTP_BEARER_MODE" != "enabled" ]]; then
+  echo "invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE" >&2
+  exit 1
+elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
   export MCP_AGENT_MAIL_TOKEN
   IFS= read -r MCP_AGENT_MAIL_TOKEN < <(
     python3 - "${AGENTSTACK_MAIL_ENV}" <<'PY'

@@ -8,6 +8,7 @@ MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}
 PROJECT_KEY_DEFAULT="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 
 resolve_agent_name() {
     if [[ -f "$HOOKS_DIR/resolve-agent-name.sh" ]]; then
@@ -53,6 +54,14 @@ get_agentstack_token() {
     return 1
 }
 
+legacy_http_bearer_enabled() {
+    case "$HTTP_BEARER_MODE" in
+        enabled|auto) return 0 ;;
+        disabled) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
 RESOLVED_AGENT="$(resolve_agent_name)"
 AGENT_NAME="${1:-${RESOLVED_AGENT:-${AGENT_NAME:-}}}"
 PROJECT_KEY="${PROJECT_KEY:-$PROJECT_KEY_DEFAULT}"
@@ -90,8 +99,17 @@ if [[ -z "$PROJECT_KEY" ]]; then
     exit 0
 fi
 
-TOKEN=$(get_agentstack_token 2>/dev/null || true)
-if [[ -z "$TOKEN" ]]; then
+if legacy_http_bearer_enabled; then
+    TOKEN=$(get_agentstack_token 2>/dev/null || true)
+    bearer_status=0
+else
+    bearer_status=$?
+    TOKEN=""
+fi
+if [[ "$bearer_status" == "2" ]]; then
+    exit 0
+fi
+if [[ "$bearer_status" == "0" && -z "$TOKEN" ]]; then
     exit 0
 fi
 
@@ -119,12 +137,14 @@ payload = json.dumps({
 }).encode()
 
 conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=15)
-conn.request("POST", parsed.path, body=payload, headers={
+headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "Authorization": f"Bearer {token}",
     "Connection": "close",
-})
+}
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+conn.request("POST", parsed.path, body=payload, headers=headers)
 resp = conn.getresponse()
 print(resp.read().decode())
 conn.close()
