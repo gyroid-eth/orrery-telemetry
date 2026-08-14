@@ -625,20 +625,41 @@ print(f"{host}|{port}|{path}")
 PY
 }
 
-mcp_endpoint_listening() {
+# Three-state probe. "Nothing is listening" and "the probe could not run" are
+# different answers, and only ECONNREFUSED proves the first one. Collapsing
+# every OSError into "free" made the installer announce an available port while
+# a service held it: over SSH on macOS 26 every loopback connect returns
+# EADDRNOTAVAIL, including one to a socket the probing process just opened.
+# Callers that only ask "can I reach it" keep working, because undetermined is
+# still non-zero.
+#   0 = listening   1 = refused (nothing there)   2 = undetermined
+mcp_endpoint_probe() {
   local parts host port
-  parts="$(mcp_endpoint_parts)" || return 1
+  parts="$(mcp_endpoint_parts)" || return 2
   IFS='|' read -r host port <<< "$parts"
   "$PYTHON_BIN" - "$host" "$port" <<'PY'
+import errno
 import socket
 import sys
 
 try:
     with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=0.5):
         pass
-except OSError:
+except ConnectionRefusedError:
     raise SystemExit(1)
+except OSError as exc:
+    if exc.errno == errno.ECONNREFUSED:
+        raise SystemExit(1)
+    sys.stderr.write(
+        f"port probe inconclusive for {sys.argv[1]}:{sys.argv[2]}: "
+        f"[errno {exc.errno}] {exc.strerror}\n"
+    )
+    raise SystemExit(2)
 PY
+}
+
+mcp_endpoint_listening() {
+  mcp_endpoint_probe >/dev/null 2>&1
 }
 
 preflight_agent_mail_port() {
@@ -664,8 +685,18 @@ preflight_agent_mail_port() {
       ;;
   esac
 
-  if ! mcp_endpoint_listening; then
+  local probe_err probe_state
+  probe_err="$(mcp_endpoint_probe 2>&1 >/dev/null)"
+  probe_state=$?
+  if [[ "$probe_state" == "1" ]]; then
     say "preflight: agent-mail port $port is available"
+    return
+  fi
+  if [[ "$probe_state" != "0" ]]; then
+    # Undetermined is not free. Everything downstream — reuse an existing
+    # service or start our own — branches on this answer, so guessing "free"
+    # here is how an installer ends up fighting a service it never saw.
+    preflight_error "could not determine whether agent-mail port $port is in use${probe_err:+ (${probe_err##*: })}. Loopback connections from this shell are failing, which commonly happens over SSH on macOS; run the installer from a local terminal on the target machine, or set AGENTSTACK_PREFLIGHT_SKIP_PORT=1 if you have verified the port yourself."
     return
   fi
   if [[ -f "$MANIFEST" ]]; then
