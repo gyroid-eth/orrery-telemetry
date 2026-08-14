@@ -8,6 +8,7 @@
 #   spawn_child.sh --model opus --resources "path" "<task>"
 #   spawn_child.sh --worktree --resources "path" "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
+#   spawn_child.sh --pre-registered <name> --child-token-file <path> --embed-task --task-file <path> [<workdir>]
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
 # モデル指定（--model。Codex は gpt-5.5 既定で任意の許可済み model を渡せる）:
@@ -202,6 +203,8 @@ UNSAFE_NO_RESOURCES=false
 PRE_REGISTERED=""
 CHILD_TOKEN_FILE=""
 STANDALONE=false
+EMBED_TASK=false
+TASK_FILE=""
 USE_WORKTREE=false
 WORKTREE_BASE="/tmp/cc-worktrees"
 WORKTREE_BASE_REV=""   # --worktree-base で指定された起点 rev (空=HEAD)
@@ -246,6 +249,18 @@ while [[ "${1:-}" == --* ]]; do
             STANDALONE=true
             shift
             ;;
+        --embed-task)
+            EMBED_TASK=true
+            shift
+            ;;
+        --task-file)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --task-file requires a path" >&2
+                exit 1
+            fi
+            TASK_FILE="$2"
+            shift 2
+            ;;
         --worktree)
             USE_WORKTREE=true
             shift
@@ -269,6 +284,16 @@ fi
 
 if [[ "$STANDALONE" == true && -z "$PRE_REGISTERED" ]]; then
     echo "Error: --standalone requires --pre-registered" >&2
+    exit 1
+fi
+
+if [[ "$EMBED_TASK" == true && -z "$PRE_REGISTERED" ]]; then
+    echo "Error: --embed-task requires --pre-registered" >&2
+    exit 1
+fi
+
+if [[ "$EMBED_TASK" == true && "$STANDALONE" == true ]]; then
+    echo "Error: --embed-task cannot be combined with --standalone" >&2
     exit 1
 fi
 
@@ -925,8 +950,32 @@ print(token_path)
 ' "$agent_name" "$project_key" "$sent_token_file" "$token_file" "$state_file"
 }
 
+build_embedded_task_prompt() {
+    local child_name="$1"
+    local parent_name="$2"
+    local spawned_at="$3"
+    local project_key="$4"
+    local task_text="$5"
+    printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent・fetch_inbox は実行しないでください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら send_message で %s に報告してください:\n\n%s' \
+        "$child_name" "$parent_name" "$spawned_at" "$project_key" \
+        "$parent_name" "$task_text"
+}
+
 TASK="${1:-}"
 WORK_DIR="${2:-$(pwd)}"
+if [[ -n "$TASK_FILE" ]]; then
+    if [[ ! -f "$TASK_FILE" || ! -r "$TASK_FILE" ]]; then
+        echo "Error: --task-file not readable: $TASK_FILE" >&2
+        exit 1
+    fi
+    TASK="$(cat "$TASK_FILE")"
+    # With no positional TASK, the first positional argument is the workdir.
+    # If both positionals are present, TASK_FILE overrides $1 and $2 remains
+    # the workdir, preserving the existing positional contract.
+    if [[ -d "${1:-}" && -z "${2:-}" ]]; then
+        WORK_DIR="$1"
+    fi
+fi
 CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
 
 if [[ -z "$PROJECT_KEY" ]]; then
@@ -937,13 +986,12 @@ if [[ -z "$PROJECT_KEY" ]]; then
 fi
 
 # --- Pre-registered mode ---
-# 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths / send_message
-# を済ませてから呼ぶモード。spawn_child.sh は tmux セッション作成のみ行う。
+# 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths を
+# 済ませてから呼ぶモード。通常は task mail を正本にし、--embed-task 使用時は
+# task mail を送らず起動 prompt を正本にする。
 # Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> "<タスク>" [<作業ディレクトリ>]
 if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
-    TASK="${1:-}"
-    WORK_DIR="${2:-$(pwd)}"
     # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）。Codex は指定 model をそのまま渡す。
     if [[ "$USE_CODEX" == true ]]; then
         CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
@@ -967,6 +1015,16 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     if [[ ! -d "$WORK_DIR" ]]; then
         echo "Error: workdir does not exist: $WORK_DIR" >&2
         exit 1
+    fi
+
+    EMBEDDED_TASK_PROMPT=""
+    if [[ "$EMBED_TASK" == true ]]; then
+        SPAWNED_AT="$(date '+%Y-%m-%dT%H:%M %Z')"
+        EMBEDDED_TASK_PROMPT="$(
+            build_embedded_task_prompt "$CHILD_NAME" "$PARENT_NAME" \
+                "$SPAWNED_AT" "$PROJECT_KEY" "$TASK"
+        )"
+        echo "[spawn_child/embed-task] WARNING: the launch prompt is canonical; do not send task mail to $CHILD_NAME (a second task source would split authority)." >&2
     fi
 
     # Pre-registered children must use their own token. Never inherit the
@@ -1080,6 +1138,8 @@ PY
             CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
+        elif [[ "$EMBED_TASK" == true ]]; then
+            CODEX_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
             CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
         fi
@@ -1169,7 +1229,7 @@ ${TASK}"
             exit 1
         fi
 
-        if [[ "$STANDALONE" == true ]]; then
+        if [[ "$STANDALONE" == true || "$EMBED_TASK" == true ]]; then
             tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CODEX_PROMPT}$(printf '\033[201~')"
         else
             tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
@@ -1279,9 +1339,14 @@ ${TASK}"
             CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
-            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CHILD_PROMPT}$(printf '\033[201~')"
+        elif [[ "$EMBED_TASK" == true ]]; then
+            CHILD_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
             CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+        fi
+        if [[ "$STANDALONE" == true || "$EMBED_TASK" == true ]]; then
+            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CHILD_PROMPT}$(printf '\033[201~')"
+        else
             tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
         fi
         sleep 0.3
