@@ -93,6 +93,41 @@ six-second-or-better median and at least three fully matched/complete runs, and
 reports the maximum separately. Fingerprints exclude mutable activity
 timestamps.
 
+## Archive commit latency and startup repair
+
+Archive-writing tools durably update SQLite and write their audit files before
+returning. The Git commit for those files is queued asynchronously by default,
+so Git history construction is not part of request latency. Set
+`AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC=false` to restore the old synchronous
+behavior; this kill switch remains available if a deployment observes queue or
+commit failures.
+
+The trade-off is limited to the Git projection. A hard process or machine
+shutdown can cancel a commit after the tool has returned. The database remains
+committed and the audit files remain as uncommitted files in the archive working
+tree. At the next server startup, the existing archive heal pass removes stale
+lock artifacts, discovers untracked and modified audit files, and commits them
+synchronously before the service starts accepting work. A recovery or
+maintenance failure is logged but does not discard the database or files.
+
+Startup also checks `git gc --auto`, rate-limited by a marker under `.git` to at
+most once every 24 hours. The daily limit avoids paying even the object-count
+check on every restart; `--auto` supplies the second gate, so a repack runs only
+when Git's own loose-object or pack thresholds say it is warranted. When Git
+does start maintenance, `gc.autoDetach=false` keeps completion and failure
+observable to the startup heal pass.
+
+For scale, the 2026-08-14 Tier-1 measurements were taken on the development
+MacBook Pro, with Python 3.12.2, an ephemeral loopback server, an empty scratch
+archive, 25 measured iterations after three warmups, and the production-shaped
+tool log enabled. With `commit_async=true`, register/send/
+reservation p50 values were 32/76/47 ms (p95 41/89/58 ms); on the same machine
+and scratch-archive shape with `commit_async=false`, they were 217/310/259 ms
+(p95 252/344/271 ms). These are comparison data for that machine and profile,
+not universal latency promises. The executable gate and full recorded settings
+live in [`bench/tier1_latency.py`](../bench/tier1_latency.py) and
+[`bench/README.md`](../bench/README.md).
+
 The provenance Git bundle and dirty patch remain repository-only audit inputs
 and are excluded from wheels and source distributions. Distribution gates
 verify both artifact types still contain the runtime modules, NOTICE, both
