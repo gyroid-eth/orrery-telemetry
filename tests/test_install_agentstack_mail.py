@@ -1,4 +1,4 @@
-"""Opt-in AgentStack Mail installer wiring without changing the upstream default."""
+"""Default AgentStack Mail installer wiring and the upstream opt-out."""
 
 from __future__ import annotations
 
@@ -79,26 +79,6 @@ def _wait_health(url: str, timeout: float = 30) -> dict:
     raise AssertionError(f"mail health did not become ready: {last_error}")
 
 
-def _service_env(path: pathlib.Path, state: pathlib.Path, port: int) -> None:
-    path.write_text(
-        "\n".join(
-            (
-                "AGENTSTACK_MAIL_HTTP_HOST=127.0.0.1",
-                f"AGENTSTACK_MAIL_HTTP_PORT={port}",
-                "AGENTSTACK_MAIL_HTTP_PATH=/mcp",
-                "AGENTSTACK_MAIL_HTTP_PATH_ALIASES=/mcp,/api",
-                f"AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///{state / 'storage.sqlite3'}",
-                f"AGENTSTACK_MAIL_STORAGE_ROOT={state / 'archive'}",
-                "AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED=true",
-                f"AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR={state / 'signals'}",
-                "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough",
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-
-
 def _stop_mail(home: pathlib.Path, state_root: pathlib.Path, port: int) -> None:
     """Stop only the isolated service proven by its pidfile/open state path."""
 
@@ -173,7 +153,9 @@ def _base_env(
     return env
 
 
-def test_no_opt_in_keeps_upstream_dry_run(tmp_path):
+def _provider_dry_run(
+    tmp_path: pathlib.Path, provider: str | None
+) -> tuple[subprocess.CompletedProcess[str], pathlib.Path]:
     home = tmp_path / "home"
     home.mkdir()
     fake_bin = _fake_linux_bin(tmp_path)
@@ -185,6 +167,56 @@ def test_no_opt_in_keeps_upstream_dry_run(tmp_path):
             "AGENTSTACK_PORT": str(_free_port()),
         }
     )
+    if provider is not None:
+        env["AGENTSTACK_MAIL_PROVIDER"] = provider
+
+    result = subprocess.run(
+        ["/bin/bash", str(INSTALLER), "--dashboard-only", "--dry-run"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, home
+
+
+def test_default_uses_agentstack_dry_run(tmp_path):
+    result, home = _provider_dry_run(tmp_path, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "installer will provision AgentStack Mail" in result.stdout
+    assert "create immutable AgentStack Mail candidate venv" in result.stdout
+    assert "clone agent-mail upstream" not in result.stdout
+    assert not (home / ".agentstack").exists()
+
+
+def test_explicit_agentstack_uses_agentstack_dry_run(tmp_path):
+    result, home = _provider_dry_run(tmp_path, "agentstack")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "installer will provision AgentStack Mail" in result.stdout
+    assert "create immutable AgentStack Mail candidate venv" in result.stdout
+    assert "clone agent-mail upstream" not in result.stdout
+    assert not (home / ".agentstack").exists()
+
+
+def test_explicit_upstream_keeps_upstream_dry_run(tmp_path):
+    result, home = _provider_dry_run(tmp_path, "upstream")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "installer will provision upstream agent-mail" in result.stdout
+    assert "clone agent-mail upstream" in result.stdout
+    assert "AgentStack Mail candidate" not in result.stdout
+    assert not (home / ".agentstack").exists()
+
+
+def test_automatic_migration_inputs_are_rejected(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_bin = _fake_linux_bin(tmp_path)
+    env = _base_env(tmp_path, home, fake_bin)
+    env["AGENTSTACK_MAIL_MIGRATION_SOURCE_DB"] = "/legacy/storage.sqlite3"
 
     result = subprocess.run(
         ["/bin/bash", str(INSTALLER), "--dashboard-only", "--dry-run"],
@@ -195,111 +227,34 @@ def test_no_opt_in_keeps_upstream_dry_run(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "installer will provision upstream agent-mail" in result.stdout
-    assert "clone agent-mail upstream" in result.stdout
-    assert "AgentStack Mail candidate" not in result.stdout
-    assert not (home / ".agentstack").exists()
+    assert result.returncode != 0
+    assert "automatic mail migration is not part of install.sh" in result.stderr
+    assert "agentstack-mail-migrate copy and verify manually" in result.stderr
 
 
-def test_opt_in_migrates_to_distinct_state_and_serves_health(tmp_path):
+def test_default_provisions_isolated_state_and_serves_health(tmp_path):
     # Keep the venv path itself: resolving its python symlink would select the
     # base interpreter directory, which does not contain the mail entrypoints.
     candidate_bin = pathlib.Path(sys.executable).parent
-    server = candidate_bin / "agentstack-mail"
     migrate = candidate_bin / "agentstack-mail-migrate"
     service = candidate_bin / "agentstack-mail-service"
-    assert server.is_file() and migrate.is_file() and service.is_file()
+    assert migrate.is_file() and service.is_file()
 
     home = tmp_path / "home"
     home.mkdir()
     fake_bin = _fake_linux_bin(tmp_path)
     env = _base_env(tmp_path, home, fake_bin)
-    source_state = tmp_path / "legacy-state"
-    source_env = tmp_path / "legacy.env"
-    source_port = _free_port()
-    source_url = f"http://127.0.0.1:{source_port}/mcp"
-    _service_env(source_env, source_state, source_port)
-    source_process = subprocess.Popen(
-        [str(server)],
-        cwd=ROOT,
-        env={**env, "AGENTSTACK_MAIL_ENV_FILE": str(source_env)},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        source_health = _wait_health(source_url)
-        assert pathlib.Path(
-            source_health["database_url"].removeprefix("sqlite+aiosqlite:///")
-        ).resolve() == (source_state / "storage.sqlite3").resolve()
-    finally:
-        source_process.terminate()
-        source_process.wait(timeout=15)
-
-    # The migration contract treats the archive as a versioned working tree,
-    # just like the upstream service does.  The native seed server creates the
-    # directory but deliberately does not invent repository history for it.
-    subprocess.run(["git", "init", "-q", str(source_state / "archive")], check=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_state / "archive"),
-            "config",
-            "user.name",
-            "Installer Test",
-        ],
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_state / "archive"),
-            "config",
-            "user.email",
-            "installer@example.test",
-        ],
-        check=True,
-    )
-    (source_state / "archive" / ".keep").write_text("\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "-C", str(source_state / "archive"), "add", "."], check=True
-    )
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_state / "archive"),
-            "commit",
-            "-q",
-            "-m",
-            "fixture",
-        ],
-        check=True,
-    )
-
     destination_state = tmp_path / "native-state"
     mail_port = _free_port()
     dashboard_port = _free_port()
     mail_url = f"http://127.0.0.1:{mail_port}/mcp"
     env.update(
         {
-            "AGENTSTACK_MAIL_PROVIDER": "agentstack",
             "AGENTSTACK_MAIL_STATE_ROOT": str(destination_state),
             "AGENTSTACK_MAIL_SERVICE_ROOT": str(
                 home / ".agentstack" / "mail-service"
             ),
             "AGENTSTACK_MAIL_SERVICE_VENV": str(candidate_bin.parent),
-            "AGENTSTACK_MAIL_MIGRATION_SOURCE_DB": str(
-                source_state / "storage.sqlite3"
-            ),
-            "AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE": str(
-                source_state / "archive"
-            ),
-            "AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS": str(
-                source_state / "signals"
-            ),
             "AGENTSTACK_MCP_URL": mail_url,
             "AGENTSTACK_PORT": str(dashboard_port),
         }
@@ -331,23 +286,18 @@ def test_opt_in_migrates_to_distinct_state_and_serves_health(tmp_path):
             timeout=180,
         )
         assert installed.returncode == 0, installed.stdout + installed.stderr
-        assert '"status": "copied"' in installed.stdout
-        assert '"status": "verified"' in installed.stdout
-        assert '"status": "reversible"' in installed.stdout
         assert "AgentStack Mail ready at" in installed.stdout
 
         health = _wait_health(mail_url)
         alias_health = _wait_health(f"http://127.0.0.1:{mail_port}/api/")
-        source_db = (source_state / "storage.sqlite3").resolve()
         destination_db = (destination_state / "storage.sqlite3").resolve()
         health_db = pathlib.Path(
             health["database_url"].removeprefix("sqlite+aiosqlite:///")
         ).resolve()
-        assert source_db != destination_db
         assert health_db == destination_db
         assert alias_health["status"] == "ok"
         assert alias_health["database_url"] == health["database_url"]
-        assert source_db.is_file() and destination_db.is_file()
+        assert destination_db.is_file()
 
         service_env = next(
             (home / ".agentstack" / "mail-service" / "renders").glob(
@@ -375,12 +325,87 @@ def test_opt_in_migrates_to_distinct_state_and_serves_health(tmp_path):
         assert claude_mcp["mcp-agent-mail"] == {"type": "http", "url": mail_url}
         assert claude_mcp["unrelated"] == {"command": "keep-me"}
         assert "agentstack-mail" not in claude_mcp
-        assert (home / ".agentstack" / "hooks" / "spawn_child.sh").is_file()
+        installed_spawn = (
+            home / ".agentstack" / "hooks" / "spawn_child.sh"
+        ).read_text(encoding="utf-8")
+        assert 'claimed = ["agent-mail"]' in installed_spawn
+        assert "AGENTSTACK_MCP_URL=mcp_url" in installed_spawn
         dashboard_plist_template = (
             home / ".agentstack" / "dashboard" / "agentdashboard.plist.template"
         ).read_text(encoding="utf-8")
         assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE" in dashboard_plist_template
         assert "__MAIL_HTTP_BEARER_MODE__" in dashboard_plist_template
+
+        mailctl = home / ".agentstack" / "bin" / "agentstack-mailctl"
+        assert mailctl.is_file() and os.access(mailctl, os.X_OK)
+
+        def run_mailctl(action: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(mailctl), action],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+
+        status = run_mailctl("status")
+        assert status.returncode == 0, status.stdout + status.stderr
+        pidfile = (
+            home
+            / ".agentstack"
+            / "mail-service"
+            / "runtime"
+            / "agentstack-mail.pid"
+        )
+        first_pid = int(pidfile.read_text(encoding="utf-8").split()[0])
+
+        duplicate = run_mailctl("start")
+        assert duplicate.returncode == 0, duplicate.stdout + duplicate.stderr
+        assert "already running" in duplicate.stdout
+        assert int(pidfile.read_text(encoding="utf-8").split()[0]) == first_pid
+
+        # Kill only the listener proven to have this isolated state open. The
+        # rendered runner must keep its PID and restore health after its
+        # five-second crash-recovery delay.
+        lsof = pathlib.Path("/usr/sbin/lsof")
+        if lsof.is_file():
+            listeners = subprocess.run(
+                [str(lsof), "-nP", f"-iTCP:{mail_port}", "-sTCP:LISTEN", "-t"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.split()
+            assert len(listeners) == 1
+            listener = int(listeners[0])
+            open_files = subprocess.run(
+                [str(lsof), "-a", "-p", str(listener), "-Fn"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            assert str(destination_state) in open_files
+            os.kill(listener, signal.SIGKILL)
+            recovered = _wait_health(mail_url, timeout=20)
+            assert recovered["database_url"] == health["database_url"]
+            assert int(pidfile.read_text(encoding="utf-8").split()[0]) == first_pid
+
+        restarted = run_mailctl("restart")
+        assert restarted.returncode == 0, restarted.stdout + restarted.stderr
+        assert "AgentStack Mail stopped" in restarted.stdout
+        assert "AgentStack Mail started" in restarted.stdout
+        _wait_health(mail_url)
+        assert int(pidfile.read_text(encoding="utf-8").split()[0]) != first_pid
+
+        stopped = run_mailctl("stop")
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        stopped_status = run_mailctl("status")
+        assert stopped_status.returncode == 3
+        assert "AgentStack Mail stopped" in stopped_status.stdout
+
+        started = run_mailctl("start")
+        assert started.returncode == 0, started.stdout + started.stderr
+        _wait_health(mail_url)
 
         doctor = subprocess.run(
             [
@@ -400,3 +425,95 @@ def test_opt_in_migrates_to_distinct_state_and_serves_health(tmp_path):
     finally:
         _stop_mail(home, destination_state, mail_port)
         stop_dashboard(home, label_prefix="")
+
+
+def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
+    """Exercise the producer-shaped per-message layout through the real watcher."""
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    tmux_log = tmp_path / "tmux.log"
+    _write_command(
+        fake_bin,
+        "tmux",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+case "$1" in
+  has-session) exit 0 ;;
+  capture-pane) printf '%s\n' 'Claude Code' ;;
+  send-keys) exit 0 ;;
+  *) exit 1 ;;
+esac
+""",
+    )
+    signals = tmp_path / "signals"
+    runtime = tmp_path / "runtime"
+    lock = tmp_path / "watcher.lock"
+    signal_file = (
+        signals
+        / "projects"
+        / "isolated-project"
+        / "agents"
+        / "BreezyMaxwell"
+        / "42.signal"
+    )
+    signal_file.parent.mkdir(parents=True)
+    signal_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-08-15T00:00:00+00:00",
+                "project": "isolated-project",
+                "agent": "BreezyMaxwell",
+                "message": {
+                    "id": 42,
+                    "from": "ProOpus",
+                    "subject": "per-message verification",
+                    "importance": "high",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "FAKE_TMUX_LOG": str(tmux_log),
+            "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+            "AGENTSTACK_SIGNALS_DIR": str(signals),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(lock),
+            "TMUX_TIMEOUT": "2",
+        }
+    )
+    watcher = subprocess.Popen(
+        ["/bin/bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        state_file = runtime / "notify-state.json"
+        deadline = time.monotonic() + 10
+        state: dict[str, dict[str, object]] = {}
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            if (
+                state.get("BreezyMaxwell:42", {}).get("last_result") == "success"
+                and not signal_file.exists()
+            ):
+                break
+            time.sleep(0.1)
+        assert state.get("BreezyMaxwell:42", {}).get("last_result") == "success"
+        assert not signal_file.exists()
+        calls = tmux_log.read_text(encoding="utf-8")
+        assert "has-session -t BreezyMaxwell" in calls
+        assert "capture-pane -t BreezyMaxwell" in calls
+        assert "message from ProOpus [high]: per-message verification" in calls
+    finally:
+        watcher.terminate()
+        watcher.wait(timeout=10)

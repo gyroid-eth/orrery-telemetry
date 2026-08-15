@@ -58,6 +58,7 @@ def _fresh_env(home: pathlib.Path, project: pathlib.Path) -> dict[str, str]:
             "HOME": str(home),
             "AGENTSTACK_PYTHON": sys.executable,
             "AGENTSTACK_HOME": str(home / ".agentstack"),
+            "AGENTSTACK_MAIL_PROVIDER": "upstream",
             "AGENTSTACK_MAIL_DIR": str(home / "mcp_agent_mail"),
             "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
             "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",

@@ -15,7 +15,7 @@ MAIL_DIR="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
-MAIL_PROVIDER="${AGENTSTACK_MAIL_PROVIDER:-upstream}"
+MAIL_PROVIDER="${AGENTSTACK_MAIL_PROVIDER:-agentstack}"
 MAIL_HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
 PORT="${AGENTSTACK_PORT:-8770}"
@@ -89,8 +89,8 @@ be selected explicitly by the user; an agent or automation must not add it on
 the user's behalf. AGENTSTACK_ASSUME_YES=1 provides the same explicit opt-in.
 It never authorizes edits to an existing agent-mail checkout. That separate
 operation requires AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1.
-The bundled provider remains off unless AGENTSTACK_MAIL_PROVIDER=agentstack is
-set explicitly; without it, upstream provisioning and port 8765 stay unchanged.
+The bundled AgentStack Mail provider is the default and uses port 18765. Set
+AGENTSTACK_MAIL_PROVIDER=upstream to opt out and provision upstream on port 8765.
 EOF
 }
 
@@ -197,7 +197,11 @@ PROVISION_NATIVE_MAIL=false
 NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
 NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-service}"
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
-NATIVE_MAIL_SOURCE_ID="${AGENTSTACK_MAIL_CANDIDATE_ID:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf source)}"
+NATIVE_MAIL_SOURCE_ID="${AGENTSTACK_MAIL_CANDIDATE_ID:-}"
+if [[ -z "$NATIVE_MAIL_SOURCE_ID" ]]; then
+  NATIVE_MAIL_SOURCE_ID="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  NATIVE_MAIL_SOURCE_ID="${NATIVE_MAIL_SOURCE_ID:-source}"
+fi
 NATIVE_MAIL_VENV_EXPLICIT="${AGENTSTACK_MAIL_SERVICE_VENV+x}"
 NATIVE_MAIL_VENV="${AGENTSTACK_MAIL_SERVICE_VENV:-$NATIVE_MAIL_SERVICE_ROOT/candidates/$NATIVE_MAIL_SOURCE_ID/venv}"
 NATIVE_MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_SERVICE_ENV+x}"
@@ -205,9 +209,6 @@ NATIVE_MAIL_ENV="${AGENTSTACK_MAIL_SERVICE_ENV:-$NATIVE_MAIL_SERVICE_ROOT/render
 NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
 NATIVE_MAIL_PIDFILE="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.pid"
 NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
-NATIVE_MIGRATION_SOURCE_DB="${AGENTSTACK_MAIL_MIGRATION_SOURCE_DB:-}"
-NATIVE_MIGRATION_SOURCE_ARCHIVE="${AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE:-}"
-NATIVE_MIGRATION_SOURCE_SIGNALS="${AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS:-}"
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected agent-mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
 PREFLIGHT_ERRORS=()
@@ -539,12 +540,10 @@ validate_mail_provider() {
   fi
   [[ "$NATIVE_MAIL_SOURCE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
     die "AGENTSTACK_MAIL_CANDIDATE_ID contains unsafe characters"
-  local migration_count=0
-  [[ -n "$NATIVE_MIGRATION_SOURCE_DB" ]] && migration_count=$((migration_count + 1))
-  [[ -n "$NATIVE_MIGRATION_SOURCE_ARCHIVE" ]] && migration_count=$((migration_count + 1))
-  [[ -n "$NATIVE_MIGRATION_SOURCE_SIGNALS" ]] && migration_count=$((migration_count + 1))
-  if [[ "$migration_count" != "0" && "$migration_count" != "3" ]]; then
-    die "AGENTSTACK_MAIL_MIGRATION_SOURCE_DB, _ARCHIVE, and _SIGNALS must be set together"
+  if [[ -n "${AGENTSTACK_MAIL_MIGRATION_SOURCE_DB:-}" || \
+        -n "${AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE:-}" || \
+        -n "${AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS:-}" ]]; then
+    die "automatic mail migration is not part of install.sh; run agentstack-mail-migrate copy and verify manually before installing"
   fi
 }
 
@@ -732,7 +731,7 @@ preflight_agent_mail_port() {
 
   local parts host port
   parts="$(mcp_endpoint_parts 2>/dev/null)" || {
-    preflight_error "AGENTSTACK_MCP_URL '$MCP_URL' is invalid. Set it to an http(s) agent-mail endpoint, normally http://127.0.0.1:8765/mcp."
+    preflight_error "AGENTSTACK_MCP_URL '$MCP_URL' is invalid. Set it to an http(s) endpoint (default: AgentStack Mail on http://127.0.0.1:18765/mcp; upstream opt-out on http://127.0.0.1:8765/mcp)."
     return
   }
   IFS='|' read -r host port <<< "$parts"
@@ -1110,9 +1109,7 @@ PY
   fi
 
   PROVISION_NATIVE_MAIL=true
-  if [[ -n "$NATIVE_MIGRATION_SOURCE_DB" ]]; then
-    say "no native listener found; installer will migrate explicit legacy state into $NATIVE_MAIL_STATE_ROOT"
-  elif [[ -f "$expected_db" && -d "$NATIVE_MAIL_STATE_ROOT/archive" ]]; then
+  if [[ -f "$expected_db" && -d "$NATIVE_MAIL_STATE_ROOT/archive" ]]; then
     say "no native listener found; installer will start existing AgentStack Mail state at $NATIVE_MAIL_STATE_ROOT"
   else
     say "no native listener or state found; installer will provision AgentStack Mail at $MCP_URL"
@@ -1169,6 +1166,8 @@ validate_repo_assets() {
   if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
     [[ -f "$NATIVE_MAIL_PACKAGE_SOURCE/pyproject.toml" ]] || \
       die "missing AgentStack Mail package: $NATIVE_MAIL_PACKAGE_SOURCE"
+    [[ -f "$REPO_ROOT/bin/agentstack-mailctl" ]] || \
+      die "missing AgentStack Mail lifecycle controller: $REPO_ROOT/bin/agentstack-mailctl"
   fi
 }
 
@@ -1472,12 +1471,14 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
     cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
     cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
+    cp "$REPO_ROOT/bin/agentstack-mailctl" "$BIN_DIR/agentstack-mailctl"
     chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
       "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" \
       "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
-      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup"
+      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
+      "$BIN_DIR/agentstack-mailctl"
   fi
 }
 
@@ -2096,36 +2097,6 @@ target.chmod(0o600)
 PY
 }
 
-run_native_mail_migration() {
-  [[ -n "$NATIVE_MIGRATION_SOURCE_DB" ]] || return 0
-  local migrate manifest
-  migrate="$NATIVE_MAIL_VENV/bin/agentstack-mail-migrate"
-  NATIVE_MIGRATION_SOURCE_DB="$(normalize_path "$NATIVE_MIGRATION_SOURCE_DB")"
-  NATIVE_MIGRATION_SOURCE_ARCHIVE="$(normalize_path "$NATIVE_MIGRATION_SOURCE_ARCHIVE")"
-  NATIVE_MIGRATION_SOURCE_SIGNALS="$(normalize_path "$NATIVE_MIGRATION_SOURCE_SIGNALS")"
-  manifest="$NATIVE_MAIL_STATE_ROOT/migration-manifest.json"
-  plan "copy explicit legacy mail state into isolated root $NATIVE_MAIL_STATE_ROOT"
-  plan "verify migrated AgentStack Mail state with $migrate verify"
-  plan "assess rollback at C3_MIGRATION_VERIFIED"
-  if [[ "$DRY_RUN" == true ]]; then
-    return
-  fi
-  mkdir -p "$(dirname "$NATIVE_MAIL_STATE_ROOT")"
-  "$migrate" copy \
-    --source-db "$NATIVE_MIGRATION_SOURCE_DB" \
-    --source-archive "$NATIVE_MIGRATION_SOURCE_ARCHIVE" \
-    --source-signals "$NATIVE_MIGRATION_SOURCE_SIGNALS" \
-    --destination-root "$NATIVE_MAIL_STATE_ROOT"
-  "$migrate" verify \
-    --source-db "$NATIVE_MIGRATION_SOURCE_DB" \
-    --source-archive "$NATIVE_MIGRATION_SOURCE_ARCHIVE" \
-    --source-signals "$NATIVE_MIGRATION_SOURCE_SIGNALS" \
-    --destination-root "$NATIVE_MAIL_STATE_ROOT"
-  "$migrate" rollback-assess \
-    --manifest "$manifest" \
-    --cutover-stage C3_MIGRATION_VERIFIED
-}
-
 initialize_native_mail_state() {
   if [[ -f "$MAIL_DB" && -d "$NATIVE_MAIL_STATE_ROOT/archive" ]]; then
     return
@@ -2207,30 +2178,26 @@ PY
 }
 
 start_native_mail() {
-  local pid attempts=0 database_url resolved_db
-  plan "start AgentStack Mail with the existing service supervisor at $MCP_URL"
+  local database_url resolved_db
+  plan "start AgentStack Mail with agentstack-mailctl at $MCP_URL"
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
   render_native_mail_runner
-  pid="$(sed -n '1p' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-    die "AgentStack Mail endpoint is down but pidfile points to live pid $pid"
-  fi
-  rm -f "$NATIVE_MAIL_PIDFILE"
-  nohup /bin/bash "$NATIVE_MAIL_RUNNER" </dev/null >> "$NATIVE_MAIL_LOG" 2>&1 &
-  pid=$!
-  printf '%s\n' "$pid" > "$NATIVE_MAIL_PIDFILE"
+  AGENTSTACK_MAILCTL_SKIP_ENV=1 \
+  AGENTSTACK_HOME="$INSTALL_DIR" \
+  AGENTSTACK_MAIL_PROVIDER=agentstack \
+  AGENTSTACK_MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT" \
+  AGENTSTACK_MAIL_ENV="$NATIVE_MAIL_ENV" \
+  AGENTSTACK_MAIL_RUNNER="$NATIVE_MAIL_RUNNER" \
+  AGENTSTACK_MAIL_PIDFILE="$NATIVE_MAIL_PIDFILE" \
+  AGENTSTACK_MAIL_LOG="$NATIVE_MAIL_LOG" \
+  AGENTSTACK_MAIL_DB="$MAIL_DB" \
+  AGENTSTACK_MCP_URL="$MCP_URL" \
+  AGENTSTACK_PYTHON="$PYTHON_BIN" \
+    "$BIN_DIR/agentstack-mailctl" start
   AGENT_MAIL_SERVICE_KIND="nohup"
   AGENT_MAIL_SERVICE_PATH="$NATIVE_MAIL_PIDFILE"
-  while ! mcp_endpoint_listening && [[ "$attempts" -lt 150 ]]; do
-    sleep 0.2
-    attempts=$((attempts + 1))
-  done
-  if ! mcp_endpoint_listening; then
-    stop_new_agent_mail
-    die "AgentStack Mail did not become reachable; inspect $NATIVE_MAIL_LOG"
-  fi
   database_url="$(probe_agent_mail_database_url || true)"
   resolved_db="$(database_url_to_path "$database_url" "" || true)"
   [[ -n "$resolved_db" ]] || {
@@ -2254,7 +2221,6 @@ ensure_native_agentstack_mail() {
   fi
   ensure_native_mail_candidate
   write_native_mail_env
-  run_native_mail_migration
   initialize_native_mail_state
   start_native_mail
 }

@@ -1,0 +1,327 @@
+#!/bin/bash
+# Minimal lifecycle controller for the supervised AgentStack Mail runner.
+#
+# The runner owns crash recovery.  This controller owns operator actions and
+# refuses to signal a PID unless its controller-written marker names the exact
+# rendered runner for this install (and its command line matches when the
+# process table is visible).
+set -u
+
+PROG="agentstack-mailctl"
+
+say() { printf '%s\n' "$*"; }
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+if [[ "${AGENTSTACK_MAILCTL_SKIP_ENV:-0}" != "1" && -f "$AGENTSTACK_HOME/env.sh" ]]; then
+  # shellcheck disable=SC1090
+  . "$AGENTSTACK_HOME/env.sh"
+fi
+
+MAIL_PROVIDER="${AGENTSTACK_MAIL_PROVIDER:-}"
+MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_DIR:-$AGENTSTACK_HOME/mail-service}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
+MAIL_RUNNER="${AGENTSTACK_MAIL_RUNNER:-}"
+if [[ -z "$MAIL_RUNNER" && -n "$MAIL_ENV" ]]; then
+  MAIL_RUNNER="$(dirname "$MAIL_ENV")/run-agentstack-mail.sh"
+fi
+RUNTIME_DIR="${AGENTSTACK_MAIL_RUNTIME_DIR:-$MAIL_SERVICE_ROOT/runtime}"
+PIDFILE="${AGENTSTACK_MAIL_PIDFILE:-$RUNTIME_DIR/agentstack-mail.pid}"
+LOGFILE="${AGENTSTACK_MAIL_LOG:-$RUNTIME_DIR/agentstack-mail.log}"
+CONTROL_LOCK="${AGENTSTACK_MAIL_CONTROL_LOCK:-$RUNTIME_DIR/agentstack-mailctl.lock}"
+LOCK_HELD=0
+
+usage() {
+  cat <<'EOF'
+Usage: agentstack-mailctl {start|status|stop|restart}
+
+Controls the AgentStack Mail supervised-background service recorded by the
+installed env.sh. status exits 0 only for a managed, healthy service; a cleanly
+stopped service exits 3.
+EOF
+}
+
+validate_config() {
+  [[ "$MAIL_PROVIDER" == "agentstack" ]] || \
+    die "this controller only manages AGENTSTACK_MAIL_PROVIDER=agentstack"
+  [[ -n "$MAIL_ENV" ]] || die "AGENTSTACK_MAIL_ENV is not configured"
+  [[ -n "$MAIL_RUNNER" ]] || die "the rendered AgentStack Mail runner is not configured"
+  [[ "$MCP_URL" == http://* || "$MCP_URL" == https://* ]] || \
+    die "AGENTSTACK_MCP_URL must be an HTTP(S) URL"
+  command -v "$PYTHON_BIN" >/dev/null 2>&1 || \
+    die "configured Python is unavailable: $PYTHON_BIN"
+}
+
+pid_running() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+  sed -n '1{s/[[:space:]].*$//;p;}' "$PIDFILE" 2>/dev/null || true
+}
+
+pid_is_managed_runner() {
+  local pid="$1"
+  local recorded_runner
+  local command_line
+  [[ -n "$MAIL_RUNNER" ]] || return 1
+  recorded_runner="$(sed -n '2p' "$PIDFILE" 2>/dev/null || true)"
+  [[ "$recorded_runner" == "$MAIL_RUNNER" ]] || return 1
+  command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
+  # Some managed sandboxes deny process-table reads. The controller-owned
+  # runner marker plus exact endpoint/database health remains the fallback.
+  [[ -z "$command_line" ]] && return 0
+  case "$command_line" in
+    *"$MAIL_RUNNER"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+endpoint_port_open() {
+  "$PYTHON_BIN" - "$MCP_URL" <<'PY'
+import socket
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname
+port = parsed.port or (443 if parsed.scheme == "https" else 80)
+if not host:
+    raise SystemExit(1)
+try:
+    with socket.create_connection((host, port), timeout=0.4):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
+}
+
+health_ok() {
+  "$PYTHON_BIN" - "$MCP_URL" "$MAIL_DB" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.request
+
+url, expected_db = sys.argv[1:]
+payload = json.dumps({
+    "jsonrpc": "2.0",
+    "id": "agentstack-mailctl",
+    "method": "tools/call",
+    "params": {"name": "health_check", "arguments": {}},
+}).encode()
+request = urllib.request.Request(
+    url,
+    data=payload,
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=1) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+except Exception:
+    raise SystemExit(1)
+for line in raw.splitlines():
+    if line.startswith("data:"):
+        raw = line[5:].strip()
+        break
+try:
+    result = json.loads(raw).get("result", {})
+    health = result.get("structuredContent", result)
+except (AttributeError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(health, dict) or health.get("status") != "ok":
+    raise SystemExit(1)
+if expected_db:
+    database_url = str(health.get("database_url", ""))
+    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+        if database_url.startswith(prefix):
+            actual = pathlib.Path(database_url[len(prefix):]).resolve()
+            break
+    else:
+        raise SystemExit(1)
+    if actual != pathlib.Path(expected_db).resolve():
+        raise SystemExit(1)
+PY
+}
+
+release_lock() {
+  local owner=""
+  if [[ "$LOCK_HELD" -eq 1 ]]; then
+    owner="$(sed -n '1p' "$CONTROL_LOCK/pid" 2>/dev/null || true)"
+    if [[ "$owner" == "$$" ]]; then
+      rm -f "$CONTROL_LOCK/pid"
+      rmdir "$CONTROL_LOCK" 2>/dev/null || true
+    fi
+    LOCK_HELD=0
+  fi
+}
+
+acquire_lock() {
+  local owner=""
+  mkdir -p "$RUNTIME_DIR"
+  if mkdir "$CONTROL_LOCK" 2>/dev/null; then
+    printf '%s\n' "$$" > "$CONTROL_LOCK/pid"
+    LOCK_HELD=1
+    trap release_lock EXIT INT TERM
+    return
+  fi
+  owner="$(sed -n '1p' "$CONTROL_LOCK/pid" 2>/dev/null || true)"
+  if pid_running "$owner"; then
+    die "another lifecycle action is active (pid $owner)"
+  fi
+  rm -f "$CONTROL_LOCK/pid"
+  rmdir "$CONTROL_LOCK" 2>/dev/null || \
+    die "stale lifecycle lock could not be removed: $CONTROL_LOCK"
+  mkdir "$CONTROL_LOCK" || die "could not acquire lifecycle lock: $CONTROL_LOCK"
+  printf '%s\n' "$$" > "$CONTROL_LOCK/pid"
+  LOCK_HELD=1
+  trap release_lock EXIT INT TERM
+}
+
+write_pid() {
+  local pid="$1"
+  local temporary="$PIDFILE.tmp.$$"
+  umask 077
+  printf '%s\n%s\n' "$pid" "$MAIL_RUNNER" > "$temporary"
+  mv "$temporary" "$PIDFILE"
+}
+
+wait_for_health() {
+  local attempts=0
+  while [[ "$attempts" -lt 150 ]]; do
+    health_ok && return 0
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+wait_for_stop() {
+  local pid="$1"
+  local attempts=0
+  while [[ "$attempts" -lt 150 ]]; do
+    if ! pid_running "$pid" && ! endpoint_port_open; then
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+start_service() {
+  local pid
+  [[ -f "$MAIL_ENV" ]] || die "service env is missing: $MAIL_ENV"
+  [[ -f "$MAIL_RUNNER" ]] || die "rendered service runner is missing: $MAIL_RUNNER"
+  pid="$(read_pid)"
+  if pid_running "$pid"; then
+    pid_is_managed_runner "$pid" || \
+      die "pidfile points to a process other than the rendered runner (pid $pid)"
+    health_ok || die "managed runner pid $pid is alive but AgentStack Mail health is failing"
+    say "AgentStack Mail already running (pid $pid, endpoint $MCP_URL)"
+    return
+  fi
+  if [[ -n "$pid" ]]; then
+    rm -f "$PIDFILE"
+  fi
+  if endpoint_port_open; then
+    if health_ok; then
+      die "a healthy AgentStack Mail endpoint exists without this controller's pidfile"
+    fi
+    die "the configured AgentStack Mail port is owned by another or unhealthy listener"
+  fi
+  mkdir -p "$RUNTIME_DIR"
+  nohup /bin/bash "$MAIL_RUNNER" </dev/null >> "$LOGFILE" 2>&1 &
+  pid=$!
+  write_pid "$pid"
+  if ! wait_for_health; then
+    if pid_running "$pid" && pid_is_managed_runner "$pid"; then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait_for_stop "$pid" || true
+    fi
+    rm -f "$PIDFILE"
+    die "AgentStack Mail did not become healthy; inspect $LOGFILE"
+  fi
+  say "AgentStack Mail started (pid $pid, endpoint $MCP_URL)"
+}
+
+stop_service() {
+  local pid
+  pid="$(read_pid)"
+  if ! pid_running "$pid"; then
+    if endpoint_port_open; then
+      die "the endpoint is still occupied without a live managed pid; refusing to stop an unknown process"
+    fi
+    rm -f "$PIDFILE"
+    say "AgentStack Mail already stopped"
+    return
+  fi
+  pid_is_managed_runner "$pid" || \
+    die "pidfile points to a process other than the rendered runner (pid $pid)"
+  kill -TERM "$pid" 2>/dev/null || true
+  if ! wait_for_stop "$pid"; then
+    if pid_running "$pid" && pid_is_managed_runner "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait_for_stop "$pid" || \
+      die "managed runner stopped but the configured endpoint remains occupied"
+  fi
+  rm -f "$PIDFILE"
+  say "AgentStack Mail stopped"
+}
+
+status_service() {
+  local pid
+  pid="$(read_pid)"
+  if pid_running "$pid"; then
+    pid_is_managed_runner "$pid" || \
+      die "pidfile points to a foreign process (pid $pid)"
+    health_ok || die "managed runner pid $pid is alive but health is failing"
+    say "AgentStack Mail running (pid $pid, endpoint $MCP_URL)"
+    return 0
+  fi
+  if endpoint_port_open; then
+    die "endpoint is occupied without a live managed pid"
+  fi
+  say "AgentStack Mail stopped"
+  return 3
+}
+
+command="${1:-}"
+case "$command" in
+  start)
+    validate_config
+    acquire_lock
+    start_service
+    ;;
+  status)
+    validate_config
+    status_service
+    ;;
+  stop)
+    validate_config
+    acquire_lock
+    stop_service
+    ;;
+  restart)
+    validate_config
+    acquire_lock
+    stop_service
+    start_service
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

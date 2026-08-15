@@ -13,7 +13,7 @@
 - Python 3.10 以上（`python3`）。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 です。上限は設けていません（CI が 3.10・3.12・3.14 を毎回回すので、新しい Python で壊れた場合はそこで落ちます）
 - `tmux`
 - `git`
-- `uv`（agent-mail が未導入の環境で upstream clone の依存を同期・起動するために使用）
+- `uv`（既定の AgentStack Mail candidate 環境を作成するために使用。upstream opt-out の新規 clone にも使用）
 - Claude Code または Codex CLI
 
 任意:
@@ -28,6 +28,9 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 `AGENTSTACK_PYTHON` を指定した場合も Python 3.10 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
 ## agent-mail のバージョンと名前の扱い（サポート範囲）
+
+既定の AgentStack Mail は installer が `passthrough` を固定し、要求名をそのまま
+使います。以下は `AGENTSTACK_MAIL_PROVIDER=upstream` を選んだ場合の support 表です。
 
 このスタックは agent-mail に**特定の名前**でエージェントを登録します。その名前がそのまま通るかどうかを決めるのは agent-mail 側で、版によって基準が違います。名前が黙って別のものに置き換わると、そのエージェントは動き続けるのに**誰からも宛先として呼べなく**なります。ここで動作を保証する範囲を明示します。
 
@@ -62,13 +65,13 @@ installer は source を読むだけで次のどれかを1〜2行で表示しま
 patch を一切当てずに upstream のままにしたい場合:
 
 ```bash
-AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0 ./scripts/install.sh
+AGENTSTACK_MAIL_PROVIDER=upstream AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0 ./scripts/install.sh
 ```
 
 稼働中の既存 agent-mail checkout は `--assume-yes` の対象外です。source 変更を確認したユーザーが、その checkout への3行 patch を別に承認する場合だけ次を指定します。installer は適用前に `explicit opt-in:` の監査行を出し、patch が AST 検査で適用済みと確認できた場合だけ `.env` に passthrough mode を書きます。
 
 ```bash
-AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 ./scripts/install.sh
+AGENTSTACK_MAIL_PROVIDER=upstream AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 ./scripts/install.sh
 ```
 
 この patch は `mode == "passthrough"` の条件の後ろにあるだけなので、モードを選ばない限り**挙動は変わりません**。取り消しは `git -C <checkout> checkout -- src/mcp_agent_mail` です。
@@ -91,63 +94,92 @@ cd claude-agent-stack
 
 環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ明示 opt-in です。command-line の `--assume-yes`（短縮 `-y`）は環境変数より優先されます。この installer 選択は生成する `env.sh` には永続化しません。
 
-mail provider の既定は従来どおり third-party upstream です。同梱の
-`packages/agentstack_mail` を使う経路は、次の環境変数を明示した場合だけ有効に
-なります。
-
-```bash
-AGENTSTACK_MAIL_PROVIDER=agentstack ./scripts/install.sh --dry-run
-AGENTSTACK_MAIL_PROVIDER=agentstack ./scripts/install.sh
-```
-
-この opt-in では endpoint の既定が `http://127.0.0.1:18765/mcp`、state root が
-`~/.agentstack/mail` になり、service env は
+mail provider の既定は同梱の `packages/agentstack_mail` です。既定 endpoint は
+`http://127.0.0.1:18765/mcp`、state root は `~/.agentstack/mail` で、service env は
 `AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` を必須にします。legacy
 HTTP bearer は使わず、各 agent の owner token は従来どおり tool argument / local
-proxy で扱います。Claude の MCP key は `mcp-agent-mail`、Codex の MCP key は
-`agent-mail` のままです。provider 名へ key を改名しません。
+proxy で扱います。
+
+third-party upstream を使う場合だけ provider を明示します。これは opt-out であり、
+切り戻し経路でもあります。
+
+```bash
+AGENTSTACK_MAIL_PROVIDER=upstream ./scripts/install.sh --dry-run
+AGENTSTACK_MAIL_PROVIDER=upstream ./scripts/install.sh
+```
+
+Claude の MCP key は `mcp-agent-mail`、Codex の MCP key は `agent-mail` のままです。
+provider 名へ key を改名しません。既定では両方とも 18765 の endpoint を使い、
+upstream opt-out では 8765 の endpoint と legacy bearer 設定を使います。
+
+### 既存 upstream データの手動移行
 
 既存 upstream state を移す場合は、先に legacy writer を quiesce し、DB、archive、
-signals の3 path をすべて明示します。installer は実装済みの
-`agentstack-mail-migrate copy`、`verify`、`rollback-assess` を順に実行し、別の
-state root へ copy してから native service を起動します。
+signals の3 path を確認します。installer は自動移行しません。destination がまだ
+存在しない状態で、repository checkout から migration CLI の `copy` と `verify` を
+手動実行します。
 
 ```bash
 LEGACY_DB="/absolute/path/reported-for-the-quiesced-legacy-database"
 LEGACY_ARCHIVE="/absolute/path/reported-for-the-quiesced-legacy-archive"
 LEGACY_SIGNALS="/absolute/path/reported-for-the-quiesced-legacy-signals"
-AGENTSTACK_MAIL_PROVIDER=agentstack \
-AGENTSTACK_MAIL_MIGRATION_SOURCE_DB="$LEGACY_DB" \
-AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE="$LEGACY_ARCHIVE" \
-AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS="$LEGACY_SIGNALS" \
-./scripts/install.sh --dry-run
+DESTINATION="$HOME/.agentstack/mail"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate copy \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate verify \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+./scripts/install.sh
 ```
 
-3 path の一部だけを指定した場合は停止します。source と destination の DB / archive
-を共有する構成も migration helper と service controller が拒否します。これは
-coexistence と検証のための opt-in であり、decision ledger の `cutover_state` を変更
-したり、既定 authority の切替を承認したりするものではありません。
+source と destination の DB / archive を共有する構成は migration helper と service
+controller が拒否します。2026-08-12 の live 切替では、この手順で DB と archive の
+合計約6万件を実際に移送し、照合済みです。copy から verify まで legacy writer を
+停止したままにしてください。
+
+### ロールバック
+
+`AGENTSTACK_MAIL_PROVIDER=upstream ./scripts/install.sh` を再実行します（`~/.agentstack/mail` のデータは残ります）。
 
 installer は次を行います。
 
 1. dependency、dashboard port、agent-mail endpoint を検査
-2. 稼働中の agent-mail server があれば再利用を確認し、その server の実 DB path を health response、listener process、既存 DB 候補から解決。server も DB もなければ upstream を clone し、`uv sync`、supervised background 起動、health/DB 再解決まで実行
+2. 既定では bundled AgentStack Mail candidate を配置し、namespaced env と supervised runner を生成。既存の canonical state があれば再利用し、なければ空 state を初期化して、health response が設定 DB を返すまで確認。upstream opt-out では従来どおり既存 server/DB の解決または clone と `uv sync` を実行
 3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
 4. `~/.agentstack/env.sh` を生成
 5. Tier 1 では Claude Code の MCP user config、settings、managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
 6. agent-mail の要求名対応を source から非侵襲で判定し、launchd / systemd user / supervised background の実際の方式とともに `install-state.json` に記録
 
-agent-mail の既定 SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。既定 endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
+upstream opt-out の SQLite URL は server の current working directory 相対です。installer は `AGENTSTACK_MAIL_DIR/storage.sqlite3` を実体確認なしで採用しません。upstream endpoint（`127.0.0.1:8765`）がすでに LISTEN していれば agent-mail の health response を検証し、対話実行ではその既存 server と DB を使うか確認します。非対話実行では検出結果を表示して再利用します。DB を一意に解決できない場合は、存在しない path を設定せず `AGENTSTACK_MAIL_DB` の明示を求めて停止します。
 
-完全な新規環境では agent-mail を同梱せず、`AGENTSTACK_AGENT_MAIL_REPO`（既定は upstream GitHub repository）を `AGENTSTACK_MAIL_DIR` へ clone します。installer は `uv sync --no-dev` 後に restart loop 付きの supervised process として起動し、`$AGENTSTACK_MAIL_HOME/agent-mail.pid` と `agent-mail.log` を残します。endpoint の health check と実 DB path の確認が成功してから dashboard setup を続行し、起動した process は `install-state.json` に記録して uninstall 時に停止します。既存 server/DB を再利用する install では `uv` を要求しません。
+upstream opt-out の完全な新規環境では、`AGENTSTACK_AGENT_MAIL_REPO`（既定は upstream GitHub repository）を `AGENTSTACK_MAIL_DIR` へ clone します。installer は `uv sync --no-dev` 後に restart loop 付きの supervised process として起動し、`$AGENTSTACK_MAIL_HOME/agent-mail.pid` と `agent-mail.log` を残します。endpoint の health check と実 DB path の確認が成功してから dashboard setup を続行し、起動した process は `install-state.json` に記録して uninstall 時に停止します。既存 server/DB を再利用する install では `uv` を要求しません。
 
-`AGENTSTACK_MAIL_PROVIDER=agentstack` の新規環境では、bundled package を exact
+既定の AgentStack Mail 新規環境では、bundled package を exact
 candidate venv へ配置し、candidate ID ごとの immutable service env / runner を
 render します。空 state は一度だけ scratch authority として初期化し、その後は
 実装済み service helper の `foreground` controller で起動します。health response
 が設定した canonical DB を返した場合だけ install を続行します。
 
-サービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。実際の常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
+mail service は次の薄い controller で操作します。runner 自身がクラッシュを5秒後に
+再起動し、controller は PID file の rendered-runner marker、取得可能な場合は command
+line、endpoint、canonical DB、操作 lock を照合して二重起動や無関係な process の停止を拒否します。
+
+```bash
+~/.agentstack/bin/agentstack-mailctl start
+~/.agentstack/bin/agentstack-mailctl status
+~/.agentstack/bin/agentstack-mailctl stop
+~/.agentstack/bin/agentstack-mailctl restart
+```
+
+dashboard のサービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。mail service の provisioning / canonical DB health が失敗した場合は install を停止します。実際の dashboard 常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 
 `agentstack-doctor` は必要な file と設定に加え、`/api/version` が実際に配信されているかと、launchd / systemd の登録・実行状態を別々に調べる存在確認です。endpoint が応答していて manager が実行していない場合は、停止ではなく `unmanaged-background` と報告します。`agentstack-selftest` は実際に2 agent を登録して message 往復と file reservation を行い、同じ結果を dashboard が見ているところまで確かめる機能確認です。install 完了後は self-test も実行してください。
 
@@ -234,8 +266,7 @@ Tier 1 installer は `AGENTSTACK_CLAUDE_JSON`（既定 `~/.claude.json`）の `m
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": {"Authorization": "Bearer <agent-mail bearer token>"}
+      "url": "http://127.0.0.1:18765/mcp"
     }
   }
 }
@@ -243,8 +274,9 @@ Tier 1 installer は `AGENTSTACK_CLAUDE_JSON`（既定 `~/.claude.json`）の `m
 
 diff preview では bearer token を `<redacted>` に置き換えます。対話で `yes` と答えた場合、またはユーザーが明示した `--assume-yes` の場合だけ mode `0600` で atomic write し、元 file を `~/.agentstack/backups` に保存します。非対話で未承認なら書き込まず、installer と `agentstack-doctor` が安全な preview / apply コマンドを表示します。`agentstack-selftest` は HTTP server の動作だけでなく、この固定名・endpoint・authorization の登録も検査します。
 
-native opt-in では同じ `mcp-agent-mail` entry の URL だけを native endpoint へ更新し、
-`headers.Authorization` は付けません。既存の他 MCP entry は保持します。
+既定 provider では同じ `mcp-agent-mail` entry を 18765 に向け、
+`headers.Authorization` は付けません。upstream opt-out では 8765 と bearer を設定し、
+既存の他 MCP entry は保持します。
 
 既存 install で登録が無い場合は、まず doctor の出力に従って preview してください。
 
@@ -256,12 +288,12 @@ Codex child は launcher が child-scoped MCP proxy config を自動生成しま
 
 ```toml
 [mcp_servers.agent-mail]
-url = "http://127.0.0.1:8765/mcp"
-bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"
+url = "http://127.0.0.1:18765/mcp"
 ```
 
-native opt-in でも key は `[mcp_servers.agent-mail]` のまま URL を
-`http://127.0.0.1:18765/mcp` にし、legacy bearer の設定は省きます。
+key は provider に関係なく `[mcp_servers.agent-mail]` のままです。upstream opt-out
+では URL を `http://127.0.0.1:8765/mcp` にし、
+`bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"` を追加します。
 
 ### Managed instruction helper
 
