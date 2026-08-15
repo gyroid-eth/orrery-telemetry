@@ -1,8 +1,17 @@
 # AgentStack Mail cutover gates
 
-This runbook covers the implementation-train step that precedes any authority
-switch. It does not approve a cutover and it never changes the normative
-`product_decisions[*].cutover_state` values. Human approval remains separate.
+> **Conclusion (2026-08-15):** owner maintainer approved the authority cutover. The
+> normative ledger records D1–D6 and D8–D12 as the exact 11 `go` decisions,
+> keeps D7 deferred as `no_go`, requires 11 machine conditions, and descopes
+> `data-migration-reconciliation`, `rollback-revert-procedure`, and
+> `notification-layout-consumer-compatibility` to documentation-only work.
+
+This runbook covers the implementation-train verification around that approved
+state. The runner consumes the approval read-only and never changes normative
+`product_decisions[*].cutover_state` values. It accepts only the recorded
+combination: an additional approval, a rollback of an approved decision, or a
+D7 `go` transition fails until a new owner decision updates the contract and
+its tests.
 
 ## Hermetic automated gate
 
@@ -22,6 +31,13 @@ bundle and patch. It does not consult a mutable AgentMail checkout. Every
 writable database, archive, signal tree, home, CWD, and temporary directory is
 under one private disposable root. Network services bind only dynamically
 allocated loopback ports; ports 7333, 8765, and 8770 are refused.
+
+The `all` and `fault` paths also validate the ledger before fault evidence is
+accepted. They require the exact 11/1 decision-state split, the exact ordered
+11 `required_condition_ids`, the three `descoped_documentation_only` follow-up
+states and descope records, and the 2026-08-15 approval record. A different
+combination raises `GateFailure`; human approval cannot be inferred from test
+success or rewritten by the runner.
 
 The terminal JSON is `status=pass` only when all four gates and all four broken
 controls pass:
@@ -142,6 +158,6 @@ soak is not resumed or relabeled as success; start a fresh 24-hour run from an
 absent root after fixing the cause.
 
 This manual receipt is evidence for human review only. It does not change the
-decision ledger, does not make the current readiness evaluator return `go`, and
-does not authorize the authority switch described in
-`docs/agentstack-mail-cutover.md`.
+already-approved decision ledger, does not by itself make a readiness result
+`go`, and cannot override any failed machine condition or operator hold point
+in `docs/agentstack-mail-cutover.md`.

@@ -162,7 +162,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "core_change",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "reject_explicit_conflicting_token_before_mutation",
         "scope": {
             "explicit_conflicting_token": "reject_without_durable_mutation",
@@ -190,7 +190,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "expiry_role": "stored_and_refreshed_not_an_authorization_boundary",
@@ -231,7 +231,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "foreign_source_row_intro": (
@@ -268,7 +268,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": (
@@ -303,7 +303,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": "same_project_existing_agent_starting_contacts_only",
@@ -334,7 +334,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": "same_project_send_message_to_open_recipient",
@@ -415,7 +415,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": "same_project_send_message_to_open_recipient",
@@ -480,7 +480,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": (
@@ -522,7 +522,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": (
@@ -635,7 +635,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "measured_path": (
@@ -704,7 +704,7 @@ EXPECTED_SELECTED_DECISIONS = {
         "decision_state": "selected",
         "implementation_state": "implemented",
         "implementation_origin": "pre_existing_parity",
-        "cutover_state": "no_go",
+        "cutover_state": "go",
         "resolution": "match_frozen_live",
         "scope": {
             "server_delivery_order": (
@@ -961,15 +961,18 @@ EXPECTED_FOLLOW_UP_TASK_IDS = [
     "notification-layout-consumer-compatibility",
 ]
 EXPECTED_FOLLOW_UP_TASK_STATES = {
-    task_id: (
-        "implemented"
-        if task_id == "reservation-probe-safety-release-gate"
-        else "not_implemented"
-    )
-    for task_id in EXPECTED_FOLLOW_UP_TASK_IDS
+    "reservation-probe-safety-release-gate": "implemented",
+    "http-cli-transport-entrypoints": "not_implemented",
+    "service-lifecycle-supervision": "not_implemented",
+    "mcp-client-reregistration-cutover": "not_implemented",
+    "data-migration-reconciliation": "descoped_documentation_only",
+    "rollback-revert-procedure": "descoped_documentation_only",
+    "notification-layout-consumer-compatibility": (
+        "descoped_documentation_only"
+    ),
 }
 EXPECTED_FOLLOW_UP_TASKS_SHA256 = (
-    "47ba7d1ec23bb939a005de98116cf9e4f0d44d7f5ed0a1f625957db03eb4de36"
+    "ad5b4c4332fd7b5e82bfc94d70a42748308472e1813adfaad4f871462f070318"
 )
 EXPECTED_POST_CUTOVER_TASK_IDS = [
     "d2-d3-worker-progress-diagnostics",
@@ -1003,7 +1006,7 @@ EXPECTED_CURRENT_GATE_ACTIVATION_REQUIREMENTS_SHA256 = (
 EXPECTED_POST_CUTOVER_GATE_CONTRACT_DEFECTS_SHA256 = (
     "68ddb85125dbb9ed101b74f3f4efccce3e3d31942cb8b804891346a485c5ede8"
 )
-EXPECTED_CUTOVER_CONDITION_IDS = [
+EXPECTED_REQUIRED_CUTOVER_CONDITION_IDS = [
     "product-decisions-selected",
     "pre-cutover-product-decisions-implemented",
     "initial-cutover-difference-set-exact",
@@ -1015,13 +1018,37 @@ EXPECTED_CUTOVER_CONDITION_IDS = [
     "http-cli-transport-entrypoints",
     "service-lifecycle-supervision",
     "mcp-client-reregistration-cutover",
+]
+EXPECTED_DESCOPED_CUTOVER_CONDITION_IDS = [
     "data-migration-reconciliation",
     "rollback-revert-procedure",
     "notification-layout-consumer-compatibility",
 ]
+EXPECTED_CUTOVER_CONDITION_IDS = [
+    *EXPECTED_REQUIRED_CUTOVER_CONDITION_IDS,
+    *EXPECTED_DESCOPED_CUTOVER_CONDITION_IDS,
+]
 EXPECTED_CUTOVER_GATE_SHA256 = (
-    "07824f651387b62bcf750e0fa863ad01fe88434dbf72a6a8f8a7213aad195b6b"
+    "6dee83ed6b104732ee007ab1415abe6bc37fcf5e45c116a339c280f7bd78c8c1"
 )
+EXPECTED_CUTOVER_APPROVAL = {
+    "approved_by": "maintainer",
+    "approved_date": "2026-08-15",
+    "channel": "direct chat instruction to ProOpus",
+    "scope": "D1-D6 and D8-D12 cutover_state set to go; D7 remains deferred no_go",
+    "decision_note": "vault:09_MCP/mcp-agent-mail/DECISION_cutover承認3点とD7.md",
+    "descope": {
+        "removed_required_condition_ids": EXPECTED_DESCOPED_CUTOVER_CONDITION_IDS,
+        "rationale": (
+            "public release targets fresh tester installs with no legacy data or "
+            "prior configuration; migration stays available as a documented manual "
+            "procedure (migration.py, proven in the 2026-08-12 live cutover), "
+            "rollback is documented as AGENTSTACK_MAIL_PROVIDER=upstream re-run, "
+            "notification layout compatibility is a one-time verification that the "
+            "shipped watcher reads the per-message layout"
+        ),
+    },
+}
 
 REQUIRED_RUNTIME_MODULES = {
     "__init__.py",
@@ -1467,6 +1494,7 @@ def _assert_expected_divergences_manifest(
         "current_gate_activation_requirements",
         "post_cutover_gate_contract_defects",
         "cutover_gate",
+        "cutover_approval",
         "product_decisions",
     }
     if set(manifest) != expected_top_level:
@@ -1477,6 +1505,8 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(
             f"{artifact} divergence manifest must be schema version 2, contract 1"
         )
+    if manifest["cutover_approval"] != EXPECTED_CUTOVER_APPROVAL:
+        raise SystemExit(f"{artifact} cutover approval changed")
     if (
         manifest["personal_identifier_allowlist_reason"]
         != EXPECTED_PERSONAL_IDENTIFIER_ALLOWLIST_REASON
@@ -1653,7 +1683,7 @@ def _assert_expected_divergences_manifest(
         or cutover_gate["default_state"] != "no_go"
         or cutover_gate["unknown_state"] != "no_go"
         or cutover_gate["required_condition_ids"]
-        != EXPECTED_CUTOVER_CONDITION_IDS
+        != EXPECTED_REQUIRED_CUTOVER_CONDITION_IDS
     ):
         raise SystemExit(f"{artifact} cutover gate is not fail-closed")
     conditions = cutover_gate["conditions"]

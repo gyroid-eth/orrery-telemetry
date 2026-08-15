@@ -41,6 +41,83 @@ DECISION_LEDGER = PACKAGE_ROOT / "fixtures" / "differential-expected-divergences
 FORBIDDEN_PORTS = frozenset({7333, 8765, 8770})
 MCP_PATH = "/mcp"
 FULL_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+EXPECTED_CUTOVER_STATES = {
+    **{f"D{index}": "go" for index in range(1, 7)},
+    "D7": "no_go",
+    **{f"D{index}": "go" for index in range(8, 13)},
+}
+EXPECTED_REQUIRED_CONDITION_IDS = (
+    "product-decisions-selected",
+    "pre-cutover-product-decisions-implemented",
+    "initial-cutover-difference-set-exact",
+    "candidate-source-bound",
+    "product-decision-cutover-approval",
+    "selected-behavior-release-gate",
+    "distribution-artifact-release-gate",
+    "reservation-probe-safety-release-gate",
+    "http-cli-transport-entrypoints",
+    "service-lifecycle-supervision",
+    "mcp-client-reregistration-cutover",
+)
+EXPECTED_DESCOPED_CONDITION_IDS = (
+    "data-migration-reconciliation",
+    "rollback-revert-procedure",
+    "notification-layout-consumer-compatibility",
+)
+EXPECTED_FOLLOW_UP_TASK_STATES = {
+    "reservation-probe-safety-release-gate": "implemented",
+    "http-cli-transport-entrypoints": "not_implemented",
+    "service-lifecycle-supervision": "not_implemented",
+    "mcp-client-reregistration-cutover": "not_implemented",
+    **{
+        condition_id: "descoped_documentation_only"
+        for condition_id in EXPECTED_DESCOPED_CONDITION_IDS
+    },
+}
+EXPECTED_DESCOPED_TASK_METADATA = {
+    "data-migration-reconciliation": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": (
+            "manual procedure documented for the minority of testers with existing "
+            "upstream data; not part of installer or cutover gate"
+        ),
+    },
+    "rollback-revert-procedure": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": (
+            "documented one-line rollback: AGENTSTACK_MAIL_PROVIDER=upstream "
+            "re-run of install.sh"
+        ),
+    },
+    "notification-layout-consumer-compatibility": {
+        "date": "2026-08-15",
+        "approved_by": "maintainer",
+        "disposition": (
+            "one-time verification that the shipped watcher reads per-message "
+            "signal layout; both layouts already supported"
+        ),
+    },
+}
+EXPECTED_CUTOVER_APPROVAL = {
+    "approved_by": "maintainer",
+    "approved_date": "2026-08-15",
+    "channel": "direct chat instruction to ProOpus",
+    "scope": "D1-D6 and D8-D12 cutover_state set to go; D7 remains deferred no_go",
+    "decision_note": "vault:09_MCP/mcp-agent-mail/DECISION_cutover承認3点とD7.md",
+    "descope": {
+        "removed_required_condition_ids": list(EXPECTED_DESCOPED_CONDITION_IDS),
+        "rationale": (
+            "public release targets fresh tester installs with no legacy data or "
+            "prior configuration; migration stays available as a documented manual "
+            "procedure (migration.py, proven in the 2026-08-12 live cutover), "
+            "rollback is documented as AGENTSTACK_MAIL_PROVIDER=upstream re-run, "
+            "notification layout compatibility is a one-time verification that the "
+            "shipped watcher reads the per-message layout"
+        ),
+    },
+}
 
 for import_root in (str(TESTS_ROOT), str(CORE_SOURCE)):
     if import_root not in sys.path:
@@ -476,8 +553,69 @@ def _ledger_expectations() -> dict[str, Any]:
     by_id = {entry.get("id"): entry for entry in decisions if isinstance(entry, dict)}
     if set(by_id) != {f"D{index}" for index in range(1, 13)}:
         raise GateFailure("decision ledger IDs are not exactly D1-D12")
-    if any(entry.get("cutover_state") != "no_go" for entry in decisions):
-        raise GateFailure("gate refuses a decision ledger whose human cutover approvals changed")
+    actual_cutover_states = {
+        decision_id: by_id[decision_id].get("cutover_state")
+        for decision_id in EXPECTED_CUTOVER_STATES
+    }
+    if actual_cutover_states != EXPECTED_CUTOVER_STATES:
+        changed = sorted(
+            decision_id
+            for decision_id, expected_state in EXPECTED_CUTOVER_STATES.items()
+            if actual_cutover_states.get(decision_id) != expected_state
+        )
+        raise GateFailure(
+            "gate refuses decision-ledger cutover states outside the exact "
+            f"2026-08-15 owner approval: {changed}"
+        )
+    if payload.get("cutover_approval") != EXPECTED_CUTOVER_APPROVAL:
+        raise GateFailure("decision ledger cutover approval record changed")
+
+    cutover_gate = payload.get("cutover_gate")
+    if not isinstance(cutover_gate, dict):
+        raise GateFailure("decision ledger cutover gate is missing")
+    if cutover_gate.get("required_condition_ids") != list(
+        EXPECTED_REQUIRED_CONDITION_IDS
+    ):
+        raise GateFailure("decision ledger required cutover conditions changed")
+    conditions = cutover_gate.get("conditions")
+    if not isinstance(conditions, list) or not all(
+        isinstance(condition, dict) for condition in conditions
+    ):
+        raise GateFailure("decision ledger cutover condition definitions changed")
+    if [condition.get("id") for condition in conditions] != [
+        *EXPECTED_REQUIRED_CONDITION_IDS,
+        *EXPECTED_DESCOPED_CONDITION_IDS,
+    ]:
+        raise GateFailure("decision ledger cutover condition definitions changed")
+    condition_by_id = {condition["id"]: condition for condition in conditions}
+    if any(
+        condition_by_id[condition_id].get("descoped")
+        != "2026-08-15_owner_approved_documentation_only"
+        for condition_id in EXPECTED_DESCOPED_CONDITION_IDS
+    ):
+        raise GateFailure("decision ledger descoped condition markers changed")
+
+    follow_up_tasks = payload.get("follow_up_tasks")
+    if not isinstance(follow_up_tasks, list) or not all(
+        isinstance(task, dict) for task in follow_up_tasks
+    ):
+        raise GateFailure("decision ledger follow-up tasks changed")
+    if [task.get("id") for task in follow_up_tasks] != list(
+        EXPECTED_FOLLOW_UP_TASK_STATES
+    ):
+        raise GateFailure("decision ledger follow-up task IDs changed")
+    tasks_by_id = {task["id"]: task for task in follow_up_tasks}
+    actual_task_states = {
+        task_id: tasks_by_id[task_id].get("implementation_state")
+        for task_id in EXPECTED_FOLLOW_UP_TASK_STATES
+    }
+    if actual_task_states != EXPECTED_FOLLOW_UP_TASK_STATES:
+        raise GateFailure("decision ledger follow-up task states changed")
+    if any(
+        tasks_by_id[task_id].get("descoped") != expected_metadata
+        for task_id, expected_metadata in EXPECTED_DESCOPED_TASK_METADATA.items()
+    ):
+        raise GateFailure("decision ledger documentation-only descope record changed")
     expected = {
         "D8": ("match_frozen_live", "DB persists after archive failure"),
         "D10": ("match_frozen_live", "concurrent reservation winner and SQLite lock semantics"),
@@ -492,7 +630,13 @@ def _ledger_expectations() -> dict[str, Any]:
     return {
         "sha256": hashlib.sha256(DECISION_LEDGER.read_bytes()).hexdigest(),
         "entries": 12,
-        "cutover_no_go_entries": 12,
+        "cutover_go_entries": 11,
+        "cutover_no_go_entries": 1,
+        "deferred_decision": "D7",
+        "required_condition_entries": len(EXPECTED_REQUIRED_CONDITION_IDS),
+        "descoped_documentation_only_entries": len(
+            EXPECTED_DESCOPED_CONDITION_IDS
+        ),
         "fault_decisions": ["D8", "D10", "D12"],
     }
 

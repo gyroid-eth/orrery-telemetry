@@ -94,7 +94,11 @@ def _unknown_implementation_state(manifest: dict[str, Any]) -> None:
 
 
 def _unknown_cutover_state(manifest: dict[str, Any]) -> None:
-    _decision(manifest, "D6")["cutover_state"] = "go"
+    _decision(manifest, "D6")["cutover_state"] = "maybe"
+
+
+def _regress_d2_cutover_approval(manifest: dict[str, Any]) -> None:
+    _decision(manifest, "D2")["cutover_state"] = "no_go"
 
 
 def _unselect_d7(manifest: dict[str, Any]) -> None:
@@ -283,6 +287,14 @@ def _weaken_cutover_remediation(manifest: dict[str, Any]) -> None:
     manifest["cutover_gate"]["conditions"][0]["remediation"] = "review later"
 
 
+def _drop_cutover_approval(manifest: dict[str, Any]) -> None:
+    manifest.pop("cutover_approval")
+
+
+def _change_cutover_descope_approval(manifest: dict[str, Any]) -> None:
+    manifest["cutover_approval"]["descope"]["removed_required_condition_ids"].pop()
+
+
 def test_canonical_decision_ledger_is_accepted() -> None:
     _verify(_canonical_manifest())
 
@@ -403,7 +415,28 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
     assert all(
         task["implementation_state"] == "not_implemented"
         for task in pre
-        if task is not safety
+        if task["id"] in {
+            "http-cli-transport-entrypoints",
+            "service-lifecycle-supervision",
+            "mcp-client-reregistration-cutover",
+        }
+    )
+    descoped_ids = {
+        "data-migration-reconciliation",
+        "rollback-revert-procedure",
+        "notification-layout-consumer-compatibility",
+    }
+    assert {
+        task["id"]
+        for task in pre
+        if task["implementation_state"] == "descoped_documentation_only"
+    } == descoped_ids
+    assert all(
+        task["descoped"]["approved_by"] == "maintainer"
+        and task["descoped"]["date"] == "2026-08-15"
+        and task["descoped"]["disposition"]
+        for task in pre
+        if task["id"] in descoped_ids
     )
 
     http = _follow_up_task(manifest, "http-cli-transport-entrypoints")
@@ -434,8 +467,15 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
     )
     assert "21 observed stale Claude allow occurrences" in " ".join(cleanup["scope"])
 
-    assert manifest["cutover_gate"]["required_condition_ids"][-7:] == [
-        task["id"] for task in pre
+    assert manifest["cutover_gate"]["required_condition_ids"][-4:] == [
+        task["id"] for task in pre if task["id"] not in descoped_ids
+    ]
+    assert manifest["cutover_approval"]["descope"][
+        "removed_required_condition_ids"
+    ] == [
+        "data-migration-reconciliation",
+        "rollback-revert-procedure",
+        "notification-layout-consumer-compatibility",
     ]
     assert [
         item["id"] for item in manifest["current_gate_activation_requirements"]
@@ -578,9 +618,27 @@ def test_all_decisions_have_independent_required_states() -> None:
         )
         for item in decisions
     } == {
-        ("selected", "implemented", "no_go"),
+        ("selected", "implemented", "go"),
         ("selected", "not_implemented", "no_go"),
     }
+    assert {
+        item["id"] for item in decisions if item["cutover_state"] == "go"
+    } == {
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "D5",
+        "D6",
+        "D8",
+        "D9",
+        "D10",
+        "D11",
+        "D12",
+    }
+    assert {
+        item["id"] for item in decisions if item["cutover_state"] == "no_go"
+    } == {"D7"}
 
 
 def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> None:
@@ -659,6 +717,7 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
             "non-implemented decision D6 must not have origin",
         ),
         (_unknown_cutover_state, "selected product decision D6 changed"),
+        (_regress_d2_cutover_approval, "selected product decision D2 changed"),
         (_unselect_d7, "selected product decision D7 changed"),
         (
             _pretend_d7_is_implemented,
@@ -726,6 +785,11 @@ def test_implemented_decision_verification_nodes_exist_as_top_level_tests() -> N
         (_drop_cutover_condition, "cutover condition ids changed"),
         (_weaken_cutover_unknown_policy, "cutover gate is not fail-closed"),
         (_weaken_cutover_remediation, "cutover gate changed"),
+        (
+            _drop_cutover_approval,
+            "divergence manifest top-level keys do not match v2",
+        ),
+        (_change_cutover_descope_approval, "cutover approval changed"),
     ),
 )
 def test_decision_ledger_mutations_fail_closed(

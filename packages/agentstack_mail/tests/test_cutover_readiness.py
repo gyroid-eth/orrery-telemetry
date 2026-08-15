@@ -53,32 +53,17 @@ def _evaluate(
     )
 
 
-def test_checked_in_ledger_is_valid_no_go_with_exact_missing_tasks() -> None:
+def test_checked_in_ledger_is_valid_no_go_with_owner_approval_and_six_missing_gates() -> None:
     result = _evaluate(MANIFEST.read_bytes())
 
     assert result["evaluation_state"] == "valid"
     assert result["cutover_state"] == "no_go"
     assert result["invalid_reasons"] == []
-    assert result["condition_count"] == 14
-    assert result["passed_condition_ids"] == list(EXPECTED_CONDITION_IDS[:4])
+    assert result["condition_count"] == 11
+    assert result["passed_condition_ids"] == list(EXPECTED_CONDITION_IDS[:5])
     assert [item["id"] for item in result["missing_conditions"]] == list(
-        EXPECTED_CONDITION_IDS[4:]
+        EXPECTED_CONDITION_IDS[5:]
     )
-    approval = result["missing_conditions"][0]
-    assert approval["observed"]["not_approved"] == [
-        "D1",
-        "D10",
-        "D11",
-        "D12",
-        "D2",
-        "D3",
-        "D4",
-        "D5",
-        "D6",
-        "D8",
-        "D9",
-    ]
-    assert approval["observed"]["d7_exact_deferred_no_go"] is True
     safety = next(
         item
         for item in result["missing_conditions"]

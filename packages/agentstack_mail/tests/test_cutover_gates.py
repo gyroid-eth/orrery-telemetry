@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -33,6 +34,42 @@ def test_mcp_error_detector_parses_boolean_instead_of_substring() -> None:
     assert failure["isError"] is True
     with pytest.raises(gates.GateFailure, match="boolean isError"):
         gates.parse_mcp_response_body('{"isError": "false"}')
+
+
+def test_ledger_expectations_accept_exact_owner_approval() -> None:
+    result = gates._ledger_expectations()  # noqa: SLF001
+
+    assert result["cutover_go_entries"] == 11
+    assert result["cutover_no_go_entries"] == 1
+    assert result["deferred_decision"] == "D7"
+    assert result["required_condition_entries"] == 11
+    assert result["descoped_documentation_only_entries"] == 3
+
+
+@pytest.mark.parametrize(
+    ("decision_id", "cutover_state"),
+    (("D7", "go"), ("D2", "no_go")),
+)
+def test_ledger_expectations_reject_unapproved_cutover_state_change(
+    decision_id: str,
+    cutover_state: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(gates.DECISION_LEDGER.read_text(encoding="utf-8"))
+    decision = next(
+        entry for entry in payload["product_decisions"] if entry["id"] == decision_id
+    )
+    decision["cutover_state"] = cutover_state
+    mutated_ledger = tmp_path / "unapproved-ledger.json"
+    mutated_ledger.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(gates, "DECISION_LEDGER", mutated_ledger)
+
+    with pytest.raises(
+        gates.GateFailure,
+        match="outside the exact 2026-08-15 owner approval",
+    ):
+        gates._ledger_expectations()  # noqa: SLF001
 
 
 @pytest.mark.parametrize("gate_name", ["coexistence", "migration", "rollback"])

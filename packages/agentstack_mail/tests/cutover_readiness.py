@@ -43,9 +43,15 @@ EXPECTED_CONDITION_IDS = (
     "http-cli-transport-entrypoints",
     "service-lifecycle-supervision",
     "mcp-client-reregistration-cutover",
+)
+DESCOPED_CONDITION_IDS = (
     "data-migration-reconciliation",
     "rollback-revert-procedure",
     "notification-layout-consumer-compatibility",
+)
+EXPECTED_CONDITION_DEFINITION_IDS = (
+    *EXPECTED_CONDITION_IDS,
+    *DESCOPED_CONDITION_IDS,
 )
 EXPECTED_DECISION_IDS = tuple(f"D{index}" for index in range(1, 13))
 INITIAL_APPROVAL_IDS = tuple(
@@ -708,13 +714,29 @@ def _evaluate_cutover_core(
         invalid_reasons.append("cutover conditions must be a list")
     conditions: dict[str, dict[str, Any]] = {}
     for index, condition in enumerate(raw_conditions):
-        if not isinstance(condition, dict) or set(condition) != CONDITION_KEYS:
+        if not isinstance(condition, dict):
             invalid_reasons.append(f"cutover condition {index} has invalid keys")
             continue
-        condition_id = condition["id"]
+        condition_id = condition.get("id")
+        expected_keys = (
+            CONDITION_KEYS | {"descoped"}
+            if condition_id in DESCOPED_CONDITION_IDS
+            else CONDITION_KEYS
+        )
+        if set(condition) != expected_keys:
+            invalid_reasons.append(f"cutover condition {index} has invalid keys")
+            continue
         if not isinstance(condition_id, str) or condition_id in conditions:
             invalid_reasons.append(f"cutover condition {index} has invalid or duplicate id")
             continue
+        if (
+            condition_id in DESCOPED_CONDITION_IDS
+            and condition["descoped"]
+            != "2026-08-15_owner_approved_documentation_only"
+        ):
+            invalid_reasons.append(
+                f"cutover condition {condition_id} has an invalid descope marker"
+            )
         expected_kind = "none" if condition["kind"] in {
             "manifest_predicate",
             "checkout_predicate",
@@ -729,7 +751,7 @@ def _evaluate_cutover_core(
         }:
             invalid_reasons.append(f"unknown condition kind for {condition_id}")
         conditions[condition_id] = condition
-    if tuple(conditions) != EXPECTED_CONDITION_IDS:
+    if tuple(conditions) != EXPECTED_CONDITION_DEFINITION_IDS:
         invalid_reasons.append("cutover condition definitions are missing, extra, or reordered")
 
     artifacts, evidence_errors = _parse_evidence_index(

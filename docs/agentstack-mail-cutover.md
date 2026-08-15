@@ -9,6 +9,8 @@ agent:
 
 # ORRERY Mail working-tree 切替手順（未実行）
 
+> **結論（2026-08-15）:** 所有者 maintainer は authority cutover を承認した。台帳では D1–D6 と D8–D12 の11決定が `go`、D7だけが deferred の `no_go` であり、required machine condition は11件である。`data-migration-reconciliation`、`rollback-revert-procedure`、`notification-layout-consumer-compatibility` の3件は `descoped_documentation_only` として手順・参照実装を残すが、cutover gateには含めない。承認は実行済みを意味せず、以下のmachine gateとoperator hold pointは引き続きfail-closedである。
+
 > **ここを越えると初回切替の手順では戻れない:** C5 で最初の consumer の `register_agent` または別の write tool が新 endpoint に成功し、新 root が migration baseline から変わった瞬間。以後は旧 DB へ部分的に戻さず、新 authority 上で fix-forward する。将来の `post-authority-reverse-transform` は台帳に残すが、実装・rehearsal・別承認が済むまでは初回切替のrollback根拠にしない。
 
 > **この間は全員が黙る:** C2 で旧 writer を止めてから、C5 の専用 test sender/recipient による1通の send/readとreservation guard実動確認が終わるまで、ProOpus、他の全 Claude/Codex parent・child、bot、watcher/hook、切替 operator は agent-mail を使わない。例外は、maintenance shellがH9で実行するexact read-only `health_check`/`whois`と、H0で名前とsessionをsealした既存session 1つがH10で行う最初のread-only `health_check` 1回だけである。`fetch_inbox`、再試行、fallback、明示reconnectは例外に含めない。**2–4分はC3のdata copy/verificationだけの実測**であり、自動再接続とoperational smokeを含む全静止時間は未測定である。
@@ -241,29 +243,30 @@ PY
 
 同日の本番legacy stop/start後に、採取済み`legacy-launchd-definition-v1.json`のdefinitionと再起動後loaded definitionをread-onlyで比較し、plist bytes/path、program/arguments、working directory、RunAtLoad、KeepAliveを含むdefinition全体が一致した。legacy listenerはPID 77623/port 8765、wrapperはPID 77599で復帰した。これはrollback tailで採取済みlegacy定義から同じjobが戻ることの実機確認である。
 
-## 旧14条件 evaluator（切替後hardeningへ延期）
+## 承認済み11条件 evaluator
 
-`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`と`packages/agentstack_mail/tests/cutover_readiness.py`の14条件evaluatorは、配布製品相当のfull evidence gateとしてfail-closedのまま保持する。ただし2026-08-11の簡素化裁定後は、この単独localhost切替のpre-cutover hard stopには使わず、未実装handlerを埋める作業も切替後へ延期する。以下の表と旧C0 producerは履歴・将来hardening用であり、上の3点へ作業範囲を再拡張しない。
+`packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json`と`packages/agentstack_mail/tests/cutover_readiness.py`は、次の11条件をrequired machine gateとしてfail-closedに評価する。product-decision-cutover-approval conditionは、D1–D6とD8–D12がexactに`go`で、D7がexactにdeferred `no_go`である場合だけpassする。追加承認、承認の巻き戻し、D7の`go`化はoperator判断で台帳を更新するまでinvalid/no-goであり、evaluatorは承認状態を書き換えない。
 
-次の表は旧14個のmachine gateをoperatorの確認順にgroup化したものである。IDと合格線は旧台帳のまま保持し、表の説明は置換しない。
+3件のdocumentation-only項目は台帳のcondition定義とfollow-up記録に残すが、`required_condition_ids`には含めない。data migrationは既存dataを持つ少数tester向けmanual procedure、rollbackは`AGENTSTACK_MAIL_PROVIDER=upstream`でinstallerを再実行する手順、notification layoutは出荷watcherがper-message layoutを読むone-time確認として維持する。
+
+次の表は11個のrequired machine gateをoperatorの確認順にgroup化したものである。
 
 | 段階 | machine gate ID（台帳とexact match） | operatorが確認する意味 |
 |---|---|---|
 | 決定・candidate固定 | `product-decisions-selected`<br>`pre-cutover-product-decisions-implemented`<br>`initial-cutover-difference-set-exact`<br>`candidate-source-bound`<br>`product-decision-cutover-approval` | D1–D12、初回差異集合、clean candidate、maintainer承認が同じcandidateへ固定されている |
 | behavior・build | `selected-behavior-release-gate`<br>`distribution-artifact-release-gate` | 選択挙動と、実際に使うwheel/sdistが同じcandidateへ束縛されている |
 | 予約安全 | `reservation-probe-safety-release-gate` | timeout/error/filesystem-incompleteで予約を誤解放せず、TTL expiryだけがreleaseされる |
-| runtime・deploy・consumer | `http-cli-transport-entrypoints`<br>`service-lifecycle-supervision`<br>`mcp-client-reregistration-cutover`<br>`notification-layout-consumer-compatibility` | exact wheelからの24-tool起動、単一writer lifecycle、全clientの可逆切替、通知layoutと実consumerの互換性が通っている |
-| authority移行・復旧 | `data-migration-reconciliation`<br>`rollback-revert-procedure` | data照合とfirst durable write前までのrollbackが、一つのauthority遷移を証明している |
+| runtime・deploy・consumer | `http-cli-transport-entrypoints`<br>`service-lifecycle-supervision`<br>`mcp-client-reregistration-cutover` | exact wheelからの24-tool起動、単一writer lifecycle、全clientの切替が通っている |
 
-C5の専用test sender/recipientによる5項目とreservation guardの4観測は、GO判定後にauthority switchが実際に機能したことを見る**post-switch operational smoke check**である。14条件の代替でも、切替承認を作る第二の合格線でもない。
+C5の専用test sender/recipientによる5項目とreservation guardの4観測は、GO判定後にauthority switchが実際に機能したことを見る**post-switch operational smoke check**である。11条件の代替でも、所有者承認を作る第二の合格線でもない。
 
-evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動変更しない。C0/C2/C5のhuman hold pointは実行を止められるが、`no_go`を承認で上書きできない。
+evaluatorはread-onlyであり、`go`でもservice、config、authorityを自動変更しない。C0/C2/C5のhuman hold pointは実行を止められるが、所有者承認で失敗中のmachine conditionを上書きできない。
 
-## 旧full-evidence hard stop（切替後backlog）
+## full-evidence手順とdocumentation-only移行手順
 
 今回の移送方針は **DB + signals + legacy archive の working tree を運び、legacy `.git` は運ばない**で固定する。検証回数は既存設計の6回を維持し、2回へ減らす最適化はしない。
 
-working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。台帳のdata-migration-reconciliation evidence handlerは未実装だが、簡素化裁定によりhandler自体は切替後backlogである。以下の旧C0 command例はfull-evidence pathの参照として残し、今回の3点を満たすために実行しない。
+working-tree scope の `agentstack-mail-migrate copy` / `verify` / `rollback-assess` と、production-shaped rehearsal / candidate-bound raw evidence runner は実装済みである。data migrationとrollbackのevidence handlerはrequired gateではなく、既存dataを扱うmanual procedureの参照として以下に残す。このlocalhost working-tree切替で実行する場合はoperator手順のH0–H14に従うが、11条件evaluatorへartifactを登録しない。
 
 consumer設定用の `agentstack-mail-consumers` は実装済みである。明示inventoryから全before/after imageを先に作り、外部にpinするmanifest SHA-256、whole-set CAS、同一directoryのatomic replace、write-once terminal receipt、migration baselineを再検査する1操作rollbackを持つ。ただし複数directoryを跨ぐ真のatomic syscallではない。途中状態は `status=committed` にならず、C2でconsumerを止めたまま再実行またはrollbackする契約である。実機inventoryの確定、個人設定のpreview承認、下記のOrrery/dashboard前提条件が揃うまで C2へ進まない。
 
@@ -1218,17 +1221,17 @@ assert p["damage_control"] == "physical_and_logical_non_noop"
 PY
 ```
 
-runnerはsource/backup/damaged/restoredの4 raw familyを同一run IDへ束縛し、built-in damageがmainを実際に変え、backup時ABSENTだったsidecarを作って除去branchを通したことを要求する。no-op damage、restore skip、PRESENT replace skip、ABSENT unlink skipは各mutation testで赤くなる。raw artifact、terminal receipt、separate verifier receipt、run directory外の3 SHA pinは、将来の data-migration-reconciliation handlerへの入力として保持する。rollback-revert-procedure は同じartifactを別名で再登録せず、C3–C5/R1–R5のfirst durable write前だけを再計算する独立handlerと独立recordを必要とする。post-authority reverse transformは別のnon-blocking post-cutover taskであり、このconditionへ混ぜない。最終booleanだけはevidenceに数えない。
+runnerはsource/backup/damaged/restoredの4 raw familyを同一run IDへ束縛し、built-in damageがmainを実際に変え、backup時ABSENTだったsidecarを作って除去branchを通したことを要求する。no-op damage、restore skip、PRESENT replace skip、ABSENT unlink skipは各mutation testで赤くなる。raw artifact、terminal receipt、separate verifier receipt、run directory外の3 SHA pinは、既存dataを扱うmanual migrationの監査記録として保持する。data migrationとpre-write rollbackを同じartifact名で混同せず、post-authority reverse transformは別のnon-blocking post-cutover taskとして扱う。最終booleanだけはevidenceに数えない。
 
 canonical rehearsal receiptが無い、command rc0を観測できない、`.prepared`/`.unconfirmed`/ownership markerだけが残る、または初回verifier/check-onlyのどちらかが失敗した場合は未完了である。prepared/unconfirmedを手動renameしない。receipt内の`fsync`/`atomic_replace`という文字列は自己証明ではなく、それらはcode pathとEIO fault testでのみ照合する。producerが実際に走ったことの暗号学的証明ではなく、保持raw artifactsから独立再計算できるところが保証の上限である。
 
-### 現行v1の停止点（normative）
+### documentation-only disposition（normative）
 
-現在のversioned manifestでは data-migration-reconciliation と rollback-revert-procedure がともに`unimplemented_v1`である。この状態ではartifactやindexへ何も書かず、非0で停止する。両conditionのversioned handlerと別々のevidence recordが実装され、readiness evaluatorが両recordを再計算して受理するまで次へ進まない。
+現在のversioned manifestでは data-migration-reconciliation と rollback-revert-procedure は `descoped_documentation_only` であり、`required_condition_ids`に含まれない。condition定義の`unimplemented_v1`は、これらを誤ってmachine evidenceとして登録しないためのfail-closed markerとして残す。artifactやindexへ両IDのrecordを書かず、11件のrequired conditionだけを評価する。manual procedure自身の失敗は、そのprocedureを使うoperator flowを停止するが、両handlerの未実装をcutover gateの不足条件として数えない。
 
-### handler実装後のfuture skeleton（現行では実行禁止）
+### documentation-only evidence boundary
 
-次のproducerは、将来 data-migration-reconciliation 用のversioned handlerが実装された後に、rehearsalの3つの外部pinとcanonical raw evidenceから同条件の1 recordだけを作るためのskeletonである。現在の`unimplemented_v1`では先頭で意図的に非0となる。これは rollback-revert-procedure のproducer/handlerを実装せず、未知の将来`evidence_kind`も固定していないため、現行の実行可能契約ではない。handler実装後もcondition IDを増やさず、review済みのversioned `evidence_kind`と同じ値だけを受け入れる。
+次のproducer例はraw evidence bindingの形式だけを説明するもので、現行の実行可能契約ではない。`unimplemented_v1`で必ず非0となり、documentation-only IDをevidence indexへ追加しない。将来あらためてrequired conditionへ戻す場合は、所有者の新しい承認、台帳変更、versioned handler、拒否mutation testを同じreviewで追加する。
 
 ```sh
 python3 - "$CUTOVER_MANIFEST" "$CANDIDATE_COMMIT" "$REHEARSAL_RUN" \
@@ -1317,7 +1320,7 @@ finally:
 PY
 ```
 
-1. 将来版で data-migration-reconciliation と rollback-revert-procedure のversioned handlerおよび別々のevidence recordが実装され、両recordを含むindexをreadiness evaluatorが再計算して受理できた場合にだけ、clean checkoutでfull candidate commit、exact manifest、digest-verified evidenceを次のexact commandへ渡す。現行v1ではここへ進まない。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
+1. clean checkoutでfull candidate commit、exact manifest、11件のrequired conditionに対するdigest-verified evidenceだけを次のcommandへ渡す。documentation-only 3 IDのrecordはindexへ含めない。一つでも違えば後続のhuman確認やsmoke testで上書きせず、C0で止まる。
 
 ```sh
 CANDIDATE_COMMIT=$(git -C "$REPO" rev-parse --verify 'HEAD^{commit}')
@@ -1627,7 +1630,7 @@ shasum -a 256 "$COLD_BACKUP_DIR/cold-backup-receipt.json" \
 
 ### C3: DB + signals + working tree を一単位として複製・検証する
 
-C2Bのmachine-readable cold backup receiptとbundle外SHA-256 pinが揃った後だけ開始する。`cold-backup`の取得成功はrestore可能性の証明ではないため、本番C0の data-migration-reconciliation evidenceには、後述の非production rehearsal receiptも必要である。
+C2Bのmachine-readable cold backup receiptとbundle外SHA-256 pinが揃った後だけ開始する。`cold-backup`の取得成功はrestore可能性の証明ではないため、このmachineでmanual migrationを実行する場合は、後述の非production rehearsal receiptもoperator受入れ条件として必要である。これはdocumentation-only conditionを11条件gateへ戻すものではない。
 
 working-tree scope migration は次を一つの staging generation 内で行う。
 
@@ -1639,7 +1642,7 @@ working-tree scope migration は次を一つの staging generation 内で行う�
 6. working treeの全 path/content/mode、signals、33 file attachments、選んだGit開始状態を確認する。
 7. fsync後、同一 filesystem上の一回のdirectory renameで `~/.agentstack/mail` を公開する。失敗時は部分treeを canonical path に残さない。file descriptor/inode/link/container identity検査で実測したsource差替を拒否するが、same-UIDの非協調filesystem writerを完全な敵対者としては扱わない。destination不在checkとrenameの間のraceも単一operator前提で明記して受け入れ、未実装の`RENAME_EXCL`を安全保証として数えない。
 
-以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、現行のoperator用正本でH0〜H5が順に合格した後、H6としてだけ稼働dataへ実行する。切替後hardeningへ延期した旧14条件evaluatorのGOは、このH6の前提にしない。**
+以下が実装済みcommand形である。pathはsymlink componentを含まないcanonical absolute pathだけを使う。**この変更では実行しておらず、現行のoperator用正本でH0〜H5が順に合格した後、H6としてだけ稼働dataへ実行する。H6は既存dataを持つこのmachineのmanual procedureであり、documentation-only 3条件を11条件evaluatorへ戻すものではない。**
 
 ```sh
 "$MIGRATE_BIN" copy \
@@ -1948,7 +1951,7 @@ assert_client_config_seal > "$MAINT/r5-client-config-seal.json" || exit 1
 
 **旧plist照合/bootstrap、consumer rollback、旧endpoint handshakeは行わない。** canonical stageは`C6_NEW_AUTHORITY_VERIFIED`だけであり、snapshotがfresh baselineでも`rollback-assess`は無条件`no_go`を返す。`C6_CUTOVER_COMPLETE`を含む別名は受け入れず、operatorが同じ境界に二つの名前を使わない。新authorityだけを次の順序で止め、`status=stopped, owned=true`を確認し、incident固有repair後にstartする。loaded jobへstartを直接撃ってrestart扱いにしない。
 
-このsequenceを本番で使う前に、exact candidateを隔離root/free portで起動し、launchd相当の`SIGTERM`で停止して、tracebackなし、正常exit、endpoint閉鎖、SQLite main/WAL/SHMの物理mapと再open integrityをreceiptへ残す。さらにshutdown完了前のforced killを負対照として、残ったsidecarと次回startの回復結果を記録する。Ctrl-Cの`SIGINT`/exit 130はこの証跡の代用にならない。dirty working treeを使った隔離direct probeに続き、`e0b1110`ではclean exact candidateへ束縛したforeground receiptと、実controllerによる`stop → status=stopped → start → bounded health`を含むlaunchd receiptを生成・独立検算済みである。ただしこの手順書訂正後は新しいfinal SHAへ再束縛する。旧14条件evaluatorのservice-lifecycle conditionは未実装handlerを含むfull evidence gateとしてNO-GOのままとし、簡素化した初回切替のORRERY receipt受入れと混同しない。
+このsequenceを本番で使う前に、exact candidateを隔離root/free portで起動し、launchd相当の`SIGTERM`で停止して、tracebackなし、正常exit、endpoint閉鎖、SQLite main/WAL/SHMの物理mapと再open integrityをreceiptへ残す。さらにshutdown完了前のforced killを負対照として、残ったsidecarと次回startの回復結果を記録する。Ctrl-Cの`SIGINT`/exit 130はこの証跡の代用にならない。dirty working treeを使った隔離direct probeに続き、`e0b1110`ではclean exact candidateへ束縛したforeground receiptと、実controllerによる`stop → status=stopped → start → bounded health`を含むlaunchd receiptを生成・独立検算済みである。実行時にはfinal SHAへ再束縛する。11条件evaluatorのservice-lifecycle conditionはrequiredのままであり、versioned evidence handlerが未実装ならNO-GOとなる。所有者承認や簡素化した初回切替のORRERY receiptで、そのmachine conditionを暗黙にpassさせない。
 
 ```sh
 set +e
@@ -1986,7 +1989,7 @@ bounded_mail_probe \
 
 ## 現在の blocker digest（non-normative）
 
-これは進捗を読むための要約であり、別の完了条件ではない。2026-08-11の簡素化裁定後の3点だけを追う。
+これは進捗を読むための要約であり、別の完了条件ではない。所有者承認は2026-08-15に台帳へ記録済みであり、ここでは実行前の3点だけを追う。
 
 - **復元の実演: `4d41f80`で外部検算PASS・次のfinal candidateでは再束縛待ち。** `4d41f80`のwrite-once final JSONと外部pinは元の照合子がacceptして旧HOLDを解除した。ただしfail-closed 4遷移testをcandidate ancestryとsdistへ入れるcommitが先行するため、その新SHAでは同じcomplete operator blockを1回だけ再実行し、元の照合経路で再検算する。`4d41f80`のreceiptを新SHAのH0へ流用しない。
 - **二重service防止: product guard・手順は完了、final candidateへのORRERY証跡再束縛待ち、実切替は未実行。** C2A→C4を旧bootout→new bootstrapの不可分handoffとし、`service_start`はsealed legacy label/receipt SHA不一致、configured legacy job残留、foreign 8765 listenerをlaunchctl前に拒否する。`e0b1110`のforeground、legacy snapshot、launchd rehearsal receiptは独立検算PASS済みだが、この訂正後は履歴証跡である。新しいclean commitへ全4 receiptを再束縛して元の照合経路で検算するまでH0は通さない。actual authority交代は切替当日にだけ実行する。
@@ -1994,6 +1997,6 @@ bounded_mail_probe \
 
 permission/hook selector確認は完了済みで、pre-cutover残タスクではない。project `.mcp.json`へ新serverを足さず、client設定のkey / URL / port / path / tokenを一文字も変えない。permission `allow`のraw occurrenceは68件（global `~/.claude/settings.json` 28件、local `settings.local.json` 15ファイル40件）、hook matcherは2件で合計70件である。distinct unionは34（global 28 / local 28 / local-only 6）。既存keyとisolated candidate endpointを使った9-tool隔離probeは9/9一致、permission/trust prompt 0、error 0だった。C0のwrite-once sealはClaude/Codex/token sourceのfull-file SHA-256とmetadataを外部pinへ固定する。probe自身に`MCP_AGENT_MAIL_TOKEN`がある場合は同じdigestであることもsealし、無い場合は`not_present_unverified`をreceiptへ残す。稼働中process群は個別sealの対象にせず、切替前の一回採取でtoken-bearing process数、distinct digest数、DRIFT数だけをwrite-once report-only artifactへ記録する。したがって「token完全据え置き」は設定fileとprobe processの観測範囲に限定し、全sessionを個別にsealしたとは主張しない。seal verifierはfinal candidate wheelを入れた専用venvからだけ読む。H9/RB4/R6の共通probeは現在値がsealへexact一致した後だけBearer headerを値非表示で読み、欠落・同形別token・config driftではrequest前にfail-closedする。
 
-hash-lock済み依存閉包、atomic install receipt、残りの証跡handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。まずlaunchdのfail-closed 4遷移testと手順訂正をcommitしてfinal candidateを固定し、その同じSHAで復元実演の外部検算とORRERY namespace 4 receiptの再束縛・独立検算を閉じる。それまでは本番切替は未承認である。再束縛結果は外部receipt/pinを正本とし、そのPASSを転記するだけのcandidate変更は行わない。
+hash-lock済み依存閉包、atomic install receipt、documentation-only handler、consumer orchestrationは切替後backlogであり、pre-cutover blockerへ戻さない。まずlaunchdのfail-closed 4遷移testと手順更新をcommitしてfinal candidateを固定し、その同じSHAで復元実演の外部検算とORRERY namespace 4 receiptの再束縛・独立検算を閉じる。所有者承認は記録済みだが、これらの実行前hold pointが閉じるまではauthority switchを開始しない。再束縛結果は外部receipt/pinを正本とし、そのPASSを転記するだけのcandidate変更は行わない。
 
 `packages/agentstack_mail/README.md`はgenerator/rehearsal/verifier/check-onlyとcrash境界へ同期した。`claude/CLAUDE.md`と`codex/AGENTS.md`は今回の未実行runbookと矛盾するinstalled behaviorを記述していないため変更しない。

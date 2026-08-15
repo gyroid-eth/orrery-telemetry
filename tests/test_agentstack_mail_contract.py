@@ -115,7 +115,14 @@ def test_cutover_runbook_names_every_machine_gate_exactly_once() -> None:
     required_ids = manifest["cutover_gate"]["required_condition_ids"]
     runbook = (ROOT / "docs" / "agentstack-mail-cutover.md").read_text()
 
-    assert len(required_ids) == len(set(required_ids)) == 14
+    assert len(required_ids) == len(set(required_ids)) == 11
+    assert set(manifest["cutover_approval"]["descope"][
+        "removed_required_condition_ids"
+    ]) == {
+        "data-migration-reconciliation",
+        "rollback-revert-procedure",
+        "notification-layout-consumer-compatibility",
+    }
     assert {
         condition_id: runbook.count(f"`{condition_id}`")
         for condition_id in required_ids
@@ -164,7 +171,7 @@ def test_cutover_runbook_pins_selector_and_unchanged_client_header_contract() ->
     assert 'CUTOVER_PYTHON="$CANDIDATE_VENV/bin/python"' in runbook
     assert "CUTOVER_PYTHONPATH" not in runbook
     assert runbook.index("initialize_client_config_seal || exit 1") < runbook.index(
-        "### 現行v1の停止点（normative）"
+        "### documentation-only disposition（normative）"
     )
     assert runbook.count("assert_cutover_client_provenance || return 1") == 4
     assert 'archive.read("agentstack_mail/cutover_client.py")' in runbook
