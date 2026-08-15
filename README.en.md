@@ -1,10 +1,10 @@
-# claude-agent-stack
+# ORRERY Telemetry
 
 [日本語](README.md)
 
 A coordination layer and live telemetry dashboard for local Claude Code and Codex agent teams. By default it uses the bundled AgentStack Mail server as the source of truth for messages, identities, and file reservations, then overlays tmux runtime state, parent-child lineage, communication history, and remaining context in one interface. Set `AGENTSTACK_MAIL_PROVIDER=upstream` to switch to the third-party [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) instead (the opt-out and rollback path).
 
-![claude-agent-stack demo](assets/demo.gif)
+![ORRERY Telemetry demo](assets/demo.gif)
 
 The central design principle is to make operating rules executable through launchers, hooks, mail, and visualization instead of merely expecting LLMs to coordinate.
 
@@ -29,8 +29,8 @@ Only CI and isolated tests that deliberately replace a platform boundary should 
 ## Quick start
 
 ```bash
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh
 ```
 

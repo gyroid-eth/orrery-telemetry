@@ -6,7 +6,7 @@
 
 ## `mcp_agent_mail`
 
-claude-agent-stack は [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) を次の正本として使います。
+ORRERY Telemetry は [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) を次の正本として使います。
 
 - project と agent identity
 - inbox / outbox / thread
@@ -49,7 +49,7 @@ license file が per-component boundary の正本です。
 
 ## License
 
-claude-agent-stack 本体は **PolyForm Perimeter License 1.0.1** です。正本は repository の [`LICENSE`](../LICENSE) です。source-available であり、OSI の意味での open source ではありません。
+ORRERY Telemetry 本体は **PolyForm Perimeter License 1.0.1** です。正本は repository の [`LICENSE`](../LICENSE) です。source-available であり、OSI の意味での open source ではありません。
 
 Perimeter の中核は Noncompete 条項です。利用・改変・再配布は目的を問わず可能ですが、**本ソフトウェアと競合する製品を他者へ提供すること**はできません。license は競合を広く定義しており、無償配布、別言語や別プラットフォームへの移植、service / library / plug-in としての提供も含みます。
 
@@ -59,7 +59,7 @@ Perimeter の中核は Noncompete 条項です。利用・改変・再配布は�
 ${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}/LICENSE
 ```
 
-**Rider は `mcp_agent_mail` 側だけの条項です。** claude-agent-stack 本体には Rider はありません（本 repository は Claude Code / Codex CLI を動かすための道具なので、利用者がそれらの API へ本 software を送信することを妨げない条文にしています）。`mcp_agent_mail` の Rider の適用範囲は upstream の `LICENSE` 全文で確認してください。
+**Rider は `mcp_agent_mail` 側だけの条項です。** ORRERY Telemetry 本体には Rider はありません（本 repository は Claude Code / Codex CLI を動かすための道具なので、利用者がそれらの API へ本 software を送信することを妨げない条文にしています）。`mcp_agent_mail` の Rider の適用範囲は upstream の `LICENSE` 全文で確認してください。
 
 この文書は要約であり、license 条項そのものではありません。配布・派生物・host・benchmark・dataset / training / evaluation への利用を判断するときは、必ず各 component の `LICENSE` 全文を確認してください。
 
@@ -67,7 +67,7 @@ ${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}/LICENSE
 
 | Component | 配置 | データ / 役割 | License の正本 |
 | --- | --- | --- | --- |
-| claude-agent-stack | この repository | launcher、hook、dashboard、skill、installer | [`LICENSE`](../LICENSE) |
+| ORRERY Telemetry | この repository | launcher、hook、dashboard、skill、installer | [`LICENSE`](../LICENSE) |
 | mcp_agent_mail | 外部 clone | identity、mail、reservation、signal、SQLite | upstream clone の `LICENSE` |
 | Claude Code | user install | Claude runtime | vendor terms |
 | Codex CLI | user install | Codex runtime | vendor terms |
@@ -82,7 +82,7 @@ dependency を同梱扱いにせず境界を明記することで、upgrade、un
 - [Ghostty](https://ghostty.org/): 推奨 terminal integration
 - Claude Code と Codex CLI: dashboard が観測・起動する agent runtimes
 
-scientist portrait catalog と dashboard assets は claude-agent-stack 配布物の一部です。private portrait は `AGENTSTACK_PORTRAITS_DIR` で repository 外に分離できます。
+scientist portrait catalog と dashboard assets は ORRERY Telemetry 配布物の一部です。private portrait は `AGENTSTACK_PORTRAITS_DIR` で repository 外に分離できます。
 
 ## Security と privacy
 

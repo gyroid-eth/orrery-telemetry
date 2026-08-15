@@ -8,7 +8,7 @@
 
 ```bash
 ~/.agentstack/bin/agentstack-doctor
-git -C /path/to/claude-agent-stack status --short
+git -C /path/to/orrery-telemetry status --short
 ```
 
 core doctor は install footprint、必須 command、managed block、managed agent 名、tmux mouse、tmux global identity env、dashboard endpoint と service manager の状態を検査します。repository 側は `git status` で変更を確認します。

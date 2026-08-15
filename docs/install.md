@@ -79,8 +79,8 @@ AGENTSTACK_MAIL_PROVIDER=upstream AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 ./scrip
 ## 基本インストール
 
 ```bash
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh
 ```
 

@@ -1,10 +1,10 @@
-# claude-agent-stack
+# ORRERY Telemetry
 
 [English](README.en.md)
 
 ローカルで動く Claude Code / Codex エージェント群のための、協調基盤とライブ telemetry ダッシュボードです。既定では同梱の AgentStack Mail server をメッセージ・identity・file reservation の正本にし、tmux 上の実行状態、親子関係、通信履歴、コンテキスト残量を一つの画面に重ねます。`AGENTSTACK_MAIL_PROVIDER=upstream` を明示すると、third-party の [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) を正本にする従来構成へ切り替えられます（opt-out 兼 rollback 経路）。
 
-![claude-agent-stack demo](assets/demo.gif)
+![ORRERY Telemetry demo](assets/demo.gif)
 
 設計の中心は「LLM に協調を期待するだけでなく、launcher・hook・mail・可視化で運用規約を実行可能にする」ことです。
 
@@ -29,8 +29,8 @@ CI や isolated test で platform boundary を意図的に偽装する場合に�
 ## クイックスタート
 
 ```bash
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh
 ```
 
