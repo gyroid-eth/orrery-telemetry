@@ -23,12 +23,12 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 `Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。
 
 installer は endpoint と transport credential selector を同じ generated `env.sh` で
-配布します。既定の upstream 経路は
-`AGENTSTACK_MAIL_HTTP_BEARER_MODE=auto` 相当で、従来どおり Keychain / `.env` の
-legacy HTTP bearer を使います。`AGENTSTACK_MAIL_PROVIDER=agentstack` の明示
-opt-in だけは `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を生成し、hook と
+配布します。既定の native 経路（AgentStack Mail）は
+`AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を生成し、hook と
 `spawn_child.sh` / `cleanup-child-agent.sh` は Authorization header を付けず native
-endpoint へ接続します。agent owner token はこれとは別の identity credential で、
+endpoint へ接続します。`AGENTSTACK_MAIL_PROVIDER=upstream` の opt-out だけは
+`AGENTSTACK_MAIL_HTTP_BEARER_MODE=auto` 相当で、従来どおり Keychain / `.env` の
+legacy HTTP bearer を使います。agent owner token はこれとは別の identity credential で、
 child token file と tool argument の既存境界を変えません。
 
 ### `set-ghostty-title.sh`

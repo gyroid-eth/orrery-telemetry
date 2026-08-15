@@ -78,7 +78,7 @@ preview が正しければ `--dry-run` だけを外します。
 source 済みの core `env.sh` に custom path があれば installer はそれを使います。
 未指定時の bearer file は upstream clone 側の `~/mcp_agent_mail/.env`、signal
 directory は runtime/archive 側の `~/.mcp_agent_mail/signals` です。この2つは用途
-の異なる directory です。native opt-in の core env は endpoint、native signals、
+の異なる directory です。native provider（既定）の core env は endpoint、native signals、
 `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` をまとめて渡します。専用 installer は
 その selector を Bridge env に保存し、runner、plugin MCP process、orphan cleanup の
 いずれも legacy bearer を読み込みません。

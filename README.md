@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-ローカルで動く Claude Code / Codex エージェント群のための、協調基盤とライブ telemetry ダッシュボードです。既定では [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) をメッセージ・identity・file reservation の正本にし、tmux 上の実行状態、親子関係、通信履歴、コンテキスト残量を一つの画面に重ねます。同梱 native provider は明示 opt-in の coexistence / 検証経路だけを提供し、既定 authority は変更しません。
+ローカルで動く Claude Code / Codex エージェント群のための、協調基盤とライブ telemetry ダッシュボードです。既定では同梱の AgentStack Mail server をメッセージ・identity・file reservation の正本にし、tmux 上の実行状態、親子関係、通信履歴、コンテキスト残量を一つの画面に重ねます。`AGENTSTACK_MAIL_PROVIDER=upstream` を明示すると、third-party の [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) を正本にする従来構成へ切り替えられます（opt-out 兼 rollback 経路）。
 
 ![claude-agent-stack demo](assets/demo.gif)
 
@@ -22,7 +22,7 @@ Python は **3.10 以上**が必須です。上限は設けておらず、全 su
 
 必須 command は `git` と `tmux` です。agent-mail を新規 provision する場合だけ `uv` も必須です。実行時には Claude Code または Codex CLI の少なくとも一方が必要です。`systemctl` は Linux の user service 用ですが、利用できなければ supervisor が代替します。`fswatch`（mail watcher）、`fzf`（directory picker）、Ghostty、Obsidian は任意です。
 
-installer は冒頭で OS、Python、必須 command、agent-mail endpoint（upstream の既定 `127.0.0.1:8765`）、install directory の書込権限をまとめて検査します。8765 が使用中でも、既存の `install-state.json` があれば上書き更新として扱います。新規 install で使用中の場合も socket の所有者を推測して停止せず、agent-mail の health response と SQLite database を確認できた場合だけ既存 service を再利用します。無関係または解決不能な listener なら、最初の書き込み前に停止します。`AGENTSTACK_MAIL_PROVIDER=agentstack` を明示した native 経路の既定 endpoint は `127.0.0.1:18765`、state root は `~/.agentstack/mail` です。
+installer は冒頭で OS、Python、必須 command、agent-mail endpoint（既定 `127.0.0.1:18765`・state root `~/.agentstack/mail`）、install directory の書込権限をまとめて検査します。endpoint が使用中でも、既存の `install-state.json` があれば上書き更新として扱います。新規 install で使用中の場合も socket の所有者を推測して停止せず、agent-mail の health response と canonical database を確認できた場合だけ既存 service を再利用します。無関係または解決不能な listener なら、最初の書き込み前に停止します。`AGENTSTACK_MAIL_PROVIDER=upstream` を明示した opt-out 経路の既定 endpoint は `127.0.0.1:8765` です。
 
 CI や isolated test で platform boundary を意図的に偽装する場合に限り、`AGENTSTACK_PREFLIGHT_SKIP_OS=1`、`AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`、`AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`、`AGENTSTACK_PREFLIGHT_SKIP_PORT=1`、`AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1` で各検査を個別に skip できます。skip は依存を提供せず、未対応環境を対応済みに変えるものでもありません。詳しくは[インストール](docs/install.md#動作環境)を参照してください。
 
@@ -133,7 +133,7 @@ tmux session ── telemetry ──► dashboard
                   identity / inbox / reservations
 ```
 
-既定構成は agent-mail を置き換えず、その上に launcher、運用 guard、可視化、control plane を重ねます。native provider の明示 opt-in でも正本は一度に一つだけで、legacy と native が同じ writable DB / archive を共有する構成を許しません。dashboard が落ちても identity・mail・reservation の正本は失われません。
+既定構成は同梱の AgentStack Mail を正本にし、その上に launcher、運用 guard、可視化、control plane を重ねます。upstream opt-out を選んでも正本は一度に一つだけで、legacy と native が同じ writable DB / archive を共有する構成を許しません。dashboard が落ちても identity・mail・reservation の正本は失われません。
 
 ## License
 

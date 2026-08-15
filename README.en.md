@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-A coordination layer and live telemetry dashboard for local Claude Code and Codex agent teams. It uses [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) as the source of truth for messages, identities, and file reservations, then overlays tmux runtime state, parent-child lineage, communication history, and remaining context in one interface.
+A coordination layer and live telemetry dashboard for local Claude Code and Codex agent teams. By default it uses the bundled AgentStack Mail server as the source of truth for messages, identities, and file reservations, then overlays tmux runtime state, parent-child lineage, communication history, and remaining context in one interface. Set `AGENTSTACK_MAIL_PROVIDER=upstream` to switch to the third-party [mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail) instead (the opt-out and rollback path).
 
 ![claude-agent-stack demo](assets/demo.gif)
 
@@ -22,7 +22,7 @@ Python **3.10 or newer** is required. There is no declared upper bound; the full
 
 The required commands are `git` and `tmux`. `uv` is additionally required only when the installer must provision agent-mail. At runtime, at least one of Claude Code or the Codex CLI is required. `systemctl` enables the Linux user service, with the supervisor as its supported fallback. `fswatch` (mail watcher), `fzf` (directory picker), Ghostty, and Obsidian are optional.
 
-The installer begins by checking the OS, Python, required commands, the agent-mail endpoint (default `127.0.0.1:8765`), and install-directory writability, reporting all detected problems together. An occupied port 8765 is expected when an existing `install-state.json` marks an update. On a fresh install, the installer does not guess ownership from the socket: it reuses the listener only after resolving an agent-mail health response and SQLite database, and stops before its first write for an unrelated or unresolved listener.
+The installer begins by checking the OS, Python, required commands, the agent-mail endpoint (default `127.0.0.1:18765`, state root `~/.agentstack/mail`), and install-directory writability, reporting all detected problems together. An occupied endpoint is expected when an existing `install-state.json` marks an update. On a fresh install, the installer does not guess ownership from the socket: it reuses the listener only after resolving an agent-mail health response and its canonical database, and stops before its first write for an unrelated or unresolved listener. The `AGENTSTACK_MAIL_PROVIDER=upstream` opt-out path defaults to `127.0.0.1:8765`.
 
 Only CI and isolated tests that deliberately replace a platform boundary should bypass an individual check with `AGENTSTACK_PREFLIGHT_SKIP_OS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`, `AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PORT=1`, or `AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1`. A bypass does not supply a dependency or make an unsupported environment supported. See [Installation](docs/install.md#動作環境) for details.
 
@@ -130,7 +130,7 @@ tmux session ── telemetry ──► dashboard
                   identity / inbox / reservations
 ```
 
-The stack does not replace agent-mail. It layers launchers, operational guards, visualization, and a control plane on top. If the dashboard stops, identities, mail, and reservations remain in their source of truth.
+The default configuration uses the bundled AgentStack Mail server as the source of truth and layers launchers, operational guards, visualization, and a control plane on top. Even with the upstream opt-out there is exactly one source of truth at a time; legacy and native never share a writable database or archive. If the dashboard stops, identities, mail, and reservations remain in their source of truth.
 
 ## License
 
