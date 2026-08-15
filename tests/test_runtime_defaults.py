@@ -360,6 +360,10 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         "AGENTSTACK_MAIL_ENV": str(mail_env),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        # This harness stubs provisioning binaries (uv/git), which cannot
+        # build the bundled AgentStack Mail wheel; pin the upstream provider
+        # so the pre-existing provider-orthogonal assertions stay valid.
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_CLAUDE_JSON": str(claude_json),
@@ -542,6 +546,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_LANG": "ja",
         "AGENTSTACK_MURMUR": "off",
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        # This harness stubs provisioning binaries (uv/git), which cannot
+        # build the bundled AgentStack Mail wheel; pin the upstream provider
+        # so the pre-existing provider-orthogonal assertions stay valid.
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
@@ -825,6 +833,10 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        # This harness stubs provisioning binaries (uv/git), which cannot
+        # build the bundled AgentStack Mail wheel; pin the upstream provider
+        # so the pre-existing provider-orthogonal assertions stay valid.
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),

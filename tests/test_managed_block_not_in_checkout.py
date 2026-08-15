@@ -33,6 +33,9 @@ def _dry_run(tmp_path: pathlib.Path, *args: str) -> str:
     env.update({
         "HOME": str(tmp_path / "home"),
         "AGENTSTACK_TERMINAL": "none",
+        # Hermetic: nothing listens on port 1, so the installer plans a fresh
+        # provision instead of detecting whatever mail server runs on this host.
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
     })
     env.pop("AGENTSTACK_PROJECT_KEY", None)
     env.pop("PROJECT_KEY", None)

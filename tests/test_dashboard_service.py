@@ -182,6 +182,10 @@ def _installer_upgrade_env(
         "AGENTSTACK_MAIL_DB": str(mail_db),
         "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        # This harness stubs provisioning (fake uv / pre-seeded upstream clone),
+        # which cannot build the bundled AgentStack Mail wheel; pin the upstream
+        # provider so the provider-orthogonal assertions stay valid.
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
@@ -246,6 +250,9 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
         "HOME": str(home),
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_TERMINAL": "none",
+        # Hermetic: nothing listens on port 1, so the installer plans a fresh
+        # provision instead of detecting whatever mail server runs on this host.
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
     })
     result = subprocess.run(
         [
@@ -682,6 +689,9 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
     env = os.environ.copy()
     env.pop("AGENTSTACK_PYTHON", None)
     env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+    # Hermetic: nothing listens on port 1, so the installer plans a fresh
+    # provision instead of detecting whatever mail server runs on this host.
+    env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:1/mcp"
     result = subprocess.run(
         [
             "bash", str(ROOT / "scripts" / "install.sh"),
@@ -765,6 +775,7 @@ exit 0
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_LAUNCHCTL_LOG": str(launchctl_log),
     })
@@ -932,6 +943,7 @@ def test_installer_reuses_existing_agent_mail_listener_database(tmp_path):
         "AGENTSTACK_MCP_URL": (
             f"http://127.0.0.1:{mail_server.server_port}/mcp"
         ),
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_PORT": str(dashboard_port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
@@ -1024,6 +1036,7 @@ def test_installer_refuses_to_record_an_ambiguous_mail_database(tmp_path):
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_DIR": str(mail_dir),
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
         "AGENTSTACK_PORT": str(dashboard_port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
