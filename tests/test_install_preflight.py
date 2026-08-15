@@ -167,7 +167,7 @@ def test_preflight_marks_occupied_port_as_existing_install_update(tmp_path):
         "existing AgentStack install detected; occupied agent-mail port "
         f"{server.server_port} will be verified for reuse"
     ) in result.stdout
-    assert "AGENTSTACK_MAIL_DB" in result.stderr
+    assert "did not answer an AgentStack Mail health check" in result.stderr
 
 
 def test_shell_python_floor_matches_package_metadata():

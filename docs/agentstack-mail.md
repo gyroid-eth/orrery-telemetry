@@ -1,18 +1,18 @@
 # AgentStack mail extraction
 
-`agentstack-mail` is developed inside this repository as a logically isolated
-package first. Repository extraction is deliberately deferred until the
-versioned contract, independent export/test gate, install/upgrade/rollback
-manifest, and N/N-1 consumer tests are stable.
+`agentstack-mail` is the public installer's default coordination provider. It
+is developed inside this repository as a logically isolated package;
+repository extraction remains deferred until the versioned contract and
+independent export/test gates are stable.
 
 The authoritative implementation input is the working live Python AgentMail
 checkout, including its local commits and dirty signal/runtime fixes. Current
 upstream is retained only as an advisory security and bug-fix source.
 
-The development endpoint is `http://127.0.0.1:18765`; data lives below
-`~/.agentstack/mail`. Existing AgentMail remains on its own endpoint and data
-roots throughout development. No test or installer may point both services at
-one writable database or archive.
+The default endpoint is `http://127.0.0.1:18765/mcp`; data lives below
+`~/.agentstack/mail`. Set `AGENTSTACK_MAIL_PROVIDER=upstream` when running
+`scripts/install.sh` to opt out and use the third-party provider. No test or
+installer may point both services at one writable database or archive.
 
 The caller-derived compatibility surface is versioned in
 `packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 24 tools
@@ -20,7 +20,7 @@ are the positive union of executable callers and shipped model-facing
 contracts. Permission deny entries, negative instructions, and Codex
 Bridge-local operations do not become source-extraction roots.
 
-The first implementation train is:
+The implementation train was:
 
 1. freeze provenance, live tool schemas, and the caller-derived tool contract;
 2. define isolated configuration and an exact-schema database copy/import gate;
@@ -30,14 +30,15 @@ The first implementation train is:
    tmux daemons;
 5. update installer, doctor, bridge, and hooks atomically to the new endpoint
    and authentication while preserving each client's existing MCP key;
-6. run coexistence, migration, rollback, fault, and real-machine soak gates
-   before any authority switch.
+6. run coexistence, migration, rollback, fault, and real-machine soak evidence
+   before the approved authority switch.
 
 The first four gates are executable and hermetic via
 [`packages/agentstack_mail/scripts/cutover_gates.py`](../packages/agentstack_mail/scripts/cutover_gates.py).
 The automated contract and the still-manual real-machine soak procedure are in
 [`agentstack-mail-cutover-gates.md`](agentstack-mail-cutover-gates.md). Passing
-them is evidence, not permission to change any decision-ledger `cutover_state`.
+them is evidence rather than authority on its own; the owner approved the
+public authority switch on 2026-08-15.
 
 The provider identity remains `agentstack-mail`, but it is not the client
 registration key. First cutover preserves Claude's `mcp-agent-mail` and
@@ -85,9 +86,78 @@ reregister paths already stop on mismatch, while direct spawn, raw MCP calls,
 and Codex App reauthentication remain follow-up coverage rather than a substitute
 for the required cutover setting.
 The service helper/controller and copy/verify/rollback-assess migration
-commands are implemented. Their clean candidate-bound release evidence and the
-installer/client authority switch are not complete, so the corresponding
-cutover conditions remain `no_go`.
+commands are implemented. The installer provisions this provider by default
+while preserving Claude's `mcp-agent-mail` and Codex's `agent-mail` client
+keys.
+
+## Installation and lifecycle
+
+The regular installer provisions the bundled package into an immutable
+candidate virtual environment, renders a namespaced service environment, and
+starts a supervised-background runner. The runner restarts a crashed server
+after five seconds; `agentstack-mail-service foreground` holds the state-root
+authority lock so a restart cannot create two writers. The thin lifecycle
+controller adds a PID file, exact rendered-runner identity check, endpoint and
+database health check, and a short-lived operation lock:
+
+```bash
+~/.agentstack/bin/agentstack-mailctl start
+~/.agentstack/bin/agentstack-mailctl status
+~/.agentstack/bin/agentstack-mailctl stop
+~/.agentstack/bin/agentstack-mailctl restart
+```
+
+The controller deliberately does not add a second launchd/systemd layer. A
+live PID with the wrong command, a healthy endpoint without the owned PID
+file, or an endpoint reporting another database is refused rather than stopped
+or reused.
+
+## Manual migration from upstream
+
+Migration is an operator-run procedure, not an installer step. First quiesce
+the upstream writer and determine the canonical absolute database, archive,
+and signals paths. The destination must not yet exist. From the repository
+checkout, copy and then verify all three projections:
+
+```bash
+LEGACY_DB=/absolute/path/to/storage.sqlite3
+LEGACY_ARCHIVE=/absolute/path/to/git_mailbox_repo
+LEGACY_SIGNALS=/absolute/path/to/signals
+DESTINATION="$HOME/.agentstack/mail"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate copy \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate verify \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+./scripts/install.sh
+```
+
+This path was used for the 2026-08-12 live switch: the database plus archive,
+about 60,000 records in total, were copied and reconciled successfully. Keep
+the upstream service stopped between copy and verification so the source
+snapshot does not change under the verifier.
+
+## Rollback
+
+Run `AGENTSTACK_MAIL_PROVIDER=upstream ./scripts/install.sh`; the AgentStack Mail data remains in `~/.agentstack/mail`.
+
+## Notification layout compatibility
+
+AgentStack Mail writes one signal per message at
+`signals/projects/<project>/agents/<agent>/<message-id>.signal`. The bundled
+`hooks/watch_agent_mail_signals.sh` recursively discovers that layout, extracts
+the nested `message` metadata, injects the notification, and removes only the
+successfully delivered per-message signal. The repository installer regression
+test exercises that exact producer-shaped path in an isolated signals/runtime
+root with a fake tmux boundary; it never touches the live watcher or ports.
 
 File-reservation activity probes converge on upstream #240's one-pathspec Git
 walk, then add a process-global concurrency limit of eight, a three-second
@@ -190,8 +260,9 @@ so a selected design cannot be mistaken for implemented or cutover-approved
 behavior. This document deliberately does not duplicate entry scopes.
 Unselected and selected-but-unimplemented entries retain
 `comparator_disposition: fail`; implemented selections are not allowances and
-must assert their selected behavior. Every current entry has
-`cutover_state: no_go`, so the gate does not authorize authority cutover.
+must assert their selected behavior. The current ledger records the approved
+authority-cutover selections as `go`; a separately scoped post-cutover
+follow-up may remain `no_go` without reversing that approval.
 
 ## Decision material
 
