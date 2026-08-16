@@ -182,10 +182,30 @@ for svc in data.get("services", []):
         if pidfile:
             p = pathlib.Path(pidfile).expanduser()
             if p.exists():
+                # agentstack-mailctl writes TWO lines: the pid, then the runner it
+                # started (bin/agentstack-mailctl write_pid). int() over the whole
+                # file raises, pid falls back to 0, and the mail server keeps
+                # running after an uninstall. Parse it the way the controller
+                # does, and do not signal a pid that has been recycled into
+                # something else.
+                recorded_runner = ""
                 try:
-                    pid = int(p.read_text(encoding="utf-8").strip())
+                    lines = p.read_text(encoding="utf-8").splitlines()
+                    pid = int(lines[0].split()[0]) if lines and lines[0].split() else 0
+                    recorded_runner = lines[1].strip() if len(lines) > 1 else ""
                 except Exception:
                     pid = 0
+                if pid > 1 and recorded_runner:
+                    try:
+                        command = subprocess.run(
+                            ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                            capture_output=True, text=True, timeout=10,
+                        ).stdout
+                    except Exception:
+                        command = ""
+                    if command and recorded_runner not in command:
+                        print(f"skipping pid {pid}: not the recorded runner")
+                        pid = 0
                 if pid > 1:
                     if dry_run:
                         print(f"DRY-RUN would terminate pid from {p}: {pid}")

@@ -191,6 +191,15 @@ AGENT_MAIL_PIDFILE="$MAIL_HOME/agent-mail.pid"
 AGENT_MAIL_LOG="$MAIL_HOME/agent-mail.log"
 AGENT_MAIL_SERVICE_KIND=""
 AGENT_MAIL_SERVICE_PATH=""
+# Login-time autostart for AgentStack Mail. `agentstack-mailctl start` daemonizes
+# with nohup, which does not survive a reboot: the dashboard has had a launchd /
+# systemd unit since day one, mail never did. A machine that reboots therefore
+# came back with a dashboard and no mail server.
+MAIL_AUTOSTART_LABEL="$LABEL_PREFIX.mail"
+AGENT_MAIL_AUTOSTART_KIND=""
+AGENT_MAIL_AUTOSTART_PATH=""
+# systemd needs a second file (service + timer); launchd does it in one plist.
+AGENT_MAIL_AUTOSTART_SERVICE_PATH=""
 AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
 NATIVE_MAIL_EXISTING=false
 PROVISION_NATIVE_MAIL=false
@@ -1104,6 +1113,7 @@ PY
     [[ -f "$resolved_db" ]] || die "AgentStack Mail database does not exist: $resolved_db"
     NATIVE_MAIL_EXISTING=true
     EXISTING_AGENT_MAIL_SERVER=true
+    adopt_running_native_mail_render
     say "existing AgentStack Mail database: $resolved_db"
     return
   fi
@@ -1115,6 +1125,56 @@ PY
     say "no native listener or state found; installer will provision AgentStack Mail at $MCP_URL"
   fi
 }
+
+# When a healthy native listener is already running, this run returns before it
+# renders anything — but the paths computed from the current checkout are still
+# what write_env_file records. On an update (different repo HEAD, MCP URL or
+# state root) those paths name a render that never existed, so env.sh points at a
+# missing service.env and every later `agentstack-mailctl start` dies with
+# "service env is missing" — including the login trigger, which would then fail
+# at every boot. Adopt the render the live service is actually using.
+# (Found by review on 2026-08-16 with an isolated full install against a running
+# listener; the same defect already made the documented manual start command fail
+# for updating users, before any autostart existed.)
+adopt_running_native_mail_render() {
+  local pid runner dir candidate=""
+  # The pidfile agentstack-mailctl writes is TWO lines: the pid, then the runner
+  # it started (bin/agentstack-mailctl write_pid). Read it exactly the way the
+  # controller reads it — a plain `cat` yields "PID\nRUNNER", which fails the
+  # numeric test and silently skips this whole function. (That bug shipped in the
+  # first version of this helper and was caught by review, because the test
+  # fixture had invented a one-line pidfile.)
+  pid="$(sed -n '1{s/[[:space:]].*$//;p;}' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)"
+  runner="$(sed -n '2p' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    if [[ -z "$runner" ]]; then
+      # Pidfile from an older controller: recover the runner from the process.
+      runner="$(ps -ww -o command= -p "$pid" 2>/dev/null |
+        awk '{for (i = 1; i <= NF; i++) if ($i ~ /run-agentstack-mail\.sh$/) { print $i; exit }}')"
+    fi
+    if [[ -n "$runner" ]]; then
+      dir="$(dirname "$runner")"
+      [[ -f "$dir/service.env" ]] && candidate="$dir/service.env"
+    fi
+  fi
+  if [[ -z "$candidate" && -f "$INSTALL_DIR/env.sh" ]]; then
+    # write_env_file emits `export KEY=<shlex.quote(value)>`, so a raw sed of the
+    # right-hand side hands back the quotes as part of the path and the -f test
+    # rejects a file that exists. Let a shell do the unquoting, in a subshell so
+    # sourcing cannot leak into this one.
+    candidate="$(
+      set +u
+      . "$INSTALL_DIR/env.sh" >/dev/null 2>&1 || exit 0
+      printf '%s' "${AGENTSTACK_MAIL_ENV:-}"
+    )"
+    [[ -n "$candidate" && -f "$candidate" ]] || candidate=""
+  fi
+  [[ -n "$candidate" ]] || return 0
+  NATIVE_MAIL_ENV="$candidate"
+  NATIVE_MAIL_RUNNER="$(dirname "$candidate")/run-agentstack-mail.sh"
+  MAIL_ENV="$NATIVE_MAIL_ENV"
+  say "adopted the running AgentStack Mail service env: $NATIVE_MAIL_ENV"
+} # end adopt_running_native_mail_render
 
 check_dependencies() {
   if ! command -v fswatch >/dev/null 2>&1; then
@@ -2225,6 +2285,226 @@ ensure_native_agentstack_mail() {
   start_native_mail
 }
 
+# Deliberately minimal. `agentstack-mailctl` sources $AGENTSTACK_HOME/env.sh
+# unless AGENTSTACK_MAILCTL_SKIP_ENV=1, so the unit runs the *same* command a
+# user runs by hand and reads the same configuration. Baking the mail paths into
+# the unit instead would drift the moment a re-install renders a new service env,
+# and the drift would only show up after the next reboot.
+mail_autostart_environment() {
+  cat <<ENVLIST
+HOME=$HOME
+AGENTSTACK_HOME=$INSTALL_DIR
+PATH=$PATH_VALUE
+ENVLIST
+} # end mail_autostart_environment
+
+# One-shot on purpose: `agentstack-mailctl start` spawns the runner with nohup and
+# exits, so a KeepAlive/Restart=always unit would respawn the controller in a loop
+# instead of supervising the server. `start` is idempotent — it reports "already
+# running" and exits 0 when the pidfile process is alive and healthy — so running
+# it at every login is safe.
+render_mail_autostart_unit() {
+  local kind="$1"
+  # Its own log: the trigger re-checks every few minutes and would otherwise
+  # write "already running" into the mail server's own log forever. Derived here
+  # because NATIVE_MAIL_SERVICE_ROOT is still being resolved at parse time.
+  local autostart_log="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail-autostart.log"
+  if [[ "$kind" == "launchd" ]]; then
+    AGENT_MAIL_AUTOSTART_PATH="$HOME/Library/LaunchAgents/$MAIL_AUTOSTART_LABEL.plist"
+    plan "render launchd plist $AGENT_MAIL_AUTOSTART_PATH (AgentStack Mail autostart)"
+    [[ "$DRY_RUN" == true ]] && return 0
+    mkdir -p "$HOME/Library/LaunchAgents"
+    # The env goes through argv, not a pipe: the `<<'PY'` heredoc already owns
+    # this command's stdin, so a pipe would be silently discarded and the plist
+    # would ship with an empty EnvironmentVariables block.
+    "$PYTHON_BIN" - \
+      "$AGENT_MAIL_AUTOSTART_PATH" "$MAIL_AUTOSTART_LABEL" \
+      "$BIN_DIR/agentstack-mailctl" "$autostart_log" \
+      "$(mail_autostart_environment)" <<'PY'
+import pathlib
+import plistlib
+import sys
+
+dst, label, mailctl, logfile, env_blob = sys.argv[1:6]
+env = {}
+for line in env_blob.splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        env[key] = value
+
+plist = {
+    "Label": label,
+    "ProgramArguments": [mailctl, "start"],
+    "RunAtLoad": True,
+    # Not KeepAlive: mailctl exits after handing the server to nohup, so launchd
+    # would respawn the *controller* in a loop instead of supervising the server.
+    "KeepAlive": False,
+    # Re-check periodically instead. `start` is idempotent — it reports "already
+    # running" and exits 0 — so this is a cheap liveness sweep that also covers
+    # the cases RunAtLoad alone cannot: the runner being killed mid-session, and
+    # a port that was briefly contended at login.
+    "StartInterval": 300,
+    "StandardOutPath": logfile,
+    "StandardErrorPath": logfile,
+    "EnvironmentVariables": env,
+}
+path = pathlib.Path(dst)
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_bytes(plistlib.dumps(plist))
+tmp.replace(path)
+PY
+    return 0
+  fi
+
+  AGENT_MAIL_AUTOSTART_PATH="$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.timer"
+  AGENT_MAIL_AUTOSTART_SERVICE_PATH="$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.service"
+  plan "render systemd user units $AGENT_MAIL_AUTOSTART_SERVICE_PATH and $AGENT_MAIL_AUTOSTART_PATH (AgentStack Mail autostart)"
+  [[ "$DRY_RUN" == true ]] && return 0
+  mkdir -p "$HOME/.config/systemd/user"
+  {
+    # NOT After=default.target: a unit installed into default.target.wants/ is
+    # already ordered by systemd's own Wants completion, and ordering against
+    # default.target as well is a cycle, which systemd resolves by dropping a
+    # job. The dashboard unit uses network.target for the same reason.
+    printf '[Unit]\nDescription=AgentStack Mail autostart\nAfter=network.target\n\n'
+    # No RemainAfterExit: the timer re-runs this unit, and a unit left "active"
+    # after exiting would never be started again.
+    printf '[Service]\nType=oneshot\n'
+    # systemd splits unquoted values on whitespace, so a HOME or install dir
+    # containing a space would silently truncate every Environment= value and
+    # the ExecStart path. Quote them the way systemd expects.
+    "$PYTHON_BIN" - "$BIN_DIR/agentstack-mailctl" "$(mail_autostart_environment)" <<'PY_UNIT'
+import sys
+
+mailctl, env_blob = sys.argv[1:3]
+
+
+def quote(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+for line in env_blob.splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        print(f"Environment={key}={quote(value)}")
+print(f"ExecStart={quote(mailctl)} start")
+print()
+PY_UNIT
+  } > "$AGENT_MAIL_AUTOSTART_SERVICE_PATH"
+  # The timer is what gets enabled: it covers boot *and* keeps checking, which a
+  # login-only trigger cannot (a runner killed mid-session stays dead until the
+  # next login). launchd gets the same behaviour from StartInterval.
+  {
+    printf '[Unit]\nDescription=AgentStack Mail autostart timer\n\n'
+    printf '[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\nAccuracySec=30s\n'
+    printf 'Unit=%s.service\nPersistent=true\n\n' "$MAIL_AUTOSTART_LABEL"
+    printf '[Install]\nWantedBy=timers.target\n'
+  } > "$AGENT_MAIL_AUTOSTART_PATH"
+} # end render_mail_autostart_unit
+
+enable_mail_autostart() {
+  local kind=""
+  case "$(uname -s)" in
+    Darwin) command -v launchctl >/dev/null 2>&1 && kind="launchd" ;;
+    Linux)  command -v systemctl >/dev/null 2>&1 && kind="systemd-user" ;;
+  esac
+  # Never register a trigger that is already known to fail: mailctl reads env.sh
+  # and dies if the service env is missing, and a unit that fails only at boot is
+  # worse than no unit at all — nothing reports it until mail is silently absent.
+  if [[ "$DRY_RUN" != true && ! -f "$MAIL_ENV" ]]; then
+    warn "AgentStack Mail service env is missing ($MAIL_ENV); skipping the login trigger because it would fail at boot. Stop the mail server and re-run install.sh to render one, then mail will restart automatically."
+    return 0
+  fi
+
+  if [[ -z "$kind" ]]; then
+    # Say it out loud. A missing autostart is invisible until the machine
+    # reboots, which is exactly how this gap survived on the maintainer's Mac.
+    warn "no supported service manager found; AgentStack Mail will NOT restart after a reboot. Start it manually with: $BIN_DIR/agentstack-mailctl start"
+    return 0
+  fi
+
+  # Compute the path first so the existing unit can be preserved: the renderer
+  # overwrites it, and a failed re-registration would otherwise leave the machine
+  # with neither the old trigger nor the new one — visible only at the next boot.
+  local previous=""
+  if [[ "$kind" == "launchd" ]]; then
+    AGENT_MAIL_AUTOSTART_PATH="$HOME/Library/LaunchAgents/$MAIL_AUTOSTART_LABEL.plist"
+  else
+    AGENT_MAIL_AUTOSTART_PATH="$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.timer"
+  fi
+  if [[ "$DRY_RUN" != true && -f "$AGENT_MAIL_AUTOSTART_PATH" ]]; then
+    previous="$AGENT_MAIL_AUTOSTART_PATH.prev"
+    rm -f "$previous"
+    cp "$AGENT_MAIL_AUTOSTART_PATH" "$previous"
+  fi
+
+  render_mail_autostart_unit "$kind"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    if [[ "$kind" == "launchd" ]]; then
+      say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $AGENT_MAIL_AUTOSTART_PATH"
+      say "DRY-RUN would run: launchctl enable gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+    else
+      say "DRY-RUN would run: systemctl --user enable $MAIL_AUTOSTART_LABEL.timer"
+    fi
+    AGENT_MAIL_AUTOSTART_KIND="$kind"
+    return 0
+  fi
+
+  if [[ "$kind" == "launchd" ]]; then
+    launchctl bootout "gui/$(id -u)/$MAIL_AUTOSTART_LABEL" 2>/dev/null || true
+    # As with the dashboard: the bootstrap call is the capability probe. Never
+    # infer availability from login metadata.
+    if launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH" && \
+       launchctl enable "gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+    then
+      AGENT_MAIL_AUTOSTART_KIND="launchd"
+      [[ -n "$previous" ]] && rm -f "$previous"
+      say "AgentStack Mail will restart at login ($MAIL_AUTOSTART_LABEL)"
+      return 0
+    fi
+    launchctl bootout "gui/$(id -u)/$MAIL_AUTOSTART_LABEL" 2>/dev/null || true
+    rm -f "$AGENT_MAIL_AUTOSTART_PATH"
+    if [[ -n "$previous" ]]; then
+      mv "$previous" "$AGENT_MAIL_AUTOSTART_PATH"
+      if launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH" 2>/dev/null; then
+        warn "kept the previous AgentStack Mail login trigger; the new one could not be registered"
+        AGENT_MAIL_AUTOSTART_KIND="launchd"
+        return 0
+      fi
+    fi
+  else
+    # `enable` (not `enable --now`): the server is already running from
+    # start_native_mail, and a oneshot start here would only re-probe it.
+    if systemctl --user daemon-reload && \
+       systemctl --user enable "$MAIL_AUTOSTART_LABEL.timer"
+    then
+      AGENT_MAIL_AUTOSTART_KIND="systemd-user"
+      [[ -n "$previous" ]] && rm -f "$previous"
+      say "AgentStack Mail will restart at login ($MAIL_AUTOSTART_LABEL.timer)"
+      return 0
+    fi
+    systemctl --user disable "$MAIL_AUTOSTART_LABEL.timer" 2>/dev/null || true
+    rm -f "$AGENT_MAIL_AUTOSTART_PATH" "$AGENT_MAIL_AUTOSTART_SERVICE_PATH"
+    if [[ -n "$previous" ]]; then
+      mv "$previous" "$AGENT_MAIL_AUTOSTART_PATH"
+      if systemctl --user daemon-reload 2>/dev/null && \
+         systemctl --user enable "$MAIL_AUTOSTART_LABEL.timer" 2>/dev/null; then
+        warn "kept the previous AgentStack Mail login trigger; the new one could not be registered"
+        AGENT_MAIL_AUTOSTART_KIND="systemd-user"
+        return 0
+      fi
+    fi
+    # systemd caches unit files; without this the removed unit lingers in the
+    # manager's view until something else reloads it.
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+
+  rm -f "${previous:-/nonexistent}" 2>/dev/null || true
+  AGENT_MAIL_AUTOSTART_PATH=""
+  warn "could not register the AgentStack Mail autostart unit; mail will NOT restart after a reboot. Start it manually with: $BIN_DIR/agentstack-mailctl start"
+}
+
 render_launchd_plist() {
   local plist="$HOME/Library/LaunchAgents/$LABEL.plist"
   plan "render launchd plist $plist"
@@ -2531,7 +2811,9 @@ write_manifest() {
   local mail_service_path="${4:-}"
   local tmp="$MANIFEST.tmp"
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
-    "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" <<PY
+    "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
+    "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
+    "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" <<PY
 import json
 import os
 import pathlib
@@ -2544,6 +2826,10 @@ service_path = sys.argv[3]
 mail_service_kind = sys.argv[4]
 mail_service_path = sys.argv[5]
 requested_name_honoring = json.loads(sys.argv[6])
+mail_autostart_kind = sys.argv[7]
+mail_autostart_path = sys.argv[8]
+mail_autostart_label = sys.argv[9]
+mail_autostart_service_path = sys.argv[10]
 install_dir = pathlib.Path("$INSTALL_DIR")
 claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
@@ -2564,6 +2850,10 @@ if version_path.is_file() or version_path.is_symlink():
 owned_files.extend([str(pathlib.Path("$ENV_FILE")), str(pathlib.Path("$MANIFEST"))])
 if service_path:
     owned_files.append(service_path)
+if mail_autostart_path:
+    owned_files.append(mail_autostart_path)
+if mail_autostart_service_path:
+    owned_files.append(mail_autostart_service_path)
 if "$MAIL_PROVIDER" == "agentstack":
     for raw in ("$NATIVE_MAIL_ENV", "$NATIVE_MAIL_RUNNER"):
         path = pathlib.Path(raw)
@@ -2625,6 +2915,15 @@ elif service_kind == "nohup":
     services.append({"kind": "nohup", "pidfile": service_path})
 if mail_service_kind == "nohup" and mail_service_path:
     services.append({"kind": "nohup", "pidfile": mail_service_path, "role": "agent-mail"})
+# Recorded so uninstall.sh tears the autostart unit down through the same
+# services loop it already uses for the dashboard.
+if mail_autostart_kind == "launchd" and mail_autostart_path:
+    services.append({"kind": "launchd", "label": mail_autostart_label,
+                     "path": mail_autostart_path, "role": "agent-mail-autostart"})
+elif mail_autostart_kind == "systemd-user" and mail_autostart_path:
+    # The timer is the enabled unit; the service it triggers is a plain file.
+    services.append({"kind": "systemd-user", "unit": f"{mail_autostart_label}.timer",
+                     "path": mail_autostart_path, "role": "agent-mail-autostart"})
 manifest = {
     "schema_version": 1,
     "tool": "claude-agent-stack",
@@ -2755,6 +3054,21 @@ main() {
   fi
   report_agent_mail_name_capability
   write_env_file
+  # After write_env_file: the unit runs `agentstack-mailctl start`, which reads
+  # env.sh. Registering it earlier would fire RunAtLoad against a config that
+  # does not exist yet. This is outside ensure_native_agentstack_mail on purpose
+  # — that function returns early when a healthy server is already running, which
+  # is precisely the case for every existing user re-running install.sh to
+  # update, and they need the autostart most.
+  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
+    enable_mail_autostart
+  elif [[ "$PROVISION_AGENT_MAIL" == true ]]; then
+    # The upstream opt-out provisions its own nohup runner, which has the same
+    # reboot defect. It has no mailctl-equivalent to invoke from a login trigger,
+    # so say so instead of leaving the gap silent. A server we merely *detected*
+    # is someone else's to manage and is not mentioned here.
+    warn "the upstream agent-mail provider does not restart after a reboot; restart it yourself or switch to the bundled provider (unset AGENTSTACK_MAIL_PROVIDER)"
+  fi
   safe_merge_claude_mcp
   safe_merge_settings
   safe_managed_doc_setups

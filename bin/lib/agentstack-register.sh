@@ -14,6 +14,11 @@ ags_mail_load_token() {
     tok="$(grep HTTP_BEARER_TOKEN "$mail_env" 2>/dev/null | cut -d= -f2- || true)"
     [[ -n "$tok" ]] && export MCP_AGENT_MAIL_TOKEN="$tok"
   fi
+  # The bearer token is optional (tokenless transports set
+  # AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled). Without this the last evaluated
+  # command is the `[[ -n "$tok" ]]` test, so "no token" returns 1 and the
+  # `set -e` in every caller kills the launcher with no output at all.
+  return 0
 }
 
 ags_mcp_call() {
@@ -45,9 +50,12 @@ PY
 )"
   local auth=()
   [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $MCP_AGENT_MAIL_TOKEN")
+  # `${auth[@]+"${auth[@]}"}` — macOS bash 3.2 treats a plain `"${auth[@]}"` on
+  # an empty array as an unbound variable under `set -u`, so a tokenless call
+  # would abort here instead of sending no Authorization header.
   printf '%s' "$payload" | curl -sf --max-time 30 -X POST "$mcp_url" \
     -H "Content-Type: application/json" -H "Accept: application/json" -H "Connection: close" \
-    "${auth[@]}" \
+    ${auth[@]+"${auth[@]}"} \
     --data-binary @- 2>/dev/null
 }
 

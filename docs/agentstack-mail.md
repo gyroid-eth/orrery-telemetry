@@ -107,10 +107,54 @@ database health check, and a short-lived operation lock:
 ~/.agentstack/bin/agentstack-mailctl restart
 ```
 
-The controller deliberately does not add a second launchd/systemd layer. A
-live PID with the wrong command, a healthy endpoint without the owned PID
+The controller deliberately does not add a second supervision layer of its own.
+A live PID with the wrong command, a healthy endpoint without the owned PID
 file, or an endpoint reporting another database is refused rather than stopped
 or reused.
+
+### Restart after a reboot
+
+The runner is started with `nohup`, which does not survive a reboot, so the
+installer registers a *supervising trigger* — `org.agentstack.mail` as a launchd
+job on macOS, or a oneshot service plus a `.timer` on Linux — whose only job is
+to run `agentstack-mailctl start` at login and every five minutes thereafter. It is registered on every install,
+including when the installer finds a healthy server already running, so
+re-running `install.sh` on an existing setup is enough to gain it.
+
+The unit carries only `HOME`, `AGENTSTACK_HOME` and `PATH`: `agentstack-mailctl`
+reads `env.sh` for everything else, so the trigger runs exactly the command an
+operator runs by hand and picks up a re-rendered service env automatically.
+Freezing those paths into the unit instead would silently keep starting the
+previous render after a re-install. Each invocation is one-shot on purpose (`KeepAlive` false / `Type=oneshot`): the
+controller hands the server to `nohup` and exits, so a restart-always unit would
+respawn the *controller* in a loop instead of supervising the server. Repetition
+comes from `StartInterval` on launchd and from the timer on systemd. `start` is
+idempotent — it reports "already running" and exits 0 when the owned PID is alive
+and healthy — so re-running it costs nothing. Its output goes to
+`agentstack-mail-autostart.log`, separate from the server's own log.
+
+If neither launchd nor systemd is available, the installer says so explicitly
+rather than skipping quietly, because a missing autostart is invisible until the
+machine actually reboots. That is not hypothetical: on 2026-08-16 a reboot on the
+maintainer's Mac came back with the dashboard running, no mail server, and a
+stale legacy service holding port 8765 — every agent registered afterwards wrote
+to the wrong database, and nothing reported an error.
+
+`agentstack-uninstall` removes the trigger — both the launchd/systemd job and the
+unit file — along with the other services recorded in the install manifest.
+
+**What it covers.** The rendered runner restarts a crashed *server* after five
+seconds. If the *runner itself* is killed the trigger picks it up on its next
+sweep (measured before the sweep existed: pidfile present, port closed, nothing
+restarting it until the next login). A stale PID with a free port recovers
+automatically; a stale PID whose port is held by an unhealthy or foreign listener
+is refused with a message rather than fought over — the sweep will retry, but it
+will not evict a listener it does not own. Immediate recovery is
+`agentstack-mailctl start`.
+
+The upstream opt-out provider (`AGENTSTACK_MAIL_PROVIDER=upstream`) has the same
+reboot behaviour and no equivalent controller to trigger, so the installer warns
+about it instead of registering anything.
 
 ## Manual migration from upstream
 

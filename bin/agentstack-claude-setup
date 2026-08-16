@@ -97,10 +97,22 @@ apply_target() {
   echo "$PROG: installed managed block into $target"
 }
 
+# `done < <(resolve_targets)` runs the resolver in a *subshell*, so its `die`
+# only kills that subshell: the message prints, TARGETS stays empty, and the
+# script marches on. Under macOS bash 3.2 + `set -u` the bare "${TARGETS[@]}"
+# below then aborts with `TARGETS[@]: unbound variable`, which reads as a bug in
+# this script rather than as "the scope you gave me is invalid".
+# Command substitution *does* propagate the status, so resolve here and fail
+# where the caller can see why. Making the expansion nounset-safe on its own
+# would be worse: a resolver failure would become a silent successful no-op.
+TARGETS_RAW="$(resolve_targets)" || exit $?
 TARGETS=()
 while IFS= read -r target; do
-  TARGETS+=("$target")
-done < <(resolve_targets)
+  [[ -n "$target" ]] && TARGETS+=("$target")
+done <<EOF
+$TARGETS_RAW
+EOF
+[[ ${#TARGETS[@]} -gt 0 ]] || die "no CLAUDE.md target resolved for scope '$SCOPE'"
 
 if [[ "$mode" == "print" ]]; then
   for target in "${TARGETS[@]}"; do
