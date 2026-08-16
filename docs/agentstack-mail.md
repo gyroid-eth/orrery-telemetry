@@ -130,8 +130,17 @@ controller hands the server to `nohup` and exits, so a restart-always unit would
 respawn the *controller* in a loop instead of supervising the server. Repetition
 comes from `StartInterval` on launchd and from the timer on systemd. `start` is
 idempotent — it reports "already running" and exits 0 when the owned PID is alive
-and healthy — so re-running it costs nothing. Its output goes to
-`agentstack-mail-autostart.log`, separate from the server's own log.
+and healthy — so re-running it costs nothing, and it stays silent when there is
+nothing to do. Its output goes to `agentstack-mail-autostart.log` (launchd
+`StandardOutPath`, systemd `StandardOutput=append:`), separate from the server's
+own log.
+
+`agentstack-mailctl stop` is honoured. It records the intent in
+`runtime/agentstack-mail.stopped`, and the sweep leaves a deliberately stopped
+server alone until an explicit `start` or `restart` releases the hold. Without
+that record the trigger would quietly undo an operator's stop at the next
+firing — measured before the fix: `stop` reported "AgentStack Mail stopped", and
+the following sweep reported "AgentStack Mail started".
 
 If neither launchd nor systemd is available, the installer says so explicitly
 rather than skipping quietly, because a missing autostart is invisible until the

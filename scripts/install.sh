@@ -2295,6 +2295,7 @@ mail_autostart_environment() {
 HOME=$HOME
 AGENTSTACK_HOME=$INSTALL_DIR
 PATH=$PATH_VALUE
+AGENTSTACK_MAILCTL_SWEEP=1
 ENVLIST
 } # end mail_autostart_environment
 
@@ -2390,16 +2391,25 @@ for line in env_blob.splitlines():
 print(f"ExecStart={quote(mailctl)} start")
 print()
 PY_UNIT
-  } > "$AGENT_MAIL_AUTOSTART_SERVICE_PATH"
+    # systemd has no equivalent of launchd's StandardOutPath in the plist, so
+    # say it here or the "output goes to a dedicated log" promise is false on
+    # Linux (it was).
+    printf 'StandardOutput=append:%s\nStandardError=append:%s\n' \
+      "$autostart_log" "$autostart_log"
+  } > "$AGENT_MAIL_AUTOSTART_SERVICE_PATH.tmp"
+  mv "$AGENT_MAIL_AUTOSTART_SERVICE_PATH.tmp" "$AGENT_MAIL_AUTOSTART_SERVICE_PATH"
   # The timer is what gets enabled: it covers boot *and* keeps checking, which a
   # login-only trigger cannot (a runner killed mid-session stays dead until the
   # next login). launchd gets the same behaviour from StartInterval.
   {
     printf '[Unit]\nDescription=AgentStack Mail autostart timer\n\n'
+    # No Persistent=: it only affects OnCalendar timers, and implying that a
+    # missed monotonic firing is caught up after resume is simply wrong.
     printf '[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\nAccuracySec=30s\n'
-    printf 'Unit=%s.service\nPersistent=true\n\n' "$MAIL_AUTOSTART_LABEL"
+    printf 'Unit=%s.service\n\n' "$MAIL_AUTOSTART_LABEL"
     printf '[Install]\nWantedBy=timers.target\n'
-  } > "$AGENT_MAIL_AUTOSTART_PATH"
+  } > "$AGENT_MAIL_AUTOSTART_PATH.tmp"
+  mv "$AGENT_MAIL_AUTOSTART_PATH.tmp" "$AGENT_MAIL_AUTOSTART_PATH"
 } # end render_mail_autostart_unit
 
 enable_mail_autostart() {
@@ -2432,10 +2442,21 @@ enable_mail_autostart() {
   else
     AGENT_MAIL_AUTOSTART_PATH="$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.timer"
   fi
+  local previous_service=""
   if [[ "$DRY_RUN" != true && -f "$AGENT_MAIL_AUTOSTART_PATH" ]]; then
     previous="$AGENT_MAIL_AUTOSTART_PATH.prev"
     rm -f "$previous"
     cp "$AGENT_MAIL_AUTOSTART_PATH" "$previous"
+  fi
+  # The systemd timer is useless without the service it triggers: restoring only
+  # the timer reports success while leaving nothing to activate.
+  if [[ "$DRY_RUN" != true && "$kind" == "systemd-user" ]]; then
+    local existing_service="$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.service"
+    if [[ -f "$existing_service" ]]; then
+      previous_service="$existing_service.prev"
+      rm -f "$previous_service"
+      cp "$existing_service" "$previous_service"
+    fi
   fi
 
   render_mail_autostart_unit "$kind"
@@ -2445,7 +2466,7 @@ enable_mail_autostart() {
       say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $AGENT_MAIL_AUTOSTART_PATH"
       say "DRY-RUN would run: launchctl enable gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
     else
-      say "DRY-RUN would run: systemctl --user enable $MAIL_AUTOSTART_LABEL.timer"
+      say "DRY-RUN would run: systemctl --user enable --now $MAIL_AUTOSTART_LABEL.timer"
     fi
     AGENT_MAIL_AUTOSTART_KIND="$kind"
     return 0
@@ -2476,11 +2497,17 @@ enable_mail_autostart() {
   else
     # `enable` (not `enable --now`): the server is already running from
     # start_native_mail, and a oneshot start here would only re-probe it.
+    # An older install enabled the *service* directly; leave that symlink in
+    # place and it keeps firing alongside the timer.
+    systemctl --user disable "$MAIL_AUTOSTART_LABEL.service" 2>/dev/null || true
+    # `enable` alone only writes the symlink — the timer does not start until the
+    # next login, so a re-install would not supervise anything until then.
     if systemctl --user daemon-reload && \
-       systemctl --user enable "$MAIL_AUTOSTART_LABEL.timer"
+       systemctl --user enable --now "$MAIL_AUTOSTART_LABEL.timer"
     then
       AGENT_MAIL_AUTOSTART_KIND="systemd-user"
       [[ -n "$previous" ]] && rm -f "$previous"
+      [[ -n "$previous_service" ]] && rm -f "$previous_service"
       say "AgentStack Mail will restart at login ($MAIL_AUTOSTART_LABEL.timer)"
       return 0
     fi
@@ -2488,8 +2515,11 @@ enable_mail_autostart() {
     rm -f "$AGENT_MAIL_AUTOSTART_PATH" "$AGENT_MAIL_AUTOSTART_SERVICE_PATH"
     if [[ -n "$previous" ]]; then
       mv "$previous" "$AGENT_MAIL_AUTOSTART_PATH"
-      if systemctl --user daemon-reload 2>/dev/null && \
-         systemctl --user enable "$MAIL_AUTOSTART_LABEL.timer" 2>/dev/null; then
+      [[ -n "$previous_service" ]] && \
+        mv "$previous_service" "$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.service"
+      if [[ -f "$HOME/.config/systemd/user/$MAIL_AUTOSTART_LABEL.service" ]] && \
+         systemctl --user daemon-reload 2>/dev/null && \
+         systemctl --user enable --now "$MAIL_AUTOSTART_LABEL.timer" 2>/dev/null; then
         warn "kept the previous AgentStack Mail login trigger; the new one could not be registered"
         AGENT_MAIL_AUTOSTART_KIND="systemd-user"
         return 0
@@ -2500,7 +2530,7 @@ enable_mail_autostart() {
     systemctl --user daemon-reload 2>/dev/null || true
   fi
 
-  rm -f "${previous:-/nonexistent}" 2>/dev/null || true
+  rm -f "${previous:-/nonexistent}" "${previous_service:-/nonexistent}" 2>/dev/null || true
   AGENT_MAIL_AUTOSTART_PATH=""
   warn "could not register the AgentStack Mail autostart unit; mail will NOT restart after a reboot. Start it manually with: $BIN_DIR/agentstack-mailctl start"
 }

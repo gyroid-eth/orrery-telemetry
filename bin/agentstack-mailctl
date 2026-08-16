@@ -29,6 +29,14 @@ if [[ -z "$MAIL_RUNNER" && -n "$MAIL_ENV" ]]; then
   MAIL_RUNNER="$(dirname "$MAIL_ENV")/run-agentstack-mail.sh"
 fi
 RUNTIME_DIR="${AGENTSTACK_MAIL_RUNTIME_DIR:-$MAIL_SERVICE_ROOT/runtime}"
+# An explicit `stop` has to outlive the command: the installed autostart trigger
+# calls `start` every few minutes, so without a recorded intent it would simply
+# undo the operator's stop at the next sweep. Measured: stop → "AgentStack Mail
+# stopped" → next sweep → "AgentStack Mail started (pid ...)".
+STOPPED_MARKER="${AGENTSTACK_MAIL_STOPPED_MARKER:-$RUNTIME_DIR/agentstack-mail.stopped}"
+# Set by the autostart unit. A sweep must never override intent, and must stay
+# quiet when there is nothing to do (it runs ~105k times a year).
+SWEEP="${AGENTSTACK_MAILCTL_SWEEP:-0}"
 PIDFILE="${AGENTSTACK_MAIL_PIDFILE:-$RUNTIME_DIR/agentstack-mail.pid}"
 LOGFILE="${AGENTSTACK_MAIL_LOG:-$RUNTIME_DIR/agentstack-mail.log}"
 CONTROL_LOCK="${AGENTSTACK_MAIL_CONTROL_LOCK:-$RUNTIME_DIR/agentstack-mailctl.lock}"
@@ -226,7 +234,7 @@ start_service() {
     pid_is_managed_runner "$pid" || \
       die "pidfile points to a process other than the rendered runner (pid $pid)"
     health_ok || die "managed runner pid $pid is alive but AgentStack Mail health is failing"
-    say "AgentStack Mail already running (pid $pid, endpoint $MCP_URL)"
+    [[ "$SWEEP" == "1" ]] || say "AgentStack Mail already running (pid $pid, endpoint $MCP_URL)"
     return
   fi
   if [[ -n "$pid" ]]; then
@@ -299,7 +307,14 @@ command="${1:-}"
 case "$command" in
   start)
     validate_config
+    if [[ "$SWEEP" == "1" && -f "$STOPPED_MARKER" ]]; then
+      # Deliberately stopped. Say so once, on stderr, and leave it alone.
+      printf '%s: held down by an explicit stop (%s); not starting\n' \
+        "$PROG" "$STOPPED_MARKER" >&2
+      exit 0
+    fi
     acquire_lock
+    [[ "$SWEEP" == "1" ]] || rm -f "$STOPPED_MARKER"
     start_service
     ;;
   status)
@@ -309,11 +324,14 @@ case "$command" in
   stop)
     validate_config
     acquire_lock
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
+    : > "$STOPPED_MARKER"
     stop_service
     ;;
   restart)
     validate_config
     acquire_lock
+    rm -f "$STOPPED_MARKER"
     stop_service
     start_service
     ;;

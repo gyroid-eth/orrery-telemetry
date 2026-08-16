@@ -169,7 +169,12 @@ def test_launchd_unit_is_one_shot_and_calls_mailctl():
         "mailctl exits after handing the server to nohup; KeepAlive would respawn "
         "the controller in a loop instead of supervising the server"
     )
-    assert plist.get("StartInterval"), (
+    interval = plist.get("StartInterval")
+    assert isinstance(interval, int) and 60 <= interval <= 900, (
+        f"StartInterval={interval!r} is not a liveness sweep; a year-long "
+        "interval satisfies a truthiness check and supervises nothing"
+    )
+    assert interval, (
         "RunAtLoad alone only covers login. Without a periodic re-check a runner "
         "killed mid-session stays dead until the next reboot, and a port that was "
         "briefly contended at login is never retried. (systemd gets this from its "
@@ -218,8 +223,17 @@ def test_the_unit_lets_mailctl_read_env_sh():
     )
     assert env.get("AGENTSTACK_HOME"), env
     assert env.get("HOME"), env
-    baked = [k for k in env if k.startswith("AGENTSTACK_MAIL")]
+    # AGENTSTACK_MAILCTL_SWEEP is a mode flag, not configuration: it tells the
+    # controller "this is the periodic sweep", which is how an explicit stop is
+    # respected and how the sweep stays quiet. Everything else must come from
+    # env.sh.
+    baked = [k for k in env
+             if k.startswith("AGENTSTACK_MAIL") and k != "AGENTSTACK_MAILCTL_SWEEP"]
     assert not baked, f"these belong in env.sh, not in the unit: {baked}"
+    assert env.get("AGENTSTACK_MAILCTL_SWEEP") == "1", (
+        "without the sweep flag the trigger would restart a server the operator "
+        "deliberately stopped, and would log a line every five minutes"
+    )
 
 
 def test_autostart_is_registered_even_when_mail_is_already_running():
@@ -444,7 +458,9 @@ def test_launchd_registration_actually_calls_launchctl():
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KIND=launchd" in r.stdout, r.stdout
     assert "launchctl bootstrap" in calls, f"the job was never registered:\n{calls}"
-    assert "launchctl enable" in calls, calls
+    assert f"launchctl enable gui/" in calls and f"{LABEL_PREFIX}.mail" in calls, (
+        "the wrong label would register a job nobody triggers\n" + calls
+    )
 
 
 def test_systemd_registration_actually_calls_systemctl():
@@ -453,7 +469,16 @@ def test_systemd_registration_actually_calls_systemctl():
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KIND=systemd-user" in r.stdout, r.stdout
     assert "systemctl --user daemon-reload" in calls, calls
-    assert "systemctl --user enable" in calls, calls
+    # The unit *and* the activation both matter: enabling the service instead of
+    # the timer, or enabling without --now, leaves nothing sweeping until the
+    # next login. Both mutants passed an earlier version of this test.
+    assert f"systemctl --user enable --now {LABEL_PREFIX}.mail.timer" in calls, (
+        "the timer was not enabled-and-started\n" + calls
+    )
+    assert f"systemctl --user disable {LABEL_PREFIX}.mail.service" in calls, (
+        "an older install enabled the service directly; that symlink must be "
+        "cleared or it keeps firing alongside the timer\n" + calls
+    )
 
 
 def test_a_failed_registration_cleans_up_and_reports():
@@ -499,6 +524,29 @@ def test_the_unit_carries_the_real_paths_not_just_the_right_keys():
     assert env["AGENTSTACK_HOME"] == str(tmp / "home" / ".agentstack"), env
 
 
+def test_both_platforms_log_to_the_dedicated_autostart_log():
+    """`autostart_log` must actually be wired, on both platforms.
+
+    Pointing it at /definitely/wrong/... passed the whole suite, and the systemd
+    unit had no StandardOutput at all while the docs claimed a dedicated log.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        expected = str(tmp / "home" / "mail-service" / "runtime"
+                       / "agentstack-mail-autostart.log")
+        plist = plistlib.loads(_render_unit("launchd", tmp).read_bytes())
+    with tempfile.TemporaryDirectory() as td2:
+        tmp2 = pathlib.Path(td2)
+        expected2 = str(tmp2 / "home" / "mail-service" / "runtime"
+                        / "agentstack-mail-autostart.log")
+        _, service = _render_systemd_pair(tmp2)
+        unit_text = service.read_text(encoding="utf-8")
+    assert plist["StandardOutPath"] == expected, (plist.get("StandardOutPath"), expected)
+    assert plist["StandardErrorPath"] == expected, plist.get("StandardErrorPath")
+    assert f"StandardOutput=append:{expected2}" in unit_text, unit_text
+    assert f"StandardError=append:{expected2}" in unit_text, unit_text
+
+
 def test_systemd_timer_re_runs_the_oneshot():
     """A oneshot service is never repeated on its own; the timer is the sweep."""
     with tempfile.TemporaryDirectory() as td:
@@ -532,6 +580,75 @@ def test_systemd_unit_survives_a_path_containing_spaces():
             assert value.startswith('"') and value.endswith('"'), (
                 f"unquoted value would be split by systemd: {line}"
             )
+
+
+# --- the sweep must not undo a deliberate stop --------------------------------
+
+MAILCTL = ROOT / "bin" / "agentstack-mailctl"
+
+
+def _mailctl_env(tmp: pathlib.Path) -> dict:
+    runtime = tmp / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    service_env = tmp / "service.env"
+    service_env.write_text("# test\n", encoding="utf-8")
+    runner = tmp / "run-agentstack-mail.sh"
+    runner.write_text("#!/bin/bash\nsleep 30\n", encoding="utf-8")
+    runner.chmod(0o755)
+    env = dict(os.environ)
+    env.update({
+        "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
+        "AGENTSTACK_MAIL_PROVIDER": "agentstack",
+        "AGENTSTACK_MAIL_DIR": str(tmp),
+        "AGENTSTACK_MAIL_ENV": str(service_env),
+        "AGENTSTACK_MAIL_RUNNER": str(runner),
+        "AGENTSTACK_MAIL_RUNTIME_DIR": str(runtime),
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{_free_port()}/mcp",
+        "AGENTSTACK_PYTHON": sys.executable,
+    })
+    return env
+
+
+def test_the_sweep_leaves_a_deliberately_stopped_server_alone():
+    """Reported by review with a live end-to-end run:
+
+        STOP_RESULT 0 AgentStack Mail stopped
+        SIMULATED_SWEEP_START 0 AgentStack Mail started (pid 39426, ...)
+
+    A trigger that runs `start` every five minutes silently undoes an operator's
+    `stop`. The controller now records the intent and the sweep honours it.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        env = _mailctl_env(tmp)
+        stop = subprocess.run(["/bin/bash", str(MAILCTL), "stop"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        marker = tmp / "runtime" / "agentstack-mail.stopped"
+        marker_written = marker.exists()
+        sweep_env = dict(env)
+        sweep_env["AGENTSTACK_MAILCTL_SWEEP"] = "1"
+        sweep = subprocess.run(["/bin/bash", str(MAILCTL), "start"],
+                               capture_output=True, text=True, env=sweep_env, timeout=120)
+        # An operator's own `start` is intent too: it must clear the hold.
+        manual = subprocess.run(["/bin/bash", str(MAILCTL), "start"],
+                                capture_output=True, text=True, env=env, timeout=180)
+        marker_cleared = not marker.exists()
+    assert marker_written, (stop.stdout, stop.stderr)
+    assert sweep.returncode == 0, sweep.stderr
+    assert "held down by an explicit stop" in sweep.stderr, (sweep.stdout, sweep.stderr)
+    assert "started" not in sweep.stdout, (
+        "the sweep restarted a server the operator stopped\n" + sweep.stdout)
+    assert marker_cleared, "an explicit start must release the hold"
+    # `manual` may fail for lack of a real server; what matters is that it tried.
+    assert "held down" not in manual.stderr, manual.stderr
+
+
+def test_the_sweep_is_quiet_when_there_is_nothing_to_do():
+    """It runs ~105k times a year; a line each time is a log that eats itself."""
+    source = MAILCTL.read_text(encoding="utf-8")
+    assert 'SWEEP" == "1" ]] || say "AgentStack Mail already running' in source, (
+        "the 'already running' line is not suppressed for the periodic sweep"
+    )
 
 
 def _main() -> int:
