@@ -18,6 +18,7 @@ PATH, so nothing here touches a real service.
 from __future__ import annotations
 
 import os
+import plistlib
 import subprocess
 from pathlib import Path
 
@@ -37,12 +38,20 @@ case "$1" in
     ;;
   bootout)
     label="${2##*/}"
+    if [[ -n "${BOOTOUT_FAILS:-}" ]]; then
+      exit 77
+    fi
     rm -f "$LOADED_DIR/$label"
     exit 0
     ;;
 esac
 exit 0
 """
+
+
+def _write_plist(path: Path, label: str, *program: str) -> None:
+    with path.open("wb") as handle:
+        plistlib.dump({"Label": label, "ProgramArguments": list(program)}, handle)
 
 
 def _harness(tmp_path: Path, loaded: list[str]) -> tuple[dict[str, str], Path, Path]:
@@ -58,7 +67,9 @@ def _harness(tmp_path: Path, loaded: list[str]) -> tuple[dict[str, str], Path, P
     agents.mkdir(parents=True)
     for label in loaded:
         (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
-        (agents / f"{label}.plist").write_text("<plist/>\n", encoding="utf-8")
+        # A real plist: the installer extracts Label and ProgramArguments with
+        # plutil, so a placeholder document would exercise nothing.
+        _write_plist(agents / f"{label}.plist", label, "/opt/mcp_agent_mail/.venv/bin/serve-http")
 
     log = tmp_path / "launchctl.log"
     env = {
@@ -70,28 +81,39 @@ def _harness(tmp_path: Path, loaded: list[str]) -> tuple[dict[str, str], Path, P
     return env, loaded_dir, log
 
 
+def _log_text(log: Path) -> str:
+    """No log file at all means launchctl was never invoked."""
+    return log.read_text() if log.exists() else ""
+
+
 def _run_retirement(
     tmp_path: Path,
     loaded: list[str],
     *,
     extra_env: dict[str, str] | None = None,
-    keep_legacy: bool = False,
-) -> tuple[str, Path, Path]:
+    retire: bool = True,
+    harness: tuple[dict[str, str], Path, Path] | None = None,
+) -> tuple[str, str, Path, Path]:
     """Source the installer and call the step directly, with no install running."""
-    env, loaded_dir, log = _harness(tmp_path, loaded)
+    env, loaded_dir, log = harness if harness is not None else _harness(tmp_path, loaded)
     env.update(extra_env or {})
     install_dir = tmp_path / "agentstack"
-    install_dir.mkdir()
+    install_dir.mkdir(exist_ok=True)
     script = f"""
 set -euo pipefail
 # The installer runs its own argument parsing and main() at the bottom; source
 # only the definitions by stopping before it acts.
 INSTALL_SH={INSTALLER!s}
 eval "$(sed -n '/^retire_legacy_mail_services() {{/,/^}}/p' "$INSTALL_SH")"
+eval "$(sed -n '/^legacy_mail_plist_looks_like_mail() {{/,/^}}/p' "$INSTALL_SH")"
 say() {{ echo "$@"; }}
 warn() {{ echo "warn: $@"; }}
 DRY_RUN={'true' if False else 'false'}
-KEEP_LEGACY_MAIL={'true' if keep_legacy else 'false'}
+RETIRE_LEGACY_MAIL={'true' if retire else 'false'}
+LABEL_PREFIX=org.agentstack
+LABEL=org.agentstack.agentdashboard
+MAIL_AUTOSTART_LABEL=org.agentstack.mail
+die() {{ echo "die: $@" >&2; exit 1; }}
 INSTALL_DIR={install_dir!s}
 uname() {{ echo Darwin; }}
 retire_legacy_mail_services
@@ -103,15 +125,14 @@ retire_legacy_mail_services
         env=env,
         timeout=60,
     )
-    assert result.returncode == 0, result.stderr
-    return result.stdout, loaded_dir, log
+    return result.stdout, result.stderr, loaded_dir, log
 
 
 def test_the_label_older_installers_actually_used_is_retired(tmp_path: Path) -> None:
     label = "org.agentstack.mcp-agent-mail"
-    out, loaded_dir, log = _run_retirement(tmp_path, [label])
+    out, _err, loaded_dir, log = _run_retirement(tmp_path, [label])
     assert not (loaded_dir / label).exists(), "the legacy job was left loaded"
-    assert f"bootout gui/{os.getuid()}/{label}" in log.read_text()
+    assert f"bootout gui/{os.getuid()}/{label}" in _log_text(log)
     assert "retired legacy mail service" in out
     parked = tmp_path / "agentstack" / "parked-launchd" / f"{label}.plist"
     assert parked.exists(), "the plist was deleted instead of parked"
@@ -122,38 +143,189 @@ def test_the_per_user_label_is_retired_too(tmp_path: Path) -> None:
     # under pytest (it reports the controlling terminal's owner).
     user = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
     label = f"com.{user}.mcp-agent-mail"
-    _, loaded_dir, _ = _run_retirement(tmp_path, [label])
+    _out, _err, loaded_dir, _log = _run_retirement(tmp_path, [label])
     assert not (loaded_dir / label).exists()
 
 
 def test_nothing_is_touched_when_no_legacy_job_is_loaded(tmp_path: Path) -> None:
     """The null case: a clean machine must come through untouched."""
-    out, _, log = _run_retirement(tmp_path, [])
+    out, _err, _loaded, log = _run_retirement(tmp_path, [])
     assert "retired" not in out
-    assert "bootout" not in log.read_text()
+    assert "bootout" not in _log_text(log)
 
 
-def test_keep_legacy_mail_leaves_it_alone_but_says_so(tmp_path: Path) -> None:
+def test_retirement_is_opt_in(tmp_path: Path) -> None:
+    """Stopping a service someone is running is the operator's call.
+
+    The default reports the collision -- two servers means two databases -- and
+    leaves the decision to a human.
+    """
     label = "org.agentstack.mcp-agent-mail"
-    out, loaded_dir, log = _run_retirement(tmp_path, [label], keep_legacy=True)
-    assert (loaded_dir / label).exists(), "the opt-out still retired the service"
-    assert "bootout" not in log.read_text()
-    assert "left alone" in out
+    out, err, loaded_dir, log = _run_retirement(tmp_path, [label], retire=False)
+    assert (loaded_dir / label).exists(), "a previous service was retired without being asked"
+    assert "bootout" not in _log_text(log)
+    assert "--retire-legacy-mail" in (out + err)
+
+
+def test_the_label_this_install_owns_can_never_be_retired(tmp_path: Path) -> None:
+    """One stray environment variable must not stop the server being installed."""
+    label = "org.orrery.mail"
+    env, loaded_dir, log = _harness(tmp_path, [label])
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path,
+        [],
+        extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": label},
+        harness=(env, loaded_dir, log),
+    )
+    assert (loaded_dir / label).exists(), "the current production label was retired"
+    assert "bootout" not in _log_text(log)
+    assert "this install owns it" in (out + err)
+
+
+def test_a_job_that_is_not_a_mail_service_is_left_alone(tmp_path: Path) -> None:
+    """A supplied label is not evidence. Read what the job actually runs."""
+    label = "com.example.editor"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/Applications/Editor.app/Contents/MacOS/editor",
+    )
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path,
+        [],
+        extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": label},
+        harness=(env, loaded_dir, log),
+    )
+    assert (loaded_dir / label).exists(), "an unrelated service was retired"
+    assert "bootout" not in _log_text(log)
+    assert "does not look like a mail service" in (out + err)
+
+
+def test_a_failed_bootout_stops_the_install_and_keeps_the_plist(tmp_path: Path) -> None:
+    """Never report 'retired' while the job is still loaded.
+
+    Moving the definition aside after a failed bootout leaves a running server
+    with nothing to restore it from -- strictly worse than the collision.
+    """
+    label = "org.agentstack.mcp-agent-mail"
+    out, err, loaded_dir, _log = _run_retirement(
+        tmp_path, [label], extra_env={"BOOTOUT_FAILS": "1"}
+    )
+    assert (loaded_dir / label).exists()
+    assert "retired legacy mail service" not in out
+    assert "by hand" in err
+    parked = tmp_path / "agentstack" / "parked-launchd" / f"{label}.plist"
+    assert not parked.exists(), "the plist was parked even though the job is still loaded"
+    still_there = tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist"
+    assert still_there.exists()
 
 
 def test_the_known_labels_can_be_overridden(tmp_path: Path) -> None:
     label = "com.example.some-other-mail"
-    _, loaded_dir, _ = _run_retirement(
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/opt/mcp_agent_mail/serve",
+    )
+    _out, _err, loaded_dir, _log = _run_retirement(
         tmp_path,
-        [label],
+        [],
         extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": f"{label},org.unused"},
+        harness=(env, loaded_dir, log),
     )
     assert not (loaded_dir / label).exists()
 
 
-def test_an_unrelated_service_is_not_retired(tmp_path: Path) -> None:
-    """Only known mail labels. Booting out someone's editor would be a disaster."""
-    label = "com.example.unrelated"
-    _, loaded_dir, log = _run_retirement(tmp_path, [label])
+def test_a_known_label_on_someone_elses_job_is_not_enough(tmp_path: Path) -> None:
+    """The check must read what the job runs, not the document as a whole.
+
+    Every legacy label we look for is itself written inside the plist, so a
+    whole-document search confirms itself: an editor whose Label happens to be
+    org.agentstack.mcp-agent-mail passed, and was booted out.
+    """
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/Applications/Editor.app/Contents/MacOS/editor",
+    )
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists(), "an editor carrying a known label was retired"
+    assert "bootout" not in _log_text(log)
+    assert "does not look like a mail service" in (out + err)
+
+
+def test_an_unparseable_plist_fails_closed(tmp_path: Path) -> None:
+    """Not being able to tell is not permission to act."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    (tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist").write_text(
+        "this is not a plist; mcp-agent-mail used to run here\n", encoding="utf-8"
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
     assert (loaded_dir / label).exists()
-    assert "bootout" not in log.read_text()
+    assert "bootout" not in _log_text(log)
+
+
+def test_this_installs_own_dashboard_label_is_protected(tmp_path: Path) -> None:
+    """Every label this install registers is protected, by value.
+
+    Denying the whole prefix would be simpler and wrong: the legacy job this
+    step exists to retire lives under the same prefix.
+    """
+    label = "org.agentstack.agentdashboard"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/opt/agentstack-mail-service",  # looks like mail, and is still ours
+    )
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path,
+        [],
+        extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": label},
+        harness=(env, loaded_dir, log),
+    )
+    assert (loaded_dir / label).exists(), "this install's own dashboard was retired"
+    assert "this install owns it" in (out + err)
+
+
+def test_an_existing_parked_copy_is_never_overwritten(tmp_path: Path) -> None:
+    """The parked plist may be the only remaining definition of that service."""
+    label = "org.agentstack.mcp-agent-mail"
+    parked_dir = tmp_path / "agentstack" / "parked-launchd"
+    parked_dir.mkdir(parents=True)
+    keepsake = parked_dir / f"{label}.plist"
+    keepsake.write_text("ORIGINAL RECOVERY COPY\n", encoding="utf-8")
+
+    _out, _err, _loaded, _log = _run_retirement(tmp_path, [label])
+    assert keepsake.read_text() == "ORIGINAL RECOVERY COPY\n", "the earlier copy was replaced"
+    assert list(parked_dir.glob(f"{label}.plist.*")), "the new copy was not kept"
+
+
+def test_a_symlinked_plist_is_refused(tmp_path: Path) -> None:
+    """Moving the link parks a dangling file and reports success."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    real = tmp_path / "elsewhere.plist"
+    _write_plist(real, label, "/opt/mcp_agent_mail/serve")
+    (tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist").symlink_to(real)
+
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists()
+    assert "bootout" not in _log_text(log)

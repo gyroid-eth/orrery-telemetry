@@ -843,6 +843,20 @@ EXPECTED_LIVE_RESOURCE_TEMPLATE_URIS = [
     "resource://views/urgent-unread/{agent}{?project,limit,format}",
 ]
 
+EXPECTED_POST_CUTOVER_INTENTIONAL_DIFFERENCES = [
+    {
+        "id": "payload.agent.last_active_ts",
+        "arose": "post_cutover",
+        "date": "2026-08-17",
+        "approved_by": "maintainer",
+        "channel": "direct chat instruction to ProOpus",
+        "summary": "Core refreshes Agent.last_active_ts on reservation traffic (file_reservation_paths / renew_file_reservations / release_file_reservations); frozen live refreshed it only on register_agent and send_message.",
+        "why_not_in_the_initial_cutover_difference_set": "The initial-cutover-difference-set-exact condition records what was approved at cutover on 2026-08-15 and is deliberately left at three. Rewriting it to four would make the ledger claim that this difference was reviewed then, which it was not: it was found on 2026-08-17 while fixing the staleness sweep, and approved separately.",
+        "comparator_effect": "masked before temporal normalization; see intentional_differences.allowlisted_entries[payload.agent.last_active_ts]"
+    }
+]
+
+
 EXPECTED_NORMALIZATION_BLIND_SPOTS = [
     {
         "id": "rich_tool_call_timing_presentation",
@@ -1576,6 +1590,14 @@ def _assert_expected_divergences_manifest(
         )
     if intentional["normalization_blind_spots"] != EXPECTED_NORMALIZATION_BLIND_SPOTS:
         raise SystemExit(f"{artifact} normalization blind spots changed")
+    # Pin the contents, not just the key. A section that records which
+    # divergences were approved after cutover, and by whom, is worth nothing if
+    # it can be emptied without the gate noticing.
+    if (
+        manifest["post_cutover_intentional_differences"]
+        != EXPECTED_POST_CUTOVER_INTENTIONAL_DIFFERENCES
+    ):
+        raise SystemExit(f"{artifact} post-cutover intentional differences changed")
     if intentional["safety_entries"] != EXPECTED_SAFETY_DIFFERENCES:
         raise SystemExit(f"{artifact} safety differences changed")
     performance_gates = manifest["performance_gates"]

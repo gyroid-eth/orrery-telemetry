@@ -76,6 +76,7 @@ validate_config() {
 # When launchd owns the endpoint, defer to it. It is the supervisor; signalling
 # its child behind its back is what produced the ambiguity in the first place.
 MAIL_LAUNCHD_LABEL="${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+LAUNCHD_PLIST_MEMO="${AGENTSTACK_MAIL_LAUNCHD_MEMO:-$RUNTIME_DIR/agentstack-mail.launchd-plist}"
 
 launchd_available() {
   [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1
@@ -88,6 +89,82 @@ launchd_service_target() {
 launchd_supervises_mail() {
   launchd_available || return 1
   launchctl print "$(launchd_service_target)" >/dev/null 2>&1
+}
+
+# Is the loaded job the one this install supervises?
+#
+# "A label is loaded" is not ownership: a job carrying the expected label may
+# belong to something else entirely, and acting on it would boot out a stranger.
+# Two independent checks, both required when they are available:
+#
+#   * the job runs this service (its Program/ProgramArguments name our runner or
+#     the mail service entry point), and
+#   * when the endpoint is being served, the listener is that job or its child.
+#
+# Anything unproven fails closed. A controller that assumes ownership when it
+# cannot check is the failure this guard exists to prevent.
+# Read a plist structurally. Searching the whole document conflates the Label
+# with what the job runs, and the labels we look for are themselves the strings
+# being searched for -- the check would confirm itself.
+plist_defines_this_service() {
+  local plist="$1" label program
+  [[ -f "$plist" && ! -L "$plist" ]] || return 1
+  command -v /usr/bin/plutil >/dev/null 2>&1 || return 1
+  label="$(/usr/bin/plutil -extract Label raw -o - "$plist" 2>/dev/null)" || return 1
+  [[ "$label" == "$MAIL_LAUNCHD_LABEL" ]] || return 1
+  program="$(/usr/bin/plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null)" ||
+    program="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" || return 1
+  case "$program" in
+    *agentstack-mail-service*|*agentstack_mail*|*run-agentstack-mail.sh*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+launchd_job_program() {
+  launchctl print "$(launchd_service_target)" 2>/dev/null |
+    sed -n -e 's/^[[:space:]]*program = \(.*\)$/\1/p' \
+           -e 's/^[[:space:]]*[0-9][0-9]* = \(.*\)$/\1/p'
+}
+
+launchd_job_runs_this_service() {
+  local program
+  program="$(launchd_job_program)"
+  [[ -n "$program" ]] || return 1
+  case "$program" in
+    *agentstack-mail-service*|*agentstack_mail*|*run-agentstack-mail.sh*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+launchd_listener_belongs_to_job() {
+  local job_pid listener_pid port parent
+  job_pid="$(launchd_service_pid)"
+  [[ -n "$job_pid" ]] || return 1
+  port="${MCP_URL##*:}"
+  port="${port%%/*}"
+  command -v lsof >/dev/null 2>&1 || return 1
+  listener_pid="$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -n 1)"
+  [[ -n "$listener_pid" ]] || return 1
+  [[ "$listener_pid" == "$job_pid" ]] && return 0
+  parent="$(ps -o ppid= -p "$listener_pid" 2>/dev/null | tr -d " ")"
+  [[ "$parent" == "$job_pid" ]]
+}
+
+launchd_job_is_ours() {
+  launchd_supervises_mail || return 1
+  launchd_job_runs_this_service || return 1
+  # Only insist on the listener when something is actually serving; a loaded
+  # job with a closed endpoint is exactly what an operator means to start or
+  # stop.
+  if endpoint_port_open; then
+    launchd_listener_belongs_to_job || return 1
+  fi
+  return 0
+}
+
+launchd_service_plist() {
+  launchctl print "$(launchd_service_target)" 2>/dev/null |
+    sed -n 's/^[[:space:]]*path = \(.*\)$/\1/p' | head -n 1
 }
 
 launchd_service_pid() {
@@ -260,7 +337,38 @@ wait_for_stop() {
 start_service() {
   # A launchd install starts through launchd, not through the runner wrapper:
   # starting our own would put a second server on the same endpoint.
-  if launchd_supervises_mail; then
+  if [[ ! -e "$LAUNCHD_PLIST_MEMO" ]] || launchd_supervises_mail; then
+    :
+  else
+    # We booted this job out in a previous `stop`. Put the supervisor back
+    # rather than starting a second, unsupervised server next to where launchd
+    # will start one at the next login.
+    local memo_label memo_plist
+    memo_label="$(sed -n 's/^label=//p' "$LAUNCHD_PLIST_MEMO" 2>/dev/null | head -n 1)"
+    memo_plist="$(sed -n 's/^plist=//p' "$LAUNCHD_PLIST_MEMO" 2>/dev/null | head -n 1)"
+    # A receipt is an instruction to load a launchd job, so treat it as one:
+    # wrong label, missing file, or a definition that is not this service means
+    # something changed underneath us. Say so rather than loading it, and never
+    # fall through to an unsupervised runner -- that silently demotes an install
+    # that launchd will contradict at the next login.
+    [[ "$memo_label" == "$MAIL_LAUNCHD_LABEL" ]] || \
+      die "recorded launchd job is for '$memo_label', not '$MAIL_LAUNCHD_LABEL'; remove $LAUNCHD_PLIST_MEMO if it is stale"
+    [[ -n "$memo_plist" && -f "$memo_plist" ]] || \
+      die "recorded launchd plist is missing ($memo_plist); remove $LAUNCHD_PLIST_MEMO if it is stale"
+    plist_defines_this_service "$memo_plist" || \
+      die "recorded plist $memo_plist does not define $MAIL_LAUNCHD_LABEL running this service"
+    launchctl bootstrap "gui/$(id -u)" "$memo_plist" >/dev/null 2>&1 || true
+    if launchd_supervises_mail; then
+      rm -f "$LAUNCHD_PLIST_MEMO"
+      if wait_for_health; then
+        say "AgentStack Mail started by launchd (label $MAIL_LAUNCHD_LABEL)"
+        return 0
+      fi
+      die "launchd job $MAIL_LAUNCHD_LABEL was restored but the endpoint is not healthy"
+    fi
+    die "could not restore launchd job $MAIL_LAUNCHD_LABEL from $memo_plist"
+  fi
+  if launchd_job_is_ours; then
     if endpoint_port_open && health_ok; then
       [[ "$SWEEP" == "1" ]] || say "AgentStack Mail already running under launchd (label $MAIL_LAUNCHD_LABEL)"
       return 0
@@ -311,12 +419,37 @@ start_service() {
 stop_service() {
   local pid
   pid="$(read_pid)"
-  if ! pid_running "$pid" && launchd_supervises_mail && endpoint_port_open; then
-    # launchd will restart whatever we signal, so ask launchd instead.
-    launchctl bootout "$(launchd_service_target)" >/dev/null 2>&1 || true
-    if launchd_supervises_mail && endpoint_port_open; then
-      die "launchd job $MAIL_LAUNCHD_LABEL did not release the endpoint"
+  if ! pid_running "$pid" && launchd_job_is_ours; then
+    # launchd restarts whatever we signal, so ask launchd instead. Do this
+    # whenever the job is loaded -- a job that is loaded but not currently
+    # serving is exactly the one an operator means to stop.
+    local plist
+    plist="$(launchd_service_plist)"
+    # Record what is about to be removed *before* removing it, and refuse to
+    # touch the job if the record cannot be written: a stop that unloads the
+    # supervisor and then fails to say what it unloaded leaves no way back.
+    if [[ -n "$plist" ]]; then
+      mkdir -p "$RUNTIME_DIR" 2>/dev/null || \
+        die "cannot create $RUNTIME_DIR to record the launchd job; refusing to stop it"
+      umask 077
+      printf 'label=%s\nplist=%s\n' "$MAIL_LAUNCHD_LABEL" "$plist" > "$LAUNCHD_PLIST_MEMO.tmp" || \
+        die "cannot record the launchd job at $LAUNCHD_PLIST_MEMO; refusing to stop it"
+      mv -f "$LAUNCHD_PLIST_MEMO.tmp" "$LAUNCHD_PLIST_MEMO" || \
+        die "cannot record the launchd job at $LAUNCHD_PLIST_MEMO; refusing to stop it"
     fi
+    launchctl bootout "$(launchd_service_target)" >/dev/null 2>&1 || true
+    # bootout is asynchronous: the job outlives the call by a moment.
+    local waited=0
+    while launchd_supervises_mail || health_ok; do
+      # Wait for the job to go *and* for this service to stop answering. The
+      # port alone is the wrong signal: something else may hold it, and then
+      # this would block on a condition it cannot satisfy.
+      if (( waited >= 50 )); then
+        die "launchd job $MAIL_LAUNCHD_LABEL is still loaded or still serving"
+      fi
+      sleep 0.1
+      waited=$((waited + 1))
+    done
     rm -f "$PIDFILE"
     say "AgentStack Mail stopped (launchd job $MAIL_LAUNCHD_LABEL booted out)"
     return
@@ -354,7 +487,7 @@ status_service() {
     return 0
   fi
   if endpoint_port_open; then
-    if launchd_supervises_mail; then
+    if launchd_job_is_ours; then
       local launchd_pid
       launchd_pid="$(launchd_service_pid)"
       health_ok || die "launchd job $MAIL_LAUNCHD_LABEL owns the endpoint but health is failing"
@@ -396,7 +529,7 @@ case "$command" in
     validate_config
     acquire_lock
     rm -f "$STOPPED_MARKER"
-    if launchd_supervises_mail; then
+    if launchd_job_is_ours; then
       # One call, so the job is never left booted out if the start half fails.
       launchctl kickstart -k "$(launchd_service_target)" >/dev/null 2>&1 || \
         die "launchd could not restart $MAIL_LAUNCHD_LABEL"

@@ -7,7 +7,7 @@ MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
-KEEP_LEGACY_MAIL=false
+RETIRE_LEGACY_MAIL=false
 ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
@@ -82,6 +82,8 @@ Options:
   --project-key PATH     Default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, or repo root
   --port PORT            Default: 8770
   --label-prefix PREFIX  Default: org.agentstack
+  --retire-legacy-mail   Retire a previous mail service found loaded (default:
+                         report it and leave it running)
   --terminal MODE        auto, ghostty, iterm, terminal, or none
   -h, --help             Show this help
 
@@ -101,11 +103,10 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=true
       shift
       ;;
-    --keep-legacy-mail)
-      # Escape hatch for anyone deliberately running the predecessor alongside
-      # this one. It is not the default: leaving both loaded splits identities
-      # and reservations across two databases.
-      KEEP_LEGACY_MAIL=true
+    --retire-legacy-mail)
+      # Explicit opt-in. Without it a previous mail service is reported and left
+      # running: stopping a service someone is using is the operator's call.
+      RETIRE_LEGACY_MAIL=true
       shift
       ;;
     -y|--assume-yes)
@@ -2425,13 +2426,19 @@ retire_legacy_mail_services() {
   # and nothing did: the only code that boots out a previous job is the
   # same-port handoff, which never fires because the new server binds a
   # different port, and the legacy label it looks for is a single guessed
-  # string (com.<user>.mcp-agent-mail) that does not match what the older
+  # string (com.<user>.mcp-agent-mail) that does not match what older
   # installers actually registered (org.agentstack.mcp-agent-mail). Reported by
-  # a tester on 2026-08-17 with both jobs loaded and both listening.
+  # a tester on 2026-08-17 with both jobs loaded and both listening. Two mail
+  # servers own two databases, so agent identities and file reservations split
+  # across two stores depending on which endpoint a client reaches.
   #
-  # Two mail servers is not only waste: they own separate databases, so agent
-  # identities and file reservations silently split across two stores depending
-  # on which endpoint a client reaches.
+  # Retiring is opt-in. Stopping a service someone is running is not a decision
+  # an installer gets to make silently, so the default is to report the
+  # collision and let the operator choose.
+  if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
+    return 0
+  fi
+
   local labels=()
   if [[ -n "${AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS:-}" ]]; then
     IFS=',' read -r -a labels <<< "$AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS"
@@ -2439,42 +2446,105 @@ retire_legacy_mail_services() {
     labels=("com.$(id -un).mcp-agent-mail" "org.agentstack.mcp-agent-mail")
   fi
 
-  if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
-    return 0
-  fi
+  # Labels this install owns are never candidates, whatever the environment
+  # says. Without this, one stray variable retires the server being installed.
+  # Every label this install registers, by value. Denying the whole
+  # "$LABEL_PREFIX." prefix would be simpler and wrong: the legacy job we exist
+  # to retire is "org.agentstack.mcp-agent-mail", which lives under that very
+  # prefix.
+  local protected=(
+    "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+    "${LABEL:-}"
+    "${MAIL_AUTOSTART_LABEL:-}"
+  )
 
-  local label found=0
+  local label protected_label
   for label in "${labels[@]}"; do
     label="${label// /}"
     [[ -n "$label" ]] || continue
+    for protected_label in "${protected[@]}"; do
+      if [[ -n "$protected_label" && "$label" == "$protected_label" ]]; then
+        warn "refusing to treat '$label' as a legacy mail service: this install owns it"
+        continue 2
+      fi
+    done
     launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || continue
-    found=1
-    if [[ "$KEEP_LEGACY_MAIL" == true ]]; then
-      warn "legacy mail service '$label' is still loaded and was left alone (--keep-legacy-mail). Two mail servers means two databases; point every client at one of them."
+
+    local plist="$HOME/Library/LaunchAgents/$label.plist"
+    # Only retire a job that is demonstrably a predecessor of this service.
+    # "A label is loaded" is not evidence: the label may have been supplied by
+    # the environment and belong to something else entirely.
+    if ! legacy_mail_plist_looks_like_mail "$plist"; then
+      warn "leaving '$label' alone: its launchd definition does not look like a mail service"
+      continue
+    fi
+
+    if [[ "$RETIRE_LEGACY_MAIL" != true ]]; then
+      warn "a previous mail service is still loaded: $label. Two mail servers means two databases, and agents will split across them depending on which endpoint they reach. Re-run with --retire-legacy-mail to retire it, or stop it yourself: launchctl bootout gui/$(id -u)/$label"
       continue
     fi
     if [[ "$DRY_RUN" == true ]]; then
       say "DRY-RUN would retire legacy mail service: $label"
       continue
     fi
+
+    # Boot out first and confirm it is gone. Moving the plist before the job is
+    # actually unloaded would leave the machine with a running server and no
+    # definition to restore -- worse than the collision being retired.
+    if ! launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      # bootout reports "not loaded" as failure too; only a still-loaded job is
+      # a problem.
+      if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+        die "could not retire legacy mail service '$label'; retire it by hand (launchctl bootout gui/$(id -u)/$label) and re-run"
+      fi
+    fi
+    local waited=0
+    while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+      # bootout is asynchronous.
+      if (( waited >= 50 )); then
+        die "legacy mail service '$label' is still loaded after bootout; retire it by hand and re-run"
+      fi
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+
     # Park the plist rather than delete it. Retiring someone's running service
     # is not the kind of thing an installer should make unrecoverable.
-    local plist="$HOME/Library/LaunchAgents/$label.plist"
-    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
     if [[ -f "$plist" ]]; then
       mkdir -p "$INSTALL_DIR/parked-launchd"
-      mv "$plist" "$INSTALL_DIR/parked-launchd/$label.plist"
-      say "retired legacy mail service $label (plist parked at $INSTALL_DIR/parked-launchd/$label.plist)"
+      local parked="$INSTALL_DIR/parked-launchd/$label.plist"
+      if [[ -e "$parked" ]]; then
+        # An earlier retirement parked a copy here. Overwriting it would
+        # destroy the only remaining definition of that service.
+        local suffix=1
+        while [[ -e "$parked.$suffix" ]]; do suffix=$((suffix + 1)); done
+        parked="$parked.$suffix"
+      fi
+      mv "$plist" "$parked"
+      say "retired legacy mail service $label (plist parked at $parked)"
     else
       say "retired legacy mail service $label"
     fi
-    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
-      warn "legacy mail service '$label' is still loaded after bootout; retire it by hand before using mail"
-    fi
   done
-  if [[ "$found" == 0 ]]; then
-    return 0
-  fi
+}
+
+legacy_mail_plist_looks_like_mail() {
+  # Read what the job *runs*, structurally. Searching the whole document is
+  # circular: the labels being matched are themselves written in the plist, so
+  # any job carrying a known label would confirm itself -- an editor with
+  # Label=org.agentstack.mcp-agent-mail passed that check and was booted out.
+  # Anything unreadable or unparseable fails closed.
+  local plist="$1" program=""
+  [[ -f "$plist" ]] || return 1
+  [[ -L "$plist" ]] && return 1
+  command -v /usr/bin/plutil >/dev/null 2>&1 || return 1
+  program="$(/usr/bin/plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null)" ||
+    program="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" || return 1
+  [[ -n "$program" ]] || return 1
+  case "$program" in
+    *mcp_agent_mail*|*mcp-agent-mail*|*agentstack_mail*|*agentstack-mail*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 enable_mail_autostart() {

@@ -34,20 +34,69 @@ fi
 # agent's file reservations, so a probe that could never succeed ended in
 # reservations being collected out from under agents that were working.
 #
-# Ask the endpoint the agents themselves use. A live streamable-HTTP MCP server
-# answers a bare GET with 405 or 406 -- it wants a POST with MCP headers -- while
-# a dead one produces no status line at all. The liveness URL is still honoured
-# when it does answer, so a deployment that fronts the service with a real health
-# route keeps working.
+# Ask the server what it is, not merely whether something answers. A bare GET
+# returning 405/406 only says "some HTTP server is here"; any service that
+# rejects GET would pass that. Call health_check over MCP and require the
+# structured status, so a different service on the same port is not mistaken
+# for this one. The liveness URL is still honoured when it answers, so a
+# deployment that fronts the service with a real health route keeps working.
 mail_server_is_answering() {
-    if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
+    if [ -n "${AGENTSTACK_MCP_HEALTH_URL:-}${MCP_AGENT_MAIL_HEALTH_URL:-}" ] &&
+        curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
+        # Only an explicitly configured health URL is trusted on status alone;
+        # the derived one is a guess, and "some 200" is not this service.
         return 0
     fi
-    status="$(curl -s -o /dev/null -m 2 -w '%{http_code}' "$MCP_URL" 2>/dev/null)"
-    case "$status" in
-        200|405|406) return 0 ;;
-        *) return 1 ;;
-    esac
+    response="$(curl -s -m 3 -X POST "$MCP_URL" \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -w '\n__HTTP_STATUS__%{http_code}' \
+        -d '{"jsonrpc":"2.0","id":"session-start","method":"tools/call","params":{"name":"health_check","arguments":{}}}' \
+        2>/dev/null)" || return 1
+    printf '%s' "$response" | python3 -c '
+import json, sys
+
+raw = sys.stdin.read()
+marker = "\n__HTTP_STATUS__"
+if marker not in raw:
+    raise SystemExit(1)
+body, _, status = raw.rpartition(marker)
+if not status.strip().isdigit() or not 200 <= int(status.strip()) < 300:
+    raise SystemExit(1)
+
+def documents(text):
+    """The endpoint may answer as JSON or as an SSE stream."""
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        yield stripped
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            yield line[5:].strip()
+
+for document in documents(body):
+    try:
+        message = json.loads(document)
+    except ValueError:
+        continue
+    if not isinstance(message, dict):
+        continue
+    # A JSON-RPC reply to the call we made, carrying a healthy status. Anything
+    # less -- an error object that happens to contain "ok", a bare status
+    # document, someone else true JSON -- is not this server saying it is well.
+    if message.get("jsonrpc") != "2.0" or message.get("id") != "session-start":
+        continue
+    if message.get("error") is not None:
+        continue
+    result = message.get("result")
+    if not isinstance(result, dict):
+        continue
+    health = result.get("structuredContent")
+    if not isinstance(health, dict):
+        continue
+    if health.get("status") == "ok":
+        raise SystemExit(0)
+raise SystemExit(1)
+' >/dev/null 2>&1
 }
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
