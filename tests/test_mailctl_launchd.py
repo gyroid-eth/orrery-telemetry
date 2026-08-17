@@ -36,6 +36,11 @@ FAKE_LAUNCHCTL = """#!/bin/bash
 echo "$@" >> "$LAUNCHCTL_LOG"
 case "$1" in
   print)
+    if [[ -n "${APPEAR_AFTER_FIRST_PRINT:-}" && ! -f "$LOADED_MARKER" ]]; then
+      # The job loads between the controller's two questions.
+      touch "$LOADED_MARKER"
+      exit 113
+    fi
     if [[ -f "$PENDING_UNLOAD" ]]; then
       # bootout is asynchronous: the job outlives the call for a moment.
       rm -f "$PENDING_UNLOAD" "$LOADED_MARKER" "$SERVING_MARKER"
@@ -142,7 +147,8 @@ def harness(tmp_path: Path):
     # A real plist: the controller reads Label and ProgramArguments through
     # plutil, so a placeholder document would exercise nothing.
     program = tmp_path / "agentstack-mail-service"
-    program.write_text("#!/bin/sh\n", encoding="utf-8")
+    program.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    program.chmod(0o755)
     plist = tmp_path / "org.orrery.mail.plist"
     plistlib.dump(
         {"Label": LABEL, "ProgramArguments": [str(program), "foreground"]},
@@ -170,6 +176,11 @@ def harness(tmp_path: Path):
     (tmp_path / "home").mkdir()
     (tmp_path / "service").mkdir()
     (tmp_path / "service" / "env").write_text("", encoding="utf-8")
+    # A runner has to exist for start to reach the launchd checks at all;
+    # without it the command dies earlier, for an unrelated reason.
+    runner = tmp_path / "service" / "run-agentstack-mail.sh"
+    runner.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    runner.chmod(0o755)
     (tmp_path / "storage.sqlite3").write_text("", encoding="utf-8")
     try:
         yield env, loaded, serving, log, server
@@ -409,3 +420,59 @@ def test_an_argument_mentioning_the_service_does_not_make_a_job_ours(harness) ->
     assert "is not this service" in (result.stdout + result.stderr), (
         "a foreign job holding the label was passed over in silence"
     )
+
+
+def test_a_foreign_job_appearing_mid_start_still_stops_the_start(harness) -> None:
+    """The check and the act are separate moments; both need the guard.
+
+    Reading "is a job loaded?" and "is it ours?" as two questions collapses
+    absent and foreign into one answer, and a job that loads between them is
+    then treated as absent -- so a foreign job survived while an unsupervised
+    runner started next to it.
+    """
+    env, loaded, serving, log, server = harness
+    loaded.unlink()          # absent when start looks
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    env = {
+        **env,
+        "JOB_PROGRAM": "/Applications/Editor.app/Contents/MacOS/editor",
+        "APPEAR_AFTER_FIRST_PRINT": "1",
+    }
+    result = _mailctl(env, "start")
+    assert result.returncode != 0, result.stdout
+    assert "not this service" in result.stderr
+
+
+def test_a_name_shaped_lookalike_is_not_this_service(harness, tmp_path: Path) -> None:
+    """Exact names. "not-agentstack-mail-service-backup" is not this service."""
+    env, loaded, serving, log, server = harness
+    lookalike = tmp_path / "not-agentstack-mail-service-backup"
+    lookalike.write_text("#!/bin/sh\n", encoding="utf-8")
+    env = {**env, "JOB_PROGRAM": str(lookalike)}
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    result = _mailctl(env, "stop")
+    assert "bootout" not in _log(log), "a lookalike's job was booted out"
+    assert loaded.exists()
+    assert "is not this service" in (result.stdout + result.stderr)
+
+
+def test_a_name_shaped_symlink_is_not_this_service(harness, tmp_path: Path) -> None:
+    """Follow the name to what it really runs."""
+    env, loaded, serving, log, server = harness
+    # A different directory: the fixture's own honest executable already owns
+    # this name in tmp_path.
+    elsewhere = tmp_path / "impostor"
+    elsewhere.mkdir()
+    lookalike = elsewhere / "agentstack-mail-service"
+    lookalike.symlink_to("/bin/echo")
+    env = {**env, "JOB_PROGRAM": str(lookalike)}
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    result = _mailctl(env, "stop")
+    assert "bootout" not in _log(log), "a symlink to /bin/echo was treated as this service"
+    assert loaded.exists()

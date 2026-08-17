@@ -104,8 +104,13 @@ set -euo pipefail
 # The installer runs its own argument parsing and main() at the bottom; source
 # only the definitions by stopping before it acts.
 INSTALL_SH={INSTALLER!s}
-eval "$(sed -n '/^retire_legacy_mail_services() {{/,/^}}/p' "$INSTALL_SH")"
-eval "$(sed -n '/^legacy_mail_plist_looks_like_mail() {{/,/^}}/p' "$INSTALL_SH")"
+# Pull in every function under test by name. Extracting them one at a time by
+# hand has silently dropped a helper twice, and a missing helper looks exactly
+# like the feature not working.
+for fn in retire_legacy_mail_services legacy_mail_plist_looks_like_mail path_belongs_to_a_mail_install; do
+  eval "$(awk -v fn="$fn" 'index($0, fn "() {{") == 1 {{ inside = 1 }} inside {{ print }} inside && $0 == "}}" {{ exit }}' "$INSTALL_SH")"
+  declare -f "$fn" >/dev/null || {{ echo "missing helper: $fn" >&2; exit 90; }}
+done
 say() {{ echo "$@"; }}
 warn() {{ echo "warn: $@"; }}
 DRY_RUN={'true' if False else 'false'}
@@ -371,3 +376,89 @@ def test_the_mail_autostart_label_is_protected(tmp_path: Path) -> None:
     )
     assert (loaded_dir / label).exists(), "this install's own autostart trigger was retired"
     assert "this install owns it" in (out + err)
+
+
+def test_the_predecessor_recorded_in_the_cutover_document_is_retired(
+    tmp_path: Path,
+) -> None:
+    """The definition this step exists for, verbatim from the sealed record.
+
+    docs/agentstack-mail-cutover.md pins the predecessor's ProgramArguments as
+    ["/bin/bash", ".../mcp_agent_mail/scripts/run_server_with_token.sh"]. An
+    earlier fix looked only at argv[0], saw /bin/bash, and left the very job it
+    was written to retire running -- with the tester's two-database split
+    intact.
+    """
+    label = "com.operator.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/bin/bash",
+        "/Users/operator/mcp_agent_mail/scripts/run_server_with_token.sh",
+    )
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path,
+        [],
+        extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": label},
+        harness=(env, loaded_dir, log),
+    )
+    assert not (loaded_dir / label).exists(), f"the sealed predecessor survived: {out}{err}"
+    assert "bootout" in _log_text(log)
+
+
+def test_an_interpreter_running_something_else_is_left_alone(tmp_path: Path) -> None:
+    """Recognising the wrapper form must not accept every shell script."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/bin/bash",
+        "/Users/someone/backup/nightly.sh",
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists()
+    assert "bootout" not in _log_text(log)
+
+
+def test_a_name_shaped_lookalike_is_not_retired(tmp_path: Path) -> None:
+    """Exact basenames. "not-mcp-agent-mail-backup" is not this service."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/Applications/not-mcp-agent-mail-backup",
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists()
+    assert "bootout" not in _log_text(log)
+
+
+def test_a_name_shaped_symlink_to_something_else_is_not_retired(
+    tmp_path: Path,
+) -> None:
+    """Follow the name to what it actually runs."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    lookalike = tmp_path / "mcp-agent-mail"
+    lookalike.symlink_to("/bin/echo")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(lookalike),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists(), "a symlink to /bin/echo was retired as mail"
+    assert "bootout" not in _log_text(log)

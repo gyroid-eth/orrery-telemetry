@@ -119,14 +119,32 @@ plist_defines_this_service() {
 
 # Only the executable, never its arguments: an editor invoked with
 # "--note=agentstack-mail-service" is not this service, and matching the whole
-# argument vector said it was.
+# argument vector said it was. Names are matched exactly -- a wildcard accepted
+# "not-agentstack-mail-service-backup" -- and a name-shaped symlink has to
+# resolve to something that is really this service.
 executable_is_this_service() {
-  local executable="$1"
+  local executable="$1" resolved=""
   [[ -n "$executable" ]] || return 1
   case "${executable##*/}" in
-    *agentstack-mail-service*|*agentstack_mail*|run-agentstack-mail.sh) return 0 ;;
+    agentstack-mail-service|agentstack_mail|run-agentstack-mail.sh) ;;
     *) return 1 ;;
   esac
+  # Absent files cannot be verified, and an unverifiable claim of ownership is
+  # the thing this guard exists to refuse.
+  [[ -e "$executable" ]] || return 1
+  if [[ -L "$executable" ]]; then
+    resolved="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$executable" 2>/dev/null)" || return 1
+    [[ -f "$resolved" ]] || return 1
+    case "${resolved##*/}" in
+      agentstack-mail-service|agentstack_mail|run-agentstack-mail.sh) return 0 ;;
+    esac
+    case "/${resolved%/*}/" in
+      */agentstack_mail/*|*/agentstack-mail/*|*/mail-service/*) return 0 ;;
+    esac
+    return 1
+  fi
+  [[ -f "$executable" ]] || return 1
+  return 0
 }
 
 launchd_job_program() {
@@ -153,6 +171,22 @@ launchd_listener_belongs_to_job() {
   [[ "$listener_pid" == "$job_pid" ]] && return 0
   parent="$(ps -o ppid= -p "$listener_pid" 2>/dev/null | tr -d " ")"
   [[ "$parent" == "$job_pid" ]]
+}
+
+# One snapshot, three answers. Asking "is a job loaded?" and "is it ours?" as
+# separate questions collapses absent and foreign into the same false, and a job
+# that appears between the two calls is then treated as absent -- which is how a
+# foreign job survived while an unsupervised runner started beside it.
+launchd_state() {
+  if ! launchd_supervises_mail; then
+    printf 'absent\n'
+    return 0
+  fi
+  if launchd_job_is_ours; then
+    printf 'ours\n'
+  else
+    printf 'foreign\n'
+  fi
 }
 
 launchd_job_is_ours() {
@@ -373,13 +407,15 @@ start_service() {
     fi
     die "could not restore launchd job $MAIL_LAUNCHD_LABEL from $memo_plist"
   fi
-  if launchd_supervises_mail && ! launchd_job_is_ours; then
+  local launchd_now
+  launchd_now="$(launchd_state)"
+  if [[ "$launchd_now" == "foreign" ]]; then
     # Someone else's job holds the label this install supervises. Starting our
     # own runner beside it leaves two supervisors for one endpoint, and the
     # collision surfaces at the next login instead of here.
     die "launchd job $MAIL_LAUNCHD_LABEL is loaded but is not this service; resolve that before starting mail"
   fi
-  if launchd_job_is_ours; then
+  if [[ "$launchd_now" == "ours" ]]; then
     if endpoint_port_open && health_ok; then
       [[ "$SWEEP" == "1" ]] || say "AgentStack Mail already running under launchd (label $MAIL_LAUNCHD_LABEL)"
       return 0
@@ -411,6 +447,13 @@ start_service() {
       die "a healthy AgentStack Mail endpoint exists without this controller's pidfile"
     fi
     die "the configured AgentStack Mail port is owned by another or unhealthy listener"
+  fi
+  # Re-check at the last moment. The state read at the top of this function was
+  # taken before the health probes, and a login or a manual load can arrive in
+  # that window -- which is exactly how a foreign job survived while an
+  # unsupervised runner started beside it.
+  if [[ "$(launchd_state)" == "foreign" ]]; then
+    die "launchd job $MAIL_LAUNCHD_LABEL became loaded and is not this service; refusing to start a second server"
   fi
   mkdir -p "$RUNTIME_DIR"
   nohup /bin/bash "$MAIL_RUNNER" </dev/null >> "$LOGFILE" 2>&1 &
@@ -445,7 +488,7 @@ stop_service() {
     [[ -n "$plist" ]] || \
       die "launchd did not report a plist path for $MAIL_LAUNCHD_LABEL; refusing to stop it"
     plist_defines_this_service "$plist" || \
-      die "the plist launchd reports for $MAIL_LAUNCHD_LABEL ($plist) does not define this service; refusing to stop it"
+      die "the plist launchd reports for $MAIL_LAUNCHD_LABEL ($plist) does not define this service (or its executable is missing); refusing to stop it"
     if [[ -n "$plist" ]]; then
       mkdir -p "$RUNTIME_DIR" 2>/dev/null || \
         die "cannot create $RUNTIME_DIR to record the launchd job; refusing to stop it"
