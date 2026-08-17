@@ -34,6 +34,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     reply: object = None          # override the reply document
     reply_status = 200            # override the HTTP status
     as_sse = False                # answer as an SSE stream
+    sse_pretty = False            # split the payload across data lines
+    sse_preamble = False          # send an unrelated event first
     last_request: dict = {}
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
@@ -72,7 +74,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "result": {"structuredContent": {"status": "ok"}},
             }
         if self.as_sse:
-            body = f"event: message\ndata: {json.dumps(document)}\n\n".encode()
+            if self.sse_pretty:
+                payload = "\n".join(
+                    f"data: {line}" for line in json.dumps(document, indent=2).splitlines()
+                )
+                stream = f"event: message\n{payload}\n\n"
+            else:
+                stream = f"event: message\ndata: {json.dumps(document)}\n\n"
+            if self.sse_preamble:
+                stream = 'event: ping\ndata: {"note":"warming up"}\n\n' + stream
+            body = stream.encode()
             self.send_response(self.reply_status)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(body)))
@@ -104,6 +115,8 @@ def mail_like_server() -> object:
     _Handler.reply = None
     _Handler.reply_status = 200
     _Handler.as_sse = False
+    _Handler.sse_pretty = False
+    _Handler.sse_preamble = False
     _Handler.last_request = {}
     server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -248,3 +261,25 @@ def test_replies_that_only_look_healthy_are_rejected(
     host, port = mail_like_server.server_address[:2]
     output = _run_hook(f"http://{host}:{port}/mcp", tmp_path)
     assert "not running" in output, f"{label}: {output}"
+
+
+def test_an_sse_event_split_across_data_lines_is_understood(
+    mail_like_server: http.server.HTTPServer, tmp_path: Path
+) -> None:
+    """One event, many data lines: that is how pretty-printed JSON arrives."""
+    _Handler.as_sse = True
+    _Handler.sse_pretty = True
+    host, port = mail_like_server.server_address[:2]
+    output = _run_hook(f"http://{host}:{port}/mcp", tmp_path)
+    assert "server is running" in output, output
+
+
+def test_a_later_event_carrying_the_reply_is_found(
+    mail_like_server: http.server.HTTPServer, tmp_path: Path
+) -> None:
+    """The reply need not be the first event in the stream."""
+    _Handler.as_sse = True
+    _Handler.sse_preamble = True
+    host, port = mail_like_server.server_address[:2]
+    output = _run_hook(f"http://{host}:{port}/mcp", tmp_path)
+    assert "server is running" in output, output

@@ -47,7 +47,9 @@ mail_server_is_answering() {
         # the derived one is a guess, and "some 200" is not this service.
         return 0
     fi
-    response="$(curl -s -m 3 -X POST "$MCP_URL" \
+    # Cap what a session start will read. This runs on every session, and an
+    # unbounded body is free memory amplification for anything on that port.
+    response="$(curl -s -m 3 --max-filesize 262144 -X POST "$MCP_URL" \
         -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -w '\n__HTTP_STATUS__%{http_code}' \
@@ -56,7 +58,7 @@ mail_server_is_answering() {
     printf '%s' "$response" | python3 -c '
 import json, sys
 
-raw = sys.stdin.read()
+raw = sys.stdin.read(262144 + 64)
 marker = "\n__HTTP_STATUS__"
 if marker not in raw:
     raise SystemExit(1)
@@ -65,13 +67,25 @@ if not status.strip().isdigit() or not 200 <= int(status.strip()) < 300:
     raise SystemExit(1)
 
 def documents(text):
-    """The endpoint may answer as JSON or as an SSE stream."""
+    """The endpoint may answer as JSON or as an SSE stream.
+
+    An SSE event carries its payload across as many ``data:`` lines as it
+    likes, joined by newlines -- pretty-printed JSON arrives that way. Reading
+    each line as its own document rejects a perfectly valid reply.
+    """
     stripped = text.strip()
     if stripped.startswith("{"):
         yield stripped
+    payload = []
     for line in text.splitlines():
         if line.startswith("data:"):
-            yield line[5:].strip()
+            payload.append(line[5:].lstrip())
+        elif not line.strip():
+            if payload:
+                yield "\n".join(payload)
+                payload = []
+    if payload:
+        yield "\n".join(payload)
 
 for document in documents(body):
     try:

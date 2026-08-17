@@ -329,3 +329,45 @@ def test_a_symlinked_plist_is_refused(tmp_path: Path) -> None:
     )
     assert (loaded_dir / label).exists()
     assert "bootout" not in _log_text(log)
+
+
+def test_an_argument_that_mentions_mail_is_not_a_mail_service(tmp_path: Path) -> None:
+    """Only the executable counts.
+
+    An editor invoked with --note=/tmp/mcp-agent-mail-migration.txt is an
+    editor. Matching the whole argument vector booted it out.
+    """
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/Applications/Editor.app/Contents/MacOS/editor",
+        "--note=/tmp/mcp-agent-mail-migration.txt",
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists(), "an editor was retired for one of its arguments"
+    assert "bootout" not in _log_text(log)
+
+
+def test_the_mail_autostart_label_is_protected(tmp_path: Path) -> None:
+    """Every label this install registers, including the autostart trigger."""
+    label = "org.agentstack.mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        "/opt/agentstack-mail-service",
+    )
+    out, err, loaded_dir, log = _run_retirement(
+        tmp_path,
+        [],
+        extra_env={"AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS": label},
+        harness=(env, loaded_dir, log),
+    )
+    assert (loaded_dir / label).exists(), "this install's own autostart trigger was retired"
+    assert "this install owns it" in (out + err)

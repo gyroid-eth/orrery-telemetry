@@ -45,8 +45,14 @@ case "$1" in
       exit 0
     fi
     if [[ -f "$LOADED_MARKER" ]]; then
-      echo "	path = $PLIST_PATH"
+      [[ -z "${SUPPRESS_PLIST_PATH:-}" ]] && echo "	path = $PLIST_PATH"
       echo "	program = ${JOB_PROGRAM:-$SERVICE_PROGRAM}"
+      if [[ -n "${JOB_ARGUMENT:-}" ]]; then
+        echo "	arguments = {"
+        echo "		0 = ${JOB_PROGRAM:-$SERVICE_PROGRAM}"
+        echo "		1 = $JOB_ARGUMENT"
+        echo "	}"
+      fi
       echo "	pid = ${FORCED_JOB_PID:-$(cat "$LISTENER_PID_FILE")}"
       exit 0
     fi
@@ -342,3 +348,64 @@ def test_a_tampered_restore_receipt_is_refused(harness, tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "does not define" in result.stderr
     assert "bootstrap" not in _log(log)
+
+
+def test_start_refuses_when_a_foreign_job_holds_the_label(harness) -> None:
+    """Two supervisors for one endpoint is a collision, not a free slot.
+
+    Falling through to the unsupervised runner leaves the foreign job loaded;
+    the conflict then surfaces at the next login instead of here.
+    """
+    env, loaded, serving, log, server = harness
+    env = {**env, "JOB_PROGRAM": "/Applications/Editor.app/Contents/MacOS/editor"}
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    result = _mailctl(env, "start")
+    assert result.returncode != 0, result.stdout
+    assert "not this service" in result.stderr
+    assert loaded.exists()
+
+
+def test_stop_refuses_when_launchd_reports_no_plist_path(harness) -> None:
+    """No verified way back means no bootout."""
+    env, loaded, _serving, log, _server = harness
+    env = {**env, "SUPPRESS_PLIST_PATH": "1"}
+    result = _mailctl(env, "stop")
+    assert result.returncode != 0
+    assert "refusing to stop" in result.stderr
+    assert "bootout" not in _log(log)
+    assert loaded.exists()
+
+
+def test_stop_refuses_when_the_recorded_plist_is_gone(harness, tmp_path: Path) -> None:
+    """A path that no longer exists cannot restore anything."""
+    env, loaded, _serving, log, _server = harness
+    (tmp_path / "org.orrery.mail.plist").unlink()
+    result = _mailctl(env, "stop")
+    assert result.returncode != 0
+    assert "bootout" not in _log(log)
+    assert loaded.exists()
+
+
+def test_an_argument_mentioning_the_service_does_not_make_a_job_ours(harness) -> None:
+    """launchd reports the program and its arguments; only the program counts.
+
+    An editor started with --note=agentstack-mail-service had its job booted
+    out when the arguments were folded into the match.
+    """
+    env, loaded, serving, log, server = harness
+    env = {
+        **env,
+        "JOB_PROGRAM": "/Applications/Editor.app/Contents/MacOS/editor",
+        "JOB_ARGUMENT": "--note=agentstack-mail-service",
+    }
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    result = _mailctl(env, "stop")
+    assert "bootout" not in _log(log), "an editor's job was booted out for its argument"
+    assert loaded.exists()
+    assert "is not this service" in (result.stdout + result.stderr), (
+        "a foreign job holding the label was passed over in silence"
+    )

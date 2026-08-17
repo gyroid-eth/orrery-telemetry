@@ -112,28 +112,33 @@ plist_defines_this_service() {
   command -v /usr/bin/plutil >/dev/null 2>&1 || return 1
   label="$(/usr/bin/plutil -extract Label raw -o - "$plist" 2>/dev/null)" || return 1
   [[ "$label" == "$MAIL_LAUNCHD_LABEL" ]] || return 1
-  program="$(/usr/bin/plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null)" ||
-    program="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" || return 1
-  case "$program" in
-    *agentstack-mail-service*|*agentstack_mail*|*run-agentstack-mail.sh*) return 0 ;;
+  program="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" ||
+    program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null)" || return 1
+  executable_is_this_service "$program"
+}
+
+# Only the executable, never its arguments: an editor invoked with
+# "--note=agentstack-mail-service" is not this service, and matching the whole
+# argument vector said it was.
+executable_is_this_service() {
+  local executable="$1"
+  [[ -n "$executable" ]] || return 1
+  case "${executable##*/}" in
+    *agentstack-mail-service*|*agentstack_mail*|run-agentstack-mail.sh) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 launchd_job_program() {
+  # The authoritative "program =" line only. The numbered "N = ..." lines are
+  # the job's arguments, and one of those containing a familiar string says
+  # nothing about what is being run.
   launchctl print "$(launchd_service_target)" 2>/dev/null |
-    sed -n -e 's/^[[:space:]]*program = \(.*\)$/\1/p' \
-           -e 's/^[[:space:]]*[0-9][0-9]* = \(.*\)$/\1/p'
+    sed -n 's/^[[:space:]]*program = \(.*\)$/\1/p' | head -n 1
 }
 
 launchd_job_runs_this_service() {
-  local program
-  program="$(launchd_job_program)"
-  [[ -n "$program" ]] || return 1
-  case "$program" in
-    *agentstack-mail-service*|*agentstack_mail*|*run-agentstack-mail.sh*) return 0 ;;
-    *) return 1 ;;
-  esac
+  executable_is_this_service "$(launchd_job_program)"
 }
 
 launchd_listener_belongs_to_job() {
@@ -368,6 +373,12 @@ start_service() {
     fi
     die "could not restore launchd job $MAIL_LAUNCHD_LABEL from $memo_plist"
   fi
+  if launchd_supervises_mail && ! launchd_job_is_ours; then
+    # Someone else's job holds the label this install supervises. Starting our
+    # own runner beside it leaves two supervisors for one endpoint, and the
+    # collision surfaces at the next login instead of here.
+    die "launchd job $MAIL_LAUNCHD_LABEL is loaded but is not this service; resolve that before starting mail"
+  fi
   if launchd_job_is_ours; then
     if endpoint_port_open && health_ok; then
       [[ "$SWEEP" == "1" ]] || say "AgentStack Mail already running under launchd (label $MAIL_LAUNCHD_LABEL)"
@@ -428,6 +439,13 @@ stop_service() {
     # Record what is about to be removed *before* removing it, and refuse to
     # touch the job if the record cannot be written: a stop that unloads the
     # supervisor and then fails to say what it unloaded leaves no way back.
+    # No verified way back means no bootout: a stop that cannot record what it
+    # removed leaves the operator with an unloaded supervisor and nothing to
+    # restore it from.
+    [[ -n "$plist" ]] || \
+      die "launchd did not report a plist path for $MAIL_LAUNCHD_LABEL; refusing to stop it"
+    plist_defines_this_service "$plist" || \
+      die "the plist launchd reports for $MAIL_LAUNCHD_LABEL ($plist) does not define this service; refusing to stop it"
     if [[ -n "$plist" ]]; then
       mkdir -p "$RUNTIME_DIR" 2>/dev/null || \
         die "cannot create $RUNTIME_DIR to record the launchd job; refusing to stop it"
@@ -455,6 +473,12 @@ stop_service() {
     return
   fi
   if ! pid_running "$pid"; then
+    if launchd_supervises_mail; then
+      # Nothing of ours is running, so there is nothing to stop -- but the label
+      # this install supervises is held by a job that is not this service, and
+      # silence would leave the operator thinking mail is simply stopped.
+      say "note: launchd job $MAIL_LAUNCHD_LABEL is loaded but is not this service; leaving it alone"
+    fi
     if endpoint_port_open; then
       die "the endpoint is still occupied without a live managed pid; refusing to stop an unknown process"
     fi

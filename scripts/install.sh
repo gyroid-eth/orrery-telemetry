@@ -2529,20 +2529,27 @@ retire_legacy_mail_services() {
 }
 
 legacy_mail_plist_looks_like_mail() {
-  # Read what the job *runs*, structurally. Searching the whole document is
-  # circular: the labels being matched are themselves written in the plist, so
-  # any job carrying a known label would confirm itself -- an editor with
-  # Label=org.agentstack.mcp-agent-mail passed that check and was booted out.
-  # Anything unreadable or unparseable fails closed.
-  local plist="$1" program=""
+  # Read what the job *runs*, and only that. Two narrower mistakes preceded
+  # this: searching the whole plist made the check circular (the labels being
+  # matched are written in the document), and searching every argument made it
+  # trivially forgeable -- an editor booted out because one of its arguments was
+  # "--note=/tmp/mcp-agent-mail-migration.txt". Only the executable counts:
+  # Program when present, otherwise ProgramArguments[0]. Anything unreadable,
+  # unparseable or symlinked fails closed.
+  local plist="$1" executable=""
   [[ -f "$plist" ]] || return 1
   [[ -L "$plist" ]] && return 1
   command -v /usr/bin/plutil >/dev/null 2>&1 || return 1
-  program="$(/usr/bin/plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null)" ||
-    program="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" || return 1
-  [[ -n "$program" ]] || return 1
-  case "$program" in
+  executable="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" ||
+    executable="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null)" || return 1
+  [[ -n "$executable" ]] || return 1
+  case "${executable##*/}" in
     *mcp_agent_mail*|*mcp-agent-mail*|*agentstack_mail*|*agentstack-mail*) return 0 ;;
+  esac
+  # The old service is also recognisable by the directory it was installed
+  # into, but only as a path component -- never as a substring of an argument.
+  case "$executable" in
+    */mcp_agent_mail/*|*/mcp-agent-mail/*|*/agentstack_mail/*|*/agentstack-mail/*) return 0 ;;
     *) return 1 ;;
   esac
 }
