@@ -36,6 +36,15 @@ FAKE_LAUNCHCTL = """#!/bin/bash
 echo "$@" >> "$LAUNCHCTL_LOG"
 case "$1" in
   print)
+    if [[ -n "${APPEAR_AFTER_N_PRINTS:-}" ]]; then
+      count=$(( $(cat "$PRINT_COUNT" 2>/dev/null || echo 0) + 1 ))
+      echo "$count" > "$PRINT_COUNT"
+      if (( count >= APPEAR_AFTER_N_PRINTS )) && [[ ! -f "$LOADED_MARKER" ]]; then
+        touch "$LOADED_MARKER"
+        [[ -n "${REAPPEAR_SERVING:-}" ]] && touch "$SERVING_MARKER"
+      fi
+      if [[ ! -f "$LOADED_MARKER" ]]; then exit 113; fi
+    fi
     if [[ -n "${APPEAR_AFTER_FIRST_PRINT:-}" && ! -f "$LOADED_MARKER" ]]; then
       # The job loads between the controller's two questions.
       touch "$LOADED_MARKER"
@@ -165,6 +174,7 @@ def harness(tmp_path: Path):
         "PLIST_PATH": str(plist),
         "SERVICE_PROGRAM": str(program),
         "PENDING_UNLOAD": str(tmp_path / "pending-unload"),
+        "PRINT_COUNT": str(tmp_path / "print-count"),
         "SERVING_MARKER": str(serving),
         "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
         "AGENTSTACK_MAIL_PROVIDER": "agentstack",
@@ -535,3 +545,67 @@ def test_no_function_is_defined_twice() -> None:
     names = re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", MAILCTL.read_text(), re.MULTILINE)
     duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
     assert not duplicates, f"defined more than once: {duplicates}"
+
+
+def test_the_last_thing_before_the_spawn_is_the_launchd_check() -> None:
+    """The guard has to sit immediately before the spawn, not before the probes.
+
+    This one is structural on purpose. The harm -- a job loading during the
+    endpoint and health probes, leaving two supervisors for one endpoint -- was
+    measured on a revision where the check sat earlier, but a fake cannot
+    express it: removing the check also removes the `launchctl print` that
+    would reveal the job, so a behavioural test passes either way. What can be
+    pinned is that nothing observable happens between the check and the spawn.
+    """
+    source = MAILCTL.read_text()
+    spawn = source.index('nohup /bin/bash "$MAIL_RUNNER"')
+    guard = source.rindex('case "$(launchd_state)" in', 0, spawn)
+    between = source[source.index("esac", guard) + len("esac") : spawn]
+    for probe in ("endpoint_port_open", "health_ok", "wait_for_health", "launchctl"):
+        assert probe not in between, (
+            f"{probe} runs between the launchd check and the spawn; the window it "
+            "opens is exactly the one this check exists to close"
+        )
+    assert between.strip() == "", f"unexpected statements before the spawn: {between!r}"
+
+
+def test_no_function_is_defined_twice() -> None:
+    """A later definition silently wins in bash.
+
+    An edit left two `executable_is_this_service` definitions in place; the
+    stale one was 30 lines further down, so every call used the version the
+    fix had replaced -- and the tests for the fix failed for reasons that
+    looked like the fix not working.
+    """
+    import collections
+    import re
+
+    names = re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", MAILCTL.read_text(), re.MULTILINE)
+    duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
+    assert not duplicates, f"defined more than once: {duplicates}"
+
+
+def test_a_foreign_job_appearing_after_the_probes_still_stops_the_spawn(
+    harness,
+) -> None:
+    """The guard has to sit immediately before the spawn.
+
+    Checking before endpoint_port_open and health_ok leaves the probes' worth of
+    time in the window, and a job loading there ends with two supervisors for
+    one endpoint -- measured on the previous revision, which reported
+    "AgentStack Mail started (pid ...)" with the foreign job still loaded.
+    """
+    env, loaded, serving, log, server = harness
+    loaded.unlink()
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    env = {
+        **env,
+        "JOB_PROGRAM": "/Applications/Editor.app/Contents/MacOS/editor",
+        "APPEAR_AFTER_N_PRINTS": "2",  # after the first state read
+    }
+    result = _mailctl(env, "start")
+    assert result.returncode != 0, result.stdout
+    assert "not this service" in result.stderr
+    assert loaded.exists()

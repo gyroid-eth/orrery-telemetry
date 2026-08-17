@@ -464,6 +464,21 @@ start_service() {
   # one: if our own job appeared, launchd is starting the server and a second
   # one from here would collide with it.
   mkdir -p "$RUNTIME_DIR"
+  # Immediately before the spawn, not merely before the probes. The earlier
+  # check happens before endpoint_port_open and health_ok, and a job loading in
+  # that window still ends with two supervisors for one endpoint -- measured.
+  case "$(launchd_state)" in
+    foreign)
+      die "launchd job $MAIL_LAUNCHD_LABEL became loaded and is not this service; refusing to start a second server"
+      ;;
+    ours)
+      if wait_for_health; then
+        say "AgentStack Mail started by launchd (label $MAIL_LAUNCHD_LABEL)"
+        return 0
+      fi
+      die "launchd job $MAIL_LAUNCHD_LABEL became loaded but the endpoint is not healthy"
+      ;;
+  esac
   nohup /bin/bash "$MAIL_RUNNER" </dev/null >> "$LOGFILE" 2>&1 &
   pid=$!
   write_pid "$pid"
