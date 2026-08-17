@@ -63,6 +63,38 @@ validate_config() {
     die "configured Python is unavailable: $PYTHON_BIN"
 }
 
+# --- launchd-supervised installs -------------------------------------------
+#
+# The service can be supervised two ways and they used to disagree. The plist
+# runs `agentstack-mail-service foreground ...` directly, while this controller
+# only recognises a process started through run-agentstack-mail.sh -- so on a
+# launchd install `status`, `stop` and `restart` all died with "endpoint is
+# occupied without a live managed pid" against a perfectly healthy server, and
+# the operator had to fall back to raw launchctl. Reported by a tester on
+# 2026-08-17.
+#
+# When launchd owns the endpoint, defer to it. It is the supervisor; signalling
+# its child behind its back is what produced the ambiguity in the first place.
+MAIL_LAUNCHD_LABEL="${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+
+launchd_available() {
+  [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1
+}
+
+launchd_service_target() {
+  printf 'gui/%s/%s' "$(id -u)" "$MAIL_LAUNCHD_LABEL"
+}
+
+launchd_supervises_mail() {
+  launchd_available || return 1
+  launchctl print "$(launchd_service_target)" >/dev/null 2>&1
+}
+
+launchd_service_pid() {
+  launchctl print "$(launchd_service_target)" 2>/dev/null |
+    sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\).*/\1/p' | head -n 1
+}
+
 pid_running() {
   local pid="$1"
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
@@ -226,6 +258,21 @@ wait_for_stop() {
 }
 
 start_service() {
+  # A launchd install starts through launchd, not through the runner wrapper:
+  # starting our own would put a second server on the same endpoint.
+  if launchd_supervises_mail; then
+    if endpoint_port_open && health_ok; then
+      [[ "$SWEEP" == "1" ]] || say "AgentStack Mail already running under launchd (label $MAIL_LAUNCHD_LABEL)"
+      return 0
+    fi
+    launchctl kickstart "$(launchd_service_target)" >/dev/null 2>&1 || true
+    if wait_for_health; then
+      say "AgentStack Mail started by launchd (label $MAIL_LAUNCHD_LABEL)"
+      return 0
+    fi
+    die "launchd job $MAIL_LAUNCHD_LABEL did not bring the endpoint up"
+  fi
+
   local pid
   [[ -f "$MAIL_ENV" ]] || die "service env is missing: $MAIL_ENV"
   [[ -f "$MAIL_RUNNER" ]] || die "rendered service runner is missing: $MAIL_RUNNER"
@@ -264,6 +311,16 @@ start_service() {
 stop_service() {
   local pid
   pid="$(read_pid)"
+  if ! pid_running "$pid" && launchd_supervises_mail && endpoint_port_open; then
+    # launchd will restart whatever we signal, so ask launchd instead.
+    launchctl bootout "$(launchd_service_target)" >/dev/null 2>&1 || true
+    if launchd_supervises_mail && endpoint_port_open; then
+      die "launchd job $MAIL_LAUNCHD_LABEL did not release the endpoint"
+    fi
+    rm -f "$PIDFILE"
+    say "AgentStack Mail stopped (launchd job $MAIL_LAUNCHD_LABEL booted out)"
+    return
+  fi
   if ! pid_running "$pid"; then
     if endpoint_port_open; then
       die "the endpoint is still occupied without a live managed pid; refusing to stop an unknown process"
@@ -297,6 +354,13 @@ status_service() {
     return 0
   fi
   if endpoint_port_open; then
+    if launchd_supervises_mail; then
+      local launchd_pid
+      launchd_pid="$(launchd_service_pid)"
+      health_ok || die "launchd job $MAIL_LAUNCHD_LABEL owns the endpoint but health is failing"
+      say "AgentStack Mail running under launchd (label $MAIL_LAUNCHD_LABEL${launchd_pid:+, pid $launchd_pid}, endpoint $MCP_URL)"
+      return 0
+    fi
     die "endpoint is occupied without a live managed pid"
   fi
   say "AgentStack Mail stopped"
@@ -332,8 +396,16 @@ case "$command" in
     validate_config
     acquire_lock
     rm -f "$STOPPED_MARKER"
-    stop_service
-    start_service
+    if launchd_supervises_mail; then
+      # One call, so the job is never left booted out if the start half fails.
+      launchctl kickstart -k "$(launchd_service_target)" >/dev/null 2>&1 || \
+        die "launchd could not restart $MAIL_LAUNCHD_LABEL"
+      wait_for_health || die "launchd restarted $MAIL_LAUNCHD_LABEL but the endpoint is not healthy"
+      say "AgentStack Mail restarted by launchd (label $MAIL_LAUNCHD_LABEL)"
+    else
+      stop_service
+      start_service
+    fi
     ;;
   -h|--help|help)
     usage

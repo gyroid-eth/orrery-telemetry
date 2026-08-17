@@ -7,6 +7,7 @@ MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
+KEEP_LEGACY_MAIL=false
 ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
@@ -98,6 +99,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --keep-legacy-mail)
+      # Escape hatch for anyone deliberately running the predecessor alongside
+      # this one. It is not the default: leaving both loaded splits identities
+      # and reservations across two databases.
+      KEEP_LEGACY_MAIL=true
       shift
       ;;
     -y|--assume-yes)
@@ -2412,6 +2420,63 @@ PY_UNIT
   mv "$AGENT_MAIL_AUTOSTART_PATH.tmp" "$AGENT_MAIL_AUTOSTART_PATH"
 } # end render_mail_autostart_unit
 
+retire_legacy_mail_services() {
+  # After a cutover the predecessor keeps running unless something retires it,
+  # and nothing did: the only code that boots out a previous job is the
+  # same-port handoff, which never fires because the new server binds a
+  # different port, and the legacy label it looks for is a single guessed
+  # string (com.<user>.mcp-agent-mail) that does not match what the older
+  # installers actually registered (org.agentstack.mcp-agent-mail). Reported by
+  # a tester on 2026-08-17 with both jobs loaded and both listening.
+  #
+  # Two mail servers is not only waste: they own separate databases, so agent
+  # identities and file reservations silently split across two stores depending
+  # on which endpoint a client reaches.
+  local labels=()
+  if [[ -n "${AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS:-}" ]]; then
+    IFS=',' read -r -a labels <<< "$AGENTSTACK_MAIL_LEGACY_LAUNCHD_LABELS"
+  else
+    labels=("com.$(id -un).mcp-agent-mail" "org.agentstack.mcp-agent-mail")
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local label found=0
+  for label in "${labels[@]}"; do
+    label="${label// /}"
+    [[ -n "$label" ]] || continue
+    launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || continue
+    found=1
+    if [[ "$KEEP_LEGACY_MAIL" == true ]]; then
+      warn "legacy mail service '$label' is still loaded and was left alone (--keep-legacy-mail). Two mail servers means two databases; point every client at one of them."
+      continue
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+      say "DRY-RUN would retire legacy mail service: $label"
+      continue
+    fi
+    # Park the plist rather than delete it. Retiring someone's running service
+    # is not the kind of thing an installer should make unrecoverable.
+    local plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    if [[ -f "$plist" ]]; then
+      mkdir -p "$INSTALL_DIR/parked-launchd"
+      mv "$plist" "$INSTALL_DIR/parked-launchd/$label.plist"
+      say "retired legacy mail service $label (plist parked at $INSTALL_DIR/parked-launchd/$label.plist)"
+    else
+      say "retired legacy mail service $label"
+    fi
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      warn "legacy mail service '$label' is still loaded after bootout; retire it by hand before using mail"
+    fi
+  done
+  if [[ "$found" == 0 ]]; then
+    return 0
+  fi
+}
+
 enable_mail_autostart() {
   local kind=""
   case "$(uname -s)" in
@@ -3091,6 +3156,7 @@ main() {
   # is precisely the case for every existing user re-running install.sh to
   # update, and they need the autostart most.
   if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
+    retire_legacy_mail_services
     enable_mail_autostart
   elif [[ "$PROVISION_AGENT_MAIL" == true ]]; then
     # The upstream opt-out provisions its own nohup runner, which has the same

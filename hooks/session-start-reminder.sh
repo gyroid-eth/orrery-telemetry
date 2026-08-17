@@ -22,6 +22,34 @@ if [ -z "$HEALTH_URL" ]; then
     esac
 fi
 
+# Is the mail server answering?
+#
+# The obvious probe -- GET the liveness URL derived above -- was wrong in a way
+# that looked exactly like the server being down. AgentStack Mail serves its MCP
+# path and the configured aliases and nothing else, so there is no
+# /health/liveness route to answer, and `curl -sf` fails on any non-2xx. Every
+# healthy install therefore reported "not running" at every session start, every
+# session was told to skip registration, and no agent ever refreshed
+# last_active_ts. That timestamp is what keeps the staleness sweep off an
+# agent's file reservations, so a probe that could never succeed ended in
+# reservations being collected out from under agents that were working.
+#
+# Ask the endpoint the agents themselves use. A live streamable-HTTP MCP server
+# answers a bare GET with 405 or 406 -- it wants a POST with MCP headers -- while
+# a dead one produces no status line at all. The liveness URL is still honoured
+# when it does answer, so a deployment that fronts the service with a real health
+# route keeps working.
+mail_server_is_answering() {
+    if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
+        return 0
+    fi
+    status="$(curl -s -o /dev/null -m 2 -w '%{http_code}' "$MCP_URL" 2>/dev/null)"
+    case "$status" in
+        200|405|406) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     # shellcheck disable=SC1091
     source "$HOOKS_DIR/resolve-agent-name.sh"
@@ -103,7 +131,7 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
     "${CURRENT_SESSION:-}" \
     >> "$RUNTIME_DIR/session-start-resolve.log" 2>/dev/null
 
-if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
+if mail_server_is_answering; then
     if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
         echo "mcp-agent-mail server is running. This session is already registered."
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
