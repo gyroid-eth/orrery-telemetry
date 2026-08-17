@@ -569,22 +569,6 @@ def test_the_last_thing_before_the_spawn_is_the_launchd_check() -> None:
     assert between.strip() == "", f"unexpected statements before the spawn: {between!r}"
 
 
-def test_no_function_is_defined_twice() -> None:
-    """A later definition silently wins in bash.
-
-    An edit left two `executable_is_this_service` definitions in place; the
-    stale one was 30 lines further down, so every call used the version the
-    fix had replaced -- and the tests for the fix failed for reasons that
-    looked like the fix not working.
-    """
-    import collections
-    import re
-
-    names = re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", MAILCTL.read_text(), re.MULTILINE)
-    duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
-    assert not duplicates, f"defined more than once: {duplicates}"
-
-
 def test_a_foreign_job_appearing_after_the_probes_still_stops_the_spawn(
     harness,
 ) -> None:
@@ -609,3 +593,24 @@ def test_a_foreign_job_appearing_after_the_probes_still_stops_the_spawn(
     assert result.returncode != 0, result.stdout
     assert "not this service" in result.stderr
     assert loaded.exists()
+
+
+def test_no_test_is_defined_twice() -> None:
+    """A duplicated test is a test that never runs.
+
+    pytest collects the later definition and silently discards the earlier one,
+    so the earlier one's assertions stop being checked without anything saying
+    so. This file had two copies of the duplicate-shell-function test, which is
+    the same mistake it exists to catch, one level up.
+    """
+    import collections
+    import re
+
+    for path in (
+        Path(__file__),
+        Path(__file__).with_name("test_legacy_mail_retirement.py"),
+        Path(__file__).with_name("test_session_start_liveness.py"),
+    ):
+        names = re.findall(r"^def (test_[a-z0-9_]+)\(", path.read_text(), re.MULTILINE)
+        duplicates = [n for n, c in collections.Counter(names).items() if c > 1]
+        assert not duplicates, f"{path.name}: defined more than once: {duplicates}"
