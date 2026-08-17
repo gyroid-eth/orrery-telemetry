@@ -2528,54 +2528,50 @@ retire_legacy_mail_services() {
   done
 }
 
-# Is this path part of a mail install? Directory names are the durable signal:
-# the predecessor lived in ~/mcp_agent_mail regardless of which script inside it
-# launchd ran. Basenames are matched exactly -- "not-mcp-agent-mail-backup" is
-# not this service, and a wildcard said it was.
+# Is this path part of a mail install?
+#
+# Canonicalise first, then judge only the canonical path. Judging the path as
+# written let ".../mcp_agent_mail/editor -> /bin/echo" and
+# ".../mcp_agent_mail/../editor" pass on the strength of a directory name that
+# says nothing about what runs. Directory names are the durable signal once the
+# path is real: the predecessor lived in ~/mcp_agent_mail whichever script
+# inside it launchd ran. Basenames are matched exactly -- a wildcard accepted
+# "not-mcp-agent-mail-backup".
 path_belongs_to_a_mail_install() {
-  local candidate="$1" resolved="" directory=""
+  local candidate="$1" mode="${2:-executable}" resolved=""
   [[ -n "$candidate" ]] || return 1
-  # Directories only. Matching the whole path would let the file's own name
-  # satisfy the "installed under a mail directory" rule, which is a different
-  # claim and a much weaker one.
-  directory="${candidate%/*}"
-  case "/$directory/" in
+  [[ -e "$candidate" ]] || return 1
+  resolved="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$candidate" 2>/dev/null)" || return 1
+  [[ -n "$resolved" && -f "$resolved" ]] || return 1
+  # A definition that names something the system cannot run is not evidence of
+  # a running service.
+  if [[ "$mode" == "executable" ]]; then
+    [[ -x "$resolved" ]] || return 1
+  else
+    [[ -r "$resolved" ]] || return 1
+  fi
+  case "/${resolved%/*}/" in
     */mcp_agent_mail/*|*/mcp-agent-mail/*|*/agentstack_mail/*|*/agentstack-mail/*|*/mail-service/*) return 0 ;;
   esac
-  case "${candidate##*/}" in
+  case "${resolved##*/}" in
     mcp-agent-mail|mcp_agent_mail|agentstack-mail|agentstack_mail|\
-    agentstack-mail-service|run-agentstack-mail.sh|run_server_with_token.sh) ;;
-    *) return 1 ;;
+    agentstack-mail-service|run-agentstack-mail.sh|run_server_with_token.sh) return 0 ;;
   esac
-  # An exact name is not enough on its own. Follow it: a symlink called
-  # "mcp-agent-mail" pointing at /bin/echo carries the right name and none of
-  # the meaning, and the target has to belong to a mail install too.
-  [[ -e "$candidate" ]] || return 1
-  if [[ -L "$candidate" ]]; then
-    resolved="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$candidate" 2>/dev/null)" || return 1
-    [[ -n "$resolved" && "$resolved" != "$candidate" ]] || return 1
-    case "/${resolved%/*}/" in
-      */mcp_agent_mail/*|*/mcp-agent-mail/*|*/agentstack_mail/*|*/agentstack-mail/*|*/mail-service/*) return 0 ;;
-    esac
-    case "${resolved##*/}" in
-      mcp-agent-mail|mcp_agent_mail|agentstack-mail|agentstack_mail|\
-      agentstack-mail-service|run-agentstack-mail.sh|run_server_with_token.sh) return 0 ;;
-    esac
-    return 1
-  fi
-  [[ -f "$candidate" ]] || return 1
-  return 0
+  return 1
 }
 
 legacy_mail_plist_looks_like_mail() {
-  # Read what the job runs. Three narrower mistakes preceded this: searching the
+  # Read what the job runs. Four narrower mistakes preceded this: searching the
   # whole plist was circular (the labels are written in the document), searching
   # every argument was forgeable (an editor with --note=...mcp-agent-mail... was
-  # retired), and looking only at argv[0] missed the predecessor itself, whose
-  # sealed definition is ["/bin/bash", ".../mcp_agent_mail/scripts/run_server_with_token.sh"].
+  # retired), looking only at argv[0] missed the predecessor itself, whose sealed
+  # definition is ["/bin/bash", ".../mcp_agent_mail/scripts/run_server_with_token.sh"],
+  # and trusting any interpreter *name* let a shell script called /tmp/python3
+  # vouch for whatever came after it.
   #
-  # So: the executable, plus the script when the executable is a known
-  # interpreter. Anything unreadable, unparseable or symlinked fails closed.
+  # So: the executable, and -- only when the executable is one of the system
+  # shells, by absolute path -- the script it is handed. Anything unreadable,
+  # unparseable or symlinked at the plist level fails closed.
   local plist="$1" executable="" script=""
   [[ -f "$plist" ]] || return 1
   [[ -L "$plist" ]] && return 1
@@ -2583,11 +2579,11 @@ legacy_mail_plist_looks_like_mail() {
   executable="$(/usr/bin/plutil -extract Program raw -o - "$plist" 2>/dev/null)" ||
     executable="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null)" || return 1
   [[ -n "$executable" ]] || return 1
-  path_belongs_to_a_mail_install "$executable" && return 0
-  case "${executable##*/}" in
-    bash|sh|zsh|env|python|python3)
+  path_belongs_to_a_mail_install "$executable" executable && return 0
+  case "$executable" in
+    /bin/bash|/bin/sh|/bin/zsh)
       script="$(/usr/bin/plutil -extract ProgramArguments.1 raw -o - "$plist" 2>/dev/null)" || return 1
-      path_belongs_to_a_mail_install "$script" && return 0
+      path_belongs_to_a_mail_install "$script" script && return 0
       ;;
   esac
   return 1

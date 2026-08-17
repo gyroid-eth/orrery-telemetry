@@ -39,6 +39,7 @@ case "$1" in
     if [[ -n "${APPEAR_AFTER_FIRST_PRINT:-}" && ! -f "$LOADED_MARKER" ]]; then
       # The job loads between the controller's two questions.
       touch "$LOADED_MARKER"
+      [[ -n "${REAPPEAR_SERVING:-}" ]] && touch "$SERVING_MARKER"
       exit 113
     fi
     if [[ -f "$PENDING_UNLOAD" ]]; then
@@ -476,3 +477,61 @@ def test_a_name_shaped_symlink_is_not_this_service(harness, tmp_path: Path) -> N
     result = _mailctl(env, "stop")
     assert "bootout" not in _log(log), "a symlink to /bin/echo was treated as this service"
     assert loaded.exists()
+
+
+def test_our_own_job_appearing_mid_start_hands_back_to_launchd(harness) -> None:
+    """Every state matters at the last moment, not only the foreign one.
+
+    If launchd loaded our job while start was probing, launchd is bringing the
+    server up; starting a second one from here collides with it.
+    """
+    env, loaded, serving, log, server = harness
+    loaded.unlink()
+    serving.unlink()
+    env = {**env, "APPEAR_AFTER_FIRST_PRINT": "1", "REAPPEAR_SERVING": "1"}
+    result = _mailctl(env, "start")
+    assert result.returncode == 0, result.stderr
+    assert "launchd" in result.stdout, result.stdout
+    assert "pid" not in result.stdout.split("launchd")[0], result.stdout
+
+
+def test_a_service_binary_nobody_can_run_is_not_this_service(
+    harness, tmp_path: Path
+) -> None:
+    env, loaded, serving, log, server = harness
+    (tmp_path / "agentstack-mail-service").chmod(0o644)
+    serving.unlink()
+    server.shutdown()
+    server.server_close()
+    result = _mailctl(env, "stop")
+    assert "bootout" not in _log(log), "a job whose binary is not executable was booted out"
+    assert loaded.exists()
+
+
+def test_a_differently_named_link_to_the_service_is_recognised(
+    harness, tmp_path: Path
+) -> None:
+    """Follow the link and judge the target, in both directions."""
+    env, loaded, _serving, log, _server = harness
+    entry = tmp_path / "mail-entry"
+    entry.symlink_to(tmp_path / "agentstack-mail-service")
+    env = {**env, "JOB_PROGRAM": str(entry)}
+    result = _mailctl(env, "status")
+    assert result.returncode == 0, result.stderr
+    assert "running under launchd" in result.stdout
+
+
+def test_no_function_is_defined_twice() -> None:
+    """A later definition silently wins in bash.
+
+    An edit left two `executable_is_this_service` definitions in place; the
+    stale one was 30 lines further down, so every call used the version the
+    fix had replaced -- and the tests for the fix failed for reasons that
+    looked like the fix not working.
+    """
+    import collections
+    import re
+
+    names = re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", MAILCTL.read_text(), re.MULTILINE)
+    duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
+    assert not duplicates, f"defined more than once: {duplicates}"

@@ -119,34 +119,31 @@ plist_defines_this_service() {
 
 # Only the executable, never its arguments: an editor invoked with
 # "--note=agentstack-mail-service" is not this service, and matching the whole
-# argument vector said it was. Names are matched exactly -- a wildcard accepted
-# "not-agentstack-mail-service-backup" -- and a name-shaped symlink has to
-# resolve to something that is really this service.
+# argument vector said it was.
+#
+# Canonicalise before judging, then judge the canonical path alone. Names are
+# matched exactly (a wildcard accepted "not-agentstack-mail-service-backup"),
+# the file has to exist and be executable, and a link is followed to what it
+# really runs -- in both directions, so a differently-named link to the real
+# service still resolves to it.
 executable_is_this_service() {
   local executable="$1" resolved=""
   [[ -n "$executable" ]] || return 1
-  case "${executable##*/}" in
-    agentstack-mail-service|agentstack_mail|run-agentstack-mail.sh) ;;
-    *) return 1 ;;
-  esac
-  # Absent files cannot be verified, and an unverifiable claim of ownership is
-  # the thing this guard exists to refuse.
   [[ -e "$executable" ]] || return 1
-  if [[ -L "$executable" ]]; then
-    resolved="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$executable" 2>/dev/null)" || return 1
-    [[ -f "$resolved" ]] || return 1
-    case "${resolved##*/}" in
-      agentstack-mail-service|agentstack_mail|run-agentstack-mail.sh) return 0 ;;
-    esac
-    case "/${resolved%/*}/" in
-      */agentstack_mail/*|*/agentstack-mail/*|*/mail-service/*) return 0 ;;
-    esac
-    return 1
-  fi
-  [[ -f "$executable" ]] || return 1
-  return 0
+  resolved="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$executable" 2>/dev/null)" || return 1
+  [[ -n "$resolved" && -f "$resolved" && -x "$resolved" ]] || return 1
+  case "${resolved##*/}" in
+    agentstack-mail-service|agentstack_mail|run-agentstack-mail.sh) return 0 ;;
+  esac
+  case "/${resolved%/*}/" in
+    */agentstack_mail/*|*/agentstack-mail/*|*/mail-service/*) return 0 ;;
+  esac
+  return 1
 }
 
+# Read a plist structurally. Searching the whole document conflates the Label
+# with what the job runs, and the labels we look for are themselves the strings
+# being searched for -- the check would confirm itself.
 launchd_job_program() {
   # The authoritative "program =" line only. The numbered "N = ..." lines are
   # the job's arguments, and one of those containing a familiar string says
@@ -442,6 +439,18 @@ start_service() {
   if [[ -n "$pid" ]]; then
     rm -f "$PIDFILE"
   fi
+  case "$(launchd_state)" in
+    foreign)
+      die "launchd job $MAIL_LAUNCHD_LABEL became loaded and is not this service; refusing to start a second server"
+      ;;
+    ours)
+      if wait_for_health; then
+        say "AgentStack Mail started by launchd (label $MAIL_LAUNCHD_LABEL)"
+        return 0
+      fi
+      die "launchd job $MAIL_LAUNCHD_LABEL became loaded but the endpoint is not healthy"
+      ;;
+  esac
   if endpoint_port_open; then
     if health_ok; then
       die "a healthy AgentStack Mail endpoint exists without this controller's pidfile"
@@ -450,11 +459,10 @@ start_service() {
   fi
   # Re-check at the last moment. The state read at the top of this function was
   # taken before the health probes, and a login or a manual load can arrive in
-  # that window -- which is exactly how a foreign job survived while an
-  # unsupervised runner started beside it.
-  if [[ "$(launchd_state)" == "foreign" ]]; then
-    die "launchd job $MAIL_LAUNCHD_LABEL became loaded and is not this service; refusing to start a second server"
-  fi
+  # that window -- which is how a foreign job survived while an unsupervised
+  # runner started beside it. Every state matters here, not just the foreign
+  # one: if our own job appeared, launchd is starting the server and a second
+  # one from here would collide with it.
   mkdir -p "$RUNTIME_DIR"
   nohup /bin/bash "$MAIL_RUNNER" </dev/null >> "$LOGFILE" 2>&1 &
   pid=$!

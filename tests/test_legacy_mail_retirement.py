@@ -49,6 +49,26 @@ exit 0
 """
 
 
+def _legacy_wrapper(tmp_path: Path) -> Path:
+    """The predecessor's wrapper script, in the layout the record describes."""
+    directory = tmp_path / "mcp_agent_mail" / "scripts"
+    directory.mkdir(parents=True, exist_ok=True)
+    wrapper = directory / "run_server_with_token.sh"
+    wrapper.write_text("#!/bin/bash\nexec true\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper
+
+
+def _mail_executable(tmp_path: Path, name: str = "serve-http") -> Path:
+    """A real file inside a real mail directory, as an install would leave it."""
+    directory = tmp_path / "mcp_agent_mail" / ".venv" / "bin"
+    directory.mkdir(parents=True, exist_ok=True)
+    executable = directory / name
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    return executable
+
+
 def _write_plist(path: Path, label: str, *program: str) -> None:
     with path.open("wb") as handle:
         plistlib.dump({"Label": label, "ProgramArguments": list(program)}, handle)
@@ -69,7 +89,7 @@ def _harness(tmp_path: Path, loaded: list[str]) -> tuple[dict[str, str], Path, P
         (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
         # A real plist: the installer extracts Label and ProgramArguments with
         # plutil, so a placeholder document would exercise nothing.
-        _write_plist(agents / f"{label}.plist", label, "/opt/mcp_agent_mail/.venv/bin/serve-http")
+        _write_plist(agents / f"{label}.plist", label, str(_mail_executable(tmp_path)))
 
     log = tmp_path / "launchctl.log"
     env = {
@@ -234,7 +254,7 @@ def test_the_known_labels_can_be_overridden(tmp_path: Path) -> None:
     _write_plist(
         tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
         label,
-        "/opt/mcp_agent_mail/serve",
+        str(_mail_executable(tmp_path, "serve")),
     )
     _out, _err, loaded_dir, _log = _run_retirement(
         tmp_path,
@@ -295,7 +315,7 @@ def test_this_installs_own_dashboard_label_is_protected(tmp_path: Path) -> None:
     _write_plist(
         tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
         label,
-        "/opt/agentstack-mail-service",  # looks like mail, and is still ours
+        str(_mail_executable(tmp_path, "agentstack-mail-service")),  # ours
     )
     out, err, loaded_dir, log = _run_retirement(
         tmp_path,
@@ -366,7 +386,7 @@ def test_the_mail_autostart_label_is_protected(tmp_path: Path) -> None:
     _write_plist(
         tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
         label,
-        "/opt/agentstack-mail-service",
+        str(_mail_executable(tmp_path, "agentstack-mail-service")),
     )
     out, err, loaded_dir, log = _run_retirement(
         tmp_path,
@@ -396,7 +416,7 @@ def test_the_predecessor_recorded_in_the_cutover_document_is_retired(
         tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
         label,
         "/bin/bash",
-        "/Users/operator/mcp_agent_mail/scripts/run_server_with_token.sh",
+        str(_legacy_wrapper(tmp_path)),
     )
     out, err, loaded_dir, log = _run_retirement(
         tmp_path,
@@ -462,3 +482,126 @@ def test_a_name_shaped_symlink_to_something_else_is_not_retired(
     )
     assert (loaded_dir / label).exists(), "a symlink to /bin/echo was retired as mail"
     assert "bootout" not in _log_text(log)
+
+
+def test_a_mail_directory_in_the_path_does_not_vouch_for_a_symlink(
+    tmp_path: Path,
+) -> None:
+    """Judge the canonical path, not the path as written.
+
+    ".../mcp_agent_mail/editor -> /bin/echo" sits under a mail directory and
+    runs an echo. So does ".../mcp_agent_mail/../editor".
+    """
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    directory = tmp_path / "mcp_agent_mail"
+    directory.mkdir(parents=True, exist_ok=True)
+    impostor = directory / "editor"
+    impostor.symlink_to("/bin/echo")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(impostor),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists(), "a link to /bin/echo was retired as mail"
+    assert "bootout" not in _log_text(log)
+
+
+def test_a_traversal_out_of_a_mail_directory_is_not_a_mail_install(
+    tmp_path: Path,
+) -> None:
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    (tmp_path / "mcp_agent_mail").mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "editor"
+    outside.write_text("#!/bin/sh\n", encoding="utf-8")
+    outside.chmod(0o755)
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(tmp_path / "mcp_agent_mail" / ".." / "editor"),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists()
+    assert "bootout" not in _log_text(log)
+
+
+def test_an_interpreter_is_recognised_by_path_not_by_name(tmp_path: Path) -> None:
+    """A shell script called python3 must not vouch for what follows it."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    fake_interpreter = tmp_path / "python3"
+    fake_interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_interpreter.chmod(0o755)
+    script = tmp_path / "mcp_agent_mail" / "server.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("print('hi')\n", encoding="utf-8")
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(fake_interpreter),
+        str(script),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert (loaded_dir / label).exists(), "an impostor interpreter vouched for its argument"
+    assert "bootout" not in _log_text(log)
+
+
+def test_an_executable_nobody_can_run_is_not_a_running_service(tmp_path: Path) -> None:
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    executable = _mail_executable(tmp_path)
+    executable.chmod(0o000)
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(executable),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    executable.chmod(0o755)  # so the temp dir can be cleaned up
+    assert (loaded_dir / label).exists()
+    assert "bootout" not in _log_text(log)
+
+
+def test_a_differently_named_link_to_the_real_thing_is_recognised(
+    tmp_path: Path,
+) -> None:
+    """The reverse direction: follow the link, judge what it lands on."""
+    label = "org.agentstack.mcp-agent-mail"
+    env, loaded_dir, log = _harness(tmp_path, [])
+    (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
+    real = _mail_executable(tmp_path)
+    entry = tmp_path / "mail-entry"
+    entry.symlink_to(real)
+    _write_plist(
+        tmp_path / "home" / "Library" / "LaunchAgents" / f"{label}.plist",
+        label,
+        str(entry),
+    )
+    _out, _err, loaded_dir, log = _run_retirement(
+        tmp_path, [], harness=(env, loaded_dir, log)
+    )
+    assert not (loaded_dir / label).exists(), "a link to the real service was not recognised"
+
+
+def test_no_function_is_defined_twice_in_the_installer() -> None:
+    """The same hazard: bash takes the last definition of a name."""
+    import collections
+    import re
+
+    names = re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", INSTALLER.read_text(), re.MULTILINE)
+    duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
+    assert not duplicates, f"defined more than once: {duplicates}"
