@@ -409,7 +409,7 @@ def test_the_predecessor_recorded_in_the_cutover_document_is_retired(
     was written to retire running -- with the tester's two-database split
     intact.
     """
-    label = "com.operator.mcp-agent-mail"
+    label = "com.example-operator.mcp-agent-mail"
     env, loaded_dir, log = _harness(tmp_path, [])
     (loaded_dir / label).write_text("loaded\n", encoding="utf-8")
     _write_plist(
