@@ -1087,6 +1087,45 @@ def _assert_rich_timing_normalization_observed(
     )
 
 
+def _allowlisted_field_names() -> frozenset[str]:
+    """Field names the divergence ledger marks as masked before comparison.
+
+    The ledger is the single place where an intentional difference is recorded
+    (`comparison_policy.allowlist`), so the comparator reads it rather than
+    carrying its own list.
+    """
+    manifest = json.loads(EXPECTED_DIVERGENCES.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for entry in manifest["intentional_differences"]["allowlisted_entries"]:
+        if entry.get("category") != "scenario_payload_field":
+            continue
+        selector = entry.get("selector", "")
+        if not selector.startswith("checkpoints."):
+            raise AssertionError(
+                f"masked selector outside the checkpoint payloads: {selector!r}"
+            )
+        names.add(selector.rsplit(".", 1)[-1])
+    return frozenset(names)
+
+
+def _mask_allowlisted_fields(value: Any, _names: frozenset[str] | None = None) -> Any:
+    names = _allowlisted_field_names() if _names is None else _names
+    if not names:
+        return value
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                f"<ALLOWLISTED:{key}>"
+                if key in names
+                else _mask_allowlisted_fields(item, names)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_allowlisted_fields(item, names) for item in value]
+    return value
+
+
 def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
     if type(left) is not type(right):
         return f"{path}: types differ ({type(left).__name__} != {type(right).__name__})"
@@ -1159,16 +1198,22 @@ def test_frozen_live_behavior_matches_core(
 
     assert live["tools_used"] == core["tools_used"]
     assert live["tool_trace"] == core["tool_trace"]
+    # Fields the ledger records as intentionally divergent are masked on both
+    # sides before ranks are assigned. The normalizer ranks every distinct
+    # instant it can see, so one extra timestamp anywhere shifts the rank of
+    # every later one and surfaces as differences in unrelated fields.
+    masked_live = _mask_allowlisted_fields(live["checkpoints"])
+    masked_core = _mask_allowlisted_fields(core["checkpoints"])
     live_normalizer = _TemporalNormalizer(
-        live["checkpoints"],
+        masked_live,
         live_state_root,
     )
-    normalized_live = live_normalizer.normalize(live["checkpoints"])
+    normalized_live = live_normalizer.normalize(masked_live)
     core_normalizer = _TemporalNormalizer(
-        core["checkpoints"],
+        masked_core,
         core_state_root,
     )
-    normalized_core = core_normalizer.normalize(core["checkpoints"])
+    normalized_core = core_normalizer.normalize(masked_core)
     if scenario in _RICH_TIMING_PANEL_SCENARIOS:
         _assert_rich_timing_normalization_observed(
             live_normalizer,
@@ -1305,3 +1350,40 @@ def test_worker_environment_is_fail_closed(
         assert "STORAGE_ROOT" not in environment
         assert "NOTIFICATIONS_SIGNALS_DIR" not in environment
         assert "HTTP_PORT" not in environment
+
+
+def test_the_ledger_mask_covers_only_the_field_it_names() -> None:
+    """The mask must not become a general escape hatch.
+
+    It exists so one recorded divergence does not cascade through the temporal
+    normalizer's global rank space. Anything else in the payload still has to
+    match exactly.
+    """
+    names = _allowlisted_field_names()
+    assert names == {"last_active_ts"}, names
+    payload = {
+        "checkpoints": [
+            {
+                "last_active_ts": "2026-08-17T01:00:00+00:00",
+                "created_ts": "2026-08-17T01:00:00+00:00",
+                "nested": {"last_active_ts": "2026-08-17T02:00:00+00:00", "keep": 1},
+            }
+        ]
+    }
+    masked = _mask_allowlisted_fields(payload)
+    checkpoint = masked["checkpoints"][0]
+    assert checkpoint["last_active_ts"] == "<ALLOWLISTED:last_active_ts>"
+    assert checkpoint["nested"]["last_active_ts"] == "<ALLOWLISTED:last_active_ts>"
+    assert checkpoint["created_ts"] == "2026-08-17T01:00:00+00:00"
+    assert checkpoint["nested"]["keep"] == 1
+
+
+def test_a_difference_in_any_other_field_still_fails_the_comparison() -> None:
+    """The null case for the mask: it must not make the comparator permissive."""
+    left = {"checkpoints": [{"last_active_ts": "A", "released_ts": "X"}]}
+    right = {"checkpoints": [{"last_active_ts": "B", "released_ts": "Y"}]}
+    difference = _first_difference(
+        _mask_allowlisted_fields(left), _mask_allowlisted_fields(right)
+    )
+    assert difference is not None
+    assert "released_ts" in difference

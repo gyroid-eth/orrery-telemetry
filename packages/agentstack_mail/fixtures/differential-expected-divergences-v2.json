@@ -47,6 +47,14 @@
           "duration-derived speed icon and completion footer"
         ],
         "consequence": "This behavior differential cannot detect live/Core performance-class regressions; performance must be measured by a separate gate."
+      },
+      {
+        "id": "masked_timestamp_rank_alignment",
+        "scope": "timestamps masked by allowlisted_entries with category scenario_payload_field",
+        "ignored": [
+          "the order and equality relation between a masked timestamp and any unmasked one"
+        ],
+        "consequence": "Masking removes the field from the rank universe on both sides, so a difference that consists only of an unmasked timestamp moving across a masked one is not detected. Measured: left last_active=02:00 created=01:00 versus right last_active=02:00 created=03:00 compares equal after masking. Order and equality among unmasked timestamps are still compared, so this is not a general blind spot; invariants that involve a masked field (Agent.created_ts <= last_active_ts, say) have to be asserted per side rather than differentially."
       }
     ],
     "safety_entries": [
@@ -320,6 +328,28 @@
           "load_policy": "lazy_only_when_llm_enabled"
         },
         "reason": "summarize_thread is public, but the default deployment keeps LLM support disabled: its heuristic path succeeds without importing the optional LiteLLM seam. The optional extra is required only when LLM support is explicitly enabled."
+      },
+      {
+        "id": "payload.agent.last_active_ts",
+        "category": "scenario_payload_field",
+        "selector": "checkpoints.**.last_active_ts",
+        "comparator_disposition": "allow",
+        "live": {
+          "refreshed_by": [
+            "register_agent",
+            "send_message"
+          ]
+        },
+        "core": {
+          "refreshed_by": [
+            "register_agent",
+            "send_message",
+            "file_reservation_paths",
+            "renew_file_reservations",
+            "release_file_reservations"
+          ]
+        },
+        "reason": "Core treats reservation traffic as proof that an agent is alive; live refreshed last_active_ts only on registration and on sending a message. Live's rule is the defect: last_active_ts also decides whether the staleness sweep may collect a holder's reservations, so an agent that edited files for half an hour without mailing anyone had them collected. Measured on the production database on 2026-08-17: 5,058 of 12,699 reservations were released within 120s of being granted, across five agents and several days. The field is masked on both sides before the temporal normalizer assigns ranks, because an extra distinct instant shifts the rank of every later instant and would otherwise report differences in unrelated fields. No other field is allowlisted, but masking does cost the comparison the relation between this field and unmasked timestamps; see normalization_blind_spots.masked_timestamp_rank_alignment."
       }
     ]
   },
@@ -1580,5 +1610,17 @@
       ],
       "rationale": "public release targets fresh tester installs with no legacy data or prior configuration; migration stays available as a documented manual procedure (migration.py, proven in the 2026-08-12 live cutover), rollback is documented as AGENTSTACK_MAIL_PROVIDER=upstream re-run, notification layout compatibility is a one-time verification that the shipped watcher reads the per-message layout"
     }
-  }
+  },
+  "post_cutover_intentional_differences": [
+    {
+      "id": "payload.agent.last_active_ts",
+      "arose": "post_cutover",
+      "date": "2026-08-17",
+      "approved_by": "maintainer",
+      "channel": "direct chat instruction to ProOpus",
+      "summary": "Core refreshes Agent.last_active_ts on reservation traffic (file_reservation_paths / renew_file_reservations / release_file_reservations); frozen live refreshed it only on register_agent and send_message.",
+      "why_not_in_the_initial_cutover_difference_set": "The initial-cutover-difference-set-exact condition records what was approved at cutover on 2026-08-15 and is deliberately left at three. Rewriting it to four would make the ledger claim that this difference was reviewed then, which it was not: it was found on 2026-08-17 while fixing the staleness sweep, and approved separately.",
+      "comparator_effect": "masked before temporal normalization; see intentional_differences.allowlisted_entries[payload.agent.last_active_ts]"
+    }
+  ]
 }

@@ -76,6 +76,20 @@ EXPECTED_DESCRIPTION_DIGESTS = {
 }
 
 EXPECTED_STATIC_ALLOWLIST = {
+    "payload.agent.last_active_ts": {
+        "category": "scenario_payload_field",
+        "selector": "checkpoints.**.last_active_ts",
+        "live": {"refreshed_by": ["register_agent", "send_message"]},
+        "core": {
+            "refreshed_by": [
+                "register_agent",
+                "send_message",
+                "file_reservation_paths",
+                "renew_file_reservations",
+                "release_file_reservations",
+            ]
+        },
+    },
     "isolation.namespace": {
         "category": "service_isolation",
         "selector": "service.namespace",
@@ -841,7 +855,15 @@ EXPECTED_NORMALIZATION_BLIND_SPOTS = [
             "This behavior differential cannot detect live/Core performance-class "
             "regressions; performance must be measured by a separate gate."
         ),
-    }
+    },
+    {
+        "id": "masked_timestamp_rank_alignment",
+        "scope": "timestamps masked by allowlisted_entries with category scenario_payload_field",
+        "ignored": [
+            "the order and equality relation between a masked timestamp and any unmasked one"
+        ],
+        "consequence": "Masking removes the field from the rank universe on both sides, so a difference that consists only of an unmasked timestamp moving across a masked one is not detected. Measured: left last_active=02:00 created=01:00 versus right last_active=02:00 created=03:00 compares equal after masking. Order and equality among unmasked timestamps are still compared, so this is not a general blind spot; invariants that involve a masked field (Agent.created_ts <= last_active_ts, say) have to be asserted per side rather than differentially."
+    },
 ]
 
 EXPECTED_SAFETY_DIFFERENCES = [
@@ -1493,6 +1515,7 @@ def _assert_expected_divergences_manifest(
         "post_cutover_follow_up_tasks",
         "current_gate_activation_requirements",
         "post_cutover_gate_contract_defects",
+        "post_cutover_intentional_differences",
         "cutover_gate",
         "cutover_approval",
         "product_decisions",

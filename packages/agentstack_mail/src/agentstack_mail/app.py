@@ -3540,6 +3540,52 @@ async def _get_or_create_agent(
     return agent
 
 
+async def _touch_agent_activity(agent: Agent) -> None:
+    """Mark an agent as alive right now.
+
+    ``last_active_ts`` decides whether the staleness sweep may take a holder's
+    file reservations away (see ``_expire_stale_file_reservations``). Before
+    this existed it was refreshed only by ``register_agent`` and by sending a
+    message, so an agent that spent half an hour editing files -- reserving,
+    renewing, releasing the whole time -- looked idle and had its reservations
+    swept out from under it. Reserving a path is itself proof of life.
+    """
+    agent_id = agent.id
+    if agent_id is None:
+        return
+    now = _naive_utc()
+    try:
+        async with get_session() as session:
+            # Only ever move the clock forward. `now` is sampled before the
+            # SQLite writer lock is acquired, so a touch that waited behind a
+            # register/send/other-touch would otherwise commit an older stamp
+            # last and make the agent look *less* recently active than it is.
+            outcome = await session.execute(
+                update(Agent)
+                .where(
+                    cast(Any, Agent.id) == agent_id,
+                    or_(
+                        cast(Any, Agent.last_active_ts).is_(None),
+                        cast(Any, Agent.last_active_ts) < now,
+                    ),
+                )
+                .values(last_active_ts=now)
+            )
+            await session.commit()
+            written = bool(outcome.rowcount)
+    except Exception:
+        # Liveness bookkeeping must never fail the caller's actual request --
+        # but a silent failure here means the sweep goes on treating a working
+        # agent as idle, which is invisible from the outside. Say so.
+        logger.warning("could not refresh last_active_ts for agent id=%s", agent_id, exc_info=True)
+        return
+    if written:
+        agent.last_active_ts = now
+    # If the guard rejected the write, the row already holds something newer.
+    # Copying `now` onto this detached object anyway would make it disagree
+    # with the database it was read from.
+
+
 async def _get_agent(project: Project, name: str) -> Agent:
     """Get agent by name with helpful error messages and suggestions."""
     await ensure_schema()
@@ -4012,10 +4058,24 @@ async def _collect_file_reservation_statuses(
             or (moment - agent_last_active).total_seconds() > inactivity_seconds
         )
         activity_unknown = not activity.probe_complete
+        # A pattern that matches nothing on disk carries no evidence either
+        # way, and the most common reservation in practice is "I am about to
+        # create this file" -- which has no mtime to find until the write
+        # lands. Give a young reservation the benefit of the doubt, but only
+        # briefly: a pattern still matching nothing after the grace window is a
+        # deleted path, a typo, or an empty glob, and letting those hold an
+        # exclusive lease until TTL blocks whoever wants to create the file.
+        reservation_created = _ensure_utc(reservation.created_ts)
+        awaiting_first_write = bool(
+            not activity.matched
+            and reservation_created is not None
+            and (moment - reservation_created).total_seconds() <= activity_grace
+        )
         stale = bool(
             reservation.released_ts is None
             and agent_inactive
             and not activity_unknown
+            and not awaiting_first_write
             and not (recent_mail or recent_fs or recent_git)
         )
         reasons: list[str] = []
@@ -4044,6 +4104,8 @@ async def _collect_file_reservation_statuses(
                 reasons.append(f"no_recent_git_activity>{activity_grace}s")
         else:
             reasons.append("path_pattern_unmatched")
+            if awaiting_first_write:
+                reasons.append(f"awaiting_first_write<={activity_grace}s")
 
         statuses.append(
             FileReservationStatus(
@@ -4111,6 +4173,34 @@ async def _expire_stale_file_reservations(
     stale_statuses = [status for status in statuses if status.stale and status.reservation.id is not None]
     stale_ids = [cast(int, status.reservation.id) for status in stale_statuses]
     if stale_ids:
+        # Known limitation: only the agent's own liveness is re-checked here.
+        # Filesystem, git, and mail activity are read once, before the probes,
+        # and a write landing after that read can still lose its reservation to
+        # this sweep. Closing that would mean re-running the probes under the
+        # write, which is the expensive half. The agent-side guard covers every
+        # case where the holder talks to this server at all.
+        #
+        # Re-check liveness inside the write. The staleness decision above was
+        # made from a snapshot read before the (possibly slow) filesystem and
+        # git probes; in that window the holder may have proved it is alive by
+        # reserving, renewing, or releasing something. Without this guard a
+        # concurrent sweeper releases reservations belonging to an agent that
+        # is demonstrably working -- the exact defect the liveness bump was
+        # added to fix, reintroduced through a different caller.
+        inactive_cutoff = _naive_utc(
+            now - timedelta(seconds=max(0, int(get_settings().file_reservation_inactivity_seconds)))
+        )
+        still_inactive = (
+            select(Agent.id)
+            .where(
+                cast(Any, Agent.id) == cast(Any, FileReservation.agent_id),
+                or_(
+                    cast(Any, Agent.last_active_ts).is_(None),
+                    cast(Any, Agent.last_active_ts) < inactive_cutoff,
+                ),
+            )
+            .exists()
+        )
         async with get_session() as session:
             await session.execute(
                 update(FileReservation)
@@ -4118,11 +4208,53 @@ async def _expire_stale_file_reservations(
                     cast(Any, FileReservation.project_id) == project_id,
                     cast(Any, FileReservation.id).in_(stale_ids),
                     cast(Any, FileReservation.released_ts).is_(None),
+                    still_inactive,
                 )
                 .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
             )
             await session.commit()
+            survivors = await session.execute(
+                select(FileReservation.id).where(
+                    cast(Any, FileReservation.id).in_(stale_ids),
+                    cast(Any, FileReservation.released_ts).is_(None),
+                )
+            )
+            spared = {row[0] for row in survivors.all()}
 
+        if spared:
+            async with get_session() as session:
+                revived = await session.execute(
+                    select(Agent.id, Agent.last_active_ts).where(
+                        cast(Any, Agent.id).in_(
+                            [
+                                status.agent.id
+                                for status in stale_statuses
+                                if status.reservation.id in spared and status.agent.id is not None
+                            ]
+                        )
+                    )
+                )
+                fresh_activity = {row[0]: _ensure_utc(row[1]) for row in revived.all()}
+            for status in stale_statuses:
+                if status.reservation.id in spared:
+                    # Report the timestamp that spared it, not the snapshot the
+                    # verdict was made from -- otherwise the resource shows
+                    # "became active" next to an hours-old last activity.
+                    if status.agent.id in fresh_activity:
+                        status.last_agent_activity = fresh_activity[status.agent.id]
+                    # The row survived the guard, so the verdict that produced
+                    # it is void. Callers and the `file_reservations` resource
+                    # read `stale` directly; leaving it true reports a live
+                    # reservation as collectable.
+                    status.stale = False
+                    status.stale_reasons = [
+                        reason
+                        for reason in status.stale_reasons
+                        if not reason.startswith("agent_inactive")
+                    ] + ["agent_became_active_during_sweep"]
+            stale_statuses = [
+                status for status in stale_statuses if status.reservation.id not in spared
+            ]
         for status in stale_statuses:
             status.reservation.released_ts = naive_now
 
@@ -9413,6 +9545,10 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         agent = await _get_agent(project, agent_name)
+        # Before the sweep, not after: this very call is proof the agent is
+        # alive, and the sweep below would otherwise be entitled to release the
+        # reservations it is about to hand out.
+        await _touch_agent_activity(agent)
         if project.id is None:
             raise ValueError("Project must have an id before reserving file paths.")
         sweep = await _expire_stale_file_reservations(project.id)
@@ -9643,24 +9779,69 @@ def build_mcp_server() -> FastMCP:
                         r for r in reservations
                         if any(_patterns_overlap(r.path_pattern, p) for p in paths)
                     ]
+                released_ids: list[int] = []
                 if reservations:
                     ids = [res.id for res in reservations if res.id is not None]
                     if ids:
-                        await session.execute(
-                            update(FileReservation)
-                            .where(
-                                cast(Any, FileReservation.project_id) == project.id,
-                                cast(Any, FileReservation.agent_id) == agent.id,
-                                cast(Any, FileReservation.released_ts).is_(None),
-                                cast(Any, FileReservation.id).in_(ids),
+                        # One statement per row, and ownership is whatever the
+                        # database says it updated. Two alternatives were worse:
+                        # RETURNING needs SQLite >= 3.35 and nothing in the
+                        # installer enforces that, and reading rows back by the
+                        # timestamp this call wrote mistakes a competitor's
+                        # release for its own whenever both land in the same
+                        # microsecond (measured: 673 collisions per 500k samples
+                        # of the clock this uses).
+                        for reservation_id in ids:
+                            outcome = await session.execute(
+                                update(FileReservation)
+                                .where(
+                                    cast(Any, FileReservation.project_id) == project.id,
+                                    cast(Any, FileReservation.agent_id) == agent.id,
+                                    cast(Any, FileReservation.released_ts).is_(None),
+                                    cast(Any, FileReservation.id) == reservation_id,
+                                )
+                                .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
+                                # The session holds every selected reservation,
+                                # so the default 'auto' synchronisation walks
+                                # them on each of these statements -- 4.7s for a
+                                # thousand rows, all of it inside the writer
+                                # lock. The rows this touches are re-stamped by
+                                # hand below.
+                                .execution_options(synchronize_session=False)
                             )
-                            .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
-                        )
+                            if outcome.rowcount == 1:
+                                released_ids.append(reservation_id)
+                        if released_ids:
+                            # Same transaction, same commit. Releasing a path is
+                            # proof this agent is working, and a sweeper reading
+                            # Agent.last_active_ts between the two writes would
+                            # otherwise collect this agent's *other* reservations
+                            # in the gap. There is no gap if there is one commit.
+                            await session.execute(
+                                update(Agent)
+                                .where(
+                                    cast(Any, Agent.id) == agent.id,
+                                    or_(
+                                        cast(Any, Agent.last_active_ts).is_(None),
+                                        cast(Any, Agent.last_active_ts) < naive_now,
+                                    ),
+                                )
+                                .values(last_active_ts=naive_now)
+                            )
                         await session.commit()
+            # Report only what this call actually released. A concurrent caller
+            # may have released some of the selected rows first; counting the
+            # selection would claim work this call did not do, and would write
+            # archive records with a timestamp that is not the one in the
+            # database.
+            released_set = set(released_ids)
+            reservations = [r for r in reservations if r.id in released_set]
             affected = len(reservations)
             for reservation in reservations:
                 reservation.released_ts = naive_now
             if reservations:
+                if agent.last_active_ts is None or agent.last_active_ts < naive_now:
+                    agent.last_active_ts = naive_now
                 await _write_file_reservation_records(
                     project,
                     [(reservation, agent) for reservation in reservations],
@@ -9940,6 +10121,12 @@ def build_mcp_server() -> FastMCP:
         if not file_reservations:
             await ctx.info(f"No active file_reservations to renew for '{agent.name}'.")
             return {"renewed": 0, "file_reservations": []}
+
+        # Renewing something real is the heartbeat of an agent mid-edit. A
+        # no-op renew is not: counting that would let a retired identity's
+        # leftover cleanup calls keep it looking alive (it would drift back
+        # into the 30-day broadcast recipient set, among other things).
+        await _touch_agent_activity(agent)
 
         updated: list[dict[str, Any]] = []
         async with get_session() as session:
