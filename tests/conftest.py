@@ -27,7 +27,19 @@ import time
 
 import pytest
 
-PRODUCTION_LABELS = ("org.orrery.mail", "com.operator.orrery-mail-boot")
+# Labels this machine's own services use. The mail service is the one the
+# suite has actually stopped; the autostart wrapper is named per install, so
+# it is read from the environment rather than written down here -- an operator
+# name does not belong in a tracked file (test_no_personal_identifiers.py).
+PRODUCTION_LABELS = tuple(
+    label
+    for label in (
+        "org.orrery.mail",
+        "org.agentstack.mail",
+        os.environ.get("AGENTSTACK_MAIL_AUTOSTART_LABEL", ""),
+    )
+    if label
+)
 SAMPLE_SECONDS = 2.0
 
 # Which test is running right now. A disturbance that only appears in a full
