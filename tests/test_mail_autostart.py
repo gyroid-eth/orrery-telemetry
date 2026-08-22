@@ -597,6 +597,11 @@ def _mailctl_env(tmp: pathlib.Path) -> dict:
     runner.chmod(0o755)
     env = dict(os.environ)
     env.update({
+        # Without this the controller falls back to the production label and
+        # `stop` boots out the developer's own mail service: this file stopped
+        # the real 8765 on every full-suite run, which read as the service
+        # crashing on its own. A test must never name a real install's job.
+        "AGENTSTACK_MAIL_LAUNCHD_LABEL": "org.agentstack.test.mail-autostart.mailctl",
         "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
         "AGENTSTACK_MAIL_PROVIDER": "agentstack",
         "AGENTSTACK_MAIL_DIR": str(tmp),

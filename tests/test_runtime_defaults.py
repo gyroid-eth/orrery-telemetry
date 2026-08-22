@@ -9,10 +9,16 @@ import signal
 import socket
 import subprocess
 import sys
+
+import pytest
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+from service_teardown import (  # noqa: E402
+    TEST_LABEL_PREFIX,
+    stop_dashboard,
+    stop_recorded_supervisor,
+)
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -30,11 +36,30 @@ case "$2" in
     nohup "$AGENTSTACK_TEST_PYTHON" \
       "$AGENTSTACK_HOME/dashboard/service_runner.py" >/dev/null 2>&1 &
     echo $! > "$AGENTSTACK_TEST_SERVICE_PID"
+    # Wait for the runner to record itself. Returning before that leaves a pid
+    # with no state, which the cleanup cannot tell apart from an unrelated
+    # process -- and the weak "does the command line mention this home"
+    # workaround that gap invited was worse than the gap.
+    i=0
+    while [ "$i" -lt 100 ]; do
+      [ -f "$AGENTSTACK_HOME/runtime/dashboard-service.json" ] && break
+      i=$((i + 1))
+      sleep 0.05
+    done
+    # A wait without a postcondition is a hope. Failing here surfaces the
+    # runner that never recorded itself instead of leaving a live process
+    # nothing can identify.
+    if [ ! -f "$AGENTSTACK_HOME/runtime/dashboard-service.json" ]; then
+      echo "fake systemctl: runner did not record its state" >&2
+      exit 1
+    fi
     ;;
   disable)
-    if [ -f "$AGENTSTACK_TEST_SERVICE_PID" ]; then
-      kill "$(sed -n '1p' "$AGENTSTACK_TEST_SERVICE_PID")" 2>/dev/null || true
-    fi
+    # Deliberately nothing. This used to `kill` whatever pid the file named --
+    # the same unverified kill that was removed from every Python path, still
+    # here in generated shell because the audit only counted one language.
+    # Stopping is the fixture's job, through the checked path.
+    :
     ;;
 esac
 exit 0
@@ -42,16 +67,16 @@ exit 0
 
 
 def _stop_fake_dashboard(env: dict[str, str]) -> None:
+    """Stop the fake system manager's dashboard and wait for its port.
+
+    The pid comes from a file, so it goes through the same provenance rule as
+    every other recorded pid: the install's own state has to name it. Reading a
+    number and signalling it was the older behaviour here, and it survived two
+    rounds of removing exactly that from everywhere else.
+    """
     pidfile = pathlib.Path(env["AGENTSTACK_TEST_SERVICE_PID"])
-    try:
-        pid = int(pidfile.read_text(encoding="utf-8").strip())
-    except (FileNotFoundError, ValueError):
-        pid = 0
-    if pid > 1:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+    home = pathlib.Path(env["AGENTSTACK_HOME"]).parent
+    stop_recorded_supervisor(pidfile, home)
 
     deadline = time.monotonic() + 5
     port = int(env["AGENTSTACK_PORT"])
@@ -143,6 +168,20 @@ def _clean_env(home: pathlib.Path) -> dict[str, str]:
     env.pop("AGENTSTACK_MANAGED_AGENTS_FILE", None)
     env.pop("AGENTSTACK_MAIL_ENV", None)
     env.pop("AGENTSTACK_SIGNALS_DIR", None)
+    # The identity of whoever runs the suite is not part of the fixture. The
+    # session-index writer reads the caller's identity to decide whether a
+    # registration is the caller's own, so an ambient AGENT_NAME from the
+    # developer's shell silently turns these payloads into somebody else's
+    # registration and the writer correctly declines to record them.
+    for ambient in (
+        "AGENT_NAME",
+        "AGENTSTACK_REGISTERING_AGENT",
+        "AGENTSTACK_REGISTERING_SOURCE",
+        "AGENTSTACK_SESSION_ID",
+        "TMUX",
+        "TMUX_PANE",
+    ):
+        env.pop(ambient, None)
     return env
 
 
@@ -495,6 +534,59 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     assert json.loads(claude_json.read_text()) == original_claude_json
 
 
+@pytest.fixture(autouse=True)
+def _stop_any_dashboard_this_module_started(tmp_path):
+    """Every install in this module leaves a supervised dashboard running.
+
+    One test had no teardown at all, and four of its dashboards were still
+    serving on this machine days later. Per-test cleanup is the kind of thing
+    a new test forgets, so it belongs to the module.
+
+    It acts only on evidence that a process exists right now. `install-state.json`
+    is not that: it says an install happened, and survives the process it
+    describes. Asking for a process inventory on that basis errored in a
+    sandbox where listing processes is unavailable, for tests that had nothing
+    to clean up.
+    """
+    yield
+    failures = []
+
+    # The fake system manager used by this module records its pid here rather
+    # than in the install's runtime directory.
+    harness_pidfile = tmp_path / "dashboard-service.pid"
+    home_with_install = tmp_path / "home"
+    if harness_pidfile.is_file():
+        try:
+            _stop_pid_recorded_by_the_harness(harness_pidfile, home_with_install)
+        except Exception as exc:  # noqa: BLE001 - reported below, not hidden
+            failures.append(f"{harness_pidfile}: {exc}")
+
+    for home in (tmp_path / "home", tmp_path):
+        if not (home / ".agentstack" / "runtime" / "dashboard.pid").is_file():
+            continue
+        try:
+            stop_dashboard(home, appear_timeout=0.1)
+        except Exception as exc:  # noqa: BLE001 - reported below, not hidden
+            failures.append(f"{home}: {exc}")
+
+    # Swallowing this made a failed cleanup indistinguishable from a clean one,
+    # which is the state that let leaks accumulate unnoticed. pytest reports a
+    # teardown error separately, so the test's own verdict still stands.
+    assert not failures, "dashboard teardown failed: " + "; ".join(failures)
+
+
+def _stop_pid_recorded_by_the_harness(pidfile: pathlib.Path, home: pathlib.Path) -> None:
+    """Stop the fake system manager's service, with the same provenance rule.
+
+    This helper started life as a plain "kill whatever pid is in the file",
+    which is the behaviour that had just been removed from the shared teardown
+    -- the unsafe kill had moved rather than gone. The fake systemd starts the
+    real service_runner.py, so the install's own state names it, and the same
+    check applies.
+    """
+    stop_recorded_supervisor(pidfile, home)
+
+
 def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp_path):
     env = _clean_env(tmp_path / "home")
     fake_bin = tmp_path / "fake-bin"
@@ -679,7 +771,21 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         manifest["agent_mail"]["requested_name_honoring"]
     )
 
+    # Read again unrenamed: `manifest` above has already had the test prefix
+    # projected onto the production one, and this assertion is about the branch
+    # the fixture actually exercised -- a scoped prefix pinning its own label.
+    raw_manifest = json.loads(
+        (install_dir / "install-state.json").read_text(encoding="utf-8")
+    )
+    assert raw_manifest["env"]["AGENTSTACK_MAIL_LAUNCHD_LABEL"] == (
+        f"{TEST_LABEL_PREFIX}.mail-service"
+    )
+
     normalized_env = _normalize_sample_paths(manifest["env"], manifest)
+    # The sample depicts a default install, which deliberately writes nothing
+    # here so the controller keeps its historical label. Renaming the test
+    # prefix would otherwise invent a combination no install produces.
+    normalized_env["AGENTSTACK_MAIL_LAUNCHD_LABEL"] = ""
     normalized_env["AGENTSTACK_PORT"] = "8770"
     normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:8765/mcp"
     normalized_env["AGENTSTACK_LANG"] = ""
@@ -901,3 +1007,71 @@ def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
         encoding="utf-8"
     )
     assert 'AGENTSTACK_MAIL_ENV="$HOME/mcp_agent_mail/.env"' in sample
+
+
+def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
+    """Portable, so CI catches it: an operator's label must survive install.
+
+    The explicit branch was covered only by a macOS test that drives real
+    launchd, plus a count of occurrences in the source. Neither runs on the
+    Linux CI where this could silently regress to the derived value.
+    """
+    env = _clean_env(tmp_path / "home")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "systemctl": _fake_systemctl(),
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    home = pathlib.Path(env["HOME"])
+    install_dir = home / ".agentstack"
+    mail_dir = home / "mcp_agent_mail"
+    (mail_dir / ".git").mkdir(parents=True)
+    (mail_dir / "storage.sqlite3").touch()
+    project_dir = home / "project"
+    project_dir.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    explicit = f"{TEST_LABEL_PREFIX}.chosen-by-the-operator"
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_HOME": str(install_dir),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+        "AGENTSTACK_MAIL_LAUNCHD_LABEL": explicit,
+        "AGENTSTACK_MAIL_DIR": str(mail_dir),
+        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_PORT": str(port),
+        "AGENTSTACK_PROJECT_KEY": str(project_dir),
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_TERMINAL": "none",
+        "AGENTSTACK_TEST_PYTHON": sys.executable,
+        "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
+    })
+
+    # A successful install leaves a supervised dashboard running, so the
+    # assertions live inside a cleanup block: three earlier runs of this test
+    # left three dashboards serving on this machine, which nothing noticed
+    # because the teardown check only looked at the mail port.
+    try:
+        subprocess.run(
+            ["bash", str(ROOT / "scripts" / "install.sh")],
+            cwd=ROOT, env=env, text=True, capture_output=True, check=True,
+        )
+
+        env_sh = (install_dir / "env.sh").read_text(encoding="utf-8")
+        assert f"AGENTSTACK_MAIL_LAUNCHD_LABEL={explicit}" in env_sh.replace('"', ""), env_sh
+        manifest = json.loads((install_dir / "install-state.json").read_text(encoding="utf-8"))
+        assert manifest["env"]["AGENTSTACK_MAIL_LAUNCHD_LABEL"] == explicit
+    finally:
+        # The module fixture stops what this install started; doing it here as
+        # well would clean the same artifact twice.
+        pass
