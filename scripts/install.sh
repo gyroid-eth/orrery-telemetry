@@ -205,6 +205,18 @@ AGENT_MAIL_SERVICE_PATH=""
 # systemd unit since day one, mail never did. A machine that reboots therefore
 # came back with a dashboard and no mail server.
 MAIL_AUTOSTART_LABEL="$LABEL_PREFIX.mail"
+# Only a deliberately scoped install pins its own service label; leaving it
+# empty keeps the historical default for everybody else, whose running job was
+# registered under that name long before this setting existed.
+if [[ -n "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-}" ]]; then
+  # An operator who named the label keeps it. Deriving one from the prefix
+  # would point this install at a job nobody registered under that name.
+  MAIL_LAUNCHD_LABEL_SETTING="$AGENTSTACK_MAIL_LAUNCHD_LABEL"
+elif [[ "$LABEL_PREFIX" == "org.agentstack" ]]; then
+  MAIL_LAUNCHD_LABEL_SETTING=""
+else
+  MAIL_LAUNCHD_LABEL_SETTING="$LABEL_PREFIX.mail-service"
+fi
 AGENT_MAIL_AUTOSTART_KIND=""
 AGENT_MAIL_AUTOSTART_PATH=""
 # systemd needs a second file (service + timer); launchd does it in one plist.
@@ -250,6 +262,20 @@ fi
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# The two mail jobs are different things: one runs the service, the other runs
+# `agentstack-mailctl start` on a timer. Sharing a label makes the controller
+# inspect the wrapper, decide the job under its label is not the mail service,
+# and refuse to start -- an install that looks healthy until the first sweep.
+if [[ -n "$MAIL_LAUNCHD_LABEL_SETTING" ]]; then
+  if [[ "$MAIL_LAUNCHD_LABEL_SETTING" == "$MAIL_AUTOSTART_LABEL" ]]; then
+    die "AGENTSTACK_MAIL_LAUNCHD_LABEL ($MAIL_LAUNCHD_LABEL_SETTING) collides with the mail autostart job; choose another label"
+  fi
+  if [[ "$MAIL_LAUNCHD_LABEL_SETTING" == "$LABEL_PREFIX.agentdashboard" ]]; then
+    die "AGENTSTACK_MAIL_LAUNCHD_LABEL ($MAIL_LAUNCHD_LABEL_SETTING) collides with the dashboard job; choose another label"
+  fi
+fi
+
 
 preflight_error() {
   PREFLIGHT_ERRORS[${#PREFLIGHT_ERRORS[@]}]="$1"
@@ -1655,6 +1681,7 @@ safe_merge_settings() {
     --bin-dir "$BIN_DIR"
     --skills-dir "$SKILLS_DIR"
     --backup-dir "$BACKUPS_DIR"
+    --installed-entries "$RUNTIME_DIR/settings-installed-entries.json"
   )
 
   say "Tier1 settings safe-merge dry-run: $CLAUDE_SETTINGS"
@@ -1823,6 +1850,10 @@ path = pathlib.Path(sys.argv[1])
 values = {
     "AGENTSTACK_PORT": "$PORT",
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
+    # An install that chose its own label prefix gets its own mail service
+    # label too. Otherwise agentstack-mailctl falls back to the built-in
+    # default, and a scoped install acts on whatever job already owns that name.
+    "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
     "AGENTSTACK_MAIL_DB": "$MAIL_DB",
     "AGENTSTACK_MAIL_ENV": "$MAIL_ENV",
     "AGENTSTACK_MAIL_HOME": "$MAIL_HOME",
@@ -2263,6 +2294,7 @@ start_native_mail() {
   AGENTSTACK_MAIL_LOG="$NATIVE_MAIL_LOG" \
   AGENTSTACK_MAIL_DB="$MAIL_DB" \
   AGENTSTACK_MCP_URL="$MCP_URL" \
+  AGENTSTACK_MAIL_LAUNCHD_LABEL="$MAIL_LAUNCHD_LABEL_SETTING" \
   AGENTSTACK_PYTHON="$PYTHON_BIN" \
     "$BIN_DIR/agentstack-mailctl" start
   AGENT_MAIL_SERVICE_KIND="nohup"
@@ -3156,6 +3188,7 @@ manifest = {
         "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
         "AGENTSTACK_LANG": "$LANG_SETTING",
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
+        "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
         "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",

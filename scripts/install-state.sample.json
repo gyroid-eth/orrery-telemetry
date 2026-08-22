@@ -1,57 +1,208 @@
 {
-  "schema_version": 1,
-  "tool": "claude-agent-stack",
-  "created_at": "2026-01-01T00:00:00Z",
-  "install_dir": "/home/alice/.agentstack",
-  "repo_root": "/home/alice/src/claude-agent-stack",
-  "tier": "tier1",
-  "safe_merge_performed": true,
-  "settings_merge": {
-    "operation": "merge",
-    "settings_path": "/home/alice/.claude/settings.json",
-    "hooks_dir": "/home/alice/.agentstack/hooks",
-    "skills_dir": "/home/alice/.agentstack/skills",
+  "agent_mail": {
+    "requested_name_honoring": {
+      "detail": "passthrough patch is present and its mode is selected",
+      "enforcement_mode": "passthrough",
+      "evidence": "passthrough",
+      "mail_dir": "/home/alice/mcp_agent_mail",
+      "status": "honored",
+      "warning": null
+    }
+  },
+  "backups": [
+    {
+      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
+      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
+      "target_was_missing": false
+    },
+    {
+      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
+      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
+      "backup_path": null,
+      "target_was_missing": true
+    }
+  ],
+  "claude_mcp_merge": {
+    "backup": {
+      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
+      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
+      "backup_path": null,
+      "target_was_missing": true
+    },
     "changed": true,
+    "config_path": "/home/alice/.claude.json",
+    "installed_entry_sha256": "example-agent-mail-entry-sha256",
+    "operation": "merge",
+    "previous_entry_existed": false,
+    "server_name": "mcp-agent-mail"
+  },
+  "created_at": "2026-01-01T00:00:00Z",
+  "env": {
+    "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
+    "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
+    "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
+    "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "5242880",
+    "AGENTSTACK_DASHBOARD_RESTART_DELAY": "5",
+    "AGENTSTACK_DELIVERABLE_ROOTS": "",
+    "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
+    "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
+    "AGENTSTACK_LANG": "",
+    "AGENTSTACK_MAIL_DB": "/home/alice/mcp_agent_mail/storage.sqlite3",
+    "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env",
+    "AGENTSTACK_MAIL_HOME": "/home/alice/.mcp_agent_mail",
+    "AGENTSTACK_MAIL_LAUNCHD_LABEL": "",
+    "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+    "AGENTSTACK_MURMUR": "",
+    "AGENTSTACK_PORT": "8770",
+    "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
+    "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
+    "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
+    "AGENTSTACK_SIGNALS_DIR": "/home/alice/.mcp_agent_mail/signals",
+    "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
+    "AGENTSTACK_TERMINAL": "auto"
+  },
+  "install_dir": "/home/alice/.agentstack",
+  "notes": [
+    "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
+    "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+    "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
+    "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
+  ],
+  "owned_dirs": [
+    "/home/alice/.agentstack",
+    "/home/alice/.agentstack/backups",
+    "/home/alice/.agentstack/bin",
+    "/home/alice/.agentstack/bin/lib",
+    "/home/alice/.agentstack/claude",
+    "/home/alice/.agentstack/codex",
+    "/home/alice/.agentstack/dashboard",
+    "/home/alice/.agentstack/dashboard/assets",
+    "/home/alice/.agentstack/dashboard/demo",
+    "/home/alice/.agentstack/dashboard/portraits_64",
+    "/home/alice/.agentstack/dashboard/portraits_pixel",
+    "/home/alice/.agentstack/dashboard/providers",
+    "/home/alice/.agentstack/hooks",
+    "/home/alice/.agentstack/integrations",
+    "/home/alice/.agentstack/integrations/codex_app",
+    "/home/alice/.agentstack/integrations/codex_app/plugin",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/.codex-plugin",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/hooks",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/skills",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/skills/coordinate",
+    "/home/alice/.agentstack/integrations/codex_app/src",
+    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app",
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/skills",
+    "/home/alice/.agentstack/skills/delegate",
+    "/home/alice/.agentstack/skills/log"
+  ],
+  "owned_files": [
+    "/home/alice/.agentstack/VERSION",
+    "/home/alice/.agentstack/env.sh",
+    "/home/alice/.agentstack/install-state.json",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
+    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
+    "/home/alice/.agentstack/runtime/settings-merge-result.json",
+    "/home/alice/.agentstack/runtime/claude-mcp-merge-result.json",
+    "/home/alice/.claude/skills/delegate",
+    "/home/alice/.claude/skills/log",
+    "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
+  ],
+  "purge_paths": [
+    "/home/alice/mcp_agent_mail",
+    "/home/alice/.mcp_agent_mail",
+    "/home/alice/.agentstack/runtime"
+  ],
+  "repo_root": "/home/alice/src/claude-agent-stack",
+  "retained_paths": [
+    "/home/alice/mcp_agent_mail",
+    "/home/alice/.mcp_agent_mail",
+    "/home/alice/mcp_agent_mail/storage.sqlite3",
+    "/home/alice/mcp_agent_mail/.env",
+    "/home/alice/.agentstack/runtime"
+  ],
+  "safe_merge_performed": true,
+  "schema_version": 1,
+  "services": [
+    {
+      "kind": "systemd-user",
+      "path": "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service",
+      "unit": "org.agentstack.agentdashboard.service"
+    }
+  ],
+  "settings_backups": [
+    {
+      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
+      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
+      "target_was_missing": false
+    }
+  ],
+  "settings_merge": {
+    "added_entries": [
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh",
+        "event": "SessionStart",
+        "matcher": null
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh",
+        "event": "SessionStart",
+        "matcher": null
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh",
+        "event": "PreToolUse",
+        "matcher": "Edit|Write"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh",
+        "event": "PreToolUse",
+        "matcher": "Edit|Write|Bash"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh",
+        "event": "PostToolUse",
+        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent"
+      }
+    ],
+    "after_sha256": "example-after-sha256",
     "backup": {
       "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
       "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
       "target_was_missing": false
     },
     "before_sha256": "example-before-sha256",
-    "after_sha256": "example-after-sha256",
-    "added_entries": [
+    "changed": true,
+    "entries": [
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh",
         "event": "SessionStart",
-        "matcher": null,
-        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh"
+        "matcher": null
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh",
         "event": "SessionStart",
-        "matcher": null,
-        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh"
+        "matcher": null
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh",
         "event": "PreToolUse",
-        "matcher": "Edit|Write",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
+        "matcher": "Edit|Write"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh",
         "event": "PreToolUse",
-        "matcher": "Edit|Write|Bash",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh"
+        "matcher": "Edit|Write|Bash"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh",
         "event": "PostToolUse",
-        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh"
+        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent"
       }
     ],
-    "skipped_existing": [],
-    "skills_dirs": {
-      "added": [],
-      "skipped_existing": [],
-      "removed_legacy": []
-    },
+    "hooks_dir": "/home/alice/.agentstack/hooks",
+    "operation": "merge",
     "permissions": {
       "added": {
         "allow": [
@@ -89,122 +240,16 @@
         "deny": []
       }
     },
-    "entries": [
-      {
-        "event": "SessionStart",
-        "matcher": null,
-        "command": "/bin/bash /home/alice/.agentstack/hooks/set-ghostty-title.sh"
-      },
-      {
-        "event": "SessionStart",
-        "matcher": null,
-        "command": "/bin/bash /home/alice/.agentstack/hooks/session-start-reminder.sh"
-      },
-      {
-        "event": "PreToolUse",
-        "matcher": "Edit|Write",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/check-file-reservation.sh"
-      },
-      {
-        "event": "PreToolUse",
-        "matcher": "Edit|Write|Bash",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/check-agent-registered.sh"
-      },
-      {
-        "event": "PostToolUse",
-        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
-        "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh"
-      }
-    ]
+    "respected_removals": [],
+    "settings_path": "/home/alice/.claude/settings.json",
+    "skills_dir": "/home/alice/.agentstack/skills",
+    "skills_dirs": {
+      "added": [],
+      "removed_legacy": [],
+      "skipped_existing": []
+    },
+    "skipped_existing": []
   },
-  "claude_mcp_merge": {
-    "operation": "merge",
-    "config_path": "/home/alice/.claude.json",
-    "server_name": "mcp-agent-mail",
-    "changed": true,
-    "previous_entry_existed": false,
-    "installed_entry_sha256": "example-agent-mail-entry-sha256",
-    "backup": {
-      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
-      "backup_path": null,
-      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
-      "target_was_missing": true
-    }
-  },
-  "agent_mail": {
-    "requested_name_honoring": {
-      "status": "honored",
-      "evidence": "passthrough",
-      "enforcement_mode": "passthrough",
-      "mail_dir": "/home/alice/mcp_agent_mail",
-      "detail": "passthrough patch is present and its mode is selected",
-      "warning": null
-    }
-  },
-  "env": {
-    "AGENTSTACK_PORT": "8770",
-    "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
-    "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
-    "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
-    "AGENTSTACK_DELIVERABLE_ROOTS": "",
-    "AGENTSTACK_LANG": "",
-    "AGENTSTACK_MURMUR": "",
-    "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
-    "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
-    "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
-    "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
-    "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "5242880",
-    "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
-    "AGENTSTACK_DASHBOARD_RESTART_DELAY": "5",
-    "AGENTSTACK_MAIL_DB": "/home/alice/mcp_agent_mail/storage.sqlite3",
-    "AGENTSTACK_MAIL_ENV": "/home/alice/mcp_agent_mail/.env",
-    "AGENTSTACK_MAIL_HOME": "/home/alice/.mcp_agent_mail",
-    "AGENTSTACK_SIGNALS_DIR": "/home/alice/.mcp_agent_mail/signals",
-    "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
-    "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
-    "AGENTSTACK_TERMINAL": "auto"
-  },
-  "owned_files": [
-    "/home/alice/.agentstack/VERSION",
-    "/home/alice/.agentstack/env.sh",
-    "/home/alice/.agentstack/install-state.json",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
-    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
-    "/home/alice/.agentstack/runtime/settings-merge-result.json",
-    "/home/alice/.agentstack/runtime/claude-mcp-merge-result.json",
-    "/home/alice/.claude/skills/delegate",
-    "/home/alice/.claude/skills/log",
-    "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
-  ],
-  "owned_dirs": [
-    "/home/alice/.agentstack",
-    "/home/alice/.agentstack/backups",
-    "/home/alice/.agentstack/bin",
-    "/home/alice/.agentstack/bin/lib",
-    "/home/alice/.agentstack/claude",
-    "/home/alice/.agentstack/codex",
-    "/home/alice/.agentstack/dashboard",
-    "/home/alice/.agentstack/dashboard/assets",
-    "/home/alice/.agentstack/dashboard/demo",
-    "/home/alice/.agentstack/dashboard/portraits_64",
-    "/home/alice/.agentstack/dashboard/portraits_pixel",
-    "/home/alice/.agentstack/dashboard/providers",
-    "/home/alice/.agentstack/hooks",
-    "/home/alice/.agentstack/integrations",
-    "/home/alice/.agentstack/integrations/codex_app",
-    "/home/alice/.agentstack/integrations/codex_app/plugin",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/.codex-plugin",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/hooks",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/skills",
-    "/home/alice/.agentstack/integrations/codex_app/plugin/skills/coordinate",
-    "/home/alice/.agentstack/integrations/codex_app/src",
-    "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app",
-    "/home/alice/.agentstack/runtime",
-    "/home/alice/.agentstack/skills",
-    "/home/alice/.agentstack/skills/delegate",
-    "/home/alice/.agentstack/skills/log"
-  ],
   "skill_links": [
     {
       "path": "/home/alice/.claude/skills/delegate",
@@ -215,49 +260,6 @@
       "target": "/home/alice/.agentstack/skills/log"
     }
   ],
-  "services": [
-    {
-      "kind": "systemd-user",
-      "unit": "org.agentstack.agentdashboard.service",
-      "path": "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service"
-    }
-  ],
-  "backups": [
-    {
-      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
-      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
-      "target_was_missing": false
-    },
-    {
-      "backup_dir": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z",
-      "backup_path": null,
-      "absence_marker": "/home/alice/.agentstack/backups/claude-mcp.20260101T000000.000000Z/claude.json.absent",
-      "target_was_missing": true
-    }
-  ],
-  "settings_backups": [
-    {
-      "backup_dir": "/home/alice/.agentstack/backups/20260101T000000.000000Z",
-      "backup_path": "/home/alice/.agentstack/backups/20260101T000000.000000Z/settings.json",
-      "target_was_missing": false
-    }
-  ],
-  "retained_paths": [
-    "/home/alice/mcp_agent_mail",
-    "/home/alice/.mcp_agent_mail",
-    "/home/alice/mcp_agent_mail/storage.sqlite3",
-    "/home/alice/mcp_agent_mail/.env",
-    "/home/alice/.agentstack/runtime"
-  ],
-  "purge_paths": [
-    "/home/alice/mcp_agent_mail",
-    "/home/alice/.mcp_agent_mail",
-    "/home/alice/.agentstack/runtime"
-  ],
-  "notes": [
-    "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-    "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
-    "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
-    "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
-  ]
+  "tier": "tier1",
+  "tool": "claude-agent-stack"
 }

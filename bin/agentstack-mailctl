@@ -75,7 +75,24 @@ validate_config() {
 #
 # When launchd owns the endpoint, defer to it. It is the supervisor; signalling
 # its child behind its back is what produced the ambiguity in the first place.
-MAIL_LAUNCHD_LABEL="${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+DEFAULT_MAIL_LAUNCHD_LABEL="org.orrery.mail"
+MAIL_LAUNCHD_LABEL="${AGENTSTACK_MAIL_LAUNCHD_LABEL:-$DEFAULT_MAIL_LAUNCHD_LABEL}"
+
+# Detection was not prevention: a test that stopped the developer's own service
+# was found only after five investigations of what looked like the service
+# crashing on its own. Under pytest, resolving to the built-in default label is
+# refused -- a test that means to exercise launchd delegation names its own
+# label (directly, or through the install it created with AGENTSTACK_LABEL_PREFIX).
+# The condition is the label this run will actually act on. An earlier version
+# also accepted a test-looking AGENTSTACK_LABEL_PREFIX, which does not change
+# the target at all: a test could carry a scoped prefix and still stop the
+# production job.
+if [[ -n "${PYTEST_CURRENT_TEST:-}" && "$MAIL_LAUNCHD_LABEL" == "$DEFAULT_MAIL_LAUNCHD_LABEL" ]]; then
+  printf '%s: refusing to act on the default launchd label (%s) from a test.\n' \
+    "$PROG" "$MAIL_LAUNCHD_LABEL" >&2
+  printf 'Set AGENTSTACK_MAIL_LAUNCHD_LABEL to a label the test owns.\n' >&2
+  exit 3
+fi
 LAUNCHD_PLIST_MEMO="${AGENTSTACK_MAIL_LAUNCHD_MEMO:-$RUNTIME_DIR/agentstack-mail.launchd-plist}"
 
 launchd_available() {

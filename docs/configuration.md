@@ -323,3 +323,13 @@ remote access は SSH tunnel、trusted VPN、または別の認証 proxy を使�
 - [Codex App 統合](codex-app.md)
 - [API reference](api.md)
 - [トラブルシューティング](troubleshooting.md)
+
+## `AGENTSTACK_MAIL_LAUNCHD_LABEL`
+
+`agentstack-mailctl` が操作する launchd job のラベル。**どの job を停止・起動してよいかを決める設定**なので、install 時の値は `install-state.json` の manifest にも記録されます。
+
+- 明示すればその値が使われ、installer も上書きしません
+- 明示せず `AGENTSTACK_LABEL_PREFIX` を既定以外にした install は `<prefix>.mail-service` を使います
+- どちらも無い場合は空のまま＝`agentstack-mailctl` の組み込み既定（`org.orrery.mail`）
+
+pytest 実行下では、**解決結果が組み込み既定になる場合、`agentstack-mailctl` は動作を拒否します**（テストが本番の job を停止した事故があったため）。テストは自分のラベルを明示してください。

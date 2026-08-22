@@ -45,6 +45,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-json", help="Write machine-readable operation result")
     parser.add_argument("--dry-run", action="store_true", help="Print diff without writing")
     parser.add_argument("--remove", action="store_true", help="Remove recorded agentstack entries")
+    parser.add_argument(
+        "--installed-entries",
+        help="Record of entries this installer has added before, so a later absence "
+        "is read as a deliberate removal instead of something to re-add",
+    )
+    parser.add_argument(
+        "--restore-removed",
+        action="store_true",
+        help="Re-add template entries even if they were removed on purpose",
+    )
     return parser.parse_args()
 
 
@@ -223,14 +233,51 @@ def command_exists(entries: list[dict[str, Any]], matcher: str | None, command: 
     return False
 
 
+def load_installed_entry_keys(path: pathlib.Path | None) -> set[str]:
+    """Entry keys this installer has added to these settings before.
+
+    Re-running the installer used to re-add every template entry that was
+    missing, which cannot tell "never installed" from "installed, then removed
+    on purpose". An operator who deleted a hook got it back on the next upgrade,
+    silently. Remembering what we put there is what makes the difference
+    legible.
+    """
+    if path is None or not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    keys = data.get("installed_entry_keys")
+    if not isinstance(keys, list):
+        return set()
+    return {key for key in keys if isinstance(key, str)}
+
+
+def entry_key_string(key: dict[str, str | None]) -> str:
+    return "\t".join(
+        (
+            str(key.get("event") or ""),
+            str(key.get("matcher") or ""),
+            str(key.get("command") or ""),
+        )
+    )
+
+
 def merge_template_entries(
     original: dict[str, Any],
     template_hooks: dict[str, list[dict[str, Any]]],
+    previously_installed: set[str] | None = None,
+    restore_removed: bool = False,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, str | None]]]]:
     settings = copy.deepcopy(original)
     hooks = ensure_target_hooks(settings)
     added: list[dict[str, str | None]] = []
     skipped_existing: list[dict[str, str | None]] = []
+    respected_removals: list[dict[str, str | None]] = []
+    previously_installed = previously_installed or set()
 
     for event, template_entries in template_hooks.items():
         if not template_entries:
@@ -245,10 +292,26 @@ def merge_template_entries(
             missing_commands = [
                 command for command in commands if not command_exists(entries, matcher, command)
             ]
+            if not restore_removed:
+                # Missing, and we installed it before: the operator took it out.
+                deliberate = [
+                    command
+                    for command in missing_commands
+                    if entry_key_string(entry_key(event, matcher, command)) in previously_installed
+                ]
+                for command in deliberate:
+                    respected_removals.append(entry_key(event, matcher, command))
+                missing_commands = [
+                    command for command in missing_commands if command not in deliberate
+                ]
             for command in commands:
                 key = entry_key(event, matcher, command)
                 if command in missing_commands:
                     added.append(key)
+                elif entry_key_string(key) in {
+                    entry_key_string(removed) for removed in respected_removals
+                }:
+                    continue
                 else:
                     skipped_existing.append(key)
 
@@ -269,7 +332,11 @@ def merge_template_entries(
                 new_entry["hooks"] = new_hooks
             entries.append(new_entry)
 
-    return settings, {"added_entries": added, "skipped_existing": skipped_existing}
+    return settings, {
+        "added_entries": added,
+        "skipped_existing": skipped_existing,
+        "respected_removals": respected_removals,
+    }
 
 
 def ensure_target_permissions(settings: dict[str, Any], kind: str) -> list[str]:
@@ -698,6 +765,7 @@ def run() -> int:
         allowed_skills_dirs = manifest_skills_dirs(manifest_path)
         if allowed_skills_dirs is None:
             allowed_skills_dirs = {skills_dir_key(skills_dir)} if skills_dir else set()
+        installed_entries_path = None
         merged, details = remove_agentstack_entries(original, hooks_dir, allowed_keys)
         details["skills_dirs"] = remove_skills_directories(merged, allowed_skills_dirs)
         details["permissions"] = {
@@ -708,7 +776,15 @@ def run() -> int:
         template_path = pathlib.Path(args.template).expanduser()
         template = render_template(template_path, hooks_dir, bin_dir)
         template_hooks = load_template_hooks(template, template_path)
-        merged, details = merge_template_entries(original, template_hooks)
+        installed_entries_path = (
+            pathlib.Path(args.installed_entries).expanduser() if args.installed_entries else None
+        )
+        merged, details = merge_template_entries(
+            original,
+            template_hooks,
+            previously_installed=load_installed_entry_keys(installed_entries_path),
+            restore_removed=args.restore_removed,
+        )
         details["skills_dirs"] = (
             migrate_legacy_skills_directory(merged, skills_dir)
             if skills_dir
@@ -730,6 +806,20 @@ def run() -> int:
     if changed:
         backup = make_backup(settings_path, backup_dir)
         atomic_write_settings(settings_path, after_text, before_raw)
+
+    if operation == "merge" and installed_entries_path is not None and not args.dry_run:
+        # Written after the merge, from what is actually in the file: recording
+        # intentions rather than the result would make the next run's reasoning
+        # depend on a write that may not have happened.
+        keys = sorted(
+            entry_key_string(key)
+            for key in details.get("added_entries", []) + details.get("skipped_existing", [])
+        )
+        previous = load_installed_entry_keys(installed_entries_path)
+        atomic_write_json(
+            installed_entries_path,
+            {"installed_entry_keys": sorted(previous | set(keys))},
+        )
 
     result = build_result(
         operation,
