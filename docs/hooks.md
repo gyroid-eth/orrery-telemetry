@@ -46,7 +46,7 @@ child token file と tool argument の既存境界を変えません。
 ### `check-file-reservation.sh`
 
 - **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
-- **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。raw non-tmux Claude は対象外で、`agent-start` 経由の再起動が必要です。
+- **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。tmux 外の client でも、`register_agent` を呼んで `<runtime>/session_index/` に記録されていれば、hook input の `session_id` から identity を解決します（優先度は env → tmux → session index）。`session_id` は `[a-zA-Z0-9_-]` 以外を含むなら使わず、symlink の index entry は読みません。identity source が1つも無い session の扱いは下記「unmanaged session」に従います。
 - **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
@@ -56,12 +56,50 @@ child token file と tool argument の既存境界を変えません。
 - **発火:** `Edit` / `Write` / `Bash` の直前。
 - **動作:** `mark-agent-registered.sh` が作る `/tmp/.claude-agent-registered-<session_id>` を検査します。`/clear` などで `session_id` が変わると旧 flag は一致しないため、再登録まで保護対象 tool を block します。
 - **例外:** launcher から `AGENT_NAME` を受け取る bot channel は再登録に必要な shell を使えるよう許可します。hook input に session ID がなければ fail-open です。
+- **復旧手段の所在:** flag を書くのは `mark-agent-registered.sh` だけで、それは mail MCP の `register_agent` の PostToolUse です。したがって **この block を解除できるのは、その MCP を持つ session だけ**です。`agentstack-reregister` は flag を書かないので、この guard の解除手段ではありません（remote 側の登録を直す道具です）。
+
+### service outage と unmanaged session（2つの別々の問い）
+
+guard は編集を止める前に、順に2つを問います。**混ぜると起動経路で開閉することになります**（healthy なサーバーでも raw client を通し、outage でも tmux client を止める、という実測がありました）。
+
+**1. mail service は応答しているか（transport）**
+
+応答していない間は、**どのクライアントでも登録は不可能**です。flag を書けるのは `register_agent` の PostToolUse だけで、その呼び出しは応答しない endpoint には通りません。同時に、誰も予約を取れず・確認もできません。
+
+- 判定は endpoint への **HTTP HEAD 1回**（2秒 deadline）。結果は3値です
+  - `reachable`: **何らかの HTTP 応答があった**（401 / 500 / 404 を含む）。「サーバーが no と言った」は「サーバーが無い」ではないので guard は閉じたまま
+  - `unreachable`: 接続拒否、または **accept されたが期限内に応答が無い**。後者でも登録はできないので outage 扱いにします
+  - `invalid`: endpoint が設定されていない、または URL として不正。**常に block**（authority の宛先の typo が authority を消してはならないため）
+- endpoint の解決順は `AGENTSTACK_MCP_URL` → `MCP_URL` → インストール先の `env.sh`。launcher を経由しない client は installer の環境を持たないので、**固定ポートへ fallback しません**（別ポートで動く install を「停止中」と誤判定して guard を開いてしまうため）
+- 警告に出す endpoint は scheme / host / port / path だけに切り詰めます（userinfo・query に秘密が入りうるため）
+- `AGENTSTACK_MAIL_OUTAGE_POLICY=warn-open`（既定）: 通す。`systemMessage` で可視警告（10分バケットで再掲）し、毎回 JSONL に記録する。**flag も binding も作りません**。復旧後の次の呼び出しは再評価され、未登録セッションは再び block されます
+- `AGENTSTACK_MAIL_OUTAGE_POLICY=block`: 拒否する。復旧手順（`agentstack-mailctl start` / `agentstack-doctor`）を示します
+- **identity conflict は outage 中でも block** です。障害を identity の曖昧さの逃げ道にしません。両 guard が検査します（Bash は任意のファイルを書けるので、Edit/Write 側だけでは不十分）
+- conflict の検査は **identity の優先順位解決とは別**の走査です。優先順位 resolver は `AGENT_NAME` があればそこで返すので、それ経由で聞くと名前つきセッションは何も検査されません。`AGENT_NAME` が binding と食い違う場合も conflict として扱います（どちらかが他方の名前で書くことになるため）
+- **identity が解決できたセッションも同じ policy に従います**。予約の renew が transport failure で終わった場合も同じ handler を通ります（名前があるエージェントが、名前の無いセッションより無協調な書き込みを許されることはありません）
+
+**2. このセッションに identity source があるか（identity）**
+
+service が応答しているなら登録は可能なので、既定は**要求する**（block）です。`AGENTSTACK_UNMANAGED_SESSION_POLICY=warn-open` は「サーバーは動いているが、この client は協調に参加しない」という operator の明示的な opt-out です。
+
+| identity / local state | transport | 挙動 |
+|---|---|---|
+| self binding あり・project 一致 | reachable | 通常の enforcement |
+| 未 binding / flag 無し | reachable | block（`register_agent` を案内） |
+| binding の有無を問わず | unreachable | `AGENTSTACK_MAIL_OUTAGE_POLICY` に従う |
+| identity conflict | 全状態 | block |
+| HTTP / auth / MCP / schema の拒否 | 応答あり | block（outage として扱わない） |
+| 明示 opt-out | reachable | `AGENTSTACK_UNMANAGED_SESSION_POLICY` に従う（既定 block） |
+
+**identity source が無いこと ≠ mail MCP を持たないこと。** IDE の agent panel から `register_agent` が成功した実績があります。hook の入力に client の MCP inventory を示す field は無いので（実測: PreToolUse の共通 input は9 key のみ）、判定できるのは endpoint が今この瞬間 reachable かどうかだけです。
+
+両 guard は同じ順序で同じ判定を使います。片方だけ開けると、もう片方で同じ行き止まりに落ちるためです。
 
 ### `mark-agent-registered.sh`
 
 - **発火:** `register_agent` MCP tool の PostToolUse。`tool_input` と error でない server response の両方が必要です。response の canonical name を取得できない場合に tool input の明示名へ fallback しません。
 - **検証:** `name` が明示されていれば response の `name` と完全一致を要求します。別名、error response、入力または応答の解析失敗は `registration-failures.log` へ記録し、exit 2 で caller に返します。名前を省略した登録だけは response の生成名を採用します。
-- **動作:** 検証後にだけ registration flag を作り、`record-session-index.py` を非同期実行します。現在が `pending-*`、既に同名、または env の `AGENT_NAME` と一致する場合だけ title helper を呼びます。
+- **動作:** 検証後に `record-session-index.py` を**同期実行してから** registration flag を作ります（flag が先だと、登録済みなのに identity が未記録という窓ができ、予約 guard が誰を照合すべきか分からなくなるため）。現在が `pending-*`、既に同名、または env の `AGENT_NAME` と一致する場合だけ title helper を呼びます。
 - **親子保護:** 親が child を preregister した PostToolUse でも、親 pane metadata を child identity に書き換えません。
 - **保証境界:** PostToolUse は server call 後なので、拒否した別名 row を transaction rollback はしません。また `check-agent-registered.sh` は既存 `AGENT_NAME` を持つ channel を flag なしでも許可します。この hook の保証は「不一致を黙って受理せず、成功 state を新規作成しない」であり、全 session の後続操作を強制停止することではありません。
 
@@ -71,8 +109,8 @@ child token file と tool argument の既存境界を変えません。
 
 | 実行ファイル | 呼び出し元 / 起動タイミング | 主な動作 |
 | --- | --- | --- |
-| [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して非同期起動 | agent-mail ID と Claude `session_id`、transcript、cwd の exact mapping を atomic write |
-| [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → pane metadata → exact tmux session の優先順で identity を解決 |
+| [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して**同期**起動 | agent-mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
+| [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → exact tmux session → session index（caller が `AGENTSTACK_SESSION_ID` を渡した場合）の順で identity を解決 |
 | [`spawn_child.sh`](../hooks/spawn_child.sh) | `/delegate` または dashboard の NEW AGENT が child 起動時に明示実行 | identity、token、task mail、reservation、tmux、Claude / Codex、worktree、readiness を一つの launch transaction にまとめる |
 | [`cleanup-child-agent.sh`](../hooks/cleanup-child-agent.sh) | `spawn_child.sh` が起動した child の REPL command が終了した直後 | reservation release、remote identity retire、managed list / state / credential / MCP config の削除を best-effort 実行 |
 | [`monitor_child_agent.sh`](../hooks/monitor_child_agent.sh) | `/delegate` の親が監視頻度ごとに一回ずつ実行 | tmux pane を採取し、完了、session 消失、permission prompt、stasis、任意の danger pattern を判定して exit code で返す |
@@ -80,11 +118,11 @@ child token file と tool argument の既存境界を変えません。
 
 ### `record-session-index.py`
 
-PostToolUse payload から agent-mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
+PostToolUse payload から agent-mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。record は `schema_version: 2` と `binding_kind: "self"` を持ちます。**呼び出し元が別の agent を登録した場合（親による child 登録）は record を書きません** — この index は dashboard の resume と guard の identity 解決の両方に読まれるので、読む側で除外するのではなく、書かない方が誤用の余地が残りません。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
 
 ### `resolve-agent-name.sh`
 
-source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返します。優先順位は `AGENT_NAME`、次に`TMUX_PANE`で明示した pane の exact tmux session です。pane metadata は権威ではなく一致確認にだけ使い、不一致なら`identity-conflict`を返します。`pending-*`、`warm-*`、`claimed-*`、`mail-watcher`はidentityと見なしません。pane指定なしでambient tmux sessionを照会せず、解決不能時は空文字を返してcallerが境界を適用します。
+source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返します。優先順位は `AGENT_NAME`、次に`TMUX_PANE`で明示した pane の exact tmux session、最後に session index です。session index を使うのは caller が `AGENTSTACK_SESSION_ID` を渡した場合だけで、`schema_version: 2` かつ `binding_kind: "self"` の record に限り、`AGENTSTACK_LOOKUP_PROJECT_KEY` が与えられていればその project と exact match した record だけを採用します。同一 session に複数の identity が結び付いていれば時刻で選ばず `identity-conflict` を返します。pane metadata は権威ではなく一致確認にだけ使い、不一致なら`identity-conflict`を返します。`pending-*`、`warm-*`、`claimed-*`、`mail-watcher`はidentityと見なしません。pane指定なしでambient tmux sessionを照会せず、解決不能時は空文字を返してcallerが境界を適用します。
 
 ### `spawn_child.sh`
 

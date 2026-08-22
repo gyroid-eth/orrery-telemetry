@@ -740,9 +740,20 @@ def _create_transcripts(root: Path, now: datetime) -> None:
                     "timestamp": _iso(inception + timedelta(minutes=offset)),
                     "cwd": str(root / "project"),
                 })
+            # Mirrors what hooks/record-session-index.py writes, including the
+            # fields the server checks before treating a record as exact
+            # authority. The fixture used "name" while production wrote
+            # "agent_name", which nothing noticed while the reader ignored both.
             (index_dir / f"{agent['id']}.json").write_text(
-                json.dumps({"agent_id": agent["id"], "name": agent["name"],
-                            "session_id": uid, "transcript_path": str(path)},
+                json.dumps({"agent_id": agent["id"],
+                            "agent_name": agent["name"],
+                            "session_id": uid,
+                            "transcript_path": str(path),
+                            "cwd": str(root / "project"),
+                            "project_key": str(root / "project"),
+                            "registered_by": "",
+                            "schema_version": 2,
+                            "binding_kind": "self"},
                            ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )

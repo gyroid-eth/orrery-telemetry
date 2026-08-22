@@ -1710,6 +1710,19 @@ def _indexed_transcript(name: str) -> str | None:
             o = json.load(fh)
     except (OSError, ValueError):
         return None
+    # Only a record that says what it is may be exact authority. Records
+    # written before the schema existed, and records made when one session
+    # registered a different agent, both name a transcript belonging to
+    # somebody else -- a parent's transcript once appeared on a child's card
+    # this way. Falling back to the heuristic is better than showing the wrong
+    # session with certainty.
+    if o.get("schema_version") != 2 or o.get("binding_kind") != "self":
+        return None
+    if o.get("agent_name") != name:
+        return None
+    caller = o.get("registered_by")
+    if not isinstance(caller, str) or (caller and caller != name):
+        return None
     tp = o.get("transcript_path")
     if isinstance(tp, str) and tp.endswith(".jsonl") and os.path.isfile(tp):
         return tp

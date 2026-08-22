@@ -69,11 +69,57 @@ def _extract_name(v):
     return ""
 
 
+# Outcomes the caller acts on. mark-agent-registered.sh creates the session's
+# registration flag only for EXIT_BOUND: a flag that outlives a refused or
+# failed binding tells the guards "registered" while leaving them unable to say
+# who this is.
+EXIT_BOUND = 0
+EXIT_NOT_APPLICABLE = 3
+EXIT_DELEGATED = 4
+EXIT_CALLER_UNRESOLVED = 5
+EXIT_WRITE_FAILED = 6
+
+# Sources resolve-agent-name.sh reports that identify one agent. Anything else
+# (identity-conflict, placeholder-env, unconfirmed-metafile) is a caller whose
+# identity was refused, not an absent one.
+_SOURCES_THAT_MAY_BIND = {"none", "env", "tmux-session", "metafile+tmux-session", "session-index"}
+
+
+def _bindings_for(out_dir, session_id):
+    """Names already bound to this session by an authoritative record."""
+    names = set()
+    try:
+        entries = os.listdir(out_dir)
+    except OSError:
+        return names
+    for entry in entries:
+        if not entry.endswith(".json"):
+            continue
+        path = os.path.join(out_dir, entry)
+        if os.path.islink(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                record = json.load(handle)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("session_id") != session_id:
+            continue
+        if record.get("schema_version") != 2 or record.get("binding_kind") != "self":
+            continue
+        name = record.get("agent_name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
 def main():
     try:
         d = json.loads(sys.stdin.read())
     except Exception:
-        return
+        return EXIT_NOT_APPLICABLE
 
     session_id = d.get("session_id") or ""
     transcript_path = d.get("transcript_path") or ""
@@ -83,11 +129,44 @@ def main():
     if resp is None:
         resp = d.get("tool_result")
     agent_id = _extract_id(resp)
-    agent_name = _extract_name(resp) or (d.get("tool_input") or {}).get("name", "")
+    tool_input = d.get("tool_input") or {}
+    agent_name = _extract_name(resp) or tool_input.get("name", "")
+
+    # Agent names are project-local, so a binding is only meaningful together
+    # with the project it was made in. resolve-agent-name.sh refuses a record
+    # that cannot show it belongs to the project being enforced.
+    project_key = tool_input.get("project_key") or ""
+    if not isinstance(project_key, str):
+        project_key = ""
+
+    # Who called register_agent, as mark-agent-registered.sh resolved it. Both
+    # halves are required: the name alone cannot distinguish "nobody claims this
+    # session" from "the claim was refused", and a refused claim must not be
+    # read as an anonymous self-registration.
+    registered_by = os.environ.get("AGENTSTACK_REGISTERING_AGENT", "")
+    # Absent means the writer was invoked directly rather than through
+    # mark-agent-registered.sh: an anonymous caller, which may claim only a
+    # session no other identity has claimed.
+    caller_source = os.environ.get("AGENTSTACK_REGISTERING_SOURCE", "") or "none"
 
     # Need at least an id (the unique key) and a session_id to be useful.
     if agent_id is None or not session_id:
-        return
+        return EXIT_NOT_APPLICABLE
+
+    if caller_source not in _SOURCES_THAT_MAY_BIND:
+        # An unresolved, conflicting or unconfirmed caller cannot be shown to be
+        # this agent. Adding a third name to a session that already has two is
+        # how a conflict becomes permanent.
+        return EXIT_CALLER_UNRESOLVED
+
+    # A registration made on somebody else's behalf is not a binding for this
+    # session, and writing it anyway leaves a record every reader has to know
+    # to distrust -- the dashboard used one to show a parent's transcript on a
+    # child's card. Not writing it is the version that cannot be misread.
+    if registered_by and agent_name and registered_by != agent_name:
+        return EXIT_DELEGATED
+    if caller_source != "none" and registered_by != agent_name:
+        return EXIT_DELEGATED
 
     runtime_dir = os.path.expanduser(
         os.environ.get("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
@@ -96,7 +175,13 @@ def main():
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError:
-        return
+        return EXIT_WRITE_FAILED
+
+    # An anonymous caller may only claim a session nobody else has claimed.
+    if caller_source == "none":
+        for existing in _bindings_for(out_dir, session_id):
+            if existing != agent_name:
+                return EXIT_CALLER_UNRESOLVED
 
     record = {
         "agent_id": agent_id,
@@ -104,6 +189,12 @@ def main():
         "session_id": session_id,
         "transcript_path": transcript_path,
         "cwd": cwd,
+        "project_key": project_key,
+        "registered_by": registered_by,
+        # Readers that treat this file as authority check these two, so a record
+        # written by an older version is ignored rather than half-trusted.
+        "schema_version": 2,
+        "binding_kind": "self",
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     path = os.path.join(out_dir, f"{agent_id}.json")
@@ -113,8 +204,18 @@ def main():
             json.dump(record, f, ensure_ascii=False)
         os.replace(tmp, path)
     except OSError:
-        pass
+        # Swallowing this used to be harmless -- the index was a convenience for
+        # the dashboard. It is now the identity the guards check, so a failure
+        # has to reach the caller instead of leaving a flag with no binding.
+        return EXIT_WRITE_FAILED
+    return EXIT_BOUND
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main() or EXIT_BOUND)
+    except SystemExit:
+        raise
+    except Exception:
+        # A crash is not a binding either.
+        raise SystemExit(EXIT_WRITE_FAILED)

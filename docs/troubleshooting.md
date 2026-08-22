@@ -229,27 +229,85 @@ token が missing / stale / wrong-owner なら親または operator へ報告し
 
 Claude Code の `check-agent-registered.sh` は、現在の `session_id` で `register_agent` の成功が記録されるまで Edit / Write / Bash を block します。`/clear`、resume、compact 後は SessionStart hook の reminder を読み、既存 identity があるなら別名を作らず再登録します。
 
-優先する復旧:
+**まず自分がどちらの状況か切り分けます。**
+
+`AGENT_NAME` があっても素通りするとは限りません。この guard は **identity conflict → endpoint 不正 → service 停止（outage policy）→ `AGENT_NAME` 免除 → flag** の順に見ます。`AGENT_NAME` が免除するのは **flag の要求だけ**です。`AGENT_NAME` が無いなら、下の復旧コマンドではなく次節を読んでください。
+
+優先する復旧（**mail MCP を持つ session に限る**）:
 
 ```bash
 AGENTSTACK_PROJECT_KEY=/absolute/project/path \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
+このコマンドは remote の登録を修復しますが、**flag file は書きません**。flag を書けるのは `register_agent` MCP tool の PostToolUse (`mark-agent-registered.sh`) だけです。したがって block の解除には、その MCP tool を session の中から呼ぶ必要があります。
+
 成功後に自分の `fetch_inbox` を実行します。`pending-*` tmux session のままなら registration read-back と rename が完了していません。server が返した canonical name を使い、既存同名 tmux session を自動で kill しないでください。
+
+## 最初の Edit/Write/Bash が block される（launcher を経由しない client / service 停止中）
+
+まず **mail service が応答しているか**を確認します。ここで分岐が変わります。
+
+```bash
+# endpoint はインストールごとに違います。install が使っている値を見てから叩きます。
+grep AGENTSTACK_MCP_URL ~/.agentstack/env.sh
+~/.agentstack/bin/agentstack-doctor --report
+```
+
+`agentstack-mailctl` は環境によっては入っていません（このリポジトリの開発機にも無い時期がありました）。**存在するものだけを使ってください。**
+
+### service が応答していない場合
+
+**登録は原理的に不可能です。** flag を書けるのは `register_agent` の PostToolUse だけで、その呼び出しは応答しない endpoint には通りません。tmux の中でも同じです。`agentstack-reregister` も flag を書かないので復旧になりません。
+
+既定（`AGENTSTACK_MAIL_OUTAGE_POLICY=warn-open`）では、この状態の編集は**警告つきで通ります**。予約は取れないので、同じ project を共有する他 agent との衝突は検出されません。記録は `~/.agentstack/runtime/logs/unmanaged_sessions.jsonl` に残ります。
+
+復旧は service 側です。
+
+```bash
+# 実在するものだけを絶対パスで叩きます（hook の案内も同じ基準です）
+[ -x ~/.agentstack/bin/agentstack-mailctl ] && ~/.agentstack/bin/agentstack-mailctl start
+[ -x ~/.agentstack/bin/agentstack-doctor ] && ~/.agentstack/bin/agentstack-doctor --report
+```
+
+`AGENTSTACK_MAIL_OUTAGE_POLICY=block` を設定している場合、この状態では編集自体が拒否されます（協調できないなら書かせない、という選択）。
+
+### service が応答している場合
+
+登録は可能なので、guard は登録を要求します。client に mail MCP があるなら `register_agent` を呼べば解除されます（IDE の agent panel からの登録実績があります）。
+
+MCP を持たない client を協調の外で使うと決めているなら、その client の環境に明示的に設定します。
+
+```bash
+export AGENTSTACK_UNMANAGED_SESSION_POLICY=warn-open
+```
+
+**既定は block です。** 設定しない限り、identity を持たないセッションは登録を求められます。
+
+## installer を再実行したら、外したはずの hook が戻ってきた
+
+戻りません（2026-08-22 以降）。installer は自分が追加した entry を `<runtime>/settings-installed-entries.json` に記録し、**次回その entry が settings から消えていれば「意図的に外した」と読んで再追加しません**。結果は merge の出力の `respected_removals` に出ます。
+
+意図的に戻したい場合だけ、明示します。
+
+```bash
+agentstack-merge-settings ... --restore-removed
+```
+
+記録が無い状態（初回インストール、記録ファイルを消した場合）では、従来どおり template の entry がすべて入ります。「消えている」ことが「外した」ことの証拠になるのは、**こちらが一度入れた記録がある場合だけ**です。
 
 ## Hook が `FILE RESERVATION REQUIRED` で block する
 
 protected root 内の Edit / Write では、hook が exact identity を確定してから既存 reservation を相対/絶対 path の両方で renew-only 確認します。auto-acquire はしません。block する場合:
 
 1. `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` が reservation を作った project と一致するか確認
-2. `AGENT_NAME`、または`TMUX_PANE`で明示したtmux sessionがcanonical identityを指すか確認。pane metadataとの不一致は`AGENT IDENTITY CONFLICT`として先に直す
+2. `AGENT_NAME`、または`TMUX_PANE`で明示したtmux sessionがcanonical identityを指すか確認。pane metadataとの不一致は`AGENT IDENTITY CONFLICT`として先に直す。tmux 外の client は `register_agent` 済みなら session index から identity が解決される。同一 session に複数の identity が結び付いている場合も `AGENT IDENTITY CONFLICT` で、どちらを残すかを決めてから再登録する
 3. exact path または最小の glob を `file_reservation_paths` で予約
 4. conflict が返ったら holder へ agent-mail で連絡し、release または expiry を待つ
 
 owner `registration_token` はこのhookのtool argumentsへ送られず、legacy HTTP bearerとは別物です。`isError`は省略またはboolean `false`だけを成功とします。exact identityとprotected scopeの確定後、最初の照会がtransport unreachableの場合だけfail-openです。HTTP/MCP/schema rejection、malformed response、definitive zero後のtransport failureはblockします。pathなし・protected root外はenforcement対象外なのでexit 0です。
 
-strict版はcutover C5の全client restart/rebind後にdeployします。raw non-tmux Claudeやidentity sourceのない旧sessionは対応せず、`agent-start`経由で再起動してください。guardを無効化したり、untargeted tmux sessionやstale metadataをidentityとして採用したりしないでください。
+strict版はcutover C5の全client restart/rebind後にdeployします。raw non-tmux Claude は、`register_agent` を呼んで session index に self binding ができていれば identity が解決されます。登録できない client（mail MCP を持たない起動経路）と identity source のない旧 session は `AGENTSTACK_UNMANAGED_SESSION_POLICY` の扱いになり、協調が必要なら `agent-start` 経由で再起動してください。guardを無効化したり、untargeted tmux sessionやstale metadataをidentityとして採用したりしないでください。
 
 ## Spawned child が自分の inbox を読めない
 

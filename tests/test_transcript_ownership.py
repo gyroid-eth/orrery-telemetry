@@ -130,3 +130,50 @@ if __name__ == "__main__":
                 failures += 1
                 print(f"FAIL {name}: {exc}")
     raise SystemExit(1 if failures else 0)
+
+
+def test_a_legacy_index_record_is_not_exact_authority(tmp_path, monkeypatch):
+    """An upgraded machine still has records written before the schema existed.
+
+    Those were produced by a writer that recorded a registration whoever made
+    it, so one can name a parent's transcript under a child's id. The exact
+    path has to decline them and let the heuristic decide, rather than point at
+    the wrong session with certainty.
+    """
+    import dashboard.server as server
+
+    index_dir = tmp_path / "session_index"
+    index_dir.mkdir()
+    transcript = tmp_path / "legacy-parent.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    (index_dir / "77.json").write_text(
+        json.dumps(
+            {
+                "agent_id": 77,
+                "agent_name": "LegacyChild",
+                "session_id": "parent-session",
+                "transcript_path": str(transcript),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(index_dir))
+    monkeypatch.setattr(server, "_agent_id_for_name", lambda name: 77)
+    assert server._indexed_transcript("LegacyChild") is None
+
+    # The null case: a record that shows what it is still resolves.
+    (index_dir / "77.json").write_text(
+        json.dumps(
+            {
+                "agent_id": 77,
+                "agent_name": "LegacyChild",
+                "session_id": "own-session",
+                "transcript_path": str(transcript),
+                "registered_by": "",
+                "schema_version": 2,
+                "binding_kind": "self",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert server._indexed_transcript("LegacyChild") == str(transcript)

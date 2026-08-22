@@ -113,6 +113,23 @@ raise SystemExit(1)
 ' >/dev/null 2>&1
 }
 
+# The SessionStart payload carries the session id, which is how a client with
+# no launcher is identified: resolve-agent-name.sh looks up the binding that
+# register_agent recorded for it. Without this the reminder cannot name an
+# identity that already exists, and tells an established session it is nobody.
+if [ ! -t 0 ]; then
+    SESSION_START_INPUT="$(cat)"
+    AGENTSTACK_SESSION_ID="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("session_id", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")"
+    export AGENTSTACK_SESSION_ID
+fi
+
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     # shellcheck disable=SC1091
     source "$HOOKS_DIR/resolve-agent-name.sh"
@@ -222,4 +239,11 @@ if mail_server_is_answering; then
     fi
 else
     echo "mcp-agent-mail server is not running; skip registration until it is available."
+    if [ -n "$RESOLVED_AGENT" ]; then
+        # Say who this session already is. Otherwise a resumed session waits out
+        # the outage believing it is nobody, and registers a second identity for
+        # itself as soon as the service returns.
+        echo "あなたは既に「${RESOLVED_AGENT}」です（source: ${RESOLVED_AGENT_SRC}）。復旧後も新しい名前を生成せず、この名前で登録し直してください。"
+    fi
+    echo "この間、ファイル予約は取得も確認もできません。他のエージェントと同じファイルを編集しても衝突は検出されません。"
 fi

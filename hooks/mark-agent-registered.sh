@@ -144,15 +144,75 @@ if [ "$NAME_STATUS" -ne 0 ]; then
     exit 2
 fi
 
+# Record the agent-mail-id <-> sessionId <-> transcript map (see
+# record-session-index.py) BEFORE the flag exists. The index started as a
+# convenience for the dashboard's session resume, but resolve-agent-name.sh now
+# reads it as the identity of a session that has no launcher, so the old
+# fire-and-forget order left a window where the flag said "registered" while
+# the guards could not yet tell who this was -- and a guard that cannot name
+# the agent has nothing to check a reservation against.
+if [ -f "$HOOKS_DIR/record-session-index.py" ]; then
+    # Who is calling matters as much as who was registered: a parent that
+    # registers a child fires this same PostToolUse, and binding the child's
+    # name to the parent's session would let the parent act as the child. The
+    # caller is resolved the same way the guards resolve identity, so a session
+    # identified only by tmux is not mistaken for an anonymous self-registration.
+    REGISTER_PROJECT_KEY=$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    value = (json.loads(sys.stdin.read()).get("tool_input") or {}).get("project_key", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")
+
+    # Both halves of the resolution travel to the writer. The name alone hides
+    # the difference between "no claim on this session" and "the claim was
+    # refused", and the writer must not read a refusal as an anonymous agent
+    # registering itself.
+    CALLER_RESULT="none|"
+    if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
+        CALLER_RESULT="$(
+            AGENTSTACK_SESSION_ID="$SESSION_ID" \
+            AGENTSTACK_LOOKUP_PROJECT_KEY="$REGISTER_PROJECT_KEY" \
+            bash -c '. "$0"; printf "%s|%s" "${RESOLVED_AGENT_SRC:-none}" "${RESOLVED_AGENT:-}"' \
+                "$HOOKS_DIR/resolve-agent-name.sh" 2>/dev/null
+        )"
+        [ -z "$CALLER_RESULT" ] && CALLER_RESULT="none|"
+    fi
+    AGENTSTACK_REGISTERING_SOURCE="${CALLER_RESULT%%|*}"
+    AGENTSTACK_REGISTERING_AGENT="${CALLER_RESULT#*|}"
+    export AGENTSTACK_REGISTERING_SOURCE AGENTSTACK_REGISTERING_AGENT
+
+    printf '%s' "$INPUT" | python3 "$HOOKS_DIR/record-session-index.py" >/dev/null 2>&1
+    INDEX_STATUS=$?
+fi
+
+# The flag says "this session is registered", and the guards answer questions
+# about it that only a binding can answer. It is created for a written binding
+# and nothing else: a session that registered a child, or whose own identity
+# could not be established, has not registered itself.
+case "${INDEX_STATUS:-0}" in
+    0) ;;
+    4)
+        echo "note: registration recorded for another agent; this session is still unregistered." >&2
+        exit 0
+        ;;
+    5)
+        echo "AGENT IDENTITY UNRESOLVED: this session's own identity could not be established," >&2
+        echo "so no session binding was written and the registration flag was not created." >&2
+        exit 0
+        ;;
+    6)
+        echo "SESSION BINDING NOT WRITTEN: the identity index could not be updated." >&2
+        echo "The remote registration succeeded, but this session stays unregistered locally." >&2
+        exit 0
+        ;;
+    *) ;;
+esac
+
 FLAG="/tmp/.claude-agent-registered-${SESSION_ID}"
 touch "$FLAG"
-
-# Record precise agent-mail-id <-> sessionId <-> transcript map for the
-# dashboard's exact session resume (see record-session-index.py). Fire and
-# forget; never blocks or fails registration.
-if [ -f "$HOOKS_DIR/record-session-index.py" ]; then
-    printf '%s' "$INPUT" | python3 "$HOOKS_DIR/record-session-index.py" >/dev/null 2>&1 &
-fi
 
 if [ -n "$AGENT_NAME_VAL" ] && [ -n "$SESSION_ID" ]; then
     if [ -f "$HOOKS_DIR/update-agentfiles-tags.py" ]; then
