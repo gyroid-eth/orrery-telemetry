@@ -735,7 +735,18 @@ class AsyncFileLock:
         max_retries: int = 5,
     ) -> None:
         self._path = Path(path)
-        self._lock = SoftFileLock(str(self._path))
+        # thread_local=False, because acquire and release do not run on the
+        # same thread. Both are dispatched with asyncio.to_thread, which draws
+        # from a pool: the release usually lands on a different worker than the
+        # acquire, and filelock's default thread-local counter is then zero
+        # there, so release() returns without closing anything. The unlink that
+        # follows removes the name while the descriptor stays open, so the leak
+        # is invisible on disk and only shows up as unlinked descriptors
+        # (`lsof +L1`). A live server held 140 of them after two days — 95
+        # .commit.lock and 44 .archive.lock — climbing toward launchd's ceiling,
+        # past which reservations fail while health_check still answers
+        # (2026-08-24, found by review).
+        self._lock = SoftFileLock(str(self._path), thread_local=False)
         self._timeout = float(timeout_seconds)
         self._stale_timeout = float(max(stale_timeout_seconds, 0.0))
         self._max_retries = max_retries

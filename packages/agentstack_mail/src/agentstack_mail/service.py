@@ -35,6 +35,10 @@ from urllib.parse import unquote, urlparse
 LAUNCHD_LABEL: Final[str] = "org.orrery.mail"
 LAUNCHD_REHEARSAL_PREFIX: Final[str] = f"{LAUNCHD_LABEL}.rehearsal."
 OWNERSHIP_NAME: Final[str] = f"{LAUNCHD_LABEL}.ownership.json"
+# File-descriptor ceiling written into the launchd job. See the plist body for
+# why the inherited default is not survivable.
+SOFT_MAX_OPEN_FILES: Final[int] = 8192
+HARD_MAX_OPEN_FILES: Final[int] = 16384
 PLIST_NAME: Final[str] = f"{LAUNCHD_LABEL}.plist"
 LEGACY_PORT: Final[int] = 8765
 MIGRATION_STAGING_MARKER: Final[str] = ".agentstack-mail-migration-staging.json"
@@ -381,6 +385,19 @@ def render_launchd(
         "KeepAlive": True,
         "ThrottleInterval": 5,
         "ProcessType": "Background",
+        # A launchd job inherits launchd's own file-descriptor default, which is
+        # 256 on macOS — not the shell's soft limit, which is orders of
+        # magnitude higher and so hides the ceiling during development. The
+        # server opens a git repository to issue a file reservation, so once it
+        # crosses that ceiling reservations fail with EMFILE while health_check
+        # keeps answering off descriptors it already holds: a server that looks
+        # healthy and cannot hand out reservations, which fail-closes every
+        # agent edit behind the PreToolUse hook. Reported from an install that
+        # reached 272 open regular files after 7.75 days (2026-08-24). Raising
+        # the ceiling does not excuse a leak; it turns a multi-day outage into
+        # something an operator has time to notice.
+        "SoftResourceLimits": {"NumberOfFiles": SOFT_MAX_OPEN_FILES},
+        "HardResourceLimits": {"NumberOfFiles": HARD_MAX_OPEN_FILES},
         "StandardOutPath": str(runtime_dir / "service.stdout.log"),
         "StandardErrorPath": str(runtime_dir / "service.stderr.log"),
         "EnvironmentVariables": {

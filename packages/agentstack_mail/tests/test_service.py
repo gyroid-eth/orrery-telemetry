@@ -328,6 +328,17 @@ def test_render_is_pure_content_aware_and_parseable(tmp_path: Path) -> None:
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
     assert plist["ThrottleInterval"] == 5
+    # Without an explicit ceiling the job inherits launchd's 256-descriptor
+    # default and stops issuing reservations after days of uptime, while still
+    # answering health_check. Assert the numbers, not merely the keys: a plist
+    # that carries the keys with a ceiling below what launchd already gives is
+    # the same outage with extra XML.
+    # Literals, not the constants: comparing the plist to the same constants it
+    # was rendered from proves only that they were copied. Setting both to 257
+    # kept that version of this test green while restoring the outage
+    # (2026-08-24, found by review).
+    assert plist["SoftResourceLimits"] == {"NumberOfFiles": 8192}
+    assert plist["HardResourceLimits"] == {"NumberOfFiles": 16384}
     assert set(plist["EnvironmentVariables"]) == {
         "AGENTSTACK_MAIL_ENV_FILE",
         "PATH",
