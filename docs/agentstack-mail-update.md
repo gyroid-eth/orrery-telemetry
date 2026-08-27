@@ -66,7 +66,31 @@ commit being deployed, `NEW=$MAINT/final-candidate-$SHA`.
    "$NEW/venv/bin/agentstack-mail-service" start --ownership-manifest <NEW render>/org.orrery.mail.ownership.json
    ```
 
-6. **Prove production, then say done.** `launchctl print` state is not the
+6. **Point whatever restarts mail at the new deployment.** A machine that keeps
+   the service up across logins usually has a supervisor — here, a launchd job
+   every five minutes that starts mail when the endpoint does not answer. If it
+   names a candidate and a manifest of its own, `stop`/`start` has not finished
+   the deployment: the next time mail goes quiet for any reason, that supervisor
+   brings the *old* build back, and the rollback is silent because the endpoint
+   answers again afterwards.
+
+   This is not hypothetical. The 2026-08-25 deployment of `72b76aa` was undone
+   at 2026-08-26 14:37 by exactly this path, and nobody noticed until an
+   unrelated bug report two days later showed the old code running.
+
+   Keep the supervisor's target in one place that the deployment updates —
+   a pointer file it reads, not a path baked into the script:
+
+   ```bash
+   cat > ~/.agentstack/mail/runtime/current-deployment.env <<EOF
+   ORRERY_MAIL_SERVICE=$NEW/venv/bin/agentstack-mail-service
+   ORRERY_MAIL_MANIFEST=$MAINT/deploy-.../render/org.orrery.mail.ownership.json
+   EOF
+   ```
+
+   Then confirm the supervisor resolves the new paths before you walk away.
+
+7. **Prove production, then say done.** `launchctl print` state is not the
    goal; repeat the step-3 probes against the real port, and confirm the
    database file being served is the production one (`health_check` reports
    `database_url`). Record probes, `$SHA`, and both render paths in a
@@ -77,7 +101,23 @@ commit being deployed, `NEW=$MAINT/final-candidate-$SHA`.
 `start` the previous render's ownership manifest again (its candidate venv
 was never touched). Rollback is a repeat of step 5 with the arguments
 swapped — which is why neither old render nor old candidate is ever deleted
-by an update.
+by an update. Point the supervisor back as well (step 6), or the next restart
+undoes the rollback.
+
+## Checking which build is actually serving
+
+The deployment you performed and the build answering the port are different
+claims. Ask the port, not your notes:
+
+```bash
+pid=$(lsof -nP -iTCP:<port> -sTCP:LISTEN | awk 'NR>1{print $2}')
+ps -o command= -p "$pid"          # which candidate's python is this
+```
+
+Note that the pid launchd reports is the wrapper, not the server; the server
+is its child, and it is the child that holds the descriptors and answers
+requests. Measuring the wrapper and concluding "the fix is live" is a mistake
+that has already been made here.
 
 ## Relation to cutover receipts
 
