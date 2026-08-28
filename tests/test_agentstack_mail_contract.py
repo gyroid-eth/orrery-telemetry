@@ -56,7 +56,7 @@ def test_provenance_and_live_contract_fixture_are_present() -> None:
     names = {tool["name"] for tool in live_payload["tools"]}
     compatibility = set(contract_payload["compatibility_union"])
     assert len(names) == 40
-    assert len(compatibility) == 24
+    assert len(compatibility) == 25
     assert compatibility <= names
     assert names == compatibility | NON_COMPATIBILITY_UPSTREAM_TOOLS
     assert "create_agent_identity" not in compatibility
@@ -72,7 +72,7 @@ def test_contract_documents_isolated_namespaces() -> None:
     assert SERVICE_IDENTITY["codex_client_key"] == "agent-mail"
     assert SERVICE_IDENTITY["client_key_policy"] == "preserve_existing"
     assert SERVICE_IDENTITY["launchd_label"] == "org.orrery.mail"
-    assert len(COMPATIBILITY_TOOLS) == 24
+    assert len(COMPATIBILITY_TOOLS) == 25
     assert (
         "authority is determined by endpoint, data roots, and ownership"
         in normalized_docs

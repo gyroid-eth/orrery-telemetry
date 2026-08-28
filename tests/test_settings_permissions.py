@@ -83,6 +83,11 @@ def test_template_ships_a_permissions_block():
         "deregister_agent",
         "force_release_file_reservation",
         "retire_agent",
+        # Recovery is state-changing too, and it is reached during incidents:
+        # pre-approving it would let a stray call resurrect an agent that was
+        # retired on purpose, and denying it would recreate the dead end this
+        # tool was published to remove.
+        "unretire_agent",
     ):
         rule = f"mcp__mcp-agent-mail__{tool}"
         assert rule not in permissions["deny"], tool

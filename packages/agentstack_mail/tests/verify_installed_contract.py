@@ -55,7 +55,7 @@ async def verify() -> None:
         )
         actual[name] = {key: dumped[key] for key in schema_fields if key in dumped}
 
-    if set(tools) != COMPATIBILITY_TOOLS or len(tools) != 24:
+    if set(tools) != COMPATIBILITY_TOOLS or len(tools) != len(COMPATIBILITY_TOOLS):
         raise SystemExit(
             "installed wheel tool boundary mismatch: "
             f"missing={sorted(COMPATIBILITY_TOOLS - set(tools))}, "

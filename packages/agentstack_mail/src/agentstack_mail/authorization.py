@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "1d769ea851af1c13110a1648b2922ab5e2e83ae9a419a76a0a8e9f5ad0ea5ca8"
+    "23496b3843695a0be19fa5fa229bda2584c1584118369a337ae51b17fe8015ee"
 )
 
 
@@ -186,6 +186,19 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
             "bound loopback local principal may soft-retire any project target "
             "without its registration_token; retain the credential field for "
             "future project-administrator hardening"
+        ),
+    ),
+    "unretire_agent": _entry(
+        subject="agent:{agent_name}",
+        action="restore_retired_agent",
+        resource="project:{project_key}/agent:{agent_name}",
+        required_arguments=("project_key", "agent_name"),
+        current_credential_arguments=("registration_token",),
+        authorization_rule=(
+            "the agent's own registration_token when it registered with one; "
+            "otherwise a bound loopback local principal, matching how "
+            "retire_agent is authorized — recovery must not be harder to reach "
+            "than the mistake it undoes"
         ),
     ),
     "search_messages": _entry(

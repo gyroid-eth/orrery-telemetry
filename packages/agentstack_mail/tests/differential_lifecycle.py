@@ -24,6 +24,7 @@ SCENARIO_TOOLS: frozenset[str] = frozenset(
         "macro_start_session",
         "register_agent",
         "retire_agent",
+        "unretire_agent",
     }
 )
 
@@ -186,6 +187,15 @@ async def run(
     await event(
         "09_peer_retired",
         "retire_agent",
+        {
+            "project_key": project_key,
+            "agent_name": _PEER,
+            "registration_token": tokens[_PEER],
+        },
+    )
+    await event(
+        "10_peer_restored",
+        "unretire_agent",
         {
             "project_key": project_key,
             "agent_name": _PEER,

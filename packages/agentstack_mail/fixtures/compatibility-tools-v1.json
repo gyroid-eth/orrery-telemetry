@@ -63,6 +63,7 @@
     "send_message",
     "set_contact_policy",
     "summarize_thread",
+    "unretire_agent",
     "whois"
   ],
   "selftest_exercised": [
@@ -100,8 +101,7 @@
     "rename_window",
     "summarize_recent",
     "unarchive_project",
-    "uninstall_precommit_guard",
-    "unretire_agent"
+    "uninstall_precommit_guard"
   ],
   "policy_excluded_upstream": [
     "create_agent_identity",
@@ -111,5 +111,8 @@
   ],
   "non_tool_control_dependencies": [
     "tools/list"
+  ],
+  "post_cutover_published": [
+    "unretire_agent"
   ]
 }

@@ -823,10 +823,16 @@ def _wait_read_only_ready(
             health = observation["health"]
             if (
                 set(observation["tool_names"]) != COMPATIBILITY_TOOLS
-                or observation["tool_count"] != 24
+                # Count comes from the contract, not a literal. The set and the
+                # number are the same claim, and writing the number twice means
+                # one copy can be right while the other is stale — which is how
+                # publishing a tool turned a green gate red in a place nobody
+                # was looking (2026-08-28).
+                or observation["tool_count"] != len(COMPATIBILITY_TOOLS)
             ):
                 raise RestoreAcceptanceError(
-                    "candidate server did not publish the exact 24-tool boundary"
+                    "candidate server did not publish the exact "
+                    f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
                 )
             if health.get("status") != "ok":
                 raise RestoreAcceptanceError("candidate health status is not ok")

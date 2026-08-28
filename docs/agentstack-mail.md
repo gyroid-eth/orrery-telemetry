@@ -15,9 +15,10 @@ The default endpoint is `http://127.0.0.1:18765/mcp`; data lives below
 installer may point both services at one writable database or archive.
 
 The caller-derived compatibility surface is versioned in
-`packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 24 tools
+`packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 25 tools
 are the positive union of executable callers and shipped model-facing
-contracts. Permission deny entries, negative instructions, and Codex
+contracts, plus what the surface has gained since the cutover (see
+`post_cutover_published` in the same fixture). Permission deny entries, negative instructions, and Codex
 Bridge-local operations do not become source-extraction roots.
 
 The implementation train was:
@@ -50,7 +51,8 @@ selector cleanup are separate post-cutover work.
 ## Current core boundary
 
 The core train copies the live data/archive/tool-body seam into the renamed
-package and publishes exactly the 24 versioned tools through a fail-closed
+package and publishes exactly the versioned tools named by the contract
+through a fail-closed
 FastMCP subclass. MCP resources and the 16 non-compatibility tools are not
 published. Their bodies remain internal only until the differential train can
 prove that pruning them does not break macro or storage dependencies.
@@ -293,7 +295,7 @@ The ordered scenarios are:
 3. health, start-session, reservation-cycle, contact-handshake, summary fetch,
    and retirement lifecycle.
 
-Their union is exactly the versioned 24 tools. Each operation records a call
+Their union is exactly the versioned tools named by the contract. Each operation records a call
 window so 300/900/604800-second TTL behavior can be checked without a flaky
 wall-clock estimate. The oracle validates public structured/text projections,
 SQLite integrity and foreign keys, schema identity, relational IDs, Git fsck

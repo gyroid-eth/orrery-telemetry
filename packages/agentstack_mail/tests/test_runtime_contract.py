@@ -148,7 +148,7 @@ def test_invalid_agent_name_mode_keeps_frozen_coerce_fallback(
         _require_attr(config, "clear_settings_cache")()
 
 
-def test_mcp_server_exposes_only_the_24_compatibility_tools() -> None:
+def test_mcp_server_exposes_only_the_compatibility_tools() -> None:
     app = _require_module("agentstack_mail.app")
     build_mcp_server = _require_attr(app, "build_mcp_server")
 
@@ -164,7 +164,7 @@ def test_mcp_server_exposes_only_the_24_compatibility_tools() -> None:
         inspect_server()
     )
 
-    assert len(tool_names) == 24
+    assert len(tool_names) == len(COMPATIBILITY_TOOLS) == 25
     assert tool_names == COMPATIBILITY_TOOLS
     assert not resources
     assert not resource_templates

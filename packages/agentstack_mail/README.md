@@ -10,7 +10,7 @@ identity, port, database, archive, signal directory, and service labels into
 an AgentStack-owned namespace. The client compatibility keys stay Claude
 `mcp-agent-mail` and Codex `agent-mail` during the initial cutover.
 
-Contract v1 contains 24 upstream tools: 12 required by executable AgentStack
+Contract v1 contains 25 published tools: 12 required by executable AgentStack
 runtime paths, 23 visible through shipped model permissions or the delegate
 skill, and `retire_agent` as the one runtime-only addition. Bridge-local names
 such as `runtime_status` are not upstream tools, and `create_agent_identity` is
@@ -53,7 +53,7 @@ tests.
 
 The current core copies the live data, archive, and tool-body seam so it can be
 compared without translating behavior. A fail-closed FastMCP boundary publishes
-exactly the 24 compatibility tools, zero concrete resources, zero resource
+exactly the compatibility tools named by the contract (25), zero concrete resources, zero resource
 templates, and zero prompts. Non-compatibility bodies are retained internally
 only until the differential suite proves they can be
 removed. The installed `agentstack-mail` console script serves this boundary at
@@ -144,7 +144,7 @@ reopen the accepted paths. The worker makes its own copy, consumes a migration-
 generated manifest and cold-backup receipt, performs a non-no-op restore, then
 starts the exact installed candidate wheel on an isolated port. The same
 observer records the read-only production prefix before and after, sampled
-process-tree/lsof isolation, 24-tool API readiness, exact logical/watermark
+process-tree/lsof isolation, published-surface API readiness, exact logical/watermark
 state, and bounded SIGTERM shutdown.
 The restore worker has its own 120-second deadline because the accepted 67 MB
 family takes about 29 seconds to copy and verify; candidate readiness,
@@ -334,7 +334,7 @@ not permission to treat a partial rule set as a complete live inventory.
 Dynamic tmux/session/reservation capture and operator approval remain separate
 cutover gates.
 
-`authorization.py` is the machine-readable inventory for the exact 24-tool
+`authorization.py` is the machine-readable inventory for the exact published
 surface. Each entry records the prospective subject, action, resource, current
 required arguments, existing credential arguments, and future authorization
 rule without adding credentials to any MCP schema. The runtime emits a
@@ -351,7 +351,7 @@ authenticated repository bundle plus tracked working-tree patch. Live and Core
 then run in separate Python processes with disjoint 0700 state roots, private
 inputs/outputs, fixed import origins, equivalent explicit configuration, and no
 mutable-checkout or network fallback. Three ordered scenarios cover the exact
-24-tool union across identity/contact/message/receipt/search/thread-summary, reservation/signal, and
+published union across identity/contact/message/receipt/search/thread-summary, reservation/signal, and
 macro/lifecycle behavior. Every checkpoint compares the public MCP
 serialization and durable SQLite, archive, signal, and Git state after raw
 integrity, relationship, TTL, receipt-idempotency, archive-derivation, and
@@ -360,7 +360,7 @@ credential-leak checks.
 Expected differences are fail-closed in
 `fixtures/differential-expected-divergences-v2.json`. The only tool-description
 allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
-surface versus Core 24-tool surface is pinned across all four MCP publication
+surface versus the Core published surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
 and Core 24/0/0/0. Service namespace/default isolation is also an exact,
 versioned allowance. The provider identity remains `agentstack-mail`, while
@@ -482,7 +482,7 @@ agentstack-mail-evidence runtime-rehearsal \
 
 The producer uses only the specified isolated port and roots. It observes the
 legacy 8765 listener with a read-only `lsof` table and sends that listener zero
-network requests. It exercises both installed entrypoints, the exact 24-tool
+network requests. It exercises both installed entrypoints, the exact published
 surface, normal stop/restart, duplicate rejection, child crash/recovery, and
 the wrapper-SIGKILL case where the surviving server must retain the authority
 lock. Any failed run stops every process it spawned and then removes only a
@@ -598,7 +598,7 @@ loaded-machine outlier fail the gate. The input and result-shape fingerprints
 exclude activity timestamps, which change as the workspace is committed. The
 configured live-pattern snapshot is also diagnostic only.
 
-The 24-tool contract does not expose an MCP roster resource. Callers obtain
+The published contract does not expose an MCP roster resource. Callers obtain
 their own assigned identity from the AgentStack runtime, `register_agent`, or
 `macro_start_session`; `list_contacts` returns known contact links and `whois`
 verifies a known name. `send_message(..., to=[], broadcast=true)` is the

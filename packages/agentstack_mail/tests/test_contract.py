@@ -9,6 +9,7 @@ from agentstack_mail.contract import (
     LOCAL_ONLY_TOOLS,
     MODEL_COMPATIBILITY_TOOLS,
     NON_COMPATIBILITY_UPSTREAM_TOOLS,
+    POST_CUTOVER_PUBLISHED_TOOLS,
     POLICY_EXCLUDED_UPSTREAM_TOOLS,
     RUNTIME_REQUIRED_TOOLS,
     SERVICE_IDENTITY,
@@ -78,7 +79,14 @@ def test_compatibility_surface_matches_caller_audit() -> None:
     )
     assert len(RUNTIME_REQUIRED_TOOLS) == 12
     assert len(MODEL_COMPATIBILITY_TOOLS) == 23
-    assert len(COMPATIBILITY_TOOLS) == 24
+    # 24 at cutover, plus unretire_agent published on 2026-08-28. The two
+    # historical sets keep their sizes: what grew is the post-cutover set, so
+    # the record still says what the predecessor exposed.
+    assert len(COMPATIBILITY_TOOLS) == 25
+    assert POST_CUTOVER_PUBLISHED_TOOLS == {"unretire_agent"}
+    assert not POST_CUTOVER_PUBLISHED_TOOLS & MODEL_COMPATIBILITY_TOOLS
+    assert not POST_CUTOVER_PUBLISHED_TOOLS & RUNTIME_REQUIRED_TOOLS
+    assert set(fixture["post_cutover_published"]) == POST_CUTOVER_PUBLISHED_TOOLS
     assert "retire_agent" in RUNTIME_REQUIRED_TOOLS - MODEL_COMPATIBILITY_TOOLS
     assert "macro_contact_handshake" in MODEL_COMPATIBILITY_TOOLS
     assert {"search_messages", "summarize_thread"} <= MODEL_COMPATIBILITY_TOOLS

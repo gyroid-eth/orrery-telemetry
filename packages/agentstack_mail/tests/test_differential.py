@@ -78,6 +78,7 @@ _EXPECTED_EVENTS = {
         "07_contact_handshake_auto_accepted",
         "08_empty_summary_collection_fetched",
         "09_peer_retired",
+        "10_peer_restored",
     ),
     "reservation_signal": (
         "01_project_ensured",
@@ -138,6 +139,7 @@ _EXPECTED_TOOL_TRACE = {
         "macro_contact_handshake",
         "fetch_summary",
         "retire_agent",
+        "unretire_agent",
     ),
     "reservation_signal": (
         "ensure_project",

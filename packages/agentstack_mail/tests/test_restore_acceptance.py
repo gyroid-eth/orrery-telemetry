@@ -672,7 +672,7 @@ def test_read_only_probe_calls_no_state_changing_tool(
     assert calls == [("health_check", {})]
     assert result["calls"] == ["list_tools", "health_check"]
     assert result["write_calls"] == []
-    assert result["tool_count"] == 24
+    assert result["tool_count"] == 25
 
 
 def test_readiness_requires_exact_tools_database_and_binding(
@@ -684,7 +684,7 @@ def test_readiness_requires_exact_tools_database_and_binding(
     async def exact_probe(_url: str) -> dict[str, Any]:
         return {
             "tool_names": sorted(COMPATIBILITY_TOOLS),
-            "tool_count": 24,
+            "tool_count": len(COMPATIBILITY_TOOLS),
             "health": {
                 "status": "ok",
                 "http_host": "127.0.0.1",
@@ -1378,7 +1378,7 @@ def test_joint_success_raw_restore_server_contract_shutdown_and_publish(
     assert payload["production"]["before"]["listener"]["method"] == (
         "lsof-listener-table-no-network-connection"
     )
-    assert payload["candidate_server"]["readiness"]["tool_count"] == 24
+    assert payload["candidate_server"]["readiness"]["tool_count"] == 25
     assert payload["candidate_server"]["shutdown"]["exit_code"] == 0
     assert payload["deadlines"] == {
         "restore_worker_seconds": 120,

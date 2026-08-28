@@ -159,6 +159,16 @@
       "resource": "project:{project_key}/agent:{agent_name}",
       "subject": "agent:{agent_name}"
     },
+    "unretire_agent": {
+      "action": "restore_retired_agent",
+      "authorization_rule": "the agent's own registration_token when it registered with one; otherwise a bound loopback local principal, matching how retire_agent is authorized — recovery must not be harder to reach than the mistake it undoes",
+      "current_credential_arguments": [
+        "registration_token"
+      ],
+      "required_arguments": ["project_key", "agent_name"],
+      "resource": "project:{project_key}/agent:{agent_name}",
+      "subject": "agent:{agent_name}"
+    },
     "search_messages": {
       "action": "search_project_messages",
       "authorization_rule": "project member or project administrator",

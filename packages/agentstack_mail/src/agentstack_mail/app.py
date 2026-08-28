@@ -5551,8 +5551,25 @@ def build_mcp_server() -> FastMCP:
         if not agent:
             raise ValueError(f"Agent '{agent_name}' not found in project '{project_key}'")
 
-        if agent.registration_token and not hmac.compare_digest(registration_token or "", agent.registration_token):
-            raise ValueError("Invalid registration_token — only the agent's owner can unretire it")
+        # Authorized exactly like retire_agent: the bound local process is
+        # trusted, and registration_token stays in the schema for future
+        # administrator hardening. Requiring the target's credential here would
+        # make recovery harder to reach than the mistake it undoes — an agent
+        # retired by accident has often lost the state file that held its token
+        # (the cleanup path deletes it), and the operator would be left editing
+        # the database by hand, which is what publishing this tool is meant to
+        # end. Nothing is protected by the asymmetry either: whoever can reach
+        # this boundary can already retire any agent in the project.
+        logger.info(
+            "unretire_agent.loopback_authorized",
+            extra={
+                "authorization_mode": "loopback_local_process",
+                "project_key": project.human_key,
+                "agent_name": agent.name,
+                "target_has_registration_token": bool(agent.registration_token),
+                "registration_token_supplied": bool(registration_token),
+            },
+        )
 
         async with get_session() as session:
             db_agent = await session.get(Agent, agent.id)

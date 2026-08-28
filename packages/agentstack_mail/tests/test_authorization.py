@@ -26,6 +26,8 @@ EXPECTED_FIELDS = {
 EXPECTED_CURRENT_CREDENTIAL_ARGUMENTS = {
     "register_agent": ("registration_token",),
     "retire_agent": ("registration_token",),
+    # Recovery carries the same credential as the retirement it reverses.
+    "unretire_agent": ("registration_token",),
     "send_message": ("sender_token",),
 }
 AUTHORIZATION_FIXTURE_PATH = (
@@ -87,7 +89,7 @@ def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
     assert authorization.authorization_catalog_is_complete()
     assert authorization.catalog_record_shape() == EXPECTED_FIELDS
     assert set(catalog) == COMPATIBILITY_TOOLS
-    assert len(catalog) == 24
+    assert len(catalog) == 25  # 24 at cutover + unretire_agent (2026-08-28)
     assert set(asyncio.run(app.build_mcp_server().get_tools())) == set(catalog)
     assert hashlib.sha256(fixture_bytes).hexdigest() == (
         authorization.AUTHORIZATION_FIXTURE_SHA256
@@ -162,7 +164,7 @@ def test_missing_or_empty_shadow_policy_denies_nothing(
         for tool_name in sorted(COMPATIBILITY_TOOLS)
     ]
 
-    assert len(observations) == 24
+    assert len(observations) == 25  # one per published tool
     assert {item["decision"] for item in observations} == {"would_allow"}
     assert {item["reason"] for item in observations} == {"policy_empty_default_allow"}
     assert not [item for item in observations if item["decision"] == "would_deny"]

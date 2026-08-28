@@ -998,8 +998,14 @@ def _wait_ready(
             last_error = f"{type(exc).__name__}: {exc}"
             time.sleep(0.1)
             continue
-        if set(result["tool_names"]) != COMPATIBILITY_TOOLS or result["tool_count"] != 24:
-            raise EvidenceError("running server did not publish the exact 24-tool boundary")
+        if (
+            set(result["tool_names"]) != COMPATIBILITY_TOOLS
+            or result["tool_count"] != len(COMPATIBILITY_TOOLS)
+        ):
+            raise EvidenceError(
+                "running server did not publish the exact "
+                f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
+            )
         return {
             **result,
             "bounded_ready_ms": round((time.monotonic() - started) * 1000, 3),
@@ -1753,8 +1759,14 @@ def _wait_launchd_ready(
             last_error = f"{type(exc).__name__}: {exc}"
             time.sleep(0.1)
             continue
-        if set(probe["tool_names"]) != COMPATIBILITY_TOOLS or probe["tool_count"] != 24:
-            raise EvidenceError("launchd server did not publish the exact 24-tool boundary")
+        if (
+            set(probe["tool_names"]) != COMPATIBILITY_TOOLS
+            or probe["tool_count"] != len(COMPATIBILITY_TOOLS)
+        ):
+            raise EvidenceError(
+                "launchd server did not publish the exact "
+                f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
+            )
         return {
             **probe,
             "ownership": ownership,

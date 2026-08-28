@@ -25,7 +25,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "1d769ea851af1c13110a1648b2922ab5e2e83ae9a419a76a0a8e9f5ad0ea5ca8"
+    "23496b3843695a0be19fa5fa229bda2584c1584118369a337ae51b17fe8015ee"
 )
 
 EXPECTED_BASELINES = {
@@ -853,7 +853,17 @@ EXPECTED_POST_CUTOVER_INTENTIONAL_DIFFERENCES = [
         "summary": "Core refreshes Agent.last_active_ts on reservation traffic (file_reservation_paths / renew_file_reservations / release_file_reservations); frozen live refreshed it only on register_agent and send_message.",
         "why_not_in_the_initial_cutover_difference_set": "The initial-cutover-difference-set-exact condition records what was approved at cutover on 2026-08-15 and is deliberately left at three. Rewriting it to four would make the ledger claim that this difference was reviewed then, which it was not: it was found on 2026-08-17 while fixing the staleness sweep, and approved separately.",
         "comparator_effect": "masked before temporal normalization; see intentional_differences.allowlisted_entries[payload.agent.last_active_ts]"
-    }
+    },
+    {
+        "id": "surface.tool.unretire_agent",
+        "arose": "post_cutover",
+        "date": "2026-08-28",
+        "approved_by": "maintainer",
+        "channel": "direct chat instruction to ProOpus",
+        "summary": "unretire_agent is published. The frozen live server exposed it; the cutover surface withheld it as a non-compatibility upstream tool, and that decision is reversed.",
+        "why_not_in_the_initial_cutover_difference_set": "The initial-cutover-difference-set-exact condition records what was approved on 2026-08-15 and stays at three. Withholding this tool was reviewed then; publishing it was not. It was published on 2026-08-28, after retirement turned out to be one-way in practice: on 2026-08-27 a session ending outside tmux resolved an unrelated live agent's name and retired it, twice, and nothing on the published surface could undo that. register_agent does not clear retired_at, so recovery meant editing the database by hand during an incident. The product decision that speaks of an exact 24-tool boundary is left as written: it records what was decided on 2026-08-15, and rewriting it would make the minutes claim a review that did not happen.",
+        "comparator_effect": "The published tool set grows from 24 to 25 and unretire_agent moves from live-only to shared, which shrinks the divergence rather than widening it. No existing tool's schema or behaviour changed. Comparisons asserting the exact core tool set differ by this one name; the core topology allowance and the differential lifecycle coverage are updated to match.",
+    },
 ]
 
 
@@ -1876,7 +1886,7 @@ def _assert_expected_divergences_manifest(
         "tool_names": sorted(live_by_name),
     }
     expected_core_topology = {
-        "tool_count": 24,
+        "tool_count": 25,
         "resource_count": 0,
         "resource_names": [],
         "resource_template_count": 0,
@@ -1902,7 +1912,7 @@ def _assert_expected_divergences_manifest(
             "prompt_count": 0,
         },
         "core": {
-            "tool_count": 24,
+            "tool_count": 25,
             "resource_count": 0,
             "resource_template_count": 0,
             "prompt_count": 0,

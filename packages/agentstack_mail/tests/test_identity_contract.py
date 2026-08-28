@@ -226,6 +226,8 @@ def test_compatibility_tool_schemas_advertise_only_live_token_parameters() -> No
     assert advertised == {
         "register_agent": {"registration_token"},
         "retire_agent": {"registration_token"},
+        # Recovery advertises the same credential as the retirement it undoes.
+        "unretire_agent": {"registration_token"},
         "send_message": {"sender_token"},
     }
 
@@ -268,6 +270,73 @@ def test_loopback_retire_accepts_token_bearing_target_without_target_token(
             "agent_name": "BlueTarget",
             "project_key": project,
         }
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()
+
+
+def test_loopback_unretire_restores_a_token_bearing_target_without_its_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Recovery must not be harder to reach than the mistake it undoes.
+
+    An agent retired by accident has usually lost the state file that held its
+    registration token — the cleanup path deletes it — so demanding that token
+    here would leave the operator editing the database by hand, which is the
+    situation publishing this tool exists to end. The asymmetry protected
+    nothing either: whoever reaches this boundary can already retire anyone.
+    """
+    _configure_isolated_runtime(monkeypatch, tmp_path, mode="passthrough")
+    project = str(tmp_path / "project")
+
+    async def unretire_without_target_token() -> tuple[dict[str, Any], Any]:
+        async with Client(app.build_mcp_server()) as client:
+            await _ensure_project(client, project)
+            registered = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "identity-contract",
+                    "model": "fixture-model",
+                    "name": "GreenTarget",
+                    "registration_token": "target-owned-token",
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+            assert registered.is_error is False
+            retired = await client.call_tool(
+                "retire_agent",
+                {"project_key": project, "agent_name": "GreenTarget"},
+                raise_on_error=False,
+            )
+            assert retired.is_error is False
+            restored = await client.call_tool(
+                "unretire_agent",
+                {"project_key": project, "agent_name": "GreenTarget"},
+                raise_on_error=False,
+            )
+            assert restored.is_error is False
+            # The field is what the outage was made of: a live agent whose
+            # roster entry said retired stopped receiving new messages.
+            after = await client.call_tool(
+                "whois",
+                {"project_key": project, "agent_name": "GreenTarget", "format": "json"},
+                raise_on_error=False,
+            )
+            assert after.is_error is False
+        await db.dispose_database_for_shutdown()
+        return _payload(restored), _payload(after)
+
+    try:
+        restored_payload, whois_payload = asyncio.run(unretire_without_target_token())
+        assert restored_payload == {
+            "status": "active",
+            "agent_name": "GreenTarget",
+            "project_key": project,
+        }
+        assert whois_payload.get("retired_at") is None
     finally:
         db.reset_database_state()
         config.clear_settings_cache()

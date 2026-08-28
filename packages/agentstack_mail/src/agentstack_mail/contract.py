@@ -52,7 +52,25 @@ MODEL_COMPATIBILITY_TOOLS = frozenset(
     }
 )
 
-COMPATIBILITY_TOOLS = RUNTIME_REQUIRED_TOOLS | MODEL_COMPATIBILITY_TOOLS
+# Published after the cutover, deliberately kept out of the two sets above.
+#
+# Those sets record what the frozen predecessor exposed; growing either one
+# would claim this tool was part of that surface, which it was not. This set
+# says the true thing instead: the surface gained a tool, on a date, for a
+# reason, and the ledger of intentional differences carries the rest.
+#
+# unretire_agent is here because retirement had become one-way in practice. A
+# session ending outside tmux could resolve an unrelated live agent's name and
+# retire it (two agents lost that way on 2026-08-27), and nothing on the
+# published surface could undo it: register_agent does not clear retired_at,
+# and the tool that does was excluded as "not in the predecessor". Recovery
+# meant editing the database by hand, which is the worst tool to reach for
+# during an incident.
+POST_CUTOVER_PUBLISHED_TOOLS = frozenset({"unretire_agent"})
+
+COMPATIBILITY_TOOLS = (
+    RUNTIME_REQUIRED_TOOLS | MODEL_COMPATIBILITY_TOOLS | POST_CUTOVER_PUBLISHED_TOOLS
+)
 
 LOCAL_ONLY_TOOLS = frozenset(
     {
@@ -81,7 +99,6 @@ NON_COMPATIBILITY_UPSTREAM_TOOLS = frozenset(
         "summarize_recent",
         "unarchive_project",
         "uninstall_precommit_guard",
-        "unretire_agent",
     }
 )
 
