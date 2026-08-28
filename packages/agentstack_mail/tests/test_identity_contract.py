@@ -395,3 +395,70 @@ def test_loopback_retire_emits_audit_event_without_exposing_token(
     finally:
         db.reset_database_state()
         config.clear_settings_cache()
+
+
+def test_loopback_unretire_emits_audit_event_without_exposing_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Restoring is as trusted as retiring, so it leaves the same trail.
+
+    An action that can be taken without the target's credential has to be
+    visible afterwards, and the record must name the target without carrying
+    the secret that was not required.
+    """
+    _configure_isolated_runtime(monkeypatch, tmp_path, mode="passthrough")
+    project = str(tmp_path / "project")
+    token_canary = "audit-restore-token-must-not-leak"
+    caplog.set_level(logging.INFO, logger=app.__name__)
+
+    async def unretire_without_target_token() -> None:
+        async with Client(app.build_mcp_server()) as client:
+            await _ensure_project(client, project)
+            registered = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "identity-contract",
+                    "model": "fixture-model",
+                    "name": "RestoreAuditTarget",
+                    "registration_token": token_canary,
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+            assert registered.is_error is False
+            retired = await client.call_tool(
+                "retire_agent",
+                {"project_key": project, "agent_name": "RestoreAuditTarget"},
+                raise_on_error=False,
+            )
+            assert retired.is_error is False
+            restored = await client.call_tool(
+                "unretire_agent",
+                {"project_key": project, "agent_name": "RestoreAuditTarget"},
+                raise_on_error=False,
+            )
+            assert restored.is_error is False
+        await db.dispose_database_for_shutdown()
+
+    try:
+        asyncio.run(unretire_without_target_token())
+        records = [
+            record
+            for record in caplog.records
+            if record.name == app.__name__
+            and record.getMessage() == "unretire_agent.loopback_authorized"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.authorization_mode == "loopback_local_process"
+        assert record.project_key == project
+        assert record.agent_name == "RestoreAuditTarget"
+        assert record.target_has_registration_token is True
+        assert record.registration_token_supplied is False
+        assert token_canary not in json.dumps(record.__dict__, default=str)
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()

@@ -128,9 +128,9 @@ COMPACT_TOOL_DESCRIPTIONS = MappingProxyType(
         "unretire_agent": (
             "Restore a retired agent to active status so it accepts new "
             "messages again. Args: project_key, agent_name, "
-            "registration_token (required only if the agent registered with "
-            "one). Use when an agent is alive but the roster says retired — "
-            "activity recorded after retired_at is the signature."
+            "registration_token (optional; pass it if you hold it). Use when "
+            "an agent is alive but the roster says retired — activity "
+            "recorded after retired_at is the signature."
         ),
         "whois": (
             "Look up one agent's profile (program, model, task, last_active) "

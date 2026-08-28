@@ -12483,7 +12483,8 @@ def build_mcp_server() -> FastMCP:
 
     # This must remain the final registry mutation gate. A subset filter is
     # incompatible with the frozen compatibility contract and therefore makes
-    # construction fail rather than silently publishing fewer than 24 tools.
+    # construction fail rather than silently publishing fewer tools than the
+    # contract names.
     mcp.assert_contract_boundary()
     assert_authorization_catalog_boundary(mcp.published_tool_names)
 

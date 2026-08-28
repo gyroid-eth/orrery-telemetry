@@ -1,4 +1,4 @@
-"""Exact gates for the 24-tool authorization catalog and shadow observer."""
+"""Exact gates for the published authorization catalog and shadow observer."""
 
 from __future__ import annotations
 
@@ -90,6 +90,15 @@ def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
     assert authorization.catalog_record_shape() == EXPECTED_FIELDS
     assert set(catalog) == COMPATIBILITY_TOOLS
     assert len(catalog) == 25  # 24 at cutover + unretire_agent (2026-08-28)
+    # The rule text is the published claim about who may call this. It drifted
+    # once already: the code was changed to trust the loopback caller while the
+    # catalog still told operators a token was required.
+    assert catalog["unretire_agent"]["authorization_rule"] == (
+        "bound loopback local principal may restore any project target "
+        "without its registration_token; retain the credential field for "
+        "future project-administrator hardening, which should land on "
+        "retire_agent and unretire_agent together"
+    )
     assert set(asyncio.run(app.build_mcp_server().get_tools())) == set(catalog)
     assert hashlib.sha256(fixture_bytes).hexdigest() == (
         authorization.AUTHORIZATION_FIXTURE_SHA256

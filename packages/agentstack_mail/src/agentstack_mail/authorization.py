@@ -1,6 +1,6 @@
 """Transport-independent authorization catalog and shadow observations.
 
-The catalog describes the selected 24-tool compatibility surface without
+The catalog describes the published compatibility surface without
 adding credentials to tool schemas. The retire rule records the current
 loopback local-process boundary; other rules remain prospective and
 non-binding. Shadow observations are diagnostic only: they never authorize or
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "23496b3843695a0be19fa5fa229bda2584c1584118369a337ae51b17fe8015ee"
+    "73df37ad341d5aa5e8d67d63dde0040b5a4a1b50909753c0c7ebcb3214ef61f3"
 )
 
 
@@ -195,10 +195,10 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
         required_arguments=("project_key", "agent_name"),
         current_credential_arguments=("registration_token",),
         authorization_rule=(
-            "the agent's own registration_token when it registered with one; "
-            "otherwise a bound loopback local principal, matching how "
-            "retire_agent is authorized — recovery must not be harder to reach "
-            "than the mistake it undoes"
+            "bound loopback local principal may restore any project target "
+            "without its registration_token; retain the credential field for "
+            "future project-administrator hardening, which should land on "
+            "retire_agent and unretire_agent together"
         ),
     ),
     "search_messages": _entry(

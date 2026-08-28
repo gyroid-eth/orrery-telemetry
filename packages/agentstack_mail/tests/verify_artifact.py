@@ -25,7 +25,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "23496b3843695a0be19fa5fa229bda2584c1584118369a337ae51b17fe8015ee"
+    "73df37ad341d5aa5e8d67d63dde0040b5a4a1b50909753c0c7ebcb3214ef61f3"
 )
 
 EXPECTED_BASELINES = {
@@ -862,7 +862,7 @@ EXPECTED_POST_CUTOVER_INTENTIONAL_DIFFERENCES = [
         "channel": "direct chat instruction to ProOpus",
         "summary": "unretire_agent is published. The frozen live server exposed it; the cutover surface withheld it as a non-compatibility upstream tool, and that decision is reversed.",
         "why_not_in_the_initial_cutover_difference_set": "The initial-cutover-difference-set-exact condition records what was approved on 2026-08-15 and stays at three. Withholding this tool was reviewed then; publishing it was not. It was published on 2026-08-28, after retirement turned out to be one-way in practice: on 2026-08-27 a session ending outside tmux resolved an unrelated live agent's name and retired it, twice, and nothing on the published surface could undo that. register_agent does not clear retired_at, so recovery meant editing the database by hand during an incident. The product decision that speaks of an exact 24-tool boundary is left as written: it records what was decided on 2026-08-15, and rewriting it would make the minutes claim a review that did not happen.",
-        "comparator_effect": "The published tool set grows from 24 to 25 and unretire_agent moves from live-only to shared, which shrinks the divergence rather than widening it. No existing tool's schema or behaviour changed. Comparisons asserting the exact core tool set differ by this one name; the core topology allowance and the differential lifecycle coverage are updated to match.",
+        "comparator_effect": "The published tool set grows from 24 to 25 and unretire_agent moves from live-only to shared, which shrinks the divergence rather than widening it. No other tool's schema or behaviour changed. unretire_agent's own authorization did change: the frozen live server refuses to restore a token-bearing target when the token is omitted, and Core now allows it, matching how retire_agent is already authorized here. The differential lifecycle scenario passes the token, so it compares the shared success path and does not observe that branch; the changed branch is pinned instead by test_loopback_unretire_restores_a_token_bearing_target_without_its_token in the identity contract.",
     },
 ]
 

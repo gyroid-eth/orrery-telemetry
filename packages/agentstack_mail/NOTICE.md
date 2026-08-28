@@ -31,7 +31,7 @@ Implemented in the core extraction:
 - MCP provider identity, service labels, environment namespace, port, database,
   archive, and signal roots isolated from AgentMail defaults while the existing
   Claude `mcp-agent-mail` and Codex `agent-mail` client keys remain stable;
-- only AgentStack's audited 24-tool compatibility surface is published;
+- only AgentStack's audited compatibility surface is published (25 tools);
 - live-derived tool bodies remain temporarily internal until differential
   tests permit removal of the non-compatibility bodies;
 - machine-specific daemons, HTTP UI, and presentation policy are excluded;

@@ -12,7 +12,9 @@ an AgentStack-owned namespace. The client compatibility keys stay Claude
 
 Contract v1 contains 25 published tools: 12 required by executable AgentStack
 runtime paths, 23 visible through shipped model permissions or the delegate
-skill, and `retire_agent` as the one runtime-only addition. Bridge-local names
+skill, `retire_agent` as the one runtime-only addition, and `unretire_agent`,
+published after the cutover so a mistaken retirement can be undone without
+editing the database (see `post_cutover_published` in the contract fixture). Bridge-local names
 such as `runtime_status` are not upstream tools, and `create_agent_identity` is
 explicitly excluded.
 
@@ -362,7 +364,7 @@ Expected differences are fail-closed in
 allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
 surface versus the Core published surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
-and Core 24/0/0/0. Service namespace/default isolation is also an exact,
+and Core 25/0/0/0. Service namespace/default isolation is also an exact,
 versioned allowance. The provider identity remains `agentstack-mail`, while
 first cutover preserves Claude's `mcp-agent-mail` and Codex's `agent-mail`
 client keys. Authority is validated from endpoint, data roots, and ownership;

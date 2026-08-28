@@ -161,7 +161,7 @@
     },
     "unretire_agent": {
       "action": "restore_retired_agent",
-      "authorization_rule": "the agent's own registration_token when it registered with one; otherwise a bound loopback local principal, matching how retire_agent is authorized — recovery must not be harder to reach than the mistake it undoes",
+      "authorization_rule": "bound loopback local principal may restore any project target without its registration_token; retain the credential field for future project-administrator hardening, which should land on retire_agent and unretire_agent together",
       "current_credential_arguments": [
         "registration_token"
       ],

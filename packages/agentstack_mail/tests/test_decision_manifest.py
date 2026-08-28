@@ -445,6 +445,9 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
     migration = _follow_up_task(manifest, "data-migration-reconciliation")
     rollback = _follow_up_task(manifest, "rollback-revert-procedure")
     assert "exact candidate wheel" in " ".join(http["requirements"])
+    # Historical: this pins the requirement as written on 2026-08-15. The
+    # surface has since grown to 25 (unretire_agent), recorded in the
+    # post-cutover ledger rather than by editing what was decided then.
     assert "exact 24-tool boundary" in " ".join(http["requirements"])
     assert "never share the provider identity, port, database, archive, or signals" in " ".join(
         service["requirements"]
