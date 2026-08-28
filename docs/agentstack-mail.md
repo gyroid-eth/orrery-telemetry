@@ -307,7 +307,7 @@ and equality classes rather than replacing every timestamp with one wildcard.
 The versioned divergence manifest is packaged into wheel and sdist and is
 validated against the live fixture and Core source. It permits only the exact
 tools/concrete resources/resource templates/prompts publication surfaces of
-live 40/0/21/0 versus Core 24/0/0/0, renamed/isolation defaults, provenance and
+live 40/0/21/0 versus Core 25/0/0/0, renamed/isolation defaults, provenance and
 lazy-LLM boundary, and the three roster-resource description rewrites. The
 manifest's single `product_decisions` array is the normative decision ledger.
 Every entry independently records selection, implementation, and cutover state,

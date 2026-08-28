@@ -81,7 +81,7 @@ def _configure_isolated_runtime(
     config.clear_settings_cache()
 
 
-def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
+def test_authorization_catalog_exactly_matches_the_published_contract() -> None:
     catalog = authorization.AUTHORIZATION_CATALOG
     fixture_bytes = AUTHORIZATION_FIXTURE_PATH.read_bytes()
     fixture = json.loads(fixture_bytes)
@@ -111,7 +111,7 @@ def test_authorization_catalog_exactly_matches_the_24_tool_contract() -> None:
         },
         "default_principal_candidate": authorization.LOCAL_SINGLE_PRINCIPAL,
         "rule_status": (
-            "current_loopback_retire_boundary_other_rules_prospective_non_binding"
+            "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
         ),
         "tools": authorization.catalog_as_plain_data(),
     }

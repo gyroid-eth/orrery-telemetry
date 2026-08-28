@@ -25,7 +25,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "73df37ad341d5aa5e8d67d63dde0040b5a4a1b50909753c0c7ebcb3214ef61f3"
+    "6609e7b2c6816c039ab55432de3bda15ad7c491bad5fb5764b9ae77a2aeda607"
 )
 
 EXPECTED_BASELINES = {
@@ -1476,7 +1476,7 @@ def _assert_authorization_fixture(
     if fixture.get("default_principal_candidate") != "local-single-principal":
         raise SystemExit(f"{artifact} authorization default principal changed")
     if fixture.get("rule_status") != (
-        "current_loopback_retire_boundary_other_rules_prospective_non_binding"
+        "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
     ):
         raise SystemExit(f"{artifact} authorization rule status changed")
     if fixture.get("default_policy") != {

@@ -1,8 +1,8 @@
 """Transport-independent authorization catalog and shadow observations.
 
 The catalog describes the published compatibility surface without
-adding credentials to tool schemas. The retire rule records the current
-loopback local-process boundary; other rules remain prospective and
+adding credentials to tool schemas. The retire and unretire rules record the
+current loopback local-process boundary; other rules remain prospective and
 non-binding. Shadow observations are diagnostic only: they never authorize or
 deny the wrapped operation.
 """
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "73df37ad341d5aa5e8d67d63dde0040b5a4a1b50909753c0c7ebcb3214ef61f3"
+    "6609e7b2c6816c039ab55432de3bda15ad7c491bad5fb5764b9ae77a2aeda607"
 )
 
 
@@ -388,7 +388,7 @@ def assert_authorization_catalog_boundary(
         },
         "default_principal_candidate": LOCAL_SINGLE_PRINCIPAL,
         "rule_status": (
-            "current_loopback_retire_boundary_other_rules_prospective_non_binding"
+            "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
         ),
         "tools": catalog_as_plain_data(),
     }:

@@ -5,7 +5,7 @@
     "reason": "policy_empty_default_allow"
   },
   "default_principal_candidate": "local-single-principal",
-  "rule_status": "current_loopback_retire_boundary_other_rules_prospective_non_binding",
+  "rule_status": "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding",
   "tools": {
     "acknowledge_message": {
       "action": "acknowledge_received_message",
