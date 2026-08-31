@@ -155,6 +155,26 @@ def _single_line(result: subprocess.CompletedProcess[str], label: str) -> str:
     return value
 
 
+def live_bundle_path(package_root: Path) -> Path:
+    """Where the frozen live bundle would be, present or not."""
+
+    return package_root / _BUNDLE_RELATIVE_PATH
+
+
+def live_bundle_is_available(package_root: Path) -> bool:
+    """Whether the frozen upstream server can be reconstructed here.
+
+    The bundle is not shipped. It carried the third-party server's full
+    history, and the published repository does not distribute that; a reader
+    who wants these comparisons regenerates it from an upstream clone at the
+    pinned commit (see the provenance README). Everything that depends on it
+    skips when it is absent, rather than failing: a comparison that cannot be
+    run is not the same as a comparison that failed.
+    """
+
+    return live_bundle_path(package_root).is_file()
+
+
 def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
     """Reconstruct and authenticate the frozen tracked live checkout.
 
@@ -165,6 +185,18 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
     """
 
     package_root = Path(package_root).resolve()
+    if not live_bundle_is_available(package_root):
+        # One gate at the entrance rather than a guard at every caller: eleven
+        # test modules reconstruct through here, and a per-caller check is a
+        # list somebody will fail to extend.
+        import pytest
+
+        pytest.skip(
+            "frozen live bundle is not present; regenerate it from an upstream "
+            "clone at the pinned commit to run the comparisons "
+            "(packages/agentstack_mail/provenance/README.md)",
+            allow_module_level=True,
+        )
     tmp_path = Path(tmp_path).resolve()
     bundle = package_root / _BUNDLE_RELATIVE_PATH
     patch = package_root / _PATCH_RELATIVE_PATH

@@ -17,18 +17,34 @@ ROOT = Path(__file__).resolve().parents[1]
 # name, kept deliberately as measurement provenance. An allowlist entry that no
 # longer applies is not harmless — it is a standing permission for a future
 # leak in that path, which is why the guard fails on stale entries.
-ALLOWLIST = {
-    "docs/agentstack-mail-cutover-patches/0001-orrery-mail-db-selector.patch": "The patch preserves an immutable cutover before/after record.",
-    "docs/agentstack-mail-cutover-patches/0002-dashboard-mail-cutover-selectors.patch": "The patch preserves an immutable cutover before/after record.",
-    "docs/agentstack-mail-cutover.md": "The runbook records exact paths and labels needed to reconstruct the handoff.",
-    "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json": "The workspace is measurement provenance for the accepted performance baseline.",
-}
+
+
+
+VAULT_DIRECTORY = b"obsidian" + b"_for_xiaomi"
 
 IDENTIFIERS = (
     b"shuto" + b"ito",
-    b"obsidian" + b"_for_xiaomi",
+    VAULT_DIRECTORY,
     b"shutos" + b"-macbook",
+    # The given name alone. It survived a whole-history rewrite in three commit
+    # messages because the replacement covered file contents only, and the
+    # check meant to catch that looked for the username and the machine name
+    # but never for the name by itself.
+    b"shut" + b"o ",
 )
+
+ALLOWLIST = {
+    # path -> (reason, the identifiers that path may contain)
+    #
+    # Per pattern, not per path. A path-wide excuse lets an allowlisted file
+    # carry any identifier, including one nobody reviewed — an adversarial pass
+    # demonstrated exactly that by planting the username in an allowlisted file
+    # and in a binary, and watching this guard accept both (2026-08-31).
+    "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json": (
+        "The workspace is measurement provenance for the accepted performance baseline.",
+        {VAULT_DIRECTORY},
+    ),
+}
 
 
 def _tracked_paths() -> set[str]:
@@ -58,15 +74,19 @@ def test_tracked_text_has_no_unapproved_personal_identifiers() -> None:
 
     for relative_path in sorted(tracked):
         payload = _tracked_bytes(relative_path)
-        if b"\0" in payload:
-            continue
+        # Binaries are scanned. Skipping them was a hole an adversarial pass
+        # walked through, and a repository can carry a whole second history
+        # inside one: a tracked git bundle held 720 commits, the previous
+        # identity, and a private key, none of it visible to a text search.
         lowered = payload.lower()
         matched = {pattern for pattern in IDENTIFIERS if pattern in lowered}
         if matched:
             hits[relative_path] = matched
 
     violations = {
-        path: patterns for path, patterns in hits.items() if path not in ALLOWLIST
+        path: sorted(patterns - set(ALLOWLIST.get(path, ("", frozenset()))[1]))
+        for path, patterns in hits.items()
+        if patterns - set(ALLOWLIST.get(path, ("", frozenset()))[1])
     }
     formatted = [
         f"{path}: {pattern.decode('ascii')}"
@@ -77,7 +97,7 @@ def test_tracked_text_has_no_unapproved_personal_identifiers() -> None:
 
     malformed_reasons = [
         path
-        for path, reason in ALLOWLIST.items()
+        for path, (reason, _patterns) in ALLOWLIST.items()
         if not reason.strip() or "\n" in reason
     ]
     assert not malformed_reasons, (
