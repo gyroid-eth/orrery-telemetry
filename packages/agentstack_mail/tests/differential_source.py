@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,18 @@ _BASE_ENV_ALLOWLIST = frozenset(
         "WINDIR",
     }
 )
+
+
+class LiveBaselineUnavailable(RuntimeError):
+    """The frozen predecessor is not present, so no comparison can be made.
+
+    Distinct from a reconstruction that was attempted and failed. Callers
+    decide what that means: a test skips, a command-line gate reports
+    "unavailable" and exits 3. The library only reports the fact — an earlier
+    version called pytest.skip() here, which raises through BaseException and
+    slipped past the CLI's error handling, leaving exit 1, no output, and a
+    traceback that read like a failure.
+    """
 
 
 class LiveReconstructionError(RuntimeError):
@@ -164,12 +177,12 @@ def live_bundle_path(package_root: Path) -> Path:
 def live_bundle_is_available(package_root: Path) -> bool:
     """Whether the frozen upstream server can be reconstructed here.
 
-    The bundle is not shipped. It carried the third-party server's full
-    history, and the published repository does not distribute that; a reader
-    who wants these comparisons regenerates it from an upstream clone at the
-    pinned commit (see the provenance README). Everything that depends on it
-    skips when it is absent, rather than failing: a comparison that cannot be
-    run is not the same as a comparison that failed.
+    The baseline is not shipped: it is an upstream checkout plus local commits,
+    so nobody who does not already hold it can rebuild it, and the copy that
+    used to live here carried the third-party server's full history along with
+    a private key (see the provenance README). Everything that depends on it
+    skips when it is absent, rather than failing — a comparison that cannot be
+    run is not the same as a comparison that passed.
     """
 
     return live_bundle_path(package_root).is_file()
@@ -189,14 +202,16 @@ def reconstruct_live(package_root: Path, tmp_path: Path) -> Path:
         # One gate at the entrance rather than a guard at every caller: eleven
         # test modules reconstruct through here, and a per-caller check is a
         # list somebody will fail to extend.
-        import pytest
-
-        pytest.skip(
-            "frozen live bundle is not present; regenerate it from an upstream "
-            "clone at the pinned commit to run the comparisons "
-            "(packages/agentstack_mail/provenance/README.md)",
-            allow_module_level=True,
+        message = (
+            "frozen live baseline is not distributed with this repository, so "
+            "the comparisons against the predecessor cannot run here "
+            "(packages/agentstack_mail/provenance/README.md)"
         )
+        if "pytest" in sys.modules:
+            import pytest
+
+            pytest.skip(message, allow_module_level=True)
+        raise LiveBaselineUnavailable(message)
     tmp_path = Path(tmp_path).resolve()
     bundle = package_root / _BUNDLE_RELATIVE_PATH
     patch = package_root / _PATCH_RELATIVE_PATH

@@ -403,7 +403,7 @@ def test_the_predecessor_recorded_in_the_cutover_document_is_retired(
 ) -> None:
     """The definition this step exists for, verbatim from the sealed record.
 
-    docs/agentstack-mail-cutover.md pins the predecessor's ProgramArguments as
+    The cutover record pinned the predecessor's ProgramArguments as
     ["/bin/bash", ".../mcp_agent_mail/scripts/run_server_with_token.sh"]. An
     earlier fix looked only at argv[0], saw /bin/bash, and left the very job it
     was written to retire running -- with the tester's two-database split

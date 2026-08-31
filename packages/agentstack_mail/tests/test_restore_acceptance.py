@@ -20,8 +20,17 @@ from agentstack_mail import evidence, restore_acceptance
 from agentstack_mail.contract import COMPATIBILITY_TOOLS
 
 
-ACCEPTED_BACKUP_ROOT = (
-    Path(os.environ.get("AGENTSTACK_ACCEPTED_BACKUP_ROOT", "/nonexistent/agentstack-accepted-backups"))
+# The accepted backup family lives outside the repository, on the machine that
+# performed the restore. Point this at it to run the acceptance test; with no
+# value the path does not exist and the test skips, which is what happens
+# everywhere except that machine. The previous default hardcoded the
+# maintainer's home directory, split across concatenation so the repository's
+# own identifier guard would not see it.
+ACCEPTED_BACKUP_ROOT = Path(
+    os.environ.get(
+        "AGENTSTACK_ACCEPTED_BACKUP_ROOT",
+        "/nonexistent/agentstack-accepted-backups",
+    )
 )
 ACCEPTED_BACKUP_BASENAME = "agent-mail-backup-20260811-215721.sqlite3"
 ACCEPTED_BACKUP_PATHS = {

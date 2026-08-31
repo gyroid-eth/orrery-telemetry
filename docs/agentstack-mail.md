@@ -36,10 +36,11 @@ The implementation train was:
 
 The first four gates are executable and hermetic via
 [`packages/agentstack_mail/scripts/cutover_gates.py`](../packages/agentstack_mail/scripts/cutover_gates.py).
-The automated contract and the still-manual real-machine soak procedure are in
-[`agentstack-mail-cutover-gates.md`](agentstack-mail-cutover-gates.md). Passing
-them is evidence rather than authority on its own; the owner approved the
-public authority switch on 2026-08-15.
+The automated contract lives in the gate script itself. The real-machine soak
+procedure and the handoff runbook were minutes of a one-time event and are not
+published; the decisions they recorded are enforced by the decision ledger
+fixture and its tests, where drift fails rather than merely disagreeing with a
+document.
 
 The provider identity remains `agentstack-mail`, but it is not the client
 registration key. First cutover preserves Claude's `mcp-agent-mail` and
@@ -321,10 +322,9 @@ follow-up may remain `no_go` without reversing that approval.
 
 ## Decision material
 
-- [Product decision packet](agentstack-mail-decision-packet.md) records the
-  observed live/Core edge behavior, incompatible goals, option impacts, and
-  post-decision tests. Normative selections remain in the manifest rather than
-  this evidence packet.
+- The normative selections live in the decision manifest fixture and are pinned
+  by `test_decision_manifest.py`. The evidence packet that accompanied them was
+  cutover-era material and is not published.
 - [Claim/enrollment design](agentstack-mail-claim-enrollment-design.md) frames
   credential issuance, legacy null-token ownership proof, recovery, macro
   integration, migration, and rollback implications; normative selections stay

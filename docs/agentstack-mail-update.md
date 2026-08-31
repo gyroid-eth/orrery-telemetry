@@ -1,7 +1,7 @@
 # Updating a live AgentStack Mail service
 
-The cutover procedure (`agentstack-mail-cutover.md`) covers replacing the
-third-party server once. This document covers every deployment after that:
+The one-time authority handoff from the third-party server is history and its
+runbook is not published. This document covers every deployment after it:
 shipping a new build of `agentstack_mail` onto a machine where the service is
 already serving production traffic.
 

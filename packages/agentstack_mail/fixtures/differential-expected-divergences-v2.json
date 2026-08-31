@@ -1230,8 +1230,7 @@
       "implementation_order": "post_cutover",
       "scope": [
         "tests/test_agentstack_mail_contract.py",
-        "packages/agentstack_mail/NOTICE.md",
-        "packages/agentstack_mail/provenance/live-head.bundle"
+        "packages/agentstack_mail/NOTICE.md"
       ],
       "requirements": [
         "make repository-level contract assertions use the current b8251c1 live source head and 2265572d bundle digest",
@@ -1368,7 +1367,6 @@
       "implementation_state": "not_implemented",
       "implementation_order": "post_cutover",
       "scope": [
-        "docs/agentstack-mail-decision-packet.md",
         "docs/agentstack-mail.md",
         "docs/agentstack-mail-performance-gate.md",
         "docs/install.md",
@@ -1378,8 +1376,7 @@
         "README.md",
         "claude/CLAUDE.md",
         "codex/AGENTS.md",
-        "packages/agentstack_mail/README.md",
-        "docs/agentstack-mail-cutover.md"
+        "packages/agentstack_mail/README.md"
       ],
       "requirements": [
         "remove stale first-cutover statements in favor of the exact D1 plus reservation-probe and loopback-retire safety difference set",

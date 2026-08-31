@@ -44,7 +44,7 @@ CANDIDATE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
 They reconstruct frozen live from checked-in provenance, use only disposable
 state and dynamically allocated non-production loopback ports, and require one
 detected broken-state control per gate. The separate manual real-machine soak
-procedure is documented in `docs/agentstack-mail-cutover-gates.md`; neither an
+procedure was documented in the cutover runbook, which is not published; neither an
 automated pass nor a soak edits or approves the normative decision ledger.
 
 The reconstructible live Git bundle and dirty patch under `provenance/` are
@@ -176,7 +176,7 @@ The release sequence is therefore: generate the seed, create the rehearsal
 receipt, publish one verifier receipt, then perform a read-only recheck with
 all three generator, rehearsal, and verifier receipt hashes pinned outside the
 run directory. The complete asserted
-commands and paths are in `docs/agentstack-mail-cutover.md`; the CLI surfaces
+commands and paths were in the cutover runbook, which is not published; the CLI surfaces
 are:
 
 ```text

@@ -26,11 +26,9 @@ IDENTIFIERS = (
     b"shuto" + b"ito",
     VAULT_DIRECTORY,
     b"shutos" + b"-macbook",
-    # The given name alone. It survived a whole-history rewrite in three commit
-    # messages because the replacement covered file contents only, and the
-    # check meant to catch that looked for the username and the machine name
-    # but never for the name by itself.
-    b"shut" + b"o ",
+    # The given name alone, with no trailing space: "Shuto," and "Shuto." and a
+    # line-final "Shuto" all walked past the earlier pattern.
+    b"shut" + b"o",
 )
 
 ALLOWLIST = {
@@ -43,6 +41,11 @@ ALLOWLIST = {
     "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json": (
         "The workspace is measurement provenance for the accepted performance baseline.",
         {VAULT_DIRECTORY},
+    ),
+    # This file has to contain what it searches for.
+    "tests/test_no_personal_identifiers.py": (
+        "The guard names the identifiers it looks for.",
+        set(IDENTIFIERS),
     ),
 }
 
@@ -111,4 +114,44 @@ def test_tracked_text_has_no_unapproved_personal_identifiers() -> None:
     assert not stale_entries, (
         "tracked allowlist entries no longer contain an identifier: "
         + ", ".join(stale_entries)
+    )
+
+
+def test_history_metadata_has_no_personal_identifiers() -> None:
+    """Names, addresses and messages are as public as the files are.
+
+    Rewriting file contents does not touch commit metadata, and the check that
+    was supposed to notice looked only at tracked text. Two commits reached the
+    publication candidate carrying the previous author identity, because the
+    rewrite fixed the past while the repository's own git config kept minting
+    new commits with the old name (2026-08-31).
+    """
+
+    fields = subprocess.run(
+        ["git", "log", "--all", "--format=%an%n%ae%n%cn%n%ce%n%s%n%b"],
+        capture_output=True,
+        check=True,
+        cwd=ROOT,
+    ).stdout.lower()
+
+    found = sorted(
+        pattern.decode("ascii") for pattern in IDENTIFIERS if pattern in fields
+    )
+    assert not found, (
+        "commit metadata or messages carry personal identifiers: "
+        + ", ".join(found)
+    )
+
+
+def test_tracked_paths_have_no_personal_identifiers() -> None:
+    """A file can carry an identifier in its name and nothing in its bytes."""
+
+    offenders = sorted(
+        path
+        for path in _tracked_paths()
+        for pattern in IDENTIFIERS
+        if pattern in path.lower().encode("utf-8")
+    )
+    assert not offenders, "tracked paths carry personal identifiers: " + ", ".join(
+        offenders
     )

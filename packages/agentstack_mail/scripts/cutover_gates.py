@@ -132,7 +132,8 @@ from agentstack_mail.migration import (  # noqa: E402
     snapshot_state,
     verify_copy,
 )
-from differential_source import (  # noqa: E402
+from differential_source import (
+    LiveBaselineUnavailable,  # noqa: E402
     CORE_NAMESPACE,
     LIVE_NAMESPACE,
     WorkerStateRoots,
@@ -1344,6 +1345,24 @@ def main() -> None:
         if args.output is not None:
             _write_output(args.output, result)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+    except LiveBaselineUnavailable as exc:
+        # Not a failure: the predecessor this gate compares against is not
+        # distributed. Reported with its own status and exit code so a caller
+        # cannot read "could not run" as "ran and passed" — or as "failed".
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "unavailable",
+                    "selection": args.gate,
+                    "reason": str(exc),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        raise SystemExit(3) from exc
     except Exception as exc:
         failure = {
             "schema_version": 1,
