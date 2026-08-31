@@ -419,11 +419,11 @@ verify_display_patch_bundle() {
   (
     cd "$PATCH_DIR"
     shasum -a 256 -c <<'EOF'
-31c36321aa0bd4ab40cfc6544ff024b38639a2dc3fc2ab423adb115701e38758  0001-orrery-mail-db-selector.patch
-97833bbe1f866a2dc8a05c8dae92b8be8a6db30b1375c9db607a8659b7d25240  0002-dashboard-mail-cutover-selectors.patch
-5b3cd31c6fbc3fbf3a5c79f08998f0627b12d52d8db3f11bc32c7d3333d09d24  0002b-dashboard-live-launchagent-selectors.patch
-734778af233e1ba7833fbaebc574f7e5b6f76183a14c32b70d9e7aa73b1166f2  0003-dashboard-agentstack-mail-no-bearer.patch
-b134a0953daaa554b2108a25ebc35fc2b94367600c1d6f61bbe0cd8eca447dea  0004a-dashboard-loopback-retire-exit.patch
+fad125aff843eee373ce9a56182528f91dc005082edbd3236e49f51bc992e4b8  0001-orrery-mail-db-selector.patch
+6e2cf1ca26b9eb4b91182650f965d49db6822e7ded17a00572586387fa19b21d  0002-dashboard-mail-cutover-selectors.patch
+357d44d9e27676271ac1b51d8546cb3e2c0091ccda086c2f4a21fdc061a24ddd  0002b-dashboard-live-launchagent-selectors.patch
+286e02563ef4d424d7036e350366e9cf320a3c90c4ba6eb0a7444774d90fecf1  0003-dashboard-agentstack-mail-no-bearer.patch
+4fa69c9a13c1dd44b9625ab00b028c413efd24400a86a67332a9b573d0c2cde4  0004a-dashboard-loopback-retire-exit.patch
 EOF
   )
 }
