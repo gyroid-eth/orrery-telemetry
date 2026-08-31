@@ -19,10 +19,19 @@ boundary, followed by the security-only signing-key deletion at the recorded
 HEAD, plus uncommitted changes. It, not current upstream HEAD, is the behavior
 baseline for the extraction. Current upstream is an advisory source for
 individually reviewed security and bug fixes, not a merge target.
-The repository preserves a depth-1 Git bundle of the live HEAD tree and the
-tracked dirty patch under `provenance/`; its README gives the verified
-reconstruction procedure. Full history is deliberately excluded so the
-deleted signing-key blob is physically absent from the bundle.
+The repository preserved a depth-1 Git bundle of the live HEAD tree under
+`provenance/` until publication; the tracked dirty patch and the README's
+reconstruction procedure remain. The bundle itself was removed from this
+repository and from its history before the project was made public.
+
+Excluding full history had been the safeguard against shipping a deleted
+signing-key blob, and the bundle was believed to hold only the HEAD tree. It
+did not: an adversarial pass before publication found 720 commits inside it,
+along with that key and the previous author identity. Nothing in this
+repository's text could see them, because a bundle is compressed Git objects
+and a text search reads straight past it. The lesson is recorded here rather
+than in a commit message: an archive committed as a file is a second
+repository, and it has to be opened, not grepped.
 
 Implemented in the core extraction:
 

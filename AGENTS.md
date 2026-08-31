@@ -66,8 +66,8 @@ them what to install.
 ## Installing
 
 ```sh
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh --dry-run        # writes nothing; read this output
 ```
 

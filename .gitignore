@@ -27,3 +27,7 @@ dashboard/demo/dist/
 
 # wrangler local state
 .wrangler/
+
+# Marketing page kept out of the repository: it carries the owner's
+# public social handle, which the published history deliberately does not.
+site/
