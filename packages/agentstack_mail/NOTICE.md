@@ -21,7 +21,8 @@ baseline for the extraction. Current upstream is an advisory source for
 individually reviewed security and bug fixes, not a merge target.
 The repository preserved a depth-1 Git bundle of the live HEAD tree under
 `provenance/` until publication; the tracked dirty patch and the README's
-reconstruction procedure remain. The bundle itself was removed from this
+audit trail remain, though the reconstruction it described can no longer be
+performed here. The bundle itself was removed from this
 repository and from its history before the project was made public.
 
 Excluding full history had been the safeguard against shipping a deleted

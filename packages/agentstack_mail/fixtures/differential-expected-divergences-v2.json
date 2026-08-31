@@ -314,7 +314,7 @@
             "fixtures"
           ]
         },
-        "reason": "The bundle and patch reconstruct the frozen live source but are repository-only audit inputs; wheel and sdist retain notices, licenses, and fixtures instead."
+        "reason": "The tracked patch is a repository-only audit input; the bundle it accompanied is supplied by the operator and is not distributed, so wheel and sdist carry neither."
       },
       {
         "id": "dependency.lazy_legacy_llm",

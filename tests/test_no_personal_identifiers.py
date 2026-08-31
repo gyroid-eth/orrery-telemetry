@@ -155,3 +155,107 @@ def test_tracked_paths_have_no_personal_identifiers() -> None:
     assert not offenders, "tracked paths carry personal identifiers: " + ", ".join(
         offenders
     )
+
+
+ARCHIVE_MAGIC = (b"# v2 git bundle", b"# v3 git bundle", b"PACK")
+
+
+def test_no_tracked_file_is_a_git_archive() -> None:
+    """A repository committed as a file is a second repository.
+
+    One was here: a tracked bundle carrying 720 commits, a third-party signing
+    key, and the previous author identity. Nothing that reads this repository as
+    text could see any of it, because a bundle is compressed Git objects — the
+    scan that reported it clean read straight past it, and the reviewer who
+    found it opened the file instead (2026-08-31).
+
+    Checked by magic bytes rather than by extension, since the name is the part
+    an author chooses.
+    """
+
+    offenders = [
+        path
+        for path in sorted(_tracked_paths())
+        if _tracked_bytes(path)[:16].startswith(ARCHIVE_MAGIC)
+    ]
+    assert not offenders, (
+        "tracked files are Git archives and cannot be reviewed as text: "
+        + ", ".join(offenders)
+    )
+
+
+def test_history_carries_no_git_archive_or_identifier() -> None:
+    """The published history, not just the checkout at its tip.
+
+    Publication exposes every reachable object. A file removed yesterday is
+    still readable from the commit that carried it, so the working tree being
+    clean says nothing about what a reader can fetch.
+    """
+
+    listing = subprocess.run(
+        ["git", "rev-list", "--all", "--objects"],
+        capture_output=True,
+        check=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.splitlines()
+
+    archives: list[str] = []
+    identifiers: list[str] = []
+    for line in listing:
+        sha, _, path = line.partition(" ")
+        kind = subprocess.run(
+            ["git", "cat-file", "-t", sha],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        ).stdout.strip()
+        if kind != "blob":
+            if path and any(
+                pattern in path.lower().encode("utf-8") for pattern in IDENTIFIERS
+            ):
+                identifiers.append(f"{sha} path {path}")
+            continue
+        payload = subprocess.run(
+            ["git", "cat-file", "blob", sha],
+            capture_output=True,
+            check=True,
+            cwd=ROOT,
+        ).stdout
+        if payload[:16].startswith(ARCHIVE_MAGIC):
+            archives.append(f"{sha} {path}")
+        # The guard's own file is allowed to name what it searches for; every
+        # other historical blob is not, and history has no allowlist because a
+        # past excuse cannot be reviewed against a present reason.
+        if path != "tests/test_no_personal_identifiers.py":
+            lowered = payload.lower()
+            hits = sorted(
+                pattern.decode("ascii")
+                for pattern in IDENTIFIERS
+                if pattern in lowered and pattern != VAULT_DIRECTORY
+            )
+            if hits:
+                identifiers.append(f"{sha} {path}: {', '.join(hits)}")
+
+    assert not archives, "reachable history contains Git archives: " + ", ".join(
+        archives
+    )
+    assert not identifiers, "reachable history carries identifiers: " + ", ".join(
+        identifiers[:20]
+    )
+
+
+def test_refs_and_tags_carry_no_personal_identifiers() -> None:
+    """Names of refs, and the messages inside annotated tags, publish too."""
+
+    refs = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)%0a%(taggername)%0a"
+         "%(taggeremail)%0a%(contents)"],
+        capture_output=True,
+        check=True,
+        cwd=ROOT,
+    ).stdout.lower()
+    found = sorted(
+        pattern.decode("ascii") for pattern in IDENTIFIERS if pattern in refs
+    )
+    assert not found, "refs or tags carry personal identifiers: " + ", ".join(found)

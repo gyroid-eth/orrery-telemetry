@@ -2,7 +2,7 @@
 """Hermetic coexistence, migration, rollback, and fault cutover gates.
 
 This executable intentionally reconstructs the frozen live authority from the
-checked-in provenance bundle.  It never consults a developer checkout, never
+operator-supplied provenance bundle.  It never consults a developer checkout, never
 uses a production port, and keeps every writable surface below one disposable
 work root.
 """

@@ -23,8 +23,14 @@ bundle is compressed Git objects.
 The baseline is not a published upstream commit. It is an upstream checkout
 plus five local commits, the last of which removed the signing key, so no
 `git clone` of the upstream project reaches it. Whoever holds that checkout can
-rebuild the bundle with `git bundle create ... --depth=1 HEAD`; nobody else can,
-and this repository does not ask them to pretend otherwise.
+rebuild it; nobody else can, and this repository does not ask them to pretend
+otherwise. `git bundle create` takes rev-list arguments and has no `--depth`,
+so a self-contained shallow bundle is made from a shallow clone:
+
+```bash
+git clone --depth=1 "file://$FROZEN_CHECKOUT" /tmp/frozen
+git -C /tmp/frozen bundle create /path/to/live-head.bundle HEAD
+```
 
 ## What this means for the comparison gates
 

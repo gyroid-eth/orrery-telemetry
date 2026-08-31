@@ -33,7 +33,10 @@ The first release must satisfy these invariants:
   versioned compatibility fixtures.
 
 The pre-authority coexistence, migration, pre-write rollback, and D8/D10/D12
-fault gates are executable from a repository checkout with:
+fault gates compare against the frozen predecessor. That baseline is not
+distributed with this repository, so in a published checkout they report
+`status: unavailable` and exit 3 rather than running (see
+`provenance/README.md`). Where the baseline is present they run with:
 
 ```console
 CANDIDATE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
@@ -41,14 +44,14 @@ CANDIDATE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
   --candidate-commit "$CANDIDATE_COMMIT"
 ```
 
-They reconstruct frozen live from checked-in provenance, use only disposable
+They reconstruct frozen live from a baseline the operator supplies, use only disposable
 state and dynamically allocated non-production loopback ports, and require one
 detected broken-state control per gate. The separate manual real-machine soak
 procedure was documented in the cutover runbook, which is not published; neither an
 automated pass nor a soak edits or approves the normative decision ledger.
 
-The reconstructible live Git bundle and dirty patch under `provenance/` are
-repository-only audit inputs. They are intentionally excluded from both wheel
+The dirty patch under `provenance/` is a repository-only audit input; the Git
+bundle it accompanied is no longer distributed. They are intentionally excluded from both wheel
 and source distributions; the package distributions retain `NOTICE.md`, both
 license texts, the compatibility fixtures, runtime source, and verification
 tests.
@@ -348,8 +351,9 @@ therefore observable while the underlying operation still succeeds. Server
 construction fails closed if the runtime catalog, canonical versioned fixture,
 or published tool set diverges.
 
-The Behavior differential reconstructs the frozen live source only from the
-authenticated repository bundle plus tracked working-tree patch. Live and Core
+The Behavior differential reconstructs the frozen live source only from an
+authenticated bundle plus the tracked working-tree patch, and skips entirely
+when that bundle is absent, as it is here. Live and Core
 then run in separate Python processes with disjoint 0700 state roots, private
 inputs/outputs, fixed import origins, equivalent explicit configuration, and no
 mutable-checkout or network fallback. Three ordered scenarios cover the exact

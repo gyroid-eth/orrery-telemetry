@@ -18,25 +18,6 @@ from agentstack_mail.contract import (
 )
 
 LIVE_TOOLS_SHA256 = "6ea7dabf41f71091161fa1fcb8a4073a383a65c7bba4785306217fd35f9e8332"
-LIVE_BUNDLE_SHA256 = "2265572de9ae1161c0be5e2681137d10205400cc01c3efe93bbcb16c30e37a1e"
-LIVE_PATCH_SHA256 = "8f592e415af1cb00c8daea9b190fadf8f9dcfbaa6d4b2b957c8a690da05f9eac"
-CUTOVER_PATCH_SHA256 = {
-    "0001-orrery-mail-db-selector.patch": (
-        "fad125aff843eee373ce9a56182528f91dc005082edbd3236e49f51bc992e4b8"
-    ),
-    "0002-dashboard-mail-cutover-selectors.patch": (
-        "6e2cf1ca26b9eb4b91182650f965d49db6822e7ded17a00572586387fa19b21d"
-    ),
-    "0002b-dashboard-live-launchagent-selectors.patch": (
-        "357d44d9e27676271ac1b51d8546cb3e2c0091ccda086c2f4a21fdc061a24ddd"
-    ),
-    "0003-dashboard-agentstack-mail-no-bearer.patch": (
-        "286e02563ef4d424d7036e350366e9cf320a3c90c4ba6eb0a7444774d90fecf1"
-    ),
-    "0004a-dashboard-loopback-retire-exit.patch": (
-        "4fa69c9a13c1dd44b9625ab00b028c413efd24400a86a67332a9b573d0c2cde4"
-    ),
-}
 
 
 def test_provenance_and_live_contract_fixture_are_present() -> None:

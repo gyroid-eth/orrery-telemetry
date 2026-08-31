@@ -68,7 +68,7 @@ packages = ["src/agentstack_mail"]
 "NOTICE.md" = "agentstack_mail/NOTICE.md"
 
 [tool.hatch.build.targets.sdist]
-# The reconstructible live Git bundle and dirty patch are repository audit
+# The dirty patch is a repository audit input; the Git bundle is not shipped
 # inputs, not runtime source-distribution payloads. NOTICE, both licenses,
 # fixtures, source, and tests remain in the sdist.
 exclude = [

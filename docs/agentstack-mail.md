@@ -260,7 +260,8 @@ not universal latency promises. The executable gate and full recorded settings
 live in [`bench/tier1_latency.py`](../bench/tier1_latency.py) and
 [`bench/README.md`](../bench/README.md).
 
-The provenance Git bundle and dirty patch remain repository-only audit inputs
+The dirty patch remains a repository-only audit input, and the Git bundle it
+accompanied is no longer distributed
 and are excluded from wheels and source distributions. Distribution gates
 verify both artifact types still contain the runtime modules, NOTICE, both
 licenses, and the versioned fixtures.
@@ -279,7 +280,7 @@ pull-request lane uses the exact synthetic merge `HEAD` checked out by that
 lane. That same full candidate SHA must be supplied to exact-checkout,
 `candidate-source-bound`, and every candidate-bound evidence verifier; the
 two SHAs are never substituted for one another. Behavior tests authenticate
-and reconstruct the frozen live baseline from the checked-in Git bundle and
+and reconstruct the frozen live baseline, where the operator supplies it, from a Git bundle and
 dirty patch, then start live and Core in separate subprocesses. Worker
 environments inherit only
 an OS bootstrap allowlist; database, archive, signals, home, temporary files,
