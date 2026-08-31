@@ -11,16 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Keep each exception path-specific and auditable. A future tracked benchmark
 # is intentionally listed before it exists; absent entries are ignored.
+# Only the files that still carry an identifier belong here. The publication
+# rewrite of 2026-08-30 removed the maintainer's username, machine name, and
+# home paths from history; what remains in these four is the vault directory
+# name, kept deliberately as measurement provenance. An allowlist entry that no
+# longer applies is not harmless — it is a standing permission for a future
+# leak in that path, which is why the guard fails on stale entries.
 ALLOWLIST = {
-    "bench/results.jsonl": "Measurement provenance requires the recorded host and execution path.",
     "docs/agentstack-mail-cutover-patches/0001-orrery-mail-db-selector.patch": "The patch preserves an immutable cutover before/after record.",
     "docs/agentstack-mail-cutover-patches/0002-dashboard-mail-cutover-selectors.patch": "The patch preserves an immutable cutover before/after record.",
-    "docs/agentstack-mail-cutover-patches/0002b-dashboard-live-launchagent-selectors.patch": "The patch preserves an immutable cutover before/after record.",
-    "docs/agentstack-mail-cutover-patches/0003-dashboard-agentstack-mail-no-bearer.patch": "The patch preserves an immutable cutover before/after record.",
-    "docs/agentstack-mail-cutover-patches/0004a-dashboard-loopback-retire-exit.patch": "The patch preserves an immutable cutover before/after record.",
     "docs/agentstack-mail-cutover.md": "The runbook records exact paths and labels needed to reconstruct the handoff.",
     "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json": "The workspace is measurement provenance for the accepted performance baseline.",
-    "packages/agentstack_mail/provenance/README.md": "The checkout path identifies the source captured by the provenance bundle.",
 }
 
 IDENTIFIERS = (
