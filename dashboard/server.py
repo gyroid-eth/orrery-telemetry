@@ -59,6 +59,65 @@ def _env_text(name: str, default: str = "") -> str:
     return (os.environ.get(name, default) or default).strip()
 
 
+def _listener_mail_db() -> str:
+    """Return the SQLite file opened by the configured live mail listener.
+
+    Both native and legacy databases can remain on disk, so existence alone is
+    not evidence of which one is current.  Installed services receive an
+    explicit ``AGENTSTACK_MAIL_DB``; this probe protects direct dashboard runs.
+    """
+    endpoint = _env_text(
+        "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+    )
+    try:
+        port = urlparse(endpoint).port or 8765
+    except ValueError:
+        return ""
+    lsof = shutil.which("lsof")
+    if not lsof and os.path.isfile("/usr/sbin/lsof"):
+        lsof = "/usr/sbin/lsof"
+    if not lsof:
+        return ""
+    try:
+        listeners = subprocess.run(
+            [lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if listeners.returncode != 0:
+        return ""
+    databases: set[str] = set()
+    for pid in listeners.stdout.split():
+        if not pid.isdigit():
+            continue
+        try:
+            opened = subprocess.run(
+                [lsof, "-a", "-p", pid, "-Fn"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if opened.returncode != 0:
+            continue
+        for line in opened.stdout.splitlines():
+            path = line[1:] if line.startswith("n") else ""
+            if path.endswith(".sqlite3") and os.path.isfile(path):
+                databases.add(os.path.realpath(path))
+    return next(iter(databases)) if len(databases) == 1 else ""
+
+
+def _resolve_mail_db() -> str:
+    configured = _env_path("AGENTSTACK_MAIL_DB")
+    return configured or _listener_mail_db() or _env_path(
+        "AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3"
+    )
+
+
 PORT = _env_int("AGENTSTACK_PORT", 8770)
 BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +130,7 @@ THEME_ASSETS = {
     ),
     "/theme_light.css": (os.path.join(HERE, "theme_light.css"), "text/css; charset=utf-8"),
 }
-DB_PATH = _env_path("AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3")
+DB_PATH = _resolve_mail_db()
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/mcp_agent_mail/.env")
 MAIL_HTTP_BEARER_MODE = _env_text(
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE", "auto"
@@ -1287,10 +1346,15 @@ def graph_payload(days: float, show_all: bool) -> dict:
     else:
         # running_set: claude/node プロセスが alive な tmux session のみ。
         # zsh husk (session 残存だが claude 非稼働) は除外する。
+        programs = {n["name"]: (n.get("program") or "") for n in nodes}
         running_set: set[str] = set()
         for nm, s in sessions.items():
             t = (s.get("title") or "").strip()
-            if s["cmd"] in ("node", "claude") or (t and _is_activity_glyph(t[:1])):
+            if (
+                s["cmd"] in ("node", "claude")
+                or (t and _is_activity_glyph(t[:1]))
+                or programs.get(nm, "").startswith("codex")
+            ):
                 running_set.add(nm)
         retired_names = {n["name"] for n in nodes if n.get("retired")}
         for nm, rec in codex_apps.items():
@@ -2577,44 +2641,44 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
             for nm, info in agent_infos.items():
                 agent_id = info["id"]
-                # 送信
+                # Expand one event per recipient so replay can animate every
+                # broadcast edge.  The client groups cards sharing a message
+                # id, while ``rcpt_n`` preserves the recipient count label.
                 cur.execute(
                     """
                     SELECT m.id,
                            CAST(strftime('%s', m.created_ts) AS INTEGER) AS ts,
                            m.subject, m.importance, m.thread_id,
-                           (SELECT ra.name
-                              FROM message_recipients mr
-                              JOIN agents ra ON ra.id = mr.agent_id
-                              WHERE mr.message_id = m.id
-                              ORDER BY mr.agent_id LIMIT 1) AS first_recipient,
-                           (SELECT COUNT(*) FROM message_recipients
-                              WHERE message_id = m.id) AS rcpt_n
+                           ra.name AS recipient,
+                           (SELECT COUNT(DISTINCT mr2.agent_id)
+                              FROM message_recipients mr2
+                              WHERE mr2.message_id = m.id) AS rcpt_n
                     FROM messages m
                     JOIN projects p ON p.id = m.project_id
+                    JOIN message_recipients mr ON mr.message_id = m.id
+                    JOIN agents ra ON ra.id = mr.agent_id
                     WHERE p.human_key = ?
                       AND m.sender_id = ?
                       AND CAST(strftime('%s', m.created_ts) AS INTEGER) >= ?
-                    ORDER BY m.created_ts ASC
+                    GROUP BY m.id, ra.id
+                    ORDER BY m.created_ts ASC, ra.id ASC
                     """,
                     (project_key, agent_id, since),
                 )
                 for r in cur.fetchall():
                     subj = (r["subject"] or "").strip()
                     kind = _classify_sent_subject(subj)
-                    ref = r["first_recipient"] or ""
-                    if (r["rcpt_n"] or 0) > 1:
-                        ref = f"{ref} +{r['rcpt_n'] - 1}"
                     raw_events.append({
                         "id": r["id"],
                         "ts": r["ts"],
                         "kind": kind,
-                        "ref": ref,
+                        "ref": r["recipient"] or "",
                         "subject": subj[:140],
                         "importance": (r["importance"] or "normal").lower(),
                         "agent": nm,
                         "sender": nm,
-                        "recipient": r["first_recipient"] or "",
+                        "recipient": r["recipient"] or "",
+                        "rcpt_n": r["rcpt_n"] or 1,
                         "thread_id": r["thread_id"],
                     })
                 # 受信
