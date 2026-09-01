@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 
 def _env_path(name: str, default: str = "") -> str:
@@ -13,15 +14,70 @@ def _env_path(name: str, default: str = "") -> str:
     return os.path.expanduser(value) if value else ""
 
 
+def _listener_mail_db() -> str:
+    """Return the SQLite file opened by the configured live mail listener.
+
+    Both the native and legacy databases can remain on disk after a migration,
+    so file existence does not identify the active writer.  The installer
+    normally supplies ``AGENTSTACK_MAIL_DB``; this read-only listener probe is
+    for direct dashboard runs where that generated environment is absent.
+    """
+    endpoint = os.environ.get(
+        "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+    ).strip()
+    try:
+        port = urlparse(endpoint).port or 8765
+    except ValueError:
+        return ""
+    lsof = shutil.which("lsof")
+    if not lsof and os.path.isfile("/usr/sbin/lsof"):
+        lsof = "/usr/sbin/lsof"
+    if not lsof:
+        return ""
+    try:
+        listeners = subprocess.run(
+            [lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if listeners.returncode != 0:
+        return ""
+    databases: set[str] = set()
+    for pid in listeners.stdout.split():
+        if not pid.isdigit():
+            continue
+        try:
+            opened = subprocess.run(
+                [lsof, "-a", "-p", pid, "-Fn"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if opened.returncode != 0:
+            continue
+        for line in opened.stdout.splitlines():
+            path = line[1:] if line.startswith("n") else ""
+            if path.endswith(".sqlite3") and os.path.isfile(path):
+                databases.add(os.path.realpath(path))
+    return next(iter(databases)) if len(databases) == 1 else ""
+
+
 def _default_mail_db() -> str:
-    """Prefer this stack's own mail database over a third-party checkout.
+    """Resolve the active listener before considering on-disk defaults.
 
     The installer passes AGENTSTACK_MAIL_DB, so this default only applies when
-    the dashboard is run directly. Pointing that case at ~/mcp_agent_mail meant
-    a machine that had migrated still opened the abandoned file: the graph
-    rendered, tmux liveness still animated on top of it, and nothing said the
-    data had stopped two days earlier.
+    the dashboard is run directly.  Prefer the database actually opened by the
+    configured listener; only fall back to this stack's database when no live
+    writer can be identified.
     """
+    live = _listener_mail_db()
+    if live:
+        return live
     home = os.path.expanduser("~")
     own = os.path.join(home, ".agentstack", "mail", "storage.sqlite3")
     if os.path.exists(own):
