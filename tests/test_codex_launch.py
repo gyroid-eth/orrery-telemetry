@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shlex
 import stat
 import subprocess
 import sys
@@ -44,6 +45,13 @@ def _extract(func: str) -> str:
     marker = f"\n{func}() {{"
     start = text.index(marker) + 1
     end = text.index("\n}\n", start) + len("\n}\n")
+    return text[start:end]
+
+
+def _model_catalog() -> str:
+    text = _SPAWN.read_text(encoding="utf-8")
+    start = text.index("# --- Child model catalog")
+    end = text.index("# --- Claude モデル名の正規化 ---", start)
     return text[start:end]
 
 
@@ -114,6 +122,66 @@ def test_approval_flags_follow_the_installed_cli():
     assert _flags("  -s, --sandbox <MODE>\n      --full-auto") == "--full-auto"
     # Unknown build: pass nothing rather than an argument it would reject.
     assert _flags("  -s, --sandbox <MODE>") == ""
+
+
+def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
+    functions = ["normalize_claude_model", "normalize_codex_model",
+                 "validate_codex_effort"]
+    script = _model_catalog() + "\n" + "\n".join(
+        _extract(name) for name in functions
+    )
+    command = " ".join([function, *(shlex.quote(arg) for arg in args)])
+    return _run_bash(script + "\n" + command + "\n")
+
+
+def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
+    expected = {
+        ("normalize_claude_model", ""): "claude-opus-5",
+        ("normalize_claude_model", "opus"): "claude-opus-5",
+        ("normalize_claude_model", "opus[1m]"): "claude-opus-4-8[1m]",
+        ("normalize_claude_model", "claude-opus-4-8"): "claude-opus-4-8",
+        ("normalize_claude_model", "opus-5[1m]"): "claude-opus-5[1m]",
+        ("normalize_claude_model", "sonnet"): "claude-sonnet-5",
+        ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
+        ("normalize_claude_model", "fable"): "claude-fable-5",
+        ("normalize_codex_model", ""): "gpt-5.6-sol",
+        ("normalize_codex_model", "sol"): "gpt-5.6-sol",
+        ("normalize_codex_model", "terra"): "gpt-5.6-terra",
+        ("normalize_codex_model", "luna"): "gpt-5.6-luna",
+        ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
+    }
+    for (function, raw), normalized in expected.items():
+        result = _model_call(function, raw)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == normalized
+
+
+def test_model_specific_effort_constraints_are_enforced():
+    accepted = _model_call("validate_codex_effort", "gpt-5.6-sol", "ultra")
+    assert accepted.returncode == 0
+    assert accepted.stdout.strip() == "ultra"
+
+    luna = _model_call("validate_codex_effort", "gpt-5.6-luna", "ultra")
+    assert luna.returncode != 0
+    assert "does not support ultra" in luna.stderr
+
+    legacy = _model_call("validate_codex_effort", "gpt-5.5", "max")
+    assert legacy.returncode != 0
+    assert "only through xhigh" in legacy.stderr
+
+    unknown = _model_call("validate_codex_effort", "gpt-5.6-sol", "extreme")
+    assert unknown.returncode != 0
+    assert "unknown Codex reasoning effort" in unknown.stderr
+
+
+def test_both_launch_paths_use_the_shared_model_catalog():
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert text.count('normalize_codex_model "$CLAUDE_MODEL"') == 2
+    assert text.count('validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT"') == 2
+    assert text.count('normalize_claude_model "$CLAUDE_MODEL"') == 2
+    assert '${CLAUDE_MODEL:-gpt-5.5}' not in text
+    assert '"$CLAUDE_WARM_OPUS_MODEL")' in text
+    assert '"$CLAUDE_WARM_SONNET_MODEL")' in text
 
 
 def test_launcher_no_longer_hardcodes_full_auto():
