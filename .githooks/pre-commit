@@ -1,0 +1,90 @@
+#!/bin/bash
+# Refuse a commit that would put a personal identifier into this repository.
+#
+# The guard in tests/test_no_personal_identifiers.py finds these after the fact.
+# That is the wrong end: on 2026-08-30 publishing this repository meant rewriting
+# 372 commits, twice, because five days of ordinary work had carried a username,
+# a machine name, a home directory and an author identity into the history. None
+# of it was hard to spot afterwards. All of it was trivial to refuse up front.
+#
+# Checks what is staged, not the working tree: the commit is what publishes.
+set -u
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FAILED=0
+
+# Identity, before content. A commit authored under the personal name lands in
+# metadata no content scan reads.
+AUTHOR="$(git var GIT_AUTHOR_IDENT 2>/dev/null)"
+COMMITTER="$(git var GIT_COMMITTER_IDENT 2>/dev/null)"
+
+report() {
+    if [ "$FAILED" -eq 0 ]; then
+        printf '\npre-commit: this commit would publish personal information.\n\n' >&2
+    fi
+    FAILED=1
+    printf '  %s\n' "$1" >&2
+}
+
+python3 - "$REPO_ROOT" "$AUTHOR" "$COMMITTER" <<'PY'
+import json, os, subprocess, sys
+
+repo, author, committer = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Split so this file does not contain the literals it refuses.
+IDENTIFIERS = [
+    ("username", b"shu" + b"toito"),
+    ("given name", b"shut" + b"o"),
+    ("machine name", b"shu" + b"tos-macbook"),
+    ("personal email", b"dr." + b"shu" + b"toito@gmail.com"),
+]
+ARCHIVE_MAGIC = (b"# v2 git bundle", b"# v3 git bundle", b"PACK")
+ALLOW = {"tests/test_no_personal_identifiers.py", ".githooks/pre-commit"}
+
+problems = []
+
+for label, pattern in IDENTIFIERS:
+    for who, ident in (("author", author), ("committer", committer)):
+        if pattern in ident.lower().encode("utf-8", "replace"):
+            problems.append(
+                f"{who} identity carries the {label}: set a publishing identity with "
+                f"`git config user.name` and `git config user.email` in this repository"
+            )
+
+staged = subprocess.run(
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+    capture_output=True, text=True, cwd=repo,
+).stdout.split()
+
+for path in staged:
+    if path in ALLOW:
+        continue
+    for label, pattern in IDENTIFIERS:
+        if pattern in path.lower().encode("utf-8", "replace"):
+            problems.append(f"{path}: the path carries the {label}")
+    blob = subprocess.run(
+        ["git", "show", f":{path}"], capture_output=True, cwd=repo
+    ).stdout
+    if blob[:16].startswith(ARCHIVE_MAGIC):
+        problems.append(
+            f"{path}: this is a Git archive. It is a second repository inside this "
+            f"one, and no text search of this repository can read what is in it"
+        )
+        continue
+    lowered = blob.lower()
+    for label, pattern in IDENTIFIERS:
+        if pattern in lowered:
+            problems.append(f"{path}: contains the {label}")
+
+if problems:
+    print("\npre-commit: this commit would publish personal information.\n", file=sys.stderr)
+    for problem in problems:
+        print(f"  {problem}", file=sys.stderr)
+    print(
+        "\nFix the content, or if this is a deliberate exception add it to ALLOW in\n"
+        ".githooks/pre-commit with a reason. `--no-verify` skips this check and is\n"
+        "how the history got laundered last time.\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
