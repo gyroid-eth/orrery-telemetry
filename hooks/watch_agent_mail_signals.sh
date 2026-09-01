@@ -96,6 +96,11 @@ print(msg.get("from") or "unknown")
 print((msg.get("subject") or "(no subject)")[:80])
 print(msg.get("importance") or "normal")
 print(int(st.st_mtime))
+# A short body is included by newer mail servers. Keep it on one line before
+# passing it to tmux: an embedded newline would submit an incomplete prompt.
+snippet = (msg.get("body_snippet") or "").replace("\r", " ").replace("\n", " ⏎ ")
+print(snippet[:500])
+print("1" if msg.get("body_truncated") else "0")
 PY
 }
 
@@ -276,19 +281,23 @@ handle_signal_file() {
     # signal は server-owned dirty bit。client は rename/delete しない。
     # 重複処理防止は state_should_attempt + acquire_delivery_lease で行う。
     # bash 3.2 (macOS system) 互換: mapfile を使わず逐次 read する。
-    local msg_id from subject importance mtime msg_key
+    local msg_id from subject importance mtime body_snippet body_truncated msg_key
     {
         IFS= read -r msg_id
         IFS= read -r from
         IFS= read -r subject
         IFS= read -r importance
         IFS= read -r mtime
+        IFS= read -r body_snippet
+        IFS= read -r body_truncated
     } < <(read_signal_meta "$signal_file")
     msg_id="${msg_id:-}"
     from="${from:-unknown}"
     subject="${subject:-(no subject)}"
     importance="${importance:-normal}"
     mtime="${mtime:-0}"
+    body_snippet="${body_snippet:-}"
+    body_truncated="${body_truncated:-0}"
     msg_key="${msg_id:-mtime-${mtime}}"
 
     # `set -e` 下で `|| return` だと return が直前の exit code を継承して
@@ -322,7 +331,7 @@ handle_signal_file() {
     while [ "$(jobs -p 2>/dev/null | wc -l | tr -d ' ')" -ge "$MAX_WORKERS" ]; do
         sleep 0.1
     done
-    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" &
+    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" &
 }
 
 # deliver_worker: 1 signal の配送を完結させる background ジョブ。すべての tmux
@@ -337,6 +346,7 @@ handle_signal_file() {
 deliver_worker() {
     local signal_file="$1" agent_name="$2" msg_key="$3"
     local from="$4" subject="$5" importance="$6" per_msg_file="$7"
+    local body_snippet="${8:-}" body_truncated="${9:-0}"
     local session_name="$agent_name"
 
     if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then
@@ -367,7 +377,14 @@ deliver_worker() {
         return 0
     fi
 
-    local prompt="mcp-agent-mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
+    local prompt
+    if [[ -n "$body_snippet" && "$body_truncated" == "0" ]]; then
+        prompt="AgentStack mail notification: message from ${from} [${importance}]: ${subject}. Body (complete; no inbox fetch needed): ${body_snippet}"
+    elif [[ -n "$body_snippet" ]]; then
+        prompt="AgentStack mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
+    else
+        prompt="mcp-agent-mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
+    fi
 
     if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" -l "$prompt" 2>/dev/null; then
         state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
