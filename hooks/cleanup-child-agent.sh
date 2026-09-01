@@ -90,13 +90,22 @@ TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
 MCP_CONFIG_FILE="$STATE_DIR/${AGENT_NAME}.mcp.json"
 CODEX_HOME_DIR="$STATE_DIR/${AGENT_NAME}.codex-home"
 if [[ -f "$STATE_FILE" ]]; then
-    STATE_PROJECT_KEY=$(python3 -c "
-	import json, sys
-	data = json.load(open(sys.argv[1], encoding='utf-8'))
-print(data.get('project_key', ''))
-" "$STATE_FILE" 2>/dev/null || true)
+    if ! STATE_PROJECT_KEY=$(
+        python3 - "$STATE_FILE" 2>/dev/null <<'PYEOF'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+print(data.get("project_key", ""))
+PYEOF
+    ); then
+        echo "[cleanup-child-agent] could not read child state for '$AGENT_NAME'; refusing partial cleanup" >&2
+        exit 1
+    fi
     if [[ -n "$STATE_PROJECT_KEY" ]]; then
         PROJECT_KEY="$STATE_PROJECT_KEY"
+    else
+        echo "[cleanup-child-agent] child state for '$AGENT_NAME' has no project key; using the configured project key if available" >&2
     fi
 fi
 
@@ -105,7 +114,8 @@ if [[ ! -s "$TOKEN_FILE" && ! -s "$STATE_FILE" && -z "${CHILD_REGISTRATION_TOKEN
 fi
 
 if [[ -z "$PROJECT_KEY" ]]; then
-    exit 0
+    echo "[cleanup-child-agent] project key is unavailable for '$AGENT_NAME'; leaving child state intact" >&2
+    exit 1
 fi
 
 if legacy_http_bearer_enabled; then

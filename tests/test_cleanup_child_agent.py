@@ -46,7 +46,16 @@ def _arrange_child_state(tmp_path: Path) -> tuple[str, dict[str, str], list[Path
     managed_file.write_text(f"{agent_name}\n", encoding="utf-8")
 
     env = os.environ.copy()
-    env.pop("AGENT_NAME", None)
+    for inherited_name in (
+        "AGENT_NAME",
+        "PROJECT_KEY",
+        "AGENTSTACK_PROJECT_KEY",
+        "CHILD_REGISTRATION_TOKEN",
+        "MCP_AGENT_MAIL_TOKEN",
+        "AGENTSTACK_MAIL_ENV",
+        "MCP_URL",
+    ):
+        env.pop(inherited_name, None)
     env.update(
         {
             "AGENTSTACK_HOOKS_DIR": str(hooks),
@@ -109,6 +118,25 @@ def test_cleanup_with_entry_environment_still_cleans_child(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr
     assert not any(path.exists() for path in artifacts)
+
+
+def test_invalid_child_state_fails_loudly_without_partial_cleanup(
+    tmp_path: Path,
+) -> None:
+    agent_name, env, artifacts = _arrange_child_state(tmp_path)
+    artifacts[0].write_text("{not-json", encoding="utf-8")
+    result = subprocess.run(
+        ["/bin/bash", str(HOOK), agent_name],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "could not read child state" in result.stderr
+    assert all(path.exists() for path in artifacts)
 
 
 def _main() -> int:
