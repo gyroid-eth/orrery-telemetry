@@ -11,17 +11,17 @@
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --embed-task --task-file <path> [<workdir>]
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
-# モデル指定（--model。Codex は gpt-5.5 既定で任意の許可済み model を渡せる）:
-#   --model 省略         → claude-opus-4-8[1m]（Opus 4.8 1M。保存既定と一致・プラン同梱で無料）
-#   --model opus         → claude-opus-4-8[1m]（[1m] 自動付与）
-#   --model opus[1m]     → claude-opus-4-8[1m]（friendly エイリアス。要シングルクォート: glob 回避）
-#   --model opus-1m      → claude-opus-4-8[1m]（旧来の無効 ID を正規化）
-#   --model claude-opus-4-8 → そのまま 200K Opus（warm pool 事前起動と一致するので warm を claim）
-#   --model sonnet       → claude-sonnet-4-6（200K）
+# モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
+#   --model 省略/opus    → claude-opus-5（200K。warm pool 対象）
+#   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
+#   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
+#   --model claude-opus-4-8 → 旧 200K Opus を明示指定（引き続き有効）
+#   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5
+#   --codex --model 省略/sol → gpt-5.6-sol（terra / luna alias も利用可）
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
-#   ※ 正規化は normalize_claude_model() が担当。warm pool は要求モデルが
-#     事前起動モデル（opus=claude-opus-4-8/200K, sonnet=claude-sonnet-4-6/200K）と
+#   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
+#     事前起動モデル（opus=claude-opus-5/200K, sonnet=claude-sonnet-5/200K）と
 #     完全一致するときだけ claim する（[1m]/fable 等は cold-start で正しく起動）。
 #
 # リソース管理:
@@ -423,16 +423,33 @@ print(token_path)
 PY
 }
 
+# --- Child model catalog -------------------------------------------------
+# Keep defaults and warm-pool identities here. Both launch paths normalize
+# through the functions below instead of carrying their own generation names.
+CLAUDE_DEFAULT_MODEL="claude-opus-5"
+CLAUDE_DEFAULT_SONNET_MODEL="claude-sonnet-5"
+CLAUDE_CURRENT_OPUS_1M_MODEL="claude-opus-5[1m]"
+CLAUDE_LEGACY_OPUS_MODEL="claude-opus-4-8"
+CLAUDE_LEGACY_OPUS_1M_MODEL="claude-opus-4-8[1m]"
+CLAUDE_LEGACY_SONNET_MODEL="claude-sonnet-4-6"
+CLAUDE_LEGACY_SONNET_1M_MODEL="claude-sonnet-4-6[1m]"
+CLAUDE_HAIKU_MODEL="claude-haiku-4-5-20251001"
+CLAUDE_FABLE_MODEL="claude-fable-5"
+CLAUDE_WARM_OPUS_MODEL="$CLAUDE_DEFAULT_MODEL"
+CLAUDE_WARM_SONNET_MODEL="$CLAUDE_DEFAULT_SONNET_MODEL"
+CODEX_DEFAULT_MODEL="gpt-5.6-sol"
+CODEX_TERRA_MODEL="gpt-5.6-terra"
+CODEX_LUNA_MODEL="gpt-5.6-luna"
+CODEX_LEGACY_MODEL="gpt-5.5"
+
 # --- Claude モデル名の正規化 ---
 # friendly エイリアス / 略記を `claude --model` が受け付ける正式 model string に変換する。
-# 設計判断（2026-06-13 OrangeGauss）:
-#   - --model 省略時は保存既定と同じ Opus 4.8 1M を既定にする（従来は claude-sonnet-4-6 に
-#     降格していた＝ユーザーの保存既定 Opus 4.8 1M を無視していた）。Opus 4.8 1M はプラン同梱で無料。
-#   - opus → claude-opus-4-8[1m]（[1m] を自動付与）。opus[1m] / opus-1m 等の friendly 表記も同じに正規化。
-#   - 明示的に 200K opus が欲しい場合だけ claude-opus-4-8（warm pool 事前起動と完全一致）。
+#   - unqualified opus / sonnet track the current 200K generation and warm pool.
+#   - generic 1M aliases remain on the known legacy 1M models; old explicit
+#     model IDs remain valid for existing automation.
 #   - 未知の形は stderr に明確なエラーを出して非ゼロで返す（set -e 下で呼び出し側が停止する）。
 #     ただし claude-* 接頭の正式 ID は前方互換のため素通りさせる（新モデル ID 対応）。
-# 注意: Codex 経路では呼ばない（CHILD_MODEL は gpt-5.5 に固定されるため）。
+# 注意: Codex 経路では呼ばない。
 normalize_claude_model() {
     local raw="${1:-}"
     # 小文字化 + 空白除去で正規化キーを作る（出力は固定の正式文字列）
@@ -440,29 +457,78 @@ normalize_claude_model() {
     m="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
 
     case "$m" in
-        ""|opus|opus-1m|opus1m|"opus[1m]"|claude-opus-4-8-1m|"claude-opus-4-8[1m]")
-            echo "claude-opus-4-8[1m]" ;;
-        opus-200k|opus200k|claude-opus-4-8)
-            echo "claude-opus-4-8" ;;
-        sonnet|claude-sonnet-4-6)
-            echo "claude-sonnet-4-6" ;;
-        sonnet-1m|sonnet1m|"sonnet[1m]"|"claude-sonnet-4-6[1m]")
-            echo "claude-sonnet-4-6[1m]" ;;
-        haiku|claude-haiku-4-5|claude-haiku-4-5-20251001)
-            echo "claude-haiku-4-5-20251001" ;;
-        fable|claude-fable-5)
-            echo "claude-fable-5" ;;
+        ""|opus|opus-5|opus5|"$CLAUDE_DEFAULT_MODEL")
+            printf '%s\n' "$CLAUDE_DEFAULT_MODEL" ;;
+        opus-1m|opus1m|"opus[1m]"|claude-opus-4-8-1m|"$CLAUDE_LEGACY_OPUS_1M_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_OPUS_1M_MODEL" ;;
+        opus-200k|opus200k|"$CLAUDE_LEGACY_OPUS_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_OPUS_MODEL" ;;
+        opus-5-1m|opus51m|"opus-5[1m]"|"opus5[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
+            printf '%s\n' "$CLAUDE_CURRENT_OPUS_1M_MODEL" ;;
+        sonnet|sonnet-5|sonnet5|"$CLAUDE_DEFAULT_SONNET_MODEL")
+            printf '%s\n' "$CLAUDE_DEFAULT_SONNET_MODEL" ;;
+        sonnet-4-6|sonnet46|"$CLAUDE_LEGACY_SONNET_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_SONNET_MODEL" ;;
+        sonnet-1m|sonnet1m|"sonnet[1m]"|"$CLAUDE_LEGACY_SONNET_1M_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_SONNET_1M_MODEL" ;;
+        haiku|claude-haiku-4-5|"$CLAUDE_HAIKU_MODEL")
+            printf '%s\n' "$CLAUDE_HAIKU_MODEL" ;;
+        fable|"$CLAUDE_FABLE_MODEL")
+            printf '%s\n' "$CLAUDE_FABLE_MODEL" ;;
         *)
             if [[ "$m" == claude-* ]]; then
                 # 正式 ID は前方互換で素通り（新モデル ID 対応）
                 printf '%s\n' "$m"
             else
-                echo "Error: unknown model '$raw'. Valid forms: opus / opus[1m] / claude-opus-4-8[1m] / sonnet / haiku / fable / claude-<id>" >&2
+                echo "Error: unknown model '$raw'. Valid forms: opus / opus[1m] / opus-5[1m] / claude-opus-4-8 / sonnet / sonnet-4-6 / haiku / fable / claude-<id>" >&2
                 return 1
             fi
             ;;
     esac
     return 0
+}
+
+normalize_codex_model() {
+    local raw="${1:-}"
+    local model
+    model="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+
+    case "$model" in
+        ""|sol|gpt-5.6|"$CODEX_DEFAULT_MODEL")
+            printf '%s\n' "$CODEX_DEFAULT_MODEL" ;;
+        terra|"$CODEX_TERRA_MODEL")
+            printf '%s\n' "$CODEX_TERRA_MODEL" ;;
+        luna|"$CODEX_LUNA_MODEL")
+            printf '%s\n' "$CODEX_LUNA_MODEL" ;;
+        gpt-*)
+            printf '%s\n' "$model" ;;
+        *)
+            echo "Error: unknown Codex model '$raw'. Valid forms: sol / terra / luna / gpt-<id>" >&2
+            return 1 ;;
+    esac
+}
+
+validate_codex_effort() {
+    local model="$1"
+    local raw_effort="${2:-xhigh}"
+    local effort
+    effort="$(printf '%s' "$raw_effort" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+
+    case "$effort" in
+        low|medium|high|xhigh|max|ultra) ;;
+        *)
+            echo "Error: unknown Codex reasoning effort '$raw_effort'. Valid values: low / medium / high / xhigh / max / ultra" >&2
+            return 1 ;;
+    esac
+    case "$model:$effort" in
+        "${CODEX_LUNA_MODEL}:ultra")
+            echo "Error: $CODEX_LUNA_MODEL does not support ultra reasoning effort" >&2
+            return 1 ;;
+        "${CODEX_LEGACY_MODEL}:max"|"${CODEX_LEGACY_MODEL}:ultra")
+            echo "Error: $CODEX_LEGACY_MODEL supports reasoning effort only through xhigh" >&2
+            return 1 ;;
+    esac
+    printf '%s\n' "$effort"
 }
 
 # 子用に独立した git worktree を作って WORK_DIR を上書きするヘルパー。
@@ -1074,9 +1140,10 @@ fi
 # Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> "<タスク>" [<作業ディレクトリ>]
 if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
-    # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）。Codex は指定 model をそのまま渡す。
+    # Both providers share the catalog/normalizers above in every launch path.
     if [[ "$USE_CODEX" == true ]]; then
-        CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
+        CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+        CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
     else
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
     fi
@@ -1205,7 +1272,6 @@ PY
     fi
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).
-        CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
@@ -1324,9 +1390,9 @@ ${TASK}"
     else
         # Claude Code startup (--pre-registered mode).
         WARM_POOL="$HOOKS_DIR/warm_pool.sh"
-        # warm pool は opus を `claude-opus-4-8`(200K)、sonnet を `claude-sonnet-4-6`(200K) で
+        # warm pool は current 200K opus / sonnet generation で
         # 事前起動している。要求モデル（正規化済み CHILD_MODEL）が warm の事前起動モデルと
-        # 完全一致するときだけ claim する。それ以外（claude-opus-4-8[1m] / fable / haiku /
+        # 完全一致するときだけ claim する。それ以外（legacy [1m] / fable / haiku /
         # sonnet[1m] 等）は __skip_warm__ で cold-start し、$CLAUDE_CHILD_MODEL を尊重する。
         # 旧実装は部分一致（*opus* + *[1m]* skip）だったため、opus[1m] は skip できても
         # fable 等の非デフォルトモデルが warm-sonnet に握り潰されていた（RainyKepler 事例）。
@@ -1337,9 +1403,9 @@ ${TASK}"
             WARM_TYPE="__skip_warm__"
         else
             case "$CHILD_MODEL" in
-                claude-opus-4-8)   WARM_TYPE="opus" ;;
-                claude-sonnet-4-6) WARM_TYPE="sonnet" ;;
-                *)                 WARM_TYPE="__skip_warm__" ;;
+                "$CLAUDE_WARM_OPUS_MODEL")   WARM_TYPE="opus" ;;
+                "$CLAUDE_WARM_SONNET_MODEL") WARM_TYPE="sonnet" ;;
+                *)                              WARM_TYPE="__skip_warm__" ;;
             esac
         fi
 
@@ -1746,10 +1812,11 @@ fi
 TASK_SHORT="${TASK:0:80}"
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_PROGRAM="codex"
-    CHILD_MODEL="${CLAUDE_MODEL:-gpt-5.5}"
+    CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+    CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
 else
     CHILD_PROGRAM="claude-code"
-    # Claude 子はモデル名を正規化（省略時 Opus 4.8 1M 既定）
+    # Claude 子は model catalog の current generation へ正規化する。
     CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
 fi
 
