@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+# A SessionEnd hook may run outside the child process and therefore inherit no
+# identity. Capture the launcher's claim before the resolver can infer anything:
+# cleanup may retire only an agent named explicitly by the caller or its entry
+# environment, never one guessed from surrounding pane/session state.
+AGENT_NAME_ENV_AT_ENTRY="${AGENT_NAME:-}"
+if [[ -z "${1:-}" && -z "$AGENT_NAME_ENV_AT_ENTRY" ]]; then
+    exit 0
+fi
+
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 STATE_DIR="$RUNTIME_DIR/child-agents"
