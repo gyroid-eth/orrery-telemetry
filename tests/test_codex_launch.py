@@ -194,6 +194,93 @@ def test_readiness_timeouts_fail_instead_of_injecting_into_unknown_ui():
     assert text.count("claude_accept_trust_dialog") == 3  # definition + 2 paths
 
 
+def test_prompt_injection_is_verified_in_every_launch_path():
+    text = _SPAWN.read_text(encoding="utf-8")
+    verifier = _extract("verify_injection")
+
+    assert text.count('verify_injection "$CHILD_NAME"') == 4
+    assert text.count('flush_queued_prompt "$CHILD_NAME"') == 2
+    assert "capture-pane" in verifier and "-S -1000" in verifier
+    assert "kill-session" not in verifier
+
+
+def test_injection_verifier_uses_scrollback_and_warns_without_killing():
+    spawn_note = _extract("spawn_note")
+    verifier = _extract("verify_injection")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        incident_log = tmpdir / "spawn-incidents.log"
+        tmux_log = tmpdir / "tmux.log"
+        common = f"""
+SPAWN_INCIDENT_LOG={str(incident_log)!r}
+INJECTION_VERIFIED=false
+{spawn_note}
+{verifier}
+sleep() {{ :; }}
+"""
+        delivered = _run_bash(
+            common
+            + f"""
+tmux() {{
+    printf '%s\\n' "$*" >> {str(tmux_log)!r}
+    printf '%s\\n' 'Canonical task' 'begins with details'
+}}
+verify_injection Child 'Canonical task begins with details'
+printf '%s\\n' "$INJECTION_VERIFIED"
+"""
+        )
+        assert delivered.returncode == 0, delivered.stderr
+        assert delivered.stdout.strip() == "true"
+        assert "injected ok (Child)" in incident_log.read_text(encoding="utf-8")
+        assert "-S -1000" in tmux_log.read_text(encoding="utf-8")
+
+        incident_log.unlink()
+        tmux_log.unlink()
+        missing = _run_bash(
+            common
+            + f"""
+tmux() {{ printf '%s\\n' "$*" >> {str(tmux_log)!r}; }}
+status=0
+verify_injection Child 'Task text that never arrived' || status=$?
+printf '%s\\n' "$status"
+"""
+        )
+        assert missing.returncode == 0, missing.stderr
+        assert missing.stdout.strip() == "1"
+        assert "injection FAILED (Child)" in incident_log.read_text(encoding="utf-8")
+        assert "kill-session" not in tmux_log.read_text(encoding="utf-8")
+
+
+def test_queued_claude_prompt_is_flushed_with_an_empty_submit():
+    flush = _extract("flush_queued_prompt")
+    spawn_note = _extract("spawn_note")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        flushed = tmpdir / "flushed"
+        tmux_log = tmpdir / "tmux.log"
+        result = _run_bash(
+            f"""
+SPAWN_INCIDENT_LOG={str(tmpdir / 'spawn-incidents.log')!r}
+{spawn_note}
+{flush}
+sleep() {{ :; }}
+tmux() {{
+    printf '%s\\n' "$*" >> {str(tmux_log)!r}
+    if [[ "$1" == capture-pane ]]; then
+        [[ -f {str(flushed)!r} ]] || printf '%s\\n' 'Press up to edit queued messages'
+    elif [[ "$1" == send-keys ]]; then
+        : > {str(flushed)!r}
+    fi
+}}
+flush_queued_prompt Child
+"""
+        )
+        assert result.returncode == 0, result.stderr
+        calls = tmux_log.read_text(encoding="utf-8")
+        assert "send-keys -t Child C-m" in calls
+        assert flushed.exists()
+
+
 def test_optional_terminal_open_is_detached_from_spawn_completion():
     text = _SPAWN.read_text(encoding="utf-8")
     helper = _extract("open_child_terminal")

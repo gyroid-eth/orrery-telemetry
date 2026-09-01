@@ -618,6 +618,76 @@ claude_accept_trust_dialog() {
     tmux send-keys -t "$session_name" C-m
 }
 
+# Record prompt-delivery evidence outside the launcher's stderr. Dashboard and
+# hook callers commonly trim command output, so stderr alone is not durable
+# enough for a child that started successfully but never received its task.
+SPAWN_INCIDENT_LOG="${AGENTSTACK_SPAWN_INCIDENT_LOG:-$RUNTIME_DIR/spawn_incidents.log}"
+INJECTION_VERIFIED=false
+SPAWN_TRAP_SESSION=""
+
+spawn_note() {
+    local message="$1"
+    echo "[spawn_child] $message" >&2
+    mkdir -p "$(dirname "$SPAWN_INCIDENT_LOG")" 2>/dev/null || true
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$message" \
+        >> "$SPAWN_INCIDENT_LOG" 2>/dev/null || true
+}
+
+# Claude can accept a submit while startup is still settling but leave it as a
+# queued message. With no active turn, that queue never drains and the child
+# waits forever. An empty submit creates the turn that flushes the queued task.
+flush_queued_prompt() {
+    local session_name="$1"
+    local waited=0
+    local pane_text
+    while (( waited < 20 )); do
+        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        if ! printf '%s' "$pane_text" | grep -qF "edit queued messages"; then
+            return 0
+        fi
+        echo "[spawn_child] Prompt is still queued; submitting an empty turn to flush it ($session_name)" >&2
+        tmux send-keys -t "$session_name" C-m
+        sleep 3
+        waited=$((waited + 3))
+    done
+    spawn_note "WARNING: prompt did not leave the queued-message state ($session_name); press Enter once in the child session"
+    return 1
+}
+
+# Verify delivery against pane scrollback, not only the visible viewport. Long
+# embedded tasks push their first line off screen immediately. Normalize line
+# wrapping and spaces before matching a short literal prefix of the prompt.
+verify_injection() {
+    local session_name="$1"
+    local prompt_text="$2"
+    local needle
+    local waited=0
+    local pane_text
+    needle="$(printf '%s' "${prompt_text:0:40}" | tr -d '\n ')"
+    [[ -n "$needle" ]] || return 0
+    while (( waited < 10 )); do
+        pane_text="$(tmux capture-pane -t "$session_name" -p -S -1000 2>/dev/null || true)"
+        if printf '%s' "$pane_text" | tr -d '\n ' | grep -qF -- "$needle"; then
+            INJECTION_VERIFIED=true
+            spawn_note "injected ok ($session_name)"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    spawn_note "WARNING: injection FAILED ($session_name): the REPL is ready but the task text was not found; resend it or close the child session"
+    return 1
+}
+
+# Existing failure cleanup terminates a half-started child. Preserve that
+# stronger repository contract, while leaving durable evidence that prompt
+# delivery was never verified before cleanup ran.
+warn_if_uninjected() {
+    [[ -n "$SPAWN_TRAP_SESSION" ]] || return 0
+    [[ "$INJECTION_VERIFIED" == true ]] && return 0
+    spawn_note "WARNING: session $SPAWN_TRAP_SESSION ended before prompt injection was verified; launcher cleanup will remove the incomplete child"
+}
+
 # --- Authenticated per-child MCP connection ------------------------------
 # Writes a child-scoped --mcp-config that points mcp-agent-mail at the local
 # stdio proxy instead of the shared HTTP endpoint. The proxy holds the child's
@@ -1050,6 +1120,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
+        warn_if_uninjected
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
         fi
@@ -1178,6 +1249,7 @@ ${TASK}"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
         PRE_REGISTERED_SESSION_STARTED=true
+        SPAWN_TRAP_SESSION="$CHILD_NAME"
 
         echo "[spawn_child/pre-reg] Waiting for Codex REPL..." >&2
         WAITED=0
@@ -1248,6 +1320,7 @@ ${TASK}"
         fi
         sleep 0.5
         tmux send-keys -t "$CHILD_NAME" C-m
+        verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
     else
         # Claude Code startup (--pre-registered mode).
         WARM_POOL="$HOOKS_DIR/warm_pool.sh"
@@ -1277,6 +1350,7 @@ ${TASK}"
             if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
                 WARM_CLAIMED=true
                 PRE_REGISTERED_SESSION_STARTED=true
+                SPAWN_TRAP_SESSION="$CHILD_NAME"
                 echo "[spawn_child/pre-reg] Warm session claimed -> $CHILD_NAME" >&2
             fi
         fi
@@ -1297,6 +1371,7 @@ ${TASK}"
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
                 '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
             PRE_REGISTERED_SESSION_STARTED=true
+            SPAWN_TRAP_SESSION="$CHILD_NAME"
 
             WAITED=0
             READY=false
@@ -1363,6 +1438,9 @@ ${TASK}"
         fi
         sleep 0.3
         tmux send-keys -t "$CHILD_NAME" C-m
+        sleep 2
+        flush_queued_prompt "$CHILD_NAME" || true
+        verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
     fi
 
     open_child_terminal "$CHILD_NAME"
@@ -1747,6 +1825,7 @@ cleanup_on_failure() {
     if [[ "$SPAWN_COMPLETED" == true ]]; then
         return
     fi
+    warn_if_uninjected
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
         tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
     fi
@@ -1972,6 +2051,7 @@ if [[ "$USE_CODEX" == true ]]; then
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
     CHILD_SESSION_STARTED=true
+    SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Codex REPL起動待機
     # 注意: モデルアップグレードダイアログやサインインプロンプトが
     # 表示されることがある。これらを自動スキップしてから入力待ちを検知する。
@@ -2049,6 +2129,7 @@ if [[ "$USE_CODEX" == true ]]; then
     tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
     sleep 0.5
     tmux send-keys -t "$CHILD_NAME" C-m
+    verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
 else
     # Claude Code 起動（モデル指定付き）
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
@@ -2059,6 +2140,7 @@ else
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
         '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
     CHILD_SESSION_STARTED=true
+    SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機
     echo "[spawn_child] Waiting for Claude REPL..." >&2
     WAITED=0
@@ -2111,6 +2193,9 @@ else
     tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
     sleep 0.3
     tmux send-keys -t "$CHILD_NAME" C-m
+    sleep 2
+    flush_queued_prompt "$CHILD_NAME" || true
+    verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
 fi
 
 open_child_terminal "$CHILD_NAME"
