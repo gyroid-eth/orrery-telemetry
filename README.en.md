@@ -29,8 +29,8 @@ Only CI and isolated tests that deliberately replace a platform boundary should 
 ## Quick start
 
 ```bash
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/coordinated-project
 ```
 

@@ -32,8 +32,8 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 ## インストール
 
 ```bash
-git clone https://github.com/gyroid-eth/claude-agent-stack.git
-cd claude-agent-stack
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
