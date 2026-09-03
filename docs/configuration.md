@@ -99,8 +99,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_SERVICE_ROOT` | `$AGENTSTACK_HOME/mail-service` | candidate、immutable render、runtime log / pidfile |
 | `AGENTSTACK_MAIL_SERVICE_VENV` | candidate ID から導出 | 検証済み candidate venv を明示的に再利用する場合の path |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy HTTP bearer を使用しない |
-| `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
-| `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
+| `AGENTSTACK_PROJECT_KEY` | 再 install 時は既存 `env.sh`、初回は必須 | project human key。`--project-key` が最優先 |
+| `AGENTSTACK_PROTECTED_ROOTS` | live project key、次に既存 `env.sh`、最後に resolved project key | reservation hook の保護 root |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | 成功した Edit / Write 後、reservation を解放するまでの debounce 秒数。旧 `FILE_RESERVATION_RELEASE_GRACE_SECONDS` も fallback として利用可 |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | Output index の `:` 区切り走査 root。env / service / manifest へ保存 |
 | `AGENTSTACK_LANG` | 未設定 | murmur の `ja` / `en` override。未設定時は browser 判定 |
@@ -114,7 +114,17 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |
 | `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | `agentstack-claude-setup` が managed block を書く先。`project / global / both` |
 
-`PROJECT_KEY` も fallback として読まれますが、永続設定には `AGENTSTACK_PROJECT_KEY` を推奨します。
+installer の project key 解決順は `--project-key` / process の
+`AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → install 先の既存 `env.sh` です。
+初回 install でどれも無い場合は repo checkout を project と推測せず、変更前に
+exit 2 で停止します。永続設定には `AGENTSTACK_PROJECT_KEY` を推奨します。
+
+hook と helper の実行時は `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` →
+`${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → 現在の cwd の順です。installed
+`env.sh` は source せず、`AGENTSTACK_PROJECT_KEY`（protected root の fallback では
+`AGENTSTACK_PROTECTED_ROOTS` も）だけを literal として読み取ります。このため install
+済みの editor を別 directory から起動しても reservation と registration は同じ project
+key を使い、同時に `env.sh` 内の任意 shell code は実行されません。
 
 installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS_DIR`
 を state / render から導出し、`env.sh` へ state root と

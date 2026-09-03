@@ -36,13 +36,13 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
 cd orrery-telemetry
-./scripts/install.sh
+./scripts/install.sh --project-key /absolute/path/to/coordinated-project
 ```
 
 非対話実行では、既定のままなら Tier 1 settings merge と Codex / Claude managed block を警告付きでスキップします。repository と preview 内容を確認した**ユーザー本人**が、これらの承認を事前に明示する場合だけ次を使えます。
 
 ```bash
-./scripts/install.sh --assume-yes
+./scripts/install.sh --project-key /absolute/path/to/coordinated-project --assume-yes
 ```
 
 `--assume-yes` は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した Claude MCP 登録、settings merge、managed block、既存 agent-mail server の利用は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を追加してはいけません。
@@ -158,7 +158,7 @@ agent-start /path/to/project
 
 ```text
 --install-dir PATH      default: ~/.agentstack
---project-key PATH      default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, repo root
+--project-key PATH      default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, existing env.sh
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
 --terminal MODE         auto | ghostty | iterm | terminal | none
@@ -166,6 +166,12 @@ agent-start /path/to/project
 ```
 
 `--bin-dir` は installer の公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
+
+初回 install では project key を明示するか、`AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`
+を設定してください。未指定なら installer は repo checkout を project と推測せず、
+変更前に停止します。再 install / upgrade では install 先の既存 `env.sh` に保存された
+`AGENTSTACK_PROJECT_KEY` を再利用するため、通常は `--project-key` の再指定は不要です。
+明示値は常に既存値より優先されます。
 
 ## Settings、permissions、Claude skill の merge
 

@@ -35,7 +35,7 @@ installed is worse than an honest "this stopped here". If you worked around
 something, say so in the same breath.
 
 Start with the machine checks in [AGENTS.md](AGENTS.md#before-you-install-anything),
-then `./scripts/install.sh --dry-run`, and read that output with the user
+then `./scripts/install.sh --project-key /absolute/project/path --dry-run`, and read that output with the user
 before doing anything that writes. Afterwards run both `agentstack-doctor` and
 `agentstack-selftest`: the first says everything is present, the second says
 it works, and only the second can tell you whether delegation is possible.

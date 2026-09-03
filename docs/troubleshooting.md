@@ -70,12 +70,20 @@ Output の file は `LOG_*.md` で、frontmatter の `agent:` が dashboard の 
 ```bash
 label=org.agentstack.agentdashboard
 plist="$HOME/Library/LaunchAgents/$label.plist"
+target="gui/$(id -u)/$label"
 
-launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+launchctl enable "$target"
+launchctl bootout "$target" 2>/dev/null || true
+while launchctl print "$target" >/dev/null 2>&1; do sleep 0.1; done
 launchctl bootstrap "gui/$(id -u)" "$plist"
-launchctl enable "gui/$(id -u)/$label"
 tail -f ~/.agentstack/dashboard/dashboard.log
 ```
+
+`enable` は `bootstrap` より先に行います。無効化された label を先に bootstrap すると
+macOS が `Input/output error` を返す場合があります。また `bootout` は非同期なので、
+`launchctl print` で job が消えるまで待ってから再登録します。installer と
+`agentctl.sh start` はこの順序を自動で行い、GUI domain 自体を使えない場合の
+supervised-background fallback は従来どおりです。
 
 よくある原因:
 

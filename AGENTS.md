@@ -68,7 +68,7 @@ them what to install.
 ```sh
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
 cd orrery-telemetry
-./scripts/install.sh --dry-run        # writes nothing; read this output
+./scripts/install.sh --project-key /absolute/project/path --dry-run
 ```
 
 Read the dry run with the user. It prints the planned service mode, the
