@@ -13,8 +13,8 @@
 | 環境 | サポート |
 | --- | --- |
 | macOS | **対応**。launchd を使い、`gui/$UID` domain を利用できない場合は supervised background mode へ切り替えます。launcher / hook は標準 Bash 3.2 対応です。 |
-| Linux | **対応**。利用可能な `systemd --user` を優先し、なければ supervised background mode を使います。 |
-| WSL2 | **制限付き対応**。localhost dashboard は利用できますが、Ghostty の click-to-jump は利用できません。 |
+| Linux | **未検証（実装あり）**。`systemd --user` を優先し、なければ supervised background mode に落ちる経路を実装していますが、実際の Linux ホストで `systemctl --user` の登録・timer 起動を通した記録はありません。検証済みなのは ubuntu-latest の CI で `systemctl` をスタブに差し替えた unit 生成テストまでです。Linux で試した結果は issue で報告してください。 |
+| WSL2 | **未検証**。設計上は localhost dashboard が使え、Ghostty の click-to-jump は使えない想定ですが、実機で確認していません。 |
 | Windows native | **未対応**。 |
 | その他の OS | **未対応**。installer の preflight が書き込み前に停止します。 |
 

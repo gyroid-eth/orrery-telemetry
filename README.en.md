@@ -13,8 +13,8 @@ The central design principle is to make operating rules executable through launc
 | Environment | Support |
 | --- | --- |
 | macOS | **Supported.** Uses launchd and falls back to supervised background mode when the `gui/$UID` domain is unavailable. Launchers and hooks support the system Bash 3.2. |
-| Linux | **Supported.** Prefers an available `systemd --user` session and otherwise uses supervised background mode. |
-| WSL2 | **Limited support.** The localhost dashboard works, but Ghostty click-to-jump does not. |
+| Linux | **Unverified (code paths exist).** The installer prefers `systemd --user` and falls back to supervised background mode, but no real Linux host has exercised the `systemctl --user` registration and timer start. What is verified is the unit rendering under CI on ubuntu-latest with `systemctl` replaced by a stub. Please report results from a Linux run as an issue. |
+| WSL2 | **Unverified.** By design the localhost dashboard should work and Ghostty click-to-jump should not, but this has not been checked on a real WSL2 install. |
 | Native Windows | **Unsupported.** |
 | Other operating systems | **Unsupported.** The installer preflight stops before writing. |
 
