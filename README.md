@@ -129,7 +129,7 @@ tmux session ── telemetry ──► dashboard
         │                         │ sanitized snapshot
         │                  Codex App Bridge ◄── plugin hooks ── Codex Desktop
         │                         │
-        └──────── ORRERY Mail ◄┘
+        └──────── ORRERY Mail ◄────┘
                   identity / inbox / reservations
 ```
 
