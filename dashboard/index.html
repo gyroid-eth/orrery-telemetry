@@ -29709,6 +29709,9 @@ function notifyThemeBridgeReady(){
 if(EMBED_MODE){
   if(document.readyState==='complete')queueMicrotask(notifyThemeBridgeReady);
   else window.addEventListener('load',notifyThemeBridgeReady,{once:true});
+  // Inside the cockpit the button opens a cockpit pane, not a terminal window.
+  const tmOpen=document.getElementById('tm-open');
+  if(tmOpen)tmOpen.textContent='OPEN IN COCKPIT';
 }
 
 const CATLABEL={agent:"ACTIVE AGENTS",
@@ -30058,6 +30061,12 @@ function toast(prefix,msg,err){
 
 async function jump(name,ev){
   ev.stopPropagation();
+  // Embedded in the ORRERY cockpit, the terminal lives in the host: hand the
+  // session over instead of asking this server to open a separate terminal.
+  if(EMBED_MODE){
+    window.parent.postMessage({type:'orrery-jump',name:name},location.origin);
+    return;
+  }
   toast('▸ LINK','> '+name+' …');
   try{
     const r=await fetch('/api/jump',{method:'POST',
@@ -33890,37 +33899,62 @@ function splitSpawnDirQuery(value){
   return {path:raw.slice(0,slash)||'/',prefix:raw.slice(slash+1)};
 }
 
+async function resolveSpawnDirRoot(){
+  if(spmDirRoot)return spmDirRoot;
+  const response=await fetch('/api/fs/dirs',{cache:'no-store'});
+  const payload=await response.json();
+  if(!response.ok||!payload||typeof payload.path!=='string'||
+     !payload.path.startsWith('/'))
+    throw new Error((payload&&payload.error)||'directory root unavailable');
+  spmDirRoot=payload.path;
+  return spmDirRoot;
+}
+
+function spawnDirRows(payload){
+  return (Array.isArray(payload&&payload.dirs)?payload.dirs:[]).map(row=>({
+    name:String(row&&row.name||''),
+    path:String(row&&row.path||'')
+  })).filter(row=>row.name&&row.path);
+}
+
 async function fetchSpawnDirOptions(value,seq=++spmDirSeq){
   let query=splitSpawnDirQuery(value);
   try{
+    const raw=String(value||'').trim();
+    // A complete path — what the field holds after a chip or an option was
+    // chosen — wants its children next, not its siblings. Asking for the
+    // siblings also fails outright when the path is itself a spawn root,
+    // because its parent lies outside the browsable roots, and the operator
+    // was left typing every level by hand.
+    if(raw&&raw!=='~'&&raw!=='.'&&!raw.endsWith('/')){
+      let candidate=raw;
+      if(candidate==='~'||candidate.startsWith('~/'))
+        candidate=(await resolveSpawnDirRoot())+candidate.slice(1);
+      if(candidate.startsWith('/')){
+        const response=await fetch('/api/fs/dirs?path='+
+          encodeURIComponent(candidate),{cache:'no-store'});
+        const payload=await response.json();
+        if(seq!==spmDirSeq)return;
+        if(response.ok&&payload&&typeof payload.path==='string'){
+          const rows=spawnDirRows(payload);
+          if(rows.length){renderSpawnDirOptions(rows,'');return;}
+        }
+      }
+    }
     let response=null,payload=null;
     if(query.path==='~'||query.path.startsWith('~/')){
-      if(!spmDirRoot){
-        response=await fetch('/api/fs/dirs',{cache:'no-store'});
-        payload=await response.json();
-        if(!response.ok||!payload||typeof payload.path!=='string'||
-           !payload.path.startsWith('/'))
-          throw new Error((payload&&payload.error)||'directory root unavailable');
-        spmDirRoot=payload.path;
-      }
-      const absolute=spmDirRoot+query.path.slice(1);
-      query={path:absolute,prefix:query.prefix};
-      if(payload&&absolute!==spmDirRoot){response=null;payload=null;}
+      const root=await resolveSpawnDirRoot();
+      query={path:root+query.path.slice(1),prefix:query.prefix};
     }
-    if(!payload){
-      response=await fetch('/api/fs/dirs?path='+
-        encodeURIComponent(query.path),{cache:'no-store'});
-      payload=await response.json();
-    }
+    response=await fetch('/api/fs/dirs?path='+
+      encodeURIComponent(query.path),{cache:'no-store'});
+    payload=await response.json();
     if(seq!==spmDirSeq)return;
     if(!response.ok||!payload||!Array.isArray(payload.dirs))
       throw new Error((payload&&payload.error)||'directory lookup failed');
     const prefix=query.prefix.toLowerCase();
-    const rows=payload.dirs.map(row=>({
-      name:String(row&&row.name||''),
-      path:String(row&&row.path||'')
-    })).filter(row=>row.name&&row.path&&
-      (!prefix||row.name.toLowerCase().startsWith(prefix)));
+    const rows=spawnDirRows(payload).filter(row=>
+      !prefix||row.name.toLowerCase().startsWith(prefix));
     renderSpawnDirOptions(rows,rows.length?'':'no matching directories');
   }catch(error){
     if(seq!==spmDirSeq)return;
@@ -34196,6 +34230,11 @@ function restoreSpawnAdvanced(){
 }
 
 function openSpawnModal(){
+  // The cockpit owns one spawn modal; an embedded dashboard defers to it.
+  if(EMBED_MODE){
+    window.parent.postMessage({type:'orrery-spawn'},location.origin);
+    return;
+  }
   const md=SPM('spawnmd');
   if(!md) return;
   populateParentSelect();
