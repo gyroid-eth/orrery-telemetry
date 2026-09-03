@@ -4,11 +4,11 @@
 
 [前: 委任と child agent](delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
 
-`hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper が同居しています。repository の実装ファイルは **11 件**です。内訳は Claude Code event hook が5件、運用 helper が6件です。
+`hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper、event hook が source / 起動する内部 library・worker が同居しています。Claude Code event hook は8件です。
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) は event と command の対応を定義し、[`hooks/README.md`](../hooks/README.md) は settings merge の安全方針を定義します。この文書は、実際にいつ起動し、何を保証するかを説明する利用者向け reference です。
 
-## Claude Code event hook（5件）
+## Claude Code event hook（8件）
 
 installer が `settings.template.json` を `~/.claude/settings.json` へ merge すると、次の event で自動実行されます。
 
@@ -18,9 +18,12 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | agent-mail health と既存 identity を確認し、同名再登録または登録手順と `fetch_inbox` を session context へ出力 |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の既存 exact path reservation を renew-only で確認。0件は1回だけ再確認し、なお0件なら exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
+| `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | file reservation の取得・renew 直前 | 同じ agent/path に対する古い release worker の token を無効化し、新しい reservation が直後に消される競合を防止 |
+| `PostToolUse` / `Edit|Write` | [`release-file-reservation.sh`](../hooks/release-file-reservation.sh) | 成功した file edit の直後 | 既定90秒の grace 後に、guard と同じ project・identity・相対/絶対 path で reservation を release |
 | `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__mcp-agent-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
+| `SessionEnd` | [`release-all-reservations.sh`](../hooks/release-all-reservations.sh) | Claude session 終了時 | 現在 identity の全 file reservation を release。identity 自体は retire しない |
 
-`Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。
+`Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。成功後だけ PostToolUse release が arm され、失敗・block・protected root 外では何もしません。
 
 installer は endpoint と transport credential selector を同じ generated `env.sh` で
 配布します。既定の native 経路（AgentStack Mail）は
@@ -57,6 +60,13 @@ child token file と tool argument の既存境界を変えません。
 - **動作:** `mark-agent-registered.sh` が作る `/tmp/.claude-agent-registered-<session_id>` を検査します。`/clear` などで `session_id` が変わると旧 flag は一致しないため、再登録まで保護対象 tool を block します。
 - **例外:** launcher から `AGENT_NAME` を受け取る bot channel は再登録に必要な shell を使えるよう許可します。hook input に session ID がなければ fail-open です。
 - **復旧手段の所在:** flag を書くのは `mark-agent-registered.sh` だけで、それは mail MCP の `register_agent` の PostToolUse です。したがって **この block を解除できるのは、その MCP を持つ session だけ**です。`agentstack-reregister` は flag を書かないので、この guard の解除手段ではありません（remote 側の登録を直す道具です）。
+
+### reservation release hook 群
+
+- **同じ座標系:** [`reservation-common.sh`](../hooks/reservation-common.sh) を `check-file-reservation.sh` と release hook が source し、endpoint、legacy bearer selector、identity、project key、protected root、相対/絶対 path を同じ規則で解決します。HTTP request は常に `Accept: application/json, text/event-stream` を付けます。
+- **grace / debounce:** `release-file-reservation.sh` は `AGENTSTACK_RELEASE_GRACE_SECONDS`（既定90秒、旧 `FILE_RESERVATION_RELEASE_GRACE_SECONDS` も可）だけ待ってから [`release-file-reservation-worker.py`](../hooks/release-file-reservation-worker.py) が解放します。state は `$AGENTSTACK_RUNTIME_DIR/file_release_debounce/` にあり、次の edit は token を更新し、再予約 hook は state file を消して古い worker を no-op にします。
+- **欠損・障害:** worker が配布されていなければ同期の即時 release に fallback します。HTTP 406、接続不能、JSON-RPC / MCP error などの解放失敗は `$AGENTSTACK_RUNTIME_DIR/release-failures.log` に1行記録します。hook 自体は edit 完了や session 終了を失敗扱いにしません。
+- **SessionEnd の境界:** `release-all-reservations.sh` は reservation だけを解放します。agent を retire しないため、crash / resume でも irreversible な identity 変更を起こしません。
 
 ### service outage と unmanaged session（2つの別々の問い）
 

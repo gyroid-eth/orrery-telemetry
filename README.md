@@ -65,7 +65,7 @@ Codex Desktop の root task / subagent も同じ agent-mail と dashboard に接
 
 ### 2. Hook、mail、file reservation
 
-Claude Code hook が未登録 session と競合書き込みを止め、agent-mail inbox signal を Claude / Codex REPL へ再注入します。mail と reservation の正本を一つに保つため、UI を再起動しても協調状態が分裂しません。
+Claude Code hook が未登録 session と競合書き込みを止め、成功した edit の reservation を短い grace 後に解放し、agent-mail inbox signal を Claude / Codex REPL へ再注入します。mail と reservation の正本を一つに保つため、UI を再起動しても協調状態が分裂しません。
 
 agent-mail は監査 archive の Git commit を既定で非同期 queue に積み、DB 更新と archive file の書き込みが完了した時点で tool 応答を返します。同期 commit に戻す kill switch は `AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC=false` です。hard shutdown が応答直後に重なると飛行中の commit は失われる可能性がありますが、archive file は working tree に残り、DB は影響を受けません。次回起動時に未 commit file を同期 commit して回収します。詳細と測定条件は [agentstack-mail 文書](docs/agentstack-mail.md#archive-commit-latency-and-startup-repair)を参照してください。
 
@@ -108,7 +108,7 @@ murmur は browser の言語から日本語 / 英語を自動選択し、`?lang=
 | [インストール](docs/install.md) | install tier、settings merge、VERSION、TCC、upgrade / uninstall |
 | [Launcher と identity](docs/launchers.md) | `agent-start`、命名、token、fail-closed、`CLAUDECODE` |
 | [委任と child agent](docs/delegation.md) | 組み込み subagent との違い、いまどちらが動いているかの見分け方、使い分け |
-| [Hooks と運用 helper](docs/hooks.md) | Claude event hook 5件、launcher / watcher helper 6件、発火条件、block / cleanup |
+| [Hooks と運用 helper](docs/hooks.md) | Claude event hook 8件、launcher / watcher helper、発火条件、block / release / cleanup |
 | [Codex App 統合](docs/codex-app.md) | Codex Desktop plugin、Bridge、session-bound MCP、inbox 通知、cold wake |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
