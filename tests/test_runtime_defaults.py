@@ -670,6 +670,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
         "AGENTSTACK_LANG": "ja",
         "AGENTSTACK_MURMUR": "off",
+        "AGENTSTACK_SPAWN_DIRS": f"~/code:{project_dir}",
+        "AGENTSTACK_SPAWN_ROOTS": str(project_dir),
         "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
@@ -789,9 +791,14 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert 'Environment="AGENTSTACK_LANG=ja"' in systemd_unit
     assert 'Environment="AGENTSTACK_MURMUR=off"' in systemd_unit
+    assert f'Environment="AGENTSTACK_SPAWN_DIRS=~/code:{project_dir}"' in systemd_unit
+    assert f'Environment="AGENTSTACK_SPAWN_ROOTS={project_dir}"' in systemd_unit
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
     assert "export AGENTSTACK_LANG=ja" in generated_env
     assert "export AGENTSTACK_MURMUR=off" in generated_env
+    assert f"export AGENTSTACK_SPAWN_DIRS='~/code:{project_dir}'" in generated_env
+    assert f"export AGENTSTACK_SPAWN_ROOTS={project_dir}" in generated_env
+    assert manifest["env"]["AGENTSTACK_SPAWN_DIRS"] == f"~/code:{project_dir}"
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
@@ -819,6 +826,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:18765/mcp"
     normalized_env["AGENTSTACK_LANG"] = ""
     normalized_env["AGENTSTACK_MURMUR"] = ""
+    normalized_env["AGENTSTACK_SPAWN_DIRS"] = ""
+    normalized_env["AGENTSTACK_SPAWN_ROOTS"] = ""
     assert normalized_env == sample["env"]
     for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]

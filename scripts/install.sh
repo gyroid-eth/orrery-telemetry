@@ -27,6 +27,9 @@ PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
+# NEW AGENT launch-directory presets. Resolved below: explicit > installed env.sh > empty.
+SPAWN_DIRS_SETTING="${AGENTSTACK_SPAWN_DIRS:-}"
+SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -69,6 +72,10 @@ Options:
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
   --terminal MODE        auto, ghostty, iterm, terminal, or none
+  --spawn-dirs PATHS     ':'-separated NEW AGENT launch-directory presets
+                         (absolute or ~; default: existing env.sh, else ~)
+  --spawn-roots PATHS    ':'-separated roots the directory typeahead may
+                         browse (default: existing env.sh, else $HOME)
   -h, --help             Show this help
 
 --assume-yes is not --force: validation and safety errors remain fatal. It must
@@ -133,6 +140,14 @@ while [[ $# -gt 0 ]]; do
       TERMINAL="$2"
       shift 2
       ;;
+    --spawn-dirs)
+      SPAWN_DIRS_SETTING="$2"
+      shift 2
+      ;;
+    --spawn-roots)
+      SPAWN_ROOTS_SETTING="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -159,6 +174,15 @@ if [[ -z "$PROJECT_KEY" ]]; then
   exit 2
 fi
 PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
+# The dashboard runs under launchd/systemd, so a shell `export` never reaches
+# it: these presets only take effect when the installer persists them. A
+# re-install keeps what the previous install recorded unless told otherwise.
+if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
+  SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")"
+fi
+if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
+  SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
+fi
 
 HOOKS_DIR="$INSTALL_DIR/hooks"
 SKILLS_DIR="$INSTALL_DIR/skills"
@@ -246,6 +270,35 @@ AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Each `:`-separated entry must be absolute or start with `~` (the dashboard
+# expands `~` itself). A missing directory is only a warning: presets often
+# name checkouts that are cloned after the install.
+validate_spawn_paths() {
+  local name="$1" raw="$2" entry expanded
+  local parts=()
+  [[ -n "$raw" ]] || return 0
+  IFS=':' read -r -a parts <<< "$raw"
+  for entry in "${parts[@]}"; do
+    [[ -n "$entry" ]] || continue
+    case "$entry" in
+      /*|"~"|"~/"*) ;;
+      *)
+        echo "error: $name entries must be absolute paths or start with ~ (got: $entry)" >&2
+        exit 2
+        ;;
+    esac
+    expanded="$entry"
+    if [[ "$entry" == "~" ]]; then
+      expanded="$HOME"
+    elif [[ "$entry" == "~/"* ]]; then
+      expanded="$HOME/${entry#\~/}"
+    fi
+    [[ -d "$expanded" ]] || warn "$name: directory does not exist yet: $entry"
+  done
+}
+validate_spawn_paths AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING"
+validate_spawn_paths AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING"
 
 # The two mail jobs are different things: one runs the service, the other runs
 # `agentstack-mailctl start` on a timer. Sharing a label makes the controller
@@ -1472,6 +1525,8 @@ values = {
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
+    "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
+    "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -2192,6 +2247,8 @@ repl = {
     "__DELIVERABLE_ROOTS__": "$DELIVERABLE_ROOTS",
     "__LANG__": "$LANG_SETTING",
     "__MURMUR__": "$MURMUR_SETTING",
+    "__SPAWN_DIRS__": "$SPAWN_DIRS_SETTING",
+    "__SPAWN_ROOTS__": "$SPAWN_ROOTS_SETTING",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
     "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
@@ -2239,6 +2296,8 @@ env = {
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
+    "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
+    "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -2613,6 +2672,8 @@ manifest = {
         "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
         "AGENTSTACK_LANG": "$LANG_SETTING",
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
+        "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
+        "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
@@ -2677,6 +2738,8 @@ main() {
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
+  say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   validate_assume_yes
   if ! run_preflight; then
     exit 1

@@ -220,6 +220,8 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_DASHBOARD_LOG"] == "__DASHBOARD_LOG__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_LANG"] == "__LANG__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_MURMUR"] == "__MURMUR__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_DIRS"] == "__SPAWN_DIRS__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_ROOTS"] == "__SPAWN_ROOTS__"
 
     installer = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert 'ExecStart={esc(\'$PYTHON_BIN\')} {esc(\'$DASHBOARD_DIR/service_runner.py\')}' in installer

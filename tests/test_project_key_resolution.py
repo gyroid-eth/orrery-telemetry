@@ -212,3 +212,86 @@ def test_first_install_without_a_project_key_stops_before_preflight(
     assert result.returncode == 2
     assert "project key is required on first install" in result.stderr
     assert "preflight:" not in result.stdout
+
+
+def test_reinstall_defaults_to_the_installed_spawn_dirs(
+    tmp_path: pathlib.Path,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".agentstack").mkdir(parents=True)
+    project.mkdir()
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={project}\n"
+        f"export AGENTSTACK_SPAWN_DIRS='~/code:{project}'\n"
+        f"export AGENTSTACK_SPAWN_ROOTS={project}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(INSTALLER), "--dashboard-only", "--dry-run"],
+        cwd=ROOT,
+        env=_fake_installer_env(home, _fake_installer_bin(tmp_path)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"spawn dirs: ~/code:{project}" in result.stdout
+    assert f"spawn roots: {project}" in result.stdout
+
+
+def test_explicit_spawn_dirs_win_over_installed_env_and_warn_when_missing(
+    tmp_path: pathlib.Path,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".agentstack").mkdir(parents=True)
+    project.mkdir()
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={project}\n"
+        "export AGENTSTACK_SPAWN_DIRS=/installed-preset\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "not-cloned-yet"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            str(INSTALLER),
+            "--dashboard-only",
+            "--dry-run",
+            "--spawn-dirs",
+            f"{project}:{missing}",
+        ],
+        cwd=ROOT,
+        env=_fake_installer_env(home, _fake_installer_bin(tmp_path)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"spawn dirs: {project}:{missing}" in result.stdout
+    assert "/installed-preset" not in result.stdout
+    assert f"directory does not exist yet: {missing}" in result.stderr
+    assert "spawn roots: (default: $HOME)" in result.stdout
+
+
+def test_relative_spawn_dir_entries_stop_the_installer(
+    tmp_path: pathlib.Path,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    env = _fake_installer_env(home, _fake_installer_bin(tmp_path))
+    env["AGENTSTACK_PROJECT_KEY"] = str(project)
+    env["AGENTSTACK_SPAWN_ROOTS"] = f"{project}:code"
+    result = subprocess.run(
+        ["/bin/bash", str(INSTALLER), "--dashboard-only", "--dry-run"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "AGENTSTACK_SPAWN_ROOTS entries must be absolute paths or start with ~ (got: code)" in result.stderr
+    assert "spawn roots:" not in result.stdout

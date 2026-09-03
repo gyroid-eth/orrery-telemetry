@@ -65,6 +65,8 @@
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
     "AGENTSTACK_SIGNALS_DIR": "/home/alice/.agentstack/mail/signals",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
+    "AGENTSTACK_SPAWN_DIRS": "",
+    "AGENTSTACK_SPAWN_ROOTS": "",
     "AGENTSTACK_TERMINAL": "auto"
   },
   "install_dir": "/home/alice/.agentstack",

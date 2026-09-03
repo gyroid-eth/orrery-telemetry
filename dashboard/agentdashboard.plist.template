@@ -52,6 +52,10 @@
     <string>__LANG__</string>
     <key>AGENTSTACK_MURMUR</key>
     <string>__MURMUR__</string>
+    <key>AGENTSTACK_SPAWN_DIRS</key>
+    <string>__SPAWN_DIRS__</string>
+    <key>AGENTSTACK_SPAWN_ROOTS</key>
+    <string>__SPAWN_ROOTS__</string>
     <key>AGENTSTACK_HOOKS_DIR</key>
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>
