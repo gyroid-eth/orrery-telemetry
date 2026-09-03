@@ -5,26 +5,8 @@
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
-DEFAULT_PROJECT_KEY="$(pwd -P)"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$DEFAULT_PROJECT_KEY}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
-# The endpoint, bearer mode and service env all come from one place, because a
-# guard that probes one endpoint while sending its reservation check to another
-# can refuse an edit for a service it never asked. On a custom-port install this
-# guard used the legacy default while the registration guard read the installed
-# env, and the two disagreed inside a single tool call.
-POLICY_LIB_EARLY="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/session-identity-policy.sh"
-if [ -f "$POLICY_LIB_EARLY" ]; then
-    # shellcheck disable=SC1090
-    . "$POLICY_LIB_EARLY"
-    # Empty is an answer: no endpoint is configured for this session. Filling it
-    # in with the legacy port would send the reservation check to a service this
-    # install may not run, and would disagree with the other guard, which calls
-    # the same situation unusable.
-    MCP_URL="$(agentstack_mail_endpoint)"
-else
-    MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/api/}}"
-fi
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reservation-common.sh"
 
 # Both the unidentified and the identified path end up here, so an operator who
 # chooses `block` stops all editing during an outage rather than only the
@@ -52,141 +34,11 @@ handle_reservation_outage() {
     exit 2
 }
 
-MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$(agentstack_installed_env_value AGENTSTACK_MAIL_ENV 2>/dev/null)}"
-MAIL_ENV="${MAIL_ENV:-$HOME/orrery/mail/.env}"
 RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
-HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-$(agentstack_installed_env_value AGENTSTACK_MAIL_HTTP_BEARER_MODE 2>/dev/null)}"
-HTTP_BEARER_MODE="${HTTP_BEARER_MODE:-auto}"
-
-expand_path() {
-    local p="$1"
-    if [[ "$p" == "~/"* ]]; then
-        printf '%s\n' "$HOME/${p:2}"
-    else
-        printf '%s\n' "$p"
-    fi
-}
-
-# Returns "<source>|<name>". The source travels with the name because the
-# caller has to tell "nobody claims this session" apart from "several do" --
-# a command substitution that returns only the name collapses the second into
-# the first, and a refusal turns into a pass.
-resolve_agent_name() {
-    if [[ -f "$HOOKS_DIR/resolve-agent-name.sh" ]]; then
-        # shellcheck disable=SC1091
-        source "$HOOKS_DIR/resolve-agent-name.sh"
-        printf '%s|%s\n' "${RESOLVED_AGENT_SRC:-none}" "${RESOLVED_AGENT:-}"
-        return 0
-    fi
-    if [[ -n "${AGENT_NAME:-}" ]]; then
-        printf 'env|%s\n' "$AGENT_NAME"
-        return 0
-    fi
-    printf 'none|\n'
-    return 0
-}
-
-get_legacy_http_bearer() {
-    if [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]]; then
-        printf '%s' "$MCP_AGENT_MAIL_TOKEN"
-        return 0
-    fi
-    if [[ -x "$HOOKS_DIR/get-mcp-agent-mail-token.sh" ]]; then
-        bash "$HOOKS_DIR/get-mcp-agent-mail-token.sh" 2>/dev/null && return 0
-    fi
-    if command -v security >/dev/null 2>&1; then
-        local keychain_token
-        keychain_token=$(security find-generic-password -s "mcp-agent-mail" -a "HTTP_BEARER_TOKEN" -w 2>/dev/null || true)
-        if [[ -n "$keychain_token" ]]; then
-            printf '%s' "$keychain_token"
-            return 0
-        fi
-    fi
-    if [[ -f "$MAIL_ENV" ]]; then
-        sed -n 's/^HTTP_BEARER_TOKEN=//p' "$MAIL_ENV" | tr -d '[:space:]'
-        return 0
-    fi
-    return 1
-}
-
-legacy_bearer_enabled() {
-    case "$HTTP_BEARER_MODE" in
-        enabled) return 0 ;;
-        disabled) return 1 ;;
-        auto)
-            # The cutover helper constrains the native service to loopback
-            # port 18765. It deliberately has no legacy server-wide bearer.
-            case "$MCP_URL" in
-                http://127.0.0.1:18765/mcp|http://127.0.0.1:18765/mcp/|http://localhost:18765/mcp|http://localhost:18765/mcp/|http://127.0.0.1:18765/api|http://127.0.0.1:18765/api/|http://localhost:18765/api|http://localhost:18765/api/)
-                    return 1
-                    ;;
-                *) return 0 ;;
-            esac
-            ;;
-        *)
-            echo "Invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE" >&2
-            return 2
-            ;;
-    esac
-}
 
 TOOL_INPUT=$(cat)
-# The session id is how a client without a launcher is identified: it is the key
-# the register_agent PostToolUse hook writes into the session index.
-SESSION_ID=$(printf '%s' "$TOOL_INPUT" | python3 -c '
-import json, sys
-try:
-    print(json.loads(sys.stdin.read()).get("session_id", ""))
-except Exception:
-    print("")
-' 2>/dev/null || echo "")
-export AGENTSTACK_SESSION_ID="$SESSION_ID"
-FILE_PATH=$(printf '%s' "$TOOL_INPUT" | python3 -c '
-import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-    tool_input = data.get("tool_input", {})
-    print(tool_input.get("file_path", tool_input.get("path", "")))
-except Exception:
-    print("")
-' 2>/dev/null || echo "")
-[ -z "$FILE_PATH" ] && exit 0
-
-if [[ "$FILE_PATH" == /* ]]; then
-    :
-elif [[ "$FILE_PATH" == "~/"* ]]; then
-    FILE_PATH="$HOME/${FILE_PATH:2}"
-else
-    FILE_PATH="$(pwd)/$FILE_PATH"
-fi
-
-MATCHED_ROOT=""
-if [[ -n "$PROTECTED_ROOTS" ]]; then
-    OLD_IFS="$IFS"
-    IFS=":"
-    for root in $PROTECTED_ROOTS; do
-        root="$(expand_path "$root")"
-        [[ -z "$root" ]] && continue
-        [[ "$root" != "/" ]] && root="${root%/}"
-        case "$FILE_PATH" in
-            "$root"|"$root/"*)
-                MATCHED_ROOT="$root"
-                break
-                ;;
-        esac
-    done
-    IFS="$OLD_IFS"
-fi
-[ -z "$MATCHED_ROOT" ] && exit 0
-
-REL_PATH="${FILE_PATH#$MATCHED_ROOT/}"
-if [[ "$REL_PATH" == "$FILE_PATH" ]]; then
-    REL_PATH="$(basename "$FILE_PATH")"
-fi
-RESERVATION_PROJECT_KEY="${PROJECT_KEY:-$MATCHED_ROOT}"
-# A session-index binding is authority only inside the project it was made in.
-export AGENTSTACK_LOOKUP_PROJECT_KEY="$RESERVATION_PROJECT_KEY"
+reservation_resolve_tool_context "$TOOL_INPUT" || exit 0
 # Asked before anything decides which identity wins: the precedence resolver
 # returns on AGENT_NAME alone, so asking it about conflicts left named sessions
 # unchecked.
