@@ -61,6 +61,10 @@ def _tracked_paths() -> set[str]:
         os.fsdecode(raw_path)
         for raw_path in result.stdout.split(b"\0")
         if raw_path
+        and (
+            (ROOT / os.fsdecode(raw_path)).exists()
+            or (ROOT / os.fsdecode(raw_path)).is_symlink()
+        )
     }
 
 

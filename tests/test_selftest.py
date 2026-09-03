@@ -41,7 +41,7 @@ def _write_installed_env(
     if claude_mcp:
         claude_json.write_text(json.dumps({
             "mcpServers": {
-                "mcp-agent-mail": {"type": "http", "url": mcp_url}
+                "orrery-mail": {"type": "http", "url": mcp_url}
             }
         }))
     (install_dir / "env.sh").write_text(

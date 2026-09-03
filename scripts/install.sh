@@ -12,12 +12,9 @@ ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
-MAIL_DIR="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
-MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
-MAIL_PROVIDER="${AGENTSTACK_MAIL_PROVIDER:-agentstack}"
-MAIL_HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+MAIL_HTTP_BEARER_MODE="disabled"
 MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
 PORT="${AGENTSTACK_PORT:-8770}"
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
@@ -29,23 +26,7 @@ LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
-MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
-UPSTREAM_AGENT_MAIL_URL="${AGENTSTACK_AGENT_MAIL_REPO:-https://github.com/Dicklesworthstone/mcp_agent_mail.git}"
-# agent-mail is somebody else's repository, and an unpinned clone means the
-# version you get depends on the day you installed — a configuration nobody
-# chose and nothing recorded. When a tester and this machine then behave
-# differently, the first question is which code each is running, and until
-# this line existed there was no answer.
-# Pin a ref we have actually run against; `AGENTSTACK_AGENT_MAIL_REF=main`
-# opts out deliberately. Moving this line is how the version changes.
-UPSTREAM_AGENT_MAIL_REF="${AGENTSTACK_AGENT_MAIL_REF:-5e481834ff1c373acda804d28c21d0349a116419}"
-# Names this stack asks for only survive registration on a server configured to
-# accept them. Set to 0 to leave agent-mail's naming exactly as upstream ships
-# it, and to be handed generated names instead.
-PASSTHROUGH_ENABLED="${AGENTSTACK_AGENT_MAIL_PASSTHROUGH:-1}"
-# Source owned by a running, pre-existing agent-mail is outside --assume-yes.
-# Patching it requires a separate, auditable opt-in.
-PATCH_EXISTING_AGENT_MAIL="${AGENTSTACK_PATCH_EXISTING_AGENT_MAIL:-0}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 
 # These match packages/agentstack_mail/pyproject.toml. A regression test keeps
 # the shell gate and package metadata in lock-step.
@@ -70,7 +51,7 @@ creates env.sh and service files, and writes install-state.json. Tier1 shows a
 Claude Code user-settings and MCP dry-run diffs and only merges after explicit approval
 (an interactive yes, or a user-selected --assume-yes).
 It does not modify shell dotfiles. After Tier1 preview and explicit approval,
-it registers the fixed mcp-agent-mail entry in ~/.claude.json and may update
+it registers the fixed orrery-mail entry in ~/.claude.json and may update
 only the managed marker block in project/global CLAUDE.md.
 
 Options:
@@ -90,10 +71,7 @@ Options:
 --assume-yes is not --force: validation and safety errors remain fatal. It must
 be selected explicitly by the user; an agent or automation must not add it on
 the user's behalf. AGENTSTACK_ASSUME_YES=1 provides the same explicit opt-in.
-It never authorizes edits to an existing agent-mail checkout. That separate
-operation requires AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1.
-The bundled AgentStack Mail provider is the default and uses port 18765. Set
-AGENTSTACK_MAIL_PROVIDER=upstream to opt out and provision upstream on port 8765.
+The bundled AgentStack Mail service uses port 18765 by default.
 EOF
 }
 
@@ -178,8 +156,6 @@ CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
-MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$MAIL_DIR/.env}"
-SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-$RUNTIME_DIR/dashboard.log}"
 DASHBOARD_LOG_MAX_BYTES="${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-5242880}"
@@ -192,12 +168,9 @@ SERVICE_PATH=""
 SERVICE_HEALTHY=false
 SERVICE_FALLBACK_USED=false
 EXISTING_AGENT_MAIL_SERVER=false
-PROVISION_AGENT_MAIL=false
-AGENT_MAIL_LISTENER_PID=""
-AGENT_MAIL_LISTENER_CWD=""
-AGENT_MAIL_RUNNER="$MAIL_HOME/run-agent-mail.sh"
-AGENT_MAIL_PIDFILE="$MAIL_HOME/agent-mail.pid"
-AGENT_MAIL_LOG="$MAIL_HOME/agent-mail.log"
+AGENT_MAIL_RUNNER=""
+AGENT_MAIL_PIDFILE=""
+AGENT_MAIL_LOG=""
 AGENT_MAIL_SERVICE_KIND=""
 AGENT_MAIL_SERVICE_PATH=""
 # Login-time autostart for AgentStack Mail. `agentstack-mailctl start` daemonizes
@@ -221,7 +194,6 @@ AGENT_MAIL_AUTOSTART_KIND=""
 AGENT_MAIL_AUTOSTART_PATH=""
 # systemd needs a second file (service + timer); launchd does it in one plist.
 AGENT_MAIL_AUTOSTART_SERVICE_PATH=""
-AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
 NATIVE_MAIL_EXISTING=false
 PROVISION_NATIVE_MAIL=false
 NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
@@ -244,20 +216,14 @@ PREFLIGHT_OS=""
 PREFLIGHT_ERRORS=()
 PYTHON_SELECTION_ERROR=""
 
-if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-  MAIL_HTTP_BEARER_MODE="disabled"
-  if [[ -z "$MCP_URL_EXPLICIT" ]]; then
-    MCP_URL="http://127.0.0.1:18765/mcp"
-  fi
-  MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT"
-  MAIL_HOME="$NATIVE_MAIL_STATE_ROOT"
-  MAIL_DB="$NATIVE_MAIL_STATE_ROOT/storage.sqlite3"
-  MAIL_ENV="$NATIVE_MAIL_ENV"
-  SIGNALS_DIR="$NATIVE_MAIL_STATE_ROOT/signals"
-  AGENT_MAIL_RUNNER="$NATIVE_MAIL_RUNNER"
-  AGENT_MAIL_PIDFILE="$NATIVE_MAIL_PIDFILE"
-  AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
-fi
+MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT"
+MAIL_HOME="$NATIVE_MAIL_STATE_ROOT"
+MAIL_DB="$NATIVE_MAIL_STATE_ROOT/storage.sqlite3"
+MAIL_ENV="$NATIVE_MAIL_ENV"
+SIGNALS_DIR="$NATIVE_MAIL_STATE_ROOT/signals"
+AGENT_MAIL_RUNNER="$NATIVE_MAIL_RUNNER"
+AGENT_MAIL_PIDFILE="$NATIVE_MAIL_PIDFILE"
+AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -379,209 +345,9 @@ preflight_finish() {
   return 1
 }
 
-# An agent-mail the user already had is not ours to move. Say which version is
-# actually in play, so a later "it works on mine" has something to compare.
-report_agent_mail_ref() {
-  local head
-  head="$(git -C "$MAIL_DIR" rev-parse HEAD 2>/dev/null || true)"
-  [[ -n "$head" ]] || return 0
-  if [[ "$head" == "$UPSTREAM_AGENT_MAIL_REF" ]]; then
-    say "agent-mail is at the pinned ref ${head:0:12}"
-  else
-    say "agent-mail is at ${head:0:12}; this stack is tested against ${UPSTREAM_AGENT_MAIL_REF:0:12}"
-    say "  leaving it as it is — behaviour may differ from the tested version"
-  fi
-}
-
-# Which names an agent-mail server honours depends on its version, so a name
-# this stack asks for is not always the name the agent ends up with. The
-# passthrough mode removes the question. It is opt-in: the patch alone changes
-# nothing until AGENT_NAME_ENFORCEMENT_MODE selects it.
-passthrough_state() {
-  local dir="$1"
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
-    --mail-dir "$dir" 2>/dev/null || printf 'error'
-}
-
-apply_passthrough() {
-  local dir="$1"
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
-    --mail-dir "$dir" --apply >/dev/null
-}
-
-inspect_agent_mail_name_capability() {
-  local dir="$1"
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/lib/agent_mail_passthrough.py" \
-    --mail-dir "$dir" --mail-env "$MAIL_ENV" --name-capability
-}
-
-# Where a server we did not start keeps its source. The listener's working
-# directory is the direct answer, but reading it needs lsof or /proc, and a
-# machine with neither would report every existing server as unreadable
-# forever. The database we already resolved sits in that same checkout, so fall
-# back to its directory when it looks like one.
-existing_agent_mail_source_dir() {
-  local candidate
-  for candidate in "$AGENT_MAIL_LISTENER_CWD" \
-                   "${MAIL_DB:+$(dirname "$MAIL_DB")}"; do
-    # Judge each candidate by what is in it, not by where it came from. A
-    # server started from somewhere other than its checkout has a working
-    # directory that is real, readable, and the wrong answer.
-    if [[ -n "$candidate" && -d "$candidate/src/mcp_agent_mail" ]]; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  printf '%s' ""
-}
-
-report_agent_mail_name_capability() {
-  local source_dir="$MAIL_DIR"
-  local summary status evidence
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    say "agent-mail requested-name handling: honored (agentstack-cutover-profile)"
-    return
-  fi
-  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
-    source_dir="$(existing_agent_mail_source_dir)"
-  fi
-  AGENT_MAIL_NAME_CAPABILITY_JSON="$(inspect_agent_mail_name_capability "$source_dir")"
-  summary="$("$PYTHON_BIN" - "$AGENT_MAIL_NAME_CAPABILITY_JSON" <<'PY'
-import json
-import sys
-
-try:
-    result = json.loads(sys.argv[1])
-except (IndexError, TypeError, ValueError):
-    result = {"status": "unknown", "evidence": "classifier-error"}
-print(f"{result.get('status', 'unknown')}|{result.get('evidence', 'classifier-error')}")
-PY
-)"
-  IFS='|' read -r status evidence <<< "$summary"
-  case "$status" in
-    honored)
-      say "agent-mail requested-name handling: honored ($evidence)"
-      ;;
-    replaced)
-      warn "agent-mail requested-name handling: replaced ($evidence)"
-      warn "  requested names will be replaced by generated names"
-      ;;
-    *)
-      warn "agent-mail requested-name handling: unknown ($evidence)"
-      warn "  support was not inferred from unavailable or unfamiliar source"
-      ;;
-  esac
-}
-
-set_env_key() {
-  local file="$1" key="$2" value="$3"
-  "$PYTHON_BIN" - "$file" "$key" "$value" <<'PY'
-import pathlib
-import sys
-
-path, key, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-for index, line in enumerate(lines):
-    if line.split("=", 1)[0].strip() == key:
-        lines[index] = f"{key}={value}"
-        break
-else:
-    lines.append(f"{key}={value}")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-}
-
-# A server this installer created is ours to configure. One it merely found is
-# not: it may serve other projects, and patching it costs a restart.
-confirm_patch_existing_agent_mail() {
-  local dir="$1"
-  if [[ "$PATCH_EXISTING_AGENT_MAIL" == "1" ]]; then
-    say "explicit opt-in: AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 approved patching existing agent-mail at $dir"
-    return 0
-  fi
-  warn "existing agent-mail source requires separate opt-in; leaving it untouched"
-  warn "  re-run with AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1 after reviewing the patch plan"
-  return 1
-}
-
-offer_passthrough_to_existing_server() {
-  if [[ "$PASSTHROUGH_ENABLED" != "1" ]]; then
-    return 0
-  fi
-  local dir
-  dir="$(existing_agent_mail_source_dir)"
-  if [[ -z "$dir" || ! -d "$dir" ]]; then
-    say "agent-mail naming mode: source directory unknown; leaving it untouched"
-    return 0
-  fi
-  # Editing an installed package is not an option: the next upgrade removes the
-  # change without saying so, and it would affect every project on this machine.
-  if [[ ! -d "$dir/.git" ]]; then
-    say "agent-mail naming mode: $dir is not a git checkout; leaving it untouched"
-    return 0
-  fi
-
-  local state
-  state="$(passthrough_state "$dir")"
-  case "$state" in
-    already)
-      say "agent-mail already accepts explicit names (passthrough patch present)"
-      return 0
-      ;;
-    applicable) ;;
-    *)
-      say "agent-mail naming mode: this version does not match the known patch ($state); leaving it untouched"
-      return 0
-      ;;
-  esac
-
-  say ""
-  say "The agent-mail server at $MCP_URL decides whether the names this stack"
-  say "asks for survive registration. A three-line change lets it accept them."
-  say "  what changes: $dir/src/mcp_agent_mail/{app.py,config.py}"
-  say "  it is inert   until AGENT_NAME_ENFORCEMENT_MODE=passthrough is set"
-  say "  it needs      a restart of that server before it takes effect"
-  say "  it is lost    the next time you update that checkout"
-  say "  to undo       git -C $dir checkout -- src/mcp_agent_mail"
-  say "Declining is fine: the install completes either way."
-
-  if [[ "$DRY_RUN" == true ]]; then
-    plan "offer to patch existing agent-mail at $dir (skipped by --dry-run)"
-    return 0
-  fi
-  if ! confirm_patch_existing_agent_mail "$dir"; then
-    say "left the existing agent-mail source untouched"
-    return 0
-  fi
-  if ! apply_passthrough "$dir"; then
-    warn "the agent-mail patch did not apply; that checkout is unchanged"
-    return 0
-  fi
-  say "patched $dir"
-  if [[ -n "$MAIL_ENV" && -f "$MAIL_ENV" ]]; then
-    set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
-    say "set AGENT_NAME_ENFORCEMENT_MODE=passthrough in $MAIL_ENV"
-  else
-    say "add AGENT_NAME_ENFORCEMENT_MODE=passthrough to that server's .env"
-  fi
-  say "restart that agent-mail server for it to take effect"
-}
-
 validate_assume_yes() {
   [[ "$ASSUME_YES" == "0" || "$ASSUME_YES" == "1" ]] || \
     die "AGENTSTACK_ASSUME_YES must be 0 or 1"
-  [[ "$PATCH_EXISTING_AGENT_MAIL" == "0" || "$PATCH_EXISTING_AGENT_MAIL" == "1" ]] || \
-    die "AGENTSTACK_PATCH_EXISTING_AGENT_MAIL must be 0 or 1"
-}
-
-validate_mail_provider() {
-  case "$MAIL_PROVIDER" in
-    upstream|agentstack) ;;
-    *) die "AGENTSTACK_MAIL_PROVIDER must be 'upstream' or 'agentstack'" ;;
-  esac
-  if [[ "$MAIL_PROVIDER" != "agentstack" ]]; then
-    return
-  fi
   [[ "$NATIVE_MAIL_SOURCE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
     die "AGENTSTACK_MAIL_CANDIDATE_ID contains unsafe characters"
   if [[ -n "${AGENTSTACK_MAIL_MIGRATION_SOURCE_DB:-}" || \
@@ -775,7 +541,7 @@ preflight_agent_mail_port() {
 
   local parts host port
   parts="$(mcp_endpoint_parts 2>/dev/null)" || {
-    preflight_error "AGENTSTACK_MCP_URL '$MCP_URL' is invalid. Set it to an http(s) endpoint (default: AgentStack Mail on http://127.0.0.1:18765/mcp; upstream opt-out on http://127.0.0.1:8765/mcp)."
+    preflight_error "AGENTSTACK_MCP_URL '$MCP_URL' is invalid. Set it to an http(s) endpoint (default: AgentStack Mail on http://127.0.0.1:18765/mcp)."
     return
   }
   IFS='|' read -r host port <<< "$parts"
@@ -822,32 +588,8 @@ run_preflight() {
   preflight_finish
 }
 
-discover_agent_mail_listener_process() {
-  local parts port lsof_bin
-  parts="$(mcp_endpoint_parts)" || return 0
-  port="${parts##*|}"
-  lsof_bin="$(command -v lsof 2>/dev/null || true)"
-  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
-    lsof_bin=/usr/sbin/lsof
-  fi
-  if [[ -n "$lsof_bin" ]]; then
-    AGENT_MAIL_LISTENER_PID="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sed -n '1p')"
-  fi
-  if [[ "$AGENT_MAIL_LISTENER_PID" =~ ^[0-9]+$ ]]; then
-    if [[ -L "/proc/$AGENT_MAIL_LISTENER_PID/cwd" ]]; then
-      AGENT_MAIL_LISTENER_CWD="$(readlink "/proc/$AGENT_MAIL_LISTENER_PID/cwd" 2>/dev/null || true)"
-    elif [[ -n "$lsof_bin" ]]; then
-      AGENT_MAIL_LISTENER_CWD="$("$lsof_bin" -a -p "$AGENT_MAIL_LISTENER_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
-    fi
-  fi
-}
-
 probe_agent_mail_database_url() {
-  local listener_env=""
-  if [[ -n "$AGENT_MAIL_LISTENER_CWD" ]]; then
-    listener_env="$AGENT_MAIL_LISTENER_CWD/.env"
-  fi
-  "$PYTHON_BIN" - "$MCP_URL" "$MAIL_ENV" "$listener_env" <<'PY'
+  "$PYTHON_BIN" - "$MCP_URL" "$MAIL_ENV" <<'PY'
 import json
 import pathlib
 import sys
@@ -932,160 +674,6 @@ for prefix in prefixes:
         raise SystemExit(0)
 raise SystemExit(1)
 PY
-}
-
-listener_open_database() {
-  local lsof_bin path
-  [[ "$AGENT_MAIL_LISTENER_PID" =~ ^[0-9]+$ ]] || return 1
-  lsof_bin="$(command -v lsof 2>/dev/null || true)"
-  if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
-    lsof_bin=/usr/sbin/lsof
-  fi
-  [[ -n "$lsof_bin" ]] || return 1
-  path="$("$lsof_bin" -a -p "$AGENT_MAIL_LISTENER_PID" -Fn 2>/dev/null |
-    sed -n 's/^n//p' | awk '/\.sqlite3$/ { print; exit }')"
-  [[ -n "$path" && -f "$path" ]] || return 1
-  normalize_path "$path"
-}
-
-existing_mail_db_candidates() {
-  local seen="" raw normalized
-  for raw in \
-    "${MAIL_DB:-}" \
-    "$MAIL_DIR/storage.sqlite3" \
-    "$HOME/.local/share/mcp-agent-mail/git_mailbox_repo/storage.sqlite3" \
-    "$HOME/.local/share/mcp-agent-mail/storage.sqlite3" \
-    "$HOME/.mcp_agent_mail/storage.sqlite3" \
-    "${AGENT_MAIL_LISTENER_CWD:+$AGENT_MAIL_LISTENER_CWD/storage.sqlite3}"
-  do
-    [[ -n "$raw" ]] || continue
-    normalized="$(normalize_path "$raw")"
-    [[ -f "$normalized" ]] || continue
-    case $'\n'"$seen"$'\n' in
-      *$'\n'"$normalized"$'\n'*) continue ;;
-    esac
-    seen="${seen}${seen:+$'\n'}$normalized"
-    printf '%s\n' "$normalized"
-  done
-}
-
-confirm_existing_agent_mail() {
-  if [[ "$ASSUME_YES" == "1" ]]; then
-    return 0
-  fi
-  if [[ ! -t 0 ]]; then
-    say "non-interactive install: using the detected existing agent-mail server"
-    return 0
-  fi
-  printf 'Use the existing agent-mail server and database above? Type yes to continue: ' >&2
-  local reply
-  read -r reply
-  [[ "$reply" == "yes" ]]
-}
-
-resolve_agent_mail_connection() {
-  local database_url="" resolved_db="" explicit_db="" candidates_text=""
-  local candidates=()
-
-  if [[ -n "$MAIL_DB_EXPLICIT" ]]; then
-    [[ -n "${AGENTSTACK_MAIL_DB:-}" ]] || die "AGENTSTACK_MAIL_DB was set but empty"
-    explicit_db="$(normalize_path "$AGENTSTACK_MAIL_DB")"
-  fi
-
-  if mcp_endpoint_listening; then
-    say "existing agent-mail listener detected at $MCP_URL"
-    discover_agent_mail_listener_process
-    database_url="$(probe_agent_mail_database_url || true)"
-
-    # The probe is one way to find the database, not the gate that decides
-    # whether this listener is agent-mail. A server too old to report
-    # database_url, or one that wants credentials the installer cannot see,
-    # still holds its database open — and the operator may simply have told us
-    # where it is. Treating a silent probe as "not agent-mail" turned a working
-    # install into a dead end whose two suggested escapes both led back here.
-    if [[ -n "$database_url" ]]; then
-      resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
-    fi
-    if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
-      resolved_db="$(listener_open_database || true)"
-    fi
-    if [[ -z "$database_url" && -z "$explicit_db" && ( -z "$resolved_db" || ! -f "$resolved_db" ) ]]; then
-      die "$MCP_URL is already listening, but it did not answer an agent-mail health check and no SQLite database of its own could be found. Stop that service, point AGENTSTACK_MCP_URL at agent-mail, or set AGENTSTACK_MAIL_DB to the database it uses."
-    fi
-    # Everything above is evidence from the server itself, so a disagreement
-    # with AGENTSTACK_MAIL_DB is worth stopping for. Guesses from well-known
-    # locations are not: prefer what the operator told us over a coincidence.
-    if [[ -n "$resolved_db" && -f "$resolved_db" ]]; then
-      resolved_db="$(normalize_path "$resolved_db")"
-      if [[ -n "$explicit_db" && "$explicit_db" != "$resolved_db" ]]; then
-        die "AGENTSTACK_MAIL_DB points to '$explicit_db', but the running agent-mail server uses '$resolved_db'"
-      fi
-    elif [[ -n "$explicit_db" ]]; then
-      [[ -f "$explicit_db" ]] || die "AGENTSTACK_MAIL_DB does not exist: $explicit_db"
-      resolved_db="$explicit_db"
-    else
-      while IFS= read -r resolved_db; do
-        [[ -n "$resolved_db" ]] && candidates+=("$resolved_db")
-      done < <(existing_mail_db_candidates)
-      if [[ "${#candidates[@]}" -eq 1 ]]; then
-        resolved_db="$(normalize_path "${candidates[0]}")"
-      else
-        resolved_db=""
-      fi
-    fi
-    [[ -n "$resolved_db" && -f "$resolved_db" ]] || \
-      die "agent-mail is running at $MCP_URL, but its SQLite database could not be resolved from '$database_url'. Set AGENTSTACK_MAIL_DB to the existing database."
-
-    say "existing agent-mail database: $resolved_db"
-    if [[ "$DRY_RUN" != true ]] && ! confirm_existing_agent_mail; then
-      die "existing agent-mail connection declined; set AGENTSTACK_MCP_URL and AGENTSTACK_MAIL_DB explicitly, then re-run"
-    fi
-    if [[ "$DRY_RUN" != true && "$ASSUME_YES" == "1" ]]; then
-      say "assume-yes: approved existing agent-mail server at $MCP_URL"
-    fi
-    MAIL_DB="$resolved_db"
-    EXISTING_AGENT_MAIL_SERVER=true
-    if [[ -z "$MAIL_ENV_EXPLICIT" ]]; then
-      if [[ -n "$AGENT_MAIL_LISTENER_CWD" && -f "$AGENT_MAIL_LISTENER_CWD/.env" ]]; then
-        MAIL_ENV="$AGENT_MAIL_LISTENER_CWD/.env"
-      elif [[ -f "$(dirname "$MAIL_DB")/.env" ]]; then
-        MAIL_ENV="$(dirname "$MAIL_DB")/.env"
-      fi
-    fi
-    return
-  fi
-
-  if [[ -n "$explicit_db" ]]; then
-    if [[ ! -f "$explicit_db" ]]; then
-      if [[ "$DRY_RUN" == true ]]; then
-        warn "AGENTSTACK_MAIL_DB does not exist yet: $explicit_db"
-      else
-        die "AGENTSTACK_MAIL_DB does not exist: $explicit_db"
-      fi
-    fi
-    MAIL_DB="$explicit_db"
-    say "agent-mail database: $MAIL_DB"
-    return
-  fi
-
-  while IFS= read -r resolved_db; do
-    [[ -n "$resolved_db" ]] && candidates+=("$resolved_db")
-  done < <(existing_mail_db_candidates)
-  if [[ "${#candidates[@]}" -eq 1 ]]; then
-    MAIL_DB="${candidates[0]}"
-    say "agent-mail database: $MAIL_DB"
-    return
-  fi
-  if [[ "${#candidates[@]}" -gt 1 ]]; then
-    candidates_text="$(printf '\n  %s' "${candidates[@]}")"
-    die "multiple agent-mail databases exist; set AGENTSTACK_MAIL_DB explicitly:$candidates_text"
-  fi
-
-  MAIL_DB="$(normalize_path "$MAIL_DIR/storage.sqlite3")"
-  mcp_local_server_parts >/dev/null || \
-    die "no running agent-mail server or database was found, and '$MCP_URL' is not a local HTTP endpoint the installer can start. Start agent-mail there or set AGENTSTACK_MCP_URL to a local endpoint."
-  PROVISION_AGENT_MAIL=true
-  say "no running agent-mail server or database found; installer will provision upstream agent-mail at $MCP_URL"
 }
 
 resolve_native_mail_connection() {
@@ -1226,16 +814,12 @@ check_agent_mail_provisioning_dependencies() {
   if [[ "$PREFLIGHT_SKIP_COMMANDS" == "1" ]]; then
     return 0
   fi
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    if [[ "$PROVISION_NATIVE_MAIL" != true || -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
-      return 0
-    fi
-  elif [[ "$PROVISION_AGENT_MAIL" != true ]]; then
+  if [[ "$PROVISION_NATIVE_MAIL" != true || -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
     return 0
   fi
   if ! command -v uv >/dev/null 2>&1; then
     PREFLIGHT_ERRORS=()
-    preflight_error "uv is required to provision the selected mail provider. Install it from https://docs.astral.sh/uv/getting-started/installation/ and re-run install.sh."
+    preflight_error "uv is required to provision AgentStack Mail. Install it from https://docs.astral.sh/uv/getting-started/installation/ and re-run install.sh."
     preflight_finish
     return 1
   fi
@@ -1255,15 +839,12 @@ validate_repo_assets() {
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
-  [[ -f "$SCRIPT_DIR/lib/agent_mail_passthrough.py" ]] || die "missing scripts/lib/agent_mail_passthrough.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    [[ -f "$NATIVE_MAIL_PACKAGE_SOURCE/pyproject.toml" ]] || \
-      die "missing AgentStack Mail package: $NATIVE_MAIL_PACKAGE_SOURCE"
-    [[ -f "$REPO_ROOT/bin/agentstack-mailctl" ]] || \
-      die "missing AgentStack Mail lifecycle controller: $REPO_ROOT/bin/agentstack-mailctl"
-  fi
+  [[ -f "$NATIVE_MAIL_PACKAGE_SOURCE/pyproject.toml" ]] || \
+    die "missing AgentStack Mail package: $NATIVE_MAIL_PACKAGE_SOURCE"
+  [[ -f "$REPO_ROOT/bin/agentstack-mailctl" ]] || \
+    die "missing AgentStack Mail lifecycle controller: $REPO_ROOT/bin/agentstack-mailctl"
 }
 
 port_in_use() {
@@ -1553,7 +1134,6 @@ install_payload() {
     cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
     cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
-    cp "$SCRIPT_DIR/lib/agent_mail_passthrough.py" "$BIN_DIR/lib/agent_mail_passthrough.py"
     cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
@@ -1703,7 +1283,7 @@ safe_merge_settings() {
 
 print_claude_mcp_registration_instructions() {
   local helper="$BIN_DIR/agentstack-merge-claude-mcp"
-  warn "Claude Code cannot use /delegate until the fixed 'mcp-agent-mail' MCP entry is registered."
+  warn "Claude Code cannot use /delegate until the fixed 'orrery-mail' MCP entry is registered."
   printf 'Preview and apply it manually:\n' >&2
   printf '  %q %q --dry-run --config %q --mcp-url %q --mail-env %q --backup-dir %q\n' \
     "$PYTHON_BIN" "$helper" "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$BACKUPS_DIR" >&2
@@ -1721,7 +1301,7 @@ confirm_claude_mcp_merge() {
     print_claude_mcp_registration_instructions
     return 1
   fi
-  printf "Register the fixed 'mcp-agent-mail' entry in %s? Type yes to continue: " \
+  printf "Register the fixed 'orrery-mail' entry in %s? Type yes to continue: " \
     "$CLAUDE_JSON" >&2
   local reply
   read -r reply
@@ -1748,7 +1328,7 @@ safe_merge_claude_mcp() {
   local merge_status
   merge_status="$("$PYTHON_BIN" "${merge_args[@]}" --check)"
   if [[ "$merge_status" == "configured" ]]; then
-    say "Claude MCP already registered as mcp-agent-mail in $CLAUDE_JSON"
+    say "Claude MCP already registered as orrery-mail in $CLAUDE_JSON"
     return
   fi
   say "Claude MCP user-config safe-merge dry-run: $CLAUDE_JSON"
@@ -1760,7 +1340,7 @@ safe_merge_claude_mcp() {
   if confirm_claude_mcp_merge; then
     "$PYTHON_BIN" "${merge_args[@]}" --result-json "$MCP_MERGE_RESULT_FILE"
     if [[ "$ASSUME_YES" == "1" ]]; then
-      say "assume-yes: registered mcp-agent-mail in $CLAUDE_JSON"
+      say "assume-yes: registered orrery-mail in $CLAUDE_JSON"
     fi
   else
     say "Skipped Claude MCP user-config merge."
@@ -1878,64 +1458,16 @@ values = {
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
     "AGENTSTACK_PATH": "$PATH_VALUE",
 }
-if "$MAIL_PROVIDER" == "agentstack":
-    values.update({
-        "AGENTSTACK_MAIL_PROVIDER": "agentstack",
-        "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
-        "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
-        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
-    })
+values.update({
+    "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
+    "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
+    "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
+})
 lines = ["# Generated by claude-agent-stack install.sh", "# Do not put secrets in this file.", ""]
 for key, value in values.items():
     lines.append(f"export {key}={shlex.quote(value)}")
 path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
 path.chmod(0o600)
-PY
-}
-
-render_agent_mail_runner() {
-  local uv_bin="$1" host="$2" port="$3" path="$4"
-  mkdir -p "$MAIL_HOME"
-  "$PYTHON_BIN" - "$AGENT_MAIL_RUNNER" "$uv_bin" "$MAIL_DIR" \
-    "$host" "$port" "$path" <<'PY'
-import pathlib
-import shlex
-import sys
-
-runner, uv_bin, mail_dir, host, port, path = sys.argv[1:]
-command = [
-    uv_bin,
-    "--directory", mail_dir,
-    "run", "--no-dev", "--no-sync",
-    "python", "-m", "mcp_agent_mail.cli", "serve-http",
-    "--host", host, "--port", port, "--path", path,
-]
-text = "\n".join([
-    "#!/usr/bin/env bash",
-    "set -u",
-    "child_pid=''",
-    "stop_runner() {",
-    "  trap - TERM INT",
-    "  if [[ \"$child_pid\" =~ ^[0-9]+$ ]] && kill -0 \"$child_pid\" 2>/dev/null; then",
-    "    kill \"$child_pid\" 2>/dev/null || true",
-    "    wait \"$child_pid\" 2>/dev/null || true",
-    "  fi",
-    "  exit 0",
-    "}",
-    "trap stop_runner TERM INT",
-    f"cd {shlex.quote(mail_dir)} || exit 1",
-    "while true; do",
-    f"  {shlex.join(command)} &",
-    "  child_pid=$!",
-    "  wait \"$child_pid\" || true",
-    "  child_pid=''",
-    "  sleep 5",
-    "done",
-    "",
-])
-target = pathlib.Path(runner)
-target.write_text(text, encoding="utf-8")
-target.chmod(0o700)
 PY
 }
 
@@ -1946,173 +1478,6 @@ stop_new_agent_mail() {
     kill "$pid" 2>/dev/null || true
   fi
   rm -f "$AGENT_MAIL_PIDFILE"
-}
-
-start_new_agent_mail() {
-  local parts host port path uv_bin pid attempts=0 database_url resolved_db
-  parts="$(mcp_local_server_parts)" || \
-    die "cannot start agent-mail for non-local endpoint $MCP_URL"
-  IFS='|' read -r host port path <<< "$parts"
-  uv_bin="$(command -v uv 2>/dev/null || true)"
-  [[ -n "$uv_bin" ]] || die "uv is required to prepare a new agent-mail clone; install uv and re-run"
-
-  plan "sync agent-mail dependencies in $MAIL_DIR with uv"
-  if [[ "$DRY_RUN" == true ]]; then
-    plan "start agent-mail in supervised background mode at $MCP_URL"
-    return
-  fi
-  if ! "$uv_bin" --directory "$MAIL_DIR" sync --no-dev; then
-    die "agent-mail dependency setup failed in $MAIL_DIR. Check the uv error above, then re-run the installer."
-  fi
-
-  render_agent_mail_runner "$uv_bin" "$host" "$port" "$path"
-  pid="$(sed -n '1p' "$AGENT_MAIL_PIDFILE" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-    die "agent-mail endpoint is down, but $AGENT_MAIL_PIDFILE points to live pid $pid. Stop that process or remove the stale setup before re-running."
-  fi
-  rm -f "$AGENT_MAIL_PIDFILE"
-  say "starting agent-mail in supervised background mode at $MCP_URL"
-  nohup /bin/bash "$AGENT_MAIL_RUNNER" </dev/null >> "$AGENT_MAIL_LOG" 2>&1 &
-  pid=$!
-  printf '%s\n' "$pid" > "$AGENT_MAIL_PIDFILE"
-  if ! kill -0 "$pid" 2>/dev/null; then
-    rm -f "$AGENT_MAIL_PIDFILE"
-    die "agent-mail supervisor did not start. Inspect $AGENT_MAIL_LOG, fix the reported error, and re-run."
-  fi
-  AGENT_MAIL_SERVICE_KIND="nohup"
-  AGENT_MAIL_SERVICE_PATH="$AGENT_MAIL_PIDFILE"
-
-  while ! mcp_endpoint_listening && [[ "$attempts" -lt 150 ]]; do
-    sleep 0.2
-    attempts=$((attempts + 1))
-  done
-  if ! mcp_endpoint_listening; then
-    stop_new_agent_mail
-    die "agent-mail did not become reachable at $MCP_URL after dependency setup. Inspect $AGENT_MAIL_LOG, then re-run."
-  fi
-
-  discover_agent_mail_listener_process
-  database_url="$(probe_agent_mail_database_url || true)"
-  resolved_db="$(database_url_to_path "$database_url" "$AGENT_MAIL_LISTENER_CWD" || true)"
-  if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
-    resolved_db="$(listener_open_database || true)"
-  fi
-  if [[ -z "$resolved_db" || ! -f "$resolved_db" ]]; then
-    stop_new_agent_mail
-    die "agent-mail started at $MCP_URL but its SQLite database could not be resolved. Inspect $AGENT_MAIL_LOG and set AGENTSTACK_MAIL_DB before re-running."
-  fi
-  MAIL_DB="$(normalize_path "$resolved_db")"
-  EXISTING_AGENT_MAIL_SERVER=true
-  say "agent-mail ready at $MCP_URL (database: $MAIL_DB)"
-}
-
-ensure_agent_mail() {
-  AGENT_MAIL_PASSTHROUGH_CONFIRMED=false
-  if [[ "$EXISTING_AGENT_MAIL_SERVER" == true ]]; then
-    plan "reuse existing agent-mail server at $MCP_URL"
-    if [[ -f "$MAIL_ENV" ]]; then
-      plan "reuse existing agent-mail .env at $MAIL_ENV"
-    else
-      warn "no agent-mail bearer .env was resolved; localhost must allow unauthenticated access"
-    fi
-    offer_passthrough_to_existing_server
-    return
-  fi
-
-  local mail_dir_is_ours=true
-  if [[ -e "$MAIL_DIR" ]]; then
-    if [[ -d "$MAIL_DIR/.git" ]]; then
-      local remote
-      remote="$(git -C "$MAIL_DIR" remote get-url origin 2>/dev/null || true)"
-      if [[ -n "$remote" && "$remote" != "$UPSTREAM_AGENT_MAIL_URL" ]]; then
-        warn "existing agent-mail remote is '$remote' (expected '$UPSTREAM_AGENT_MAIL_URL'); leaving it untouched"
-        mail_dir_is_ours=false
-      else
-        plan "reuse existing agent-mail clone at $MAIL_DIR"
-        report_agent_mail_ref
-      fi
-    else
-      die "agent-mail path exists but is not a git clone: $MAIL_DIR"
-    fi
-  else
-    plan "clone agent-mail upstream into $MAIL_DIR at $UPSTREAM_AGENT_MAIL_REF"
-    if [[ "$DRY_RUN" != true ]]; then
-      if ! git clone "$UPSTREAM_AGENT_MAIL_URL" "$MAIL_DIR"; then
-        die "failed to clone agent-mail from $UPSTREAM_AGENT_MAIL_URL. Check network access and the repository URL, then re-run."
-      fi
-      # Check out the pinned ref rather than whatever the default branch is
-      # today. A clone with no ref makes the install date part of the
-      # configuration, invisibly.
-      if ! git -C "$MAIL_DIR" checkout --quiet "$UPSTREAM_AGENT_MAIL_REF"; then
-        die "agent-mail was cloned but ref '$UPSTREAM_AGENT_MAIL_REF' could not be checked out. Set AGENTSTACK_AGENT_MAIL_REF to a ref that exists in $UPSTREAM_AGENT_MAIL_URL, then re-run."
-      fi
-    fi
-  fi
-
-  # A clone this installer made is ours, so its naming behaviour is ours to fix
-  # rather than ask about. Without it, the name an agent registers under depends
-  # on which upstream version happened to be checked out. A checkout pointing
-  # somewhere else was already declared untouched above, and stays that way.
-  if [[ "$PASSTHROUGH_ENABLED" != "1" ]]; then
-    say "agent-mail naming mode: left as it is (AGENTSTACK_AGENT_MAIL_PASSTHROUGH=0)"
-  elif [[ "$mail_dir_is_ours" != true ]]; then
-    say "agent-mail naming mode: left as it is, along with the rest of $MAIL_DIR"
-  else
-    plan "set agent-mail naming mode to passthrough in $MAIL_DIR"
-    if [[ "$DRY_RUN" != true ]]; then
-      local state
-      state="$(passthrough_state "$MAIL_DIR")"
-      case "$state" in
-        already)
-          AGENT_MAIL_PASSTHROUGH_CONFIRMED=true
-          say "agent-mail already accepts explicit names"
-          ;;
-        applicable)
-          apply_passthrough "$MAIL_DIR" || \
-            die "the agent-mail naming patch did not apply to $MAIL_DIR. Remove that checkout and re-run to get the pinned version, or set AGENTSTACK_AGENT_MAIL_REF to the ref you want."
-          if [[ "$(passthrough_state "$MAIL_DIR")" != "already" ]]; then
-            die "the agent-mail naming patch returned success but passthrough could not be verified in $MAIL_DIR"
-          fi
-          AGENT_MAIL_PASSTHROUGH_CONFIRMED=true
-          say "patched agent-mail to accept explicit names"
-          ;;
-        *)
-          warn "agent-mail at $MAIL_DIR does not match the known naming patch ($state)"
-          warn "  names this stack asks for may be replaced by generated ones"
-          ;;
-      esac
-    fi
-  fi
-
-  if [[ -f "$MAIL_ENV" ]]; then
-    plan "reuse existing agent-mail .env at $MAIL_ENV"
-    if [[ "$DRY_RUN" != true && "$AGENT_MAIL_PASSTHROUGH_CONFIRMED" == true ]]; then
-      set_env_key "$MAIL_ENV" "AGENT_NAME_ENFORCEMENT_MODE" "passthrough"
-    fi
-  else
-    plan "create agent-mail .env at $MAIL_ENV (mode 600; token hidden)"
-    if [[ "$DRY_RUN" != true ]]; then
-      mkdir -p "$(dirname "$MAIL_ENV")"
-      umask 077
-      "$PYTHON_BIN" - "$MAIL_ENV" "$AGENT_MAIL_PASSTHROUGH_CONFIRMED" <<'PY'
-import pathlib
-import secrets
-import sys
-path = pathlib.Path(sys.argv[1])
-token = secrets.token_urlsafe(32)
-lines = [f"HTTP_BEARER_TOKEN={token}"]
-if sys.argv[2] == "true":
-    lines.append("AGENT_NAME_ENFORCEMENT_MODE=passthrough")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-path.chmod(0o600)
-PY
-    fi
-  fi
-
-  if [[ "$PROVISION_AGENT_MAIL" == true ]]; then
-    start_new_agent_mail
-  fi
-
 }
 
 native_mail_binaries_ready() {
@@ -2132,17 +1497,17 @@ ensure_native_mail_candidate() {
   if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
     die "AGENTSTACK_MAIL_SERVICE_VENV does not contain the required AgentStack Mail executables: $NATIVE_MAIL_VENV"
   fi
+  plan "create immutable AgentStack Mail candidate venv $NATIVE_MAIL_VENV"
+  plan "install bundled AgentStack Mail package from $NATIVE_MAIL_PACKAGE_SOURCE"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
   if [[ "$NATIVE_MAIL_PACKAGE_SOURCE" == "$REPO_ROOT/packages/agentstack_mail" ]] && \
      git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local dirty_package
     dirty_package="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- packages/agentstack_mail)"
     [[ -z "$dirty_package" ]] || \
       die "bundled AgentStack Mail package is dirty; build a candidate from an exact clean commit"
-  fi
-  plan "create immutable AgentStack Mail candidate venv $NATIVE_MAIL_VENV"
-  plan "install bundled AgentStack Mail package from $NATIVE_MAIL_PACKAGE_SOURCE"
-  if [[ "$DRY_RUN" == true ]]; then
-    return
   fi
   local uv_bin
   uv_bin="$(command -v uv 2>/dev/null || true)"
@@ -2286,7 +1651,6 @@ start_native_mail() {
   render_native_mail_runner
   AGENTSTACK_MAILCTL_SKIP_ENV=1 \
   AGENTSTACK_HOME="$INSTALL_DIR" \
-  AGENTSTACK_MAIL_PROVIDER=agentstack \
   AGENTSTACK_MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT" \
   AGENTSTACK_MAIL_ENV="$NATIVE_MAIL_ENV" \
   AGENTSTACK_MAIL_RUNNER="$NATIVE_MAIL_RUNNER" \
@@ -3093,11 +2457,10 @@ if mail_autostart_path:
     owned_files.append(mail_autostart_path)
 if mail_autostart_service_path:
     owned_files.append(mail_autostart_service_path)
-if "$MAIL_PROVIDER" == "agentstack":
-    for raw in ("$NATIVE_MAIL_ENV", "$NATIVE_MAIL_RUNNER"):
-        path = pathlib.Path(raw)
-        if path.is_file() or path.is_symlink():
-            owned_files.append(str(path))
+for raw in ("$NATIVE_MAIL_ENV", "$NATIVE_MAIL_RUNNER"):
+    path = pathlib.Path(raw)
+    if path.is_file() or path.is_symlink():
+        owned_files.append(str(path))
 merge_result_path = pathlib.Path("$SAFE_MERGE_RESULT_FILE")
 settings_merge = None
 if merge_result_path.exists():
@@ -3233,16 +2596,14 @@ manifest = {
         "Claude MCP user config uses an explicit-confirm, fixed-name structural merge.",
     ],
 }
-if "$MAIL_PROVIDER" == "agentstack":
-    manifest["agent_mail"]["provider"] = "agentstack"
-    manifest["agent_mail"]["state_root"] = "$NATIVE_MAIL_STATE_ROOT"
-    manifest["agent_mail"]["candidate_venv"] = "$NATIVE_MAIL_VENV"
-    manifest["env"].update({
-        "AGENTSTACK_MAIL_PROVIDER": "agentstack",
-        "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
-        "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
-        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
-    })
+manifest["agent_mail"]["provider"] = "agentstack"
+manifest["agent_mail"]["state_root"] = "$NATIVE_MAIL_STATE_ROOT"
+manifest["agent_mail"]["candidate_venv"] = "$NATIVE_MAIL_VENV"
+manifest["env"].update({
+    "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
+    "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
+    "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
+})
 out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
   "$PYTHON_BIN" -m json.tool "$tmp" >/dev/null
@@ -3255,7 +2616,6 @@ main() {
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
   validate_assume_yes
-  validate_mail_provider
   if ! run_preflight; then
     exit 1
   fi
@@ -3267,11 +2627,7 @@ main() {
   check_dependencies
   validate_repo_assets
   check_port
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    resolve_native_mail_connection
-  else
-    resolve_agent_mail_connection
-  fi
+  resolve_native_mail_connection
   if ! check_agent_mail_provisioning_dependencies; then
     exit 1
   fi
@@ -3287,12 +2643,8 @@ main() {
   install_payload
   install_claude_skill_links
   render_installed_templates
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    ensure_native_agentstack_mail
-  else
-    ensure_agent_mail
-  fi
-  report_agent_mail_name_capability
+  ensure_native_agentstack_mail
+  say "AgentStack Mail requested-name handling: honored (passthrough)"
   write_env_file
   # After write_env_file: the unit runs `agentstack-mailctl start`, which reads
   # env.sh. Registering it earlier would fire RunAtLoad against a config that
@@ -3300,16 +2652,8 @@ main() {
   # — that function returns early when a healthy server is already running, which
   # is precisely the case for every existing user re-running install.sh to
   # update, and they need the autostart most.
-  if [[ "$MAIL_PROVIDER" == "agentstack" ]]; then
-    retire_legacy_mail_services
-    enable_mail_autostart
-  elif [[ "$PROVISION_AGENT_MAIL" == true ]]; then
-    # The upstream opt-out provisions its own nohup runner, which has the same
-    # reboot defect. It has no mailctl-equivalent to invoke from a login trigger,
-    # so say so instead of leaving the gap silent. A server we merely *detected*
-    # is someone else's to manage and is not mentioned here.
-    warn "the upstream agent-mail provider does not restart after a reboot; restart it yourself or switch to the bundled provider (unset AGENTSTACK_MAIL_PROVIDER)"
-  fi
+  retire_legacy_mail_services
+  enable_mail_autostart
   safe_merge_claude_mcp
   safe_merge_settings
   safe_managed_doc_setups

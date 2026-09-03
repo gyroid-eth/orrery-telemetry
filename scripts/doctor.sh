@@ -4,7 +4,6 @@ set -euo pipefail
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MANIFEST="$INSTALL_DIR/install-state.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NAME_CAPABILITY_SCRIPT="$SCRIPT_DIR/lib/agent_mail_passthrough.py"
 
 usage() {
   cat <<'EOF'
@@ -100,13 +99,12 @@ else
   status=1
 fi
 
-if [[ "${AGENTSTACK_MAIL_PROVIDER:-upstream}" == "agentstack" ]]; then
-  if [[ "${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-}" == "disabled" ]]; then
-    echo "ok: AgentStack Mail transport uses owner tokens without a legacy HTTP bearer"
-  else
-    echo "missing: native AgentStack Mail requires AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled" >&2
-    status=1
-  fi
+if [[ "${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-}" == "disabled" ]]; then
+  echo "ok: AgentStack Mail transport uses owner tokens without a legacy HTTP bearer"
+else
+  echo "missing: AgentStack Mail requires AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled" >&2
+  status=1
+fi
   NATIVE_MAIL_HEALTH="$("$PYTHON_BIN" - \
     "${AGENTSTACK_MCP_URL:-}" "$MAIL_DB_PATH" <<'PY' 2>/dev/null || true
 import json
@@ -163,13 +161,11 @@ PY
     echo "missing: AgentStack Mail health does not serve the configured native database at ${AGENTSTACK_MCP_URL:-<unset>}" >&2
     status=1
   fi
-fi
 
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
-MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
-CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$MAIL_ENV" "$SCRIPT_DIR/lib" \
-  "${AGENTSTACK_MAIL_PROVIDER:-upstream}" <<'PY' 2>/dev/null || true
+CLAUDE_MCP_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" "$MCP_URL" "$SCRIPT_DIR/lib" <<'PY' 2>/dev/null || true
 import json
 import pathlib
 import sys
@@ -186,35 +182,20 @@ except ImportError:
 
 try:
     config = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-    entry = config.get("mcpServers", {}).get("mcp-agent-mail")
+    entry = config.get("mcpServers", {}).get("orrery-mail")
 except (AttributeError, OSError, ValueError):
     print("invalid")
 else:
-    bearer = ""
-    try:
-        for line in pathlib.Path(sys.argv[3]).read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == "HTTP_BEARER_TOKEN":
-                bearer = value.strip().strip("'\"")
-                break
-    except OSError:
-        pass
     authorization = (
         (entry.get("headers") or {}).get("Authorization")
         if isinstance(entry, dict)
         else None
     )
-    provider = sys.argv[5]
-    transport_auth_ok = (
-        authorization is None
-        if provider == "agentstack"
-        else (not bearer or authorization == f"Bearer {bearer}")
-    )
     if (
         isinstance(entry, dict)
         and entry.get("type") == "http"
         and same_endpoint(str(entry.get("url", "")), sys.argv[2])
-        and transport_auth_ok
+        and authorization is None
     ):
         print("configured")
     else:
@@ -222,13 +203,13 @@ else:
 PY
 )"
 if [[ "$CLAUDE_MCP_STATE" == "configured" ]]; then
-  echo "ok: Claude MCP mcp-agent-mail registered in $CLAUDE_JSON"
+  echo "ok: Claude MCP orrery-mail registered in $CLAUDE_JSON"
 elif [[ "$CLAUDE_MCP_STATE" == "unavailable" ]]; then
   echo "warn: cannot check the Claude MCP entry: $SCRIPT_DIR/lib/mcp_endpoint.py is missing" >&2
   echo "      This is an incomplete install, not a problem with $CLAUDE_JSON." >&2
   status=1
 else
-  echo "warn: Claude MCP mcp-agent-mail is not registered for $MCP_URL in $CLAUDE_JSON" >&2
+  echo "warn: Claude MCP orrery-mail is not registered for $MCP_URL in $CLAUDE_JSON" >&2
   echo "      /delegate cannot use agent-mail until this fixed-name entry exists." >&2
   MCP_MERGE_HELPER="$INSTALL_DIR/bin/agentstack-merge-claude-mcp"
   printf '      preview: %q %q --dry-run --config %q --mcp-url %q --mail-env %q --backup-dir %q\n' \
@@ -561,7 +542,7 @@ if [[ "$REPORT" == "1" ]]; then
   echo
   echo '## agent-mail'
   echo
-  ags_mail_dir="${AGENTSTACK_MAIL_DIR:-$HOME/mcp_agent_mail}"
+  ags_mail_dir="${AGENTSTACK_MAIL_DIR:-$HOME/.agentstack/mail-service}"
   printf -- '- directory: %s\n' "$ags_mail_dir"
   if git -C "$ags_mail_dir" rev-parse --short HEAD >/dev/null 2>&1; then
     printf -- '- commit: %s\n' "$(git -C "$ags_mail_dir" rev-parse --short HEAD)"
@@ -572,45 +553,7 @@ if [[ "$REPORT" == "1" ]]; then
   fi
   printf -- '- declared version: %s\n' \
     "$(grep -m1 '^version' "$ags_mail_dir/pyproject.toml" 2>/dev/null | tr -d ' "' || echo unknown)"
-  # The mode decides whether the name you asked for is the name you get.
-  printf -- '- AGENT_NAME_ENFORCEMENT_MODE: %s\n' \
-    "$(grep -m1 '^AGENT_NAME_ENFORCEMENT_MODE=' "${AGENTSTACK_MAIL_ENV:-$ags_mail_dir/.env}" 2>/dev/null \
-       | cut -d= -f2- || echo 'unset (default)')"
-  # Use the installed syntax-aware inspector. Grep sees markers in comments and
-  # reference strings as code, which can turn an inert checkout into a false
-  # "present" report.
-  ags_patch_state=""
-  if [[ -x "$PYTHON_BIN" && -f "$NAME_CAPABILITY_SCRIPT" ]]; then
-    ags_patch_state="$("$PYTHON_BIN" "$NAME_CAPABILITY_SCRIPT" \
-      --mail-dir "$ags_mail_dir" 2>/dev/null || true)"
-  fi
-  case "$ags_patch_state" in
-    already) echo '- passthrough patch: present' ;;
-    partial) echo '- passthrough patch: partial (the mode may be refused at startup)' ;;
-    applicable) echo '- passthrough patch: absent' ;;
-    unsupported) echo '- passthrough patch: absent (source not recognised)' ;;
-    *) echo '- passthrough patch: unknown (source or inspector unavailable)' ;;
-  esac
-  ags_name_capability_json=""
-  if [[ -x "$PYTHON_BIN" && -f "$NAME_CAPABILITY_SCRIPT" ]]; then
-    ags_name_capability_json="$("$PYTHON_BIN" "$NAME_CAPABILITY_SCRIPT" \
-      --mail-dir "$ags_mail_dir" \
-      --mail-env "${AGENTSTACK_MAIL_ENV:-$ags_mail_dir/.env}" \
-      --name-capability 2>/dev/null || true)"
-  fi
-  ags_name_capability_summary="$("$PYTHON_BIN" - "$ags_name_capability_json" <<'PYEOF' 2>/dev/null || true
-import json
-import sys
-
-try:
-    result = json.loads(sys.argv[1])
-except (IndexError, TypeError, ValueError):
-    result = {"status": "unknown", "evidence": "classifier-unavailable"}
-print(f"{result.get('status', 'unknown')} ({result.get('evidence', 'classifier-unavailable')})")
-PYEOF
-)"
-  printf -- '- requested-name handling: %s\n' \
-    "${ags_name_capability_summary:-unknown (classifier-unavailable)}"
+  echo '- requested-name handling: honored (passthrough)'
   printf -- '- endpoint: %s\n' "${AGENTSTACK_MCP_URL:-unset}"
   ags_mail_db="${AGENTSTACK_MAIL_DB:-$ags_mail_dir/storage.sqlite3}"
   if [[ -f "$ags_mail_db" ]] && [[ -x "$PYTHON_BIN" ]]; then

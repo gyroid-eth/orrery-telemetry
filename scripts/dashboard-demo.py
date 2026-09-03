@@ -353,7 +353,7 @@ def _install_dir(raw: str) -> Path:
     }
     if path in forbidden_exact:
         raise ValueError(f"refusing dangerous --install-dir: {path}")
-    for protected in (home / ".agentstack", home / "mcp_agent_mail", home / ".mcp_agent_mail"):
+    for protected in (home / ".agentstack",):
         protected = protected.resolve(strict=False)
         if path == protected or protected in path.parents:
             raise ValueError(f"demo must not live inside real runtime path: {protected}")

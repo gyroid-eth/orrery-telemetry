@@ -167,10 +167,9 @@ def _installer_upgrade_env(
     install_dir = home / ".agentstack"
     project = tmp_path / "project"
     project.mkdir()
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    mail_db = mail_dir / "storage.sqlite3"
-    mail_db.touch()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
     env = os.environ.copy()
     env.update({
         "HOME": str(home),
@@ -178,14 +177,12 @@ def _installer_upgrade_env(
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_DB": str(mail_db),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        # This harness stubs provisioning (fake uv / pre-seeded upstream clone),
-        # which cannot build the bundled AgentStack Mail wheel; pin the upstream
-        # provider so the provider-orthogonal assertions stay valid.
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MAIL_STATE_ROOT": str(install_dir / "mail"),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(
+            pathlib.Path(sys.executable).parent.parent
+        ),
+        "AGENTSTACK_MAIL_PACKAGE_SOURCE": str(ROOT / "packages" / "agentstack_mail"),
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_TERMINAL": "none",
@@ -290,6 +287,10 @@ def test_launchd_in_place_upgrade_replaces_its_own_listener_with_new_code(
         "uname": "#!/bin/sh\necho Darwin\n",
         "uv": "#!/bin/sh\nexit 0\n",
         "launchctl": """#!/bin/sh
+case "$*" in
+  *agentdashboard*) ;;
+  *) [ "$1" = print ] && exit 1; exit 0 ;;
+esac
 case "$1" in
   print)
     printf '{\n    pid = %s\n}\n' "$AGENTSTACK_TEST_OLD_PID"
@@ -359,6 +360,10 @@ exit 0
         )
         assert manifest["services"][0]["kind"] == "launchd"
     finally:
+        subprocess.run(
+            [str(install_dir / "bin" / "agentstack-mailctl"), "stop"],
+            env=env, text=True, capture_output=True, check=False,
+        )
         if new_pidfile.exists():
             try:
                 os.kill(int(new_pidfile.read_text().strip()), signal.SIGTERM)
@@ -490,6 +495,10 @@ exit 0
         assert "managed dashboard owns port" in second.stdout
         assert "stopping supervised background dashboard" in second.stdout
     finally:
+        subprocess.run(
+            [str(install_dir / "bin" / "agentstack-mailctl"), "stop"],
+            env=env, text=True, capture_output=True, check=False,
+        )
         if pidfile.exists():
             try:
                 os.kill(int(pidfile.read_text().strip()), signal.SIGTERM)
@@ -636,8 +645,11 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
             env=env,
             text=True,
             capture_output=True,
-            check=True,
         )
+        # This fixture isolates dashboard supervision and intentionally does
+        # not start ORRERY Mail, so doctor remains non-zero for that separate
+        # service while still reporting the dashboard state precisely.
+        assert running.returncode == 1
         assert "dashboard endpoint serving" in running.stdout
         assert "dashboard service mode launchd" in running.stdout
         assert "running" in running.stdout
@@ -757,12 +769,12 @@ exit 0
     install_dir = home / ".agentstack"
     project = tmp_path / "project"
     project.mkdir()
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    (mail_dir / "storage.sqlite3").touch()
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
     env = os.environ.copy()
     env.update({
         "HOME": str(home),
@@ -770,12 +782,11 @@ exit 0
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MAIL_STATE_ROOT": str(install_dir / "mail"),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(pathlib.Path(sys.executable).parent.parent),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_LAUNCHCTL_LOG": str(launchctl_log),
     })
@@ -802,10 +813,19 @@ exit 0
         manifest = json.loads(
             (install_dir / "install-state.json").read_text(encoding="utf-8")
         )
-        assert manifest["services"] == [{
-            "kind": "nohup",
-            "pidfile": str(install_dir / "runtime" / "dashboard.pid"),
-        }]
+        assert manifest["services"] == [
+            {
+                "kind": "nohup",
+                "pidfile": str(install_dir / "runtime" / "dashboard.pid"),
+            },
+            {
+                "kind": "nohup",
+                "pidfile": str(
+                    install_dir / "mail-service/runtime/agentstack-mail.pid"
+                ),
+                "role": "agent-mail",
+            },
+        ]
         assert "launchd could not bootstrap" in result.stderr
         assert "Service mode: supervised background" in result.stdout
         assert "dashboard healthy:" in result.stdout
@@ -860,6 +880,12 @@ exit 0
         assert main.index("start_service") < main.index("write_manifest")
     finally:
         subprocess.run(
+            [str(install_dir / "bin" / "agentstack-mailctl"), "stop"],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        subprocess.run(
             ["bash", str(install_dir / "dashboard" / "agentctl.sh"), "stop"],
             env=env,
             text=True,
@@ -867,199 +893,7 @@ exit 0
         )
 
 
-def test_installer_reuses_existing_agent_mail_listener_database(tmp_path):
-    home = tmp_path / "home"
-    external_root = (
-        home / ".local" / "share" / "mcp-agent-mail" / "git_mailbox_repo"
-    )
-    external_root.mkdir(parents=True)
-    external_db = external_root / "storage.sqlite3"
-    external_db.touch()
-
-    class AgentMailHandler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            content_length = int(self.headers.get("Content-Length", "0"))
-            self.rfile.read(content_length)
-            body = json.dumps({
-                "jsonrpc": "2.0",
-                "id": "agentstack-installer-probe",
-                "result": {
-                    "content": [],
-                    "structuredContent": {
-                        "status": "ok",
-                        "http_host": "127.0.0.1",
-                        "http_port": self.server.server_port,
-                        # Upstream's default is cwd-relative.  The installer
-                        # must not reinterpret it below AGENTSTACK_MAIL_DIR.
-                        "database_url": "sqlite+aiosqlite:///./storage.sqlite3",
-                    },
-                    "isError": False,
-                },
-            }).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    mail_server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0),
-        AgentMailHandler,
-    )
-    mail_thread = threading.Thread(target=mail_server.serve_forever, daemon=True)
-    mail_thread.start()
-
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir()
-    for name, body in {
-        "systemctl": "#!/bin/sh\nexit 1\n",
-        "tmux": "#!/bin/sh\nexit 0\n",
-        "uname": "#!/bin/sh\necho Linux\n",
-        "uv": "#!/bin/sh\nexit 0\n",
-    }.items():
-        command = fake_bin / name
-        command.write_text(body, encoding="utf-8")
-        command.chmod(0o755)
-
-    install_dir = home / ".agentstack"
-    mail_dir = home / "new-clone-that-must-not-be-created"
-    project = tmp_path / "project"
-    project.mkdir()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        dashboard_port = probe.getsockname()[1]
-    env = os.environ.copy()
-    env.update({
-        "HOME": str(home),
-        "PATH": f"{fake_bin}:{env['PATH']}",
-        "AGENTSTACK_PYTHON": sys.executable,
-        "AGENTSTACK_HOME": str(install_dir),
-        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
-        "AGENTSTACK_MCP_URL": (
-            f"http://127.0.0.1:{mail_server.server_port}/mcp"
-        ),
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
-        "AGENTSTACK_PORT": str(dashboard_port),
-        "AGENTSTACK_PROJECT_KEY": str(project),
-        "AGENTSTACK_TERMINAL": "none",
-    })
-
-    try:
-        result = subprocess.run(
-            [
-                "bash",
-                str(ROOT / "scripts" / "install.sh"),
-                "--dashboard-only",
-            ],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        manifest = json.loads(
-            (install_dir / "install-state.json").read_text(encoding="utf-8")
-        )
-        assert manifest["env"]["AGENTSTACK_MAIL_DB"] == str(external_db)
-        assert "existing agent-mail listener detected" in result.stdout
-        assert f"existing agent-mail database: {external_db}" in result.stdout
-        assert "non-interactive install: using" in result.stdout
-        assert "reuse existing agent-mail server" in result.stdout
-        assert not mail_dir.exists()
-
-        doctor = subprocess.run(
-            [
-                "bash",
-                str(install_dir / "bin" / "agentstack-doctor"),
-                "--install-dir",
-                str(install_dir),
-            ],
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        assert f"ok: agent-mail database {external_db}" in doctor.stdout
-    finally:
-        subprocess.run(
-            [
-                "bash",
-                str(install_dir / "dashboard" / "agentctl.sh"),
-                "stop",
-            ],
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        mail_server.shutdown()
-        mail_server.server_close()
-        mail_thread.join(timeout=5)
-
-
-def test_installer_refuses_to_record_an_ambiguous_mail_database(tmp_path):
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir()
-    for name, body in {
-        "tmux": "#!/bin/sh\nexit 0\n",
-        "uname": "#!/bin/sh\necho Linux\n",
-        "uv": "#!/bin/sh\nexit 0\n",
-    }.items():
-        command = fake_bin / name
-        command.write_text(body, encoding="utf-8")
-        command.chmod(0o755)
-
-    home = tmp_path / "home"
-    install_dir = home / ".agentstack"
-    mail_dir = home / "not-installed"
-    mail_dir.mkdir(parents=True)
-    (mail_dir / "storage.sqlite3").touch()
-    second_mail_dir = (
-        home / ".local" / "share" / "mcp-agent-mail" / "git_mailbox_repo"
-    )
-    second_mail_dir.mkdir(parents=True)
-    (second_mail_dir / "storage.sqlite3").touch()
-    project = tmp_path / "project"
-    project.mkdir()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        dashboard_port = probe.getsockname()[1]
-    env = os.environ.copy()
-    env.update({
-        "HOME": str(home),
-        "PATH": f"{fake_bin}:{env['PATH']}",
-        "AGENTSTACK_PYTHON": sys.executable,
-        "AGENTSTACK_HOME": str(install_dir),
-        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
-        "AGENTSTACK_PORT": str(dashboard_port),
-        "AGENTSTACK_PROJECT_KEY": str(project),
-        "AGENTSTACK_TERMINAL": "none",
-    })
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(ROOT / "scripts" / "install.sh"),
-            "--assume-yes",
-            "--dashboard-only",
-        ],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.returncode == 1
-    assert "multiple agent-mail databases exist" in result.stderr
-    assert "set AGENTSTACK_MAIL_DB" in result.stderr
-    assert not (install_dir / "env.sh").exists()
-    assert not (install_dir / "install-state.json").exists()
+# Foreign and unreadable listener adoption is covered by test_install_mail_probe.py.
 
 
 def test_mail_watcher_process_drives_health_and_agents_without_launchd(tmp_path):

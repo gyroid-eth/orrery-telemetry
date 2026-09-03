@@ -33,6 +33,10 @@ case "$2" in
     exit 0
     ;;
   enable)
+    case "$*" in
+      *agentdashboard*) ;;
+      *) exit 0 ;;
+    esac
     nohup "$AGENTSTACK_TEST_PYTHON" \
       "$AGENTSTACK_HOME/dashboard/service_runner.py" >/dev/null 2>&1 &
     echo $! > "$AGENTSTACK_TEST_SERVICE_PID"
@@ -126,6 +130,12 @@ def _normalize_sample_paths(value, manifest):
     if isinstance(value, str):
         for source, target in replacements:
             value = value.replace(source, target)
+        marker = "/mail-service/renders/"
+        if marker in value:
+            prefix, rendered = value.split(marker, 1)
+            if "/" in rendered:
+                _render_id, suffix = rendered.split("/", 1)
+                value = f"{prefix}{marker}<render>/{suffix}"
     return value
 
 
@@ -168,6 +178,7 @@ def _clean_env(home: pathlib.Path) -> dict[str, str]:
     env.pop("AGENTSTACK_MANAGED_AGENTS_FILE", None)
     env.pop("AGENTSTACK_MAIL_ENV", None)
     env.pop("AGENTSTACK_SIGNALS_DIR", None)
+    env.pop("AGENTSTACK_MAIL_PROVIDER", None)
     # The identity of whoever runs the suite is not part of the fixture. The
     # session-index writer reads the caller's identity to decide whether a
     # registration is the caller's own, so an ambient AGENT_NAME from the
@@ -270,6 +281,23 @@ def test_runtime_code_has_no_legacy_claude_fallback():
     assert offenders == []
 
 
+def test_user_facing_runtime_defaults_target_orrery_mail():
+    expected = "http://127.0.0.1:18765/mcp"
+    defaults = {
+        "bin/agent-start": 'AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp',
+        "bin/agentstack-codex-bootstrap": (
+            'AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp'
+        ),
+        "bin/agentstack-await-reply": f'DEFAULT_URL = "{expected}"',
+        "integrations/codex_app/env.sh.sample": (
+            f'export AGENTSTACK_MCP_URL="{expected}"'
+        ),
+    }
+    for relative, marker in defaults.items():
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert marker in text, relative
+
+
 def test_existing_tmux_launch_paths_export_claudecode_guard():
     for relative in ("bin/agent-start", "bin/agent-start-codex"):
         text = (ROOT / relative).read_text(encoding="utf-8")
@@ -370,12 +398,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     install_dir = home / ".agentstack"
     project = tmp_path / "project"
     project.mkdir()
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    mail_db = mail_dir / "storage.sqlite3"
-    mail_db.touch()
-    mail_env = mail_dir / ".env"
-    mail_env.write_text("HTTP_BEARER_TOKEN=installer-test-bearer\n")
+    mail_dir = install_dir / "mail"
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
     original_settings = '{"permissions":{"allow":["User(existing)"]}}\n'
@@ -389,20 +412,17 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_DB": str(mail_db),
-        "AGENTSTACK_MAIL_ENV": str(mail_env),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        # This harness stubs provisioning binaries (uv/git), which cannot
-        # build the bundled AgentStack Mail wheel; pin the upstream provider
-        # so the pre-existing provider-orthogonal assertions stay valid.
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MAIL_STATE_ROOT": str(mail_dir),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(pathlib.Path(sys.executable).parent.parent),
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project),
         "AGENTSTACK_CLAUDE_JSON": str(claude_json),
@@ -428,9 +448,6 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
             without_approval.stderr
         )
         assert "agentstack-merge-claude-mcp" in without_approval.stderr
-        assert "installer-test-bearer" not in (
-            without_approval.stdout + without_approval.stderr
-        )
         assert "non-interactive shell; skipping Codex AGENTS.md managed setup" in (
             without_approval.stderr
         )
@@ -457,7 +474,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
             from_environment.stdout
         )
-        assert f"assume-yes: registered mcp-agent-mail in {claude_json}" in (
+        assert f"assume-yes: registered orrery-mail in {claude_json}" in (
             from_environment.stdout
         )
         assert "installer-test-bearer" not in (
@@ -472,10 +489,9 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert settings.read_text(encoding="utf-8") != original_settings
         claude_servers = json.loads(claude_json.read_text())["mcpServers"]
         assert claude_servers["user-owned"] == {"command": "user-command"}
-        assert claude_servers["mcp-agent-mail"] == {
+        assert claude_servers["orrery-mail"] == {
             "type": "http",
-            "url": "http://127.0.0.1:1/mcp",
-            "headers": {"Authorization": "Bearer installer-test-bearer"},
+            "url": f"http://127.0.0.1:{mail_port}/mcp",
         }
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
@@ -505,7 +521,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert f"assume-yes: applied Tier1 settings merge to {settings}" in (
             from_flag.stdout
         )
-        assert f"assume-yes: registered mcp-agent-mail in {claude_json}" in (
+        assert f"assume-yes: registered orrery-mail in {claude_json}" in (
             from_flag.stdout
         )
         assert "<!-- >>> claude-agent-stack" in (
@@ -530,7 +546,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         capture_output=True,
         check=True,
     )
-    assert "mcp-agent-mail" in uninstalled.stdout
+    assert "orrery-mail" in uninstalled.stdout
     assert json.loads(claude_json.read_text()) == original_claude_json
 
 
@@ -550,6 +566,25 @@ def _stop_any_dashboard_this_module_started(tmp_path):
     """
     yield
     failures = []
+
+    # Native-only installs also leave an ORRERY Mail supervisor. The product
+    # controller understands its two-line identity marker and refuses to act
+    # unless it matches this test installation's rendered runner.
+    for home in (tmp_path / "home", tmp_path):
+        mailctl = home / ".agentstack" / "bin" / "agentstack-mailctl"
+        if not mailctl.is_file():
+            continue
+        stopped = subprocess.run(
+            [str(mailctl), "stop"],
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if stopped.returncode not in (0, 3):
+            failures.append(
+                f"{mailctl}: {stopped.stdout.strip()} {stopped.stderr.strip()}"
+            )
 
     # The fake system manager used by this module records its pid here rather
     # than in the install's runtime directory.
@@ -614,22 +649,20 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "WiseFaraday": {"role": "legacy", "emoji": "", "group": "runtime"}
     }
     legacy_path.write_text(json.dumps(legacy_data), encoding="utf-8")
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    (mail_dir / "storage.sqlite3").touch()
+    mail_dir = install_dir / "mail"
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
     project_dir = home / "project"
-    project_dir.mkdir()
+    project_dir.mkdir(parents=True)
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_HOME": str(install_dir),
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
-        "AGENTSTACK_MAIL_DB": str(mail_dir / "storage.sqlite3"),
-        "AGENTSTACK_MAIL_ENV": str(mail_dir / ".env"),
-        "AGENTSTACK_SIGNALS_DIR": str(home / ".mcp_agent_mail" / "signals"),
+        "AGENTSTACK_MAIL_STATE_ROOT": str(mail_dir),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(pathlib.Path(sys.executable).parent.parent),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
@@ -637,11 +670,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
         "AGENTSTACK_LANG": "ja",
         "AGENTSTACK_MURMUR": "off",
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        # This harness stubs provisioning binaries (uv/git), which cannot
-        # build the bundled AgentStack Mail wheel; pin the upstream provider
-        # so the pre-existing provider-orthogonal assertions stay valid.
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
@@ -787,7 +816,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     # prefix would otherwise invent a combination no install produces.
     normalized_env["AGENTSTACK_MAIL_LAUNCHD_LABEL"] = ""
     normalized_env["AGENTSTACK_PORT"] = "8770"
-    normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:8765/mcp"
+    normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:18765/mcp"
     normalized_env["AGENTSTACK_LANG"] = ""
     normalized_env["AGENTSTACK_MURMUR"] = ""
     assert normalized_env == sample["env"]
@@ -828,14 +857,22 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         str(path.relative_to(install_dir))
         for path in install_dir.rglob("*")
     }
-    assert remaining == {
+    assert {
         "runtime",
         "runtime/annotations.json",
         "runtime/agent_token_WiseFaraday",
         "runtime/dashboard.log",
         "runtime/dashboard.legacy.log",
         "runtime/dashboard.legacy.1.log",
-    }
+        "mail",
+        "mail/storage.sqlite3",
+        "mail-service",
+        "mail-service/runtime",
+    } <= remaining
+    assert all(
+        path.split("/", 1)[0] in {"runtime", "mail", "mail-service"}
+        for path in remaining
+    )
     assert not (install_dir / "VERSION").exists()
     assert not (install_dir / "integrations").exists()
     assert not (home / ".claude" / "skills" / "delegate").exists()
@@ -922,27 +959,24 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     user_delegate.parent.mkdir(parents=True)
     original = "---\nname: delegate\n---\n\nUser-owned delegate.\n"
     user_delegate.write_text(original, encoding="utf-8")
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    (mail_dir / "storage.sqlite3").touch()
+    mail_dir = install_dir / "mail"
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
     project_dir = home / "project"
-    project_dir.mkdir()
+    project_dir.mkdir(parents=True)
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MAIL_STATE_ROOT": str(mail_dir),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(pathlib.Path(sys.executable).parent.parent),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        # This harness stubs provisioning binaries (uv/git), which cannot
-        # build the bundled AgentStack Mail wheel; pin the upstream provider
-        # so the pre-existing provider-orthogonal assertions stay valid.
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),
@@ -979,7 +1013,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     assert log_link.resolve() == user_log
 
 
-def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
+def test_codex_app_installer_uses_native_mail_env(tmp_path):
     env = _clean_env(tmp_path)
     installer = ROOT / "scripts" / "install-codex-app-integration.sh"
     result = subprocess.run(
@@ -1000,13 +1034,13 @@ def test_codex_app_installer_uses_clone_env_not_signal_home(tmp_path):
         capture_output=True,
         check=True,
     )
-    expected = tmp_path / "mcp_agent_mail" / ".env"
+    expected = tmp_path / ".agentstack" / "mail" / ".env"
     assert f"bearer reference does not exist yet: {expected}" in result.stderr
-    assert str(tmp_path / ".mcp_agent_mail" / ".env") not in result.stderr
     sample = (ROOT / "integrations" / "codex_app" / "env.sh.sample").read_text(
         encoding="utf-8"
     )
-    assert 'AGENTSTACK_MAIL_ENV="$HOME/mcp_agent_mail/.env"' in sample
+    assert 'AGENTSTACK_MAIL_ENV="$HOME/.agentstack/mail/.env"' in sample
+    assert 'AGENTSTACK_SIGNALS_DIR="$HOME/.agentstack/mail/signals"' in sample
 
 
 def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
@@ -1031,14 +1065,15 @@ def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
 
     home = pathlib.Path(env["HOME"])
     install_dir = home / ".agentstack"
-    mail_dir = home / "mcp_agent_mail"
-    (mail_dir / ".git").mkdir(parents=True)
-    (mail_dir / "storage.sqlite3").touch()
+    mail_dir = install_dir / "mail"
     project_dir = home / "project"
-    project_dir.mkdir()
+    project_dir.mkdir(parents=True)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        mail_port = probe.getsockname()[1]
 
     explicit = f"{TEST_LABEL_PREFIX}.chosen-by-the-operator"
     env.update({
@@ -1046,12 +1081,11 @@ def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": explicit,
-        "AGENTSTACK_MAIL_DIR": str(mail_dir),
-        "AGENTSTACK_MAIL_HOME": str(home / ".mcp_agent_mail"),
+        "AGENTSTACK_MAIL_STATE_ROOT": str(mail_dir),
+        "AGENTSTACK_MAIL_SERVICE_VENV": str(pathlib.Path(sys.executable).parent.parent),
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_PROJECT_KEY": str(project_dir),
-        "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
-        "AGENTSTACK_MAIL_PROVIDER": "upstream",
+        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
         "AGENTSTACK_TEST_SERVICE_PID": str(tmp_path / "dashboard-service.pid"),

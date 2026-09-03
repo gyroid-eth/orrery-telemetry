@@ -14,7 +14,7 @@ usage() {
 Usage: uninstall.sh [--dry-run] [--purge-data] [--install-dir PATH]
 
 Uninstalls only files, services, and manifest-recorded settings changes from
-install-state.json. By default, agent-mail clone, database, and runtime logs are
+install-state.json. By default, ORRERY Mail state, database, and runtime logs are
 retained. Use --purge-data to remove exact retained paths recorded in the
 manifest.
 EOF

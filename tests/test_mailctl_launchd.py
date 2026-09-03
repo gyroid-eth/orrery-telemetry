@@ -177,7 +177,6 @@ def harness(tmp_path: Path):
         "PRINT_COUNT": str(tmp_path / "print-count"),
         "SERVING_MARKER": str(serving),
         "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
-        "AGENTSTACK_MAIL_PROVIDER": "agentstack",
         "AGENTSTACK_MAIL_ENV": str(tmp_path / "service" / "env"),
         "AGENTSTACK_MAIL_DB": str(tmp_path / "storage.sqlite3"),
         "AGENTSTACK_MAIL_RUNTIME_DIR": str(tmp_path / "runtime"),

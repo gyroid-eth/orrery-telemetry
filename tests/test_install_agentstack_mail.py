@@ -1,4 +1,4 @@
-"""Default AgentStack Mail installer wiring and the upstream opt-out."""
+"""Default AgentStack Mail installer wiring."""
 
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def test_default_uses_agentstack_dry_run(tmp_path):
     assert not (home / ".agentstack").exists()
 
 
-def test_explicit_agentstack_uses_agentstack_dry_run(tmp_path):
+def test_obsolete_provider_env_cannot_change_the_native_dry_run(tmp_path):
     result, home = _provider_dry_run(tmp_path, "agentstack")
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -201,13 +201,13 @@ def test_explicit_agentstack_uses_agentstack_dry_run(tmp_path):
     assert not (home / ".agentstack").exists()
 
 
-def test_explicit_upstream_keeps_upstream_dry_run(tmp_path):
+def test_obsolete_upstream_value_no_longer_selects_a_clone_path(tmp_path):
     result, home = _provider_dry_run(tmp_path, "upstream")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "installer will provision upstream agent-mail" in result.stdout
-    assert "clone agent-mail upstream" in result.stdout
-    assert "AgentStack Mail candidate" not in result.stdout
+    assert "installer will provision AgentStack Mail" in result.stdout
+    assert "create immutable AgentStack Mail candidate venv" in result.stdout
+    assert "clone agent-mail upstream" not in result.stdout
     assert not (home / ".agentstack").exists()
 
 
@@ -322,13 +322,14 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         claude_mcp = json.loads(
             (home / ".claude.json").read_text(encoding="utf-8")
         )["mcpServers"]
-        assert claude_mcp["mcp-agent-mail"] == {"type": "http", "url": mail_url}
+        assert claude_mcp["orrery-mail"] == {"type": "http", "url": mail_url}
+        assert claude_mcp["mcp-agent-mail"]["url"] == "http://127.0.0.1:9/mcp"
         assert claude_mcp["unrelated"] == {"command": "keep-me"}
         assert "agentstack-mail" not in claude_mcp
         installed_spawn = (
             home / ".agentstack" / "hooks" / "spawn_child.sh"
         ).read_text(encoding="utf-8")
-        assert 'claimed = ["agent-mail"]' in installed_spawn
+        assert 'claimed = ["orrery-mail"]' in installed_spawn
         assert "AGENTSTACK_MCP_URL=mcp_url" in installed_spawn
         dashboard_plist_template = (
             home / ".agentstack" / "dashboard" / "agentdashboard.plist.template"

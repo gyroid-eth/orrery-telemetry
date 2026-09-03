@@ -603,7 +603,6 @@ def _mailctl_env(tmp: pathlib.Path) -> dict:
         # crashing on its own. A test must never name a real install's job.
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "org.agentstack.test.mail-autostart.mailctl",
         "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
-        "AGENTSTACK_MAIL_PROVIDER": "agentstack",
         "AGENTSTACK_MAIL_DIR": str(tmp),
         "AGENTSTACK_MAIL_ENV": str(service_env),
         "AGENTSTACK_MAIL_RUNNER": str(runner),

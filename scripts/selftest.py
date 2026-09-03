@@ -201,10 +201,10 @@ def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> Non
         or os.environ.get("AGENTSTACK_CLAUDE_JSON", "")
         or pathlib.Path.home() / ".claude.json"
     ).expanduser()
-    expected_url = env.get("AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp")
+    expected_url = env.get("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp")
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
-        entry = config.get("mcpServers", {}).get("mcp-agent-mail")
+        entry = config.get("mcpServers", {}).get("orrery-mail")
     except (AttributeError, OSError, ValueError) as exc:
         raise Fail(
             f"Claude MCP registration is missing or unreadable at {path}: {exc}; "
@@ -212,29 +212,29 @@ def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> Non
         ) from exc
     if not isinstance(entry, dict) or entry.get("type") != "http":
         raise Fail(
-            f"Claude MCP entry 'mcp-agent-mail' is not an HTTP server in {path}; "
-            "/delegate cannot see its allowed mcp__mcp-agent-mail__* tools"
+            f"Claude MCP entry 'orrery-mail' is not an HTTP server in {path}; "
+            "/delegate cannot see its allowed mcp__orrery-mail__* tools"
         )
     configured_url = str(entry.get("url", ""))
     if not same_endpoint(configured_url, expected_url):
         raise Fail(
-            f"Claude MCP entry 'mcp-agent-mail' points to {configured_url!r}, "
+            f"Claude MCP entry 'orrery-mail' points to {configured_url!r}, "
             f"which does not reach the installed endpoint {expected_url!r}"
         )
     bearer = read_token(env)
     authorization = (entry.get("headers") or {}).get("Authorization")
     if bearer and authorization != f"Bearer {bearer}":
         raise Fail(
-            "Claude MCP entry 'mcp-agent-mail' has missing or stale authorization; "
+            "Claude MCP entry 'orrery-mail' has unexpected authorization; "
             "run agentstack-doctor for the safe registration command"
         )
     if configured_url != expected_url:
         report.ok(
-            "Claude Code has the fixed mcp-agent-mail MCP registration "
+            "Claude Code has the fixed orrery-mail MCP registration "
             f"(at {configured_url}, the same server as {expected_url})"
         )
         return
-    report.ok("Claude Code has the fixed mcp-agent-mail MCP registration")
+    report.ok("Claude Code has the fixed orrery-mail MCP registration")
 
 
 def dashboard(url: str, path: str, timeout: float = 15.0):
@@ -474,7 +474,7 @@ def main() -> int:
     project_key = ""
     try:
         env = load_env(pathlib.Path(args.install_dir).expanduser())
-        mcp_url = env.get("AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp")
+        mcp_url = env.get("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp")
         project_key = env.get("AGENTSTACK_PROJECT_KEY", "")
         dash_url = f"http://127.0.0.1:{env.get('AGENTSTACK_PORT', '8770')}"
         if not project_key:
