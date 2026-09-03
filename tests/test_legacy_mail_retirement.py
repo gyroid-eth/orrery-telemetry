@@ -112,6 +112,7 @@ def _run_retirement(
     *,
     extra_env: dict[str, str] | None = None,
     retire: bool = True,
+    twice: bool = False,
     harness: tuple[dict[str, str], Path, Path] | None = None,
 ) -> tuple[str, str, Path, Path]:
     """Source the installer and call the step directly, with no install running."""
@@ -142,6 +143,7 @@ die() {{ echo "die: $@" >&2; exit 1; }}
 INSTALL_DIR={install_dir!s}
 uname() {{ echo Darwin; }}
 retire_legacy_mail_services
+{"retire_legacy_mail_services" if twice else ""}
 """
     result = subprocess.run(
         ["/bin/bash", "-c", script],
@@ -170,6 +172,15 @@ def test_the_per_user_label_is_retired_too(tmp_path: Path) -> None:
     label = f"com.{user}.mcp-agent-mail"
     _out, _err, loaded_dir, _log = _run_retirement(tmp_path, [label])
     assert not (loaded_dir / label).exists()
+
+
+def test_retirement_scan_is_idempotent(tmp_path: Path) -> None:
+    label = "org.agentstack.mcp-agent-mail"
+    out, err, loaded_dir, log = _run_retirement(tmp_path, [label], twice=True)
+    assert not err
+    assert not (loaded_dir / label).exists()
+    assert _log_text(log).count(f"bootout gui/{os.getuid()}/{label}") == 1
+    assert out.count("retired legacy mail service") == 1
 
 
 def test_nothing_is_touched_when_no_legacy_job_is_loaded(tmp_path: Path) -> None:
