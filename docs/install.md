@@ -57,6 +57,19 @@ proxy で扱います。
 
 Claude と Codex の MCP 登録 key はともに `orrery-mail` です。Claude の旧 `mcp-agent-mail` key が同じ endpoint を指す場合、承認された設定 merge で新 key へ移します。
 
+### 旧 launchd mail service の退役
+
+旧 `mcp_agent_mail` の launchd job が endpoint を保持している場合は、明示的に
+`--retire-legacy-mail` を付けて installer を実行します。installer は既存 listener を
+AgentStack Mail として再利用できるか調べる**前**に、既知の legacy label と plist の
+実行内容を照合し、該当 job を bootout して plist を
+`~/.agentstack/parked-launchd/` へ退避します。フラグなしでは service を止めず、検出
+label と同フラグを示して停止します。
+
+`--dry-run --retire-legacy-mail` は job を実際には止めませんが、退役計画を先に表示し、
+その listener は退役される前提で bundled ORRERY Mail の provision 計画を表示します。
+同じ installer process 内で legacy scan が再度呼ばれても二重に bootout / 退避しません。
+
 ### 既存 upstream データの手動移行
 
 既存 upstream state を移す場合は、先に legacy writer を quiesce し、DB、archive、
@@ -161,6 +174,7 @@ agent-start /path/to/project
 --project-key PATH      default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, existing env.sh
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
+--retire-legacy-mail    retire a verified legacy launchd mail job before reuse checks
 --terminal MODE         auto | ghostty | iterm | terminal | none
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```

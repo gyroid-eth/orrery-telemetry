@@ -192,6 +192,13 @@ agent-mail が名前を受け入れず、生成名に置き換えた状態です
 
 install 時の判定と根拠は `install-state.json` の `agent_mail.requested_name_honoring` に残ります。同梱 ORRERY Mail は要求名を受け付ける設定で起動します。旧 service がまだ応答している場合は `--retire-legacy-mail` で停止してから installer を再実行し、同梱 service へ切り替えてください。
 
+旧 service が `sqlite+aiosqlite:///./storage.sqlite3` のような相対 DB URL を返す機体で
+`unsupported database URL` が出る場合も、既知の legacy launchd label がロード中なら
+`./scripts/install.sh --retire-legacy-mail ...` を使います。installer は label と plist が
+実際に mail service を指すことを確認してから、listener の再利用判定より先に退役します。
+フラグなしのエラーには検出 label が表示されます。label が表示されない場合は別の
+listener なので、DB path を推測せず `agentstack-doctor --report` で所有者を確認してください。
+
 ### 別名で登録されたときに何が起きるか
 
 エージェント自体は正常に動きます。壊れるのは**呼び名だけ**です。
