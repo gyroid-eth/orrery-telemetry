@@ -43,9 +43,17 @@ When a change modifies behavior, startup flow, install behavior, or agent
 coordination rules, review the docs in the same PR before calling the work
 done:
 
-- `README.md`
+- `README.md` and `README.en.md` (the English quick start and document table
+  must list the same steps and guides as the Japanese original)
+- `AGENTS.md` (the instructions an installing agent follows)
+- `docs/install.md`, `docs/hooks.md` and the reference the change touches
 - `claude/CLAUDE.md`
 - `codex/AGENTS.md`
+
+Facts that drift silently — the default agent-mail port, the number of
+approval prompts, the number of Claude event hooks, the guide list — are
+checked against the implementation by `tests/test_docs_consistency.py`.
+Extend that test when you add such a fact instead of relying on review.
 
 The docs must not contradict the implementation. If no docs change is needed,
 that should be an explicit review decision, not an accidental omission.

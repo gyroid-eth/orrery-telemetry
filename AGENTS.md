@@ -51,13 +51,14 @@ has already broken a real install.
 python3 --version                     # must be 3.10 or newer
 command -v tmux git uv                # all three are required
 lsof -i :8770                         # dashboard port; must be free
-lsof -i :8765                         # agent-mail; see below
+lsof -i :18765                        # agent-mail (default port; see below)
 uname -s                              # macOS is the primary target
 ```
 
-**If something is already listening on 8765**, the user likely has agent-mail
-running. That is good and normal — the installer will detect it and reuse both
-the server and its database. Do not stop it. Do not start a second one.
+**If something is already listening on 18765** (or on the port named by an
+existing `AGENTSTACK_MCP_URL`), the user likely has agent-mail running. That is
+good and normal — the installer will detect it and reuse both the server and
+its database. Do not stop it. Do not start a second one.
 
 **If `python3` is older than 3.10**, do not upgrade their system Python.
 Point `AGENTSTACK_PYTHON` at a newer interpreter they already have, or tell
@@ -81,9 +82,9 @@ Then, for the real run, choose one of two paths.
 **Default — hand back at the approvals.** Run `./scripts/install.sh` in a
 terminal the user controls, or tell them to run it themselves. It pauses for a
 typed `yes` four times — the settings merge, the `~/.claude.json` MCP entry,
-the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block — plus once more
-to confirm reuse of an already-running agent-mail. This is the right choice when you are unsure, and
-when the user has not said otherwise.
+the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block. Reuse of an
+already-running agent-mail is reported, not prompted for. This is the right
+choice when you are unsure, and when the user has not said otherwise.
 
 **Opt-in — `./scripts/install.sh --assume-yes`.** Use this only when the user
 has explicitly said they trust the repo and do not want to be asked. It

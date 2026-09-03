@@ -28,30 +28,32 @@ CI や isolated test で platform boundary を意図的に偽装する場合に�
 
 ## クイックスタート
 
+初回は必ず dry-run から始めます。変更予定（service mode・使う agent-mail DB・settings diff）を読んでから本番の install に進みます。
+
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
 cd orrery-telemetry
+./scripts/install.sh --project-key /absolute/path/to/coordinated-project --dry-run
 ./scripts/install.sh --project-key /absolute/path/to/coordinated-project
 ```
 
-installer の preview を確認し、Claude Code settings と managed instructions の merge を許可します。インストール後:
+installer は 4 回 `yes` を求めます（Claude Code settings の merge・`~/.claude.json` の MCP entry・Codex / Claude の managed instructions）。インストール後、「入っているか」と「動くか」を別々に確認します。
 
 ```bash
 export PATH="$HOME/.agentstack/bin:$PATH"
-
-agent-start ~/code/my-project
-# または
-agent-start-codex ~/code/my-project
+agentstack-doctor      # 配置・設定・service の状態
+agentstack-selftest    # agent を2体登録し、mail 往復と file reservation を実測
 ```
 
-別の terminal で dashboard を開きます。
+最初の agent を起動し、その中から child を1体作って dashboard で確認します。
 
 ```bash
-open http://127.0.0.1:8770/
-~/.agentstack/bin/agentstack-doctor
+agent-start ~/code/my-project        # または agent-start-codex ~/code/my-project
+# 起動した Claude Code で:  /delegate <child に頼む作業>
+open http://127.0.0.1:8770/          # 別 terminal。DECK に親と child のカードが並べば完了
 ```
 
-`agent-start` は agent-mail identity と同名の tmux session を作ります。これが dashboard の jump、mail signal 配送、token recovery を一意に結びます。設定を変える場合は[インストール](docs/install.md)と[設定](docs/configuration.md)を参照してください。
+`agent-start` は agent-mail identity と同名の tmux session を作ります。これが dashboard の jump、mail signal 配送、token recovery を一意に結びます。設定を変える場合は[インストール](docs/install.md)と[設定](docs/configuration.md)、child の仕組みは[委任と child agent](docs/delegation.md)を参照してください。
 
 Codex Desktop の root task / subagent も同じ agent-mail と dashboard に接続する場合は、任意の [Codex App 統合](docs/codex-app.md)を追加します。Codex CLI だけを使う場合、この追加 install は不要です。
 

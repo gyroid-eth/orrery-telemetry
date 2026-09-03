@@ -82,7 +82,7 @@ agent-start-codex /path/to/your-project
 
 ## 非対話で入れる（`--assume-yes`）
 
-CI や script から入れる場合、既定のままだと 3 つの承認は警告付きでスキップされます。repository と preview 内容を確認した**ユーザー本人**が、承認を事前に与える場合だけ次を使えます。
+CI や script から入れる場合、既定のままだと 4 つの承認（Claude settings merge・`~/.claude.json` の MCP entry・Codex `AGENTS.md` block・Claude `CLAUDE.md` block）は警告付きでスキップされます。repository と preview 内容を確認した**ユーザー本人**が、承認を事前に与える場合だけ次を使えます。
 
 ```bash
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes

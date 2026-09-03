@@ -28,30 +28,32 @@ Only CI and isolated tests that deliberately replace a platform boundary should 
 
 ## Quick start
 
+Always start with a dry run. Read what it plans (service mode, the agent-mail database it resolved, the settings diff) before the real install.
+
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
 cd orrery-telemetry
+./scripts/install.sh --project-key /absolute/path/to/coordinated-project --dry-run
 ./scripts/install.sh --project-key /absolute/path/to/coordinated-project
 ```
 
-Review the installer preview and approve the Claude Code settings and managed-instructions merge. Then:
+The installer asks for `yes` four times (the Claude Code settings merge, the `~/.claude.json` MCP entry, and the Codex / Claude managed instructions). After it finishes, check "is it installed" and "does it work" separately:
 
 ```bash
 export PATH="$HOME/.agentstack/bin:$PATH"
-
-agent-start ~/code/my-project
-# or
-agent-start-codex ~/code/my-project
+agentstack-doctor      # placement, configuration and service state
+agentstack-selftest    # registers two agents, exchanges mail and holds a reservation
 ```
 
-Open the dashboard from another terminal:
+Start your first agent, spawn one child from inside it, and confirm both on the dashboard:
 
 ```bash
-open http://127.0.0.1:8770/
-~/.agentstack/bin/agentstack-doctor
+agent-start ~/code/my-project        # or agent-start-codex ~/code/my-project
+# inside the Claude Code session:  /delegate <what the child should do>
+open http://127.0.0.1:8770/          # another terminal; DECK shows the parent and child cards
 ```
 
-`agent-start` gives the tmux session the same name as its agent-mail identity. That unambiguously connects dashboard jumps, mail-signal delivery, and token recovery. See [Installation](docs/install.md) and [Configuration](docs/configuration.md) for other setups.
+`agent-start` gives the tmux session the same name as its agent-mail identity. That unambiguously connects dashboard jumps, mail-signal delivery, and token recovery. See [Installation](docs/install.md) and [Configuration](docs/configuration.md) for other setups, and [Delegation and child agents](docs/delegation.md) for how children differ from built-in subagents.
 
 To connect Codex Desktop root tasks and subagents to the same agent-mail project and dashboard, add the optional [Codex App integration](docs/codex-app.md). Codex CLI-only setups do not need this additional install.
 
@@ -75,19 +77,21 @@ By default, agent-mail queues the audit archive's Git commit asynchronously and 
 
 Cards group running, standby, finished, and gone agents while showing tasks, models, remaining context, latest instructions, and deliverables. History, Output, terminal access, and confirmed EXIT/KILL controls stay in one place.
 
-<!-- TODO: screenshot: DECK view -->
+![DECK view](docs/img/deck.jpg)
 
 ### 4. NETWORK and DIGEST REPLAY
 
 A force graph overlays spawn lineage and agent-mail traffic, with explorable nodes, edges, roles, groups, and a mail drawer. Select multiple agents to replay communication and state changes with speed, HOLD, and TIME-TRAVEL controls.
 
-<!-- TODO: screenshot: NETWORK and DIGEST REPLAY -->
+![NETWORK view](docs/img/network.jpg)
+
+![DIGEST REPLAY](docs/img/digest-replay.jpg)
 
 ### 5. Control plane and NEW AGENT
 
 The dashboard can EXIT, RESUME, REPLAY, annotate roles, and spawn Claude or Codex children. Registration, task delivery, token creation, and tmux launch follow one auditable sequence.
 
-<!-- TODO: screenshot: NEW AGENT modal -->
+![NEW AGENT modal](docs/img/new-agent.jpg)
 
 ### 6. API and customization
 
@@ -105,7 +109,8 @@ The Japanese documentation is canonical. English versions of the detailed guides
 | --- | --- |
 | [Installation](docs/install.md) | Install tiers, settings merge, VERSION, TCC, upgrade, and uninstall |
 | [Launchers and identity](docs/launchers.md) | `agent-start`, naming, tokens, fail-closed checks, and `CLAUDECODE` |
-| [Hooks and operational helpers](docs/hooks.md) | Five Claude event hooks, six launcher/watcher helpers, triggers, blocking, and cleanup |
+| [Delegation and child agents](docs/delegation.md) | How children differ from built-in subagents, how to tell which one is running, and when to use each |
+| [Hooks and operational helpers](docs/hooks.md) | Eight Claude event hooks, launcher/watcher helpers, triggers, blocking, release, and cleanup |
 | [Codex App integration](docs/codex-app.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
 | [Dashboard](docs/dashboard.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
 | [API reference](docs/api.md) | Every route, query/request fields, and response schemas |
