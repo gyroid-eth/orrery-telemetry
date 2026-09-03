@@ -33942,6 +33942,29 @@ function scheduleSpawnDirOptions(value,delay=250){
   },delay);
 }
 
+// Poll the background verdict of an async spawn and report it as a toast.
+async function watchSpawnLaunch(name,dir){
+  const started=Date.now();
+  while(Date.now()-started<140000){
+    await new Promise(r=>setTimeout(r,2000));
+    let j=null;
+    try{
+      const r=await fetch('/api/spawn-status?name='+encodeURIComponent(name),{cache:'no-store'});
+      j=await r.json();
+    }catch(e){continue;}
+    if(!j||!j.ok||j.state==='launching')continue;
+    if(j.state==='ready'){
+      clearSpawnTaskDraft(dir);
+      toast('▸ SPAWNED','> '+name+' :: tmux session ready');
+      setTimeout(()=>{ if(view==='deck') tick(); else netTick(); },300);
+    }else{
+      toast('✕ SPAWN FAILED','> '+name+' :: '+(j.error||'launcher failed')+' · task draft saved',true);
+    }
+    return;
+  }
+  toast('✕ SPAWN','> '+name+' :: no verdict after 140s',true);
+}
+
 function renderSpawnDirs(dirs){
   const root=SPM('spm-dir-chips');
   const clean=[...new Set((Array.isArray(dirs)?dirs:[])
@@ -34338,10 +34361,14 @@ async function submitSpawn(){
   spmDraftDir=payload.dir;
   try{
     try{localStorage.setItem(SPM_DIR_KEY,payload.dir);}catch(e){}
+    // async: the server registers the child and starts the launcher, then
+    // answers at once; readiness is settled in the background and read back
+    // from /api/spawn-status, so the dialog does not sit over the deck for
+    // the ten-odd seconds a REPL takes to come up.
     const r=await fetch('/api/spawn',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
+      body:JSON.stringify({...payload,async:true})
     });
     const j=await r.json();
     spmBusy=false;
@@ -34351,6 +34378,17 @@ async function submitSpawn(){
       setSpawnStat('✕ '+(j.error||'spawn failed')+
         (draftSaved?' · task draft saved':' · task remains in this form'),'err');
       updateSpawnButton();
+      return;
+    }
+    if(j.pending){
+      spmDraftRestored=false;
+      const adjusted=j.name_substituted
+        ? ' · identity changed from '+(j.requested_name||'?') : '';
+      toast(j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
+        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL');
+      updateSpawnButton();
+      closeSpawnModal();
+      watchSpawnLaunch(j.child_name,payload.dir);
       return;
     }
     clearSpawnTaskDraft(payload.dir);

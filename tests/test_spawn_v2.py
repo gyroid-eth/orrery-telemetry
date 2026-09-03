@@ -437,3 +437,68 @@ def test_spawn_dirs_rejects_traversal_external_and_symlink_escape(monkeypatch, t
     assert server.spawn_directory_suggestions(str(outside))["dirs"] == []
     result = server.spawn_directory_suggestions(str(root))
     assert [item["name"] for item in result["dirs"]] == ["alpha", "zulu"]
+
+
+def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, tmp_path):
+    """The page closes its modal at once; the verdict arrives via spawn-status."""
+    import threading as _threading
+    import time as _time
+    launcher = tmp_path / "spawn_child.sh"
+    launcher.write_text("#!/bin/bash\n")
+    launcher.chmod(0o755)
+    release = _threading.Event()
+
+    class SlowProc:
+        def wait(self, timeout=None):
+            assert release.wait(timeout=5), "launcher wait was never released"
+            return 0
+
+    def mcp(method, args, timeout=15):
+        return {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if method == "register_agent" else {}}
+
+    monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(server, "HERE", str(tmp_path))
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(server, "_mcp_call", mcp)
+    monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: SlowProc())
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+
+    started = _time.monotonic()
+    result = server.do_spawn({"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path), "async": True})
+    assert _time.monotonic() - started < 1.0, "an async spawn must not wait for the launcher"
+    assert result["ok"] is True and result["pending"] is True
+    assert result["child_name"] == "QuietCurie"
+    assert server.spawn_launch_status("QuietCurie")["state"] == "launching"
+
+    release.set()
+    deadline = _time.monotonic() + 5
+    while server.spawn_launch_status("QuietCurie")["state"] == "launching" and _time.monotonic() < deadline:
+        _time.sleep(0.05)
+    status = server.spawn_launch_status("QuietCurie")
+    assert status["state"] == "ready", status
+    assert status["result"]["tmux_session"] == "QuietCurie"
+    assert server.spawn_launch_status("Nobody")["ok"] is False
+
+
+def test_sync_spawn_is_unchanged_without_the_async_flag(monkeypatch, tmp_path):
+    launcher = tmp_path / "spawn_child.sh"
+    launcher.write_text("#!/bin/bash\n")
+    launcher.chmod(0o755)
+
+    class Proc:
+        def wait(self, timeout=None):
+            return 3
+
+    monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(server, "HERE", str(tmp_path))
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
+    monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: Proc())
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    result = server.do_spawn({"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)})
+    assert result["ok"] is False
+    assert "exited with status 3" in result["error"]

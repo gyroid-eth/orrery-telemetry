@@ -3846,6 +3846,54 @@ def _runtime_agent_token(agent_name: str) -> str:
     return token if token and len(token) <= 4096 else ""
 
 
+_SPAWN_LAUNCHES: dict[str, dict] = {}
+_SPAWN_LAUNCHES_LOCK = threading.Lock()
+_SPAWN_LAUNCH_RETENTION = 1800.0
+
+
+def _spawn_launch_record(name: str, result: dict) -> None:
+    """Remember the outcome of an asynchronous launch for /api/spawn-status."""
+    if result.get("pending"):
+        state = "launching"
+    elif result.get("ok"):
+        state = "ready"
+    else:
+        state = "failed"
+    now = time.time()
+    with _SPAWN_LAUNCHES_LOCK:
+        for stale in [k for k, v in _SPAWN_LAUNCHES.items()
+                      if now - v["ts"] > _SPAWN_LAUNCH_RETENTION]:
+            _SPAWN_LAUNCHES.pop(stale, None)
+        previous = _SPAWN_LAUNCHES.get(name)
+        _SPAWN_LAUNCHES[name] = {
+            "ts": now,
+            "started": previous["started"] if previous else now,
+            "state": state,
+            "result": result,
+        }
+
+
+def spawn_launch_status(name: str) -> dict:
+    with _SPAWN_LAUNCHES_LOCK:
+        entry = _SPAWN_LAUNCHES.get(name)
+    if entry is None:
+        return {"ok": False, "error": "no launch recorded for this name"}
+    result = entry["result"]
+    return {
+        "ok": True,
+        "name": name,
+        "state": entry["state"],
+        "age": round(time.time() - entry["started"], 1),
+        "error": result.get("error"),
+        "detail": result.get("detail"),
+        "result": result if entry["state"] != "launching" else None,
+    }
+
+
+def spawn_launch_statuses() -> dict:
+    return {"ok": True, "launches": {name: spawn_launch_status(name) for name in list(_SPAWN_LAUNCHES)}}
+
+
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
@@ -4126,23 +4174,40 @@ def do_spawn(payload: dict) -> dict:
         # The launcher performs readiness/death detection and consumes the
         # one-shot token before returning.  Wait for that verdict instead of
         # treating a briefly-created tmux session as success.
-        if hasattr(proc, "wait"):
-            try:
-                returncode = proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
+        def settle() -> dict:
+            if hasattr(proc, "wait"):
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001
+                    returncode = proc.wait(timeout=120)
+                except subprocess.TimeoutExpired:
                     try:
-                        proc.kill()
+                        proc.terminate()
+                        proc.wait(timeout=5)
                     except Exception:  # noqa: BLE001
+                        try:
+                            proc.kill()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    kill_spawn_session()
+                    remove_spawn_credentials()
+                    return retained_registration_error(
+                        "spawn launcher did not finish readiness checks within 120s")
+                if returncode != 0:
+                    kill_spawn_session()
+                    remove_spawn_credentials()
+                    tail = ""
+                    try:
+                        with open(log_path, encoding="utf-8", errors="replace") as f:
+                            tail = f.read()[-1000:]
+                    except OSError:
                         pass
-                kill_spawn_session()
-                remove_spawn_credentials()
-                return retained_registration_error(
-                    "spawn launcher did not finish readiness checks within 120s")
-            if returncode != 0:
+                    return retained_registration_error(
+                        f"spawn launcher exited with status {returncode}",
+                        detail=tail)
+
+            probe = subprocess.run(
+                ["tmux", "has-session", "-t", f"={child_name}"],
+                capture_output=True, text=True)
+            if probe.returncode:
                 kill_spawn_session()
                 remove_spawn_credentials()
                 tail = ""
@@ -4152,24 +4217,60 @@ def do_spawn(payload: dict) -> dict:
                 except OSError:
                     pass
                 return retained_registration_error(
-                    f"spawn launcher exited with status {returncode}",
+                    "spawn launcher exited before a live tmux session was created",
                     detail=tail)
+            return {
+                "ok": True,
+                "child_name": child_name,
+                "requested_name": requested_name,
+                "name_substituted": name_substituted,
+                "tmux_session": child_name,
+                "annot": annot_status,
+                "worktree": worktree,
+                "standalone": standalone,
+                "provider": provider,
+                "model": model_str,
+                "effort": effort or None,
+            }
 
-        probe = subprocess.run(
-            ["tmux", "has-session", "-t", f"={child_name}"],
-            capture_output=True, text=True)
-        if probe.returncode:
-            kill_spawn_session()
-            remove_spawn_credentials()
-            tail = ""
-            try:
-                with open(log_path, encoding="utf-8", errors="replace") as f:
-                    tail = f.read()[-1000:]
-            except OSError:
-                pass
-            return retained_registration_error(
-                "spawn launcher exited before a live tmux session was created",
-                detail=tail)
+        if payload.get("async") is True:
+            # The verdict is unchanged; only who waits for it. The page closes
+            # its modal now and reads the outcome from /api/spawn-status, so a
+            # ten-second readiness wait no longer holds a dialog open over the
+            # rest of the UI. The thread owns the log handle from here.
+            pending = {
+                "ok": True,
+                "pending": True,
+                "child_name": child_name,
+                "requested_name": requested_name,
+                "name_substituted": name_substituted,
+                "tmux_session": child_name,
+                "annot": annot_status,
+                "worktree": worktree,
+                "standalone": standalone,
+                "provider": provider,
+                "model": model_str,
+                "effort": effort or None,
+            }
+            _spawn_launch_record(child_name, pending)
+            owned_log = log_fh
+            log_fh = None
+
+            def runner() -> None:
+                try:
+                    verdict = settle()
+                except Exception as e:  # noqa: BLE001
+                    kill_spawn_session()
+                    remove_spawn_credentials()
+                    verdict = retained_registration_error(f"spawn launch failed: {e}")
+                finally:
+                    owned_log.close()
+                _spawn_launch_record(child_name, verdict)
+
+            threading.Thread(target=runner, name=f"spawn-{child_name}", daemon=True).start()
+            return pending
+
+        result = settle()
     except Exception as e:  # noqa: BLE001
         kill_spawn_session()
         remove_spawn_credentials()
@@ -4178,19 +4279,7 @@ def do_spawn(payload: dict) -> dict:
         if log_fh is not None:
             log_fh.close()
 
-    return {
-        "ok": True,
-        "child_name": child_name,
-        "requested_name": requested_name,
-        "name_substituted": name_substituted,
-        "tmux_session": child_name,
-        "annot": annot_status,
-        "worktree": worktree,
-        "standalone": standalone,
-        "provider": provider,
-        "model": model_str,
-        "effort": effort or None,
-    }
+    return result
 
 
 def do_exit(session: str) -> dict:
@@ -4516,6 +4605,15 @@ class Handler(BaseHTTPRequestHandler):
                 ensure_ascii=False,
             ).encode()
             self._send(200, body, "application/json; charset=utf-8")
+        elif path == "/api/spawn-status":
+            q = parse_qs(urlparse(self.path).query)
+            name = (q.get("name") or [""])[0]
+            status = spawn_launch_status(name) if name else spawn_launch_statuses()
+            self._send(
+                200 if status.get("ok") else 404,
+                json.dumps(status, ensure_ascii=False).encode(),
+                "application/json; charset=utf-8",
+            )
         elif path == "/api/custom-portraits":
             self._send(
                 200,

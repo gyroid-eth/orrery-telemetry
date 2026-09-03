@@ -542,6 +542,20 @@ non-git directory では Codex が trust dialog を出すことがあります�
 
 spawn は generated `env.sh` の `AGENTSTACK_MCP_URL`（未設定時は `http://127.0.0.1:18765/mcp` に fallback）を使います。既定の ORRERY Mail transport は bearer を使いません。launcher / hook と同じ値を共有するので、endpoint を変更する場合は `env.sh` 側を更新してください。
 
+## 非同期 spawn と `GET /api/spawn-status`
+
+`POST /api/spawn` に `"async": true` を付けると、child の登録と launcher の起動まで済ませた時点で応答を返します（`ok: true, pending: true`、`child_name` 等は同期時と同じ field）。REPL の readiness 判定と task 注入の確認は background で続き、結果は次で読みます。
+
+```bash
+curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
+```
+
+```json
+{"ok":true,"name":"WindyFermi","state":"ready","age":9.4,"error":null,"detail":null,"result":{...}}
+```
+
+`state` は `launching / ready / failed`。`failed` のとき `error` と `detail`（launcher の末尾ログ）が入り、同期 spawn が返すものと同じ内容です。記録は 30 分保持し、未知の名前は 404 です。`name` を省略すると保持中の全件を返します。dashboard と ORRERY cockpit の NEW AGENT はこの経路を使い、modal を即閉じて結果を toast で出します。`async` を付けない呼び出しは従来どおり判定まで待ちます。
+
 ## 関連文書
 
 - [Hooks と運用 helper](hooks.md)
