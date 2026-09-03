@@ -1830,6 +1830,19 @@ PY_UNIT
   mv "$AGENT_MAIL_AUTOSTART_PATH.tmp" "$AGENT_MAIL_AUTOSTART_PATH"
 } # end render_mail_autostart_unit
 
+wait_for_launchd_unload() {
+  local target="$1"
+  local waited=0
+  while launchctl print "$target" >/dev/null 2>&1; do
+    if (( waited >= 50 )); then
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  return 0
+} # end wait_for_launchd_unload
+
 retire_legacy_mail_services() {
   # After a cutover the predecessor keeps running unless something retires it,
   # and nothing did: the only code that boots out a previous job is the
@@ -1907,15 +1920,8 @@ retire_legacy_mail_services() {
         die "could not retire legacy mail service '$label'; retire it by hand (launchctl bootout gui/$(id -u)/$label) and re-run"
       fi
     fi
-    local waited=0
-    while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
-      # bootout is asynchronous.
-      if (( waited >= 50 )); then
-        die "legacy mail service '$label' is still loaded after bootout; retire it by hand and re-run"
-      fi
-      sleep 0.1
-      waited=$((waited + 1))
-    done
+    wait_for_launchd_unload "gui/$(id -u)/$label" || \
+      die "legacy mail service '$label' is still loaded after bootout; retire it by hand and re-run"
 
     # Park the plist rather than delete it. Retiring someone's running service
     # is not the kind of thing an installer should make unrecoverable.
@@ -2049,8 +2055,10 @@ enable_mail_autostart() {
 
   if [[ "$DRY_RUN" == true ]]; then
     if [[ "$kind" == "launchd" ]]; then
-      say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $AGENT_MAIL_AUTOSTART_PATH"
       say "DRY-RUN would run: launchctl enable gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+      say "DRY-RUN would run: launchctl bootout gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+      say "DRY-RUN would wait for launchctl unload: gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+      say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $AGENT_MAIL_AUTOSTART_PATH"
     else
       say "DRY-RUN would run: systemctl --user enable --now $MAIL_AUTOSTART_LABEL.timer"
     fi
@@ -2059,22 +2067,27 @@ enable_mail_autostart() {
   fi
 
   if [[ "$kind" == "launchd" ]]; then
-    launchctl bootout "gui/$(id -u)/$MAIL_AUTOSTART_LABEL" 2>/dev/null || true
-    # As with the dashboard: the bootstrap call is the capability probe. Never
-    # infer availability from login metadata.
-    if launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH" && \
-       launchctl enable "gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
-    then
-      AGENT_MAIL_AUTOSTART_KIND="launchd"
-      [[ -n "$previous" ]] && rm -f "$previous"
-      say "AgentStack Mail will restart at login ($MAIL_AUTOSTART_LABEL)"
-      return 0
+    local launchd_target="gui/$(id -u)/$MAIL_AUTOSTART_LABEL"
+    if launchctl enable "$launchd_target"; then
+      launchctl bootout "$launchd_target" 2>/dev/null || true
+      # bootstrap is the capability probe only after disabled state is cleared
+      # and the previous job has actually left the domain.
+      if wait_for_launchd_unload "$launchd_target" && \
+         launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH"
+      then
+        AGENT_MAIL_AUTOSTART_KIND="launchd"
+        [[ -n "$previous" ]] && rm -f "$previous"
+        say "AgentStack Mail will restart at login ($MAIL_AUTOSTART_LABEL)"
+        return 0
+      fi
     fi
-    launchctl bootout "gui/$(id -u)/$MAIL_AUTOSTART_LABEL" 2>/dev/null || true
+    launchctl bootout "$launchd_target" 2>/dev/null || true
+    wait_for_launchd_unload "$launchd_target" || true
     rm -f "$AGENT_MAIL_AUTOSTART_PATH"
     if [[ -n "$previous" ]]; then
       mv "$previous" "$AGENT_MAIL_AUTOSTART_PATH"
-      if launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH" 2>/dev/null; then
+      if launchctl enable "$launchd_target" 2>/dev/null && \
+         launchctl bootstrap "gui/$(id -u)" "$AGENT_MAIL_AUTOSTART_PATH" 2>/dev/null; then
         warn "kept the previous AgentStack Mail login trigger; the new one could not be registered"
         AGENT_MAIL_AUTOSTART_KIND="launchd"
         return 0
@@ -2239,32 +2252,38 @@ PY
 
 start_service() {
   local kind="$1"
+  local launchd_target=""
   case "$kind" in
     launchd)
       render_launchd_plist
+      launchd_target="gui/$(id -u)/$LABEL"
       if [[ "$DRY_RUN" == true ]]; then
-        say "DRY-RUN would run: launchctl bootout gui/$(id -u)/$LABEL"
+        say "DRY-RUN would run: launchctl enable $launchd_target"
+        say "DRY-RUN would run: launchctl bootout $launchd_target"
+        say "DRY-RUN would wait for launchctl unload: $launchd_target"
         say "DRY-RUN would run: launchctl bootstrap gui/$(id -u) $SERVICE_PATH"
-        say "DRY-RUN would run: launchctl enable gui/$(id -u)/$LABEL"
-        say "DRY-RUN would run: launchctl kickstart gui/$(id -u)/$LABEL"
+        say "DRY-RUN would run: launchctl kickstart $launchd_target"
         say "DRY-RUN note: a real run treats those commands as the probe; if the"
         say "  gui/$(id -u) domain refuses them it switches to supervised background mode."
         ACTIVE_SERVICE_KIND="launchd"
         return
       fi
-      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       # A GUI domain can disappear while the user is logged in (for example
       # while the display is asleep), so the bootstrap operation itself is the
       # capability probe. Never infer availability from login metadata.
-      if launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH" && \
-         launchctl enable "gui/$(id -u)/$LABEL" && \
-         launchctl kickstart "gui/$(id -u)/$LABEL"
-      then
-        ACTIVE_SERVICE_KIND="launchd"
-        return
+      if launchctl enable "$launchd_target"; then
+        launchctl bootout "$launchd_target" 2>/dev/null || true
+        if wait_for_launchd_unload "$launchd_target" && \
+           launchctl bootstrap "gui/$(id -u)" "$SERVICE_PATH" && \
+           launchctl kickstart "$launchd_target"
+        then
+          ACTIVE_SERVICE_KIND="launchd"
+          return
+        fi
       fi
       warn "launchd could not bootstrap $LABEL in gui/$(id -u); falling back to supervised background mode"
-      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      launchctl bootout "$launchd_target" 2>/dev/null || true
+      wait_for_launchd_unload "$launchd_target" || true
       rm -f "$SERVICE_PATH"
       SERVICE_FALLBACK_USED=true
       start_supervised_background || true

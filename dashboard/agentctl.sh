@@ -90,6 +90,18 @@ launchd_loaded() {
     launchctl print "$GUI/$LABEL" >/dev/null 2>&1
 }
 
+wait_for_launchd_unload() {
+  local attempts=0
+  while launchctl print "$GUI/$LABEL" >/dev/null 2>&1; do
+    if [[ "$attempts" -ge 50 ]]; then
+      return 1
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  return 0
+}
+
 export_background_env() {
   export AGENTSTACK_PORT="$PORT"
   export AGENTSTACK_LABEL_PREFIX="$LABEL_PREFIX"
@@ -155,18 +167,22 @@ start_any() {
   fi
   if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
     render_plist
-    launchctl bootout "$GUI/$LABEL" 2>/dev/null || true
-    # bootstrap itself is the capability check: a logged-in Mac can lose the
-    # GUI domain while its display sleeps.
-    if launchctl bootstrap "$GUI" "$PLIST_DST" && \
-       launchctl enable "$GUI/$LABEL" && \
-       launchctl kickstart "$GUI/$LABEL"
-    then
-      echo "started in launchd mode -> $URL"
-      return 0
+    # A disabled label makes bootstrap fail with EIO, and bootout completes
+    # asynchronously. Clear both states before using bootstrap as the GUI-domain
+    # capability probe.
+    if launchctl enable "$GUI/$LABEL"; then
+      launchctl bootout "$GUI/$LABEL" 2>/dev/null || true
+      if wait_for_launchd_unload && \
+         launchctl bootstrap "$GUI" "$PLIST_DST" && \
+         launchctl kickstart "$GUI/$LABEL"
+      then
+        echo "started in launchd mode -> $URL"
+        return 0
+      fi
     fi
     echo "warning: launchd bootstrap failed; using supervised-background mode" >&2
     launchctl bootout "$GUI/$LABEL" 2>/dev/null || true
+    wait_for_launchd_unload || true
     rm -f "$PLIST_DST"
   fi
   start_background

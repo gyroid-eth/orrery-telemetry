@@ -407,6 +407,10 @@ start_service() {
       die "recorded launchd plist is missing ($memo_plist); remove $LAUNCHD_PLIST_MEMO if it is stale"
     plist_defines_this_service "$memo_plist" || \
       die "recorded plist $memo_plist does not define $MAIL_LAUNCHD_LABEL running this service"
+    # A label remains disabled after bootout on some macOS installs; enabling
+    # it first avoids bootstrap failing with EIO.
+    launchctl enable "$(launchd_service_target)" >/dev/null 2>&1 || \
+      die "could not enable launchd job $MAIL_LAUNCHD_LABEL"
     launchctl bootstrap "gui/$(id -u)" "$memo_plist" >/dev/null 2>&1 || true
     if launchd_supervises_mail; then
       rm -f "$LAUNCHD_PLIST_MEMO"
