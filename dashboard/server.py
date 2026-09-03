@@ -3569,6 +3569,9 @@ def _is_within_root(path: str, root: str) -> bool:
         return False
 
 
+_SPAWN_DIR_SUGGESTION_CAP = 500
+
+
 def spawn_directory_suggestions(raw_path: str) -> dict:
     """List visible child directories without allowing traversal outside configured roots."""
     roots = _spawn_roots()
@@ -3595,7 +3598,10 @@ def spawn_directory_suggestions(raw_path: str) -> dict:
     except OSError:
         return {"path": target, "dirs": []}
     dirs.sort(key=lambda item: item["name"].lower())
-    return {"path": target, "dirs": dirs[:20], "truncated": len(dirs) > 20}
+    # The page filters these by the typed prefix, so the cap must be large
+    # enough to hold a whole directory listing: capped at 20, a vault with
+    # 25 top-level folders could never suggest the last five, whatever was typed.
+    return {"path": target, "dirs": dirs[:_SPAWN_DIR_SUGGESTION_CAP], "truncated": len(dirs) > _SPAWN_DIR_SUGGESTION_CAP}
 
 
 _SPAWN_STATUS_CACHE: dict = {"ts": 0.0, "key": None, "data": {}}

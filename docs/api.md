@@ -174,7 +174,7 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 {"path":null,"dirs":[]}
 ```
 
-を返します。hidden directory と root 外へ出る symlink は除外し、名前順の先頭20件だけを返します。21件以上なら `truncated: true` です。
+を返します。hidden directory と root 外へ出る symlink は除外し、名前順に最大 500 件を返します（page 側が入力中の prefix で絞るので、一覧全体が要ります）。501 件以上なら `truncated: true` です。
 
 ## GET `/api/agents`
 

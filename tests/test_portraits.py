@@ -116,3 +116,15 @@ def test_overlay_files_are_offered_to_the_browser_as_custom_portraits(tmp_path):
     )
     assert srv._custom_portrait_map() == {"seminarbot": "Curie"}
     assert srv._portrait_file("SeminarBot", False).endswith("Curie.png")
+
+
+def test_directory_suggestions_return_the_whole_listing_for_prefix_filtering(tmp_path):
+    root = tmp_path / "vault"
+    root.mkdir()
+    for i in range(30):
+        (root / f"{i:02d}_folder").mkdir()
+    srv = _load_server(tmp_path, AGENTSTACK_SPAWN_ROOTS=str(root))
+    payload = srv.spawn_directory_suggestions(str(root))
+    names = [row["name"] for row in payload["dirs"]]
+    assert names[-1] == "29_folder", "a 20-row cap hid the tail of the listing from the prefix filter"
+    assert payload["truncated"] is False
