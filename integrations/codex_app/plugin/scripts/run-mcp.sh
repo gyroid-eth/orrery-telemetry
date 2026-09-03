@@ -51,8 +51,11 @@ elif [[ "$HTTP_BEARER_MODE" != "auto" && "$HTTP_BEARER_MODE" != "enabled" ]]; th
   echo "invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE" >&2
   exit 1
 elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
-  export MCP_AGENT_MAIL_TOKEN
-  IFS= read -r MCP_AGENT_MAIL_TOKEN < <(
+  # A service env without HTTP_BEARER_TOKEN (bearer disabled) is normal: the
+  # proxy then authenticates with the owner token only. Under `set -e`, a
+  # `read` that hits EOF returned 1 and ended the proxy before it answered
+  # initialize, which Codex reported as "connection closed" (2026-09-03).
+  _ags_bearer_token="$(
     python3 - "${AGENTSTACK_MAIL_ENV}" <<'PY'
 import pathlib
 import sys
@@ -63,7 +66,13 @@ for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
         print(value.strip().strip("\"'"))
         break
 PY
-  )
+  )" || _ags_bearer_token=""
+  if [[ -n "$_ags_bearer_token" ]]; then
+    export MCP_AGENT_MAIL_TOKEN="$_ags_bearer_token"
+  else
+    unset MCP_AGENT_MAIL_TOKEN
+  fi
+  unset _ags_bearer_token
 fi
 
 SOURCE_ROOT="$PLUGIN_ROOT/src"

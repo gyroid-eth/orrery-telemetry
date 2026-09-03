@@ -820,14 +820,14 @@ write_child_mcp_config() {
     mkdir -p "$config_dir" || return 0
     python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
         "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
-        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" <<'PY' || return 0
+        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" <<'PY' || return 0
 # NOTE: no line here may start with "}" in column 0 — the shell function is
 # extracted by "up to the first line that is just a closing brace".
 import json
 import os
 import sys
 
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json = sys.argv[1:10]
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode = sys.argv[1:11]
 server_env = dict(
     AGENTSTACK_PROXY_AGENT_NAME=child,
     AGENTSTACK_PROXY_TOKEN_FILE=token_file,
@@ -835,6 +835,11 @@ server_env = dict(
     AGENTSTACK_PROJECT_KEY=project_key,
     AGENTSTACK_MCP_URL=mcp_url,
     AGENTSTACK_MAIL_ENV=mail_env,
+    # The MCP client starts the proxy with this table only, not the child's
+    # shell environment. Without the bearer mode the proxy defaulted to
+    # "auto", found no HTTP_BEARER_TOKEN in a bearer-disabled service env
+    # and exited before answering initialize (2026-09-03).
+    AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode,
     AGENTSTACK_RUNTIME_DIR=runtime_dir,
 )
 server = dict(command=runner, args=[], env=server_env)
@@ -912,13 +917,13 @@ write_child_codex_home() {
 
     local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
     python3 - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
-        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" <<'PY' || return 0
+        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" <<'PY' || return 0
 import os
 import pathlib
 import re
 import sys
 
-home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir = sys.argv[1:10]
+home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode = sys.argv[1:11]
 home_path = pathlib.Path(home)
 source_path = pathlib.Path(source)
 home_path.mkdir(parents=True, exist_ok=True)
@@ -1031,6 +1036,8 @@ for name in claimed:
     lines.append("AGENTSTACK_PROJECT_KEY = " + toml_string(project_key))
     lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
     lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
+    # Codex starts the proxy with this env table only; see the Claude writer.
+    lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))
     lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
     # run-mcp.sh also reads the machine-wide Codex App env for missing values.
     # Pin its state inside this child-owned home so a bridge install cannot

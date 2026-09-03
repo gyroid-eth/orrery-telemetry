@@ -525,3 +525,14 @@ def test_codex_polls_capture_the_visible_screen_only():
 def test_child_shell_never_sources_a_user_bootstrap():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "codex_agent_bootstrap" not in text
+
+
+def test_child_proxy_configs_carry_the_bearer_mode():
+    # Claude and Codex start the proxy with the config's env table only, so
+    # the mode must be written there or the proxy defaults to "auto" and
+    # exits on a bearer-disabled service env before answering initialize.
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode," in text
+    assert 'lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))' in text
+    run_mcp = (_ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh").read_text(encoding="utf-8")
+    assert "read -r MCP_AGENT_MAIL_TOKEN" not in run_mcp
