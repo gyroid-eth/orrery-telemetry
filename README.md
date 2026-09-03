@@ -29,8 +29,8 @@ CI や isolated test で platform boundary を意図的に偽装する場合に�
 ## クイックスタート
 
 ```bash
-git clone https://github.com/gyroid-eth/orrery-telemetry.git
-cd orrery-telemetry
+git clone https://github.com/gyroid-eth/claude-agent-stack.git
+cd claude-agent-stack
 ./scripts/install.sh --project-key /absolute/path/to/coordinated-project
 ```
 

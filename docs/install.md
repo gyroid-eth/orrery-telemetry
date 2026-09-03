@@ -4,6 +4,8 @@
 
 [README に戻る](../README.md) · [次: Launcher と identity](launchers.md)
 
+この文書は、はじめて claude-agent-stack を入れる人向けです。3 コマンドで入れて、2 コマンドで確かめ、1 コマンドで最初の agent を起動します。以前 third-party の MCP Agent Mail を使っていた人向けの移行手順は、末尾の[付録](#付録-以前-mcp-agent-mail-を使っていた場合)にまとめました。
+
 ## 動作環境
 
 主対象は macOS です。launcher と hook は macOS 標準 Bash 3.2 でも動くよう実装されています。
@@ -13,7 +15,7 @@
 - Python 3.10 以上（`python3`）。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 です。上限は設けていません（CI が 3.10・3.12・3.14 を毎回回すので、新しい Python で壊れた場合はそこで落ちます）
 - `tmux`
 - `git`
-- `uv`（同梱 AgentStack Mail candidate 環境を作成するために使用）
+- `uv`（同梱の ORRERY Mail 用の Python 環境を作るために使います）
 - Claude Code または Codex CLI
 
 任意:
@@ -27,118 +29,33 @@ macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で�
 
 `AGENTSTACK_PYTHON` を指定した場合も Python 3.10 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
-## ORRERY Mail の名前と state
-
-同梱 service は `AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` を固定し、launcher が要求した identity をそのまま登録します。既定 endpoint は `http://127.0.0.1:18765/mcp`、state root は `~/.agentstack/mail` です。installer は別 DB を返す既存 listener を再利用せず、最初の書き込み前に停止します。
-
-## 基本インストール
+## インストール
 
 ```bash
-git clone https://github.com/gyroid-eth/orrery-telemetry.git
-cd orrery-telemetry
-./scripts/install.sh --project-key /absolute/path/to/coordinated-project
+git clone https://github.com/gyroid-eth/claude-agent-stack.git
+cd claude-agent-stack
+./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-非対話実行では、既定のままなら Tier 1 settings merge と Codex / Claude managed block を警告付きでスキップします。repository と preview 内容を確認した**ユーザー本人**が、これらの承認を事前に明示する場合だけ次を使えます。
+`--project-key` には、agent たちに作業させる project の絶対パスを渡します（この repository の checkout ではありません）。初回は必須で、未指定なら installer は何も書かずに停止します。2 回目以降は前回の値を `~/.agentstack/env.sh` から引き継ぐので省略できます。
 
-```bash
-./scripts/install.sh --project-key /absolute/path/to/coordinated-project --assume-yes
-```
+installer は途中で 3 つの変更を preview し、それぞれ `yes` を求めます。
 
-`--assume-yes` は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した Claude MCP 登録、settings merge、managed block、既存 agent-mail server の利用は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を追加してはいけません。
+1. Claude Code の MCP 登録（`~/.claude.json` に `orrery-mail` を追加）
+2. Claude Code の settings（hooks と permissions を `~/.claude/settings.json` に追記）
+3. managed instruction block（project の `CLAUDE.md` と `~/.codex/AGENTS.md` の marker 間）
 
-環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ明示 opt-in です。command-line の `--assume-yes`（短縮 `-y`）は環境変数より優先されます。この installer 選択は生成する `env.sh` には永続化しません。
+いずれも既存の内容は保持し、merge 前の backup を `~/.agentstack/backups` に置きます。`no` と答えた項目は後から helper で個別に入れられます（[Claude Code から使えるようにする](#claude-code-から-agent-mail-を使えるようにする)）。
 
-mail provider の既定は同梱の `packages/agentstack_mail` です。既定 endpoint は
-`http://127.0.0.1:18765/mcp`、state root は `~/.agentstack/mail` で、service env は
-`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` を必須にします。legacy
-HTTP bearer は使わず、各 agent の owner token は従来どおり tool argument / local
-proxy で扱います。
+installer が置くもの:
 
-Claude と Codex の MCP 登録 key はともに `orrery-mail` です。Claude の旧 `mcp-agent-mail` key が同じ endpoint を指す場合、承認された設定 merge で新 key へ移します。
+- `~/.agentstack/` に dashboard、launcher、hook、skill、同梱の ORRERY Mail、`env.sh`、`VERSION`、`install-state.json`
+- `~/.claude/skills/delegate` と `~/.claude/skills/log`（`~/.agentstack/skills/` への symlink）
+- 常駐 service 2 つ: dashboard（port 8770）と ORRERY Mail（`http://127.0.0.1:18765/mcp`、state は `~/.agentstack/mail`）。それぞれ launchd（macOS）に登録し、できなければ supervised background mode で起動します
 
-### 旧 launchd mail service の退役
+`env.sh` は mode `0600` で、token は書き込みません。shell の dotfile は変更しません。
 
-旧 `mcp_agent_mail` の launchd job が endpoint を保持している場合は、明示的に
-`--retire-legacy-mail` を付けて installer を実行します。installer は既存 listener を
-AgentStack Mail として再利用できるか調べる**前**に、既知の legacy label と plist の
-実行内容を照合し、該当 job を bootout して plist を
-`~/.agentstack/parked-launchd/` へ退避します。フラグなしでは service を止めず、検出
-label と同フラグを示して停止します。
-
-`--dry-run --retire-legacy-mail` は job を実際には止めませんが、退役計画を先に表示し、
-その listener は退役される前提で bundled ORRERY Mail の provision 計画を表示します。
-同じ installer process 内で legacy scan が再度呼ばれても二重に bootout / 退避しません。
-
-### 既存 upstream データの手動移行
-
-既存 upstream state を移す場合は、先に legacy writer を quiesce し、DB、archive、
-signals の3 path を確認します。installer は自動移行しません。destination がまだ
-存在しない状態で、repository checkout から migration CLI の `copy` と `verify` を
-手動実行します。
-
-```bash
-LEGACY_DB="/absolute/path/reported-for-the-quiesced-legacy-database"
-LEGACY_ARCHIVE="/absolute/path/reported-for-the-quiesced-legacy-archive"
-LEGACY_SIGNALS="/absolute/path/reported-for-the-quiesced-legacy-signals"
-DESTINATION="$HOME/.agentstack/mail"
-
-uv run --project packages/agentstack_mail agentstack-mail-migrate copy \
-  --source-db "$LEGACY_DB" \
-  --source-archive "$LEGACY_ARCHIVE" \
-  --source-signals "$LEGACY_SIGNALS" \
-  --destination-root "$DESTINATION"
-
-uv run --project packages/agentstack_mail agentstack-mail-migrate verify \
-  --source-db "$LEGACY_DB" \
-  --source-archive "$LEGACY_ARCHIVE" \
-  --source-signals "$LEGACY_SIGNALS" \
-  --destination-root "$DESTINATION"
-
-./scripts/install.sh
-```
-
-source と destination の DB / archive を共有する構成は migration helper と service
-controller が拒否します。2026-08-12 の live 切替では、この手順で DB と archive の
-合計約6万件を実際に移送し、照合済みです。copy から verify まで legacy writer を
-停止したままにしてください。
-
-### ロールバック
-
-installer は third-party provider への自動切替を行いません。必要なら ORRERY Mail を停止し、migration backup と設定 backup を使って手動で復旧します。
-
-installer は次を行います。
-
-1. dependency、dashboard port、agent-mail endpoint を検査
-2. bundled ORRERY Mail candidate を配置し、namespaced env と supervised runner を生成。既存の canonical state があれば再利用し、なければ空 state を初期化して、health response が設定 DB を返すまで確認
-3. `~/.agentstack` に dashboard、launcher、hook、skill、managed instruction template、`VERSION` を配置し、Claude skill を `~/.claude/skills` から参照できるようにする
-4. `~/.agentstack/env.sh` を生成
-5. Tier 1 では Claude Code の MCP user config、settings、managed instructions の差分を preview し、対話で明示した `yes` またはユーザーが事前に選んだ `--assume-yes` の場合だけ merge
-6. ORRERY Mail の要求名設定とlaunchd / systemd user / supervised background の実際の方式とともに `install-state.json` に記録
-
-
-既定の AgentStack Mail 新規環境では、bundled package を exact
-candidate venv へ配置し、candidate ID ごとの immutable service env / runner を
-render します。空 state は一度だけ scratch authority として初期化し、その後は
-実装済み service helper の `foreground` controller で起動します。health response
-が設定した canonical DB を返した場合だけ install を続行します。
-
-mail service は次の薄い controller で操作します。runner 自身がクラッシュを5秒後に
-再起動し、controller は PID file の rendered-runner marker、取得可能な場合は command
-line、endpoint、canonical DB、操作 lock を照合して二重起動や無関係な process の停止を拒否します。
-
-```bash
-~/.agentstack/bin/agentstack-mailctl start
-~/.agentstack/bin/agentstack-mailctl status
-~/.agentstack/bin/agentstack-mailctl stop
-~/.agentstack/bin/agentstack-mailctl restart
-```
-
-dashboard のサービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了します。installer は warning と supervised background の手動起動コマンドを最後に表示します。mail service の provisioning / canonical DB health が失敗した場合は install を停止します。実際の dashboard 常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
-
-`agentstack-doctor` は必要な file と設定に加え、`/api/version` が実際に配信されているかと、launchd / systemd の登録・実行状態を別々に調べる存在確認です。endpoint が応答していて manager が実行していない場合は、停止ではなく `unmanaged-background` と報告します。`agentstack-selftest` は実際に2 agent を登録して message 往復と file reservation を行い、同じ結果を dashboard が見ているところまで確かめる機能確認です。install 完了後は self-test も実行してください。
-
-完了後:
+### 確認
 
 ```bash
 ~/.agentstack/bin/agentstack-doctor
@@ -146,46 +63,55 @@ dashboard のサービス登録や health check が失敗しても、payload、�
 open http://127.0.0.1:8770/
 ```
 
-install 前から開いていた Claude Code session は、新しく導入した skill を再走査しません。既存 session で `/exit` した後、新しい terminal から project を指定して起動し直します。
+`agentstack-doctor` は、必要な file と設定が揃っているか、dashboard の `/api/version` が実際に応答しているか、launchd / systemd への登録と実行状態はどうかを別々に報告します。endpoint が応答しているのに manager が実行していない場合は `unmanaged-background` と出ます。
+
+`agentstack-selftest` は実際に 2 つの agent を登録し、message の往復と file reservation を行い、その結果を dashboard が同じ DB から読めているところまで確かめます。install 後は必ず一度実行してください。
+
+### 最初の agent を起動する
+
+install 前から開いていた Claude Code session は、新しく入った skill を再走査しません。既存 session を `/exit` してから、新しい terminal で project を指定して起動します。
 
 ```bash
-agent-start /path/to/project
+export PATH="$HOME/.agentstack/bin:$PATH"
+agent-start /path/to/your-project
+# Codex CLI なら
+agent-start-codex /path/to/your-project
 ```
 
-再起動後は Claude Code で `/delegate` のように先頭の slash を付けて呼び出します。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
+`agent-start` は agent-mail の identity と同名の tmux session を作ります。dashboard の jump、mail 通知、token 復旧はこの名前で結びつきます。起動した Claude Code では `/delegate` のように先頭の slash を付けて skill を呼びます。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
 
-生成する `env.sh` は mode `0600` です。bearer token は `env.sh` へ書き込みません。
+## 非対話で入れる（`--assume-yes`）
 
-## Install tier
+CI や script から入れる場合、既定のままだと 3 つの承認は警告付きでスキップされます。repository と preview 内容を確認した**ユーザー本人**が、承認を事前に与える場合だけ次を使えます。
+
+```bash
+./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes
+```
+
+`--assume-yes`（短縮 `-y`、環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ）は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した項目は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を付けてはいけません。command-line の指定は環境変数より優先され、生成する `env.sh` には残しません。
+
+## Install tier と option
 
 | 呼び出し | Tier | 内容 |
 | --- | --- | --- |
-| `./scripts/install.sh` | Tier 1 / default | 全 payloadと Claude standard skill link。hooks・permissions と Codex / Claude managed block は preview 後、承認時だけ merge |
+| `./scripts/install.sh` | Tier 1 / default | 全 payload と Claude skill link。hooks・permissions と Codex / Claude managed block は preview 後、承認時だけ merge |
 | `./scripts/install.sh --dashboard-only` | Tier 0 | dashboard と helper のみ。hooks、skills、Codex / Claude template は導入しない |
 | `./scripts/install.sh --scoped` | Tier 2 placeholder | payload は導入するが、user settings / managed docs は変更しない |
 | `./scripts/install.sh --dry-run` | preview | 変更予定を表示し、file や service を変更しない |
 
 `--dashboard-only` と `--scoped` は排他的です。不明 option や値不足は変更前に停止します。
 
-## Installer option
-
 ```text
 --install-dir PATH      default: ~/.agentstack
---project-key PATH      default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, existing env.sh
+--project-key PATH      first install: required / re-install: existing env.sh
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
---retire-legacy-mail    retire a verified legacy launchd mail job before reuse checks
 --terminal MODE         auto | ghostty | iterm | terminal | none
+--retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 
-`--bin-dir` は installer の公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
-
-初回 install では project key を明示するか、`AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`
-を設定してください。未指定なら installer は repo checkout を project と推測せず、
-変更前に停止します。再 install / upgrade では install 先の既存 `env.sh` に保存された
-`AGENTSTACK_PROJECT_KEY` を再利用するため、通常は `--project-key` の再指定は不要です。
-明示値は常に既存値より優先されます。
+`--project-key` は、明示した値がいつでも最優先です。次に環境変数 `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`、最後に install 先の既存 `env.sh` を見ます。`--bin-dir` は公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
 
 ## Settings、permissions、Claude skill の merge
 
@@ -198,7 +124,7 @@ Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベ�
 - managed block は marker 間だけを idempotent に更新
 - `install-state.json` を uninstall の削除範囲の正本にする
 
-permissions の `deny` は、**不可逆で復旧手段がない操作だけ**に限定します。破壊的でも復旧できる操作は allow にも deny にも入れず、実行時の人間による確認に委ねます。また、allow 済みの別 tool で同じ状態へ到達できる場合は、deny に追加しても安全上の意味がないため追加しません。現在 deny するのは `hard_delete_agent`、`hard_delete_project`、`purge_old_messages` の3つです。
+permissions の `deny` は、**不可逆で復旧手段がない操作だけ**に限定します。破壊的でも復旧できる操作は allow にも deny にも入れず、実行時の人間による確認に委ねます。また、allow 済みの別 tool で同じ状態へ到達できる場合は、deny に追加しても安全上の意味がないため追加しません。現在 deny するのは `hard_delete_agent`、`hard_delete_project`、`purge_old_messages` の 3 つです。
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
 
@@ -209,9 +135,7 @@ permissions の `deny` は、**不可逆で復旧手段がない操作だけ**�
 ~/.claude/skills/log      -> ~/.agentstack/skills/log
 ```
 
-同じ AgentStack payload を指す symlink がすでにある場合は再利用し、manifest に所有登録します。この link は payload と一緒に無効になるため、uninstall では削除対象です。同名の file、directory、または別 target の symlink がある場合は warning を出して保持し、所有登録しません。
-
-uninstall は manifest の path と実際の symlink target を照合し、所有登録された、AgentStack payload を指す symlink だけを削除します。利用者が file や directory に置き換えた path、または retarget した symlink は残します。
+同じ AgentStack payload を指す symlink がすでにある場合は再利用し、manifest に所有登録します。この link は payload と一緒に無効になるため、uninstall では削除対象です。同名の file、directory、または別 target の symlink がある場合は warning を出して保持し、所有登録しません。uninstall は manifest の path と実際の symlink target を照合し、所有登録された、AgentStack payload を指す symlink だけを削除します。利用者が file や directory に置き換えた path、または retarget した symlink は残します。
 
 旧 installer が `skillsDirectories` に `~/.agentstack/skills` を追加していた環境では、Tier 1 の settings merge を承認した再インストール時にその旧 AgentStack entry だけを削除します。同じ配列の他の user value と、それ以外の settings は保持します。
 
@@ -236,9 +160,7 @@ Tier 1 installer は `AGENTSTACK_CLAUDE_JSON`（既定 `~/.claude.json`）の `m
 
 diff preview では bearer token を `<redacted>` に置き換えます。対話で `yes` と答えた場合、またはユーザーが明示した `--assume-yes` の場合だけ mode `0600` で atomic write し、元 file を `~/.agentstack/backups` に保存します。非対話で未承認なら書き込まず、installer と `agentstack-doctor` が安全な preview / apply コマンドを表示します。`agentstack-selftest` は HTTP server の動作だけでなく、この固定名・endpoint・authorization の登録も検査します。
 
-同じ endpoint の旧 `mcp-agent-mail` entry は `orrery-mail` へ移し、既存の他 MCP entry は保持します。
-
-既存 install で登録が無い場合は、まず doctor の出力に従って preview してください。
+install 時に `no` と答えた、または登録が無い場合は、doctor の出力に従って preview してください。
 
 ```bash
 ~/.agentstack/bin/agentstack-doctor
@@ -270,6 +192,23 @@ Tier 1 が preview / merge に使う helper は単独でも実行できます。
 ```
 
 block だけを外す場合はそれぞれ `--uninstall` を使います。Codex は `$CODEX_HOME/AGENTS.md`、Claude は `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both` で選んだ `CLAUDE.md` が対象です。marker 外の既存内容は保持します。
+
+## ORRERY Mail service の扱い
+
+同梱の ORRERY Mail は、launcher が要求した identity をそのまま登録する設定（`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough`）で動きます。既定 endpoint は `http://127.0.0.1:18765/mcp`、state root は `~/.agentstack/mail` です。HTTP bearer は使わず、各 agent の owner token は tool argument / local proxy で扱います。
+
+installer は endpoint に既に何かが応答している場合、それが同じ DB を返す ORRERY Mail のときだけ再利用し、別 DB を返す listener は再利用せず最初の書き込み前に停止します。新規環境では同梱 package の venv を candidate ID ごとに配置し、空 state を初期化して、health response が設定した DB を返すまで確認してから先へ進みます（内部構成は [agentstack-mail 文書](agentstack-mail.md)）。
+
+service の操作は次の controller で行います。runner 自身がクラッシュを 5 秒後に再起動し、controller は PID file と endpoint と DB を照合して、二重起動や無関係な process の停止を拒否します。
+
+```bash
+~/.agentstack/bin/agentstack-mailctl start
+~/.agentstack/bin/agentstack-mailctl status
+~/.agentstack/bin/agentstack-mailctl stop
+~/.agentstack/bin/agentstack-mailctl restart
+```
+
+dashboard 側のサービス登録や health check が失敗しても、payload、承認済み managed block、`install-state.json` の生成は完了し、installer は warning と supervised background の手動起動コマンドを最後に表示します。mail service の provisioning / DB health が失敗した場合は install を停止します。実際の dashboard 常駐方式は `~/.agentstack/dashboard/agentctl.sh status` と `agentstack-doctor` で確認できます。
 
 ## VERSION
 
@@ -313,7 +252,7 @@ git pull
 ~/.agentstack/bin/agentstack-doctor
 ```
 
-installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。bundled ORRERY Mail candidate と state を検証して再利用します。
+installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。同梱 ORRERY Mail の candidate と state を検証して再利用します。`--project-key` は前回の値を引き継ぎます。
 
 **in-place upgrade 中も agent-mail server は稼働させたまま**にしてください。稼働 listener から解決した実 DB path は filesystem の候補探索より優先されます。agent-mail を先に止めると候補探索へフォールバックし、複数の DB がある環境では誤選択を避けるため installer が停止します。
 
@@ -344,6 +283,49 @@ uninstaller は `install-state.json` に記録された file、service、setting
 ```
 
 `--purge-data` も manifest に記録された exact path だけを対象にし、home directory や未記録 path は削除しません。runtime directory は purge path に含まれるため、この option では annotation も削除されます。
+
+## 付録: 以前 MCP Agent Mail を使っていた場合
+
+はじめて入れる人には関係ありません。この節は、同梱の ORRERY Mail の元になった third-party の [MCP Agent Mail](third-party.md) を、launchd job として自前で動かしていた人向けです。
+
+### 旧 launchd mail service の退役
+
+旧 `mcp_agent_mail` の launchd job が endpoint を保持している場合は、明示的に `--retire-legacy-mail` を付けて installer を実行します。installer は既存 listener を ORRERY Mail として再利用できるか調べる**前**に、既知の legacy label と plist の実行内容を照合し、該当 job を bootout して plist を `~/.agentstack/parked-launchd/` へ退避します。フラグなしでは service を止めず、検出 label と同フラグを示して停止します。
+
+`--dry-run --retire-legacy-mail` は job を実際には止めませんが、退役計画を先に表示し、その listener は退役される前提で同梱 ORRERY Mail の provision 計画を表示します。同じ installer process 内で legacy scan が再度呼ばれても二重に bootout / 退避しません。
+
+Claude Code の旧 `mcp-agent-mail` key が同じ endpoint を指す場合、承認された設定 merge で `orrery-mail` key へ移します。別 endpoint を指す旧 key は無関係な entry として残します。
+
+### 旧 DB の手動移行
+
+旧 state（DB、archive、signals）を引き継ぐ場合は、先に旧 writer を止め、3 つの path を確認します。installer は自動移行しません。移行先がまだ存在しない状態で、repository checkout から migration CLI の `copy` と `verify` を手動実行し、その後に installer を走らせます。
+
+```bash
+LEGACY_DB="/absolute/path/to/the-stopped-legacy-database"
+LEGACY_ARCHIVE="/absolute/path/to/the-stopped-legacy-archive"
+LEGACY_SIGNALS="/absolute/path/to/the-stopped-legacy-signals"
+DESTINATION="$HOME/.agentstack/mail"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate copy \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+uv run --project packages/agentstack_mail agentstack-mail-migrate verify \
+  --source-db "$LEGACY_DB" \
+  --source-archive "$LEGACY_ARCHIVE" \
+  --source-signals "$LEGACY_SIGNALS" \
+  --destination-root "$DESTINATION"
+
+./scripts/install.sh
+```
+
+source と destination の DB / archive を共有する構成は migration helper と service controller が拒否します。2026-08-12 の切替では、この手順で DB と archive の合計約 6 万件を実際に移送し、照合済みです。copy から verify まで旧 writer を停止したままにしてください。
+
+### ロールバック
+
+installer は third-party 版への自動切替を行いません。必要なら ORRERY Mail を停止し、migration backup と設定 backup を使って手動で復旧します。
 
 ## 関連文書
 
