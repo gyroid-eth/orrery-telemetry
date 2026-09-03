@@ -368,14 +368,27 @@ def _portrait_fallback(name: str, hi: bool) -> bytes:
 
 
 def _custom_portrait_map() -> dict:
-    if not CUSTOM_PORTRAITS_PATH:
-        return {}
-    try:
-        with open(CUSTOM_PORTRAITS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError, TypeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    """registered name (lower-cased) -> portrait stem.
+
+    Every PNG in the private overlay is a mapping by itself: dropping
+    `SeminarBot.png` there is the whole configuration for an agent registered
+    as SeminarBot. The browser decides from this map whether to request a
+    portrait at all, so without these entries an overlay face was served on
+    request but never requested. The explicit JSON map wins on conflicts.
+    """
+    merged: dict = {
+        key: os.path.basename(path)[:-4]
+        for key, path in _png_index(PORTRAIT_OVERLAY_DIR).items()
+    }
+    if CUSTOM_PORTRAITS_PATH:
+        try:
+            with open(CUSTOM_PORTRAITS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError, TypeError):
+            data = {}
+        if isinstance(data, dict):
+            merged.update({str(k).lower(): v for k, v in data.items() if isinstance(v, str)})
+    return merged
 
 
 PORTRAITS = _portrait_set()

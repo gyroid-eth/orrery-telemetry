@@ -100,3 +100,19 @@ def test_directory_typeahead_descends_into_a_complete_path():
     siblings = markup.index("const prefix=query.prefix.toLowerCase();")
     assert descend < siblings, "children must be tried before the sibling prefix search"
     assert "if(rows.length){renderSpawnDirOptions(rows,'');return;}" in markup
+
+
+def test_overlay_files_are_offered_to_the_browser_as_custom_portraits(tmp_path):
+    """The page only requests a face for names in /api/custom-portraits."""
+    overlay = tmp_path / "faces"
+    overlay.mkdir()
+    (overlay / "SeminarBot.png").write_bytes(PNG)
+    mapping = tmp_path / "custom.json"
+    mapping.write_text(json.dumps({"SeminarBot": "Curie"}), encoding="utf-8")
+    srv = _load_server(tmp_path, AGENTSTACK_PORTRAITS_DIR=str(overlay))
+    assert srv._custom_portrait_map() == {"seminarbot": "SeminarBot"}
+    srv = _load_server(
+        tmp_path, AGENTSTACK_PORTRAITS_DIR=str(overlay), AGENTSTACK_CUSTOM_PORTRAITS=str(mapping)
+    )
+    assert srv._custom_portrait_map() == {"seminarbot": "Curie"}
+    assert srv._portrait_file("SeminarBot", False).endswith("Curie.png")
