@@ -20,9 +20,9 @@
 | --- | --- | --- |
 | `AGENTSTACK_PORT` | `8770` | HTTP port |
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | bind address |
-| `AGENTSTACK_MAIL_DB` | `~/mcp_agent_mail/storage.sqlite3` | agent-mail SQLite |
-| `AGENTSTACK_MAIL_ENV` | `~/mcp_agent_mail/.env` | dashboard spawn が bearer token を読む file |
-| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `auto` | `disabled` では legacy Authorization header を付けない。native installer が service definition と env に同時設定 |
+| `AGENTSTACK_MAIL_DB` | `~/.agentstack/mail/storage.sqlite3` | ORRERY Mail SQLite |
+| `AGENTSTACK_MAIL_ENV` | `~/.agentstack/mail/.env` | standalone dashboard の互換 bearer 参照先。installer は service render を明示 |
+| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy Authorization header を付けない |
 | `AGENTSTACK_PROJECT_KEY` | 未設定 | agent-mail project の human key |
 | `AGENTSTACK_VAULT` | 未設定 | project key 不在時の fallback と、vault 内 Output item の Obsidian link hint |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | `:` 区切りで `LOG_*.md` を再帰走査する root。未設定時は project の `logs/` |
@@ -32,7 +32,7 @@
 | `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
 | `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、annotation、session index、child / watcher state |
-| `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal data root |
+| `AGENTSTACK_MAIL_HOME` | `~/.agentstack/mail` | signal data root |
 | `AGENTSTACK_SIGNALS_DIR` | `$AGENTSTACK_MAIL_HOME/signals` | mail signal directory |
 | `AGENTSTACK_PORTRAITS_DIR` | 未設定 | private PNG overlay directory |
 | `AGENTSTACK_CUSTOM_PORTRAITS` | 未設定 | agent name → portrait key JSON |
@@ -91,19 +91,14 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | 環境変数 | 既定値 | 意味 |
 | --- | --- | --- |
 | `AGENTSTACK_HOME` | `~/.agentstack` | install root。`--install-dir` でも指定可 |
-| `AGENTSTACK_MAIL_PROVIDER` | `agentstack` | 既定で bundled native provider（AgentStack Mail）を配置・起動。`upstream` を明示すると third-party mcp-agent-mail へ opt-out |
-| `AGENTSTACK_MAIL_DIR` | `~/mcp_agent_mail` | upstream clone |
-| `AGENTSTACK_MAIL_HOME` | `~/.mcp_agent_mail` | signal / runtime data |
-| `AGENTSTACK_MAIL_DB` | 稼働中 server / 既存 file から自動解決 | dashboard が読む実在する agent-mail SQLite。候補が複数なら明示指定が必要 |
-| `AGENTSTACK_MAIL_ENV` | `$AGENTSTACK_MAIL_DIR/.env` | agent-mail bearer token file。稼働中 server を再利用するときは server cwd / DB 隣接 file も探索 |
-| `AGENTSTACK_MAIL_STATE_ROOT` | `~/.agentstack/mail` | native provider（既定）の canonical DB / archive / signals root |
-| `AGENTSTACK_MAIL_SERVICE_ROOT` | `$AGENTSTACK_HOME/mail-service` | native candidate、immutable render、runtime log / pidfile |
-| `AGENTSTACK_MAIL_SERVICE_VENV` | candidate ID から導出 | 検証済み native candidate venv を明示的に再利用する場合の path |
-| `AGENTSTACK_MAIL_MIGRATION_SOURCE_DB` | 未設定 | quiesce 済み legacy SQLite。下記 archive / signals と3件同時指定 |
-| `AGENTSTACK_MAIL_MIGRATION_SOURCE_ARCHIVE` | 未設定 | quiesce 済み legacy Git archive working tree |
-| `AGENTSTACK_MAIL_MIGRATION_SOURCE_SIGNALS` | 未設定 | quiesce 済み legacy signals root |
-| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `auto` | installed runtime selector。upstream は `auto`、native installer は `disabled` を生成 |
-| `AGENTSTACK_AGENT_MAIL_REPO` | upstream GitHub URL | agent-mail clone source |
+| `AGENTSTACK_MAIL_DIR` | `$AGENTSTACK_HOME/mail-service` | candidate、immutable render、runtime log / pidfile |
+| `AGENTSTACK_MAIL_HOME` | `~/.agentstack/mail` | canonical DB / archive / signals root |
+| `AGENTSTACK_MAIL_DB` | `$AGENTSTACK_MAIL_HOME/storage.sqlite3` | dashboard が読む ORRERY Mail SQLite |
+| `AGENTSTACK_MAIL_ENV` | render ID から導出 | ORRERY Mail service env |
+| `AGENTSTACK_MAIL_STATE_ROOT` | `~/.agentstack/mail` | canonical DB / archive / signals root |
+| `AGENTSTACK_MAIL_SERVICE_ROOT` | `$AGENTSTACK_HOME/mail-service` | candidate、immutable render、runtime log / pidfile |
+| `AGENTSTACK_MAIL_SERVICE_VENV` | candidate ID から導出 | 検証済み candidate venv を明示的に再利用する場合の path |
+| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy HTTP bearer を使用しない |
 | `AGENTSTACK_PROJECT_KEY` | repo root | project human key |
 | `AGENTSTACK_PROTECTED_ROOTS` | project key | reservation hook の保護 root |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | 成功した Edit / Write 後、reservation を解放するまでの debounce 秒数。旧 `FILE_RESERVATION_RELEASE_GRACE_SECONDS` も fallback として利用可 |
@@ -115,17 +110,15 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |
 | `AGENTSTACK_PYTHON` | `python3` の解決結果 | service 用 Python |
 | `AGENTSTACK_PATH` | Homebrew と system path | service に渡す `PATH` |
-| `AGENTSTACK_MCP_URL` | 既定（native）: `http://127.0.0.1:18765/mcp`、upstream opt-out: `http://127.0.0.1:8765/mcp` | launcher / hook / dashboard / Bridge の MCP endpoint |
+| `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | launcher / hook / dashboard / Bridge の MCP endpoint |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |
 | `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | `agentstack-claude-setup` が managed block を書く先。`project / global / both` |
 
 `PROJECT_KEY` も fallback として読まれますが、永続設定には `AGENTSTACK_PROJECT_KEY` を推奨します。
 
-既定の `AGENTSTACK_MAIL_PROVIDER=agentstack` では、installer は `AGENTSTACK_MAIL_DB`、
-`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS_DIR` を native state / render から導出し、
-`env.sh` へ provider、state root、`AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled`
-を一緒に保存します。provider を指定しない場合はこれらの追加値を生成せず、従来の
-upstream 探索・provisioning のままです。
+installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS_DIR`
+を state / render から導出し、`env.sh` へ state root と
+`AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を一緒に保存します。
 
 ## Launcher
 
@@ -139,7 +132,7 @@ upstream 探索・provisioning のままです。
 | `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
 | `AGENTSTACK_CODEX_APPROVAL` | `on-request` | Codex `--ask-for-approval` |
 | `AGENTSTACK_VAULT` | 未設定 | Codex へ追加する writable `--add-dir` |
-| `AGENTSTACK_MCP_URL` | `http://127.0.0.1:8765/mcp` | registration / hook endpoint |
+| `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | registration / hook endpoint |
 | `AGENTSTACK_CONTACT_POLICY` | `open` | 登録後の contact policy。`skip` で server default |
 | `AGENTSTACK_AGENT_NAME_ATTEMPTS` | implementation default | name 候補の最大試行数 |
 | `AGENTSTACK_NAME_UNKNOWN_LIMIT` | `3` | 連続 `unknown` の停止閾値 |
@@ -192,7 +185,7 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
 | `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
 | `AGENTSTACK_MAIL_WATCHER_SESSION` | `mail-watcher` | launcher が起動・再利用する watcher の tmux session 名 |
-| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/mcp-agent-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
+| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/orrery-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
 | `AGENTSTACK_MAIL_WATCHER_HEARTBEAT` | pidfile と同じ directory の `heartbeat` | process command を取得できない環境で使う watcher heartbeat |
 | `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE` | `low`（＝全通） | 通知として**割り込ませる**下限。`low` \| `normal` \| `high` \| `urgent` |
 | `AGENTSTACK_REREGISTER_PROGRAM` | `codex` | `agentstack-reregister` の第2引数を省略した場合の program |
@@ -218,17 +211,15 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 `AGENTSTACK_MCP_URL` は launcher / hook の接続先です。
 
 dashboard `POST /api/spawn` は generated `env.sh` の同じ値を使います。既定
-（native provider）は:
+は:
 
 ```text
 http://127.0.0.1:18765/mcp
 ```
 
 で、installer が transport selector を `disabled` へ同時に設定するため、launcher、
-hook、dashboard spawn、Codex App Bridge が同じ authority を見ます。
-`AGENTSTACK_MAIL_PROVIDER=upstream` の opt-out では endpoint は
-`http://127.0.0.1:8765/mcp`、transport selector は `auto` 相当になります。手動で
-endpoint を上書きする場合も、これらを別々に設定しないでください。
+hook、dashboard spawn、Codex App Bridge が同じ authority を見ます。手動で endpoint
+を上書きする場合も、これらを別々に設定しないでください。
 
 ## Spawn directory
 
@@ -314,7 +305,7 @@ dashboard は local-first で、認証 layer を持ちません。
 
 - 既定 bind は `127.0.0.1`
 - `0.0.0.0` は control endpoint、mail body、terminal bridge も公開
-- bearer token は `mcp_agent_mail/.env` から server process が読む
+- owner token は agent ごとの private file から local proxy が読む
 - token を `env.sh`、API response、spawn log に書かない
 - private portrait と vault は repository 外に置ける
 

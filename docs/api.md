@@ -540,7 +540,7 @@ non-git directory では Codex が trust dialog を出すことがあります�
 
 を含めます。同じ request を無条件 retry せず、残った identity を確認してください。
 
-spawn は generated `env.sh` の `AGENTSTACK_MCP_URL`（未設定時は `http://127.0.0.1:8765/mcp` に fallback）を使い、transport selector に応じて `AGENTSTACK_MAIL_ENV` の `HTTP_BEARER_TOKEN` を読みます。launcher / hook と同じ値を共有するので、agent-mail endpoint を変更する場合は `env.sh` 側を更新してください。
+spawn は generated `env.sh` の `AGENTSTACK_MCP_URL`（未設定時は `http://127.0.0.1:18765/mcp` に fallback）を使います。既定の ORRERY Mail transport は bearer を使いません。launcher / hook と同じ値を共有するので、endpoint を変更する場合は `env.sh` 側を更新してください。
 
 ## 関連文書
 

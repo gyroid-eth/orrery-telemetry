@@ -1,8 +1,8 @@
 # Working in this repository as an agent
 
 This repo installs a coordination layer for local Claude Code and Codex agents:
-a launcher, hooks, skills, and a live telemetry dashboard backed by
-[mcp-agent-mail](https://github.com/Dicklesworthstone/mcp_agent_mail).
+a launcher, hooks, skills, and a live telemetry dashboard backed by the
+bundled ORRERY Mail service.
 
 You are most likely reading this because the person you are working for said
 something like "install this for me". That job is mostly *checking their

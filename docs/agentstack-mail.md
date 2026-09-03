@@ -1,18 +1,16 @@
 # AgentStack mail extraction
 
-`agentstack-mail` is the public installer's default coordination provider. It
+ORRERY Mail is the public installer's coordination service. It
 is developed inside this repository as a logically isolated package;
 repository extraction remains deferred until the versioned contract and
 independent export/test gates are stable.
 
-The authoritative implementation input is the working live Python AgentMail
-checkout, including its local commits and dirty signal/runtime fixes. Current
-upstream is retained only as an advisory security and bug-fix source.
+The implementation is maintained in `packages/agentstack_mail`; its provenance
+snapshot remains an audit input rather than a runtime dependency.
 
 The default endpoint is `http://127.0.0.1:18765/mcp`; data lives below
-`~/.agentstack/mail`. Set `AGENTSTACK_MAIL_PROVIDER=upstream` when running
-`scripts/install.sh` to opt out and use the third-party provider. No test or
-installer may point both services at one writable database or archive.
+`~/.agentstack/mail`. No test or migration may point legacy and current
+services at one writable database or archive.
 
 The caller-derived compatibility surface is versioned in
 `packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 25 tools
@@ -29,8 +27,8 @@ The implementation train was:
    behavior with differential tests against the live source;
 4. port HTTP and lifecycle stability without the machine-specific notify and
    tmux daemons;
-5. update installer, doctor, bridge, and hooks atomically to the new endpoint
-   and authentication while preserving each client's existing MCP key;
+5. update installer, doctor, bridge, and hooks atomically to the new endpoint,
+   authentication, and `orrery-mail` MCP key;
 6. run coexistence, migration, rollback, fault, and real-machine soak evidence
    before the approved authority switch.
 
@@ -42,12 +40,11 @@ published; the decisions they recorded are enforced by the decision ledger
 fixture and its tests, where drift fails rather than merely disagreeing with a
 document.
 
-The provider identity remains `agentstack-mail`, but it is not the client
-registration key. First cutover preserves Claude's `mcp-agent-mail` and
-Codex's `agent-mail` keys so fully qualified tool names, permissions, and hook
-matchers do not change. The authority is determined by endpoint, data roots,
-and ownership, never by the client-visible key. Optional key renaming and stale
-selector cleanup are separate post-cutover work.
+The provider identity and both client registration keys are `orrery-mail`.
+Install-time migrations recognize legacy client keys only to replace same-
+endpoint entries without creating a duplicate authority.
+Authority is determined by endpoint, data roots, and ownership in addition to
+the client-visible key.
 
 ## Current core boundary
 
@@ -90,8 +87,7 @@ and Codex App reauthentication remain follow-up coverage rather than a substitut
 for the required cutover setting.
 The service helper/controller and copy/verify/rollback-assess migration
 commands are implemented. The installer provisions this provider by default
-while preserving Claude's `mcp-agent-mail` and Codex's `agent-mail` client
-keys.
+with the fixed `orrery-mail` client key.
 
 ## Installation and lifecycle
 
@@ -164,10 +160,6 @@ is refused with a message rather than fought over — the sweep will retry, but 
 will not evict a listener it does not own. Immediate recovery is
 `agentstack-mailctl start`.
 
-The upstream opt-out provider (`AGENTSTACK_MAIL_PROVIDER=upstream`) has the same
-reboot behaviour and no equivalent controller to trigger, so the installer warns
-about it instead of registering anything.
-
 ## Manual migration from upstream
 
 Migration is an operator-run procedure, not an installer step. First quiesce
@@ -203,7 +195,9 @@ snapshot does not change under the verifier.
 
 ## Rollback
 
-Run `AGENTSTACK_MAIL_PROVIDER=upstream ./scripts/install.sh`; the AgentStack Mail data remains in `~/.agentstack/mail`.
+The installer does not switch back to an external provider. Stop ORRERY Mail
+and use the migration and configuration backups for a deliberate manual
+rollback.
 
 ## Notification layout compatibility
 

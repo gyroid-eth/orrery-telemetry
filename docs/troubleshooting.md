@@ -182,7 +182,7 @@ agent-mail が名前を受け入れず、生成名に置き換えた状態です
 
 `requested-name handling: replaced` なら、要求名を受け付けない既知の旧処理です。installer も事前に「要求した名前が生成名に置き換わる」と警告します。`unknown` は source が読めないか命名処理が既知の形でないため、対応しているとも対応していないとも推測していません。`passthrough patch: absent` でも #140 の `validate_explicit_agent_id` があれば `honored` になるため、patch 行だけで判断しないでください。
 
-install 時の判定と根拠は `install-state.json` の `agent_mail.requested_name_honoring` に残ります。どの環境まで保証するかは[インストール](install.md#agent-mail-のバージョンと名前の扱いサポート範囲)の表を参照してください。installer を再実行すると、自分が clone した checkout には patch を当てます。稼働中の既存 checkout は `--assume-yes` では変更せず、`AGENTSTACK_PATCH_EXISTING_AGENT_MAIL=1` という専用 opt-in がある場合だけ patch します。
+install 時の判定と根拠は `install-state.json` の `agent_mail.requested_name_honoring` に残ります。同梱 ORRERY Mail は要求名を受け付ける設定で起動します。旧 service がまだ応答している場合は `--retire-legacy-mail` で停止してから installer を再実行し、同梱 service へ切り替えてください。
 
 ### 別名で登録されたときに何が起きるか
 

@@ -6,7 +6,7 @@ ones that cause real damage when skipped, and you should not have to follow a
 link to learn them.
 
 **Approvals belong to the human.** The installer asks before merging into
-`~/.claude/settings.json`, before adding the `mcp-agent-mail` entry to
+`~/.claude/settings.json`, before adding the `orrery-mail` entry to
 `~/.claude.json`, and before adding a managed block to their `CLAUDE.md` or
 `AGENTS.md` — four typed confirmations, plus one to reuse a running
 agent-mail. Note that those are the user's own files elsewhere on disk, not

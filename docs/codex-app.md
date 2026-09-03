@@ -46,9 +46,9 @@ hook は prompt 本文、tool input、tool output を Bridge へ渡しません�
 
 ## 前提
 
-- 基本の `./scripts/install.sh` が完了し、agent-mail と signal directory が動作している
+- 基本の `./scripts/install.sh` が完了し、ORRERY Mail と signal directory が動作している
 - absolute path の `AGENTSTACK_PROJECT_KEY`
-- agent-mail の `tools/call` を通常の JSON response で返す HTTP endpoint（例: `/api/`）。upstream provider では bearer token を含む `.env` の path、native provider では generated `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled`
+- ORRERY Mail の `tools/call` を通常の JSON response で返す HTTP endpoint（例: `/mcp`）。core installer が generated `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を設定
 - `python3` と plugin command を持つ Codex executable
 - service の自動登録を使う場合は macOS（GUI domain が利用できない場合は supervised background へ自動切替）
 
@@ -76,9 +76,8 @@ preview が正しければ `--dry-run` だけを外します。
 ```
 
 source 済みの core `env.sh` に custom path があれば installer はそれを使います。
-未指定時の bearer file は upstream clone 側の `~/mcp_agent_mail/.env`、signal
-directory は runtime/archive 側の `~/.mcp_agent_mail/signals` です。この2つは用途
-の異なる directory です。native provider（既定）の core env は endpoint、native signals、
+未指定時の互換 bearer file と signal directory は `~/.agentstack/mail` 配下です。
+core env は endpoint、signals、
 `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` をまとめて渡します。専用 installer は
 その selector を Bridge env に保存し、runner、plugin MCP process、orphan cleanup の
 いずれも legacy bearer を読み込みません。
@@ -185,7 +184,7 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 | `AGENTSTACK_CODEX_APP_COLD_WAKE` | `1` | `0` で cold wake だけを無効化 |
 | `AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK` | `0` | `1` で resume の git trust check を解除 |
 | `AGENTSTACK_CODEX_BINARY` | install 時に解決した `codex` | plugin 操作と `codex exec resume` |
-| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `auto` | core mail transport。native core install は `disabled` を生成し Bridge へ永続化 |
+| `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | core ORRERY Mail transport。core install が生成し Bridge へ永続化 |
 
 `AGENTSTACK_CODEX_APP_SOCKET`、`AGENTSTACK_CODEX_APP_SNAPSHOT`、`AGENTSTACK_CODEX_APP_DELIVERY_DB`、`AGENTSTACK_CODEX_APP_PLUGIN_ID` は installer が一貫した値を生成します。`AGENTSTACK_CODEX_APP_SPOOL`、`AGENTSTACK_PROJECT_SLUG`、`AGENTSTACK_CODEX_APP_BOOTSTRAP_WAIT`、`AGENTSTACK_CODEX_APP_RETRY_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS`、`AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS` は Bridge / test の内部 tuning 値です。通常は手動設定せず、変更する場合は source の validation range と delivery semantics を確認してください。
 
@@ -194,7 +193,7 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 ## Security boundary
 
 - install / runtime directory は mode `0700`、generated env、socket、binding、snapshot は mode `0600`
-- upstream bearer token は generated `env.sh` へコピーせず、`AGENTSTACK_MAIL_ENV` の参照だけを保存。native selector が `disabled` なら bearer 自体を読み込まない
+- legacy bearer token は generated `env.sh` へコピーせず、`AGENTSTACK_MAIL_ENV` の参照だけを保存。既定の `disabled` transport では bearer 自体を読み込まない
 - owner token は private identity store に分離し、agent や dashboard snapshot へ公開しない
 - hook event と dashboard snapshot は field allowlist で検証
 - cold wake は固定 instruction と bounded metadata だけを渡し、stdout / stderr 診断は token pattern を redaction
@@ -207,10 +206,10 @@ wake prompt に入るのは message ID、sender、subject だけです。message
 | 症状 | 確認と対処 |
 | --- | --- |
 | installer が project key を拒否 | `--project-key` に absolute path を渡す |
-| Bridge が agent-mail へ接続できない | `tools/call` を通常の JSON で返す generated endpoint を確認。upstream は `AGENTSTACK_MAIL_ENV` と bearer file、native は `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` かを確認 |
+| Bridge が ORRERY Mail へ接続できない | `tools/call` を通常の JSON で返す generated endpoint と `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を確認 |
 | doctor が service / socket / startup diagnostic を失敗扱い | doctor が表示する実 service mode を確認。launchd なら `launchctl print gui/$(id -u)/org.agentstack.codex-app-bridge`、supervised background なら `bridge-supervisor.pid` と `bridge.stderr.log` を確認。意図的な停止中だけ `--allow-stopped` |
 | Codex App runtime が dashboard に出ない | Codex Desktop plugin が有効か確認。CLI session と transcript のない session は意図的に対象外 |
-| state が `degraded` | owner token 読み取りまたは agent-mail 登録が失敗。URL、選択中 provider の transport mode、runtime file mode、registration retry log を確認し、別 identity を作らない |
+| state が `degraded` | owner token 読み取りまたは ORRERY Mail 登録が失敗。URL、transport mode、runtime file mode、registration retry log を確認し、別 identity を作らない |
 | `identity_auth_required` | binding に owner token がない。doctor で binding store を確認し、同名を別 token で再登録しない |
 | `untrusted_workspace` | trusted git repository で再開。review 済み non-git workspace だけ installer の `--skip-git-check` を使う |
 | `wake_rate_limited` | 1時間の上限を待つか、原因を直してから `--wake-limit` を見直す |

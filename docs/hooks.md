@@ -20,19 +20,17 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
 | `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | file reservation の取得・renew 直前 | 同じ agent/path に対する古い release worker の token を無効化し、新しい reservation が直後に消される競合を防止 |
 | `PostToolUse` / `Edit|Write` | [`release-file-reservation.sh`](../hooks/release-file-reservation.sh) | 成功した file edit の直後 | 既定90秒の grace 後に、guard と同じ project・identity・相対/絶対 path で reservation を release |
-| `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__mcp-agent-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
+| `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__orrery-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
 | `SessionEnd` | [`release-all-reservations.sh`](../hooks/release-all-reservations.sh) | Claude session 終了時 | 現在 identity の全 file reservation を release。identity 自体は retire しない |
 
 `Edit` / `Write` では2つの PreToolUse hook がともに走ります。登録済みでも reservation がなければ書けず、reservation があっても未登録 session なら書けません。成功後だけ PostToolUse release が arm され、失敗・block・protected root 外では何もしません。
 
 installer は endpoint と transport credential selector を同じ generated `env.sh` で
-配布します。既定の native 経路（AgentStack Mail）は
-`AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を生成し、hook と
-`spawn_child.sh` / `cleanup-child-agent.sh` は Authorization header を付けず native
-endpoint へ接続します。`AGENTSTACK_MAIL_PROVIDER=upstream` の opt-out だけは
-`AGENTSTACK_MAIL_HTTP_BEARER_MODE=auto` 相当で、従来どおり Keychain / `.env` の
-legacy HTTP bearer を使います。agent owner token はこれとは別の identity credential で、
-child token file と tool argument の既存境界を変えません。
+配布します。ORRERY Mail は `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を生成し、
+hook と `spawn_child.sh` / `cleanup-child-agent.sh` は Authorization header を付けず
+endpoint へ接続します。agent owner token は別の identity credential で、child token
+file と tool argument の境界を変えません。旧 Keychain service は既存環境の fallback
+読み取りだけに残します。
 
 ### `set-ghostty-title.sh`
 

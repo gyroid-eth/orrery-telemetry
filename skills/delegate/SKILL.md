@@ -1,7 +1,7 @@
 ---
 name: delegate
 description: Delegate a bounded task to a child Claude or Codex agent, prepare risk-aware instructions, spawn the child, annotate it in the dashboard, monitor progress, and verify completion.
-allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__mcp-agent-mail__send_message, mcp__mcp-agent-mail__fetch_inbox, mcp__mcp-agent-mail__register_agent, mcp__mcp-agent-mail__ensure_project, mcp__mcp-agent-mail__set_contact_policy, mcp__mcp-agent-mail__macro_contact_handshake, mcp__mcp-agent-mail__respond_contact, mcp__mcp-agent-mail__file_reservation_paths, mcp__mcp-agent-mail__release_file_reservations, mcp__mcp-agent-mail__renew_file_reservations
+allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__orrery-mail__send_message, mcp__orrery-mail__fetch_inbox, mcp__orrery-mail__register_agent, mcp__orrery-mail__ensure_project, mcp__orrery-mail__set_contact_policy, mcp__orrery-mail__macro_contact_handshake, mcp__orrery-mail__respond_contact, mcp__orrery-mail__file_reservation_paths, mcp__orrery-mail__release_file_reservations, mcp__orrery-mail__renew_file_reservations
 user-invocable: true
 ---
 
