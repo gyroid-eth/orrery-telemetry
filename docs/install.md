@@ -107,11 +107,13 @@ CI や script から入れる場合、既定のままだと 3 つの承認は警
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
 --terminal MODE         auto | ghostty | iterm | terminal | none
+--spawn-dirs PATHS      NEW AGENT の launch directory preset（`:` 区切り）
+--spawn-roots PATHS     directory typeahead が閲覧できる root（`:` 区切り）
 --retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 
-`--project-key` は、明示した値がいつでも最優先です。次に環境変数 `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`、最後に install 先の既存 `env.sh` を見ます。`--bin-dir` は公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
+`--project-key` は、明示した値がいつでも最優先です。次に環境変数 `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`、最後に install 先の既存 `env.sh` を見ます。`--spawn-dirs` / `--spawn-roots` も同じ順序で解決し、再インストール時は前回の値を引き継ぎます（詳細は [configuration.md](configuration.md) の「Spawn directory」）。`--bin-dir` は公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
 
 ## Settings、permissions、Claude skill の merge
 
