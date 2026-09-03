@@ -36,6 +36,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
+import subprocess
 import sys
 import time
 import urllib.error
@@ -48,6 +50,24 @@ DEFAULT_PROJECT_KEY = os.getcwd()
 def _mcp_url() -> str:
     url = os.environ.get("AGENTSTACK_MCP_URL") or os.environ.get("MCP_URL") or DEFAULT_URL
     return url
+
+
+def _resolved_project_key() -> str:
+    helper = pathlib.Path(__file__).resolve().parents[1] / "hooks" / "project-context.sh"
+    try:
+        result = subprocess.run(
+            ["/bin/bash", str(helper), "resolve-project-key", DEFAULT_PROJECT_KEY],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"project context helper is unavailable: {helper}") from exc
+    value = result.stdout.rstrip("\n")
+    if result.returncode != 0 or not value:
+        detail = result.stderr.strip() or f"exit {result.returncode}"
+        raise RuntimeError(f"project context helper failed: {detail}")
+    return value
 
 
 def _call(url: str, tool: str, arguments: dict) -> dict:
@@ -109,12 +129,18 @@ def _pick(messages: list[dict], sender: str | None, after_id: int | None) -> dic
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentstack-await-reply", add_help=True)
     parser.add_argument("--agent-name", required=True)
-    parser.add_argument("--project-key", default=os.environ.get("AGENTSTACK_PROJECT_KEY") or os.environ.get("PROJECT_KEY") or DEFAULT_PROJECT_KEY)
+    parser.add_argument("--project-key", default=None)
     parser.add_argument("--from", dest="sender", default=None)
     parser.add_argument("--after-id", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--interval", type=float, default=3.0)
     args = parser.parse_args(argv)
+    if args.project_key is None:
+        try:
+            args.project_key = _resolved_project_key()
+        except RuntimeError as exc:
+            print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+            return 2
     if args.timeout <= 0 or args.interval <= 0:
         print("agentstack-await-reply: --timeout and --interval must be positive", file=sys.stderr)
         return 2

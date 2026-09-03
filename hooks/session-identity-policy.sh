@@ -28,6 +28,15 @@
 # sharing the project. That is a choice to make deliberately, not a default.
 
 AGENTSTACK_POLICY_RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+AGENTSTACK_PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+if [ -f "$AGENTSTACK_PROJECT_CONTEXT_LIB" ]; then
+    # shellcheck disable=SC1090
+    . "$AGENTSTACK_PROJECT_CONTEXT_LIB"
+else
+    # A partial/old install has no safe installed-env reader. Treat installed
+    # values as unavailable instead of sourcing env.sh or executing its text.
+    agentstack_installed_env_value() { return 0; }
+fi
 # The default is a product decision, kept in one place so it can be read and
 # changed without hunting through the guards.
 AGENTSTACK_UNMANAGED_DEFAULT_POLICY="block"
@@ -215,19 +224,6 @@ agentstack_mail_outage_policy() {
         warn-open) printf 'warn-open\n' ;;
         *) printf 'block\n' ;;
     esac
-}
-
-# One reader for the installed environment, so every setting a raw client needs
-# comes from the same place the endpoint does.
-agentstack_installed_env_value() {
-    local name="$1"
-    local env_file="${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
-    [ -f "$env_file" ] || return 0
-    (
-        # shellcheck disable=SC1090
-        . "$env_file" >/dev/null 2>&1 || exit 0
-        eval "printf '%s' \"\${$name:-}\""
-    )
 }
 
 # The endpoint the guards ask about. A client started without the launcher has

@@ -4,9 +4,12 @@
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-${HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-${RUNTIME_DIR:-$HOME/.agentstack/runtime}}"
-DEFAULT_PROJECT_KEY="$(pwd -P)"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$DEFAULT_PROJECT_KEY}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
+LIVE_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+PROJECT_KEY="$(agentstack_resolve_project_key "$(pwd -P)")"
+PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$LIVE_PROJECT_KEY")"
 
 POLICY_LIB_EARLY="$HOOKS_DIR/session-identity-policy.sh"
 if [ -f "$POLICY_LIB_EARLY" ]; then

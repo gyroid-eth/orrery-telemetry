@@ -10,6 +10,9 @@ INPUT=$(cat)
 
 HOOKS_DIR_FOR_RESOLVER="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 POLICY_LIB="$HOOKS_DIR_FOR_RESOLVER/session-identity-policy.sh"
+PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
 
 # Extract session_id and cwd from hook input. The cwd is the only project
 # evidence a client started without the launcher carries: without it the
@@ -31,7 +34,7 @@ except:
     print('')
 " 2>/dev/null)
 
-LOOKUP_PROJECT="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$HOOK_CWD}}"
+LOOKUP_PROJECT="$(agentstack_resolve_project_key "${HOOK_CWD:-$(pwd -P)}")"
 
 # Three questions, in this order, and none of them is skipped for a session
 # that merely has a name:
