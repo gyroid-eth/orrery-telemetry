@@ -8,6 +8,9 @@ MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
 RETIRE_LEGACY_MAIL=false
+LEGACY_MAIL_SCAN_COMPLETE=false
+LEGACY_MAIL_DETECTED_LABELS=""
+LEGACY_MAIL_RETIRE_PLANNED=false
 ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
@@ -738,22 +741,32 @@ PY
   fi
 
   if mcp_endpoint_listening; then
-    say "existing AgentStack Mail listener detected at $MCP_URL"
-    database_url="$(probe_agent_mail_database_url || true)"
-    [[ -n "$database_url" ]] || \
-      die "$MCP_URL is listening but did not answer an AgentStack Mail health check"
-    resolved_db="$(database_url_to_path "$database_url" "" || true)"
-    [[ -n "$resolved_db" ]] || \
-      die "AgentStack Mail health returned an unsupported database URL: $database_url"
-    resolved_db="$(normalize_path "$resolved_db")"
-    [[ "$resolved_db" == "$expected_db" ]] || \
-      die "AgentStack Mail at $MCP_URL uses '$resolved_db', expected isolated database '$expected_db'"
-    [[ -f "$resolved_db" ]] || die "AgentStack Mail database does not exist: $resolved_db"
-    NATIVE_MAIL_EXISTING=true
-    EXISTING_AGENT_MAIL_SERVER=true
-    adopt_running_native_mail_render
-    say "existing AgentStack Mail database: $resolved_db"
-    return
+    if [[ -n "${LEGACY_MAIL_DETECTED_LABELS:-}" ]]; then
+      if [[ "$DRY_RUN" == true && "${LEGACY_MAIL_RETIRE_PLANNED:-false}" == true ]]; then
+        say "legacy mail listener at $MCP_URL is planned for retirement; skipping reuse probe"
+      elif [[ "$RETIRE_LEGACY_MAIL" == true ]]; then
+        die "legacy mail service '$LEGACY_MAIL_DETECTED_LABELS' was retired, but $MCP_URL is still occupied; stop the remaining listener and re-run"
+      else
+        die "legacy mail service '$LEGACY_MAIL_DETECTED_LABELS' is holding $MCP_URL; re-run with --retire-legacy-mail to retire it before the AgentStack Mail reuse check"
+      fi
+    else
+      say "existing AgentStack Mail listener detected at $MCP_URL"
+      database_url="$(probe_agent_mail_database_url || true)"
+      [[ -n "$database_url" ]] || \
+        die "$MCP_URL is listening but did not answer an AgentStack Mail health check"
+      resolved_db="$(database_url_to_path "$database_url" "" || true)"
+      [[ -n "$resolved_db" ]] || \
+        die "AgentStack Mail health returned an unsupported database URL: $database_url"
+      resolved_db="$(normalize_path "$resolved_db")"
+      [[ "$resolved_db" == "$expected_db" ]] || \
+        die "AgentStack Mail at $MCP_URL uses '$resolved_db', expected isolated database '$expected_db'"
+      [[ -f "$resolved_db" ]] || die "AgentStack Mail database does not exist: $resolved_db"
+      NATIVE_MAIL_EXISTING=true
+      EXISTING_AGENT_MAIL_SERVER=true
+      adopt_running_native_mail_render
+      say "existing AgentStack Mail database: $resolved_db"
+      return
+    fi
   fi
 
   PROVISION_NATIVE_MAIL=true
@@ -1857,6 +1870,11 @@ retire_legacy_mail_services() {
   # Retiring is opt-in. Stopping a service someone is running is not a decision
   # an installer gets to make silently, so the default is to report the
   # collision and let the operator choose.
+  if [[ "${LEGACY_MAIL_SCAN_COMPLETE:-false}" == true ]]; then
+    return 0
+  fi
+  LEGACY_MAIL_SCAN_COMPLETE=true
+
   if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
     return 0
   fi
@@ -1901,11 +1919,23 @@ retire_legacy_mail_services() {
       continue
     fi
 
+    case ",${LEGACY_MAIL_DETECTED_LABELS:-}," in
+      *",$label,"*) ;;
+      *)
+        if [[ -n "${LEGACY_MAIL_DETECTED_LABELS:-}" ]]; then
+          LEGACY_MAIL_DETECTED_LABELS="$LEGACY_MAIL_DETECTED_LABELS,$label"
+        else
+          LEGACY_MAIL_DETECTED_LABELS="$label"
+        fi
+        ;;
+    esac
+
     if [[ "$RETIRE_LEGACY_MAIL" != true ]]; then
       warn "a previous mail service is still loaded: $label. Two mail servers means two databases, and agents will split across them depending on which endpoint they reach. Re-run with --retire-legacy-mail to retire it, or stop it yourself: launchctl bootout gui/$(id -u)/$label"
       continue
     fi
     if [[ "$DRY_RUN" == true ]]; then
+      LEGACY_MAIL_RETIRE_PLANNED=true
       say "DRY-RUN would retire legacy mail service: $label"
       continue
     fi
@@ -2659,6 +2689,10 @@ main() {
   check_dependencies
   validate_repo_assets
   check_port
+  # A legacy listener can answer health_check but report its database relative
+  # to its own working directory. Honor the explicit retirement choice before
+  # treating that listener as a reusable AgentStack Mail service.
+  retire_legacy_mail_services
   resolve_native_mail_connection
   if ! check_agent_mail_provisioning_dependencies; then
     exit 1
@@ -2684,7 +2718,6 @@ main() {
   # — that function returns early when a healthy server is already running, which
   # is precisely the case for every existing user re-running install.sh to
   # update, and they need the autostart most.
-  retire_legacy_mail_services
   enable_mail_autostart
   safe_merge_claude_mcp
   safe_merge_settings
