@@ -399,15 +399,54 @@ def _fake_manager_bin(tmp: pathlib.Path, platform: str, *, fail: bool = False) -
     fake.mkdir()
     log = tmp / "manager.log"
     _write_command(fake, "uname", f"#!/bin/sh\nprintf '%s\\n' {platform}\n")
-    for name in ("launchctl", "systemctl"):
-        _write_command(fake, name,
-            "#!/bin/sh\n"
-            f'printf "%s %s\\n" {name} "$*" >> {log}\n'
-            + ("exit 1\n" if fail else "exit 0\n"))
+    _write_command(
+        fake,
+        "launchctl",
+        "#!/bin/sh\n"
+        f'printf "launchctl %s\\n" "$*" >> {log}\n'
+        + (
+            "exit 1\n"
+            if fail
+            else f"""case "$1" in
+  enable)
+    touch '{tmp / "launchctl-enabled"}'
+    ;;
+  bootout)
+    touch '{tmp / "launchctl-pending"}'
+    echo 0 > '{tmp / "launchctl-print-count"}'
+    ;;
+  print)
+    if [ -f '{tmp / "launchctl-pending"}' ]; then
+      current=$(cat '{tmp / "launchctl-print-count"}')
+      if [ "$current" -lt 2 ]; then
+        echo $((current + 1)) > '{tmp / "launchctl-print-count"}'
+        exit 0
+      fi
+      rm -f '{tmp / "launchctl-pending"}'
+    fi
+    exit 1
+    ;;
+  bootstrap)
+    [ -f '{tmp / "launchctl-enabled"}' ] || exit 5
+    [ ! -f '{tmp / "launchctl-pending"}' ] || exit 5
+    ;;
+esac
+exit 0
+"""
+        ),
+    )
+    _write_command(
+        fake,
+        "systemctl",
+        "#!/bin/sh\n"
+        f'printf "systemctl %s\\n" "$*" >> {log}\n'
+        + ("exit 1\n" if fail else "exit 0\n"),
+    )
     # Real utilities the renderer needs, resolved from the host but reachable
     # only through this directory so nothing else leaks in.
     for name in ("sed", "cat", "mkdir", "rm", "dirname", "basename", "printf",
-                 "id", "python3", "awk", "ps", "kill", "mv", "cp", "chmod"):
+                 "id", "python3", "awk", "ps", "kill", "mv", "cp", "chmod",
+                 "sleep", "touch"):
         real = shutil.which(name)
         if real:
             (fake / name).symlink_to(real)
@@ -443,6 +482,7 @@ def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tupl
         "plan() { :; }\n"
         f"eval \"$(sed -n '/^mail_autostart_environment()/,/^}} # end mail_autostart_environment/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^render_mail_autostart_unit()/,/^}} # end render_mail_autostart_unit/p' {INSTALLER})\"\n"
+        f"eval \"$(sed -n '/^wait_for_launchd_unload()/,/^}} # end wait_for_launchd_unload/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^enable_mail_autostart()/,/^}}$/p' {INSTALLER})\"\n"
         "enable_mail_autostart\n"
         'printf "KIND=%s\\nPATH_OUT=%s\\n" "$AGENT_MAIL_AUTOSTART_KIND" "$AGENT_MAIL_AUTOSTART_PATH"\n',
@@ -461,6 +501,12 @@ def test_launchd_registration_actually_calls_launchctl():
     assert f"launchctl enable gui/" in calls and f"{LABEL_PREFIX}.mail" in calls, (
         "the wrong label would register a job nobody triggers\n" + calls
     )
+    lines = calls.splitlines()
+    enable = next(i for i, line in enumerate(lines) if "launchctl enable " in line)
+    bootout = next(i for i, line in enumerate(lines) if "launchctl bootout " in line)
+    polls = [i for i, line in enumerate(lines) if "launchctl print " in line]
+    bootstrap = next(i for i, line in enumerate(lines) if "launchctl bootstrap " in line)
+    assert polls and enable < bootout < min(polls) <= max(polls) < bootstrap, calls
 
 
 def test_systemd_registration_actually_calls_systemctl():

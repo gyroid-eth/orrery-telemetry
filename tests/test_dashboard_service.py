@@ -89,6 +89,8 @@ def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
     repo.mkdir()
     for directory in ("bin", "dashboard", "scripts"):
         shutil.copytree(ROOT / directory, repo / directory)
+    (repo / "hooks").mkdir()
+    shutil.copy2(ROOT / "hooks" / "project-context.sh", repo / "hooks")
     shutil.copy2(ROOT / "VERSION", repo / "VERSION")
     return repo
 
@@ -266,12 +268,90 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
         capture_output=True,
         check=True,
     )
-    output = result.stdout
-    bootstrap = output.index("launchctl bootstrap gui/")
-    enable = output.index("launchctl enable gui/")
-    kickstart = output.index("launchctl kickstart gui/")
-    health = output.index("verify dashboard API responds")
-    assert bootstrap < enable < kickstart < health
+    lines = result.stdout.splitlines()
+    dashboard_lines = [
+        line for line in lines if "org.agentstack.order-test.agentdashboard" in line
+    ]
+    enable = next(i for i, line in enumerate(dashboard_lines) if " enable " in line)
+    bootout = next(i for i, line in enumerate(dashboard_lines) if " bootout " in line)
+    wait = next(i for i, line in enumerate(dashboard_lines) if "wait for launchctl unload" in line)
+    bootstrap = next(i for i, line in enumerate(dashboard_lines) if " bootstrap " in line)
+    kickstart = next(i for i, line in enumerate(dashboard_lines) if " kickstart " in line)
+    assert enable < bootout < wait < bootstrap < kickstart
+
+
+def test_agentctl_enables_then_waits_for_bootout_before_bootstrap(tmp_path):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    log = tmp_path / "launchctl.log"
+    enabled = tmp_path / "enabled"
+    pending = tmp_path / "pending-unload"
+    count = tmp_path / "print-count"
+    for name, body in {
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "launchctl": """#!/bin/sh
+echo "$1" >> "$AGENTSTACK_TEST_LAUNCHCTL_LOG"
+case "$1" in
+  enable)
+    touch "$AGENTSTACK_TEST_ENABLED"
+    ;;
+  bootout)
+    touch "$AGENTSTACK_TEST_PENDING"
+    echo 0 > "$AGENTSTACK_TEST_PRINT_COUNT"
+    ;;
+  print)
+    if [ -f "$AGENTSTACK_TEST_PENDING" ]; then
+      current=$(cat "$AGENTSTACK_TEST_PRINT_COUNT")
+      if [ "$current" -lt 2 ]; then
+        echo $((current + 1)) > "$AGENTSTACK_TEST_PRINT_COUNT"
+        exit 0
+      fi
+      rm -f "$AGENTSTACK_TEST_PENDING"
+    fi
+    exit 1
+    ;;
+  bootstrap)
+    [ -f "$AGENTSTACK_TEST_ENABLED" ] || exit 5
+    [ ! -f "$AGENTSTACK_TEST_PENDING" ] || exit 5
+    ;;
+esac
+exit 0
+""",
+    }.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    home = tmp_path / "home"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "AGENTSTACK_ENV_FILE": str(tmp_path / "missing-env.sh"),
+            "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test.order",
+            "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "AGENTSTACK_TEST_LAUNCHCTL_LOG": str(log),
+            "AGENTSTACK_TEST_ENABLED": str(enabled),
+            "AGENTSTACK_TEST_PENDING": str(pending),
+            "AGENTSTACK_TEST_PRINT_COUNT": str(count),
+        }
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "dashboard" / "agentctl.sh"), "start"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "started in launchd mode" in result.stdout
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert calls[0:2] == ["enable", "bootout"], calls
+    bootstrap = calls.index("bootstrap")
+    polls = [i for i, call in enumerate(calls) if call == "print"]
+    assert len(polls) >= 3 and max(polls) < bootstrap, calls
 
 
 def test_launchd_in_place_upgrade_replaces_its_own_listener_with_new_code(
@@ -293,6 +373,7 @@ case "$*" in
 esac
 case "$1" in
   print)
+    [ -f "$AGENTSTACK_TEST_LOADED_MARKER" ] || exit 1
     printf '{\n    pid = %s\n}\n' "$AGENTSTACK_TEST_OLD_PID"
     ;;
   bootout)
@@ -304,6 +385,7 @@ case "$1" in
         attempts=$((attempts + 1))
       done
     fi
+    rm -f "$AGENTSTACK_TEST_LOADED_MARKER"
     ;;
   bootstrap)
     nohup "$AGENTSTACK_PYTHON" \
@@ -330,9 +412,12 @@ exit 0
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    loaded_marker = tmp_path / "launchd-loaded"
+    loaded_marker.touch()
     env.update({
         "AGENTSTACK_TEST_OLD_PID": str(old_process.pid),
         "AGENTSTACK_TEST_NEW_PIDFILE": str(new_pidfile),
+        "AGENTSTACK_TEST_LOADED_MARKER": str(loaded_marker),
     })
     try:
         _wait_for_marker(port, "old-launchd")
@@ -672,6 +757,7 @@ def test_installer_rejects_explicit_python_39_before_writing(tmp_path):
             "bash", str(ROOT / "scripts" / "install.sh"),
             "--assume-yes", "--dashboard-only", "--dry-run",
             "--install-dir", str(install_dir),
+            "--project-key", str(tmp_path),
         ],
         cwd=ROOT,
         env=env,

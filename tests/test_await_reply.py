@@ -33,6 +33,24 @@ def test_default_project_key_is_the_invocation_directory():
     assert await_reply.DEFAULT_PROJECT_KEY == os.getcwd()
 
 
+def test_resolved_project_key_prefers_installed_env(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    cwd = tmp_path / "project" / "subdirectory"
+    (home / ".agentstack").mkdir(parents=True)
+    cwd.mkdir(parents=True)
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={project}\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("AGENTSTACK_HOME", raising=False)
+    monkeypatch.delenv("AGENTSTACK_PROJECT_KEY", raising=False)
+    monkeypatch.delenv("PROJECT_KEY", raising=False)
+    monkeypatch.chdir(cwd)
+
+    assert await_reply._resolved_project_key() == str(project)
+
+
 def _serve(batches):
     """One-shot HTTP server: each POST answers with the next inbox batch."""
 

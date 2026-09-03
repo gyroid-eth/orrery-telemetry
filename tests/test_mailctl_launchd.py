@@ -81,7 +81,14 @@ case "$1" in
     rm -f "$LOADED_MARKER" "$SERVING_MARKER"
     exit 0
     ;;
+  enable)
+    touch "$ENABLED_MARKER"
+    exit 0
+    ;;
   bootstrap)
+    if [[ -n "${REQUIRE_ENABLE_BEFORE_BOOTSTRAP:-}" && ! -f "$ENABLED_MARKER" ]]; then
+      exit 5
+    fi
     touch "$LOADED_MARKER" "$SERVING_MARKER"
     exit 0
     ;;
@@ -174,6 +181,7 @@ def harness(tmp_path: Path):
         "PLIST_PATH": str(plist),
         "SERVICE_PROGRAM": str(program),
         "PENDING_UNLOAD": str(tmp_path / "pending-unload"),
+        "ENABLED_MARKER": str(tmp_path / "enabled"),
         "PRINT_COUNT": str(tmp_path / "print-count"),
         "SERVING_MARKER": str(serving),
         "AGENTSTACK_MAILCTL_SKIP_ENV": "1",
@@ -282,6 +290,21 @@ def test_stop_then_start_puts_the_same_supervisor_back(harness) -> None:
     assert loaded.exists(), "the launchd job was not restored"
     assert "bootstrap" in _log(log)
     assert "run-agentstack-mail" not in _log(log)
+
+
+def test_memo_restore_enables_a_disabled_label_before_bootstrap(harness) -> None:
+    env, _loaded, _serving, log, _server = harness
+    stop = _mailctl(env, "stop")
+    assert stop.returncode == 0, stop.stderr
+    env = {**env, "REQUIRE_ENABLE_BEFORE_BOOTSTRAP": "1"}
+
+    start = _mailctl(env, "start")
+
+    assert start.returncode == 0, start.stderr
+    calls = _log(log).splitlines()
+    enable = next(i for i, line in enumerate(calls) if line.startswith("enable "))
+    bootstrap = next(i for i, line in enumerate(calls) if line.startswith("bootstrap "))
+    assert enable < bootstrap, calls
 
 
 def test_stop_boots_out_a_loaded_job_that_is_not_currently_serving(harness) -> None:

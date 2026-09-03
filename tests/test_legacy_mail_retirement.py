@@ -127,7 +127,7 @@ INSTALL_SH={INSTALLER!s}
 # Pull in every function under test by name. Extracting them one at a time by
 # hand has silently dropped a helper twice, and a missing helper looks exactly
 # like the feature not working.
-for fn in retire_legacy_mail_services legacy_mail_plist_looks_like_mail path_belongs_to_a_mail_install; do
+for fn in wait_for_launchd_unload retire_legacy_mail_services legacy_mail_plist_looks_like_mail path_belongs_to_a_mail_install; do
   eval "$(awk -v fn="$fn" 'index($0, fn "() {{") == 1 {{ inside = 1 }} inside {{ print }} inside && $0 == "}}" {{ exit }}' "$INSTALL_SH")"
   declare -f "$fn" >/dev/null || {{ echo "missing helper: $fn" >&2; exit 90; }}
 done

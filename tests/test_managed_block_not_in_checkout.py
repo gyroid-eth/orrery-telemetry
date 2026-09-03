@@ -1,8 +1,10 @@
 """The installer must not write a managed block into its own checkout.
 
-Without ``--project-key`` the default project is the repo the installer was run
+Older installers defaulted an omitted ``--project-key`` to the repo they ran
 from, so ``agentstack-claude-setup`` wrote its block into that checkout's
-``CLAUDE.md``. Once the repo started tracking ``CLAUDE.md`` and ``AGENTS.md``,
+``CLAUDE.md``. The installer now requires a project on first install, but an
+operator can still explicitly choose the checkout. Once the repo started tracking
+``CLAUDE.md`` and ``AGENTS.md``,
 ``git pull`` refused to update them:
 
     error: The following untracked working tree files would be overwritten by
@@ -50,8 +52,8 @@ def _dry_run(tmp_path: pathlib.Path, *args: str) -> str:
     return result.stdout
 
 
-def test_default_project_key_does_not_write_into_the_checkout(tmp_path):
-    output = _dry_run(tmp_path)
+def test_explicit_checkout_project_key_does_not_write_into_the_checkout(tmp_path):
+    output = _dry_run(tmp_path, "--project-key", str(ROOT))
     assert SKIP_LINE in output
     assert "Claude CLAUDE.md managed setup dry-run" not in output
 
