@@ -6,6 +6,8 @@
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
+**ブラウザで試す（インストール不要）**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) — 本物の dashboard を台本データで動かした公開デモです。台本（bug report / research）と言語を選ぶと、agent の起動・mail・context の推移・child の終了までを 4 分でループ再生し、字幕が「いま何が起きているか」を説明します。仕組みは [Dashboard](docs/dashboard.md#デモサーバー不要) を参照してください。
+
 設計の中心は「LLM に協調を期待するだけでなく、launcher・hook・mail・可視化で運用規約を実行可能にする」ことです。
 
 ## 対応環境（Supported environments）

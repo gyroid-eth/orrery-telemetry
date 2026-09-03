@@ -401,6 +401,14 @@ embed の初期化完了時と reload 後には、dashboard が `agentstack-them
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` は terminal bridge と control endpoint も外部へ公開します。dashboard に認証 layer はないため、trusted LAN / VPN 以外では使わないでください。
 
+## デモ（サーバー不要）
+
+公開デモ [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) は、この `index.html` そのものを Python も SQLite も tmux も無しで動かしたものです。コピーは作っていません。画面を動かしている通信は `fetch` による GET だけなので、`dashboard/demo/demo_api.js` が `fetch` を横取りし、台本（`story_*.js`・配役・生死・mail 本文・作業ログ）から時刻に応じた応答を組み立てます。書き込み系 API は無効です。
+
+- `http://127.0.0.1:8770/?demo=1` で、手元の dashboard でも同じデモを再生できます（`demo_tour.js` が字幕と対象のリングを重ねるだけで、製品の挙動は変えません）
+- 台本の書き方は [`dashboard/demo/STORY_CONTRACT.md`](../dashboard/demo/STORY_CONTRACT.md)。公開してよい肖像の台帳は `PORTRAITS_CLEARED.txt` で、build はそこに無い肖像を同梱しません
+- 静的 bundle は `bash dashboard/demo/build.sh [outdir]` で作り、どのパスに置いても動きます。全 script に内容ハッシュの版番号を付けるので、CDN の古い写しと新しい HTML が組になる壊れ方をしません
+
 ## 関連文書
 
 - [Hooks と運用 helper](hooks.md)

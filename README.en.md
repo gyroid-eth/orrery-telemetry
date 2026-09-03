@@ -6,6 +6,8 @@ A coordination layer and live telemetry dashboard for local Claude Code and Code
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
+**Try it in the browser (nothing to install)**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) — the real dashboard driven by scripted data. Pick a story (bug report / research) and a language; it loops through agents starting, mail crossing the graph, context draining and a child finishing, with captions saying what is happening. See [Dashboard](docs/dashboard.md#デモサーバー不要) for how it works.
+
 The central design principle is to make operating rules executable through launchers, hooks, mail, and visualization instead of merely expecting LLMs to coordinate.
 
 ## Supported environments
