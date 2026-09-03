@@ -38,10 +38,6 @@ ALLOWLIST = {
     # carry any identifier, including one nobody reviewed — an adversarial pass
     # demonstrated exactly that by planting the username in an allowlisted file
     # and in a binary, and watching this guard accept both (2026-08-31).
-    "packages/agentstack_mail/fixtures/differential-expected-divergences-v2.json": (
-        "The workspace is measurement provenance for the accepted performance baseline.",
-        {VAULT_DIRECTORY},
-    ),
     # This file has to contain what it searches for.
     "tests/test_no_personal_identifiers.py": (
         "The guard names the identifiers it looks for.",

@@ -360,7 +360,7 @@
       "selector": "reservation_activity.performance.57_concrete",
       "script": "packages/agentstack_mail/scripts/reservation_performance_gate.py",
       "input": {
-        "workspace": "/Users/operator/Syncthing/<vault-directory>",
+        "workspace": "/Users/operator/<vault-directory>",
         "count": 57,
         "source_command": "git ls-files -z",
         "preferred_prefix": "10_Reference/",
