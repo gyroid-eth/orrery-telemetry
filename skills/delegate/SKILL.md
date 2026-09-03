@@ -239,9 +239,30 @@ If you need to clear a label, send an empty value to `http://127.0.0.1:${AGENTST
 
 ## 6. Monitor Progress
 
-Primary completion signal: the child sends an agent-mail message to the parent. Read it with `fetch_inbox`, then verify the claimed output.
+Primary completion signal: the child sends an agent-mail message to the parent. It reaches you as a notification in your session; if the notification says the body is complete, act on it without a `fetch_inbox`.
 
-Backup signal: schedule monitor checks with the installed monitor script:
+### Waiting for the child
+
+Do not improvise a wait. A `fetch_inbox` polling loop consumes the push notification's dirty bit (the reply then sits unread), and a pane-diff or `sleep` loop keeps firing after the child is done. Choose one of three patterns:
+
+1. **Send and move on** (default): keep working; the completion report arrives as a notification.
+2. **Background await**: when you must be woken by the reply but have other work, run the bundled primitive in the background and let its completion wake you:
+
+   ```bash
+   "$AGENTSTACK_HOME/bin/agentstack-await-reply" --agent-name "$AGENT_NAME" \
+     --from "$CHILD_NAME" --after-id <id of the task message you sent> --timeout 1800
+   ```
+
+   It prints the reply as JSON and exits 0, or exits 124 on timeout.
+3. **Blocking await**: the same command in the foreground, only when your next step depends on the reply's content.
+
+### Startup race
+
+This applies only when the task travels by mail (a child launched without the embedded task). Such a child can start before its task message is committed and see an empty inbox. Tell it in the launch prompt to wait ten seconds and fetch once more before reporting "no task"; if you still receive that report, resend the task with `send_message` rather than letting the child guess from its cwd.
+
+### Backup monitor
+
+Schedule monitor checks with the installed monitor script:
 
 ```bash
 bash "$AGENTSTACK_HOME/hooks/monitor_child_agent.sh" \
@@ -266,6 +287,22 @@ Monitor exit codes:
 
 Dangerous command detection in the monitor is passive by default. It runs only when `AGENTSTACK_MONITOR_DANGER_CHECK=1`.
 
+Known false positives — check the pane before acting on a code:
+
+- **Exit 10 between tool calls.** The shell-return check matches a trailing `❯`, and the Claude Code REPL prompt is also `❯`, so a healthy child can return 10 on every tick. Treat 10 as "verify", not "done": completion is the inbox report plus your own inspection of the output.
+- **Exit 30 on a benign `rm -rf`.** Build steps delete `__pycache__`, `dist/`, `node_modules/` and similar. Read the actual command in the pane; if it is a build artifact, delete the cron entry, tell the child to continue, and do not escalate.
+- **Text sitting in the child's input box** may be Claude Code's automatic prompt suggestion, which `capture-pane` renders like typed input. Do not diagnose an unsubmitted `Enter` from that alone; if it matters, send one harmless character and see whether it appends.
+
+### Manage the child's context
+
+The child is busy with its task and will not choose a good moment to compact. That is the parent's job. Both Claude Code and Codex auto-compact, so a low `Context NN% left` in the pane footer is not an emergency and is never a reason to interrupt work in progress. Compact deliberately at task boundaries instead: when the child is idle at its prompt, its results are persisted (mail report, files, log), and the next task benefits from a fresh head (new code to review, a different subsystem, after a long trial-and-error). `/compact` is a REPL command, so this is the one case where a keystroke is sent to the pane:
+
+```bash
+tmux send-keys -t "$CHILD_NAME" -l "/compact"; sleep 0.3; tmux send-keys -t "$CHILD_NAME" C-m
+```
+
+Then send the next task with `send_message`; the child re-orients from the files and mail the task points to.
+
 ## 7. Completion Handling
 
 When completion is detected:
@@ -281,12 +318,18 @@ When completion is detected:
 
 If the child reports uncertainty, partial completion, or skipped tests, preserve that information in your report.
 
+### Reuse before you retire
+
+Do not retire a child the moment it reports. Sending a related follow-up task to the same child with `send_message` skips the spawn cost (tmux window, registration, bootstrap), keeps the context of the previous work, and keeps the parent-child edge on the dashboard. Reuse while the child still has roughly half its context; below that, compact it at the boundary (above) or spawn a fresh child for the next task. Reviewer children in particular stay alive so additional review angles go to the agent that already read the code.
+
+When a child is truly finished, end its tmux session; `cleanup-child-agent.sh` retires the registration and removes its runtime files. Retire only agents you spawned and named explicitly.
+
 ## 8. Codex Child Notes
 
 Codex children differ from Claude Code children in a few operational details:
 
 - Codex may use a different REPL prompt, so monitor logic must avoid treating a visible input prompt as proof of completion.
-- Injecting text with `tmux send-keys` is a last resort. Prefer `send_message`. If you must inject text, send text and `C-m` as separate calls.
+- Instructions, follow-ups and corrections go to the child over `send_message`, never by typing into its pane: keystrokes can land in the input box without submitting, nothing records that they arrived, and a human then has to press Enter for you. The only pane keystroke the parent sends is `/compact` (section 6), as text and `C-m` in separate calls.
 - Codex may be sandboxed differently from Claude Code; include test commands and allowed paths explicitly in the task.
 - The child must still read its inbox and treat the inbox task as canonical.
 
@@ -307,6 +350,8 @@ Use acquire/release pairing rather than a short time window. Long legitimate ope
 
 - Delegate only bounded work with clear ownership.
 - Keep project identity stable with `$AGENTSTACK_PROJECT_KEY`.
-- Prefer messages over raw tmux injection.
+- Messages, never raw tmux injection (the sole exception is `/compact`).
+- Wait with `agentstack-await-reply` or not at all; never with a loop of your own.
+- A child is reused before it is retired, and compacted at task boundaries, not mid-task.
 - Watch startup closely, then adjust cadence by risk.
 - Verify the child's output before reporting it as done.
