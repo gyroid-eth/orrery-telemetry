@@ -63,15 +63,43 @@
             "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/check-agent-registered.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/invalidate-release-debounce.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/release-file-reservation.sh"
+          }
+        ]
+      },
       {
         "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
         "hooks": [
           {
             "type": "command",
             "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/mark-agent-registered.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/release-all-reservations.sh"
           }
         ]
       }

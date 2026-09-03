@@ -16,8 +16,10 @@ no reason to carry one.
 
 from __future__ import annotations
 
-# The two known divergences as of 2026-09-01, recorded so this test reports the
-# state honestly instead of failing the whole suite on a debt it did not create.
+# The known divergences, recorded so this test reports the state honestly
+# instead of failing the whole suite on a debt it did not create. The three
+# release hooks joined this list on 2026-09-03 while their handwritten live
+# predecessors were being productized; remove them after the next install.
 # Reconciling them is scheduled work; what this file guarantees today is that
 # nothing *new* joins the list quietly. Remove a name once its copy is
 # reconciled — an entry that no longer drifts fails, so the list cannot rot.
@@ -44,6 +46,9 @@ KNOWN_DRIFT_HOOKS = {
     "cleanup-child-agent.sh",
     "mark-agent-registered.sh",
     "monitor_child_agent.sh",
+    "invalidate-release-debounce.sh",
+    "release-all-reservations.sh",
+    "release-file-reservation.sh",
     "resolve-agent-name.sh",
     "session-start-reminder.sh",
     "set-ghostty-title.sh",

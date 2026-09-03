@@ -161,9 +161,24 @@
         "matcher": "Edit|Write|Bash"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/invalidate-release-debounce.sh",
+        "event": "PreToolUse",
+        "matcher": "mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",
+        "event": "PostToolUse",
+        "matcher": "Edit|Write"
+      },
+      {
         "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh",
         "event": "PostToolUse",
         "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/release-all-reservations.sh",
+        "event": "SessionEnd",
+        "matcher": null
       }
     ],
     "after_sha256": "example-after-sha256",
@@ -196,9 +211,24 @@
         "matcher": "Edit|Write|Bash"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/invalidate-release-debounce.sh",
+        "event": "PreToolUse",
+        "matcher": "mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",
+        "event": "PostToolUse",
+        "matcher": "Edit|Write"
+      },
+      {
         "command": "/bin/bash /home/alice/.agentstack/hooks/mark-agent-registered.sh",
         "event": "PostToolUse",
         "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/release-all-reservations.sh",
+        "event": "SessionEnd",
+        "matcher": null
       }
     ],
     "hooks_dir": "/home/alice/.agentstack/hooks",
