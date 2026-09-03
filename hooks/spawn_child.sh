@@ -641,6 +641,33 @@ codex_session_alive() {
     tmux has-session -t "=$1" 2>/dev/null
 }
 
+# Last N non-blank lines of a pane capture. `capture-pane` pads the output to
+# the window height, so a plain `tail` on a tall window sees only blank lines
+# and every footer-based readiness check fails (2026-09-03: Codex 0.153 timed
+# out for 90s with a ready REPL on screen).
+pane_nonblank_tail() {
+    local count="$1"
+    awk '{ lines[NR] = $0 }
+         END {
+             n = NR
+             while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+             for (i = 1; i <= n; i++) print lines[i]
+         }' | tail -n "$count"
+}
+
+# Dialog detectors read the visible screen only: the Codex polls below capture
+# without scrollback, because a capture that included history kept showing an
+# already-accepted dialog and the launcher pressed Enter on every poll.
+codex_trust_dialog_present() {
+    printf '%s' "$1" | grep -qi "Do you trust"
+}
+
+# Claude Code 2.1.259 replaced "Do you trust ..." with a "Quick safety check"
+# whose default row is "No, exit". Both wordings are a modal, never readiness.
+claude_trust_dialog_present() {
+    printf '%s' "$1" | grep -qiE "Do you trust|Quick safety check|Yes, I trust this folder"
+}
+
 # Accept Codex's untrusted-directory prompt.  tmux's symbolic `Enter` did not
 # submit this dialog on Codex 0.144.x; the carriage return key `C-m` does.
 # Bound repeated detections so a future dialog change fails through the normal
@@ -664,10 +691,12 @@ codex_accept_trust_dialog() {
 # never injected into a modal dialog.
 claude_pane_ready() {
     local pane_text="$1" last_lines
-    printf '%s' "$pane_text" | grep -qi "Do you trust" && return 1
-    last_lines="$(printf '%s' "$pane_text" | tail -8)"
+    claude_trust_dialog_present "$pane_text" && return 1
+    last_lines="$(printf '%s' "$pane_text" | pane_nonblank_tail 8)"
     printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
-    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*' && return 0
+    # Only an empty input row counts. A selected dialog row also starts with
+    # the cursor glyph ("❯ No, exit") and must not read as ready.
+    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*$' && return 0
     return 1
 }
 
@@ -679,6 +708,25 @@ claude_accept_trust_dialog() {
     if (( attempt > max_attempts )); then
         echo "[$log_prefix] Claude trust dialog persisted after ${max_attempts} attempts; aborting" >&2
         return 1
+    fi
+    local pane_text
+    pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+    if printf '%s' "$pane_text" | grep -q "Yes, I trust this folder"; then
+        # New dialog: the default row is "No, exit", so a bare Enter ends the
+        # child (observed 2026-09-03: the session lived 4 seconds). Move to the
+        # Yes row and confirm it is selected before confirming.
+        if ! printf '%s' "$pane_text" | grep -qE '❯[[:space:]]*Yes, I trust'; then
+            tmux send-keys -t "$session_name" Down
+            sleep 1
+            pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        fi
+        if printf '%s' "$pane_text" | grep -qE '❯[[:space:]]*Yes, I trust'; then
+            echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
+            tmux send-keys -t "$session_name" C-m
+        else
+            echo "[$log_prefix] Claude trust dialog detected but the Yes row is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
+        fi
+        return 0
     fi
     echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
     tmux send-keys -t "$session_name" C-m
@@ -838,7 +886,7 @@ PY
 codex_pane_ready() {
     local pane_text="$1" last_lines
     printf '%s' "$pane_text" | grep -qF "Use existing model" && return 1
-    last_lines="$(printf '%s' "$pane_text" | tail -5)"
+    last_lines="$(printf '%s' "$pane_text" | pane_nonblank_tail 5)"
     printf '%s' "$last_lines" | grep -qE '% (left|context)' && return 0
     printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
     # Footer form "<model> <effort> · <cwd>" (no context segment).
@@ -1302,9 +1350,9 @@ ${TASK}"
             "${TMUX_ENV_ARGS[@]}" \
             '/bin/zsh -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
-                if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
-                    source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
-                fi
+                # The child never sources a user-side bootstrap: identity comes
+                # from the reserved name and token file, and a failing script
+                # under set -e would take the whole session with it (2026-09-03).
                 if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
                     env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 else
@@ -1333,7 +1381,7 @@ ${TASK}"
         while [[ $WAITED -lt $WAIT_MAX ]]; do
             sleep 3
             WAITED=$((WAITED + 3))
-            PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p -S -30 2>/dev/null || true)
+            PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
             if echo "$PANE_TEXT" | grep -qF "Use existing model"; then
                 echo "[spawn_child/pre-reg] Model selection dialog detected; choosing existing model" >&2
                 tmux send-keys -t "$CHILD_NAME" Down Enter
@@ -1341,7 +1389,7 @@ ${TASK}"
                 continue
             fi
             # Trust ダイアログ: "Do you trust the contents of this directory?"
-            if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+            if codex_trust_dialog_present "$PANE_TEXT"; then
                 TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
                 if ! codex_accept_trust_dialog \
                     "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
@@ -1454,7 +1502,7 @@ ${TASK}"
                 sleep 2
                 WAITED=$((WAITED + 2))
                 PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-                if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+                if claude_trust_dialog_present "$PANE_TEXT"; then
                     TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
                     if ! claude_accept_trust_dialog \
                         "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
@@ -2105,9 +2153,7 @@ if [[ "$USE_CODEX" == true ]]; then
         "${TMUX_ENV_ARGS[@]}" \
         '/bin/zsh -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
-            if [[ -f "$HOME/.codex/bin/codex_agent_bootstrap.sh" ]]; then
-                source "$HOME/.codex/bin/codex_agent_bootstrap.sh" "$PWD"
-            fi
+            # See the pre-registered path: no user-side bootstrap is sourced.
             if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
                 env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             else
@@ -2138,7 +2184,7 @@ if [[ "$USE_CODEX" == true ]]; then
     while [[ $WAITED -lt $WAIT_MAX ]]; do
         sleep 3
         WAITED=$((WAITED + 3))
-        PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p -S -30 2>/dev/null || true)
+        PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
 
         # モデルアップグレードダイアログ: "Use existing model" を選択
         if echo "$PANE_TEXT" | grep -qF "Use existing model"; then
@@ -2149,7 +2195,7 @@ if [[ "$USE_CODEX" == true ]]; then
         fi
 
         # Trust ダイアログ: "Do you trust the contents of this directory?"
-        if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+        if codex_trust_dialog_present "$PANE_TEXT"; then
             TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
             if ! codex_accept_trust_dialog \
                 "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
@@ -2226,7 +2272,7 @@ else
         sleep 2
         WAITED=$((WAITED + 2))
         PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-        if echo "$PANE_TEXT" | grep -qi "Do you trust"; then
+        if claude_trust_dialog_present "$PANE_TEXT"; then
             TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
             if ! claude_accept_trust_dialog \
                 "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
