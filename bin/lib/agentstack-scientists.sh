@@ -5,7 +5,7 @@
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_scientists_src="${BASH_SOURCE[0]}"; else _ags_scientists_src="$0"; fi
 AGS_SCIENTISTS_LIB_DIR="$(cd "$(dirname "$_ags_scientists_src")" && pwd)"
 
-# Keep byte-for-byte semantic parity with mcp-agent-mail utils.py
+# Keep byte-for-byte semantic parity with the frozen predecessor vocabulary.
 # SIMPLE_ADJECTIVES (Round 3, 2026-06-26).  Do not extend independently:
 # strict agent-mail deployments validate generated names against that canon.
 AGS_SIMPLE_ADJECTIVES=(
@@ -145,7 +145,7 @@ ags_pick_adjective_scientist_name() {
   local adjective scientist
   adjective="$(ags_pick_adjective)" || return 1
   scientist="$(ags_pick_scientist "$json_path")" || return 1
-  # Stock mcp-agent-mail preserves this spelling as the durable identity.
+  # The predecessor preserved this spelling as the durable identity.
   # Some local patched deployments coerce it to AdjectiveScientist instead;
   # callers must always adopt register_agent's returned name after registering.
   printf '%s-%s\n' "$adjective" "$scientist"

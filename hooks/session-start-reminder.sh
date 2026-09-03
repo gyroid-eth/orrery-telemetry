@@ -3,11 +3,11 @@
 # SessionStart hook for startup/resume/clear/compact.
 #
 # If an existing identity can be resolved, print a reminder to re-register with
-# the same mcp-agent-mail name instead of generating a fresh identity.
+# the same ORRERY Mail name instead of generating a fresh identity.
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
-MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
+MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HEALTH_URL="${AGENTSTACK_MCP_HEALTH_URL:-${MCP_AGENT_MAIL_HEALTH_URL:-}}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 RESOLVED_AGENT=""
@@ -213,7 +213,7 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
 
 if mail_server_is_answering; then
     if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
-        echo "mcp-agent-mail server is running. This session is already registered."
+        echo "ORRERY Mail server is running. This session is already registered."
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
         echo "新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。"
         echo "1. fetch_inbox (agent_name=\"$SHELL_REGISTERED_AGENT\")"
@@ -226,7 +226,7 @@ if mail_server_is_answering; then
             echo "初回の fetch_inbox/whois では、$RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
         fi
     elif [ -n "$RESOLVED_AGENT" ]; then
-        echo "mcp-agent-mail server is running. Register this session before working."
+        echo "ORRERY Mail server is running. Register this session before working."
         if [ -n "$SHELL_REGISTRATION_ERROR" ]; then
             echo "ERROR: $SHELL_REGISTRATION_ERROR。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
         else
@@ -234,11 +234,11 @@ if mail_server_is_answering; then
             echo "1. ensure_project -> 2. register_agent (name=\"$RESOLVED_AGENT\") -> 3. fetch_inbox"
         fi
     else
-        echo "mcp-agent-mail server is running. Register this session before working."
+        echo "ORRERY Mail server is running. Register this session before working."
         echo "1. ensure_project -> 2. register_agent (new AdjectiveScientist name if needed) -> 3. fetch_inbox"
     fi
 else
-    echo "mcp-agent-mail server is not running; skip registration until it is available."
+    echo "ORRERY Mail server is not running; skip registration until it is available."
     if [ -n "$RESOLVED_AGENT" ]; then
         # Say who this session already is. Otherwise a resumed session waits out
         # the outage believing it is nobody, and registers a second identity for

@@ -1,5 +1,5 @@
 This machine runs **claude-agent-stack**: multiple Claude Code and Codex agents
-coordinate over `mcp_agent_mail` (inter-agent messaging + a shared file-lock
+coordinate over ORRERY Mail (inter-agent messaging + a shared file-lock
 registry) and appear in a live dashboard. As a Codex agent you are a first-class
 participant. Follow the rules below.
 
@@ -16,7 +16,7 @@ First calls:
 3. If that succeeds, do not call `register_agent` again.
 4. Tokens: **if your agent-mail MCP server runs through the local proxy, you
    never touch a token.** Spawned Codex children are configured that way (their
-   `CODEX_HOME` points `[mcp_servers.agent-mail]` at the proxy), and the
+   `CODEX_HOME` points `[mcp_servers.orrery-mail]` at the proxy), and the
    SessionStart reminder says so. The proxy holds your token and authenticates
    every call, so do not read `agent_token_<name>`: it only costs an approval
    prompt and puts the secret in your context.
@@ -30,7 +30,7 @@ First calls:
 The SessionStart hook has already registered you when it prints:
 
 ```text
-mcp-agent-mail server is running. This session is already registered.
+ORRERY Mail server is running. This session is already registered.
 あなたは「<name>」です（既存 identity・source: ...）。shell hook で登録済みです。
 新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。
 ```
@@ -85,7 +85,7 @@ Details and exceptions for the first calls:
   re-authentication token for continuing an existing identity. A top-level
   session with no `PARENT_AGENT` still needs it if the tmux/session name
   resolves to an existing identity.
-- Stock agent-mail is token-strict for existing names. `register_agent` and
+- ORRERY Mail is token-strict for existing names. `register_agent` and
   read-only tools such as `fetch_inbox` or `whois` require the original
   registration token unless this MCP session has already authenticated as that
   agent. Reading only is not token-free.

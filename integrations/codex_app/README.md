@@ -109,7 +109,7 @@ Preview an install without touching Codex or launchd:
 scripts/install-codex-app-integration.sh \
   --dry-run --no-service --no-plugin \
   --project-key /absolute/project \
-  --agent-mail-url http://127.0.0.1:8765/api/
+  --agent-mail-url http://127.0.0.1:18765/api/
 ```
 
 After an approved install, diagnose it with:

@@ -1,5 +1,5 @@
 This machine runs **claude-agent-stack**: Claude Code and Codex agents
-coordinate over `mcp_agent_mail` and share file reservations. Follow these
+coordinate over ORRERY Mail and share file reservations. Follow these
 rules before doing project work.
 
 ## Session Startup
@@ -28,7 +28,7 @@ First calls:
 The SessionStart hook has already registered you when it prints:
 
 ```text
-mcp-agent-mail server is running. This session is already registered.
+ORRERY Mail server is running. This session is already registered.
 あなたは「<name>」です（既存 identity・source: ...）。shell hook で登録済みです。
 新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。
 ```
@@ -61,7 +61,7 @@ Details and exceptions for the first calls:
   top-level session with no `PARENT_AGENT` still needs it if the tmux/session
   name resolves to an existing identity. If `CHILD_REGISTRATION_TOKEN` is empty,
   do not invent a new token; try the helper below before reporting failure.
-- Stock agent-mail is token-strict for existing names. `register_agent` and
+- ORRERY Mail is token-strict for existing names. `register_agent` and
   read-only tools such as `fetch_inbox` or `whois` require the original
   registration token unless this MCP session has already authenticated as that
   agent. Reading only is not token-free.
@@ -138,6 +138,6 @@ The installed skill sources live under `__AGENTSTACK_HOME__/skills`.
   spawn, or delegate to a child, use `/delegate`. Do not substitute Claude
   Code's built-in Agent or Task tool: those children have no AgentStack
   identity, inbox, reservation, dedicated tmux session, or dashboard telemetry.
-  If `/delegate` cannot see the `mcp__mcp-agent-mail__*` tools, report that the
+  If `/delegate` cannot see the `mcp__orrery-mail__*` tools, report that the
   fixed-name MCP server is unavailable and stop the delegation attempt. Do not
   switch to a built-in agent, direct-mode launcher, or another improvised path.

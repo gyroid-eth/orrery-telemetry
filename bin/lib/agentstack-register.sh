@@ -23,7 +23,7 @@ ags_mail_load_token() {
 
 ags_mcp_call() {
   local tool="$1"; shift
-  local mcp_url="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
+  local mcp_url="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
   local args_json payload
   args_json="$(python3 - "$@" <<'PY'
 import json
@@ -277,7 +277,7 @@ ags_apply_contact_policy() {
       return 0
       ;;
   esac
-  # Try WITH the owner token first: stock mcp-agent-mail gates set_contact_policy
+  # Try WITH the owner token first: legacy deployments gate set_contact_policy
   # on the agent's registration_token, so omitting it makes the call fail and
   # (previously with a bare || true) silently leave the policy at the server
   # default instead of 'open'. But older/lenient servers whose set_contact_policy

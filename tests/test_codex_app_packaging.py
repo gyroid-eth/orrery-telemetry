@@ -78,7 +78,7 @@ def _install_args(
     home: Path,
     *,
     runtime_dir: Path | None = None,
-    agent_mail_url: str = "http://127.0.0.1:8765/api/",
+    agent_mail_url: str = "http://127.0.0.1:18765/mcp",
     service: bool = False,
 ) -> list[str]:
     codex_binary = shutil.which("codex") or _stub_codex(home)
@@ -89,9 +89,9 @@ def _install_args(
         "--agent-mail-url",
         agent_mail_url,
         "--agent-mail-env",
-        str(home / "mcp_agent_mail" / ".env"),
+        str(home / ".agentstack" / "mail" / ".env"),
         "--signals-dir",
-        str(home / ".mcp_agent_mail" / "signals"),
+        str(home / ".agentstack" / "mail" / "signals"),
         "--codex-bin",
         codex_binary,
     ]
@@ -106,8 +106,8 @@ def _prepare_home(tmp_path: Path) -> Path:
     home = tmp_path / "home"
     (home / ".codex").mkdir(parents=True)
     (home / "project").mkdir()
-    mail_env = home / "mcp_agent_mail" / ".env"
-    mail_env.parent.mkdir()
+    mail_env = home / ".agentstack" / "mail" / ".env"
+    mail_env.parent.mkdir(parents=True)
     mail_env.write_text(
         "HTTP_BEARER_" + "TOKEN=example-secret-value\n",
         encoding="utf-8",

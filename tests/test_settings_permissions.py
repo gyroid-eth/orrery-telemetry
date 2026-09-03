@@ -65,10 +65,10 @@ def test_template_ships_a_permissions_block():
         "fetch_inbox",
         "runtime_status",
     ):
-        assert f"mcp__mcp-agent-mail__{tool}" in permissions["allow"], tool
+        assert f"mcp__orrery-mail__{tool}" in permissions["allow"], tool
     # Only irreversible tools without a recovery path are denied outright.
     denied = {
-        rule.removeprefix("mcp__mcp-agent-mail__") for rule in permissions["deny"]
+        rule.removeprefix("mcp__orrery-mail__") for rule in permissions["deny"]
     }
     assert denied == {
         "hard_delete_agent",
@@ -89,7 +89,7 @@ def test_template_ships_a_permissions_block():
         # tool was published to remove.
         "unretire_agent",
     ):
-        rule = f"mcp__mcp-agent-mail__{tool}"
+        rule = f"mcp__orrery-mail__{tool}"
         assert rule not in permissions["deny"], tool
         assert rule not in permissions["allow"], tool
     # No blanket approvals.
@@ -103,11 +103,11 @@ def test_merge_installs_permissions_into_fresh_settings():
         written, detail, rc = _merge(tmpdir, {})
         assert rc == 0, detail
         allow = written["permissions"]["allow"]
-        assert "mcp__mcp-agent-mail__register_agent" in allow
+        assert "mcp__orrery-mail__register_agent" in allow
         assert written["permissions"]["deny"] == [
-            "mcp__mcp-agent-mail__hard_delete_agent",
-            "mcp__mcp-agent-mail__hard_delete_project",
-            "mcp__mcp-agent-mail__purge_old_messages",
+            "mcp__orrery-mail__hard_delete_agent",
+            "mcp__orrery-mail__hard_delete_project",
+            "mcp__orrery-mail__purge_old_messages",
         ]
         # The Bash rule is rendered with the real bin directory, not the token.
         assert any(str(tmpdir / "bin") in rule for rule in allow), allow
@@ -151,6 +151,69 @@ def test_merge_preserves_user_rules_and_is_idempotent():
         assert rc2 == 0
         assert json.dumps(written2, sort_keys=True) == before, "second merge changed settings"
         assert detail2["permissions"]["added"]["allow"] == []
+
+
+def test_merge_replaces_legacy_product_permissions_and_hook_matchers():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        hook_command = f"/bin/bash {tmpdir / 'hooks' / 'mark-agent-registered.sh'}"
+        existing = {
+            "permissions": {
+                "allow": ["mcp__mcp-agent-mail__register_agent"],
+                "deny": ["mcp__mcp-agent-mail__hard_delete_agent"],
+            },
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
+                    "hooks": [{"type": "command", "command": hook_command}],
+                }],
+            },
+        }
+
+        written, detail, rc = _merge(tmpdir, existing)
+
+        assert rc == 0, detail
+        serialized = json.dumps(written)
+        assert "mcp__orrery-mail__register_agent" in serialized
+        assert "mcp__orrery-mail__hard_delete_agent" in serialized
+        assert serialized.count("mark-agent-registered.sh") == 1
+        matcher = next(
+            entry["matcher"]
+            for entry in written["hooks"]["PostToolUse"]
+            if hook_command in [hook.get("command") for hook in entry["hooks"]]
+        )
+        assert matcher.startswith("mcp__orrery-mail__register_agent|")
+        assert detail["permissions"]["migrated_legacy"]["allow"] == [
+            "mcp__mcp-agent-mail__register_agent"
+        ]
+
+
+def test_merge_deduplicates_coexisting_legacy_and_current_permissions():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        existing = {
+            "permissions": {
+                "allow": [
+                    "mcp__mcp-agent-mail__register_agent",
+                    "mcp__orrery-mail__register_agent",
+                    "mcp__mcp-agent-mail__legacy_extra_tool",
+                    "mcp__orrery-mail__legacy_extra_tool",
+                ]
+            }
+        }
+
+        written, detail, rc = _merge(tmpdir, existing)
+
+        assert rc == 0, detail
+        assert written["permissions"]["allow"].count(
+            "mcp__orrery-mail__register_agent"
+        ) == 1
+        assert "mcp__mcp-agent-mail__register_agent" not in (
+            written["permissions"]["allow"]
+        )
+        assert written["permissions"]["allow"].count(
+            "mcp__orrery-mail__legacy_extra_tool"
+        ) == 1
 
 
 def test_remove_takes_back_only_what_the_installer_added():

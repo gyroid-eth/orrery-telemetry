@@ -400,7 +400,11 @@ class ReleaseHookTests(unittest.TestCase):
         self.assertIn("release-file-reservation.sh", post)
         self.assertIn('"matcher": "Edit|Write"', post)
         self.assertIn("invalidate-release-debounce.sh", pre)
-        for prefix in ("mcp__mcp-agent-mail__", "mcp__agent_mail__"):
+        for prefix in (
+            "mcp__orrery-mail__",
+            "mcp__mcp-agent-mail__",
+            "mcp__agent_mail__",
+        ):
             for tool in (
                 "file_reservation_paths",
                 "macro_file_reservation_cycle",

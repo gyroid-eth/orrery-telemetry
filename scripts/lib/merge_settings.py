@@ -22,6 +22,8 @@ HOOKS_TOKEN = "__AGENTSTACK_HOOKS_DIR__"
 BIN_TOKEN = "__AGENTSTACK_BIN_DIR__"
 IRREVERSIBLE_SESSION_END_WORDS = ("retire", "kill", "hard_delete")
 PERMISSION_KINDS = ("allow", "deny")
+PRODUCT_MCP_PREFIX = "mcp__orrery-mail__"
+LEGACY_PRODUCT_MCP_PREFIXES = ("mcp__mcp-agent-mail__", "mcp__agent_mail__")
 
 
 class MergeError(RuntimeError):
@@ -189,6 +191,59 @@ def command_values(entry: dict[str, Any]) -> list[str]:
 def matcher_value(entry: dict[str, Any]) -> str | None:
     matcher = entry.get("matcher")
     return matcher if isinstance(matcher, str) else None
+
+
+def current_product_rule(rule: str) -> str:
+    for prefix in LEGACY_PRODUCT_MCP_PREFIXES:
+        if rule.startswith(prefix):
+            return PRODUCT_MCP_PREFIX + rule[len(prefix):]
+    return rule
+
+
+def canonical_matcher(matcher: str | None) -> frozenset[str] | None:
+    if matcher is None:
+        return None
+    return frozenset(current_product_rule(part) for part in matcher.split("|"))
+
+
+def migrate_legacy_hook_matchers(
+    settings: dict[str, Any],
+    template_hooks: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, str | None]]:
+    """Replace installer-owned legacy matchers with the current matcher.
+
+    The new matcher intentionally retains old tool prefixes as runtime
+    compatibility aliases. Canonical comparison collapses those aliases, so
+    an entry installed by an older release is updated in place rather than
+    duplicated beside the new one.
+    """
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+    migrated: list[dict[str, str | None]] = []
+    for event, template_entries in template_hooks.items():
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            continue
+        for template_entry in template_entries:
+            desired = matcher_value(template_entry)
+            desired_commands = set(command_values(template_entry))
+            if desired is None or not desired_commands:
+                continue
+            desired_canonical = canonical_matcher(desired)
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                existing = matcher_value(entry)
+                if existing == desired:
+                    continue
+                if canonical_matcher(existing) != desired_canonical:
+                    continue
+                if not desired_commands.intersection(command_values(entry)):
+                    continue
+                entry["matcher"] = desired
+                migrated.append(entry_key(event, existing, sorted(desired_commands)[0]))
+    return migrated
 
 
 def entry_key(event: str, matcher: str | None, command: str) -> dict[str, str | None]:
@@ -379,6 +434,35 @@ def merge_permissions(
         if not permissions:
             del settings["permissions"]
     return {"added": added, "skipped_existing": skipped}
+
+
+def migrate_legacy_permissions(
+    settings: dict[str, Any],
+    template_permissions: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Rename exact permission rules shipped under the former MCP key."""
+    migrated: dict[str, list[str]] = {kind: [] for kind in PERMISSION_KINDS}
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        return migrated
+    for kind in PERMISSION_KINDS:
+        rules = permissions.get(kind)
+        if not isinstance(rules, list):
+            continue
+        rewritten: list[Any] = []
+        for rule in rules:
+            replacement = current_product_rule(rule) if isinstance(rule, str) else rule
+            if replacement != rule:
+                migrated[kind].append(rule)
+            if (
+                isinstance(replacement, str)
+                and replacement.startswith(PRODUCT_MCP_PREFIX)
+                and replacement in rewritten
+            ):
+                continue
+            rewritten.append(replacement)
+        permissions[kind] = rewritten
+    return migrated
 
 
 def remove_permissions(
@@ -776,11 +860,19 @@ def run() -> int:
         template_path = pathlib.Path(args.template).expanduser()
         template = render_template(template_path, hooks_dir, bin_dir)
         template_hooks = load_template_hooks(template, template_path)
+        template_permissions = load_template_permissions(template, template_path)
+        migrated_original = copy.deepcopy(original)
+        migrated_matchers = migrate_legacy_hook_matchers(
+            migrated_original, template_hooks
+        )
+        migrated_permissions = migrate_legacy_permissions(
+            migrated_original, template_permissions
+        )
         installed_entries_path = (
             pathlib.Path(args.installed_entries).expanduser() if args.installed_entries else None
         )
         merged, details = merge_template_entries(
-            original,
+            migrated_original,
             template_hooks,
             previously_installed=load_installed_entry_keys(installed_entries_path),
             restore_removed=args.restore_removed,
@@ -790,9 +882,11 @@ def run() -> int:
             if skills_dir
             else {"added": [], "skipped_existing": [], "removed_legacy": []}
         )
+        details["migrated_legacy_matchers"] = migrated_matchers
         details["permissions"] = merge_permissions(
-            merged, load_template_permissions(template, template_path)
+            merged, template_permissions
         )
+        details["permissions"]["migrated_legacy"] = migrated_permissions
         operation = "merge"
 
     after_text = dump_settings(merged)

@@ -45,7 +45,7 @@
 #
 # 環境変数:
 #   PARENT_AGENT  - 親エージェント名（省略時: tmuxセッション名）
-#   PROJECT_KEY   - mcp-agent-mailのプロジェクトキー（省略時: デフォルト）
+#   PROJECT_KEY   - ORRERY Mail のプロジェクトキー（省略時: デフォルト）
 #
 # 終了コード:
 #   0  - 成功
@@ -61,8 +61,8 @@ set -euo pipefail
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
-MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/mcp_agent_mail/.env}"
-MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/mcp}}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
+MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
@@ -755,7 +755,7 @@ warn_if_uninjected() {
 }
 
 # --- Authenticated per-child MCP connection ------------------------------
-# Writes a child-scoped --mcp-config that points mcp-agent-mail at the local
+# Writes a child-scoped --mcp-config that points orrery-mail at the local
 # stdio proxy instead of the shared HTTP endpoint. The proxy holds the child's
 # owner token and authenticates every call on its behalf, so the child can read
 # its OWN inbox (and nobody else's) without the token ever entering its context.
@@ -794,14 +794,15 @@ server = dict(command=runner, args=[], env=server_env)
 
 def looks_like_agent_mail(name):
     normalized = name.replace("-", "").replace("_", "").lower()
-    return normalized in {"agentmail", "mcpagentmail", "agentstackmail"}
+    return normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"}
 
 
 # The child inherits the user's own MCP servers, including their DIRECT
 # agent-mail connection. Publishing the proxy under a NEW name just adds a
 # second agent-mail, and the model reaches for the name it knows — the direct,
 # unauthenticated one. --mcp-config overrides a same-named server (measured),
-# so claim exactly the names the user already uses.
+# so claim the names the user already uses as compatibility aliases as well as
+# the canonical product key.
 names = set()
 try:
     with open(claude_json, encoding="utf-8") as handle:
@@ -818,7 +819,9 @@ for scope in scopes:
     if isinstance(scope, dict):
         names.update(name for name in scope if looks_like_agent_mail(name))
 if not names:
-    names = {"mcp-agent-mail"}
+    names = {"orrery-mail"}
+else:
+    names.add("orrery-mail")
 
 config = dict(mcpServers=dict((name, server) for name in sorted(names)))
 with open(path, "w", encoding="utf-8") as handle:
@@ -849,7 +852,7 @@ codex_pane_ready() {
 # the whole table (dropping the transport keys, which fails config load) and its
 # effect cannot be inspected, so a child gets its own CODEX_HOME instead. Only
 # config.toml is rewritten; everything else (auth.json, sessions, plugins) is
-# symlinked to the real home, and `CODEX_HOME=<dir> codex mcp get agent-mail`
+# symlinked to the real home, and `CODEX_HOME=<dir> codex mcp get orrery-mail`
 # shows exactly what the child will use.
 #
 # Prints the directory, or nothing when the proxy or token is unavailable.
@@ -887,7 +890,7 @@ for entry in source_path.iterdir():
 
 def looks_like_agent_mail(name):
     normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
-    return normalized in {"agentmail", "mcpagentmail", "agentstackmail"}
+    return normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"}
 
 
 def toml_string(value):
@@ -948,7 +951,9 @@ for line in text.splitlines():
     if not skipping:
         lines.append(line)
 if not claimed:
-    claimed = ["agent-mail"]
+    claimed = ["orrery-mail"]
+elif "orrery-mail" not in claimed:
+    claimed.append("orrery-mail")
 # Codex's deferred tool registry identifies this proxy by serverInfo.name
 # (`agentstack`), while direct MCP calls use the configured server key. Claim
 # both so the same per-tool policy applies through either path.
@@ -956,7 +961,7 @@ if "agentstack" not in claimed:
     claimed.append("agentstack")
 
 lines.append("")
-lines.append("# Written by spawn_child.sh: this child talks to agent-mail through the")
+lines.append("# Written by spawn_child.sh: this child talks to ORRERY Mail through the")
 lines.append("# local proxy, which authenticates every call with the child's own token.")
 lines.append("# The proxy claims the same server name(s) the user's own config used,")
 lines.append("# so the model's habitual call lands on the authenticated connection.")
@@ -1128,7 +1133,7 @@ CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
 
 if [[ -z "$PROJECT_KEY" ]]; then
     echo "Error: AGENTSTACK_PROJECT_KEY or PROJECT_KEY is required" >&2
-    echo "  Set it to the shared mcp-agent-mail project key before spawning a child." >&2
+    echo "  Set it to the shared ORRERY Mail project key before spawning a child." >&2
     echo "  For delegated children this may differ from the child workdir or git repo cwd." >&2
     exit 1
 fi
@@ -1290,7 +1295,7 @@ ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
             CODEX_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
-            CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+            CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
         fi
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
@@ -1804,7 +1809,7 @@ print(json.dumps(paths))
 
 # --- 1. サーバー稼働確認 ---
 if ! call_mcp "health_check" "{}" > /dev/null 2>&1; then
-    echo "Error: cannot connect to mcp-agent-mail server at $MCP_URL" >&2
+    echo "Error: cannot connect to ORRERY Mail server at $MCP_URL" >&2
     exit 1
 fi
 
@@ -1867,8 +1872,8 @@ if [[ "$CHILD_NAME" != "$CHILD_NAME_CANDIDATE" ]]; then
     echo "[spawn_child] register_agent normalized '$CHILD_NAME_CANDIDATE' to actual identity '$CHILD_NAME'" >&2
 fi
 
-# Adopt the token the SERVER persisted, not the one we sent. Stock
-# mcp-agent-mail ignores the client-supplied registration_token and mints its
+# Adopt the token the server persisted, not the one we sent. Legacy servers
+# may ignore the client-supplied registration_token and mint their
 # own, returning it in the response; keeping our sent token would leave the
 # child holding a token the server never stored, so its reregister/fetch_inbox
 # all fail with "Invalid registration_token". The response and sent fallback
@@ -2036,7 +2041,7 @@ ${TASK}
 
 - Parent agent: ${PARENT_NAME}
 - Working directory: ${WORK_DIR}${RESOURCE_NOTE}${WORKTREE_NOTE}
-- **Use \`${PROJECT_KEY}\` as the mcp-agent-mail project_key**, not the current working directory. This is especially important in worktree mode. The tmux \$PROJECT_KEY env var has the same value. If you call ensure_project(human_key=cwd) from outside the project root, you will create a different project and will not be able to read this inbox.
+- **Use \`${PROJECT_KEY}\` as the ORRERY Mail project_key**, not the current working directory. This is especially important in worktree mode. The tmux \$PROJECT_KEY env var has the same value. If you call ensure_project(human_key=cwd) from outside the project root, you will create a different project and will not be able to read this inbox.
 - File reservation TTL: ${RESOURCE_TTL} seconds
 - The parent pre-reserved the resources above under your agent name. Do not call macro_file_reservation_cycle or file_reservation_paths again for the same paths; use the existing reservations.
 - If you are worried about remaining TTL, prefer renew_file_reservations rather than acquiring the same paths again.
@@ -2094,7 +2099,7 @@ if [[ "$USE_CODEX" == true ]]; then
         echo "[spawn_child] No MCP proxy available; Codex child uses the shared agent-mail endpoint" >&2
     fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
-    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your mcp-agent-mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

@@ -15,7 +15,7 @@
 #
 # Env (normally provided by ~/.agentstack/env.sh):
 #   AGENTSTACK_PROJECT_KEY          agent-mail project key (REQUIRED)
-#   AGENTSTACK_MCP_URL              agent-mail MCP endpoint (default :8765/mcp)
+#   AGENTSTACK_MCP_URL              ORRERY Mail MCP endpoint (default :18765/mcp)
 #   AGENTSTACK_MAIL_ENV             file holding HTTP_BEARER_TOKEN
 #   AGENTSTACK_MANAGED_AGENTS_FILE  list the dashboard monitors (optional)
 #   AGENTSTACK_HOOKS_DIR            dir of watch_agent_mail_signals.sh (optional)
@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
 if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
-MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:8765/mcp}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"

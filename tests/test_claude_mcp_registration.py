@@ -43,7 +43,7 @@ def test_merge_previews_redacted_token_and_preserves_other_servers(tmp_path):
     assert preview.returncode == 0, preview.stderr
     assert "<redacted>" in preview.stdout
     assert "super-secret-bearer" not in preview.stdout + preview.stderr
-    assert "mcp-agent-mail" not in json.loads(config.read_text())["mcpServers"]
+    assert "orrery-mail" not in json.loads(config.read_text())["mcpServers"]
 
     applied = _run(*common, "--result-json", str(result))
     assert applied.returncode == 0, applied.stderr
@@ -53,14 +53,14 @@ def test_merge_previews_redacted_token_and_preserves_other_servers(tmp_path):
     assert installed["projects"]["/project"]["mcpServers"] == {
         "project-server": {}
     }
-    assert installed["mcpServers"]["mcp-agent-mail"] == {
+    assert installed["mcpServers"]["orrery-mail"] == {
         "type": "http",
         "url": "http://127.0.0.1:18765/mcp",
         "headers": {"Authorization": "Bearer super-secret-bearer"},
     }
     assert os.stat(config).st_mode & 0o777 == 0o600
     recorded = json.loads(result.read_text())
-    assert recorded["server_name"] == "mcp-agent-mail"
+    assert recorded["server_name"] == "orrery-mail"
     assert "super-secret-bearer" not in result.read_text()
     assert pathlib.Path(recorded["backup"]["backup_path"]).is_file()
 
@@ -70,7 +70,7 @@ def test_remove_restores_previous_fixed_entry_without_touching_others(tmp_path):
     previous = {"command": "user-owned-agent-mail", "args": ["--keep"]}
     config.write_text(json.dumps({
         "mcpServers": {
-            "mcp-agent-mail": previous,
+            "orrery-mail": previous,
             "other": {"command": "other"},
         }
     }))
@@ -95,7 +95,7 @@ def test_remove_restores_previous_fixed_entry_without_touching_others(tmp_path):
     assert removed.returncode == 0, removed.stderr
     restored = json.loads(config.read_text())["mcpServers"]
     assert restored == {
-        "mcp-agent-mail": previous,
+        "orrery-mail": previous,
         "other": {"command": "other"},
     }
 
@@ -111,7 +111,7 @@ def test_remove_keeps_a_user_modified_entry(tmp_path):
     )
     assert _run(*common, "--result-json", str(result)).returncode == 0
     changed = json.loads(config.read_text())
-    changed["mcpServers"]["mcp-agent-mail"]["url"] = "http://user.example/mcp"
+    changed["mcpServers"]["orrery-mail"]["url"] = "http://user.example/mcp"
     config.write_text(json.dumps(changed))
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
@@ -126,7 +126,7 @@ def test_remove_keeps_a_user_modified_entry(tmp_path):
     )
     assert removed.returncode == 0, removed.stderr
     assert "Kept modified" in removed.stdout
-    assert json.loads(config.read_text())["mcpServers"]["mcp-agent-mail"][
+    assert json.loads(config.read_text())["mcpServers"]["orrery-mail"][
         "url"
     ] == "http://user.example/mcp"
 
@@ -135,7 +135,7 @@ def test_upgrade_keeps_the_pre_agentstack_entry_as_uninstall_baseline(tmp_path):
     config = tmp_path / ".claude.json"
     previous = {"command": "user-owned-agent-mail"}
     config.write_text(json.dumps({
-        "mcpServers": {"mcp-agent-mail": previous}
+        "mcpServers": {"orrery-mail": previous}
     }))
     result = tmp_path / "result.json"
     base = (
@@ -164,7 +164,7 @@ def test_upgrade_keeps_the_pre_agentstack_entry_as_uninstall_baseline(tmp_path):
         "--manifest", str(manifest),
     )
     assert removed.returncode == 0, removed.stderr
-    assert json.loads(config.read_text())["mcpServers"]["mcp-agent-mail"] == previous
+    assert json.loads(config.read_text())["mcpServers"]["orrery-mail"] == previous
 
 
 def test_invalid_mcp_servers_is_fail_closed(tmp_path):
@@ -181,6 +181,55 @@ def test_invalid_mcp_servers_is_fail_closed(tmp_path):
     assert result.returncode == 1
     assert "mcpServers must be an object" in result.stderr
     assert config.read_text() == original
+
+
+def test_matching_legacy_name_is_moved_without_duplicate_registration(tmp_path):
+    config = tmp_path / ".claude.json"
+    legacy = {
+        "type": "http",
+        "url": "http://127.0.0.1:18765/api/",
+    }
+    config.write_text(json.dumps({
+        "mcpServers": {
+            "mcp-agent-mail": legacy,
+            "other": {"command": "keep"},
+        }
+    }))
+    result = tmp_path / "result.json"
+
+    applied = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:18765/mcp",
+        "--backup-dir", str(tmp_path / "backups"),
+        "--result-json", str(result),
+    )
+
+    assert applied.returncode == 0, applied.stderr
+    servers = json.loads(config.read_text())["mcpServers"]
+    assert servers == {"orrery-mail": legacy, "other": {"command": "keep"}}
+    recorded = json.loads(result.read_text())
+    assert recorded["migrated_legacy_server_names"] == ["mcp-agent-mail"]
+
+
+def test_existing_current_name_wins_and_matching_legacy_alias_is_removed(tmp_path):
+    config = tmp_path / ".claude.json"
+    current = {"type": "http", "url": "http://127.0.0.1:18765/mcp"}
+    legacy = {"type": "http", "url": "http://127.0.0.1:18765/api/"}
+    config.write_text(json.dumps({
+        "mcpServers": {
+            "orrery-mail": current,
+            "mcp-agent-mail": legacy,
+        }
+    }))
+
+    applied = _run(
+        "--config", str(config),
+        "--mcp-url", "http://127.0.0.1:18765/mcp",
+        "--backup-dir", str(tmp_path / "backups"),
+    )
+
+    assert applied.returncode == 0, applied.stderr
+    assert json.loads(config.read_text())["mcpServers"] == {"orrery-mail": current}
 
 
 def test_doctor_warns_and_prints_safe_registration_commands(tmp_path):
@@ -222,7 +271,7 @@ def test_doctor_warns_and_prints_safe_registration_commands(tmp_path):
         check=False,
     )
 
-    assert "Claude MCP mcp-agent-mail is not registered" in result.stderr
+    assert "Claude MCP orrery-mail is not registered" in result.stderr
     assert "/delegate cannot use agent-mail" in result.stderr
     assert "agentstack-merge-claude-mcp" in result.stderr
     assert "--dry-run" in result.stderr
@@ -232,7 +281,7 @@ def _config_with(url: str, token: str, tmp_path: pathlib.Path) -> pathlib.Path:
     config = tmp_path / ".claude.json"
     config.write_text(json.dumps({
         "mcpServers": {
-            "mcp-agent-mail": {
+            "orrery-mail": {
                 "type": "http",
                 "url": url,
                 "headers": {"Authorization": f"Bearer {token}"},

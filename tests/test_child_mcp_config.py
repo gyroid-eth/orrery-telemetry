@@ -4,7 +4,7 @@
 Defect D, part 2 (tester report 2026-07-24 section 7): the child's MCP
 connection was not authenticated as the child, so it could not read its own
 inbox — the very place delegate puts its task. The launcher now points the
-child's mcp-agent-mail server at the local stdio proxy, which holds the
+child's orrery-mail server at the local stdio proxy, which holds the
 child's owner token.
 
 Runnable two ways (no third-party dependency required):
@@ -99,7 +99,7 @@ def test_config_points_the_child_at_the_authenticating_proxy():
         path, _ = _run_helper(tmpdir)
         assert path, "helper produced no config path"
         config = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-        server = config["mcpServers"]["mcp-agent-mail"]
+        server = config["mcpServers"]["orrery-mail"]
         assert server["command"].endswith("run-mcp.sh")
         env = server["env"]
         assert env["AGENTSTACK_PROXY_AGENT_NAME"] == "Red-Euler"
@@ -195,7 +195,7 @@ def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
 
         # The shared HTTP transport for agent-mail is gone, replaced by stdio.
         assert 'url = "http://127.0.0.1:8765/api/"' not in config
-        assert '[mcp_servers."agent-mail"]' in config
+        assert '[mcp_servers."orrery-mail"]' in config
         assert '[mcp_servers."agentstack"]' in config
         assert "command = " in config
         assert 'AGENTSTACK_PROXY_AGENT_NAME = "Red-Euler"' in config
@@ -207,7 +207,9 @@ def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
         # The source transport's approval table is replaced by the complete,
         # fixed proxy allowlist. Shell approvals and unrelated MCP servers stay
         # untouched.
-        _assert_proxy_tool_approvals(config, ("agent-mail", "agentstack"))
+        _assert_proxy_tool_approvals(
+            config, ("agent-mail", "orrery-mail", "agentstack")
+        )
         assert (
             '[plugins."agentstack-codex-app@test-market".'
             'mcp_servers.agentstack]\nenabled = false'
@@ -234,9 +236,9 @@ def test_codex_child_home_works_when_the_user_has_no_config():
         tmpdir = pathlib.Path(tmp)
         home = _run_codex_home(tmpdir, config_text=None)
         config = (pathlib.Path(home) / "config.toml").read_text(encoding="utf-8")
-        assert '[mcp_servers."agent-mail"]' in config
+        assert '[mcp_servers."orrery-mail"]' in config
         assert '[mcp_servers."agentstack"]' in config
-        _assert_proxy_tool_approvals(config, ("agent-mail", "agentstack"))
+        _assert_proxy_tool_approvals(config, ("orrery-mail", "agentstack"))
 
 
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
@@ -453,7 +455,9 @@ def test_claude_child_proxy_claims_the_users_own_server_name():
         servers = config["mcpServers"]
         assert "mcp_agent_mail" in servers, servers
         assert servers["mcp_agent_mail"]["command"].endswith("run-mcp.sh")
-        # Only agent-mail is claimed; the user's other servers are untouched.
+        # The legacy spelling and canonical product key are both claimed; the
+        # user's unrelated servers are untouched.
+        assert "orrery-mail" in servers
         assert "semantic-search" not in servers
         assert "freecad" not in servers
 
@@ -468,14 +472,14 @@ def test_claude_child_proxy_claims_the_new_agentstack_mail_name():
 """
     with tempfile.TemporaryDirectory() as tmp:
         config = _claude_child_config(pathlib.Path(tmp), source)
-        assert list(config["mcpServers"]) == ["agentstack-mail"]
+        assert list(config["mcpServers"]) == ["agentstack-mail", "orrery-mail"]
         assert config["mcpServers"]["agentstack-mail"]["command"].endswith("run-mcp.sh")
 
 
 def test_claude_child_falls_back_to_legacy_name_on_legacy_endpoint():
     with tempfile.TemporaryDirectory() as tmp:
         config = _claude_child_config(pathlib.Path(tmp), None)
-        assert list(config["mcpServers"]) == ["mcp-agent-mail"]
+        assert list(config["mcpServers"]) == ["orrery-mail"]
 
 
 def test_claude_child_keeps_default_name_on_new_endpoint():
@@ -501,7 +505,7 @@ def test_claude_child_keeps_default_name_on_new_endpoint():
             check=False,
         )
         config = json.loads(pathlib.Path(proc.stdout.strip()).read_text(encoding="utf-8"))
-        assert list(config["mcpServers"]) == ["mcp-agent-mail"]
+        assert list(config["mcpServers"]) == ["orrery-mail"]
 
 
 def test_codex_child_replaces_every_agent_mail_spelling():
@@ -526,13 +530,13 @@ def test_codex_child_replaces_every_agent_mail_spelling():
         assert 'url = "http://127.0.0.1:8765/mcp"' not in text
         assert 'url = "http://127.0.0.1:8765/api/"' not in text
         assert "tools.fetch_inbox" not in text
-        # ...and both names now resolve to the proxy.
+        # ...and every legacy name plus the canonical name resolve to the proxy.
         assert '[mcp_servers."mcp_agent_mail"]' in text
-        assert '[mcp_servers."agent-mail"]' in text
+        assert '[mcp_servers."orrery-mail"]' in text
         assert '[mcp_servers."agentstack"]' in text
-        assert text.count("run-mcp.sh") >= 3
+        assert text.count("run-mcp.sh") >= 4
         _assert_proxy_tool_approvals(
-            text, ("mcp_agent_mail", "agent-mail", "agentstack")
+            text, ("mcp_agent_mail", "agent-mail", "orrery-mail", "agentstack")
         )
         # Unrelated config survives.
         assert "[mcp_servers.notion]" in text
@@ -552,8 +556,11 @@ def test_codex_child_replaces_the_new_agentstack_mail_direct_transport():
         text = (home / "config.toml").read_text(encoding="utf-8")
         assert 'url = "http://127.0.0.1:18765/mcp"' not in text
         assert '[mcp_servers."agentstack-mail"]' in text
+        assert '[mcp_servers."orrery-mail"]' in text
         assert '[mcp_servers."agentstack"]' in text
-        _assert_proxy_tool_approvals(text, ("agentstack-mail", "agentstack"))
+        _assert_proxy_tool_approvals(
+            text, ("agentstack-mail", "orrery-mail", "agentstack")
+        )
         assert "[mcp_servers.notion]" in text
 
 
@@ -581,9 +588,10 @@ def test_codex_child_keeps_default_name_on_new_endpoint():
             check=False,
         )
         text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text()
-        assert '[mcp_servers."agent-mail"]' in text
+        assert '[mcp_servers."orrery-mail"]' in text
+        assert '[mcp_servers."agent-mail"]' not in text
         assert '[mcp_servers."agentstack-mail"]' not in text
-        _assert_proxy_tool_approvals(text, ("agent-mail", "agentstack"))
+        _assert_proxy_tool_approvals(text, ("orrery-mail", "agentstack"))
 
 
 def test_doctor_reports_the_fallback_instead_of_staying_silent():

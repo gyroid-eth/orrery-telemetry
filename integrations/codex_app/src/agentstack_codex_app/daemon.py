@@ -259,7 +259,7 @@ class BridgeConfig:
             signals_dir=(
                 Path(signals_value).expanduser()
                 if signals_value
-                else Path(mail_home or "~/.mcp_agent_mail").expanduser() / "signals"
+                else Path(mail_home or "~/.agentstack/mail").expanduser() / "signals"
             ),
             project_slug=project_slug,
             delivery_db_path=(

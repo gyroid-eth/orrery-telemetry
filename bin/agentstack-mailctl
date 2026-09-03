@@ -18,7 +18,6 @@ if [[ "${AGENTSTACK_MAILCTL_SKIP_ENV:-0}" != "1" && -f "$AGENTSTACK_HOME/env.sh"
   . "$AGENTSTACK_HOME/env.sh"
 fi
 
-MAIL_PROVIDER="${AGENTSTACK_MAIL_PROVIDER:-}"
 MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_DIR:-$AGENTSTACK_HOME/mail-service}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -53,8 +52,6 @@ EOF
 }
 
 validate_config() {
-  [[ "$MAIL_PROVIDER" == "agentstack" ]] || \
-    die "this controller only manages AGENTSTACK_MAIL_PROVIDER=agentstack"
   [[ -n "$MAIL_ENV" ]] || die "AGENTSTACK_MAIL_ENV is not configured"
   [[ -n "$MAIL_RUNNER" ]] || die "the rendered AgentStack Mail runner is not configured"
   [[ "$MCP_URL" == http://* || "$MCP_URL" == https://* ]] || \

@@ -29,7 +29,8 @@ for _candidate in (_HERE, _HERE / "lib"):
 from mcp_endpoint import INTERCHANGEABLE_MCP_PATHS, same_endpoint  # noqa: E402,F401
 
 
-SERVER_NAME = "mcp-agent-mail"
+SERVER_NAME = "orrery-mail"
+LEGACY_SERVER_NAMES = ("mcp-agent-mail",)
 
 
 class MergeError(RuntimeError):
@@ -237,11 +238,20 @@ def merge(args: argparse.Namespace) -> dict[str, Any]:
     previous = copy.deepcopy(servers.get(SERVER_NAME))
     token_path = pathlib.Path(args.mail_env).expanduser() if args.mail_env else None
     installed = desired_entry(args.mcp_url or "", read_bearer_token(token_path))
+    migrated_legacy_names = [
+        name
+        for name in LEGACY_SERVER_NAMES
+        if already_reaches_server(servers.get(name), installed)
+    ]
     if already_reaches_server(previous, installed):
         # Keep the user's spelling. This is the "configured" answer, not a
         # smaller diff: there is nothing here to fix.
         installed = copy.deepcopy(previous)
+    elif previous is None and migrated_legacy_names:
+        installed = copy.deepcopy(servers[migrated_legacy_names[0]])
     servers[SERVER_NAME] = installed
+    for name in migrated_legacy_names:
+        del servers[name]
     changed = original != merged
     if args.check:
         print("needs-merge" if changed else "configured")
@@ -254,7 +264,11 @@ def merge(args: argparse.Namespace) -> dict[str, Any]:
     print_preview(path, previous, installed)
     baseline_backup = None
     previous_entry_existed = previous is not None
-    if args.existing_result and previous is not None:
+    restore_legacy_names = list(migrated_legacy_names)
+    prior_candidate = previous
+    if prior_candidate is None and migrated_legacy_names:
+        prior_candidate = original.get("mcpServers", {}).get(migrated_legacy_names[0])
+    if args.existing_result and prior_candidate is not None:
         prior_path = pathlib.Path(args.existing_result).expanduser()
         try:
             prior = json.loads(prior_path.read_text(encoding="utf-8"))
@@ -265,9 +279,16 @@ def merge(args: argparse.Namespace) -> dict[str, Any]:
         if (
             isinstance(prior, dict)
             and prior.get("changed")
-            and prior.get("installed_entry_sha256") == entry_hash(previous)
+            and prior.get("installed_entry_sha256") == entry_hash(prior_candidate)
         ):
-            previous_entry_existed = bool(prior.get("previous_entry_existed"))
+            if prior.get("server_name") == SERVER_NAME:
+                previous_entry_existed = bool(prior.get("previous_entry_existed"))
+            elif prior.get("server_name") in migrated_legacy_names:
+                restore_legacy_names = (
+                    [str(prior["server_name"])]
+                    if prior.get("previous_entry_existed")
+                    else []
+                )
             if isinstance(prior.get("backup"), dict):
                 baseline_backup = prior["backup"]
     operation_backup = None
@@ -281,6 +302,8 @@ def merge(args: argparse.Namespace) -> dict[str, Any]:
         "server_name": SERVER_NAME,
         "changed": changed,
         "previous_entry_existed": previous_entry_existed,
+        "migrated_legacy_server_names": migrated_legacy_names,
+        "restore_legacy_server_names": restore_legacy_names,
         "installed_entry_sha256": entry_hash(installed),
         "backup": backup,
     }
@@ -327,6 +350,8 @@ def remove(args: argparse.Namespace) -> dict[str, Any]:
         return result
 
     restored = None
+    backup_config = None
+    backup_servers = None
     if recorded.get("previous_entry_existed"):
         backup = recorded.get("backup")
         backup_path = backup.get("backup_path") if isinstance(backup, dict) else None
@@ -344,6 +369,25 @@ def remove(args: argparse.Namespace) -> dict[str, Any]:
         del servers[SERVER_NAME]
         if not servers:
             del merged["mcpServers"]
+
+    restore_legacy_names = recorded.get("restore_legacy_server_names", [])
+    if isinstance(restore_legacy_names, list) and restore_legacy_names:
+        if backup_config is None:
+            backup = recorded.get("backup")
+            backup_path = backup.get("backup_path") if isinstance(backup, dict) else None
+            if not isinstance(backup_path, str) or not backup_path:
+                raise MergeError("manifest Claude MCP merge has no usable legacy-name backup")
+            backup_config, _ = read_config(pathlib.Path(backup_path).expanduser())
+            backup_servers = mcp_servers(backup_config, create=False)
+        assert servers is not None
+        if "mcpServers" not in merged:
+            merged["mcpServers"] = servers
+        for name in restore_legacy_names:
+            if not isinstance(name, str) or name not in LEGACY_SERVER_NAMES:
+                continue
+            if backup_servers is None or name not in backup_servers:
+                raise MergeError(f"Claude MCP backup has no previous {name} entry")
+            servers[name] = copy.deepcopy(backup_servers[name])
 
     print_preview(path, current, restored)
     backup = None

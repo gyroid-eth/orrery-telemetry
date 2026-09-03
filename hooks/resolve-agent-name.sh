@@ -1,6 +1,6 @@
 #!/bin/bash
 # resolve-agent-name.sh
-# Resolve the current mcp-agent-mail identity for hook scripts.
+# Resolve the current ORRERY Mail identity for hook scripts.
 # Priority: AGENT_NAME env -> TMUX_PANE metadata -> that pane's tmux session -> empty.
 #
 # Usage: source this script, then read RESOLVED_AGENT and RESOLVED_AGENT_SRC.

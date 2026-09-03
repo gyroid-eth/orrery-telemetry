@@ -3,7 +3,7 @@
 
 データソース (すべて read-only):
   - tmux           : セッション / アクティブペインのタイトル(Claude のライブ作業表示) / アタッチ状況
-  - mcp-agent-mail : storage.sqlite3 から task_description(受けた指示の要約) / model /
+  - ORRERY Mail    : storage.sqlite3 から task_description(受けた指示の要約) / model /
                      最終アクティブ時刻 / 最後に受信した指示メッセージ
 
 エンドポイント:
@@ -67,7 +67,7 @@ def _listener_mail_db() -> str:
     explicit ``AGENTSTACK_MAIL_DB``; this probe protects direct dashboard runs.
     """
     endpoint = _env_text(
-        "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+        "AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"
     )
     try:
         port = urlparse(endpoint).port or 8765
@@ -114,7 +114,7 @@ def _listener_mail_db() -> str:
 def _resolve_mail_db() -> str:
     configured = _env_path("AGENTSTACK_MAIL_DB")
     return configured or _listener_mail_db() or _env_path(
-        "AGENTSTACK_MAIL_DB", "~/mcp_agent_mail/storage.sqlite3"
+        "AGENTSTACK_MAIL_DB", "~/.agentstack/mail/storage.sqlite3"
     )
 
 
@@ -131,7 +131,7 @@ THEME_ASSETS = {
     "/theme_light.css": (os.path.join(HERE, "theme_light.css"), "text/css; charset=utf-8"),
 }
 DB_PATH = _resolve_mail_db()
-MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/mcp_agent_mail/.env")
+MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/.agentstack/mail/.env")
 MAIL_HTTP_BEARER_MODE = _env_text(
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE", "auto"
 ).lower()
@@ -141,13 +141,13 @@ LABEL_PREFIX = _env_text("AGENTSTACK_LABEL_PREFIX", "org.agentstack")
 TERMINAL_SETTING = _env_text("AGENTSTACK_TERMINAL", "auto").lower()
 HOOKS_DIR = _env_path("AGENTSTACK_HOOKS_DIR", "~/.agentstack/hooks")
 RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
-MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.mcp_agent_mail")
+MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.agentstack/mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
 NOTIFY_DAEMON_LABEL = f"{LABEL_PREFIX}.notify-daemon"
 MAIL_WATCHER_PIDFILE = _env_path(
     "AGENTSTACK_MAIL_WATCHER_PIDFILE",
-    "/tmp/mcp-agent-mail-watcher.lock/watcher.pid",
+    "/tmp/orrery-mail-watcher.lock/watcher.pid",
 )
 MAIL_WATCHER_HEARTBEAT = _env_path(
     "AGENTSTACK_MAIL_WATCHER_HEARTBEAT",
@@ -210,7 +210,7 @@ def _project_key() -> str:
 # up under many spellings (claude-opus-4-7 / opus-4.7 / claude-opus-4-7[1m]).
 # Fold them to one display label. Structural parser (<family>-<version>) so
 # future versions (opus-4.8 ...) work with no code change. Source of truth:
-# ~/mcp_agent_mail/src/mcp_agent_mail/model_normalize.py — keep in sync.
+# ORRERY Mail and the dashboard share these accepted provider spellings.
 _MN_FAMILIES = ("fable", "mythos", "opus", "sonnet", "haiku", "gpt", "gemini", "grok",
                 "llama", "qwen", "mistral", "deepseek")
 _MN_FAMILY_RE = re.compile(
@@ -3394,14 +3394,14 @@ def do_kill(session: str, mode: str = "both") -> dict:
 
 # --------------------------------------------------------------------------- #
 # do_spawn — dashboard から子エージェントを spawn する control panel 入口。
-#   1) mcp-agent-mail に HTTP/JSON-RPC で register_agent → child name 取得
+#   1) ORRERY Mail に HTTP/JSON-RPC で register_agent → child name 取得
 #   2) /api/annotate ロジックで role/emoji/group を反映 (失敗しても続行)
 #   3) HTTP/JSON-RPC で send_message → child inbox にタスクメッセージ投函
 #   4) spawn_child.sh --pre-registered を background で起動 (tmux + terminal)
 #   観測専用だった dashboard を control plane として完結させる。
 # --------------------------------------------------------------------------- #
 MCP_HTTP_URL = _env_text(
-    "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+    "AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"
 )
 SPAWN_SCRIPT = _env_path(
     "AGENTSTACK_SPAWN_SCRIPT",
@@ -3433,7 +3433,7 @@ def _codex_models() -> list[str]:
 def _agent_name_comparison_key(name: str) -> str:
     """Normalize only for identity comparisons across stock/local servers.
 
-    Stock mcp-agent-mail preserves ``Adjective-Scientist`` while some local
+    Legacy Mail preserved ``Adjective-Scientist`` while some local
     deployments deterministically remove the hyphen.  API calls, tmux names,
     and credential paths must keep the register_agent read-back verbatim; this
     helper is deliberately limited to occupancy/duplicate comparisons.
@@ -3686,7 +3686,7 @@ def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
         return {"ok": False, "error": str(exc)}
     token = _mcp_bearer() if bearer_enabled else ""
     if bearer_enabled and not token:
-        return {"ok": False, "error": "HTTP_BEARER_TOKEN missing (~/mcp_agent_mail/.env)"}
+        return {"ok": False, "error": "HTTP_BEARER_TOKEN missing from ORRERY Mail env"}
     payload = json.dumps({
         # MCP servers may cache/replay duplicate JSON-RPC ids.  A fixed id made
         # sequential register/send calls consume an unrelated prior response.
@@ -3932,7 +3932,7 @@ def do_spawn(payload: dict) -> dict:
         result.update(extra)
         return result
 
-    # Registration defaults are contact-gated on stock agent-mail. Match the
+    # Registration defaults are contact-gated on ORRERY Mail. Match the
     # normal launcher path and open the new child before delivering its task.
     # The live schema removes registration_token for lenient builds that do
     # not accept it, while strict builds receive the server-issued credential.
@@ -3962,7 +3962,7 @@ def do_spawn(payload: dict) -> dict:
             "## 補足", "",
             f"- 親エージェント: {parent}",
             "- spawn 元: dashboard `+ NEW AGENT` (POST /api/spawn)",
-            f"- mcp-agent-mail の project_key は `{project_key}` を使うこと "
+            f"- ORRERY Mail の project_key は `{project_key}` を使うこと "
             "(cwd ではない、特に worktree モード時は必須)",
         ]
         if worktree:
@@ -4806,12 +4806,12 @@ class Handler(BaseHTTPRequestHandler):
 def _mail_web_url(path: str) -> str:
     """agent-mail の web API を、設定済み endpoint と同じ host:port で叩く。
 
-    ここは `http://127.0.0.1:8765` を直書きしていた。既定ポートで動いている
+    以前は特定の localhost port を直書きしていた。既定ポートで動いている
     限り正しく、それ以外では retire が黙って失敗する——「動いている環境では
     気づけない」種類の前提で、今日直したものと同じ形である。MCP endpoint が
     どこを指しているかは分かっているので、そこから導く。
     """
-    base = MCP_HTTP_URL or "http://127.0.0.1:8765/mcp"
+    base = MCP_HTTP_URL or "http://127.0.0.1:18765/mcp"
     parts = urllib.parse.urlsplit(base)
     return urllib.parse.urlunsplit((parts.scheme or "http", parts.netloc, path, "", ""))
 

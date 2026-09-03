@@ -248,7 +248,10 @@ def test_an_explicit_mail_label_reaches_the_env_and_the_manifest(tmp_path):
         "AGENTSTACK_HOME": str(home / ".agentstack"),
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_PORT": str(_free_port()),
-        "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{_free_port()}/mcp",
+            "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{_free_port()}/mcp",
+            "AGENTSTACK_MAIL_SERVICE_VENV": str(
+                pathlib.Path(sys.executable).parent.parent
+            ),
         "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test.explicit-label",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": label,
         "AGENTSTACK_TERMINAL": "none",

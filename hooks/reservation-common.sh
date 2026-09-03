@@ -16,7 +16,7 @@ if [ -f "$POLICY_LIB_EARLY" ]; then
     # with a legacy default could make sibling hooks talk to different servers.
     MCP_URL="$(agentstack_mail_endpoint)"
 else
-    MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:8765/api/}}"
+    MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/api/}}"
 fi
 
 if command -v agentstack_installed_env_value >/dev/null 2>&1; then
@@ -209,7 +209,7 @@ import urllib.request
 
 agent = os.environ["QUERY_AGENT"]
 project_key = os.environ["QUERY_PROJECT_KEY"]
-url = os.environ.get("QUERY_URL", "http://127.0.0.1:8765/api/")
+url = os.environ.get("QUERY_URL", "http://127.0.0.1:18765/api/")
 token = os.environ.get("QUERY_TOKEN", "")
 paths_json = os.environ.get("QUERY_PATHS_JSON", "")
 log_path = os.environ["QUERY_FAILURE_LOG"]

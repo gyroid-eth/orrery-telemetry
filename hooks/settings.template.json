@@ -1,33 +1,33 @@
 {
   "permissions": {
     "allow": [
-      "mcp__mcp-agent-mail__health_check",
-      "mcp__mcp-agent-mail__runtime_status",
-      "mcp__mcp-agent-mail__ensure_project",
-      "mcp__mcp-agent-mail__register_agent",
-      "mcp__mcp-agent-mail__whois",
-      "mcp__mcp-agent-mail__fetch_inbox",
-      "mcp__mcp-agent-mail__fetch_summary",
-      "mcp__mcp-agent-mail__fetch_topic",
-      "mcp__mcp-agent-mail__mark_message_read",
-      "mcp__mcp-agent-mail__acknowledge_message",
-      "mcp__mcp-agent-mail__send_message",
-      "mcp__mcp-agent-mail__reply_message",
-      "mcp__mcp-agent-mail__list_contacts",
-      "mcp__mcp-agent-mail__request_contact",
-      "mcp__mcp-agent-mail__respond_contact",
-      "mcp__mcp-agent-mail__set_contact_policy",
-      "mcp__mcp-agent-mail__file_reservation_paths",
-      "mcp__mcp-agent-mail__macro_file_reservation_cycle",
-      "mcp__mcp-agent-mail__renew_file_reservations",
-      "mcp__mcp-agent-mail__release_file_reservations",
-      "mcp__mcp-agent-mail__macro_start_session",
+      "mcp__orrery-mail__health_check",
+      "mcp__orrery-mail__runtime_status",
+      "mcp__orrery-mail__ensure_project",
+      "mcp__orrery-mail__register_agent",
+      "mcp__orrery-mail__whois",
+      "mcp__orrery-mail__fetch_inbox",
+      "mcp__orrery-mail__fetch_summary",
+      "mcp__orrery-mail__fetch_topic",
+      "mcp__orrery-mail__mark_message_read",
+      "mcp__orrery-mail__acknowledge_message",
+      "mcp__orrery-mail__send_message",
+      "mcp__orrery-mail__reply_message",
+      "mcp__orrery-mail__list_contacts",
+      "mcp__orrery-mail__request_contact",
+      "mcp__orrery-mail__respond_contact",
+      "mcp__orrery-mail__set_contact_policy",
+      "mcp__orrery-mail__file_reservation_paths",
+      "mcp__orrery-mail__macro_file_reservation_cycle",
+      "mcp__orrery-mail__renew_file_reservations",
+      "mcp__orrery-mail__release_file_reservations",
+      "mcp__orrery-mail__macro_start_session",
       "Bash(__AGENTSTACK_BIN_DIR__/agentstack-reregister:*)"
     ],
     "deny": [
-      "mcp__mcp-agent-mail__hard_delete_agent",
-      "mcp__mcp-agent-mail__hard_delete_project",
-      "mcp__mcp-agent-mail__purge_old_messages"
+      "mcp__orrery-mail__hard_delete_agent",
+      "mcp__orrery-mail__hard_delete_project",
+      "mcp__orrery-mail__purge_old_messages"
     ]
   },
   "hooks": {
@@ -65,7 +65,7 @@
         ]
       },
       {
-        "matcher": "mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations",
+        "matcher": "mcp__orrery-mail__file_reservation_paths|mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__orrery-mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__orrery-mail__renew_file_reservations|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations",
         "hooks": [
           {
             "type": "command",
@@ -85,7 +85,7 @@
         ]
       },
       {
-        "matcher": "mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
+        "matcher": "mcp__orrery-mail__register_agent|mcp__mcp-agent-mail__register_agent|mcp__agent_mail__register_agent",
         "hooks": [
           {
             "type": "command",

@@ -23,7 +23,7 @@ def _listener_mail_db() -> str:
     for direct dashboard runs where that generated environment is absent.
     """
     endpoint = os.environ.get(
-        "AGENTSTACK_MCP_URL", "http://127.0.0.1:8765/mcp"
+        "AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"
     ).strip()
     try:
         port = urlparse(endpoint).port or 8765
@@ -79,10 +79,7 @@ def _default_mail_db() -> str:
     if live:
         return live
     home = os.path.expanduser("~")
-    own = os.path.join(home, ".agentstack", "mail", "storage.sqlite3")
-    if os.path.exists(own):
-        return own
-    return os.path.join(home, "mcp_agent_mail", "storage.sqlite3")
+    return os.path.join(home, ".agentstack", "mail", "storage.sqlite3")
 
 
 DB_PATH = _env_path("AGENTSTACK_MAIL_DB") or _default_mail_db()

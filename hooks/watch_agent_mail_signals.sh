@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# watch_agent_mail_signals.sh - Watch mcp-agent-mail signal files and inject
+# watch_agent_mail_signals.sh - Watch ORRERY Mail signal files and inject
 # prompts into the target agent's tmux session.
 #
 # Uses macOS fswatch (or fallback polling) to monitor signal files.
@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.mcp_agent_mail}"
+MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
-WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/mcp-agent-mail-watcher.lock}"
+WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
 WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
 WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
 WATCH_FIFO=""
@@ -383,7 +383,7 @@ deliver_worker() {
     elif [[ -n "$body_snippet" ]]; then
         prompt="AgentStack mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
     else
-        prompt="mcp-agent-mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
     fi
 
     if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" -l "$prompt" 2>/dev/null; then
@@ -430,7 +430,7 @@ process_existing_signals() {
 if command -v fswatch &>/dev/null; then
     log "Starting fswatch on $SIGNALS_DIR"
     process_existing_signals
-    WATCH_FIFO="$(mktemp -u "/tmp/mcp-agent-mail-fswatch.XXXXXX")"
+    WATCH_FIFO="$(mktemp -u "/tmp/orrery-mail-fswatch.XXXXXX")"
     mkfifo "$WATCH_FIFO"
     fswatch -r --event Created --event Updated "$SIGNALS_DIR" > "$WATCH_FIFO" &
     WATCH_BACKEND_PID=$!
