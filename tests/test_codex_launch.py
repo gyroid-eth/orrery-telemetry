@@ -72,7 +72,7 @@ def _run_bash(script: str, env: dict[str, str] | None = None,
 
 
 def _ready(pane: str) -> bool:
-    script = _extract("codex_pane_ready") + '\ncodex_pane_ready "$PANE"\n'
+    script = _extract("pane_nonblank_tail") + "\n" + _extract("codex_pane_ready") + '\ncodex_pane_ready "$PANE"\n'
     return _run_bash(script, {"PANE": pane}).returncode == 0
 
 
@@ -231,7 +231,7 @@ tmux() {
 
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
-    ready = _extract("claude_pane_ready")
+    ready = _extract("pane_nonblank_tail") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
     trust = _extract("claude_accept_trust_dialog")
 
     gated = _run_bash(
@@ -400,3 +400,128 @@ def _main() -> int:
 
 if __name__ == "__main__":
     sys.exit(_main())
+
+
+# --- 2026-09-03: trust dialogs and padded panes -------------------------------
+
+_CLAUDE_SAFETY_CHECK = (
+    " Accessing workspace:\n /Users/example/code/project\n"
+    " Quick safety check: Is this a project you created or one you trust? (Like your\n"
+    " own code, a well-known open source project, or work from your team). If not,\n"
+    " take a moment to review what's in this folder first.\n"
+    " Claude Code'll be able to read, edit, and execute files here.\n"
+    " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n"
+    " Enter to confirm · Esc to cancel\n" + "\n" * 12
+)
+_CLAUDE_SAFETY_CHECK_YES_SELECTED = _CLAUDE_SAFETY_CHECK.replace(
+    " ❯ No, exit\n   Yes, I trust this folder", "   No, exit\n ❯ Yes, I trust this folder"
+)
+_CODEX_FOOTER_PADDED = (
+    "› Ask Codex to do anything\n\n"
+    "  gpt-5.6-sol low · Context 100% left · ~/code/project · weekly 74% left\n"
+    + "\n" * 20
+)
+_CODEX_TRUST_IN_SCROLLBACK = (
+    "> You are in /Users/example/code/project\n"
+    "  Do you trust the contents of this directory? Working with untrusted contents\n"
+    "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n"
+    + "\n" * 8
+    + _CODEX_FOOTER_PADDED
+)
+
+
+def _helpers() -> str:
+    return "\n".join(
+        _extract(name)
+        for name in (
+            "pane_nonblank_tail",
+            "codex_trust_dialog_present",
+            "claude_trust_dialog_present",
+        )
+    )
+
+
+def test_claude_safety_check_dialog_is_never_readiness():
+    ready = _helpers() + "\n" + _extract("claude_pane_ready")
+    # The selected row also starts with the cursor glyph ("❯ No, exit"); the
+    # old bare-prompt regex read that as an empty input row and typed the task
+    # into the dialog, and the following Enter chose "No, exit".
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": _CLAUDE_SAFETY_CHECK}).returncode != 0
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": _CLAUDE_SAFETY_CHECK_YES_SELECTED}).returncode != 0
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": "Claude Code\n\n❯ \n" + "\n" * 30}).returncode == 0
+
+
+def test_claude_safety_check_detector_sees_both_wordings():
+    detector = _helpers()
+    for pane in (_CLAUDE_SAFETY_CHECK, "Do you trust the files in this folder?\n  Yes\n  No\n"):
+        assert _run_bash(detector + '\nclaude_trust_dialog_present "$PANE"\n', {"PANE": pane}).returncode == 0
+    assert _run_bash(detector + '\nclaude_trust_dialog_present "$PANE"\n', {"PANE": "Claude Code\n\n❯ \n"}).returncode != 0
+
+
+def _accept_with_screens(screens: list[str]) -> str:
+    """Run claude_accept_trust_dialog against a tmux stub that returns the given
+    capture-pane screens in order and records every send-keys."""
+    stub_lines = [
+        # capture-pane runs inside $(...), so the cursor lives in a file rather
+        # than a shell variable that a subshell would lose.
+        'SCREEN_IDX_FILE="$(mktemp)"; printf 0 > "$SCREEN_IDX_FILE"',
+        "tmux() {",
+        '  case "$1" in',
+        "    capture-pane)",
+        '      local idx; idx="$(cat "$SCREEN_IDX_FILE")"',
+        '      printf \'%s\' "${SCREENS[$idx]}"',
+        '      if (( idx + 1 < ${#SCREENS[@]} )); then printf %s "$((idx + 1))" > "$SCREEN_IDX_FILE"; fi',
+        "      ;;",
+        "    send-keys)",
+        '      printf \'KEYS:%s\\n\' "$*"',
+        "      ;;",
+        "  esac",
+        "}",
+        "sleep() { :; }",
+    ]
+    env = {f"SCREEN_{i}": screen for i, screen in enumerate(screens)}
+    script = (
+        "SCREENS=(" + " ".join(f'"$SCREEN_{i}"' for i in range(len(screens))) + ")\n"
+        + "\n".join(stub_lines)
+        + "\n"
+        + _extract("claude_accept_trust_dialog")
+        + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
+    )
+    return _run_bash(script, env).stdout
+
+
+def test_claude_safety_check_moves_to_yes_before_confirming():
+    out = _accept_with_screens([_CLAUDE_SAFETY_CHECK, _CLAUDE_SAFETY_CHECK_YES_SELECTED])
+    keys = [line for line in out.splitlines() if line.startswith("KEYS:")]
+    assert keys == ["KEYS:send-keys -t Child Down", "KEYS:send-keys -t Child C-m"]
+
+
+def test_claude_safety_check_confirms_directly_when_yes_is_selected():
+    out = _accept_with_screens([_CLAUDE_SAFETY_CHECK_YES_SELECTED])
+    keys = [line for line in out.splitlines() if line.startswith("KEYS:")]
+    assert keys == ["KEYS:send-keys -t Child C-m"]
+
+
+def test_claude_safety_check_never_presses_enter_on_no_exit():
+    # Down did not move the cursor (screen unchanged): refuse to confirm.
+    out = _accept_with_screens([_CLAUDE_SAFETY_CHECK, _CLAUDE_SAFETY_CHECK])
+    keys = [line for line in out.splitlines() if line.startswith("KEYS:")]
+    assert keys == ["KEYS:send-keys -t Child Down"]
+
+
+def test_codex_readiness_survives_a_padded_pane():
+    ready = _helpers() + "\n" + _extract("codex_pane_ready")
+    assert _run_bash(ready + '\ncodex_pane_ready "$PANE"\n', {"PANE": _CODEX_FOOTER_PADDED}).returncode == 0
+
+
+def test_codex_polls_capture_the_visible_screen_only():
+    # A capture with scrollback kept an already-accepted trust dialog in view,
+    # so the launcher pressed Enter on every poll and never reached readiness.
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
+    assert text.count('PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)') == 4
+
+
+def test_child_shell_never_sources_a_user_bootstrap():
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert "codex_agent_bootstrap" not in text
