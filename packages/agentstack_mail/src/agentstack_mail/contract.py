@@ -113,19 +113,17 @@ POLICY_EXCLUDED_UPSTREAM_TOOLS = frozenset(
 
 SERVICE_IDENTITY = MappingProxyType(
     {
-        # What humans see (MCP serverInfo.name, banners). The machine
-        # identifiers below stay "agentstack-mail": they are file names, wheel
-        # names, and config keys whose rename would be churn with no visible
-        # payoff, while this one string is the whole "which server am I
-        # talking to" experience.
+        # What humans see (MCP serverInfo.name, banners). Distribution and
+        # Python package names remain agentstack-mail, while every MCP client
+        # registration uses the product key orrery-mail.
         "display_name": "ORRERY Mail",
         "distribution": "agentstack-mail",
         "python_package": "agentstack_mail",
         "cli": "agentstack-mail",
-        "mcp_provider_identity": "agentstack-mail",
-        "claude_client_key": "mcp-agent-mail",
-        "codex_client_key": "agent-mail",
-        "client_key_policy": "preserve_existing",
+        "mcp_provider_identity": "orrery-mail",
+        "claude_client_key": "orrery-mail",
+        "codex_client_key": "orrery-mail",
+        "client_key_policy": "fixed",
         "launchd_label": "org.orrery.mail",
         "systemd_unit": "agentstack-mail.service",
         "environment_prefix": "AGENTSTACK_MAIL_",

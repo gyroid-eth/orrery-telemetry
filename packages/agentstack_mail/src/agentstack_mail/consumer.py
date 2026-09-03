@@ -48,7 +48,8 @@ ROLLED_BACK_RECEIPT_NAME: Final[str] = "rolled-back.json"
 SCHEMA_VERSION: Final[int] = 1
 OLD_CLAUDE_KEY: Final[str] = "mcp-agent-mail"
 OLD_CODEX_KEY: Final[str] = "agent-mail"
-PROVIDER_IDENTITY: Final[str] = "agentstack-mail"
+CURRENT_CLIENT_KEY: Final[str] = "orrery-mail"
+PROVIDER_IDENTITY: Final[str] = CURRENT_CLIENT_KEY
 SUPPORTED_KINDS: Final[frozenset[str]] = frozenset(
     {
         "claude_mcp",
@@ -84,8 +85,8 @@ class Desired:
     new_mail_home: str
     legacy_signals_dir: str
     new_signals_dir: str
-    claude_mcp_key: str = OLD_CLAUDE_KEY
-    codex_mcp_key: str = OLD_CODEX_KEY
+    claude_mcp_key: str = CURRENT_CLIENT_KEY
+    codex_mcp_key: str = CURRENT_CLIENT_KEY
 
     @classmethod
     def from_payload(cls, value: Any) -> Desired:
@@ -111,8 +112,8 @@ class Desired:
         if not all(isinstance(item, str) and item for item in value.values()):
             raise ConsumerError("every desired value must be a non-empty string")
         payload = dict(value)
-        payload.setdefault("claude_mcp_key", OLD_CLAUDE_KEY)
-        payload.setdefault("codex_mcp_key", OLD_CODEX_KEY)
+        payload.setdefault("claude_mcp_key", CURRENT_CLIENT_KEY)
+        payload.setdefault("codex_mcp_key", CURRENT_CLIENT_KEY)
         for field in ("claude_mcp_key", "codex_mcp_key"):
             if not re.fullmatch(r"[A-Za-z0-9_-]+", payload[field]):
                 raise ConsumerError(f"{field} must be a simple MCP client key")

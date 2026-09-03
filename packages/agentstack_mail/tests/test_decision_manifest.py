@@ -468,7 +468,8 @@ def test_cutover_task_split_keeps_only_first_day_minimums_blocking() -> None:
         manifest,
         "client-key-rename-and-stale-selector-cleanup",
     )
-    assert "21 observed stale Claude allow occurrences" in " ".join(cleanup["scope"])
+    assert cleanup["implementation_state"] == "implemented"
+    assert "same-endpoint legacy Claude key" in " ".join(cleanup["scope"])
 
     assert manifest["cutover_gate"]["required_condition_ids"][-4:] == [
         task["id"] for task in pre if task["id"] not in descoped_ids

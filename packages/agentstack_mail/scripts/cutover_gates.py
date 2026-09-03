@@ -999,6 +999,10 @@ def _run_d12_core_probe(root: Path, d12: Any) -> dict[str, Any]:
             "DECISION_SIGNALS": str(roots.signals),
             "DECISION_STORAGE": str(roots.storage),
             "DECISION_SOURCE_ROOT": str(CORE_SOURCE.resolve()),
+            # D12 pins the predecessor's immediate signal-consumption
+            # projection. The production default now deliberately adds a
+            # grace window, so this historical differential opts out.
+            "AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS": "0",
         }
     )
     completed = subprocess.run(

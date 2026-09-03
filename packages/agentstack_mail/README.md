@@ -1,14 +1,14 @@
 # agentstack-mail
 
-This subtree contains the contract, provenance, and first bootable core for an
-AgentStack-owned coordination mail service. It is not a production server yet.
+This subtree contains the production ORRERY Mail service, its contract, and
+its provenance record.
 
 The implementation is a semantic extraction from the live Python AgentMail
 checkout that AgentStack currently uses. It preserves the selected public tool
 contracts and existing data model while moving the Python namespace, provider
 identity, port, database, archive, signal directory, and service labels into
-an AgentStack-owned namespace. The client compatibility keys stay Claude
-`mcp-agent-mail` and Codex `agent-mail` during the initial cutover.
+an AgentStack-owned namespace. Current Claude and Codex registrations use the
+fixed `orrery-mail` key; legacy spellings are migration inputs only.
 
 Contract v1 contains 25 published tools: 12 required by executable AgentStack
 runtime paths, 23 visible through shipped model permissions or the delegate
@@ -71,13 +71,13 @@ callers split between the two, so the well-known pair is served on every
 deployment: `AGENTSTACK_MAIL_HTTP_PATH_ALIASES` (default `/mcp,/api`) lists
 alias paths rewritten onto the canonical `--path` before routing, matching
 with and without a trailing slash; set it empty to serve the canonical path
-only. Two token-efficiency switches, both default-off so the frozen
-differential behavior is preserved: `AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=true`
-adds a 400-character `body_snippet` to notification signals so watchers can
-deliver short messages without a fetch round trip, and
-`AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true` drops the body echo from
-send/reply tool results. A third, `AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS`
-(default 0), keeps signals younger than that many seconds alive through a
+only. Two token-efficiency behaviors are enabled by default:
+`AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=true` adds a 400-character
+`body_snippet` to notification signals so watchers can deliver short messages
+without a fetch round trip, and `AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true`
+drops the body echo from send/reply tool results. Set either to `false` for the
+legacy response shape. `AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS` (default
+10), keeps signals younger than that many seconds alive through a
 fetch_inbox clear, so a poll that races the notification watcher cannot
 consume the push notification's dirty bit.
 Published tool descriptions come from `tool_descriptions.py`, not the
@@ -369,10 +369,9 @@ allowances are `whois`, `send_message`, and `request_contact`; the live 40-tool
 surface versus the Core published surface is pinned across all four MCP publication
 axes: tools/concrete resources/resource templates/prompts are live 40/0/21/0
 and Core 25/0/0/0. Service namespace/default isolation is also an exact,
-versioned allowance. The provider identity remains `agentstack-mail`, while
-first cutover preserves Claude's `mcp-agent-mail` and Codex's `agent-mail`
-client keys. Authority is validated from endpoint, data roots, and ownership;
-client-visible keys are compatibility ABI rather than authority selectors. The
+versioned allowance. Provider identity and client registration keys are
+`orrery-mail`. Authority is additionally validated from endpoint, data roots,
+and ownership. The
 manifest's single `product_decisions` ledger keeps
 `decision_state`, `implementation_state`, and `cutover_state` independent and
 mandatory. A choice can therefore be selected without pretending it is

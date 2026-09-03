@@ -295,7 +295,7 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     assert stat.S_IMODE((bundle / "manifest.json").stat().st_mode) == 0o400
     planned = preview(bundle, _digest(prepared))
     assert planned["contents_redacted"] is True
-    assert planned["files_changed"] == 8
+    assert planned["files_changed"] == 10
     assert all(set(item) == {"path", "kind", "changed", "hunks"} for item in planned["changes"])
 
     digest = _digest(prepared)
@@ -303,28 +303,28 @@ def test_prepare_apply_and_one_operation_rollback(tmp_path: Path) -> None:
     assert committed["status"] == "committed"
 
     claude = json.loads(next(path for path in before if path.name == ".claude.json").read_text())
-    assert "agentstack-mail" not in claude["mcpServers"]
-    assert claude["mcpServers"]["mcp-agent-mail"] == {
+    assert "mcp-agent-mail" not in claude["mcpServers"]
+    assert claude["mcpServers"]["orrery-mail"] == {
         "type": "http",
         "url": "http://127.0.0.1:18765/mcp",
     }
     settings_path = next(path for path in before if path.name == "settings.json")
     settings = settings_path.read_text()
-    assert settings_path.read_bytes() == before[settings_path][0]
-    assert "mcp__mcp-agent-mail__register_agent" in settings
-    assert "mcp__mcp-agent-mail__search_messages" in settings
-    assert "mcp__mcp-agent-mail__summarize_thread" in settings
+    assert settings_path.read_bytes() != before[settings_path][0]
+    assert "mcp__orrery-mail__register_agent" in settings
+    assert "mcp__orrery-mail__search_messages" in settings
+    assert "mcp__orrery-mail__summarize_thread" in settings
     local_settings_path = next(
         path for path in before if path.name == "settings.local.json"
     )
-    assert local_settings_path.read_bytes() == before[local_settings_path][0]
+    assert local_settings_path.read_bytes() != before[local_settings_path][0]
     codex_path = next(path for path in before if path.name == "config.toml" and ".codex" in str(path))
     codex = codex_path.read_text()
-    assert "[mcp_servers.agent-mail]" in codex
-    assert "[mcp_servers.agentstack-mail]" not in codex
+    assert "[mcp_servers.orrery-mail]" in codex
+    assert "[mcp_servers.agent-mail]" not in codex
     assert "bearer_token_env_var" not in codex
-    assert "[mcp_servers.agent-mail.tools.search_messages]" in codex
-    assert "[mcp_servers.agent-mail.tools.summarize_thread]" in codex
+    assert "[mcp_servers.orrery-mail.tools.search_messages]" in codex
+    assert "[mcp_servers.orrery-mail.tools.summarize_thread]" in codex
     assert "# preserve this comment" in codex
 
     restored = _rollback(bundle, digest)
@@ -342,22 +342,18 @@ def test_default_client_keys_are_independent_from_provider_identity(
         json.loads(inventory.read_text(encoding="utf-8"))["desired"]
     )
 
-    assert consumer.PROVIDER_IDENTITY == "agentstack-mail"
-    assert desired.claude_mcp_key == "mcp-agent-mail"
-    assert desired.codex_mcp_key == "agent-mail"
-    assert consumer.PROVIDER_IDENTITY not in {
-        desired.claude_mcp_key,
-        desired.codex_mcp_key,
-    }
+    assert consumer.PROVIDER_IDENTITY == "orrery-mail"
+    assert desired.claude_mcp_key == "orrery-mail"
+    assert desired.codex_mcp_key == "orrery-mail"
 
     prepared = prepare(inventory, bundle)
     apply(bundle, _digest(prepared))
     claude_path = _target_from_inventory(inventory, "claude_mcp")
     codex_path = _target_from_inventory(inventory, "codex_mcp")
     assert set(json.loads(claude_path.read_text())["mcpServers"]) >= {
-        "mcp-agent-mail"
+        "orrery-mail"
     }
-    assert "[mcp_servers.agent-mail]" in codex_path.read_text(encoding="utf-8")
+    assert "[mcp_servers.orrery-mail]" in codex_path.read_text(encoding="utf-8")
 
 
 def test_explicit_client_key_rename_remains_available(tmp_path: Path) -> None:
@@ -1213,8 +1209,8 @@ def test_child_proxy_preserves_tool_settings_while_endpoint_changes(tmp_path: Pa
     assert "tools.bootstrap" in rendered
     assert "tools.fetch_inbox" in rendered
     assert "tools.health_check" in rendered
-    assert "[mcp_servers.agent-mail" in rendered
-    assert "[mcp_servers.agentstack-mail" not in rendered
+    assert "[mcp_servers.orrery-mail" in rendered
+    assert "[mcp_servers.agent-mail" not in rendered
 
 
 def test_already_new_claude_child_is_idempotent(tmp_path: Path) -> None:
@@ -1226,14 +1222,14 @@ def test_already_new_claude_child_is_idempotent(tmp_path: Path) -> None:
     entry = value["mcpServers"].pop("mcp-agent-mail")
     entry["env"]["AGENTSTACK_MCP_URL"] = desired["new_mcp_url"]
     entry["env"]["AGENTSTACK_MAIL_ENV"] = desired["new_mail_env"]
-    value["mcpServers"]["agentstack-mail"] = entry
+    value["mcpServers"]["orrery-mail"] = entry
     _json(path, value, newline=False)
 
     prepared = prepare(inventory, bundle)
     assert apply(bundle, _digest(prepared))["status"] == "committed"
     rendered = json.loads(path.read_text())["mcpServers"]
-    assert "mcp-agent-mail" in rendered
-    assert "agentstack-mail" not in rendered
+    assert "orrery-mail" in rendered
+    assert "mcp-agent-mail" not in rendered
 
 
 @pytest.mark.parametrize(

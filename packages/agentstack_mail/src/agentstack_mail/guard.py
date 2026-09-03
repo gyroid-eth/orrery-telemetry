@@ -34,7 +34,7 @@ def _render_chain_runner_script(hook_name: str) -> str:
     """
     lines: list[str] = [
         "#!/usr/bin/env python3",
-        f"# mcp-agent-mail chain-runner ({hook_name})",
+        f"# orrery-mail chain-runner ({hook_name})",
         "import os",
         "import sys",
         "import stat",
@@ -144,7 +144,7 @@ def render_precommit_script(archive: ProjectArchive) -> str:
     storage_root = str(archive.root.resolve()).replace("\\", "/")
     lines = [
         "#!/usr/bin/env python3",
-        "# mcp-agent-mail guard hook (pre-commit)",
+        "# orrery-mail guard hook (pre-commit)",
         "import json",
         "import os",
         "import sys",
@@ -332,7 +332,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
     file_reservations_dir = str((archive.root / "file_reservations").resolve()).replace("\\", "/")
     lines = [
         "#!/usr/bin/env python3",
-        "# mcp-agent-mail guard hook (pre-push)",
+        "# orrery-mail guard hook (pre-push)",
         "import json",
         "import os",
         "import sys",
@@ -563,7 +563,13 @@ async def install_guard(settings: Settings, project_slug: str, repo_path: Path) 
             content = (await asyncio.to_thread(chain_path.read_text, "utf-8")).strip()
         except Exception:
             content = ""
-        if "mcp-agent-mail chain-runner (pre-commit)" not in content:
+        if not any(
+            marker in content
+            for marker in (
+                "orrery-mail chain-runner (pre-commit)",
+                "mcp-agent-mail chain-runner (pre-commit)",
+            )
+        ):
             orig = hooks_dir / "pre-commit.orig"
             if not orig.exists():
                 await asyncio.to_thread(chain_path.replace, orig)
@@ -617,7 +623,13 @@ async def install_prepush_guard(settings: Settings, project_slug: str, repo_path
             content = (await asyncio.to_thread(chain_path.read_text, "utf-8")).strip()
         except Exception:
             content = ""
-        if "mcp-agent-mail chain-runner (pre-push)" not in content:
+        if not any(
+            marker in content
+            for marker in (
+                "orrery-mail chain-runner (pre-push)",
+                "mcp-agent-mail chain-runner (pre-push)",
+            )
+        ):
             orig = hooks_dir / "pre-push.orig"
             if not orig.exists():
                 await asyncio.to_thread(chain_path.replace, orig)
@@ -682,7 +694,11 @@ async def uninstall_guard(repo_path: Path) -> bool:
     # Only remove chain-runner if no other plugins depend on it
     pre_commit = hooks_dir / "pre-commit"
     pre_push = hooks_dir / "pre-push"
-    SENTINELS = ("mcp-agent-mail guard hook", "AGENT_NAME environment variable is required.")
+    SENTINELS = (
+        "orrery-mail guard hook",
+        "mcp-agent-mail guard hook",
+        "AGENT_NAME environment variable is required.",
+    )
     for hook_name, hook_path in [("pre-commit", pre_commit), ("pre-push", pre_push)]:
         if hook_path.exists():
             try:
@@ -690,7 +706,13 @@ async def uninstall_guard(repo_path: Path) -> bool:
             except Exception:
                 content = ""
 
-            is_our_chain_runner = "mcp-agent-mail chain-runner" in content
+            is_our_chain_runner = any(
+                marker in content
+                for marker in (
+                    "orrery-mail chain-runner",
+                    "mcp-agent-mail chain-runner",
+                )
+            )
             is_legacy_hook = any(s in content for s in SENTINELS)
 
             if is_our_chain_runner:

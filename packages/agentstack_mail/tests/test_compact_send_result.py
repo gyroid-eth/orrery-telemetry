@@ -4,8 +4,8 @@ Two independent behaviors, both measured on 2026-08-13:
 
 - The send/reply tool result echoed the full body back to the sender at ~2.5×
   the body's size (content text + structuredContent both carry it).
-  ``AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true`` drops the echo; default stays
-  parity-compatible.
+  ``AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true`` drops the echo and is the
+  product default; an explicit false retains the compatibility shape.
 - Notification signals carried no body, so every recipient paid a fetch_inbox
   round trip even for a one-word message — the dominant share of
   notification→reply latency. Signals now carry a 400-character snippet.
@@ -69,31 +69,27 @@ async def _send(tmp_path: Path, body_md: str) -> dict[str, Any]:
     return result.structured_content or result.data
 
 
-def test_default_keeps_the_parity_compatible_body_echo(
+def test_default_drops_the_body_echo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _configure(monkeypatch, tmp_path)
-    result = asyncio.run(_send(tmp_path, "hello parity"))
+    result = asyncio.run(_send(tmp_path, "hello compact"))
     payload = result["deliveries"][0]["payload"]
-    assert payload["body_md"] == "hello parity"
-    assert "body_omitted" not in payload
+    assert "body_md" not in payload
+    assert payload["body_omitted"] is True
 
 
-def test_compact_flag_drops_the_body_echo(
+def test_explicit_false_keeps_the_body_echo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _configure(
-        monkeypatch, tmp_path, AGENTSTACK_MAIL_COMPACT_SEND_RESULT="true"
+        monkeypatch, tmp_path, AGENTSTACK_MAIL_COMPACT_SEND_RESULT="false"
     )
     body = "x" * 2000
     result = asyncio.run(_send(tmp_path, body))
     payload = result["deliveries"][0]["payload"]
-    assert "body_md" not in payload
-    assert payload["body_omitted"] is True
-    # Identifying fields the sender needs must survive the trim.
-    assert payload["subject"] == "probe"
-    assert payload["to"] == ["GreenCastle"]
-    assert payload["id"]
+    assert payload["body_md"] == body
+    assert "body_omitted" not in payload
 
 
 def _read_signal(tmp_path: Path) -> dict[str, Any]:
@@ -103,33 +99,31 @@ def _read_signal(tmp_path: Path) -> dict[str, Any]:
     return json.loads(files[-1].read_text(encoding="utf-8"))
 
 
-def test_signal_stays_metadata_only_without_the_body_flag(
+def test_signal_carries_body_by_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # The frozen differential behavior writes metadata-only signals; the
-    # snippet must not appear unless explicitly enabled.
     _configure(
         monkeypatch, tmp_path, AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true"
     )
     asyncio.run(_send(tmp_path, "しりとり: すいか"))
     message = _read_signal(tmp_path)["message"]
-    assert "body_snippet" not in message
-    assert "body_truncated" not in message
+    assert message["body_snippet"] == "しりとり: すいか"
+    assert message["body_truncated"] is False
 
 
-def test_signal_carries_the_full_body_of_a_short_message(
+def test_explicit_false_keeps_signal_metadata_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _configure(
         monkeypatch,
         tmp_path,
         AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
-        AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY="true",
+        AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY="false",
     )
     asyncio.run(_send(tmp_path, "しりとり: すいか"))
     message = _read_signal(tmp_path)["message"]
-    assert message["body_snippet"] == "しりとり: すいか"
-    assert message["body_truncated"] is False
+    assert "body_snippet" not in message
+    assert "body_truncated" not in message
 
 
 async def _fetch(tmp_path: Path, agent: str) -> None:
@@ -144,12 +138,26 @@ def _signal_files(tmp_path: Path) -> list[Path]:
     return sorted((tmp_path / "signals").rglob("*.signal"))
 
 
-def test_default_fetch_clears_even_a_fresh_signal(
+def test_default_grace_lets_a_fresh_signal_survive_a_racing_fetch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Frozen behavior: no grace, fetch consumes the dirty bit immediately.
     _configure(
         monkeypatch, tmp_path, AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true"
+    )
+    asyncio.run(_send(tmp_path, "fresh"))
+    assert _signal_files(tmp_path)
+    asyncio.run(_fetch(tmp_path, "GreenCastle"))
+    assert _signal_files(tmp_path)
+
+
+def test_explicit_zero_fetch_clears_a_fresh_signal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _configure(
+        monkeypatch,
+        tmp_path,
+        AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
+        AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS="0",
     )
     asyncio.run(_send(tmp_path, "fresh"))
     assert _signal_files(tmp_path)

@@ -252,13 +252,13 @@
         "core": {
           "distribution": "agentstack-mail",
           "python_package": "agentstack_mail",
-          "mcp_provider_identity": "agentstack-mail",
+          "mcp_provider_identity": "orrery-mail",
           "client_mcp_keys": {
-            "claude": "mcp-agent-mail",
-            "codex": "agent-mail"
+            "claude": "orrery-mail",
+            "codex": "orrery-mail"
           }
         },
-        "reason": "The renamed provider must coexist without import or storage collision while first-cutover client keys remain a compatibility ABI; authority is determined by endpoint, roots, and ownership rather than the client-visible key."
+        "reason": "The renamed provider keeps its distribution/import isolation while MCP clients consistently register the product-facing orrery-mail key."
       },
       {
         "id": "isolation.environment",
@@ -1405,23 +1405,23 @@
     },
     {
       "id": "client-key-rename-and-stale-selector-cleanup",
-      "implementation_state": "not_implemented",
+      "implementation_state": "implemented",
       "implementation_order": "post_cutover",
       "cutover_blocking": false,
-      "activation_condition": "after first cutover when an operator explicitly elects to rename a client key or remove permissions and raw command selectors for tools absent from the 24-tool boundary",
+      "activation_condition": "maintainer decision on 2026-09-03 to fix both client keys to orrery-mail and remove the external provider path",
       "scope": [
-        "optional Claude and Codex client-key rename",
-        "21 observed stale Claude allow occurrences across 10 absent tool names",
-        "four Life raw curl selectors pinned to legacy port 8765",
-        "dormant deregister_agent option in retire-agent-by-name.sh"
+        "Claude and Codex client-key rename to orrery-mail",
+        "same-endpoint legacy Claude key and permission migration",
+        "legacy hook matcher aliases retained temporarily for installed environments",
+        "external provider selection and provisioning removal"
       ],
       "requirements": [
-        "take and seal a fresh one-run selector inventory before editing because settings and sessions change over time",
-        "present exact files and line ranges for operator approval before changing personal settings",
-        "record that stale permissions can become active automatically if an absent tool is later republished",
-        "keep retire-agent-by-name.sh dormant unless its legacy database, endpoint, and bearer assumptions are separately replaced and tested"
+        "migrate only the same-endpoint legacy Claude entry and never create duplicate authority registrations",
+        "replace installer-owned legacy permission selectors while preserving unrelated user settings",
+        "publish the canonical key in launchers, child proxies, hooks, documentation, and tests",
+        "retain legacy service retirement and source-data migration without retaining a provider switch"
       ],
-      "acceptance": "a separately approved post-cutover change either preserves the client compatibility ABI or migrates every exact selector atomically, removes only the reviewed stale and legacy-endpoint entries, and proves no active hook or supported tool loses authorization"
+      "acceptance": "installer and consumer tests migrate same-endpoint legacy keys and selectors to orrery-mail without duplicates, legacy matcher aliases still fire, no external provider can be selected or cloned, and the full suite remains green"
     },
     {
       "id": "reservation-performance-input-tree-binding",

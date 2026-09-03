@@ -105,10 +105,10 @@ EXPECTED_STATIC_ALLOWLIST = {
         "core": {
             "distribution": "agentstack-mail",
             "python_package": "agentstack_mail",
-            "mcp_provider_identity": "agentstack-mail",
+            "mcp_provider_identity": "orrery-mail",
             "client_mcp_keys": {
-                "claude": "mcp-agent-mail",
-                "codex": "agent-mail",
+                "claude": "orrery-mail",
+                "codex": "orrery-mail",
             },
         },
     },
@@ -1044,7 +1044,7 @@ EXPECTED_POST_CUTOVER_TASK_IDS = [
     "selected-pytest-evidence-executor-contract",
 ]
 EXPECTED_POST_CUTOVER_TASKS_SHA256 = (
-    "801a110bc6e545a47991d11774a1b38d2af45e04ddee6483fc3d6079a69baef2"
+    "e9ec5c8915d374bc2af023489f1e79bc44412a5533811c059b006764f94dacdc"
 )
 EXPECTED_CURRENT_GATE_ACTIVATION_REQUIREMENTS_SHA256 = (
     "04e5aaa801bc35929d38d0008d23a7a0010d086e9e2831cac4bc2dd15360700a"
@@ -1679,7 +1679,12 @@ def _assert_expected_divergences_manifest(
                 else set()
             )
         )
-        or task.get("implementation_state") != "not_implemented"
+        or task.get("implementation_state")
+        != (
+            "implemented"
+            if task.get("id") == "client-key-rename-and-stale-selector-cleanup"
+            else "not_implemented"
+        )
         or task.get("implementation_order") != "post_cutover"
         or task.get("cutover_blocking") is not False
         or not isinstance(task.get("activation_condition"), str)
