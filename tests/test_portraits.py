@@ -123,8 +123,17 @@ def test_directory_suggestions_return_the_whole_listing_for_prefix_filtering(tmp
     root.mkdir()
     for i in range(30):
         (root / f"{i:02d}_folder").mkdir()
-    srv = _load_server(tmp_path, AGENTSTACK_SPAWN_ROOTS=str(root))
-    payload = srv.spawn_directory_suggestions(str(root))
+    srv = _load_server(tmp_path)
+    # Roots are read from the environment at call time, not at import.
+    saved = os.environ.get("AGENTSTACK_SPAWN_ROOTS")
+    os.environ["AGENTSTACK_SPAWN_ROOTS"] = str(root)
+    try:
+        payload = srv.spawn_directory_suggestions(str(root))
+    finally:
+        if saved is None:
+            os.environ.pop("AGENTSTACK_SPAWN_ROOTS", None)
+        else:
+            os.environ["AGENTSTACK_SPAWN_ROOTS"] = saved
     names = [row["name"] for row in payload["dirs"]]
     assert names[-1] == "29_folder", "a 20-row cap hid the tail of the listing from the prefix filter"
     assert payload["truncated"] is False
