@@ -19,8 +19,8 @@ MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
 PORT="${AGENTSTACK_PORT:-8770}"
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-$REPO_ROOT}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
@@ -60,7 +60,7 @@ Options:
   --dashboard-only       Tier0 footprint; install dashboard assets only
   --scoped               Tier2 placeholder; no user-settings merge
   --install-dir PATH     Default: ~/.agentstack
-  --project-key PATH     Default: AGENTSTACK_PROJECT_KEY, PROJECT_KEY, or repo root
+  --project-key PATH     Required on first install; existing env.sh is reused
   --port PORT            Default: 8770
   --label-prefix PREFIX  Default: org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
@@ -141,6 +141,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+PROJECT_CONTEXT_LIB="$REPO_ROOT/hooks/project-context.sh"
+if [[ ! -f "$PROJECT_CONTEXT_LIB" ]]; then
+  echo "error: missing project context resolver: $PROJECT_CONTEXT_LIB" >&2
+  exit 2
+fi
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
+PROJECT_KEY_INPUT="$PROJECT_KEY"
+PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0)"
+if [[ -z "$PROJECT_KEY" ]]; then
+  echo "error: project key is required on first install; pass --project-key /absolute/path/to/project or set AGENTSTACK_PROJECT_KEY" >&2
+  exit 2
+fi
+PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
 
 HOOKS_DIR="$INSTALL_DIR/hooks"
 SKILLS_DIR="$INSTALL_DIR/skills"
@@ -1399,11 +1414,9 @@ safe_managed_doc_setups() {
   if [[ "$TIER" != "tier1" ]]; then
     return
   fi
-  # Without --project-key the default is this checkout, and the managed block
-  # would land in the repo's own CLAUDE.md / AGENTS.md. Those files are tracked,
-  # so the write leaves the working tree dirty and `git pull` refuses to update
-  # them on every release. The block is meant for the project an agent works in,
-  # which is not the copy of the stack it installed from.
+  # An explicitly selected project can still be this checkout. Avoid placing
+  # the managed block into the stack's own tracked docs: the block belongs in
+  # the project where agents will work.
   if project_key_is_this_checkout; then
     say "skip managed CLAUDE.md / AGENTS.md blocks: --project-key is this checkout"
     say "  The block belongs in the project you will run agents in. To add it:"
