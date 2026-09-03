@@ -256,19 +256,24 @@ installer に渡して `env.sh`・service 定義・`install-state.json` に永�
 ## Codex model catalog
 
 ```bash
-export AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna"
+AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna" ./scripts/install.sh
 ```
+
+installer に渡して永続化します（shell の `export` は service に届きません）。
 
 空要素と前後空白は除去されます。指定がない場合は上記3モデルで、先頭の `gpt-5.6-sol` が default です。reasoning effort は `low / medium / high / xhigh`、default は `xhigh` です。dashboard spawn は allow-list 外の Codex model / effort を拒否します。
 
 ## Portrait overlay
 
 ```bash
-export AGENTSTACK_PORTRAITS_DIR="$HOME/.agentstack/portraits_64"
-export AGENTSTACK_CUSTOM_PORTRAITS="$HOME/.agentstack/custom_portraits.json"
+AGENTSTACK_PORTRAITS_DIR="$HOME/.agentstack/portraits" \
+AGENTSTACK_CUSTOM_PORTRAITS="$HOME/.agentstack/custom_portraits.json" \
+./scripts/install.sh
 ```
 
-overlay directory に `mybot.png` を置き、登録名を小文字 key で portrait stem へ対応させます。
+`AGENTSTACK_SPAWN_DIRS` と同じく installer に渡して永続化します（dashboard は service として動くので shell の `export` は届きません。再インストール時は前回の値を引き継ぎます）。
+
+overlay directory に `MyBot.png` を置くだけで、登録名 `MyBot` / `mybot` のどちらにも使われます（stem の照合は大文字小文字を区別しません）。登録名と file 名が違う場合だけ、custom map で登録名（小文字 key）を portrait stem へ対応させます。
 
 ```json
 {

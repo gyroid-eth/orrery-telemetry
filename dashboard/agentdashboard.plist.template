@@ -56,6 +56,12 @@
     <string>__SPAWN_DIRS__</string>
     <key>AGENTSTACK_SPAWN_ROOTS</key>
     <string>__SPAWN_ROOTS__</string>
+    <key>AGENTSTACK_PORTRAITS_DIR</key>
+    <string>__PORTRAITS_DIR__</string>
+    <key>AGENTSTACK_CUSTOM_PORTRAITS</key>
+    <string>__CUSTOM_PORTRAITS__</string>
+    <key>AGENTSTACK_CODEX_MODELS</key>
+    <string>__CODEX_MODELS__</string>
     <key>AGENTSTACK_HOOKS_DIR</key>
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>

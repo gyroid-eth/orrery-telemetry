@@ -300,17 +300,33 @@ def _safe_portrait_name(name: str) -> bool:
     return bool(name) and "/" not in name and "\\" not in name and ".." not in name
 
 
-def _png_names(directory: str) -> set[str]:
+def _png_index(directory: str) -> dict[str, str]:
+    """Map lower-cased stem -> file path for every safe PNG in a directory.
+
+    Registered names are matched case-insensitively: agents are registered as
+    `ProOpus` or `SeminarBot` while operators drop `proopus.png` into the
+    overlay, and an exact-case miss used to fall through to the initials SVG
+    without any signal that a portrait existed.
+    """
     if not directory:
-        return set()
+        return {}
     try:
-        return {
-            f[:-4]
-            for f in os.listdir(directory)
-            if f.endswith(".png") and _safe_portrait_name(f[:-4])
-        }
+        entries = sorted(os.listdir(directory))
     except OSError:
-        return set()
+        return {}
+    index: dict[str, str] = {}
+    for f in entries:
+        if not f.endswith(".png"):
+            continue
+        stem = f[:-4]
+        if not _safe_portrait_name(stem):
+            continue
+        index.setdefault(stem.lower(), os.path.join(directory, f))
+    return index
+
+
+def _png_names(directory: str) -> set[str]:
+    return {os.path.basename(path)[:-4] for path in _png_index(directory).values()}
 
 
 def _portrait_set() -> set[str]:
@@ -318,19 +334,24 @@ def _portrait_set() -> set[str]:
 
 
 def _portrait_file(name: str, hi: bool) -> str:
-    if not _safe_portrait_name(name) or name not in PORTRAITS:
+    if not _safe_portrait_name(name):
         return ""
-    fname = name + ".png"
+    key = name.lower()
+    # The operator's custom map (registered name -> portrait stem) is applied
+    # server-side too, so a client that only knows the agent's name — the
+    # cockpit proxying this endpoint — resolves the same face as the dashboard.
+    mapped = _custom_portrait_map().get(key)
+    if isinstance(mapped, str) and _safe_portrait_name(mapped):
+        key = mapped.lower()
     if PORTRAIT_OVERLAY_DIR:
-        fp = os.path.join(PORTRAIT_OVERLAY_DIR, fname)
-        if os.path.isfile(fp):
+        fp = _png_index(PORTRAIT_OVERLAY_DIR).get(key)
+        if fp:
             return fp
     if hi:
-        fp = os.path.join(PORT_HI, fname)
-        if os.path.isfile(fp):
+        fp = _png_index(PORT_HI).get(key)
+        if fp:
             return fp
-    fp = os.path.join(PORT_64, fname)
-    return fp if os.path.isfile(fp) else ""
+    return _png_index(PORT_64).get(key, "")
 
 
 def _portrait_fallback(name: str, hi: bool) -> bytes:

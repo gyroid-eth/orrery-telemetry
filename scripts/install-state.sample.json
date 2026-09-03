@@ -42,6 +42,8 @@
   "created_at": "2026-01-01T00:00:00Z",
   "env": {
     "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
+    "AGENTSTACK_CODEX_MODELS": "",
+    "AGENTSTACK_CUSTOM_PORTRAITS": "",
     "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "5242880",
@@ -60,6 +62,7 @@
     "AGENTSTACK_MCP_URL": "http://127.0.0.1:18765/mcp",
     "AGENTSTACK_MURMUR": "",
     "AGENTSTACK_PORT": "8770",
+    "AGENTSTACK_PORTRAITS_DIR": "",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
     "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
