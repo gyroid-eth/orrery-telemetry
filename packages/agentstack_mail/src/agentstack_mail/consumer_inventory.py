@@ -21,7 +21,7 @@ from collections import Counter
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
@@ -338,7 +338,7 @@ def collect(
         )
     if bundle.exists() or bundle.is_symlink():
         raise InventoryCollectionError(f"collection bundle already exists: {bundle}")
-    started = datetime.now(UTC)
+    started = datetime.now(timezone.utc)
     spec = _load_spec(spec_path)
     files, scanned = _walk(
         spec, max_files=max_files, deadline_seconds=deadline_seconds
@@ -349,7 +349,7 @@ def collect(
         raise InventoryCollectionError("known-positive selector control failed")
     if spec.ignored_path not in by_path:
         raise InventoryCollectionError("known ignored-path completeness control failed")
-    finished = datetime.now(UTC)
+    finished = datetime.now(timezone.utc)
 
     inventory = {
         "schema_version": 1,
