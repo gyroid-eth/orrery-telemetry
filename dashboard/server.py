@@ -5069,10 +5069,14 @@ def main():
     _start_supervisor_watchdog()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
-    subprocess.run(
-        ["pkill", "-f", "ttyd -p .* tmux attach -t ="],
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["pkill", "-f", "ttyd -p .* tmux attach -t ="],
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        # Optional cleanup must not prevent startup on hosts without pkill.
+        pass
     threading.Thread(target=_ttyd_reaper, daemon=True).start()
     srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     print(f"agent-dashboard listening on http://{BIND_HOST}:{PORT}/")

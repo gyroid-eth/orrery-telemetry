@@ -5,6 +5,22 @@ on:
   pull_request:
 
 jobs:
+  portable-startup:
+    # These regressions cover portable components, not a full Windows install.
+    runs-on: windows-latest
+    name: portable startup (Windows)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - name: Check checkout bytes and dashboard HTTP startup
+        env:
+          PYTHONPATH: .
+          PYTHONUTF8: "1"
+        run: python -m pytest -q tests/test_mail_fixture_line_endings.py tests/test_dashboard_startup.py tests/test_codex_app_runtime_provider.py
+
   tests:
     runs-on: ubuntu-latest
     strategy:
