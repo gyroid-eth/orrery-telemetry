@@ -1,6 +1,6 @@
 # Dashboard
 
-> English version: planned.
+> English version: [dashboard.en.md](dashboard.en.md)
 
 [前: Codex App 統合](codex-app.md) · [README に戻る](../README.md) · [次: API reference](api.md)
 

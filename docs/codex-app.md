@@ -1,6 +1,6 @@
 # Codex App 統合
 
-> English version: planned.
+> English version: [codex-app.en.md](codex-app.en.md)
 
 [前: Hooks](hooks.md) · [README に戻る](../README.md) · [次: Dashboard](dashboard.md)
 

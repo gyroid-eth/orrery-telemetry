@@ -1,6 +1,6 @@
 # インストール
 
-> English version: planned.
+> English version: [install.en.md](install.en.md)
 
 [README に戻る](../README.md) · [次: Launcher と identity](launchers.md)
 

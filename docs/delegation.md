@@ -1,6 +1,6 @@
 # 委任と child agent
 
-> English version: planned.
+> English version: [delegation.en.md](delegation.en.md)
 
 [前: Launcher と identity](launchers.md) · [README に戻る](../README.md) · [次: Hooks](hooks.md)
 

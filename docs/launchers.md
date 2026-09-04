@@ -1,6 +1,6 @@
 # Launcher と identity
 
-> English version: planned.
+> English version: [launchers.en.md](launchers.en.md)
 
 [前: インストール](install.md) · [README に戻る](../README.md) · [次: 委任と child agent](delegation.md)
 

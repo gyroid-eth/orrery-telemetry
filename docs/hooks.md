@@ -1,6 +1,6 @@
 # Hooks と運用 helper
 
-> English version: planned.
+> English version: [hooks.en.md](hooks.en.md)
 
 [前: 委任と child agent](delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
 
