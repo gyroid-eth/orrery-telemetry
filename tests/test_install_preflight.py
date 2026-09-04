@@ -10,7 +10,11 @@ import socket
 import subprocess
 import sys
 import threading
-import tomllib
+
+try:  # pragma: no cover - Python 3.11+ uses the stdlib module.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
+    import tomli as tomllib
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
