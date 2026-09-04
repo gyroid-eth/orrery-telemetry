@@ -96,3 +96,10 @@ components; see [the third-party boundary](docs/third-party.md).
 By submitting new AgentStack-authored work you agree that it is licensed under
 the PolyForm terms. Changes to derived AgentMail components must retain the
 upstream copyright and full upstream license, including its rider.
+
+By submitting a contribution you keep your copyright, but you grant the
+maintainer a perpetual, worldwide, non-exclusive, royalty-free licence to use,
+reproduce, modify, distribute, sublicense and relicense the contribution under
+any terms, including commercial ones. You confirm that you have the right to
+grant this licence. Small fixes are welcome without further paperwork; this
+paragraph is the whole agreement.
