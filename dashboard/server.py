@@ -2047,6 +2047,50 @@ def _codex_meta(path: str) -> tuple[str | None, str | None]:
         return None, None
 
 
+def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
+    """Writable roots for a Codex agent launched by the product.
+
+    Mirrors codex_child_add_dirs in hooks/spawn_child.sh: project, NEW AGENT
+    presets and typeahead roots, install dir, worktree base, ~/.claude,
+    ~/.codex, then AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped
+    and duplicates collapse on realpath (macOS /tmp -> /private/tmp)."""
+    raw: list[str] = [PROJECT_KEY or VAULT]
+    raw += os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
+    raw += os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
+    raw += [os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
+            "/tmp/cc-worktrees", os.path.expanduser("~/.claude"),
+            os.path.expanduser("~/.codex")]
+    raw += list(extra or [])
+    raw += os.environ.get("AGENTSTACK_CODEX_ADD_DIRS", "").split(":")
+    seen: list[str] = []
+    for entry in raw:
+        if not entry:
+            continue
+        expanded = os.path.expanduser(entry)
+        if not os.path.isdir(expanded):
+            continue
+        resolved = os.path.realpath(expanded)
+        if resolved not in seen:
+            seen.append(resolved)
+    return seen
+
+
+def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
+    """Sandbox / approval / network / --add-dir flags for a product-launched Codex.
+
+    Same policy as spawn_child.sh: AGENTSTACK_CODEX_CHILD_APPROVAL (default
+    `never` — an unattended agent has nobody to answer prompts),
+    AGENTSTACK_CODEX_NETWORK (default on; workspace-write blocks the network
+    otherwise and every curl / git fetch becomes a prompt or a failure)."""
+    approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
+    network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
+    parts = [f"--sandbox workspace-write --ask-for-approval {shlex.quote(approval)}"]
+    if network not in ("0", "off", "false", "no"):
+        parts.append("-c sandbox_workspace_write.network_access=true")
+    parts += [f"--add-dir {shlex.quote(d)}" for d in _codex_child_add_dirs(extra_dirs)]
+    return " ".join(parts)
+
+
 def _do_resume_codex(session: str) -> dict:
     """Codex agent を `codex resume <sid>` で tmux 再開する。
 
@@ -2071,18 +2115,13 @@ def _do_resume_codex(session: str) -> dict:
     # zsh -lic で .zshrc を読ませ codex を PATH 解決。bootstrap が無ければ
     # source をスキップ（AGENT_NAME export と resume は維持）。
     src = f'source {shlex.quote(bootstrap)}; ' if os.path.exists(bootstrap) else ''
-    add_dirs = ''
-    if VAULT:
-        add_dirs = f' --add-dir {shlex.quote(VAULT)}'
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={session}; '
         f'{src}'
         f'exec env -u OPENAI_API_KEY codex resume {sid} '
         f'-C {shlex.quote(cwd)} '
-        '--sandbox workspace-write --ask-for-approval on-request '
-        f'{add_dirs} '
-        '--add-dir "$HOME/.claude" --add-dir "$HOME/.codex"'
+        f'{_codex_child_launch_flags()}'
     )
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,

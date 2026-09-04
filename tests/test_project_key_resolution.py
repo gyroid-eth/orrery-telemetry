@@ -295,3 +295,83 @@ def test_relative_spawn_dir_entries_stop_the_installer(
     assert result.returncode == 2, result.stdout + result.stderr
     assert "AGENTSTACK_SPAWN_ROOTS entries must be absolute paths or start with ~ (got: code)" in result.stderr
     assert "spawn roots:" not in result.stdout
+
+
+_DRY_RUN_CALLS = 0
+
+
+def _dry_run(tmp_path: pathlib.Path, env_sh: str, *args: str,
+             extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    # One sandbox per call: _fake_installer_bin refuses to recreate fake-bin.
+    global _DRY_RUN_CALLS
+    _DRY_RUN_CALLS += 1
+    root = tmp_path / f"run{_DRY_RUN_CALLS}"
+    home = root / "home"
+    project = tmp_path / "project"
+    (home / ".agentstack").mkdir(parents=True)
+    project.mkdir(exist_ok=True)
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={project}\n" + env_sh, encoding="utf-8"
+    )
+    env = _fake_installer_env(home, _fake_installer_bin(root))
+    env.update(extra_env or {})
+    return subprocess.run(
+        ["/bin/bash", str(INSTALLER), "--dashboard-only", "--dry-run", *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_codex_child_policy_defaults_are_written_out_explicitly(
+    tmp_path: pathlib.Path,
+) -> None:
+    # A child runs unattended: the product default is `never` + network on,
+    # and the installer says so instead of leaving the keys empty.
+    result = _dry_run(tmp_path, "")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "codex child approval: never" in result.stdout
+    assert "codex network: on" in result.stdout
+    assert "codex add dirs: (none beyond" in result.stdout
+
+
+def test_codex_child_policy_is_inherited_then_overridden_by_flags(
+    tmp_path: pathlib.Path,
+) -> None:
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    installed = (
+        "export AGENTSTACK_CODEX_CHILD_APPROVAL=on-request\n"
+        "export AGENTSTACK_CODEX_NETWORK=off\n"
+        f"export AGENTSTACK_CODEX_ADD_DIRS={extra}\n"
+    )
+    inherited = _dry_run(tmp_path, installed)
+    assert inherited.returncode == 0, inherited.stdout + inherited.stderr
+    assert "codex child approval: on-request" in inherited.stdout
+    assert "codex network: off" in inherited.stdout
+    assert f"codex add dirs: {extra}" in inherited.stdout
+
+    overridden = _dry_run(
+        tmp_path, installed,
+        "--codex-approval", "never", "--codex-network", "on",
+        "--codex-add-dirs", f"{extra}:{tmp_path / 'not-yet'}",
+    )
+    assert overridden.returncode == 0, overridden.stdout + overridden.stderr
+    assert "codex child approval: never" in overridden.stdout
+    assert "codex network: on" in overridden.stdout
+    assert f"codex add dirs: {extra}:{tmp_path / 'not-yet'}" in overridden.stdout
+    assert f"directory does not exist yet: {tmp_path / 'not-yet'}" in overridden.stderr
+
+
+def test_codex_child_policy_rejects_unknown_values(tmp_path: pathlib.Path) -> None:
+    bad_approval = _dry_run(tmp_path, "", "--codex-approval", "yolo")
+    assert bad_approval.returncode == 2
+    assert "--codex-approval must be never, on-request, on-failure or untrusted (got: yolo)" in bad_approval.stderr
+    bad_network = _dry_run(tmp_path, "", "--codex-network", "maybe")
+    assert bad_network.returncode == 2
+    assert "--codex-network must be on or off (got: maybe)" in bad_network.stderr
+    relative = _dry_run(tmp_path, "", "--codex-add-dirs", "relative/dir")
+    assert relative.returncode == 2
+    assert "AGENTSTACK_CODEX_ADD_DIRS entries must be absolute paths or start with ~ (got: relative/dir)" in relative.stderr

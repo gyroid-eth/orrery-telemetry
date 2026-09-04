@@ -124,6 +124,103 @@ def test_approval_flags_follow_the_installed_cli():
     assert _flags("  -s, --sandbox <MODE>") == ""
 
 
+def _flags_with_env(help_text: str | None, env: dict[str, str]) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        run_env = {"HOME": tmp, **env}
+        if help_text is None:
+            # No codex anywhere: an empty PATH plus an empty ~/.local/bin.
+            run_env["PATH"] = "/usr/bin:/bin"
+        else:
+            _codex_stub(tmpdir, help_text)
+            run_env["PATH"] = f"{tmpdir}:/usr/bin:/bin"
+        script = _extract("codex_approval_flags") + "\ncodex_approval_flags\n"
+        return _run_bash(script, run_env).stdout.strip()
+
+
+_MODERN_HELP = "  -s, --sandbox <MODE>\n      --ask-for-approval <POLICY>"
+
+
+def test_approval_policy_comes_from_the_installer_setting():
+    assert _flags_with_env(_MODERN_HELP, {"AGENTSTACK_CODEX_CHILD_APPROVAL": "on-request"}) == \
+        "--ask-for-approval on-request"
+    # Empty setting is the product default, not "let codex decide".
+    assert _flags_with_env(_MODERN_HELP, {"AGENTSTACK_CODEX_CHILD_APPROVAL": ""}) == \
+        "--ask-for-approval never"
+
+
+def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
+    # The dashboard runs under launchd's minimal PATH. Probing `codex --help`
+    # there used to yield an empty string, and the child silently fell back to
+    # Codex's own on-request default (2026-09-04).
+    assert _flags_with_env(None, {}) == "--ask-for-approval never"
+
+
+def test_explicit_codex_bin_is_probed_instead_of_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        _codex_stub(tmpdir, "  -s, --sandbox <MODE>\n      --full-auto")
+        script = _extract("codex_approval_flags") + "\ncodex_approval_flags\n"
+        out = _run_bash(script, {"PATH": "/usr/bin:/bin", "HOME": tmp,
+                                 "AGENTSTACK_CODEX_BIN": str(tmpdir / "codex")}).stdout.strip()
+    assert out == "--full-auto"
+
+
+def test_network_flag_defaults_on_and_honours_off():
+    script = _extract("codex_network_flags") + "\ncodex_network_flags\n"
+    assert _run_bash(script, {}).stdout.strip() == \
+        "-c sandbox_workspace_write.network_access=true"
+    for off in ("off", "0", "false"):
+        assert _run_bash(script, {"AGENTSTACK_CODEX_NETWORK": off}).stdout.strip() == ""
+
+
+def test_child_add_dirs_cover_project_presets_roots_and_operator_extras():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        project = root / "proj with space"
+        preset = root / "code"
+        typeahead_root = root / "roots"
+        extra = root / "extra"
+        child_home = root / "child.codex-home"
+        for d in (project, preset, typeahead_root, extra, child_home,
+                  root / ".claude", root / ".codex", root / ".agentstack"):
+            d.mkdir()
+        script = (
+            f"HOME={shlex.quote(tmp)}\n"
+            f"PROJECT_KEY={shlex.quote(str(project))}\n"
+            "WORKTREE_BASE=/nonexistent/cc-worktrees\n"
+            f"AGENTSTACK_HOME_DIR={shlex.quote(str(root / '.agentstack'))}\n"
+            + _extract("codex_child_add_dirs")
+            + f"\ncodex_child_add_dirs {shlex.quote(str(child_home))}\n"
+        )
+        env = {
+            "HOME": tmp,
+            "AGENTSTACK_SPAWN_DIRS": f"~/code:{project}:/does/not/exist",
+            "AGENTSTACK_SPAWN_ROOTS": str(typeahead_root),
+            "AGENTSTACK_CODEX_ADD_DIRS": str(extra),
+        }
+        out = _run_bash(script, env).stdout.strip()
+    got = out.split(":")
+    real = lambda p: os.path.realpath(str(p))  # noqa: E731
+    assert got == [real(project), real(preset), real(typeahead_root),
+                   real(root / ".agentstack"), real(root / ".claude"),
+                   real(root / ".codex"), real(child_home), real(extra)]
+    # Missing entries are dropped, and the project appears once even though
+    # it is also listed as a preset.
+    assert "/does/not/exist" not in out
+
+
+def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert "launch_codex_workspace.sh" not in text.replace(
+        "a user-side launcher (~/.codex/bin/...)", ""
+    ), "spawn_child.sh still defers to the user's ~/.codex/bin launcher"
+    # Both launch paths apply network flags and the resolved writable roots.
+    assert text.count("${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS}") == 2
+    assert text.count("${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}") == 2
+    assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
+
+
 def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
     functions = ["normalize_claude_model", "normalize_codex_model",
                  "validate_codex_effort"]

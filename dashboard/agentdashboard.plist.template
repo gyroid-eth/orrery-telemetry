@@ -56,6 +56,12 @@
     <string>__SPAWN_DIRS__</string>
     <key>AGENTSTACK_SPAWN_ROOTS</key>
     <string>__SPAWN_ROOTS__</string>
+    <key>AGENTSTACK_CODEX_CHILD_APPROVAL</key>
+    <string>__CODEX_CHILD_APPROVAL__</string>
+    <key>AGENTSTACK_CODEX_NETWORK</key>
+    <string>__CODEX_NETWORK__</string>
+    <key>AGENTSTACK_CODEX_ADD_DIRS</key>
+    <string>__CODEX_ADD_DIRS__</string>
     <key>AGENTSTACK_PORTRAITS_DIR</key>
     <string>__PORTRAITS_DIR__</string>
     <key>AGENTSTACK_CUSTOM_PORTRAITS</key>

@@ -622,16 +622,88 @@ cleanup_worktree() {
 # Probe --help instead of pinning a version, so both old and new CLIs work.
 # Printed as one line and handed to the child through the tmux environment, so
 # the inner zsh can word-split it with ${=AGENTSTACK_CODEX_APPROVAL}.
+#
+# The policy comes from AGENTSTACK_CODEX_CHILD_APPROVAL (installer setting,
+# default `never`): a spawned child works unattended, so every "may I run this"
+# prompt is a stall nobody is watching. The probe resolves the binary the same
+# way the child will (PATH plus ~/.local/bin, or AGENTSTACK_CODEX_BIN); when
+# the dashboard's minimal launchd PATH cannot find codex at all, the modern flag
+# is emitted instead of nothing — an empty result silently reverted every child
+# to Codex's own `on-request` default (2026-09-04).
 codex_approval_flags() {
-    local help_text
-    help_text="$(codex --help 2>/dev/null || true)"
+    local help_text codex_bin policy
+    policy="${AGENTSTACK_CODEX_CHILD_APPROVAL:-never}"
+    codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+    if [[ -z "$codex_bin" ]]; then
+        codex_bin="$(PATH="$PATH:$HOME/.local/bin" command -v codex 2>/dev/null || true)"
+    fi
+    if [[ -z "$codex_bin" ]]; then
+        printf '%s\n' "--ask-for-approval $policy"
+        return 0
+    fi
+    help_text="$("$codex_bin" --help 2>/dev/null || true)"
     if printf '%s' "$help_text" | grep -q -- "--ask-for-approval"; then
-        printf '%s\n' "--ask-for-approval never"
+        printf '%s\n' "--ask-for-approval $policy"
     elif printf '%s' "$help_text" | grep -q -- "--full-auto"; then
         printf '%s\n' "--full-auto"
     fi
     # Neither flag: emit nothing and let codex use its own defaults rather than
     # passing an argument this build will reject.
+}
+
+# Writable roots for a Codex child, ':'-separated, handed to the child through
+# the tmux environment (AGENTSTACK_CODEX_ADD_DIRS_RESOLVED). The child turns each
+# entry into `--add-dir`; a ':' list survives spaces in directory names where a
+# word-split flag string would not.
+#
+# Order and membership mirror what an unattended child actually touches: the
+# project, every NEW AGENT launch preset and typeahead root, the install dir
+# (runtime state, spool, tokens), the worktree base, the user's Claude and
+# Codex homes, the child's own CODEX_HOME, then anything the operator added
+# with AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped so codex does
+# not refuse to start on a path that is not there yet.
+codex_child_add_dirs() {
+    local child_codex_home="$1" raw entry expanded resolved
+    local -a candidates=() seen=()
+    raw="${AGENTSTACK_PROJECT_KEY:-$PROJECT_KEY}"
+    raw="$raw:${AGENTSTACK_SPAWN_DIRS:-}:${AGENTSTACK_SPAWN_ROOTS:-}"
+    raw="$raw:${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}:$WORKTREE_BASE"
+    raw="$raw:$HOME/.claude:$HOME/.codex:$child_codex_home"
+    raw="$raw:${AGENTSTACK_CODEX_ADD_DIRS:-}"
+    IFS=':' read -r -a candidates <<< "$raw"
+    for entry in "${candidates[@]}"; do
+        [[ -n "$entry" ]] || continue
+        expanded="$entry"
+        if [[ "$entry" == "~" ]]; then
+            expanded="$HOME"
+        elif [[ "$entry" == "~/"* ]]; then
+            expanded="$HOME/${entry#\~/}"
+        fi
+        [[ -d "$expanded" ]] || continue
+        # Codex compares realpaths (macOS /tmp -> /private/tmp), so hand it the
+        # resolved form and use that for de-duplication too.
+        resolved="$(cd "$expanded" 2>/dev/null && pwd -P)" || continue
+        local dup=false
+        local kept
+        for kept in ${seen[@]+"${seen[@]}"}; do
+            [[ "$kept" == "$resolved" ]] && { dup=true; break; }
+        done
+        [[ "$dup" == true ]] && continue
+        seen+=("$resolved")
+    done
+    local IFS=':'
+    printf '%s\n' "${seen[*]-}"
+}
+
+# Sandbox network flag for a Codex child. workspace-write blocks the network
+# by default, which turns every curl / git fetch / ssh into an approval prompt
+# (or a hard failure under `never`). AGENTSTACK_CODEX_NETWORK (installer
+# setting, default on) controls it.
+codex_network_flags() {
+    case "${AGENTSTACK_CODEX_NETWORK:-1}" in
+        0|off|false|no) ;;
+        *) printf '%s\n' "-c sandbox_workspace_write.network_access=true" ;;
+    esac
 }
 
 # True while the child's tmux session still exists. A child that died (bad
@@ -1323,7 +1395,7 @@ PY
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
@@ -1334,6 +1406,7 @@ PY
         # Codex startup (--pre-registered mode).
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
             echo "[spawn_child/pre-reg] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
             TMUX_ENV_ARGS+=(
@@ -1360,18 +1433,17 @@ ${TASK}"
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
-                if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
-                    env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
-                else
-                    EXTRA_ARGS=()
-                    if [[ -n "${AGENTSTACK_PROJECT_KEY:-}" && -d "$AGENTSTACK_PROJECT_KEY" ]]; then
-                        EXTRA_ARGS+=(--add-dir "$AGENTSTACK_PROJECT_KEY")
-                    fi
-                    [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
-                    [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
-                    env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
-                        "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
-                fi
+                # The product decides sandbox, approval, network and writable
+                # roots itself; a user-side launcher (~/.codex/bin/...) is never
+                # consulted. Handing off to one silently replaced `never` with
+                # its `on-request` default and dropped the network flag and the
+                # extra roots (2026-09-04).
+                EXTRA_ARGS=()
+                for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
+                    [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
+                done
+                env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
         PRE_REGISTERED_SESSION_STARTED=true
@@ -2134,7 +2206,7 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
-TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)")
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi
@@ -2144,6 +2216,7 @@ fi
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
     if [[ -n "$CHILD_CODEX_HOME" ]]; then
         echo "[spawn_child] Child CODEX_HOME with authenticated agent-mail: $CHILD_CODEX_HOME" >&2
         TMUX_ENV_ARGS+=(
@@ -2161,18 +2234,14 @@ if [[ "$USE_CODEX" == true ]]; then
         '/bin/zsh -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
             # See the pre-registered path: no user-side bootstrap is sourced.
-            if [[ -f "$HOME/.codex/bin/launch_codex_workspace.sh" ]]; then
-                env -u OPENAI_API_KEY /bin/bash "$HOME/.codex/bin/launch_codex_workspace.sh" "$PWD" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
-            else
-                EXTRA_ARGS=()
-                if [[ -n "${AGENTSTACK_PROJECT_KEY:-}" && -d "$AGENTSTACK_PROJECT_KEY" ]]; then
-                    EXTRA_ARGS+=(--add-dir "$AGENTSTACK_PROJECT_KEY")
-                fi
-                [[ -d "$HOME/.claude" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.claude")
-                [[ -d "$HOME/.codex" ]] && EXTRA_ARGS+=(--add-dir "$HOME/.codex")
-                env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} \
-                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
-            fi
+            # See the pre-registered path: the product owns the launch flags and
+            # never hands off to a user-side launcher.
+            EXTRA_ARGS=()
+            for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
+                [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
+            done
+            env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+                "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
     CHILD_SESSION_STARTED=true

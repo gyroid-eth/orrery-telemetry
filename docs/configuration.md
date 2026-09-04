@@ -140,7 +140,7 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | `AGENTSTACK_CODEX_BIN` | `codex` | Codex CLI |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap の既定 | Codex 登録 model |
 | `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
-| `AGENTSTACK_CODEX_APPROVAL` | `on-request` | Codex `--ask-for-approval` |
+| `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `agent-start-codex`（利用者自身の対話 session）の `--ask-for-approval`。spawn される child は `AGENTSTACK_CODEX_CHILD_APPROVAL`（Child spawn 参照） |
 | `AGENTSTACK_VAULT` | 未設定 | Codex へ追加する writable `--add-dir` |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | registration / hook endpoint |
 | `AGENTSTACK_CONTACT_POLICY` | `open` | 登録後の contact policy。`skip` で server default |
@@ -163,6 +163,11 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | `AGENTSTACK_FOCUS_CHILD` | 未設定 | `1` で child の terminal window を前面に出す。既定は背面で開き、手元の作業を奪いません |
 | `AGENTSTACK_STRICT_AGENT_NAMES` | 未設定 | `1` で off-list な child 名を警告ではなくエラーにする |
 | `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | `1` で monitor の危険コマンド検知を有効にする。既定は passive |
+| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | Codex child の `--ask-for-approval`。installer の `--codex-approval` で永続化 |
+| `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child の sandbox network（`-c sandbox_workspace_write.network_access=true`）。`--codex-network off` で切る |
+| `AGENTSTACK_CODEX_ADD_DIRS` | 未設定 | Codex child に追加で書込を許す root（`:` 区切り）。`--codex-add-dirs` で永続化 |
+
+Codex child の起動フラグは製品が組み立てます。`~/.codex/bin/` にある利用者側の launcher は参照しません（参照すると、その launcher の既定 `on-request` に静かに置き換わり、network flag と追加 root も落ちます）。child は無人で動くので既定は approval `never`・network on です。書込を許す root は「project、`AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`、install dir、worktree base、`~/.claude`、`~/.codex`、child 専用 `CODEX_HOME`、`AGENTSTACK_CODEX_ADD_DIRS`」で、存在しない directory は黙って外します。dashboard の Codex resume も同じ値を使います。これらは dashboard service の環境なので、shell で `export` しても届きません。installer に渡してください。
 
 `AGENTSTACK_TERMINAL=auto` は利用可能な OS terminal を選び、child window を背面で開きます。これは意図的な既定です。dashboard / ORRERY を持たない導入直後の利用者にも child が起動したことを見せるためで、headless を既定にすると正常な spawn が「何も起きなかった」ように見えます。常用 dashboard から監視する環境や headless host だけ、`AGENTSTACK_TERMINAL=none` を明示してください。
 

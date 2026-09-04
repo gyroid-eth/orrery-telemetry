@@ -70,6 +70,9 @@
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_SPAWN_DIRS": "",
     "AGENTSTACK_SPAWN_ROOTS": "",
+    "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
+    "AGENTSTACK_CODEX_NETWORK": "on",
+    "AGENTSTACK_CODEX_ADD_DIRS": "",
     "AGENTSTACK_TERMINAL": "auto"
   },
   "install_dir": "/home/alice/.agentstack",
