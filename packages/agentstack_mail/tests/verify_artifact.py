@@ -18,7 +18,7 @@ EXPECTED_PERSONAL_IDENTIFIER_ALLOWLIST_REASON = (
     "cutover performance baseline."
 )
 EXPECTED_PERFORMANCE_WORKSPACE_SHA256 = (
-    "23c184225c8d431bd7573720b32c5e2d2a2befc1ea3f4e7d7fb0bc2a212cb9b1"
+    "404120af42bc03a55c319733f52176c287437ca25fc1de250c32591ac6da7796"
 )
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
