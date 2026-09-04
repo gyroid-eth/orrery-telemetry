@@ -19,7 +19,7 @@
     },
     "core": {
       "python_namespace": "agentstack_mail",
-      "approved_base": "6393f1ea3db6c0fce3188061237299cfae150db9",
+      "approved_base": "704e1ba1873b07c1de9f09dde5b59f748dcfab25",
       "contract_fixture": "compatibility-tools-v1.json"
     }
   },
