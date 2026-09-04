@@ -48,7 +48,7 @@ Check the machine first and tell the user what you found. Every one of these
 has already broken a real install.
 
 ```sh
-python3 --version                     # must be 3.10 or newer
+python3 --version                     # must be 3.11 or newer
 command -v tmux git uv                # all three are required
 lsof -i :8770                         # dashboard port; must be free
 lsof -i :18765                        # agent-mail (default port; see below)
@@ -60,7 +60,7 @@ existing `AGENTSTACK_MCP_URL`), the user likely has agent-mail running. That is
 good and normal — the installer will detect it and reuse both the server and
 its database. Do not stop it. Do not start a second one.
 
-**If `python3` is older than 3.10**, do not upgrade their system Python.
+**If `python3` is older than 3.11**, do not upgrade their system Python.
 Point `AGENTSTACK_PYTHON` at a newer interpreter they already have, or tell
 them what to install.
 

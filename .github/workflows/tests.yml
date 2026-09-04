@@ -13,9 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # README が「3.10 以上」と書く以上、両端を機械で押さえる。"3.x" 単独だと
+        # README が「3.11 以上」と書く以上、両端を機械で押さえる。"3.x" 単独だと
         # 下限は誰も踏まないし、新しい Python が出た日に上限が黙って動く。
-        python-version: ["3.10", "3.12", "3.14"]
+        # 3.10 は 2026-09-04 に対応から外した（import は通るが mail のテストが 38 件落ちる）。
+        python-version: ["3.11", "3.12", "3.14"]
     name: tests (python ${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4

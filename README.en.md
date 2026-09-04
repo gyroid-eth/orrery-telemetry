@@ -20,7 +20,7 @@ The central design principle is to make operating rules executable through launc
 | Native Windows | **Unsupported.** |
 | Other operating systems | **Unsupported.** The installer preflight stops before writing. |
 
-Python **3.10 or newer** is required. There is no declared upper bound; the full suite is verified on 3.10, 3.12, 3.13, and 3.14, while CI runs 3.10, 3.12, and 3.14.
+Python **3.11 or newer** is required. There is no declared upper bound; the full suite is verified on 3.12, 3.13, and 3.14, while CI runs 3.11, 3.12, and 3.14. 3.10 imports but the mail service tests do not pass, so it is not supported (2026-09-04).
 
 The required commands are `git` and `tmux`. `uv` is additionally required only when the installer must provision agent-mail. At runtime, at least one of Claude Code or the Codex CLI is required. `systemctl` enables the Linux user service, with the supervisor as its supported fallback. `fswatch` (mail watcher), `fzf` (directory picker), Ghostty, and Obsidian are optional.
 

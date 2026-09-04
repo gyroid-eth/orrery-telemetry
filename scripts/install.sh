@@ -49,7 +49,7 @@ MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 # These match packages/agentstack_mail/pyproject.toml. A regression test keeps
 # the shell gate and package metadata in lock-step.
 PYTHON_MIN_MAJOR=3
-PYTHON_MIN_MINOR=10
+PYTHON_MIN_MINOR=11
 
 # CI may bypass one preflight category at a time when it deliberately supplies
 # a fake platform boundary. Skipping a check never supplies the dependency the
@@ -557,14 +557,12 @@ select_python() {
   local seen=""
   local raw
   for raw in \
-    python3 python3.14 python3.13 python3.12 python3.11 python3.10 \
+    python3 python3.14 python3.13 python3.12 python3.11 \
     /opt/homebrew/bin/python3 /usr/local/bin/python3 /opt/local/bin/python3 \
     /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
     /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
-    /opt/homebrew/bin/python3.10 \
     /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
-    /usr/local/bin/python3.12 /usr/local/bin/python3.11 \
-    /usr/local/bin/python3.10
+    /usr/local/bin/python3.12 /usr/local/bin/python3.11
   do
     candidate="$(resolve_python_candidate "$raw")"
     [[ -n "$candidate" ]] || continue

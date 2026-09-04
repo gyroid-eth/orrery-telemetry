@@ -11,10 +11,7 @@ import subprocess
 import sys
 import threading
 
-try:  # pragma: no cover - Python 3.11+ uses the stdlib module.
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
-    import tomli as tomllib
+import tomllib
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -117,7 +114,7 @@ esac
 
     assert result.returncode != 0
     assert "preflight failed with 1 problem(s)" in result.stderr
-    assert "AGENTSTACK_PYTHON must be Python 3.10 or newer" in result.stderr
+    assert "AGENTSTACK_PYTHON must be Python 3.11 or newer" in result.stderr
     assert "found 3.9.18" in result.stderr
     assert "Install a current Python" in result.stderr
 

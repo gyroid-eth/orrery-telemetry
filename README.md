@@ -20,7 +20,7 @@
 | Windows native | **未対応**。 |
 | その他の OS | **未対応**。installer の preflight が書き込み前に停止します。 |
 
-Python は **3.10 以上**が必須です。上限は設けておらず、全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14（CI は 3.10 / 3.12 / 3.14）です。
+Python は **3.11 以上**が必須です。上限は設けておらず、全 suite を実測済みなのは 3.12 / 3.13 / 3.14（CI は 3.11 / 3.12 / 3.14）です。3.10 は import こそ通るものの mail service のテストが通らないため対応外です（2026-09-04）。
 
 必須 command は `git` と `tmux` です。agent-mail を新規 provision する場合だけ `uv` も必須です。実行時には Claude Code または Codex CLI の少なくとも一方が必要です。`systemctl` は Linux の user service 用ですが、利用できなければ supervisor が代替します。`fswatch`（mail watcher）、`fzf`（directory picker）、Ghostty、Obsidian は任意です。
 

@@ -12,7 +12,7 @@
 
 必須:
 
-- Python 3.10 以上（`python3`）。全 suite を実測済みなのは 3.10 / 3.12 / 3.13 / 3.14 です。上限は設けていません（CI が 3.10・3.12・3.14 を毎回回すので、新しい Python で壊れた場合はそこで落ちます）
+- Python 3.11 以上（`python3`）。全 suite を実測済みなのは 3.12 / 3.13 / 3.14 です。上限は設けていません（CI が 3.11・3.12・3.14 を毎回回すので、新しい Python で壊れた場合はそこで落ちます）
 - `tmux`
 - `git`
 - `uv`（同梱の ORRERY Mail 用の Python 環境を作るために使います）
@@ -27,7 +27,7 @@
 
 macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使う実装ですが、実 Linux ホストでは未検証です（CI は `systemctl` をスタブにした unit 生成テストのみ）。WSL2 も未検証で、設計上は localhost dashboard が使え、Ghostty の click-to-jump は使えない想定です。Windows native は対象外です。
 
-`AGENTSTACK_PYTHON` を指定した場合も Python 3.10 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
+`AGENTSTACK_PYTHON` を指定した場合も Python 3.11 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
 ## インストール
 
@@ -88,7 +88,7 @@ CI や script から入れる場合、既定のままだと 4 つの承認（Cla
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes
 ```
 
-`--assume-yes`（短縮 `-y`、環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ）は approval の事前付与であり、`--force` ではありません。Python 3.10 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した項目は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を付けてはいけません。command-line の指定は環境変数より優先され、生成する `env.sh` には残しません。
+`--assume-yes`（短縮 `-y`、環境変数 `AGENTSTACK_ASSUME_YES=1` も同じ）は approval の事前付与であり、`--force` ではありません。Python 3.11 未満、dashboard port の競合、既存 agent-mail DB の複数候補・不存在・稼働 server との不一致、自動 setup の失敗は従来どおり停止します。自動承認した項目は `assume-yes:` 行として個別に出力されます。agent や自動化が「便利だから」とユーザーの明示選択なしにこの option を付けてはいけません。command-line の指定は環境変数より優先され、生成する `env.sh` には残しません。
 
 ## Install tier と option
 
