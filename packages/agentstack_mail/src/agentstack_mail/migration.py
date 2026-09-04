@@ -176,6 +176,21 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _normalize_git_iso8601(value: str) -> str:
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise VerificationError(
+            f"baseline Git commit timestamp is malformed: {value!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise VerificationError(
+            f"baseline Git commit timestamp is not timezone-aware: {value!r}"
+        )
+    return parsed.isoformat(timespec="seconds")
+
+
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -925,10 +940,10 @@ def _git_snapshot(root: Path, *, require_baseline: bool = False) -> dict[str, An
             "root_count": roots,
             "author_name": metadata[0],
             "author_email": metadata[1],
-            "author_date": metadata[2],
+            "author_date": _normalize_git_iso8601(metadata[2]),
             "committer_name": metadata[3],
             "committer_email": metadata[4],
-            "committer_date": metadata[5],
+            "committer_date": _normalize_git_iso8601(metadata[5]),
             "subject": metadata[6],
             "message": message,
             "tree": _baseline_tree_snapshot(root),
