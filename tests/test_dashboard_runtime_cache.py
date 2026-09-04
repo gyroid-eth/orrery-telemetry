@@ -71,3 +71,24 @@ def test_truncated_model_status_has_bounded_context_window_match():
 
     prose = server._parse_runtime("Please test this code with 2M context later")
     assert prose["ctx_window"] is None
+
+
+def test_fable_statusline_wins_over_model_names_in_conversation():
+    # 2026-09-04 実害: Fable 親の会話中に "gpt-5.6-sol" が出ると、statusline の
+    # "Fable 5.1" を読めずに gpt を実モデルと誤読し、cockpit で Codex 表示になった。
+    parsed = server._parse_runtime(
+        "⏺ 英語 docs は gpt-5.6-sol の子に委任した\n"
+        "❯ \n"
+        "  Agents & Obsidian | Fable 5.1 | ctx: 13% used\n"
+    )
+    assert parsed["pane_model"] == "Fable 5.1"
+    assert server._provider_of(parsed["pane_model"]) == "anthropic"
+
+    codex = server._parse_runtime(
+        "• Opus 4.6 との比較を書いた\n"
+        "gpt-5.6 xhigh · Context 46% left · ~/OSS\n"
+    )
+    assert codex["pane_model"] == "gpt-5.6"
+
+    # statusline が無いペインは従来どおり末尾の最初の一致
+    assert server._parse_runtime("running Sonnet 5 here")["pane_model"] == "Sonnet 5"

@@ -3024,11 +3024,33 @@ _WIN_TRUNC_RE = re.compile(
 #   Claude Code: "| Opus 4.6 | ctx: 59% used"
 #   Codex:       "gpt-5.4 xhigh · Context 46% left"
 # 登録時 model 文字列は warm pool claim 等で書き換わるため信用しない。
+#   2026-09-04: Fable/Mythos を追加。未知の Claude family だと statusline を
+#   素通りし、末尾10行の会話中に出た "gpt-5.6" を実モデルと誤読して provider
+#   まで openai に化けた（ProOpus が cockpit で Codex 表示になった実害）。
+#   同時に、ctx 表示と同じ行（= statusline）を最優先で読むようにし、会話中の
+#   モデル名（"gpt-5.6-sol に委任"）を statusline より先に拾わないようにする。
 _MODEL_PANE_RE = re.compile(
-    r"\b(Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)?)\b"
+    r"\b(Opus|Sonnet|Haiku|Fable|Mythos)\s+(\d+(?:\.\d+)?)\b"
     r"|\b(gpt-\d+(?:\.\d+)?)(?:-(codex|mini|nano|turbo|thinking))?\b",
     re.IGNORECASE,
 )
+_STATUSLINE_HINT_RE = re.compile(
+    r"ctx:\s*\d+%\s*used|Context\s+\d+%\s*(?:left|used)", re.IGNORECASE)
+
+
+def _pane_model_from(tail: str) -> str | None:
+    """末尾行群から実モデル名を読む。statusline（ctx 表示のある行）があれば
+    その行だけを見る。無ければ末尾全体から最初の一致を採る。"""
+    candidates = [ln for ln in tail.splitlines() if _STATUSLINE_HINT_RE.search(ln)]
+    for src in (*candidates, tail):
+        mm = _MODEL_PANE_RE.search(src)
+        if not mm:
+            continue
+        if mm.group(1):  # Claude family
+            return f"{mm.group(1).title()} {mm.group(2)}"
+        base, variant = mm.group(3), mm.group(4)
+        return f"{base}-{variant}" if variant else base
+    return None
 
 # 稼働経過時間。work 中: スピナー行の先頭尺。
 #   Claude: "(2m 24s · ↓ … tokens …)"（区切り · = U+00B7）
@@ -3084,15 +3106,7 @@ def _parse_runtime(text: str) -> dict:
     ctx_window = re.sub(r"\s+", "", w.group(1)).upper() if w else None
     # ペイン由来の実モデル (steruslineから抽出。末尾10行に限定して
     # スクロールバッファ内のコード片やテキスト中の誤マッチを避ける)
-    pane_model = None
-    mm = _MODEL_PANE_RE.search(tail_for_model)
-    if mm:
-        if mm.group(1):  # Claude family (Opus/Sonnet/Haiku)
-            pane_model = f"{mm.group(1).title()} {mm.group(2)}"
-        else:  # gpt-x[.y][-variant]
-            base = mm.group(3)
-            variant = mm.group(4)
-            pane_model = f"{base}-{variant}" if variant else base
+    pane_model = _pane_model_from(tail_for_model)
     # AskUserQuestion ウィジェットは常にペイン最下部に表示される。スクロール
     # バッファ上部の自己マッチ（過去の出力にコードや報告文として regex 自体が
     # 書かれているケース等）を避けるため、末尾 12 行に絞って検出する。
