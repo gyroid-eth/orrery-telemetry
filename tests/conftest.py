@@ -21,7 +21,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 import threading
 import time
 
@@ -61,6 +60,30 @@ def pytest_runtest_logstart(nodeid, location):  # noqa: ARG001 - pytest hook
 # is watching.
 LAUNCHCTL = shutil.which("launchctl")
 
+
+def _private_subprocess():
+    """A second, unshared instance of the stdlib subprocess module.
+
+    Same reasoning as LAUNCHCTL, one layer down: tests replace `run` and
+    `Popen` on the shared module (tests/test_spawn_v2.py returns a stub with
+    no `.stdout`; tests/test_reservation_activity.py wraps Popen to count
+    concurrency). A watcher sampling through the shared module during those
+    windows either crashed and reported the run as unwatched, or was counted
+    as one of the probes it was watching (`assert 9 == 8`). Capturing `run`
+    alone is not enough because `run` looks `Popen` up on its module at call
+    time, so the instrument gets its own module object.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("subprocess")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_SUBPROCESS = _private_subprocess()
+_RUN = _SUBPROCESS.run
+
 UNKNOWN = "unknown"
 
 
@@ -76,13 +99,13 @@ def _job_pid(label: str) -> int | str | None:
     if not LAUNCHCTL:
         return UNKNOWN
     try:
-        result = subprocess.run(
+        result = _RUN(
             [LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, _SUBPROCESS.SubprocessError):
         return UNKNOWN
     if result.returncode != 0:
         # launchctl answers "no such service" with 113. Anything else is the
@@ -155,13 +178,13 @@ def _listener_pids(port: int = 8765) -> tuple[int, ...] | str:
     if not os.path.exists(LSOF):
         return UNKNOWN
     try:
-        result = subprocess.run(
+        result = _RUN(
             [LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, _SUBPROCESS.SubprocessError):
         return UNKNOWN
     # lsof exits 1 for "nothing matched" and uses other nonzero codes for its
     # own failures. Reading both as "no listener" is the mistake this file is
