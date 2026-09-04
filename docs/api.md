@@ -1,6 +1,6 @@
 # API reference
 
-> English version: planned.
+> English version: [api.en.md](api.en.md)
 
 [前: Dashboard](dashboard.md) · [README に戻る](../README.md) · [次: 設定](configuration.md)
 

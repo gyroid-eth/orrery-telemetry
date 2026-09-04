@@ -6,7 +6,7 @@ A coordination layer and live telemetry dashboard for local Claude Code and Code
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
-**Try it in the browser (nothing to install)**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) — the real dashboard driven by scripted data. Pick a story (bug report / research) and a language; it loops through agents starting, mail crossing the graph, context draining and a child finishing, with captions saying what is happening. See [Dashboard](docs/dashboard.md#デモサーバー不要) for how it works.
+**Try it in the browser (nothing to install)**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) — the real dashboard driven by scripted data. Pick a story (bug report / research) and a language; it loops through agents starting, mail crossing the graph, context draining and a child finishing, with captions saying what is happening. See [Dashboard](docs/dashboard.en.md#demo-no-server-required) for how it works.
 
 The central design principle is to make operating rules executable through launchers, hooks, mail, and visualization instead of merely expecting LLMs to coordinate.
 
@@ -26,7 +26,7 @@ The required commands are `git` and `tmux`. `uv` is additionally required only w
 
 The installer begins by checking the OS, Python, required commands, the ORRERY Mail endpoint (default `127.0.0.1:18765`, state root `~/.agentstack/mail`), and install-directory writability, reporting all detected problems together. An occupied endpoint is expected when an existing `install-state.json` marks an update. On a fresh install, the installer does not guess ownership from the socket: it reuses the listener only after resolving a health response and its canonical database, and stops before its first write for an unrelated or unresolved listener.
 
-Only CI and isolated tests that deliberately replace a platform boundary should bypass an individual check with `AGENTSTACK_PREFLIGHT_SKIP_OS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`, `AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PORT=1`, or `AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1`. A bypass does not supply a dependency or make an unsupported environment supported. See [Installation](docs/install.md#動作環境) for details.
+Only CI and isolated tests that deliberately replace a platform boundary should bypass an individual check with `AGENTSTACK_PREFLIGHT_SKIP_OS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PYTHON=1`, `AGENTSTACK_PREFLIGHT_SKIP_COMMANDS=1`, `AGENTSTACK_PREFLIGHT_SKIP_PORT=1`, or `AGENTSTACK_PREFLIGHT_SKIP_WRITABLE=1`. A bypass does not supply a dependency or make an unsupported environment supported. See [Installation](docs/install.en.md#supported-environment) for details.
 
 ## Quick start
 
@@ -55,9 +55,9 @@ agent-start ~/code/my-project        # or agent-start-codex ~/code/my-project
 open http://127.0.0.1:8770/          # another terminal; DECK shows the parent and child cards
 ```
 
-`agent-start` gives the tmux session the same name as its agent-mail identity. That unambiguously connects dashboard jumps, mail-signal delivery, and token recovery. See [Installation](docs/install.md) and [Configuration](docs/configuration.md) for other setups, and [Delegation and child agents](docs/delegation.md) for how children differ from built-in subagents.
+`agent-start` gives the tmux session the same name as its agent-mail identity. That unambiguously connects dashboard jumps, mail-signal delivery, and token recovery. See [Installation](docs/install.en.md) and [Configuration](docs/configuration.en.md) for other setups, and [Delegation and child agents](docs/delegation.en.md) for how children differ from built-in subagents.
 
-To connect Codex Desktop root tasks and subagents to the same agent-mail project and dashboard, add the optional [Codex App integration](docs/codex-app.md). Codex CLI-only setups do not need this additional install.
+To connect Codex Desktop root tasks and subagents to the same agent-mail project and dashboard, add the optional [Codex App integration](docs/codex-app.en.md). Codex CLI-only setups do not need this additional install.
 
 ## Feature gallery
 
@@ -105,19 +105,19 @@ Murmurs follow the browser language automatically; override them with `?lang=` /
 
 ## Documentation
 
-The Japanese documentation is canonical. English versions of the detailed guides are planned.
+The Japanese documentation is canonical. English versions of the detailed guides are linked below.
 
 | Guide | Coverage |
 | --- | --- |
-| [Installation](docs/install.md) | Install tiers, settings merge, VERSION, TCC, upgrade, and uninstall |
-| [Launchers and identity](docs/launchers.md) | `agent-start`, naming, tokens, fail-closed checks, and `CLAUDECODE` |
-| [Delegation and child agents](docs/delegation.md) | How children differ from built-in subagents, how to tell which one is running, and when to use each |
-| [Hooks and operational helpers](docs/hooks.md) | Eight Claude event hooks, launcher/watcher helpers, triggers, blocking, release, and cleanup |
-| [Codex App integration](docs/codex-app.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
-| [Dashboard](docs/dashboard.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
-| [API reference](docs/api.md) | Every route, query/request fields, and response schemas |
-| [Configuration](docs/configuration.md) | `AGENTSTACK_*` environment variables and customization |
-| [Troubleshooting](docs/troubleshooting.md) | `NOT CONFIGURED`, services, notifications, spawn, and authentication |
+| [Installation](docs/install.en.md) | Install tiers, settings merge, VERSION, TCC, upgrade, and uninstall |
+| [Launchers and identity](docs/launchers.en.md) | `agent-start`, naming, tokens, fail-closed checks, and `CLAUDECODE` |
+| [Delegation and child agents](docs/delegation.en.md) | How children differ from built-in subagents, how to tell which one is running, and when to use each |
+| [Hooks and operational helpers](docs/hooks.en.md) | Eight Claude event hooks, launcher/watcher helpers, triggers, blocking, release, and cleanup |
+| [Codex App integration](docs/codex-app.en.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
+| [Dashboard](docs/dashboard.en.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
+| [API reference](docs/api.en.md) | Every route, query/request fields, and response schemas |
+| [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
+| [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, and authentication |
 | [Third-party components](docs/third-party.md) | agent-mail, licensing, and credits |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.

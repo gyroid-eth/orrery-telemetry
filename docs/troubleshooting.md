@@ -1,6 +1,6 @@
 # トラブルシューティング
 
-> English version: planned.
+> English version: [troubleshooting.en.md](troubleshooting.en.md)
 
 [前: 設定](configuration.md) · [README に戻る](../README.md) · [次: 第三者コンポーネント](third-party.md)
 

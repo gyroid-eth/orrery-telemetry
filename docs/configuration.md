@@ -1,6 +1,6 @@
 # 設定
 
-> English version: planned.
+> English version: [configuration.en.md](configuration.en.md)
 
 [前: API reference](api.md) · [README に戻る](../README.md) · [次: トラブルシューティング](troubleshooting.md)
 
