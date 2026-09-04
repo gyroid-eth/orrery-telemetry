@@ -12,7 +12,7 @@ macOS is the primary target. The launchers and hooks are implemented to work wit
 
 Required:
 
-- Python 3.10 or newer (`python3`). The full suite has been measured on 3.10 / 3.12 / 3.13 / 3.14. There is no upper bound (CI runs 3.10, 3.12, and 3.14 every time, so incompatibility with a newer Python will fail there)
+- Python 3.11 or newer (`python3`). The full suite has been measured on 3.12 / 3.13 / 3.14. There is no upper bound (CI runs 3.11, 3.12, and 3.14 every time, so incompatibility with a newer Python will fail there)
 - `tmux`
 - `git`
 - `uv` (used to create the Python environment for the bundled ORRERY Mail)
@@ -27,7 +27,7 @@ Optional:
 
 On macOS, the resident-service path is chosen by the actual result of bootstrapping into launchd's `gui/$UID` domain. If bootstrap is unavailable while the display sleeps, in an SSH-only environment, or for another reason, installation automatically switches to supervised-background mode, which detects and restarts an exited dashboard server. On Linux, the implementation uses a systemd user service or the same supervised-background mode when unavailable, but it is unverified on a real Linux host; CI only tests unit generation with a stubbed `systemctl`. WSL2 is also unverified. By design, the localhost dashboard should work while Ghostty click-to-jump should not. Native Windows is unsupported.
 
-An explicitly specified `AGENTSTACK_PYTHON` is also checked for Python 3.10 or newer. When unspecified, the installer checks `python3` on PATH, then also searches versioned commands, `/opt/homebrew/bin/python3`, and `/usr/local/bin/python3` if needed. If no compatible interpreter exists, it reports the inspected versions and paths and stops before generating service files.
+An explicitly specified `AGENTSTACK_PYTHON` is also checked for Python 3.11 or newer. When unspecified, the installer checks `python3` on PATH, then also searches versioned commands, `/opt/homebrew/bin/python3`, and `/usr/local/bin/python3` if needed. If no compatible interpreter exists, it reports the inspected versions and paths and stops before generating service files.
 
 ## Installation
 
@@ -88,7 +88,7 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes
 ```
 
-`--assume-yes` (short form `-y`; environment variable `AGENTSTACK_ASSUME_YES=1` is equivalent) grants approvals in advance; it is not `--force`. Python older than 3.10, a dashboard-port conflict, multiple or absent existing agent-mail database candidates, disagreement with the running server, and automatic-setup failure still stop installation. Every automatically approved item is printed separately as an `assume-yes:` line. Agents and automation must not add this option “for convenience” without the user's explicit choice. The command-line option takes precedence over the environment variable and is not persisted in generated `env.sh`.
+`--assume-yes` (short form `-y`; environment variable `AGENTSTACK_ASSUME_YES=1` is equivalent) grants approvals in advance; it is not `--force`. Python older than 3.11, a dashboard-port conflict, multiple or absent existing agent-mail database candidates, disagreement with the running server, and automatic-setup failure still stop installation. Every automatically approved item is printed separately as an `assume-yes:` line. Agents and automation must not add this option “for convenience” without the user's explicit choice. The command-line option takes precedence over the environment variable and is not persisted in generated `env.sh`.
 
 ## Installation tiers and options
 
@@ -107,12 +107,12 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 --port PORT             default: 8770
 --label-prefix PREFIX   default: org.agentstack
 --terminal MODE         auto | ghostty | iterm | terminal | none
---spawn-dirs PATHS      NEW AGENT の launch directory preset（`:` 区切り）
---spawn-roots PATHS     directory typeahead が閲覧できる root（`:` 区切り）
---codex-approval MODE   Codex child の `--ask-for-approval`（never | on-request | on-failure | untrusted、既定 never）
---codex-network MODE    Codex child の sandbox network（on | off、既定 on）
---codex-add-dirs PATHS  Codex child に追加で書込を許す root（`:` 区切り）
---retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
+--spawn-dirs PATHS      NEW AGENT launch-directory presets (`:`-separated)
+--spawn-roots PATHS     roots the directory typeahead may browse (`:`-separated)
+--codex-approval MODE   Codex child `--ask-for-approval` (never | on-request | on-failure | untrusted; default never)
+--codex-network MODE    Codex child sandbox network (on | off; default on)
+--codex-add-dirs PATHS  extra writable roots for Codex children (`:`-separated)
+--retire-legacy-mail    see the appendix (retire a previous MCP Agent Mail)
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 

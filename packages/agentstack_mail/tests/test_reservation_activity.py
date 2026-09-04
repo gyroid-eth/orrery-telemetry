@@ -124,10 +124,15 @@ def test_two_collectors_share_one_process_global_git_cap(
     real_git = shutil.which("git")
     assert real_git is not None
     slow_git = tmp_path / "slow-git"
+    # The hold has to outlast launching eight interpreters back to back. At
+    # 0.08s a GitHub-hosted macOS runner finished the first probe before the
+    # eighth had started, so the observed maximum was 7 and the test blamed
+    # the cap (three consecutive CI runs, 2026-09-04). 0.6s keeps the test
+    # under two seconds for 16 probes while leaving spawn latency headroom.
     slow_git.write_text(
         "#!/usr/bin/env python3\n"
         "import os, sys, time\n"
-        "time.sleep(0.08)\n"
+        "time.sleep(0.6)\n"
         f"os.execv({real_git!r}, ['git', *sys.argv[1:]])\n",
         encoding="utf-8",
     )
