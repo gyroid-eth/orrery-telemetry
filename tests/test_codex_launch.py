@@ -240,7 +240,8 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_claude_model", "opus-5[1m]"): "claude-opus-5[1m]",
         ("normalize_claude_model", "sonnet"): "claude-sonnet-5",
         ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
-        ("normalize_claude_model", "fable"): "claude-fable-5",
+        ("normalize_claude_model", "fable"): "claude-fable-5-1",
+        ("normalize_claude_model", "claude-fable-5"): "claude-fable-5-1",
         ("normalize_codex_model", ""): "gpt-5.6-sol",
         ("normalize_codex_model", "sol"): "gpt-5.6-sol",
         ("normalize_codex_model", "terra"): "gpt-5.6-terra",
@@ -328,7 +329,7 @@ tmux() {
 
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
-    ready = _extract("pane_nonblank_tail") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
+    ready = _extract("pane_nonblank_tail") + "\n" + _extract("pane_normalize_nbsp") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
     trust = _extract("claude_accept_trust_dialog")
 
     gated = _run_bash(
@@ -532,6 +533,7 @@ def _helpers() -> str:
         _extract(name)
         for name in (
             "pane_nonblank_tail",
+            "pane_normalize_nbsp",
             "codex_trust_dialog_present",
             "claude_trust_dialog_present",
         )
@@ -580,6 +582,8 @@ def _accept_with_screens(screens: list[str]) -> str:
     script = (
         "SCREENS=(" + " ".join(f'"$SCREEN_{i}"' for i in range(len(screens))) + ")\n"
         + "\n".join(stub_lines)
+        + "\n"
+        + _extract("pane_normalize_nbsp")
         + "\n"
         + _extract("claude_accept_trust_dialog")
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"

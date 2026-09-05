@@ -179,7 +179,7 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
 def test_spawn_names_uses_current_codex_defaults(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     assert server._codex_models() == [
-        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna",
     ]
 
 
