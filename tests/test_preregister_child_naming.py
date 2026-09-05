@@ -56,6 +56,7 @@ ags_extract_agent_name() { python3 -c 'import json,sys; print(json.load(sys.stdi
 ags_extract_registration_token() { printf '\n'; }
 ags_store_registration_token() { :; }
 ags_apply_contact_policy() { :; }
+ags_record_name_substitution() { :; }
 """
 
 
