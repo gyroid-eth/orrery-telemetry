@@ -241,7 +241,7 @@ Scientist-rail `available` means that at least one pairing with the 134 adjectiv
 - Claude / Codex provider tabs
 - model cards and usage guidance per provider
 - Claude: Sonnet / Opus / Haiku
-- Codex: `gpt-5.6-sol / terra / luna`
+- Codex: `gpt-5.6-sol / terra / luna / gpt-6-astra`
 - Codex effort: `low / medium / high / xhigh`, default `xhigh`
 
 The server uses the provider / model / effort allowlist for both catalog and validation.

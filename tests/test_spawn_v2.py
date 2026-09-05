@@ -172,7 +172,7 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-test-a",
-        "efforts": ["low", "medium", "high", "xhigh"], "effort_default": "xhigh",
+        "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
     }
 
 

@@ -104,7 +104,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "program":"codex-cli",
       "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
       "default_model":"gpt-5.6-sol",
-      "efforts":["low","medium","high","xhigh"],
+      "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
   ]
@@ -500,7 +500,7 @@ Request:
 | `dir` | no | Existing working directory. Defaults to the source repository |
 | `provider` | no | `claude` (default) or `codex` |
 | `model` | no | From the provider catalog. Each provider has a default |
-| `effort` | Codex only | `low / medium / high / xhigh`; default `xhigh` |
+| `effort` | Codex only | `low / medium / high / xhigh / max / ultra` (max / ultra: gpt-6-astra only); default `xhigh` |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |

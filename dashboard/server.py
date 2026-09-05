@@ -3520,7 +3520,9 @@ _CODEX_DEFAULT_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
 )
-_CODEX_EFFORTS = ("low", "medium", "high", "xhigh")
+# max / ultra: gpt-6-astra (Codex CLI 0.153 models cache) accepts them; the
+# launcher still rejects combinations a model cannot take (luna:ultra, 5.5:max).
+_CODEX_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
 
 

@@ -245,7 +245,7 @@ scientist rail の `available` は bare surname ではなく、134 adjective の
 - Claude / Codex provider tab
 - provider ごとの model card と用途 guide
 - Claude は Sonnet / Opus / Haiku
-- Codex は `gpt-5.6-sol / terra / luna`
+- Codex は `gpt-5.6-sol / terra / luna / gpt-6-astra`
 - Codex の effort は `low / medium / high / xhigh`、既定 `xhigh`
 
 server の provider / model / effort allow-list を catalog と validation の両方に使います。

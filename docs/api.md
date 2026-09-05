@@ -104,7 +104,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "program":"codex-cli",
       "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
       "default_model":"gpt-5.6-sol",
-      "efforts":["low","medium","high","xhigh"],
+      "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
   ]
@@ -500,7 +500,7 @@ request:
 | `dir` | no | 存在する working directory。既定は source repo |
 | `provider` | no | `claude`（既定）または `codex` |
 | `model` | no | provider catalog 内。provider の default あり |
-| `effort` | Codex のみ | `low / medium / high / xhigh`。既定 `xhigh` |
+| `effort` | Codex のみ | `low / medium / high / xhigh / max / ultra`（max / ultra は gpt-6-astra のみ）。既定 `xhigh` |
 | `role` | no | 最大40文字 |
 | `group` | no | 最大24文字 |
 | `worktree` | no | isolated worktree |

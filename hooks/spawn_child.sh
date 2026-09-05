@@ -18,7 +18,7 @@
 #   --model claude-opus-4-8 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
-#   --codex --model 省略/sol → gpt-5.6-sol（terra / luna alias も利用可）
+#   --codex --model 省略/sol → gpt-5.6-sol（terra / luna / astra=gpt-6-astra alias も利用可）
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus=claude-opus-5/200K, sonnet=claude-sonnet-5/200K）と
@@ -440,6 +440,7 @@ CLAUDE_WARM_SONNET_MODEL="$CLAUDE_DEFAULT_SONNET_MODEL"
 CODEX_DEFAULT_MODEL="gpt-5.6-sol"
 CODEX_TERRA_MODEL="gpt-5.6-terra"
 CODEX_LUNA_MODEL="gpt-5.6-luna"
+CODEX_ASTRA_MODEL="gpt-6-astra"
 CODEX_LEGACY_MODEL="gpt-5.5"
 
 # --- Claude モデル名の正規化 ---
@@ -500,10 +501,12 @@ normalize_codex_model() {
             printf '%s\n' "$CODEX_TERRA_MODEL" ;;
         luna|"$CODEX_LUNA_MODEL")
             printf '%s\n' "$CODEX_LUNA_MODEL" ;;
+        astra|gpt-6|"$CODEX_ASTRA_MODEL")
+            printf '%s\n' "$CODEX_ASTRA_MODEL" ;;
         gpt-*)
             printf '%s\n' "$model" ;;
         *)
-            echo "Error: unknown Codex model '$raw'. Valid forms: sol / terra / luna / gpt-<id>" >&2
+            echo "Error: unknown Codex model '$raw'. Valid forms: sol / terra / luna / astra / gpt-<id>" >&2
             return 1 ;;
     esac
 }
