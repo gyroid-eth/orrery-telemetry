@@ -744,6 +744,12 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     # build_agents の 2nd pass で gone/retired として扱われる。
     if not claude and program and program.startswith("codex") and in_mail:
         claude = True
+    # Claude children started by spawn_child.sh run `claude` under `zsh -lc`,
+    # so pane_current_command is "zsh" and the title carries no spinner glyph
+    # between tool calls; a live tmux session registered as claude-code is
+    # still a running agent (observed 2026-09-05 with Claude Code 2.1.261).
+    if not claude and program == "claude-code" and in_mail:
+        claude = True
     if PENDING_RE.match(name):
         return "unnamed" if claude else "idle"
     if claude:
