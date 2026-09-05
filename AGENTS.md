@@ -66,6 +66,11 @@ them what to install.
 
 ## Installing
 
+For an explicitly requested native Windows development run, see
+`docs/windows-local.en.md`. Its PowerShell helper only starts the checkout's
+Mail and dashboard, with a read-only `-DryRun` plan. It is not the installer
+below and does not install launchers, hooks or managed instructions.
+
 ```sh
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
 cd orrery-telemetry
