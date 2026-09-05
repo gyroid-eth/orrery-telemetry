@@ -750,13 +750,11 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     # build_agents の 2nd pass で gone/retired として扱われる。
     if not claude and program and program.startswith("codex") and in_mail:
         claude = True
-    # 上のバージョン形判定が将来の binary 名変更で外れても、agent-mail に
-    # program=claude-code で登録され tmux session が生きていれば起動中とみなす
-    # （Codex と同じ扱い。PR #6 で導入。当初の説明「zsh -lc 配下だから zsh に
-    # なる」は誤りで、真因は上記のバージョン文字列。tmux の pane_current_command
-    # は前景プロセス群を報告するので zsh -lc 配下でも claude 本体が出る）。
-    if not claude and program == "claude-code" and in_mail:
-        claude = True
+    # ※ 「program=claude-code で登録済み＋tmux 生存なら agent」という Codex 式の
+    # fallback は入れない。Claude は REPL が終了すると pane が zsh に戻るので、
+    # その規則だと「登録は残るが REPL は死んだ」= finished を表現できなくなる
+    # （dashboard-demo の Calm-Turing がまさにその状態で、PR #6 の fallback で
+    # 崩れた）。真因はバージョン文字列の cmd なので、上の判定だけで足りる。
     if PENDING_RE.match(name):
         return "unnamed" if claude else "idle"
     if claude:

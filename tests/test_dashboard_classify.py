@@ -13,10 +13,11 @@ def test_version_string_command_is_a_running_claude_agent():
     assert server.classify("QuietBohr", "2.1.259", "Claude Code", False, None) == "agent"
 
 
-def test_registered_claude_session_with_shell_command_is_still_an_agent():
-    # PR #6: a live tmux session registered as claude-code counts as running
-    # even when pane_current_command is a shell (same rule Codex already had).
-    assert server.classify("QuietBohr", "zsh", "Obsidian", True, "claude-code") == "agent"
+def test_registered_claude_session_whose_repl_exited_is_finished():
+    # A Claude REPL that exited leaves the pane at zsh; the registration
+    # lingers. That is the "finished" state the dashboard demo models
+    # (Calm-Turing), so no registration-based fallback may promote it.
+    assert server.classify("QuietBohr", "zsh", "zsh", True, "claude-code") == "finished"
 
 
 def test_unregistered_shell_session_is_idle_and_stale_registration_is_finished():
