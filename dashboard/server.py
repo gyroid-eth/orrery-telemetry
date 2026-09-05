@@ -727,6 +727,8 @@ def _iso_to_epoch(s: str | None) -> int:
 # 合成
 # --------------------------------------------------------------------------- #
 PENDING_RE = re.compile(r"^pending-\d+$")
+# Claude Code native binary の pane_current_command（例 "2.1.259"）
+_VERSION_CMD_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def classify(name: str, cmd: str, title: str, in_mail: bool,
@@ -736,7 +738,11 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     if name in WARMUP_NAMES:
         return "warmup"
     glyph = bool(title) and _is_activity_glyph(title[0])
-    claude = cmd in ("node", "claude") or glyph
+    # Claude Code 2.1.26x の native バイナリは pane_current_command を
+    # "2.1.259" のようなバージョン文字列で報告する（2026-09-05 Pro 実測:
+    # ProOpus / ProSonnet / SeminarBot がいずれも "2.1.259"）。node / claude
+    # のどちらにも一致しないため、glyph の無い待機中に finished へ落ちていた。
+    claude = cmd in ("node", "claude") or bool(_VERSION_CMD_RE.match(cmd or "")) or glyph
     # Codex は pane_current_command が zsh で報告されることが多く (REPL の node
     # が zsh の子プロセスのため)、glyph が消える待機中に "finished" 誤判定して
     # しまう。agent-mail に program=codex-cli で登録され、かつ tmux session が
@@ -744,10 +750,11 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     # build_agents の 2nd pass で gone/retired として扱われる。
     if not claude and program and program.startswith("codex") and in_mail:
         claude = True
-    # Claude children started by spawn_child.sh run `claude` under `zsh -lc`,
-    # so pane_current_command is "zsh" and the title carries no spinner glyph
-    # between tool calls; a live tmux session registered as claude-code is
-    # still a running agent (observed 2026-09-05 with Claude Code 2.1.261).
+    # 上のバージョン形判定が将来の binary 名変更で外れても、agent-mail に
+    # program=claude-code で登録され tmux session が生きていれば起動中とみなす
+    # （Codex と同じ扱い。PR #6 で導入。当初の説明「zsh -lc 配下だから zsh に
+    # なる」は誤りで、真因は上記のバージョン文字列。tmux の pane_current_command
+    # は前景プロセス群を報告するので zsh -lc 配下でも claude 本体が出る）。
     if not claude and program == "claude-code" and in_mail:
         claude = True
     if PENDING_RE.match(name):
