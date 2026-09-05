@@ -19,7 +19,7 @@ jobs:
         env:
           PYTHONPATH: .
           PYTHONUTF8: "1"
-        run: python -m pytest -q tests/test_mail_fixture_line_endings.py tests/test_windows_mail_long_paths.py tests/test_dashboard_startup.py tests/test_codex_app_runtime_provider.py
+        run: python -m pytest -q tests/windows/ tests/test_mail_fixture_line_endings.py tests/test_dashboard_startup.py tests/test_codex_app_runtime_provider.py
 
   tests:
     # 対応 OS は macOS（README「対応環境」）。ubuntu で回すと launchd / launchctl /
@@ -55,7 +55,9 @@ jobs:
       - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)
         run: |
           set -euo pipefail
-          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q tests/ integrations/ packages/agentstack_mail/tests/
+          # tests/windows/ is the community Windows lane; its conftest already skips collection off win32,
+          # and --ignore keeps that explicit here.
+          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/
       - name: Build and inspect agentstack-mail distribution
         run: |
           set -euo pipefail
