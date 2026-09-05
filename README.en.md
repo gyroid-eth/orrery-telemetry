@@ -17,7 +17,7 @@ The central design principle is to make operating rules executable through launc
 | macOS | **Supported.** Uses launchd and falls back to supervised background mode when the `gui/$UID` domain is unavailable. Launchers and hooks support the system Bash 3.2. |
 | Linux | **Unverified (code paths exist).** The installer prefers `systemd --user` and falls back to supervised background mode, but no real Linux host has exercised the `systemctl --user` registration and timer start. What is verified is the unit rendering under CI on ubuntu-latest with `systemctl` replaced by a stub. Please report results from a Linux run as an issue. |
 | WSL2 | **Unverified.** By design the localhost dashboard should work and Ghostty click-to-jump should not, but this has not been checked on a real WSL2 install. |
-| Native Windows | **Unsupported.** Native contributions are accepted as long as they cannot change the macOS behaviour; see [CONTRIBUTING → Windows contributions](CONTRIBUTING.md#windows-contributions-community-lane) for the layout and rules. |
+| Native Windows | **Unsupported.** Native contributions are accepted as long as they cannot change the macOS behaviour; see [CONTRIBUTING → Windows contributions](CONTRIBUTING.md#windows-contributions-community-lane) for the layout and rules. Community-maintained, experimental development startup: [Mail/dashboard helper](docs/windows-local.en.md). |
 | Other operating systems | **Unsupported.** The installer preflight stops before writing. |
 
 Python **3.11 or newer** is required. There is no declared upper bound; the full suite is verified on 3.12, 3.13, and 3.14, while CI runs 3.11, 3.12, and 3.14. 3.10 imports but the mail service tests do not pass, so it is not supported (2026-09-04).
@@ -147,5 +147,3 @@ This repository uses the **PolyForm Perimeter License 1.0.1**. It is source-avai
 - You may **not** provide others with a product that competes with this software. Competing covers free distribution, ports to another language, and delivery as a service, library, or plug-in.
 
 Attribution for inherited or derived portions of the bundled service is recorded in its [NOTICE](packages/agentstack_mail/NOTICE.md), and their license is preserved as [UPSTREAM_LICENSE](packages/agentstack_mail/UPSTREAM_LICENSE). Portions written for ORRERY Telemetry ("AgentStack" in the file name is the former project name) use [AGENTSTACK_LICENSE](packages/agentstack_mail/AGENTSTACK_LICENSE). See [Third-party components](docs/third-party.md) for the boundary.
-
-Experimental Windows development startup: [Mail/dashboard helper](docs/windows-local.en.md).
