@@ -60,7 +60,7 @@ the 24 compatibility tools require a later differential-test manifest.
 
 License boundaries are per component:
 
-- new AgentStack-authored files are governed by `AGENTSTACK_LICENSE`
+- new files written for ORRERY Telemetry (formerly AgentStack) are governed by `AGENTSTACK_LICENSE`
   (PolyForm Perimeter 1.0.1);
 - copied or semantically derived AgentMail portions retain their original
   copyright and are governed by `UPSTREAM_LICENSE`;

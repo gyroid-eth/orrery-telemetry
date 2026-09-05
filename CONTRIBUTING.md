@@ -86,14 +86,14 @@ for t in tests/test_*.py; do python3 "$t"; done
 
 ## License of contributions
 
-AgentStack-authored work in this repository is under the
+Work written for ORRERY Telemetry in this repository ("AgentStack" in file names is the former project name) is under the
 [PolyForm Perimeter License 1.0.1](LICENSE). It is source-available, not open
 source in the OSI sense: you may use, modify, and redistribute the software
 for any purpose except providing others with a product that competes with it.
 The OpenAI/Anthropic Rider belongs only to copied or derived AgentMail
 components; see [the third-party boundary](docs/third-party.md).
 
-By submitting new AgentStack-authored work you agree that it is licensed under
+By submitting new work written for ORRERY Telemetry you agree that it is licensed under
 the PolyForm terms. Changes to derived AgentMail components must retain the
 upstream copyright and full upstream license, including its rider.
 

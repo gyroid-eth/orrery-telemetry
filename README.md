@@ -146,4 +146,4 @@ tmux session ── telemetry ──► dashboard
 - 利用・改変・再配布は目的を問わず可能です
 - ただし**本ソフトウェアと競合する製品を他者へ提供すること**はできません。無償配布・別言語への移植・service / library / plug-in としての提供も競合に含まれます
 
-同梱 service が継承・派生した部分の attribution は [NOTICE](packages/agentstack_mail/NOTICE.md)、適用 license は [UPSTREAM_LICENSE](packages/agentstack_mail/UPSTREAM_LICENSE) に保持しています。AgentStack 著作部分には [AGENTSTACK_LICENSE](packages/agentstack_mail/AGENTSTACK_LICENSE) が適用されます。境界の説明は[第三者コンポーネント](docs/third-party.md)を参照してください。
+同梱 service が継承・派生した部分の attribution は [NOTICE](packages/agentstack_mail/NOTICE.md)、適用 license は [UPSTREAM_LICENSE](packages/agentstack_mail/UPSTREAM_LICENSE) に保持しています。ORRERY Telemetry 側で新たに書いた部分（file 名の AgentStack は旧名称）には [AGENTSTACK_LICENSE](packages/agentstack_mail/AGENTSTACK_LICENSE) が適用されます。境界の説明は[第三者コンポーネント](docs/third-party.md)を参照してください。

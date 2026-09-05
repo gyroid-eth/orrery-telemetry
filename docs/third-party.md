@@ -9,7 +9,7 @@ ORRERY Telemetry は identity、mail、reservation、signal の正本として�
 ORRERY Mail には predecessor から継承または意味的に派生したコードがあります。
 その provenance、原 copyright、固定 snapshot は
 [`NOTICE.md`](../packages/agentstack_mail/NOTICE.md)、継承・派生部分の適用 license は
-[`UPSTREAM_LICENSE`](../packages/agentstack_mail/UPSTREAM_LICENSE)、AgentStack 著作部分の
+[`UPSTREAM_LICENSE`](../packages/agentstack_mail/UPSTREAM_LICENSE)、ORRERY Telemetry 側で新たに書いた部分（file 名の AgentStack は旧名称）の
 license は [`AGENTSTACK_LICENSE`](../packages/agentstack_mail/AGENTSTACK_LICENSE) が正本です。
 これは runtime component の attribution であり、別の third-party service を installer
 が選択できるという意味ではありません。
