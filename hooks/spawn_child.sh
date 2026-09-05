@@ -17,7 +17,7 @@
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
 #   --model claude-opus-4-8 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
-#   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5
+#   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
 #   --codex --model 省略/sol → gpt-5.6-sol（terra / luna alias も利用可）
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
@@ -434,7 +434,7 @@ CLAUDE_LEGACY_OPUS_1M_MODEL="claude-opus-4-8[1m]"
 CLAUDE_LEGACY_SONNET_MODEL="claude-sonnet-4-6"
 CLAUDE_LEGACY_SONNET_1M_MODEL="claude-sonnet-4-6[1m]"
 CLAUDE_HAIKU_MODEL="claude-haiku-4-5-20251001"
-CLAUDE_FABLE_MODEL="claude-fable-5"
+CLAUDE_FABLE_MODEL="claude-fable-5-1"
 CLAUDE_WARM_OPUS_MODEL="$CLAUDE_DEFAULT_MODEL"
 CLAUDE_WARM_SONNET_MODEL="$CLAUDE_DEFAULT_SONNET_MODEL"
 CODEX_DEFAULT_MODEL="gpt-5.6-sol"
@@ -473,7 +473,7 @@ normalize_claude_model() {
             printf '%s\n' "$CLAUDE_LEGACY_SONNET_1M_MODEL" ;;
         haiku|claude-haiku-4-5|"$CLAUDE_HAIKU_MODEL")
             printf '%s\n' "$CLAUDE_HAIKU_MODEL" ;;
-        fable|"$CLAUDE_FABLE_MODEL")
+        fable|claude-fable-5|"$CLAUDE_FABLE_MODEL")
             printf '%s\n' "$CLAUDE_FABLE_MODEL" ;;
         *)
             if [[ "$m" == claude-* ]]; then

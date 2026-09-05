@@ -3500,10 +3500,12 @@ _SPAWN_MODELS = {
     "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
     "claude-opus-5": ("claude-code", "claude-opus-5"),
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
+    "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),
 }
 _CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
 _CODEX_DEFAULT_MODELS = (
     _CODEX_DEFAULT_MODEL,
+    "gpt-6-astra",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
 )

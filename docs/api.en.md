@@ -85,7 +85,8 @@ curl -s http://127.0.0.1:8770/api/spawn-names
   "models":[
     "claude-sonnet-5",
     "claude-opus-5",
-    "claude-haiku-4-5-20251001"
+    "claude-haiku-4-5-20251001",
+    "claude-fable-5-1"
   ],
   "default_model":"claude-sonnet-5",
   "providers":[
@@ -101,7 +102,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"codex",
       "label":"Codex",
       "program":"codex-cli",
-      "models":["gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna"],
+      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
       "default_model":"gpt-5.6-sol",
       "efforts":["low","medium","high","xhigh"],
       "effort_default":"xhigh"

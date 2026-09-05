@@ -85,7 +85,8 @@ curl -s http://127.0.0.1:8770/api/spawn-names
   "models":[
     "claude-sonnet-5",
     "claude-opus-5",
-    "claude-haiku-4-5-20251001"
+    "claude-haiku-4-5-20251001",
+    "claude-fable-5-1"
   ],
   "default_model":"claude-sonnet-5",
   "providers":[
@@ -101,7 +102,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"codex",
       "label":"Codex",
       "program":"codex-cli",
-      "models":["gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna"],
+      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
       "default_model":"gpt-5.6-sol",
       "efforts":["low","medium","high","xhigh"],
       "effort_default":"xhigh"
@@ -114,7 +115,7 @@ scientist rail の `status` は、その scientist と134語の adjective の組
 
 adjective は agent-mail の正典 `SIMPLE_ADJECTIVES` Round 3 と逐語同期し、launcher・catalog・suggestion API が同じ source を使います。独自追加は strict deployment の name validation と乖離するため禁止です。
 
-`AGENTSTACK_CODEX_MODELS` があれば Codex model list を上書きします。未設定時は `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` の順で、default は `gpt-5.6-sol`、effort default は `xhigh` です。
+`AGENTSTACK_CODEX_MODELS` があれば Codex model list を上書きします。未設定時は `gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna` の順で、default は `gpt-5.6-sol`、effort default は `xhigh` です。
 
 ## GET `/api/name-status`
 

@@ -170,7 +170,7 @@ import json
 import pathlib
 import sys
 
-sys.path.insert(0, sys.argv[4])
+sys.path.insert(0, sys.argv[3])
 try:
     from mcp_endpoint import same_endpoint
 except ImportError:
