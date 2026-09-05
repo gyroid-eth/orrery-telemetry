@@ -761,10 +761,17 @@ codex_accept_trust_dialog() {
 # A fresh ~/code/<project> therefore cannot reach the normal input prompt until
 # this is accepted. Keep the detector separate from readiness so task text is
 # never injected into a modal dialog.
+# Claude Code 2.1.26x renders the empty input row as "❯" followed by a
+# NO-BREAK SPACE (U+00A0). Under LC_ALL=C that byte pair is not [[:space:]],
+# so normalize it to a plain space before matching (observed 2026-09-05).
+pane_normalize_nbsp() {
+    LC_ALL=C sed $'s/\xc2\xa0/ /g'
+}
+
 claude_pane_ready() {
     local pane_text="$1" last_lines
     claude_trust_dialog_present "$pane_text" && return 1
-    last_lines="$(printf '%s' "$pane_text" | pane_nonblank_tail 8)"
+    last_lines="$(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 8)"
     printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
     # Only an empty input row counts. A selected dialog row also starts with
     # the cursor glyph ("❯ No, exit") and must not read as ready.
@@ -787,12 +794,12 @@ claude_accept_trust_dialog() {
         # New dialog: the default row is "No, exit", so a bare Enter ends the
         # child (observed 2026-09-03: the session lived 4 seconds). Move to the
         # Yes row and confirm it is selected before confirming.
-        if ! printf '%s' "$pane_text" | grep -qE '❯[[:space:]]*Yes, I trust'; then
+        if ! printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
             tmux send-keys -t "$session_name" Down
             sleep 1
             pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
         fi
-        if printf '%s' "$pane_text" | grep -qE '❯[[:space:]]*Yes, I trust'; then
+        if printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
             echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
             tmux send-keys -t "$session_name" C-m
         else
