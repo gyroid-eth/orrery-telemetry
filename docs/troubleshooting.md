@@ -51,6 +51,16 @@ git ls-files --eol packages/agentstack_mail/fixtures/authorization-tools-v1.json
 既存 checkout で `w/crlf` のままなら、未コミットの変更を保存したうえで、この属性を含む revision から新しく clone してください。
 CRLF に合わせて期待する digest を変更したり、認可 catalog の検証を無効にしたりしないでください。
 
+## Windows Mail archive の MAX_PATH 超過
+
+長い project path と message subject によって archive path が Windows の MAX_PATH を超えると、`WinError 206` で保存に失敗することがあります。
+filesystem access には extended-length path を使い、Git staging には archive repository 内だけで `core.longpaths=true` を設定した Git を使います。
+project identity、slug、filename と global Git 設定は維持します。
+
+Windows 回帰テストは260文字を超える path で message 保存、Git staging、起動時の未commit file 回復を検証します。
+native Windows installer、service 管理、Codex Desktop Bridge の対応を示すテストではありません。
+UNC path の変換も含みますが、network share での実動作は未検証です。
+
 ## `NOT CONFIGURED`
 
 原因は dashboard service に `AGENTSTACK_PROJECT_KEY` または `AGENTSTACK_VAULT` がないことです。

@@ -51,6 +51,43 @@ _ARCHIVE_GC_MARKER_NAME = "agentstack-gc-auto.last"
 _GITPYTHON_INDEX_OPERATION_LOCK = threading.Lock()
 
 
+def _windows_extended_path(path: Path) -> Path:
+    """Return an extended-length absolute path on native Windows.
+
+    Project slugs intentionally preserve the canonical project identity. A
+    descriptive message filename below that slug can therefore push an archive
+    path beyond the legacy MAX_PATH limit. The Windows extended-length
+    namespace lets Python
+    address that same path without shortening any identity-bearing component.
+    """
+
+    if sys.platform != "win32":
+        return path
+
+    value = str(path)
+    if value.startswith("\\\\?\\"):
+        return path
+    if not path.is_absolute():
+        raise ValueError("Windows extended-length paths must be absolute")
+    if value.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + value[2:])
+    return Path("\\\\?\\" + value)
+
+
+def _windows_git_path(path: Path) -> Path:
+    """Return the conventional spelling GitPython needs for repository refs."""
+
+    if sys.platform != "win32":
+        return path
+
+    value = str(path)
+    if value.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + value[8:])
+    if value.startswith("\\\\?\\"):
+        return Path(value[4:])
+    return path
+
+
 # =============================================================================
 # Commit Queue - Batches multiple commits to reduce lock contention
 # =============================================================================
@@ -1172,7 +1209,9 @@ def collect_lock_status(settings: Settings) -> dict[str, Any]:
 
 
 async def ensure_archive_root(settings: Settings) -> tuple[Path, Repo]:
-    repo_root = Path(settings.storage.root).expanduser().resolve()
+    repo_root = _windows_extended_path(
+        Path(settings.storage.root).expanduser().resolve()
+    )
     await _to_thread(repo_root.mkdir, parents=True, exist_ok=True)
     repo = await _ensure_repo(repo_root, settings)
     return repo_root, repo
@@ -1222,28 +1261,49 @@ async def _ensure_repo(root: Path, settings: Settings) -> Repo:
             # This prevents hitting EMFILE by cleaning up before it's too late
             proactive_fd_cleanup()
 
+            needs_init = False
             git_dir = root / ".git"
+            git_root = _windows_git_path(root)
             if git_dir.exists():
-                repo = Repo(str(root))
-                _REPO_CACHE.put(cache_key, repo)
-                return repo
+                repo = Repo(str(git_root))
+            else:
+                # Initialize a new repo while holding the lock. Keep the returned
+                # Repo instance to avoid leaking an extra Repo handle.
+                repo = await _to_thread(Repo.init, str(git_root))
+                needs_init = True
 
-            # Initialize new repo and put in cache while holding the lock.
-            # Keep the returned Repo instance to avoid leaking an extra Repo handle.
-            repo = await _to_thread(Repo.init, str(root))
-            _REPO_CACHE.put(cache_key, repo)
-            # Flag that this is a newly created repo needing initialization
-            needs_init = True
+            needs_windows_longpaths = False
+            if sys.platform == "win32":
+                try:
+                    with repo.config_reader("repository") as reader:
+                        configured = reader.get_value("core", "longpaths", None)
+                    needs_windows_longpaths = str(configured).lower() != "true"
+                except Exception:
+                    needs_windows_longpaths = True
 
-        # Configure the repo outside the lock (idempotent operations)
-        if needs_init:
-            try:
+            if needs_init or needs_windows_longpaths:
+                # Native Windows requires repository-local long-path support
+                # before any concurrent caller can stage a deep archive path.
+                # Do not change the user's global Git configuration.
                 def _configure_repo() -> None:
-                    with repo.config_writer() as cw:
-                        cw.set_value("commit", "gpgsign", "false")
-                await _to_thread(_configure_repo)
-            except Exception:
-                pass
+                    with repo.config_writer("repository") as writer:
+                        if needs_init:
+                            writer.set_value("commit", "gpgsign", "false")
+                        if needs_windows_longpaths:
+                            writer.set_value("core", "longpaths", "true")
+
+                try:
+                    await _to_thread(_configure_repo)
+                except Exception:
+                    if sys.platform == "win32":
+                        with contextlib.suppress(Exception):
+                            repo.close()
+                        raise
+
+            _REPO_CACHE.put(cache_key, repo)
+
+        # Initialize archive contents outside the cache lock.
+        if needs_init:
             attributes_path = root / ".gitattributes"
             if not attributes_path.exists():
                 await _write_text(attributes_path, "*.json text\n*.md text\n")
@@ -1866,7 +1926,12 @@ async def _commit_direct(
         return
 
     actor = Actor(settings.storage.git_author_name, settings.storage.git_author_email)
-    repo = Repo(str(repo_root))
+    # GitPython can stage long paths through Git, but its pure-Python ref
+    # creation fails when the repository itself uses the extended namespace.
+    # Keep filesystem locks extended while presenting the same repository with
+    # conventional spelling to GitPython.
+    git_repo_root = _windows_git_path(repo_root)
+    repo = Repo(str(git_repo_root))
     attempt_repo = repo  # May diverge from `repo` during EMFILE recovery
 
     def _perform_commit(target_repo: Repo) -> None:
@@ -1874,7 +1939,14 @@ async def _commit_direct(
         # Async commits can otherwise overlap across worker threads and restore
         # the wrong cwd even when they target different repositories.
         with _GITPYTHON_INDEX_OPERATION_LOCK:
-            target_repo.index.add(rel_paths)
+            if sys.platform == "win32":
+                # GitPython's IndexFile.add() calls os.lstat() on each relative
+                # path before invoking Git. That call still hits MAX_PATH on
+                # native Windows. Git itself supports these paths once the
+                # repository-local core.longpaths option is enabled.
+                target_repo.git.add("--", *rel_paths)
+            else:
+                target_repo.index.add(rel_paths)
             if target_repo.is_dirty(index=True, working_tree=True):
                 # Append commit trailers with Agent and optional Thread if present in message text
                 trailers: list[str] = []
@@ -1934,7 +2006,7 @@ async def _commit_direct(
                         await asyncio.sleep(0.05)
                         with contextlib.suppress(Exception):
                             attempt_repo.close()
-                        attempt_repo = Repo(str(repo_root))
+                        attempt_repo = Repo(str(git_repo_root))
                         continue
 
                     # Handle git index.lock contention (concurrent git operations)
@@ -2029,7 +2101,7 @@ async def _commit(
     working_tree = repo.working_tree_dir
     if working_tree is None:
         raise ValueError("Repository has no working tree directory")
-    repo_root = Path(working_tree).resolve()
+    repo_root = _windows_extended_path(Path(working_tree).resolve())
 
     # commit_async defers the audit-trail commit off the request path; the
     # archive files themselves are already on disk at this point.
@@ -2056,7 +2128,7 @@ def _is_archive_lock_artifact(relative_path: str) -> bool:
 def _find_uncommitted_archive_paths(root: Path) -> list[str]:
     """Find new or modified archive files left outside the current commit."""
 
-    repo = Repo(str(root))
+    repo = Repo(str(_windows_git_path(root)))
     try:
         # Git status normally refreshes stat data in .git/index. Startup heal
         # must be read-only when there is nothing to recover, so suppress those
@@ -2105,7 +2177,8 @@ async def _run_archive_gc_auto(root: Path) -> None:
     """Run Git's threshold-gated gc synchronously and record the successful check."""
 
     def _run() -> None:
-        repo = Repo(str(root))
+        git_root = _windows_git_path(root)
+        repo = Repo(str(git_root))
         try:
             # --auto delegates the expensive-run decision to Git's object-count
             # thresholds. The config form works on older macOS Git versions
@@ -2114,7 +2187,7 @@ async def _run_archive_gc_auto(root: Path) -> None:
                 [
                     "git",
                     "-C",
-                    str(root),
+                    str(git_root),
                     "-c",
                     "gc.autoDetach=false",
                     "gc",
@@ -2133,7 +2206,9 @@ async def _run_archive_gc_auto(root: Path) -> None:
 async def heal_archive_locks(settings: Settings) -> dict[str, Any]:
     """Repair stale locks and uncommitted files, then conditionally check gc."""
 
-    root = Path(settings.storage.root).expanduser().resolve()
+    root = _windows_extended_path(
+        Path(settings.storage.root).expanduser().resolve()
+    )
     await _to_thread(root.mkdir, parents=True, exist_ok=True)
     summary: dict[str, Any] = {
         "locks_scanned": 0,
