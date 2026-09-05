@@ -266,7 +266,7 @@ AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna" ./scripts/insta
 
 installer に渡して永続化します（shell の `export` は service に届きません）。
 
-空要素と前後空白は除去されます。指定がない場合は上記3モデルで、先頭の `gpt-5.6-sol` が default です。reasoning effort は `low / medium / high / xhigh`、default は `xhigh` です。dashboard spawn は allow-list 外の Codex model / effort を拒否します。
+空要素と前後空白は除去されます。指定がない場合は上記4モデル（`gpt-5.6-sol` / `gpt-6-astra` / `gpt-5.6-terra` / `gpt-5.6-luna`）で、先頭の `gpt-5.6-sol` が default です。reasoning effort は `low / medium / high / xhigh / max / ultra`（max / ultra は `gpt-6-astra` のみ）、default は `xhigh` です。dashboard spawn は allow-list 外の Codex model / effort を拒否します。
 
 ## Portrait overlay
 
