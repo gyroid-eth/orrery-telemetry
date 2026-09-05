@@ -9,7 +9,7 @@ param(
     [switch]$NoBrowser
 )
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot -Parent
+$repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 if (-not $PythonCommand) { $PythonCommand = Join-Path $repo '.venv\Scripts\python.exe' }
 if (-not (Test-Path -LiteralPath $PythonCommand -PathType Leaf)) {
     throw 'Create the repository .venv using CONTRIBUTING.md, or pass -PythonCommand with an existing development interpreter.'

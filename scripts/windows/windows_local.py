@@ -16,7 +16,7 @@ import webbrowser
 
 import psutil
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def request(url: str, payload: dict | None = None) -> dict:

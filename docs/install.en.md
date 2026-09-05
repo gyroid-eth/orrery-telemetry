@@ -1,9 +1,5 @@
 # Installation
 
-For a development-only native Windows Mail/dashboard run, see the
-[experimental local helper](windows-local.en.md). The standard installer and
-its native Windows preflight behavior are unchanged.
-
 > 日本語版: [install.md](install.md)
 
 [Back to README](../README.en.md) · [Next: Launchers and identity](launchers.en.md)

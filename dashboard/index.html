@@ -34044,10 +34044,12 @@ function normalizeSpawnProviders(catalog){
 const SPM_MODEL_TONES=Object.freeze({
   'gpt-5.6-sol':'deepest reasoning · hard problems',
   'gpt-5.6-terra':'everyday implementation',
-  'gpt-5.6-luna':'fast & light'
+  'gpt-5.6-luna':'fast & light',
+  'gpt-6-astra':'most capable · demanding work'
 });
 const SPM_EFFORT_HINTS=Object.freeze({
-  low:'routine',medium:'standard',high:'complex',xhigh:'hardest · default'
+  low:'routine',medium:'standard',high:'complex',xhigh:'hardest · default',
+  max:'astra only · beyond xhigh',ultra:'astra only · maximum'
 });
 
 function spawnModelTone(providerId,modelId){

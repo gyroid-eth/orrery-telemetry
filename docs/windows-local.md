@@ -1,3 +1,5 @@
+Community-maintained / experimental. Verified environment: Windows 11 build 26200, CPython 3.12.10, Windows PowerShell 5.1.26100.9168.
+
 # native Windows での実験的なDashboard起動
 
 この開発用helperはcheckoutからMailとDashboardを起動し、応答を確認してブラウザを開きます。
@@ -11,11 +13,10 @@
 runtime sessionの検出にはnative tmuxが必要です。
 tmuxがなければ警告を表示し、Mailを参照する表示だけを利用できます。
 
-準備後はPowerShellから次の2コマンドで起動します。
+準備後は任意の作業ディレクトリのPowerShellから次の1コマンドで起動します。
 
 ```powershell
-cd C:\path\to\orrery-telemetry
-.\scripts\start-windows.ps1 -Project C:\path\to\your-project
+& 'C:\path\to\orrery-telemetry\scripts\windows\start-windows.ps1' -Project 'C:\path\to\your-project'
 ```
 
 初回は`-DryRun`を付け、DB、project、起動または再利用するprocessを確認してください。
@@ -41,7 +42,7 @@ childが途中で終了した場合も、同じ実行が起動した残りのchi
 確認対象はブラウザでのDashboard閲覧です。
 NEW AGENT、terminal jump、child委任、resume、mail watcher、hook、Codex Desktop Bridgeのnative動作確認は含みません。
 Codex agentの起動は別launcherの担当です。
-長いWindows Mail archive pathには、独立した[PR #7](https://github.com/gyroid-eth/orrery-telemetry/pull/7)のstorage修正が必要です。
+長いWindows Mail archive pathには、マージ済みの[PR #7](https://github.com/gyroid-eth/orrery-telemetry/pull/7)のstorage修正を利用します。
 
 回帰テストは、MailとDashboardの新規起動、PIDを増やさない再利用、DBとprojectの不一致、portの競合、起動したprocessだけの終了、DBの保持を確認します。
 native Windows全対応を示す結果ではありません。

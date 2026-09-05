@@ -839,7 +839,7 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
     )
     version = re.search(r"\((\d+)\.(\d+)", chosen)
     assert version, f"no version reported in {chosen!r}"
-    assert (int(version.group(1)), int(version.group(2))) >= (3, 10), chosen
+    assert (int(version.group(1)), int(version.group(2))) >= (3, 11), chosen
 
 
 @pytest.mark.skipif(

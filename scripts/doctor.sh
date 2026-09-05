@@ -65,11 +65,11 @@ check_cmd() {
 
 PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
 if [[ -x "$PYTHON_BIN" ]] && \
-   "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+   "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
 then
-  echo "ok: Python 3.10+ ($PYTHON_BIN)"
+  echo "ok: Python 3.11+ ($PYTHON_BIN)"
 else
-  echo "missing: Python 3.10+ interpreter" >&2
+  echo "missing: Python 3.11+ interpreter" >&2
   status=1
 fi
 check_cmd tmux

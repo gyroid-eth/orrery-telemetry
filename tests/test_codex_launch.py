@@ -246,6 +246,8 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_codex_model", "sol"): "gpt-5.6-sol",
         ("normalize_codex_model", "terra"): "gpt-5.6-terra",
         ("normalize_codex_model", "luna"): "gpt-5.6-luna",
+        ("normalize_codex_model", "astra"): "gpt-6-astra",
+        ("normalize_codex_model", "gpt-6-astra"): "gpt-6-astra",
         ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
     }
     for (function, raw), normalized in expected.items():

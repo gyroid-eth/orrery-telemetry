@@ -1,3 +1,5 @@
+Community-maintained / experimental. Verified environment: Windows 11 build 26200, CPython 3.12.10, Windows PowerShell 5.1.26100.9168.
+
 # Experimental native Windows dashboard startup
 
 This development helper starts the bundled Mail HTTP entry point and dashboard
@@ -15,8 +17,7 @@ prints a warning and only the Mail-backed views are available.
 After that preparation, open PowerShell and run:
 
 ```powershell
-cd C:\path\to\orrery-telemetry
-.\scripts\start-windows.ps1 -Project C:\path\to\your-project
+& 'C:\path\to\orrery-telemetry\scripts\windows\start-windows.ps1' -Project 'C:\path\to\your-project'
 ```
 
 Use `-DryRun` first to inspect the actual database, project and process plan.
@@ -45,7 +46,7 @@ Windows login service.
 The ready browser supports dashboard inspection. This does not validate native
 NEW AGENT, terminal jump, child delegation, resume, mail watcher, hooks or the
 Codex Desktop Bridge. Starting a Codex agent is a separate launcher concern.
-Long Windows Mail archive paths require the separate storage fix proposed in
+Long Windows Mail archive paths use the storage fix already merged in
 [PR #7](https://github.com/gyroid-eth/orrery-telemetry/pull/7).
 
 Validation covers real fresh Mail/dashboard startup, reuse without new PIDs,

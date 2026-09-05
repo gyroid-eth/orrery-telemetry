@@ -118,6 +118,12 @@ def _source(tmp_path: Path, *, wal: bool = False) -> tuple[StatePaths, sqlite3.C
         ["git", "-C", str(archive), "config", "user.email", "migration@example.test"],
         check=True,
     )
+    # The fixture commit below can start a detached `git gc --auto`, whose
+    # transient .git/objects/maintenance.lock then vanishes while
+    # _filesystem_state() walks the tree (CI, Python 3.14, 2026-09-05). The
+    # fixture never needs gc, so turn it off in this repository only.
+    for key, value in (("gc.auto", "0"), ("gc.autoDetach", "false"), ("maintenance.auto", "false")):
+        subprocess.run(["git", "-C", str(archive), "config", key, value], check=True)
     subprocess.run(["git", "-C", str(archive), "add", "."], check=True)
     subprocess.run(
         ["git", "-C", str(archive), "commit", "-q", "-m", "fixture"],

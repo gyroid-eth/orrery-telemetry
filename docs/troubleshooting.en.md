@@ -37,6 +37,19 @@ Paste the output verbatim from `--- copy from here ---` through `--- copy to her
 
 **No tokens or Authorization headers are included.** Values are intentionally omitted and tests lock this behavior so the report can be pasted directly into chat. Add “what you did,” “what you expected,” and “what happened” in the final field. Pasting error text verbatim is fastest.
 
+## Windows Mail archives exceed MAX_PATH
+
+A long canonical project path and message subject can make an archive path
+exceed Windows MAX_PATH and fail with `WinError 206`. Archive filesystem access
+uses extended-length paths, while Git staging uses Git with `core.longpaths=true`
+in the archive repository's local configuration. Project identities, slugs and
+filenames are preserved; global Git configuration is not changed.
+
+The Windows regression exercises message persistence, Git staging and startup
+recovery beyond 260 characters. It does not establish native Windows installer,
+service supervision or Codex Desktop Bridge support. UNC conversion is included
+but has not been exercised against a network share.
+
 ## `NOT CONFIGURED`
 
 The dashboard service has neither `AGENTSTACK_PROJECT_KEY` nor `AGENTSTACK_VAULT`.

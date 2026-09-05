@@ -1,8 +1,5 @@
 # インストール
 
-native Windowsで開発用のMailとDashboardを起動する手順は、[実験的なlocal helper](windows-local.md)を参照してください。
-標準installerのWindows preflightと対応範囲は変わりません。
-
 > English version: [install.en.md](install.en.md)
 
 [README に戻る](../README.md) · [次: Launcher と identity](launchers.md)

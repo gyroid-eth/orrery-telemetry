@@ -118,8 +118,12 @@ fi
 unset CHILD_REGISTRATION_TOKEN
 child_token="$(ags_generate_registration_token)" || die "failed to generate child registration token"
 
+# JSON results are handed to the lib helpers with here-strings rather than
+# `printf | fn`: a helper that returns without reading stdin (as the stock
+# stubs in tests do) made printf die of SIGPIPE, and with pipefail the
+# command substitution then exited 141 (CI flake, 2026-09-05).
 ensure_result="$(ags_mcp_call "ensure_project" "human_key=$project_key")" || die "ensure_project failed"
-if printf '%s' "$ensure_result" | ags_mcp_has_error; then
+if ags_mcp_has_error <<<"$ensure_result"; then
   die "ensure_project returned an error"
 fi
 
@@ -132,11 +136,11 @@ register_args=(
   "registration_token=$child_token"
 )
 register_result="$(ags_mcp_call "register_agent" "${register_args[@]}")" || die "register_agent failed"
-if printf '%s' "$register_result" | ags_mcp_has_error; then
+if ags_mcp_has_error <<<"$register_result"; then
   die "register_agent returned an error for $agent_name"
 fi
 
-registered="$(printf '%s' "$register_result" | ags_extract_agent_name)"
+registered="$(ags_extract_agent_name <<<"$register_result")"
 [[ -n "$registered" ]] || die "could not read registered child name"
 if [[ "$registered" != "$agent_name" ]]; then
   printf "%s: agent-mail changed requested identity '%s' to '%s'; the child tmux session must use the server-returned name\n" \
@@ -155,7 +159,7 @@ fi
 # sent token only when the server does not echo one (e.g. lenient variants that
 # adopt the supplied token but omit it from the response). This matches the
 # mainline ags_register_session behavior.
-effective_token="$(printf '%s' "$register_result" | ags_extract_registration_token)"
+effective_token="$(ags_extract_registration_token <<<"$register_result")"
 [[ -n "$effective_token" ]] || effective_token="$child_token"
 
 token_dir="$(dirname "$token_file_out")"

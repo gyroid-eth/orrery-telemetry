@@ -244,7 +244,7 @@ AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna" ./scripts/insta
 
 Pass it to the installer for persistence; a shell `export` does not reach the service.
 
-Empty entries and surrounding whitespace are removed. When unspecified, the three models above are used and the first, `gpt-5.6-sol`, is the default. Reasoning effort is `low / medium / high / xhigh`, with default `xhigh`. Dashboard spawn rejects a Codex model / effort outside the allowlist.
+Empty entries and surrounding whitespace are removed. When unspecified, the four models above (`gpt-5.6-sol` / `gpt-6-astra` / `gpt-5.6-terra` / `gpt-5.6-luna`) are used and the first, `gpt-5.6-sol`, is the default. Reasoning effort is `low / medium / high / xhigh / max / ultra` (max / ultra: `gpt-6-astra` only), with default `xhigh`. Dashboard spawn rejects a Codex model / effort outside the allowlist.
 
 ## Portrait overlay
 

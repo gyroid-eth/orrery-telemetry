@@ -11,8 +11,8 @@ import threading
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('windows_local', ROOT / 'scripts/windows_local.py')
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location('windows_local', ROOT / 'scripts/windows/windows_local.py')
 local = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(local)
 pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='native Windows process semantics')
@@ -26,7 +26,7 @@ def ports():
 
 
 def command(project, state, mail_port, dashboard_port):
-    return ['powershell.exe', '-NoProfile', '-File', str(ROOT / 'scripts/start-windows.ps1'),
+    return ['powershell.exe', '-NoProfile', '-File', str(ROOT / 'scripts/windows/start-windows.ps1'),
             '-Project', str(project), '-StateDirectory', str(state),
             '-PythonCommand', sys.executable,
             '-MailPort', str(mail_port), '-DashboardPort', str(dashboard_port), '-NoBrowser']
