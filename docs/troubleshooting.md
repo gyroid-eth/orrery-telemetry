@@ -37,6 +37,20 @@ dashboard は `/api/version` の正しい JSON response を「実際に配信中
 
 **token や Authorization ヘッダは含みません**（そのままチャットに貼れるように、意図的に値を出さない作りにしてあり、テストで固定しています）。「何をして」「何を期待して」「何が起きたか」を末尾の欄に書き足してください。エラー文はそのまま貼ってもらうのが最も速いです。
 
+## Mail の fixture digest mismatch
+
+`Authorization fixture digest mismatch` や tools fixture の digest mismatch は、Git の `core.autocrlf=true` による checkout 時の CRLF 変換でも発生します。
+次の command で対象ファイルの改行を確認できます。
+
+```bash
+git ls-files --eol packages/agentstack_mail/fixtures/authorization-tools-v1.json packages/agentstack_mail/fixtures/live-tools-list.json
+```
+
+この2ファイルは配布時の bytes を SHA-256 で固定しているため、`.gitattributes` で `text eol=lf` を指定しています。
+新しい checkout では `core.autocrlf` の値にかかわらず `i/lf w/lf` になります。
+既存 checkout で `w/crlf` のままなら、未コミットの変更を保存したうえで、この属性を含む revision から新しく clone してください。
+CRLF に合わせて期待する digest を変更したり、認可 catalog の検証を無効にしたりしないでください。
+
 ## `NOT CONFIGURED`
 
 原因は dashboard service に `AGENTSTACK_PROJECT_KEY` または `AGENTSTACK_VAULT` がないことです。

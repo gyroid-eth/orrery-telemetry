@@ -1,0 +1,4 @@
+# These fixtures have frozen raw-byte SHA256 checks at startup and in packaging.
+# Keep their canonical LF bytes even when the checkout uses core.autocrlf=true.
+/packages/agentstack_mail/fixtures/authorization-tools-v1.json text eol=lf
+/packages/agentstack_mail/fixtures/live-tools-list.json text eol=lf
