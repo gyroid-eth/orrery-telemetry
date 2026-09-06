@@ -3565,6 +3565,12 @@ def _spawn_name_status(name: str) -> str:
 
 def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
     """Load the launcher-owned scientist/adjective vocabulary once."""
+    if sys.platform == "win32":
+        from scripts.windows.spawn_catalog import load_vocabulary
+        try:
+            return load_vocabulary(SPAWN_SCIENTISTS_SCRIPT)
+        except ValueError:
+            return [], []
     try:
         output = subprocess.run(
             [
@@ -3727,7 +3733,16 @@ def _spawn_scientist_statuses(
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
-        return {"unavailable": "Native Windows launch catalog / spawn is not supported. Use WSL2, the primary Windows path."}
+        from scripts.windows.spawn_catalog import UNAVAILABLE, load_vocabulary
+        scientists, adjectives = load_vocabulary(SPAWN_SCIENTISTS_SCRIPT)
+        statuses = _spawn_scientist_statuses(adjectives, scientists)
+        return {
+            "unavailable": UNAVAILABLE,
+            "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
+                       "status": statuses.get(name, "unknown")} for name in scientists],
+            "adjectives": adjectives,
+            "naming": "adjective-scientist",
+        }
     try:
         output = subprocess.run(
             ["bash", "-c", 'source "$1" && ags_adjective_list && printf "\\036" && ags_scientist_list', "spawn-names", SPAWN_SCIENTISTS_SCRIPT],
@@ -3970,6 +3985,9 @@ def do_spawn(payload: dict) -> dict:
     payload: {parent?, standalone?, name?, dir?, role?, group?, task,
               provider?, model?, effort?}.
     """
+    if sys.platform == "win32":
+        from scripts.windows.spawn_catalog import UNAVAILABLE
+        return {"ok": False, "error": UNAVAILABLE}
     if "standalone" in payload and not isinstance(payload["standalone"], bool):
         return {"ok": False, "error": "standalone must be boolean"}
     standalone = payload.get("standalone", False)
