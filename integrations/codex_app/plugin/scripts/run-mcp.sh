@@ -20,6 +20,7 @@ _AGS_CALLER_KEYS=(
   AGENTSTACK_MAIL_ENV
   AGENTSTACK_MAIL_HTTP_BEARER_MODE
   AGENTSTACK_RUNTIME_DIR
+  AGENTSTACK_PYTHON
   AGENTSTACK_CODEX_APP_RUNTIME_DIR
   MCP_AGENT_MAIL_TOKEN
 )
@@ -44,36 +45,55 @@ while [[ $_ags_i -lt ${#_ags_saved_names[@]} ]]; do
 done
 unset _ags_key _ags_i _ags_saved_names _ags_saved_values _AGS_CALLER_KEYS
 
+# AGENTSTACK_MAIL_ENV is already the canonical env-file handoff for this
+# proxy. Read it once and recover both values that may be absent from the
+# caller, rather than resolving a second AgentStack env file independently.
+_ags_mail_python=""
+_ags_mail_bearer_token=""
+if [[ -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
+  _ags_mail_values="$(
+    python3 - "${AGENTSTACK_MAIL_ENV}" <<'PYENV'
+import pathlib
+import sys
+
+values = {"AGENTSTACK_PYTHON": "", "HTTP_BEARER_TOKEN": ""}
+for raw_line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    key, separator, value = line.partition("=")
+    if not separator:
+        continue
+    key = key.strip()
+    if key.startswith("export "):
+        key = key[len("export "):].strip()
+    if key in values:
+        values[key] = value.strip().strip("\"'")
+print(values["AGENTSTACK_PYTHON"])
+print(values["HTTP_BEARER_TOKEN"])
+PYENV
+  )" || _ags_mail_values=""
+  _ags_mail_python="$(printf '%s\n' "$_ags_mail_values" | sed -n '1p')"
+  _ags_mail_bearer_token="$(printf '%s\n' "$_ags_mail_values" | sed -n '2p')"
+  if [[ -z "${AGENTSTACK_PYTHON:-}" && -n "$_ags_mail_python" ]]; then
+    export AGENTSTACK_PYTHON="$_ags_mail_python"
+  fi
+fi
+
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 if [[ "$HTTP_BEARER_MODE" == "disabled" ]]; then
   unset MCP_AGENT_MAIL_TOKEN
 elif [[ "$HTTP_BEARER_MODE" != "auto" && "$HTTP_BEARER_MODE" != "enabled" ]]; then
   echo "invalid AGENTSTACK_MAIL_HTTP_BEARER_MODE: $HTTP_BEARER_MODE" >&2
   exit 1
-elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -f "${AGENTSTACK_MAIL_ENV:-}" ]]; then
-  # A service env without HTTP_BEARER_TOKEN (bearer disabled) is normal: the
-  # proxy then authenticates with the owner token only. Under `set -e`, a
-  # `read` that hits EOF returned 1 and ended the proxy before it answered
-  # initialize, which Codex reported as "connection closed" (2026-09-03).
-  _ags_bearer_token="$(
-    python3 - "${AGENTSTACK_MAIL_ENV}" <<'PY'
-import pathlib
-import sys
-
-for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    key, separator, value = line.partition("=")
-    if separator and key.strip() == "HTTP_BEARER_TOKEN":
-        print(value.strip().strip("\"'"))
-        break
-PY
-  )" || _ags_bearer_token=""
-  if [[ -n "$_ags_bearer_token" ]]; then
-    export MCP_AGENT_MAIL_TOKEN="$_ags_bearer_token"
+elif [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" ]]; then
+  if [[ -n "$_ags_mail_bearer_token" ]]; then
+    export MCP_AGENT_MAIL_TOKEN="$_ags_mail_bearer_token"
   else
     unset MCP_AGENT_MAIL_TOKEN
   fi
-  unset _ags_bearer_token
 fi
+unset _ags_mail_values _ags_mail_python _ags_mail_bearer_token
 
 SOURCE_ROOT="$PLUGIN_ROOT/src"
 if [[ ! -d "$SOURCE_ROOT/agentstack_codex_app" ]]; then
