@@ -3726,6 +3726,8 @@ def _spawn_scientist_statuses(
 
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
+    if sys.platform == "win32":
+        return {"unavailable": "Native Windows launch catalog / spawn is not supported. Use WSL2, the primary Windows path."}
     try:
         output = subprocess.run(
             ["bash", "-c", 'source "$1" && ags_adjective_list && printf "\\036" && ags_scientist_list', "spawn-names", SPAWN_SCIENTISTS_SCRIPT],

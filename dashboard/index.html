@@ -34178,6 +34178,14 @@ async function loadSpawnCatalog(seq){
     const response=await fetch('/api/spawn-names',{cache:'no-store'});
     const catalog=await response.json();
     if(seq!==spmLoadSeq)return;
+    if(response.ok&&catalog&&typeof catalog.unavailable==='string'){
+      spmReady=false;
+      SPM('spm-agent-strip').textContent='scientist roster unavailable';
+      SPM('spm-models').textContent='engine catalog unavailable';
+      updateSpawnButton();
+      setSpawnStat(catalog.unavailable,'err');
+      return;
+    }
     if(!response.ok||!catalog||!Array.isArray(catalog.names)||
        !Array.isArray(catalog.adjectives)||!Array.isArray(catalog.dirs))
       throw new Error((catalog&&catalog.error)||'invalid picker response');
