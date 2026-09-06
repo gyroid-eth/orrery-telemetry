@@ -633,6 +633,18 @@ cleanup_worktree() {
 # the dashboard's minimal launchd PATH cannot find codex at all, the modern flag
 # is emitted instead of nothing — an empty result silently reverted every child
 # to Codex's own `on-request` default (2026-09-04).
+resolve_codex_bin() {
+    local codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+    if [[ -z "$codex_bin" ]]; then
+        codex_bin="$(PATH="$PATH:$HOME/.local/bin" command -v codex 2>/dev/null || true)"
+    fi
+    if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
+        echo "Error: Codex CLI not found; set AGENTSTACK_CODEX_BIN to an executable path" >&2
+        return 1
+    fi
+    printf '%s\n' "$codex_bin"
+}
+
 codex_approval_flags() {
     local help_text codex_bin policy
     policy="${AGENTSTACK_CODEX_CHILD_APPROVAL:-never}"
@@ -902,14 +914,15 @@ write_child_mcp_config() {
     mkdir -p "$config_dir" || return 0
     python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
         "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
-        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" <<'PY' || return 0
+        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" \
+        "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
 # NOTE: no line here may start with "}" in column 0 — the shell function is
 # extracted by "up to the first line that is just a closing brace".
 import json
 import os
 import sys
 
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode = sys.argv[1:11]
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin = sys.argv[1:12]
 server_env = dict(
     AGENTSTACK_PROXY_AGENT_NAME=child,
     AGENTSTACK_PROXY_TOKEN_FILE=token_file,
@@ -924,6 +937,8 @@ server_env = dict(
     AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode,
     AGENTSTACK_RUNTIME_DIR=runtime_dir,
 )
+if python_bin:
+    server_env["AGENTSTACK_PYTHON"] = python_bin
 server = dict(command=runner, args=[], env=server_env)
 
 
@@ -999,13 +1014,14 @@ write_child_codex_home() {
 
     local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
     python3 - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
-        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" <<'PY' || return 0
+        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" \
+        "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
 import os
 import pathlib
 import re
 import sys
 
-home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode = sys.argv[1:11]
+home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin = sys.argv[1:12]
 home_path = pathlib.Path(home)
 source_path = pathlib.Path(source)
 home_path.mkdir(parents=True, exist_ok=True)
@@ -1121,6 +1137,8 @@ for name in claimed:
     # Codex starts the proxy with this env table only; see the Claude writer.
     lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))
     lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
+    if python_bin:
+        lines.append("AGENTSTACK_PYTHON = " + toml_string(python_bin))
     # run-mcp.sh also reads the machine-wide Codex App env for missing values.
     # Pin its state inside this child-owned home so a bridge install cannot
     # redirect the sandboxed child back into the live bridge runtime.
@@ -1414,6 +1432,8 @@ PY
     fi
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).
+        CHILD_CODEX_BIN="$(resolve_codex_bin)"
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
@@ -1452,7 +1472,7 @@ ${TASK}"
                 for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
                     [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
                 done
-                env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
                     "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -2224,6 +2244,8 @@ if [[ -n "$RESOURCES" ]]; then
     TMUX_ENV_ARGS+=(-e "CHILD_RESOURCES=$RESOURCES")
 fi
 if [[ "$USE_CODEX" == true ]]; then
+    CHILD_CODEX_BIN="$(resolve_codex_bin)"
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
@@ -2250,7 +2272,7 @@ if [[ "$USE_CODEX" == true ]]; then
             for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
                 [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
             done
-            env -u OPENAI_API_KEY codex -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
                 "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''

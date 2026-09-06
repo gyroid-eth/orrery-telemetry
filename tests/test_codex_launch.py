@@ -219,6 +219,10 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     assert text.count("${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS}") == 2
     assert text.count("${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}") == 2
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
+    assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
+    assert text.count('-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN"') == 2
+    assert text.count('env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD"') == 2
+    assert 'env -u OPENAI_API_KEY codex -C "$PWD"' not in text
 
 
 def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -484,6 +488,50 @@ def test_child_window_opens_in_the_background_by_default():
         assert f'\'"${var}"\'' in text, var
 
 
+
+def test_proxy_recovers_python_from_agentstack_mail_env_when_caller_omits_it():
+    runner = _ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        home = root / "home"
+        bridge = root / "bridge"
+        home.mkdir()
+        bridge.mkdir()
+        log = root / "python.log"
+        selected = root / "selected-python"
+        selected.write_text(
+  "#!/bin/bash\n"
+  'printf \'%s\\n\' "$0|$1" > "$AGENTSTACK_TEST_PYTHON_LOG"\n',
+  encoding="utf-8",
+        )
+        selected.chmod(selected.stat().st_mode | stat.S_IEXEC)
+        mail_env = root / "service.env"
+        mail_env.write_text(
+  f'AGENTSTACK_PYTHON="{selected}"\n'
+  "HTTP_BEARER_TOKEN=unused-in-disabled-mode\n",
+  encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.pop("AGENTSTACK_PYTHON", None)
+        env.update({
+  "HOME": str(home),
+  "AGENTSTACK_CODEX_APP_INSTALL_DIR": str(bridge),
+  "AGENTSTACK_MAIL_ENV": str(mail_env),
+  "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
+  "AGENTSTACK_TEST_PYTHON_LOG": str(log),
+        })
+        result = subprocess.run(
+  ["bash", str(runner)],
+  cwd=_ROOT,
+  env=env,
+  text=True,
+  stdout=subprocess.PIPE,
+  stderr=subprocess.PIPE,
+  check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert log.read_text(encoding="utf-8").startswith(f"{selected}|")
+
 def _main() -> int:
     failures = 0
     for name, fn in sorted(globals().items()):
@@ -638,4 +686,7 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode," in text
     assert 'lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))' in text
     run_mcp = (_ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh").read_text(encoding="utf-8")
+    assert 'server_env["AGENTSTACK_PYTHON"] = python_bin' in text
+    assert 'lines.append("AGENTSTACK_PYTHON = " + toml_string(python_bin))' in text
     assert "read -r MCP_AGENT_MAIL_TOKEN" not in run_mcp
+    assert "  AGENTSTACK_PYTHON\n" in run_mcp
