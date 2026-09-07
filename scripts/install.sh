@@ -1931,7 +1931,11 @@ PY
     printf '[Unit]\nDescription=AgentStack Mail autostart\nAfter=network.target\n\n'
     # No RemainAfterExit: the timer re-runs this unit, and a unit left "active"
     # after exiting would never be started again.
-    printf '[Service]\nType=oneshot\n'
+    # KillMode=process: mailctl hands the server to nohup and exits, and the
+    # default control-group KillMode then kills the server the moment the
+    # oneshot finishes (seen on WSL2 Ubuntu 26.04: health ok, then "Shutting
+    # down" in the same second). Only the controller is the unit's process.
+    printf '[Service]\nType=oneshot\nKillMode=process\n'
     # systemd splits unquoted values on whitespace, so a HOME or install dir
     # containing a space would silently truncate every Environment= value and
     # the ExecStart path. Quote them the way systemd expects.

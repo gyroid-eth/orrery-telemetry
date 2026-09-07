@@ -123,6 +123,25 @@ systemctl --user daemon-reload
 
 In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. Ghostty click-to-jump is unavailable, but the localhost dashboard and browser terminal can work.
 
+### On WSL2 the services vanish when the last shell closes
+
+WSL2 stops the distro's VM once no session is open, taking the `nohup`-started Mail and dashboard with it. On top of that, without linger the systemd user manager exits at the last logout. To keep them resident, set both (checked on Ubuntu 26.04 / WSL 2.7):
+
+```bash
+# inside WSL: keep systemd --user alive after logout
+loginctl enable-linger "$USER"
+```
+
+```ini
+# Windows side, %UserProfile%\.wslconfig: do not stop the VM when idle
+[wsl2]
+vmIdleTimeout=-1
+```
+
+Then run `wsl --shutdown` once and reopen. The Mail timer restarts Mail one minute after boot; bring the dashboard back by re-running `install.sh`.
+
+If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
+
 ## `EPERM` on macOS
 
 Suspect TCC under Desktop / Documents / Downloads.

@@ -138,6 +138,25 @@ systemctl --user daemon-reload
 
 systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。Ghostty click-to-jump は使えませんが、localhost dashboard と browser terminal は利用できます。
 
+### WSL2 では最後のシェルを閉じると service が消える
+
+WSL2 は開いているセッションが無くなると distro の VM ごと停止し、`nohup` で立てた Mail と dashboard は一緒に消えます。加えて、ユーザーに linger が無いと最後のログアウトで systemd user manager も終了します。常駐させたいなら両方を設定します（Ubuntu 26.04 / WSL 2.7 で確認）:
+
+```bash
+# WSL 内: ログアウト後も systemd --user を残す
+loginctl enable-linger "$USER"
+```
+
+```ini
+# Windows 側 %UserProfile%\.wslconfig: セッションが無くても VM を止めない
+[wsl2]
+vmIdleTimeout=-1
+```
+
+設定後は `wsl --shutdown` で一度止めてから開き直します。Mail は起動 1 分後に timer が立て、dashboard は `install.sh` の再実行で立て直します。
+
+同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
+
 ## macOS で `EPERM`
 
 Desktop / Documents / Downloads 配下なら TCC を疑います。

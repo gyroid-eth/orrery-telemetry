@@ -127,7 +127,10 @@ Freezing those paths into the unit instead would silently keep starting the
 previous render after a re-install. Each invocation is one-shot on purpose (`KeepAlive` false / `Type=oneshot`): the
 controller hands the server to `nohup` and exits, so a restart-always unit would
 respawn the *controller* in a loop instead of supervising the server. Repetition
-comes from `StartInterval` on launchd and from the timer on systemd. `start` is
+comes from `StartInterval` on launchd and from the timer on systemd. The systemd
+unit also sets `KillMode=process`: without it the default control-group cleanup
+kills the freshly started server the moment the oneshot controller exits (seen
+on WSL2). `start` is
 idempotent — it reports "already running" and exits 0 when the owned PID is alive
 and healthy — so re-running it costs nothing, and it stays silent when there is
 nothing to do. Its output goes to `agentstack-mail-autostart.log` (launchd

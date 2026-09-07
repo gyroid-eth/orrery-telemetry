@@ -195,6 +195,11 @@ def test_systemd_unit_is_one_shot_and_calls_mailctl():
     assert "RemainAfterExit" not in text, (
         "a oneshot left active after exiting is never re-run by its timer"
     )
+    assert re.search(r"^KillMode=process$", text, re.M), (
+        "mailctl leaves the server behind under nohup; with the default "
+        "control-group KillMode systemd kills it as soon as the oneshot exits "
+        "(observed on WSL2: health ok, then shutdown in the same second)"
+    )
     assert re.search(r"^ExecStart=.*agentstack-mailctl\"? start$", text, re.M), text
     assert "After=default.target" not in text, (
         "`systemctl --user enable` installs this into default.target.wants/, and "
