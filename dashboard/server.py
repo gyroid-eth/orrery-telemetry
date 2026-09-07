@@ -1641,6 +1641,29 @@ def _shell_join(argv: list[str]) -> str:
     return " ".join(_zsh_safe_quote(a) for a in argv)
 
 
+def _write_wt_launcher(tmux_args: list[str], title: str) -> str:
+    """One-shot launcher script for the wt adapter (see there).
+
+    Lives under the runtime dir, named after the session so a re-launch
+    overwrites rather than accumulates; removes itself once tmux has exec'd.
+    """
+    d = os.path.join(RUNTIME_DIR, "wt-launch")
+    os.makedirs(d, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", title) or "session"
+    path = os.path.join(d, f"{safe}.sh")
+    body = (
+        "#!/bin/bash\n"
+        f"rm -f {shlex.quote(path)}\n"
+        f"exec env -u TMUX -u TMUX_PANE {shlex.join(tmux_args)}\n"
+    )
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.chmod(tmp, 0o700)
+    os.replace(tmp, path)
+    return path
+
+
 def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
     adapter = _terminal_adapter()
     if adapter == "none":
@@ -1655,13 +1678,18 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
         elif adapter == "wt":
             # Windows Terminal, new tab in the current window (-w 0), running
-            # the tmux command back inside this distro. `--exec` skips the
-            # login shell so the argv reaches tmux untouched.
+            # the tmux command back inside this distro. The argv is written to
+            # a launcher script first: wt.exe's own CLI splits on `;` and the
+            # WSL interop re-quotes every argument, so a resume line such as
+            # `export A=..; exec claude --resume ..` came apart in transit
+            # ("The system cannot find the file specified", 2026-09-07). The
+            # script path has no spaces or quotes, so nothing on the Windows
+            # side has anything to reinterpret.
+            script = _write_wt_launcher(tmux_args, title)
             cmd = [
                 "wt.exe", "-w", "0", "new-tab", "--title", title,
-                "wsl.exe", "-d", _wsl_distro(), "--exec",
-                "env", "-u", "TMUX", "-u", "TMUX_PANE",
-            ] + tmux_args
+                "wsl.exe", "-d", _wsl_distro(), "--exec", "bash", script,
+            ]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
         else:
             shell_cmd = _shell_join(
