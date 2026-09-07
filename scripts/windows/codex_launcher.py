@@ -22,7 +22,8 @@ from urllib.parse import urlsplit
 
 import psutil
 
-from private_state import consume_token, create_private_directory, require_private
+from private_state import (consume_token, create_private_directory,
+                           protect_private_file, require_private)
 from owned_job import OwnedJob
 
 HERE = Path(__file__).resolve().parent
@@ -30,10 +31,17 @@ ROOT = HERE.parents[1]
 
 
 def write_json(path: Path, data: dict) -> None:
+    require_private(path.parent)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
-    with temporary.open('x', encoding='utf-8') as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-    temporary.replace(path)
+    try:
+        with temporary.open('x', encoding='utf-8') as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        protect_private_file(temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def executable(value: str) -> str:
@@ -113,6 +121,7 @@ def configure_proxy(home: Path, spec: dict) -> None:
     """Explicit child-only config, never copy an unbound Mail MCP connection."""
     # The prepared home must not have a configuration. Its login/sandbox setup
     # can be provisioned by the caller, but configuration ownership is explicit.
+    require_private(home)
     target = home / 'config.toml'
     if target.exists():
         raise ValueError('Child home config.toml already exists; use a dedicated prepared home')
@@ -143,6 +152,9 @@ def configure_proxy(home: Path, spec: dict) -> None:
         lines.extend([f'[mcp_servers.orrery-mail.tools.{tool}]', 'approval_mode = "approve"'])
     with target.open('x', encoding='utf-8') as stream:
         stream.write('\n'.join(lines) + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    protect_private_file(target)
 
 
 _SCRUBBED_CHILD_ENV = (

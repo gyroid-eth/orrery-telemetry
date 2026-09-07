@@ -59,6 +59,26 @@ def require_private(path: Path) -> None:
         raise PermissionError('Private state must allow only the current user, with full control')
 
 
+def protect_private_file(path: Path) -> None:
+    """Apply a current-user-only ACL before a private file is exposed."""
+    path = path.absolute()
+    reject_reparse(path)
+    if not path.is_file():
+        raise ValueError('Private state path must be a regular file')
+    # An elevated Windows token can make the default file owner the local
+    # Administrators group even when the containing directory is private.
+    # Install the file descriptor explicitly instead of relying on that
+    # default or on POSIX chmod semantics.
+    powershell(
+        '$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; '
+        '$acl=New-Object System.Security.AccessControl.FileSecurity; '
+        '$acl.SetSecurityDescriptorSddlForm(("O:{0}D:P(A;;FA;;;{0})" -f $sid)); '
+        'Set-Acl -LiteralPath $env:ORRERY_ACL_PATH -AclObject $acl',
+        ORRERY_ACL_PATH=str(path),
+    )
+    require_private(path)
+
+
 def create_private_directory(path: Path) -> None:
     """Create atomically with a protected DACL, before any secret is written."""
     path = path.absolute()
@@ -100,6 +120,7 @@ def create_private_directory(path: Path) -> None:
 def consume_token(source: Path, destination: Path) -> None:
     reject_reparse(source)
     reject_reparse(destination)
+    require_private(source.parent)
     require_private(source)
     require_private(destination.parent)
     if not source.is_file() or source.stat().st_size > 4096:
@@ -112,7 +133,7 @@ def consume_token(source: Path, destination: Path) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     try:
-        require_private(destination)
+        protect_private_file(destination)
     except BaseException:
         # Never leave a newly written token behind when its ACL cannot be
         # verified. The source remains intact so the caller can recover.

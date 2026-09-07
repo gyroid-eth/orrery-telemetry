@@ -79,15 +79,13 @@ def _assert_current_user_only(path: Path, *, protected: bool | None = True) -> N
 
 
 def _grant_everyone_read(path: Path) -> None:
-    private_state.powershell(
-        "$a=Get-Acl -LiteralPath $env:ORRERY_ACL_PATH; "
-        "$sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); "
-        "$rule=[System.Security.AccessControl.FileSystemAccessRule]::new("
-        "$sid,[System.Security.AccessControl.FileSystemRights]::Read,"
-        "[System.Security.AccessControl.AccessControlType]::Allow); "
-        "[void]$a.AddAccessRule($rule); "
-        "Set-Acl -LiteralPath $env:ORRERY_ACL_PATH -AclObject $a",
-        ORRERY_ACL_PATH=str(path),
+    subprocess.run(
+        ["icacls", str(path), "/grant", "*S-1-1-0:R"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -128,6 +126,7 @@ def test_private_token_handoff_consumes_source_after_verified_copy(
 
     source = private_root / "handoff.token"
     source.write_text("one-time-child-token\n", encoding="utf-8")
+    private_state.protect_private_file(source)
     destination = destination_root / "owner.token"
     private_state.consume_token(source, destination)
 
@@ -144,6 +143,13 @@ def _wait_for(predicate, timeout: float = 10.0) -> None:
             return
         time.sleep(0.05)
     assert predicate(), "condition did not become true before timeout"
+
+
+def _pid_file_ready(path: Path) -> bool:
+    try:
+        return path.is_file() and bool(path.read_text(encoding="ascii").strip())
+    except (OSError, UnicodeError):
+        return False
 
 
 def _process_alive(pid: int) -> bool:
@@ -200,7 +206,7 @@ def test_stop_owned_terminates_real_child_tree_and_leaves_foreign_process(
     foreign = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     child_pid: int | None = None
     try:
-        _wait_for(child_pid_file.is_file)
+        _wait_for(lambda: _pid_file_ready(child_pid_file))
         child_pid = int(child_pid_file.read_text(encoding="ascii"))
         _wait_for(lambda: _process_alive(child_pid))
         parent_record = launcher.process_record(psutil.Process(owner.pid))
@@ -246,7 +252,7 @@ def test_owned_job_closes_orphaned_grandchild_but_leaves_foreign_process(
             cwd=str(tmp_path),
         )
         child.wait(timeout=10)
-        _wait_for(grandchild_pid_file.is_file)
+        _wait_for(lambda: _pid_file_ready(grandchild_pid_file))
         grandchild_pid = int(grandchild_pid_file.read_text(encoding="ascii"))
         _wait_for(lambda: _process_alive(grandchild_pid))
         assert _process_alive(foreign.pid)
@@ -329,6 +335,7 @@ def test_proxy_environment_enabled_reads_private_env_without_shell_execution(
         f"UNSAFE=$(New-Item -ItemType File -Path '{sentinel}')\n",
         encoding="utf-8",
     )
+    private_state.protect_private_file(mail_env)
 
     result = proxy.proxy_environment(
         {
@@ -346,6 +353,7 @@ def test_proxy_environment_enabled_requires_a_bearer_token(tmp_path: Path) -> No
     private_state.create_private_directory(private_root)
     mail_env = private_root / "mail.env"
     mail_env.write_text("AGENTSTACK_MAIL_HTTP_BEARER_MODE=enabled\n", encoding="utf-8")
+    private_state.protect_private_file(mail_env)
 
     with pytest.raises(ValueError, match="does not contain HTTP_BEARER_TOKEN"):
         proxy.proxy_environment(
@@ -361,6 +369,7 @@ def test_direct_proxy_requires_a_private_owner_token(tmp_path: Path) -> None:
     private_state.create_private_directory(private_root)
     token = private_root / "owner.token"
     token.write_text("owner-token", encoding="utf-8")
+    private_state.protect_private_file(token)
     environment = {
         "AGENTSTACK_PROXY_AGENT_NAME": "BlueLake",
         "AGENTSTACK_PROXY_TOKEN_FILE": str(token),
@@ -374,7 +383,7 @@ def test_direct_proxy_requires_a_private_owner_token(tmp_path: Path) -> None:
 
 def test_proxy_config_propagates_child_runtime_environment(tmp_path: Path) -> None:
     home = tmp_path / "codex-home"
-    home.mkdir()
+    private_state.create_private_directory(home)
     state = tmp_path / "state"
     python = tmp_path / "python.exe"
     spec = {
