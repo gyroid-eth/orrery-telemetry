@@ -29,7 +29,7 @@
 | `AGENTSTACK_LANG` | browser language | murmur の言語を `ja` / `en` で上書き |
 | `AGENTSTACK_MURMUR` | enabled | `off` で murmur の吹き出しを無効化 |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | launchd label prefix |
-| `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / none` |
+| `AGENTSTACK_TERMINAL` | `auto` | `ghostty / iterm / terminal / wt / none`。`wt` は WSL2 の Windows Terminal（`auto` は WSL2 内で `wt.exe` が見えれば選ぶ） |
 | `AGENTSTACK_HOOKS_DIR` | `~/.agentstack/hooks` | hook と既定 spawn script の root |
 | `AGENTSTACK_RUNTIME_DIR` | `~/.agentstack/runtime` | token、annotation、session index、child / watcher state |
 | `AGENTSTACK_MAIL_HOME` | `~/.agentstack/mail` | signal data root |

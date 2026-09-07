@@ -1573,8 +1573,28 @@ def _mac_app_exists(app_name: str) -> bool:
     )
 
 
+def _is_wsl() -> bool:
+    """True inside a WSL distro (kernel string carries 'microsoft')."""
+    if sys.platform != "linux":
+        return False
+    try:
+        with open("/proc/version", encoding="utf-8", errors="replace") as fh:
+            return "microsoft" in fh.read().lower()
+    except OSError:
+        return False
+
+
+def _wsl_distro() -> str:
+    return os.environ.get("WSL_DISTRO_NAME", "").strip()
+
+
 def _auto_terminal() -> str:
     if sys.platform != "darwin":
+        # WSL2: Windows Terminal is reachable through interop as wt.exe, and a
+        # new tab running `wsl.exe -d <distro> --exec tmux attach` is the
+        # click-to-jump equivalent of a Ghostty window (2026-09-07).
+        if _is_wsl() and _wsl_distro() and shutil.which("wt.exe"):
+            return "wt"
         return "none"
     if _mac_app_exists("Ghostty.app") or shutil.which("ghostty"):
         return "ghostty"
@@ -1590,7 +1610,7 @@ def _auto_terminal() -> str:
 def _terminal_adapter() -> str:
     if TERMINAL_SETTING in ("", "auto"):
         return _auto_terminal()
-    if TERMINAL_SETTING in ("ghostty", "iterm", "terminal", "none"):
+    if TERMINAL_SETTING in ("ghostty", "iterm", "terminal", "wt", "none"):
         return TERMINAL_SETTING
     return "none"
 
@@ -1598,7 +1618,7 @@ def _terminal_adapter() -> str:
 def _terminal_unsupported() -> dict:
     return {
         "ok": False,
-        "error": "terminal jump unsupported; set AGENTSTACK_TERMINAL=ghostty, iterm, terminal, or none",
+        "error": "terminal jump unsupported; set AGENTSTACK_TERMINAL=ghostty, iterm, terminal, wt (WSL2), or none",
     }
 
 
@@ -1631,6 +1651,16 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
                 "env", "-u", "TMUX", "-u", "TMUX_PANE",
                 "open", "-na", "Ghostty.app", "--args",
                 f"--title={title}", "-e",
+            ] + tmux_args
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        elif adapter == "wt":
+            # Windows Terminal, new tab in the current window (-w 0), running
+            # the tmux command back inside this distro. `--exec` skips the
+            # login shell so the argv reaches tmux untouched.
+            cmd = [
+                "wt.exe", "-w", "0", "new-tab", "--title", title,
+                "wsl.exe", "-d", _wsl_distro(), "--exec",
+                "env", "-u", "TMUX", "-u", "TMUX_PANE",
             ] + tmux_args
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
         else:

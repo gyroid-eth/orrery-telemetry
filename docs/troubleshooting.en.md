@@ -121,7 +121,7 @@ systemctl --user status agentstack-dashboard.service
 systemctl --user daemon-reload
 ```
 
-In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. Ghostty click-to-jump is unavailable, but the localhost dashboard and browser terminal can work.
+In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
 
 ### On WSL2 the services vanish when the last shell closes
 

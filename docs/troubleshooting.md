@@ -136,7 +136,7 @@ systemctl --user status agentstack-dashboard.service
 systemctl --user daemon-reload
 ```
 
-systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。Ghostty click-to-jump は使えませんが、localhost dashboard と browser terminal は利用できます。
+systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
 ### WSL2 では最後のシェルを閉じると service が消える
 

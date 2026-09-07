@@ -102,7 +102,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MURMUR` | unset | Set to `off` to disable murmurs |
 | `AGENTSTACK_PORT` | `8770` | Dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | Service-label prefix |
-| `AGENTSTACK_TERMINAL` | `auto` | Terminal integration |
+| `AGENTSTACK_TERMINAL` | `auto` | Terminal integration: `ghostty / iterm / terminal / wt / none`. `wt` is Windows Terminal on WSL2 (`auto` picks it when `wt.exe` is reachable inside WSL2) |
 | `AGENTSTACK_PYTHON` | resolved `python3` | Python for services |
 | `AGENTSTACK_PATH` | Homebrew and system paths | `PATH` passed to services |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | MCP endpoint for launchers / hooks / dashboard / Bridge |
