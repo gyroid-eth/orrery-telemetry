@@ -112,7 +112,7 @@ When the installer detects an occupied port, it stops before service registratio
 
 ## No service on Linux / WSL
 
-**Linux and WSL are unverified.** The systemd user path and supervised-background fallback are implemented, but development uses macOS and has not exercised registration or timer startup on a real Linux host. CI on ubuntu-latest stubs `systemctl` and checks only unit generation and call order. The following is the expected design; if it fails, report the environment and output in an issue.
+**Plain Linux is unverified; WSL2 has been checked on a real machine.** The systemd user path and supervised-background fallback are implemented, but registration and timer startup have not been exercised on a plain Linux host. CI on ubuntu-latest stubs `systemctl` and checks only unit generation and call order. On WSL2 (Ubuntu 26.04 / WSL 2.7) the Mail timer start, the dashboard, agent launch, and jump have all been run. If it fails, report the environment and output in an issue.
 
 When a systemd user session is available:
 

@@ -25,7 +25,7 @@ Optional:
 - Ghostty: click-to-jump and window titles. Falls back to iTerm2, Terminal.app, or `none`. Only Ghostty can raise an existing window; iTerm2 and Terminal.app open a new window for every jump
 - Obsidian: vault / Daily Note integration for `/log` and links that open Output items inside a vault. `/log`'s Obsidian mode is enabled only when `AGENTSTACK_OBSIDIAN_APP` is set; the installer does not set it. Without it, `/log` writes to local `logs/`, and the dashboard displays a generic project log as a non-link item
 
-On macOS, the resident-service path is chosen by the actual result of bootstrapping into launchd's `gui/$UID` domain. If bootstrap is unavailable while the display sleeps, in an SSH-only environment, or for another reason, installation automatically switches to supervised-background mode, which detects and restarts an exited dashboard server. On Linux, the implementation uses a systemd user service or the same supervised-background mode when unavailable, but it is unverified on a real Linux host; CI only tests unit generation with a stubbed `systemctl`. WSL2 is also unverified. By design, the localhost dashboard should work while Ghostty click-to-jump should not. Native Windows is unsupported.
+On macOS, the resident-service path is chosen by the actual result of bootstrapping into launchd's `gui/$UID` domain. If bootstrap is unavailable while the display sleeps, in an SSH-only environment, or for another reason, installation automatically switches to supervised-background mode, which detects and restarts an exited dashboard server. On Linux, the implementation uses a systemd user service or the same supervised-background mode when unavailable, but it is unverified on a plain Linux host; CI only tests unit generation with a stubbed `systemctl`. On WSL2 (Ubuntu 26.04 / WSL 2.7) the install, Mail, dashboard, `agent-start`, `/delegate` children, and dashboard jump (attach / resume in a Windows Terminal tab) have been checked on a real machine. The VM stops with the last shell; see the WSL2 section of [troubleshooting](troubleshooting.en.md). Native Windows is unsupported.
 
 An explicitly specified `AGENTSTACK_PYTHON` is also checked for Python 3.11 or newer. When unspecified, the installer checks `python3` on PATH, then also searches versioned commands, `/opt/homebrew/bin/python3`, and `/usr/local/bin/python3` if needed. If no compatible interpreter exists, it reports the inspected versions and paths and stops before generating service files.
 
@@ -79,6 +79,37 @@ agent-start-codex /path/to/your-project
 ```
 
 `agent-start` creates a tmux session with the same name as the agent-mail identity. Dashboard jumps, mail notifications, and token recovery are joined by this name. In the launched Claude Code session, invoke skills with a leading slash, as in `/delegate`. See [Skills and file reservations](launchers.en.md#skills-2-and-file-reservations) for the first child launch.
+
+## Installing on Windows (WSL2)
+
+On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the steps above apply unchanged. This is the order that worked on Windows 11 with Ubuntu 26.04 / WSL 2.7.
+
+1. **Install WSL2 and Ubuntu** (PowerShell, once).
+   ```powershell
+   wsl --update
+   wsl --install -d Ubuntu
+   ```
+   It ends by asking for a username and password. If it stops with an error such as `Wsl/Service/E_UNEXPECTED`, run `wsl --update` first and retry `wsl --install`.
+2. **Enter Ubuntu.** Every command below is typed at the Ubuntu prompt (`user@PC:~$`). Typed at the PowerShell prompt (`PS C:\...>`) it fails at the first `&&`.
+   ```powershell
+   wsl -d Ubuntu
+   ```
+3. **Install the prerequisites** (inside Ubuntu).
+   ```bash
+   sudo apt update && sudo apt install -y git tmux python3 curl
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+4. **Clone and run the installer** (inside Ubuntu). Keep the project on the WSL side (`~/work/...`): `/mnt/c` is slow and handles permissions differently.
+   ```bash
+   git clone https://github.com/gyroid-eth/orrery-telemetry.git
+   cd orrery-telemetry
+   ./scripts/install.sh --project-key ~/work/your-project
+   ```
+   The questions are the same three as above, and each only changes files under the Ubuntu home. Answer each with `yes` and one press of Enter (over Remote Desktop a key can register as repeated, so press once and wait for the output). It is done when `dashboard healthy: http://127.0.0.1:8770/api/agents` appears.
+5. **Open the dashboard.** In a Windows browser open `http://127.0.0.1:8770/`. WSL2 forwards localhost to Windows, so it just works.
+6. **Start an agent** (inside Ubuntu). Install Claude Code or the Codex CLI inside Ubuntu, log in, then use the same commands as in "Starting the first agent" above. The dashboard's jump opens a new Windows Terminal tab attached to the tmux session.
+
+**Do not close every window.** When the last Ubuntu window closes, WSL2 stops the whole VM and Mail and the dashboard go with it. To keep them resident, set `loginctl enable-linger` and `vmIdleTimeout=-1` in `.wslconfig` as described in the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-the-services-vanish-when-the-last-shell-closes).
 
 ## Non-interactive installation (`--assume-yes`)
 

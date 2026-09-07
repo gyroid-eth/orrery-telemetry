@@ -127,7 +127,7 @@ installer は使用中 port を検出すると service 登録前に停止しま�
 
 ## Linux / WSL で service がない
 
-**Linux と WSL は未検証です。** systemd user 経路と supervised background への fallback は実装されていますが、開発者の環境は macOS のみで、実 Linux ホストでの登録・timer 起動は通していません。CI（ubuntu-latest）は `systemctl` をスタブにして unit の生成と呼び出し順だけを検査しています。以下は設計上の期待であり、うまくいかなければ issue で環境と出力を報告してください。
+**素の Linux は未検証、WSL2 は実機確認済みです。** systemd user 経路と supervised background への fallback は実装されていますが、素の Linux ホストでの登録・timer 起動は通していません。CI（ubuntu-latest）は `systemctl` をスタブにして unit の生成と呼び出し順だけを検査しています。WSL2（Ubuntu 26.04 / WSL 2.7）では Mail の timer 起動と dashboard、agent 起動、jump まで通しています。うまくいかなければ issue で環境と出力を報告してください。
 
 systemd user session が使える場合:
 

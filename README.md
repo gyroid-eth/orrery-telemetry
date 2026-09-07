@@ -16,7 +16,7 @@
 | --- | --- |
 | macOS | **対応**。launchd を使い、`gui/$UID` domain を利用できない場合は supervised background mode へ切り替えます。launcher / hook は標準 Bash 3.2 対応です。 |
 | Linux | **未検証（実装あり）**。`systemd --user` を優先し、なければ supervised background mode に落ちる経路を実装していますが、実際の Linux ホストで `systemctl --user` の登録・timer 起動を通した記録はありません。検証済みなのは ubuntu-latest の CI で `systemctl` をスタブに差し替えた unit 生成テストまでです。Linux で試した結果は issue で報告してください。 |
-| WSL2 | **未検証**。設計上は localhost dashboard が使え、Ghostty の click-to-jump は使えない想定ですが、実機で確認していません。 |
+| Windows（WSL2） | **対応**（実機確認: Ubuntu 26.04 / WSL 2.7、2026-09-07）。install、Mail の timer 起動、dashboard、`agent-start`、`/delegate` の子、dashboard からの jump（Windows Terminal のタブで attach / resume）を通しています。最後のシェルを閉じると VM ごと止まるので、常駐させるには [troubleshooting の WSL2 節](docs/troubleshooting.md#wsl2-では最後のシェルを閉じると-service-が消える) の linger と `vmIdleTimeout` の設定が要ります。Ghostty は無いので jump は Windows Terminal 経由です。 |
 | Windows native | **未対応**。native 向けの貢献は、macOS 側の挙動を変えない形で受け付けます（置き場と作法は [CONTRIBUTING「Windows contributions」](CONTRIBUTING.md#windows-contributions-community-lane)）。community-maintained の実験的な開発用起動手順: [Mail と Dashboard の起動 helper](docs/windows-local.md)。 |
 | その他の OS | **未対応**。installer の preflight が書き込み前に停止します。 |
 

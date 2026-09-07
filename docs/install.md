@@ -25,7 +25,7 @@
 - Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback。ただし既存ウィンドウの前面化は Ghostty のみで、iTerm2 と Terminal.app では jump のたびに新しいウィンドウが開きます
 - Obsidian: `/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard は generic project log を非リンク項目として表示します
 
-macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使う実装ですが、実 Linux ホストでは未検証です（CI は `systemctl` をスタブにした unit 生成テストのみ）。WSL2 も未検証で、設計上は localhost dashboard が使え、Ghostty の click-to-jump は使えない想定です。Windows native は対象外です。
+macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使う実装ですが、素の Linux ホストでは未検証です（CI は `systemctl` をスタブにした unit 生成テストのみ）。WSL2（Ubuntu 26.04 / WSL 2.7）では install、Mail、dashboard、`agent-start`、`/delegate` の子、dashboard からの jump（Windows Terminal のタブで attach / resume）まで実機で確認しています。最後のシェルを閉じると VM ごと止まる点は [troubleshooting](troubleshooting.md) の WSL2 節を参照してください。Windows native は対象外です。
 
 `AGENTSTACK_PYTHON` を指定した場合も Python 3.11 以上か検証します。未指定時は PATH 上の `python3` を検査し、不適格なら version 付き command や `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` も探索します。互換 interpreter がなければ、サービス file を生成する前に検査した version と path を示して停止します。
 
@@ -79,6 +79,37 @@ agent-start-codex /path/to/your-project
 ```
 
 `agent-start` は agent-mail の identity と同名の tmux session を作ります。dashboard の jump、mail 通知、token 復旧はこの名前で結びつきます。起動した Claude Code では `/delegate` のように先頭の slash を付けて skill を呼びます。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
+
+## Windows（WSL2）で入れる
+
+Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux なので、上の手順がそのまま使えます。以下は Windows 11 + Ubuntu 26.04 / WSL 2.7 で通した順番です。
+
+1. **WSL2 と Ubuntu を入れる**（PowerShell、初回のみ）。
+   ```powershell
+   wsl --update
+   wsl --install -d Ubuntu
+   ```
+   最後にユーザー名とパスワードを聞かれます。`Wsl/Service/E_UNEXPECTED` のようなエラーで止まるときは、先に `wsl --update` を通してから `wsl --install` をやり直します。
+2. **Ubuntu の中に入る。** 以後のコマンドはすべて Ubuntu のプロンプト（`user@PC:~$`）で打ちます。PowerShell のプロンプト（`PS C:\...>`）で打つと `&&` の時点で失敗します。
+   ```powershell
+   wsl -d Ubuntu
+   ```
+3. **前提を入れる**（Ubuntu の中）。
+   ```bash
+   sudo apt update && sudo apt install -y git tmux python3 curl
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+4. **clone して installer を走らせる**（Ubuntu の中）。project は WSL 側のパス（`~/work/...`）にしてください。`/mnt/c` 配下は遅く、権限の扱いも違います。
+   ```bash
+   git clone https://github.com/gyroid-eth/orrery-telemetry.git
+   cd orrery-telemetry
+   ./scripts/install.sh --project-key ~/work/your-project
+   ```
+   途中の質問は上の 3 つと同じで、どれも Ubuntu の home の中を変えるだけです。質問ごとに `yes` と打って Enter を 1 回ずつ押します（Remote Desktop 越しだとキーが連打扱いになることがあるので、1 回押して表示を待ちます）。最後に `dashboard healthy: http://127.0.0.1:8770/api/agents` が出れば完了です。
+5. **dashboard を開く。** Windows のブラウザで `http://127.0.0.1:8770/` を開きます。WSL2 の localhost は Windows 側に転送されるので、そのまま届きます。
+6. **agent を起動する**（Ubuntu の中）。Claude Code か Codex CLI を Ubuntu の中に入れてログインしてから、上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal の新しいタブを開いて tmux に attach します。
+
+**閉じてはいけない窓。** Ubuntu の窓を全部閉じると WSL2 は VM ごと止まり、Mail と dashboard も消えます。常駐させたいときは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-では最後のシェルを閉じると-service-が消える) の `loginctl enable-linger` と `.wslconfig` の `vmIdleTimeout=-1` を設定してください。
 
 ## 非対話で入れる（`--assume-yes`）
 
