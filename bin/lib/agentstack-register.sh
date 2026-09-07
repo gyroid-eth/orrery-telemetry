@@ -88,6 +88,43 @@ sys.exit(1)
 '
 }
 
+# The agent-mail row id from a register_agent reply (plain, structuredContent,
+# or a JSON text block). Empty when the reply carries none. The id is the key
+# of the session index, which is why a shell-side registration needs it.
+ags_extract_agent_id() {
+  python3 -c '
+import json, sys
+
+def candidate_id(obj):
+    if isinstance(obj, dict) and isinstance(obj.get("id"), int):
+        return obj["id"]
+    return None
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+
+found = candidate_id(data)
+result = data.get("result") if isinstance(data, dict) else None
+if found is None:
+    found = candidate_id(result)
+if found is None and isinstance(result, dict):
+    found = candidate_id(result.get("structuredContent"))
+    if found is None and isinstance(result.get("content"), list):
+        for part in result["content"]:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                try:
+                    found = candidate_id(json.loads(part["text"]))
+                except Exception:
+                    found = None
+                if found is not None:
+                    break
+print("" if found is None else found)
+'
+}
+
 ags_extract_agent_name() {
   python3 -c '
 import json, sys
@@ -426,6 +463,7 @@ ags_pick_available_agent_name() {
 ags_register_session() {
   local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}" requested_mode="${7:-reserved}"
   AGS_REGISTERED_AGENT_NAME=""
+  AGS_REGISTERED_AGENT_ID=""
   AGS_REGISTERED_REGISTRATION_TOKEN=""
   AGS_REQUESTED_AGENT_NAME=""
   AGS_SERVER_RETURNED_AGENT_NAME=""
@@ -502,6 +540,7 @@ ags_register_session() {
     ags_apply_contact_policy "$project_key" "$registered" "$registered_token"
   fi
   AGS_REGISTERED_AGENT_NAME="$registered"
+  AGS_REGISTERED_AGENT_ID="$(printf '%s' "$result" | ags_extract_agent_id)"
   printf '%s\n' "$registered"
 }
 
