@@ -1926,6 +1926,20 @@ def _transcript_path(session: str) -> str | None:
 ABS_CLAUDE = os.path.expanduser("~/.local/bin/claude")
 
 
+def _login_shell() -> str:
+    """Shell for `<shell> -lic <inner>` tmux launches.
+
+    zsh when installed (macOS default), otherwise bash: a stock Ubuntu / WSL2
+    has no zsh, and a hard-coded "zsh" made every resume fail there with
+    nothing in the pane. AGENTSTACK_CHILD_SHELL overrides, matching
+    spawn_child.sh.
+    """
+    override = os.environ.get("AGENTSTACK_CHILD_SHELL", "")
+    if override and os.access(override, os.X_OK):
+        return override
+    return shutil.which("zsh") or shutil.which("bash") or "bash"
+
+
 def _transcript_cwd(path: str) -> str | None:
     """transcript JSONL から元の cwd を抽出（各イベントに `cwd` フィールド）。"""
     try:
@@ -2027,7 +2041,7 @@ def do_resume(session: str) -> dict:
     # 誤爆する(2026-06-02 調査)。dashboard が tmux 内から再起動された場合に備え剥がす。
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-         "zsh", "-lic", inner],
+         _login_shell(), "-lic", inner],
         title=session,
     )
     if launch.get("ok"):
@@ -2136,7 +2150,7 @@ def _do_resume_codex(session: str) -> dict:
     )
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-         "zsh", "-lic", inner],
+         _login_shell(), "-lic", inner],
         title=session,
     )
     if launch.get("ok"):

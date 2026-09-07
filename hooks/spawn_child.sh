@@ -624,7 +624,8 @@ cleanup_worktree() {
 # died instantly and the launcher then sat through its full readiness timeout.
 # Probe --help instead of pinning a version, so both old and new CLIs work.
 # Printed as one line and handed to the child through the tmux environment, so
-# the inner zsh can word-split it with ${=AGENTSTACK_CODEX_APPROVAL}.
+# the child's login shell can word-split it (unquoted command substitution,
+# which zsh and bash both expand).
 #
 # The policy comes from AGENTSTACK_CODEX_CHILD_APPROVAL (installer setting,
 # default `never`): a spawned child works unattended, so every "may I run this"
@@ -633,6 +634,28 @@ cleanup_worktree() {
 # the dashboard's minimal launchd PATH cannot find codex at all, the modern flag
 # is emitted instead of nothing — an empty result silently reverted every child
 # to Codex's own `on-request` default (2026-09-04).
+# The child's tmux session runs `<shell> -lc '<launch>'`. This used to be a
+# hard-coded zsh path, which does not exist on a stock Ubuntu (WSL2 included):
+# the session died two seconds after spawn with nothing in the pane. Prefer zsh
+# when present (macOS default, and where every operator so far has run this),
+# otherwise bash; AGENTSTACK_CHILD_SHELL overrides both. The launch snippets
+# above are written in the syntax subset both shells share.
+resolve_child_shell() {
+    local shell="${AGENTSTACK_CHILD_SHELL:-}"
+    if [[ -n "$shell" && -x "$shell" ]]; then
+        printf '%s\n' "$shell"
+        return 0
+    fi
+    shell="$(command -v zsh 2>/dev/null || true)"
+    [[ -z "$shell" ]] && shell="$(command -v bash 2>/dev/null || true)"
+    if [[ -z "$shell" ]]; then
+        echo "Error: neither zsh nor bash found for the child session; set AGENTSTACK_CHILD_SHELL" >&2
+        return 1
+    fi
+    printf '%s\n' "$shell"
+}
+CHILD_SHELL="$(resolve_child_shell)" || exit 1
+
 resolve_codex_bin() {
     local codex_bin="${AGENTSTACK_CODEX_BIN:-}"
     if [[ -z "$codex_bin" ]]; then
@@ -1458,7 +1481,7 @@ ${TASK}"
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
-            '/bin/zsh -lc '"'"'
+            "$CHILD_SHELL"' -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
@@ -1469,10 +1492,15 @@ ${TASK}"
                 # its `on-request` default and dropped the network flag and the
                 # extra roots (2026-09-04).
                 EXTRA_ARGS=()
-                for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
+                # Portable across zsh and bash (Ubuntu ships no zsh): split the
+                # colon list with IFS, and word-split the flag strings through
+                # an unquoted command substitution, which both shells expand.
+                _ifs="$IFS"; IFS=":"
+                for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do
                     [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
                 done
-                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+                IFS="$_ifs"
+                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
                     "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -1597,7 +1625,7 @@ ${TASK}"
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-                '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+                "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
@@ -2263,16 +2291,19 @@ if [[ "$USE_CODEX" == true ]]; then
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
-        '/bin/zsh -lc '"'"'
+        "$CHILD_SHELL"' -lc '"'"'
                 export PATH="$HOME/.local/bin:$PATH";
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.
             EXTRA_ARGS=()
-            for d in ${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}; do
+            # Portable across zsh and bash: see the pre-registered path.
+            _ifs="$IFS"; IFS=":"
+            for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do
                 [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
             done
-            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS} \
+            IFS="$_ifs"
+            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
                 "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
@@ -2364,7 +2395,7 @@ else
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-        '/bin/zsh -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+        "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
     CHILD_SESSION_STARTED=true
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機

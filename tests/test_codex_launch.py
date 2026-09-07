@@ -216,8 +216,9 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
         "a user-side launcher (~/.codex/bin/...)", ""
     ), "spawn_child.sh still defers to the user's ~/.codex/bin launcher"
     # Both launch paths apply network flags and the resolved writable roots.
-    assert text.count("${=AGENTSTACK_CODEX_APPROVAL} ${=AGENTSTACK_CODEX_NETWORK_FLAGS}") == 2
-    assert text.count("${(s.:.)AGENTSTACK_CODEX_ADD_DIRS_RESOLVED}") == 2
+    # (Written in the zsh/bash-shared subset: see test_child_shell_portability.)
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
+    assert text.count('for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do') == 2
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
     assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
     assert text.count('-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN"') == 2
@@ -292,7 +293,7 @@ def test_launcher_no_longer_hardcodes_full_auto():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "--full-auto \\" not in text, "hardcoded --full-auto still in a launch line"
     # Both launch paths take the probed flags from the child environment.
-    assert text.count("--sandbox workspace-write ${=AGENTSTACK_CODEX_APPROVAL}") == 2
+    assert text.count('--sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL")') == 2
     assert text.count('-e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)"') == 2
 
 
