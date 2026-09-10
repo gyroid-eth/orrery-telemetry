@@ -2258,6 +2258,14 @@ def do_resume(session: str) -> dict:
       する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
+    if program.startswith("antigravity"):
+        return {
+            "ok": False,
+            "error": (
+                "Antigravity resume is not supported by ORRERY; "
+                "start a new Antigravity session instead"
+            ),
+        }
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
@@ -2596,9 +2604,19 @@ def _events_from_codex_jsonl(path: str) -> list[dict]:
 def history_payload(session: str, limit: int) -> dict:
     if not _valid(session):
         return {"ok": False, "error": "invalid session name"}
+    # Provider-specific transcript formats must never fall through into
+    # another provider's heuristic search. Antigravity stream-json results are
+    # not Claude/Codex transcripts, so history is unavailable until a native
+    # Antigravity history source is implemented.
+    program = _agent_program(session)
+    if program.startswith("antigravity"):
+        return {
+            "ok": False,
+            "error": "Antigravity transcript history is not available",
+        }
     # codex agent は Claude 用 selfref 探索だと子の transcript を誤マッチする
     # ため、program で先に分岐する（do_resume と同じ理由）。
-    if _agent_program(session).startswith("codex"):
+    if program.startswith("codex"):
         path = _codex_transcript_path(session)
         is_codex = bool(path)
         if not path:                      # 念のため Claude 側もフォールバック
@@ -3616,8 +3634,10 @@ def do_jump(session: str) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
     # Codex App lives outside tmux and its provider owns the safe activation
-    # action.  Check it before the terminal-adapter gate.
-    if _agent_program(session) == "codex-app" and session in _codex_app_runtimes():
+    # action.  Check it before the terminal-adapter gate. Keep the program
+    # read-back for the finished-session policy below as well.
+    program = _agent_program(session)
+    if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if _terminal_adapter() == "none":
         return _terminal_unsupported()
@@ -3645,7 +3665,12 @@ def do_jump(session: str) -> dict:
                 break
     except Exception:  # noqa: BLE001
         cat = None
-    if cat == "finished":
+    # Claude/Codex finished sessions are husks whose provider-native resume
+    # path can restore the conversation. Antigravity currently has no ORRERY
+    # resume implementation; killing its surviving human shell here would turn
+    # a harmless attachable shell into irreversible data loss. Preserve that
+    # shell and let the normal terminal attach path handle the jump instead.
+    if cat == "finished" and not program.startswith("antigravity"):
         subprocess.run(
             ["tmux", "kill-session", "-t", f"={session}"],
             capture_output=True,
