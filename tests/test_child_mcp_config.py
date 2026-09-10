@@ -148,7 +148,8 @@ def test_missing_proxy_or_token_falls_back_instead_of_failing_the_spawn():
 
 def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
                     runner_executable: bool = True,
-                    token: str | None = "child-owner-token") -> str:
+                    token: str | None = "child-owner-token",
+                    with_sandbox_metadata: bool = False) -> str:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     if runner_executable:
@@ -162,6 +163,10 @@ def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
     source_home.mkdir()
     (source_home / "auth.json").write_text('{"token": "secret"}', encoding="utf-8")
     (source_home / "sessions").mkdir()
+    if with_sandbox_metadata:
+        for name in (".git", ".agents", ".codex"):
+            (source_home / name).mkdir()
+        (source_home / ".sandbox_migration").write_text("done\n", encoding="utf-8")
     if config_text is not None:
         (source_home / "config.toml").write_text(config_text, encoding="utf-8")
 
@@ -246,6 +251,23 @@ def test_codex_child_home_shares_login_and_history_but_owns_its_config():
         assert (home / "sessions").is_symlink()
         assert not (home / "config.toml").is_symlink(), "config must be child-owned"
         assert stat.S_IMODE((home / "config.toml").stat().st_mode) == 0o600
+
+
+def test_codex_child_home_does_not_link_sandbox_metadata():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        home = pathlib.Path(
+            _run_codex_home(
+                tmpdir,
+                config_text=_BASE_CODEX_CONFIG,
+                with_sandbox_metadata=True,
+            )
+        )
+        for name in (".git", ".agents", ".codex"):
+            path = home / name
+            assert not path.exists()
+            assert not path.is_symlink()
+        assert (home / ".sandbox_migration").is_symlink()
 
 
 def test_codex_child_home_works_when_the_user_has_no_config():
