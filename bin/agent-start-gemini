@@ -3,8 +3,9 @@
 # tmux session, registered with ORRERY Mail so it appears in the dashboard.
 #
 # Directory selection:
-#   agent-start-gemini [DIR]   use DIR explicitly
-#   agent-start-gemini         fzf-pick under $AGENTSTACK_BASE_DIR
+#   agent-start-gemini [DIR]             use DIR explicitly
+#   agent-start-gemini --dry-run [DIR]   print the planned agy command only
+#   agent-start-gemini                   fzf-pick under $AGENTSTACK_BASE_DIR
 #
 # Env:
 #   AGENTSTACK_GEMINI_BIN      Antigravity CLI binary (default: agy)
@@ -25,28 +26,43 @@ GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
 GEMINI_MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
 GEMINI_EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"
 BOOTSTRAP="$BIN_DIR/agentstack-gemini-bootstrap"
+DRY_RUN=false
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=true
+  shift
+fi
 
 case "$GEMINI_EFFORT" in
   low|medium|high) ;;
   *) ags_die "invalid AGENTSTACK_GEMINI_EFFORT '$GEMINI_EFFORT' (expected low, medium, or high)" ;;
 esac
 
-TMUX_BIN="$(ags_resolve_tmux)"
-[[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
-command -v "$GEMINI_BIN" >/dev/null 2>&1 || ags_die "Antigravity CLI not found on PATH (expected 'agy'; set AGENTSTACK_GEMINI_BIN to override)"
-[[ -f "$BOOTSTRAP" ]] || ags_die "missing $BOOTSTRAP"
-
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
-[[ -n "$DIR" ]] || exit 0
-
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
-SESSION="gemini-pending-$$"
-
 build_gemini_cmd() {
   local out
   out="$(printf '%q' "$GEMINI_BIN") --model $(printf '%q' "$GEMINI_MODEL") --effort $(printf '%q' "$GEMINI_EFFORT")"
   printf '%s' "$out"
 }
+
+DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+[[ -n "$DIR" ]] || exit 0
+
+# CI and reviewers can exercise the launcher contract without installing the
+# optional Antigravity binary. Dry-run intentionally stops before tmux, Mail
+# registration, bootstrap, or `command -v agy` checks.
+if [[ "$DRY_RUN" == true ]]; then
+  printf '%s: dry-run cwd=%s\n' "$AGS_PROG" "$DIR"
+  printf '%s\n' "$(build_gemini_cmd)"
+  exit 0
+fi
+
+TMUX_BIN="$(ags_resolve_tmux)"
+[[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
+command -v "$GEMINI_BIN" >/dev/null 2>&1 || ags_die "Antigravity CLI not found on PATH (expected 'agy'; set AGENTSTACK_GEMINI_BIN to override)"
+[[ -f "$BOOTSTRAP" ]] || ags_die "missing $BOOTSTRAP"
+
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+SESSION="gemini-pending-$$"
 
 # Already inside a real tmux pane: register and run in place. Do not `exec`
 # Antigravity here: this is the human-interactive top-level path, so when the
