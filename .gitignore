@@ -1,7 +1,6 @@
 # local config & secrets
 .env
 agentstack.toml
-.agents/mcp_config.json
 
 # ORRERY Mail is fetched at install time, not vendored
 mcp_agent_mail/
