@@ -59,6 +59,8 @@ open http://127.0.0.1:8770/          # another terminal; DECK shows the parent a
 
 To connect Codex Desktop root tasks and subagents to the same ORRERY Mail project and dashboard, add the optional [Codex App integration](docs/codex-app.en.md). Codex CLI-only setups do not need this additional install.
 
+Google Antigravity / Gemini is an optional provider that can be added after the core install. See [Google Antigravity / Gemini provider](docs/antigravity.en.md) for `agy` installation/authentication prerequisites, provider-payload dry-run/install, and delegated-child constraints.
+
 ## Feature gallery
 
 ### 1. Launchers and identity
@@ -114,6 +116,7 @@ The Japanese documentation is canonical. English versions of the detailed guides
 | [Delegation and child agents](docs/delegation.en.md) | How children differ from built-in subagents, how to tell which one is running, and when to use each |
 | [Hooks and operational helpers](docs/hooks.en.md) | Eight Claude event hooks, launcher/watcher helpers, triggers, blocking, release, and cleanup |
 | [Codex App integration](docs/codex-app.en.md) | Codex Desktop plugin, Bridge, session-bound MCP, inbox notices, and cold wake |
+| [Google Antigravity / Gemini provider](docs/antigravity.en.md) | Optional provider, launcher, delegated child, permissions, and measured validation |
 | [Dashboard](docs/dashboard.en.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, and embed mode |
 | [API reference](docs/api.en.md) | Every route, query/request fields, and response schemas |
 | [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
