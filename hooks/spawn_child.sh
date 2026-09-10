@@ -1114,10 +1114,12 @@ home_path = pathlib.Path(home)
 source_path = pathlib.Path(source)
 home_path.mkdir(parents=True, exist_ok=True)
 
-# Everything except config.toml stays shared with the real home, so the child
-# keeps its login and writes its session history where the user expects it.
+# Shared state such as login and sessions stays linked to the real home, while
+# config.toml remains child-owned. Codex treats the names below as sandbox
+# metadata; writable symlinks for them prevent Linux sandbox construction.
+sandbox_metadata = {".git", ".agents", ".codex"}
 for entry in source_path.iterdir():
-    if entry.name == "config.toml":
+    if entry.name == "config.toml" or entry.name in sandbox_metadata:
         continue
     link = home_path / entry.name
     if link.is_symlink() or link.exists():
