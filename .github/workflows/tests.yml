@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   portable-startup:
     # These regressions cover portable components, not a full Windows install.
