@@ -101,6 +101,22 @@ A nominal Antigravity `SUCCESS` is not enough when required actions were denied
 or the textual response is empty. Those cases are reported to the parent as
 incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
+## Dashboard controls
+
+The Dashboard uses the same provider-aware process-tree measurement for Claude,
+Codex, and Antigravity. For a delegated Antigravity child, `EXIT` re-reads the
+process tree immediately, sends `SIGINT` only to the measured `agy` process, and
+leaves the launcher-owned shell runner alive so report/release/retire/cleanup can
+finish. For a top-level interactive Antigravity session, `EXIT` keeps the normal
+interactive `/exit` path.
+
+ORRERY does not currently implement Antigravity conversation resume or native
+transcript history. Gone or retired Antigravity entries therefore fail closed
+instead of falling through to Claude/Codex transcript lookup. A top-level
+Antigravity session whose `agy` process has exited but whose human shell remains
+is kept attachable as `finished`; Dashboard jump does not kill that shell to
+attempt an unsupported resume.
+
 ## Headless permission caveat
 
 In a measured macOS run using Antigravity CLI 1.1.27, headless `view_file`
