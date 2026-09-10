@@ -1581,7 +1581,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
     programs = {n["name"]: (n.get("program") or "") for n in nodes}
     process_tree = (
         _process_tree_snapshot()
-        if any(program.startswith(("codex", "claude", "antigravity")) for program in programs.values())
+        if any(_supports_agent_process_liveness(program) for program in programs.values())
         else None
     )
     if show_all:
