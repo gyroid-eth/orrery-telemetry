@@ -238,4 +238,8 @@ else
   echo "$PROG: note: agy is not installed/on PATH; payload installation is still valid"
 fi
 
-echo "$PROG: Gemini provider payload ${DRY_RUN:+dry-run }complete"
+if [[ "$DRY_RUN" == true ]]; then
+  echo "$PROG: Gemini provider payload dry-run complete"
+else
+  echo "$PROG: Gemini provider payload installed into $INSTALL_DIR"
+fi
