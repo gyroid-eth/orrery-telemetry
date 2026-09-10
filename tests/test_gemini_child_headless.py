@@ -99,6 +99,33 @@ def test_stream_rejects_non_success_result() -> None:
     assert "status=ERROR" in result.stderr
 
 
+def test_stream_rejects_interrupted_run_without_final_result_event() -> None:
+    """SIGINT may close agy before it emits a terminal result event."""
+    result = _run_stream(
+        [
+            {"event": "init", "conversation_id": "interrupted-run"},
+            {
+                "event": "step_update",
+                "step_update": {"step_index": 1, "state": "ACTIVE"},
+            },
+        ]
+    )
+    assert result.returncode != 0
+    assert "no final result event" in result.stderr
+
+
+def test_child_mail_treats_missing_final_result_as_unknown(tmp_path) -> None:
+    """The parent-report path must stay usable after an abrupt headless EXIT."""
+    namespace = runpy.run_path(str(CHILD_MAIL))
+    last_result = namespace["_last_result"]
+    result_log = tmp_path / "interrupted.ndjson"
+    result_log.write_text(
+        json.dumps({"event": "init", "conversation_id": "interrupted-run"}) + "\n",
+        encoding="utf-8",
+    )
+    assert last_result(result_log) == {"status": "UNKNOWN", "response": ""}
+
+
 def test_child_prompts_anchor_resources_to_the_worktree() -> None:
     for path in (CHILD, PREREGISTERED):
         text = path.read_text(encoding="utf-8")
