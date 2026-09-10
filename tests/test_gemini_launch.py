@@ -162,9 +162,13 @@ def test_delegated_child_lifecycle_is_launcher_owned() -> None:
     assert 'if mode & 0o077:' in helper
 
 
-def test_workspace_mcp_config_is_ignored() -> None:
-    ignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert ".agents/mcp_config.json" in ignore
+def test_workspace_mcp_config_uses_child_local_git_exclude() -> None:
+    for path in (_CHILD, _PREREG_CHILD):
+        text = path.read_text(encoding="utf-8")
+        assert "GIT_EXCLUDES_FILE" in text
+        assert "core.excludesFile" in text
+        assert ".agents/mcp_config.json" in text
+        assert "rev-parse --git-path info/exclude" not in text
 
 
 def _expected_session_bound_entry(config: pathlib.Path) -> dict:
