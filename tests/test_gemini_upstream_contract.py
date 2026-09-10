@@ -44,11 +44,12 @@ def test_gemini_runtime_never_auto_approves_permissions() -> None:
 
 def test_gemini_child_cleanup_is_launcher_owned_and_postposed() -> None:
     text = CHILD.read_text(encoding="utf-8")
+    cleanup_helper = '$(printf \'%q\' "$CLEANUP_HELPER")'
     assert 'CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"' in text
     report_at = text.index(" report --project-key")
     release_at = text.index(" release --project-key", report_at)
     retire_at = text.index(" retire --project-key", release_at)
-    cleanup_at = text.index('$(printf \'%q\' "$CLEANUP_HELPER")', retire_at)
+    cleanup_at = text.index(cleanup_helper, retire_at)
     assert report_at < release_at < retire_at < cleanup_at
 
     helper = CHILD_MAIL.read_text(encoding="utf-8")
