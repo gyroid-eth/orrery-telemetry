@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Session-bound ORRERY Mail stdio MCP entrypoint for Antigravity.
+#
+# Antigravity starts this command as an MCP subprocess. It inherits AGENT_NAME
+# and AGENTSTACK_PROJECT_KEY from the Gemini launcher; this wrapper resolves the
+# corresponding mode-0600 owner-token file and delegates to the existing narrow
+# ORRERY Mail proxy. The token itself never enters argv, environment, or config.
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$(cd "$BIN_DIR/.." && pwd)}"
+# shellcheck source=lib/agentstack-register.sh
+. "$BIN_DIR/lib/agentstack-register.sh"
+
+AGENT_NAME_VALUE="${AGENT_NAME:-}"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+PROXY_RUNNER="${AGENTSTACK_MCP_PROXY:-$AGENTSTACK_HOME_DIR/integrations/codex_app/plugin/scripts/run-mcp.sh}"
+
+[[ -n "$AGENT_NAME_VALUE" ]] || {
+  echo "agentstack-gemini-mcp: AGENT_NAME is unavailable; launch through an ORRERY Gemini launcher" >&2
+  exit 1
+}
+[[ -n "$PROJECT_KEY" ]] || {
+  echo "agentstack-gemini-mcp: AGENTSTACK_PROJECT_KEY is unavailable" >&2
+  exit 1
+}
+[[ -x "$PROXY_RUNNER" ]] || {
+  echo "agentstack-gemini-mcp: child MCP proxy is unavailable: $PROXY_RUNNER" >&2
+  exit 1
+}
+
+TOKEN_FILE="$(ags_registration_token_file "$AGENT_NAME_VALUE")" || exit 1
+[[ -r "$TOKEN_FILE" ]] || {
+  echo "agentstack-gemini-mcp: no owner-token file for $AGENT_NAME_VALUE" >&2
+  exit 1
+}
+
+export AGENTSTACK_PROXY_AGENT_NAME="$AGENT_NAME_VALUE"
+export AGENTSTACK_PROXY_TOKEN_FILE="$TOKEN_FILE"
+export AGENTSTACK_PROXY_PROGRAM="antigravity"
+export AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
+export AGENTSTACK_MCP_URL="$MCP_URL"
+export AGENTSTACK_MAIL_ENV="$MAIL_ENV"
+export AGENTSTACK_MAIL_HTTP_BEARER_MODE="$HTTP_BEARER_MODE"
+export AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR"
+export AGENTSTACK_CODEX_APP_RUNTIME_DIR="$RUNTIME_DIR/gemini-proxy-$AGENT_NAME_VALUE"
+
+exec "$PROXY_RUNNER"

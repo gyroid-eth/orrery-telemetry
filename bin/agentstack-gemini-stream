@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Persist Antigravity NDJSON while rendering useful progress in a tmux pane."""
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+from typing import Any
+
+
+def _denied_action_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        action = item.get("action") or item.get("display_name")
+        if isinstance(action, str) and action:
+            names.append(action)
+    return names
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: agentstack-gemini-stream RESULT_LOG", file=sys.stderr)
+        return 2
+    log_path = pathlib.Path(sys.argv[1])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    final_result: dict[str, Any] | None = None
+    with log_path.open("w", encoding="utf-8") as log:
+        for raw in sys.stdin:
+            log.write(raw)
+            log.flush()
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("event")
+            if kind == "init":
+                conversation = event.get("conversation_id") or "unknown"
+                print(f"[antigravity] conversation {conversation}", flush=True)
+                continue
+            if kind == "step_update":
+                update = event.get("step_update")
+                if not isinstance(update, dict):
+                    continue
+                delta = update.get("text_delta")
+                if isinstance(delta, str) and delta:
+                    print(delta, end="", flush=True)
+                continue
+            if kind == "result":
+                result = event.get("result")
+                if not isinstance(result, dict):
+                    continue
+                final_result = result
+                status = result.get("status") or "UNKNOWN"
+                print(f"\n[antigravity] status={status}", flush=True)
+
+    if final_result is None:
+        print(
+            "[antigravity] incomplete headless run: no final result event",
+            file=sys.stderr,
+        )
+        return 1
+
+    status = str(final_result.get("status") or "UNKNOWN").upper()
+    response = str(final_result.get("response") or "").strip()
+    denied = _denied_action_names(final_result.get("denied_actions"))
+    if status != "SUCCESS":
+        print(
+            f"[antigravity] headless run failed with status={status}",
+            file=sys.stderr,
+        )
+        return 1
+    if denied:
+        print(
+            "[antigravity] incomplete headless run: required actions were denied: "
+            + ", ".join(denied),
+            file=sys.stderr,
+        )
+        return 1
+    if not response:
+        print(
+            "[antigravity] incomplete headless run: SUCCESS with no textual response",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

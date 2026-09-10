@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# agentstack-gemini-setup — idempotently register the session-bound ORRERY Mail
+# stdio proxy in the Google Antigravity CLI global MCP configuration.
+#
+# Antigravity CLI reads global MCP servers from ~/.gemini/config/mcp_config.json.
+# This script owns only the "orrery-mail" key and preserves all other entries.
+# The config stores no ORRERY owner token; agentstack-gemini-mcp resolves the
+# current AGENT_NAME's mode-0600 token file at process start.
+#
+# Usage:
+#   agentstack-gemini-setup             install/update the managed server entry
+#   agentstack-gemini-setup --print     print the resulting JSON, change nothing
+#   agentstack-gemini-setup --uninstall remove only the managed server entry
+set -euo pipefail
+
+PROG="agentstack-gemini-setup"
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+[[ -f "$AGENTSTACK_HOME/env.sh" ]] && . "$AGENTSTACK_HOME/env.sh"
+AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+TARGET="${AGENTSTACK_GEMINI_MCP_CONFIG:-$HOME/.gemini/config/mcp_config.json}"
+SERVER_KEY="orrery-mail"
+MCP_COMMAND="${AGENTSTACK_GEMINI_MCP_RUNNER:-$AGENTSTACK_HOME/bin/agentstack-gemini-mcp}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
+
+mode="install"
+case "${1:-}" in
+  --print) mode="print" ;;
+  --uninstall) mode="uninstall" ;;
+  "") ;;
+  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+esac
+
+if [[ "$mode" == "install" && ! -x "$MCP_COMMAND" ]]; then
+  die "session-bound MCP runner is not installed: $MCP_COMMAND"
+fi
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || \
+  die "selected Python is unavailable: $PYTHON_BIN"
+
+TMP="$(mktemp -t agentstack-gemini-mcp.XXXXXX)"
+TARGET_TMP="${TARGET}.tmp.$$"
+cleanup() { rm -f "$TMP" "$TARGET_TMP"; }
+trap cleanup EXIT INT TERM HUP
+
+AGS_GEMINI_SETUP_TARGET="$TARGET" \
+AGS_GEMINI_SETUP_MODE="$mode" \
+AGS_GEMINI_SETUP_COMMAND="$MCP_COMMAND" \
+AGS_GEMINI_SETUP_KEY="$SERVER_KEY" \
+"$PYTHON_BIN" - > "$TMP" <<'PY'
+import json
+import os
+from pathlib import Path
+
+target = Path(os.environ["AGS_GEMINI_SETUP_TARGET"]).expanduser()
+mode = os.environ["AGS_GEMINI_SETUP_MODE"]
+command = os.environ["AGS_GEMINI_SETUP_COMMAND"]
+server_key = os.environ["AGS_GEMINI_SETUP_KEY"]
+
+if target.exists():
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"cannot read {target}: {exc}")
+    if raw.strip():
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            raise SystemExit(f"cannot parse {target}: {exc}")
+    else:
+        data = {}
+else:
+    data = {}
+if not isinstance(data, dict):
+    raise SystemExit(f"{target} must contain a JSON object")
+
+servers = data.get("mcpServers")
+if servers is None:
+    servers = {}
+    data["mcpServers"] = servers
+if not isinstance(servers, dict):
+    raise SystemExit(f"{target}: mcpServers must be a JSON object")
+
+if mode == "uninstall":
+    servers.pop(server_key, None)
+else:
+    servers[server_key] = {
+        "command": command,
+        "args": [],
+    }
+
+print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+PY
+
+if [[ "$mode" == "print" ]]; then
+  cat "$TMP"
+  exit 0
+fi
+
+mkdir -p "$(dirname "$TARGET")"
+if [[ -f "$TARGET" ]]; then
+  cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || cp "$TARGET" "$TARGET.bak"
+fi
+( umask 077; cat "$TMP"; printf '\n' ) > "$TARGET_TMP"
+chmod 600 "$TARGET_TMP"
+mv -f "$TARGET_TMP" "$TARGET"
+
+if [[ "$mode" == "uninstall" ]]; then
+  echo "$PROG: removed '$SERVER_KEY' from $TARGET"
+else
+  echo "$PROG: installed session-bound '$SERVER_KEY' into $TARGET"
+  echo "$PROG: restart Antigravity CLI or use /mcp to reload the server list"
+fi
