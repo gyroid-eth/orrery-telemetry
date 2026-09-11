@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を一つのチームとして協調させ、その働きを一枚の画面で観測し、必要なときに人間が介入するためのツールです。agent 同士が用件を伝え合う通信、同じファイルを同時に書き換えないための予約、誰が誰を起動したかの系譜を同梱の基盤が記録し、dashboard がそれを人の目で追える形に描きます。
+Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を複数動かすと、agent 同士をつなぐ役目は人間に回ってきます。片方の出力をもう片方に貼り直し、アプリやタブを行き来して、それぞれがいま何をしているかを確かめる。ORRERY Telemetry は、その伝言役を agent 同士の直接の通信に置き換え、全員の働きを一枚の画面で俯瞰し、必要なときにだけ人間が介入できるようにするツールです。agent 間の通信、同じファイルを同時に書き換えないための予約、誰が誰を起動したかの系譜を同梱の基盤が記録し、dashboard がそれを人の目で追える形に描きます。
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
@@ -11,7 +11,7 @@ Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を
 ## 誰のためのものか
 
 - **対象は chat ではなく coding agent を使う人**: ChatGPT のような chat ではなく、Claude Code や Codex のように、指示を受けて自律的にコードを書き、ファイルを変え、command を実行する agent を、すでに手元で動かしている人向けです。terminal からでも、Claude Desktop や ChatGPT app のような desktop app からでも構いません
-- **向いている人**: agent を 2 体以上同時に動かしていて、terminal のタブを行き来しながら「いま誰が何をしているか」を追うのが辛くなった人
+- **向いている人**: agent を複数動かしていて、その連携を人間が仲介している人。Codex の出力を Claude Code に貼り直す、アプリやタブを行き来して各 agent の様子を確かめる、といった手作業をなくし、全体を一枚の画面で俯瞰したい人
 - **向いていない人**: agent は 1 体で足りている人。このツールの価値は複数 agent の協調と、その観測にあります
 - **対応する agent**: Claude Code と Codex CLI が中心です。Codex Desktop の task と subagent、Google Antigravity / Gemini は、core install のあとに追加できる optional provider として同じ dashboard に載せられます
 

@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-ORRERY Telemetry lets coding agents from different vendors, such as Claude Code, Codex CLI, and Gemini, work together as one team, shows what they are doing on a single screen, and gives you a way to step in when you need to. The bundled infrastructure records the messages agents exchange, the file reservations that keep them from overwriting each other, and the lineage of who spawned whom, and the dashboard turns that into something a person can follow.
+Run several coding agents from different vendors, such as Claude Code, Codex CLI, and Gemini, and the job of connecting them lands on you: pasting one agent's output into another, hopping between apps and tabs to see what each one is doing. ORRERY Telemetry replaces that human relay with direct communication between the agents, puts everyone's work on a single screen, and lets you step in only when you need to. The bundled infrastructure records the messages agents exchange, the file reservations that keep them from overwriting each other, and the lineage of who spawned whom, and the dashboard turns that into something a person can follow.
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
@@ -11,7 +11,7 @@ ORRERY Telemetry lets coding agents from different vendors, such as Claude Code,
 ## Who this is for
 
 - **People who run coding agents, not chat**: not chat in the ChatGPT sense, but agents like Claude Code or Codex that take an instruction, write code, change files, and run commands on their own. It does not matter whether you drive them from a terminal or from a desktop app such as Claude Desktop or the ChatGPT app.
-- **A good fit**: you run two or more agents at the same time and are tired of switching terminal tabs to find out who is doing what.
+- **A good fit**: you run several agents and find yourself acting as the go-between: pasting Codex output into Claude Code, or hopping between apps and tabs to check on each one. You want that manual relay gone and the whole picture on one screen.
 - **Not a fit**: one agent is enough for you. The value here is in coordinating several agents and watching them.
 - **Supported agents**: Claude Code and Codex CLI are the core. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install, and they appear on the same dashboard.
 
