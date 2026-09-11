@@ -77,7 +77,7 @@ open http://127.0.0.1:8770/
 起動した agent の中で、次のように頼みます。Claude Code でも Codex でも同じです。
 
 ```text
-/delegate 自分の名前と今日の日付を返事して
+/delegate child agent を作って、自分の名前と今日の日付を答えさせて
 ```
 
 **成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。

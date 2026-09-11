@@ -77,7 +77,7 @@ open http://127.0.0.1:8770/
 Inside the running agent, ask for a child. This is the same in Claude Code and Codex.
 
 ```text
-/delegate reply with your name and today's date
+/delegate create a child agent and have it answer with its name and today's date
 ```
 
 **Success**: a second card appears on the dashboard with a line from the parent to the child. When the child finishes, a "done" message arrives in the parent's terminal. The NETWORK tab shows the messages passing between the two.
