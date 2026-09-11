@@ -41,6 +41,30 @@ PRODUCTION_LABELS = tuple(
 )
 SAMPLE_SECONDS = 2.0
 
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_inherited_agentstack_env():
+    """Run the suite as CI does: with no AGENTSTACK_* in the environment.
+
+    A shell that was started by the installed agent stack carries some forty
+    AGENTSTACK_* variables (mail database, labels, spawn dirs, codex policy).
+    The installer rehearsals inherit them through `os.environ` copies, and the
+    live install's values then contradict the rehearsal's own: "AGENTSTACK_MAIL_DB
+    must equal the native state database", spawn dirs from the real install
+    reported where the test expected its own. On this machine that made 28
+    tests fail in a full run that is green in CI, and every one of them was
+    read as "environment-dependent" for two days instead of being fixed.
+    """
+    inherited = {
+        key: value for key, value in os.environ.items() if key.startswith("AGENTSTACK_")
+    }
+    for key in inherited:
+        del os.environ[key]
+    try:
+        yield
+    finally:
+        os.environ.update(inherited)
+
 # Which test is running right now. A disturbance that only appears in a full
 # run is an interaction between tests, and "somewhere in the suite" is not a
 # lead -- naming the test that was running when the service went down is.

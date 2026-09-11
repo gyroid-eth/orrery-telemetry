@@ -73,6 +73,7 @@
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
     "AGENTSTACK_CODEX_NETWORK": "on",
     "AGENTSTACK_CODEX_ADD_DIRS": "",
+    "AGENTSTACK_CODEX_BIN": "/home/alice/.local/bin/codex",
     "AGENTSTACK_TERMINAL": "auto"
   },
   "install_dir": "/home/alice/.agentstack",

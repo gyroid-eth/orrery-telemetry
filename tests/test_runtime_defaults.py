@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import pathlib
 import signal
 import socket
@@ -151,7 +152,25 @@ def _tracked_core_payload_files() -> list[str]:
         text=True,
         check=True,
     ).stdout.split("\0")
-    return [path for path in tracked if path]
+    provider_owned = _provider_installer_files()
+    return [path for path in tracked if path and path not in provider_owned]
+
+
+def _provider_installer_files() -> set[str]:
+    """Tracked payload that a provider installer, not the core one, copies.
+
+    scripts/install-gemini-provider.sh keeps its own FILES=( ... ) list and the
+    core installer leaves those alone by design. Read the list from the script
+    so the two cannot drift apart silently: a file added there is excluded
+    here on the same commit.
+    """
+    files: set[str] = set()
+    for script in sorted(ROOT.glob("scripts/install-*-provider.sh")):
+        match = re.search(r"^FILES=\((.*?)^\)", script.read_text(encoding="utf-8"),
+                          re.MULTILINE | re.DOTALL)
+        if match:
+            files.update(re.findall(r'"([^"]+)"', match.group(1)))
+    return files
 
 
 def _expected_owned_dirs(install_dir: pathlib.Path) -> list[str]:
@@ -642,6 +661,12 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
 
     home = pathlib.Path(env["HOME"])
     install_dir = home / ".agentstack"
+    # Pin the codex the installer records. Left to PATH it resolves whatever
+    # this machine has, and the manifest then differs per developer.
+    codex_bin = home / ".local" / "bin" / "codex"
+    codex_bin.parent.mkdir(parents=True)
+    codex_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
     user_skill = home / ".claude" / "skills" / "user-owned" / "SKILL.md"
     user_skill.parent.mkdir(parents=True)
     user_skill.write_text("---\nname: user-owned\n---\n", encoding="utf-8")
@@ -679,6 +704,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_PORTRAITS_DIR": "~/faces",
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
+        "AGENTSTACK_CODEX_BIN": str(codex_bin),
         "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,

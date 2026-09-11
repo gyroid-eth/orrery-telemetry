@@ -184,6 +184,35 @@ def test_no_tracked_file_is_a_git_archive() -> None:
     )
 
 
+def _cat_file_batch(shas) -> dict[str, tuple[str, bytes]]:
+    """{sha: (type, content)} for every object, from a single git process.
+
+    `git cat-file --batch` answers each sha with a header line
+    `<sha> <type> <size>` followed by exactly <size> bytes and a newline;
+    an unknown sha gets `<sha> missing` and no body.
+    """
+    output = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        input="".join(f"{sha}\n" for sha in shas).encode("ascii"),
+        capture_output=True,
+        check=True,
+        cwd=ROOT,
+    ).stdout
+    objects: dict[str, tuple[str, bytes]] = {}
+    position = 0
+    while position < len(output):
+        newline = output.index(b"\n", position)
+        header = output[position:newline].decode("ascii").split()
+        position = newline + 1
+        if len(header) < 3:
+            objects[header[0]] = ("missing", b"")
+            continue
+        sha, kind, size = header[0], header[1], int(header[2])
+        objects[sha] = (kind, output[position : position + size])
+        position += size + 1
+    return objects
+
+
 def test_history_carries_no_git_archive_or_identifier() -> None:
     """The published history, not just the checkout at its tip.
 
@@ -200,28 +229,23 @@ def test_history_carries_no_git_archive_or_identifier() -> None:
         cwd=ROOT,
     ).stdout.splitlines()
 
+    # One `git cat-file --batch` for the whole listing. Two spawns per object
+    # made this the slowest test in the suite once history passed 6,000
+    # objects: 120 s and climbing with every commit, for work git does in
+    # under a second when asked once.
+    objects = _cat_file_batch(line.partition(" ")[0] for line in listing)
+
     archives: list[str] = []
     identifiers: list[str] = []
     for line in listing:
         sha, _, path = line.partition(" ")
-        kind = subprocess.run(
-            ["git", "cat-file", "-t", sha],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-        ).stdout.strip()
+        kind, payload = objects[sha]
         if kind != "blob":
             if path and any(
                 pattern in path.lower().encode("utf-8") for pattern in IDENTIFIERS
             ):
                 identifiers.append(f"{sha} path {path}")
             continue
-        payload = subprocess.run(
-            ["git", "cat-file", "blob", sha],
-            capture_output=True,
-            check=True,
-            cwd=ROOT,
-        ).stdout
         if payload[:16].startswith(ARCHIVE_MAGIC):
             archives.append(f"{sha} {path}")
         # The guard's own file is allowed to name what it searches for; every
