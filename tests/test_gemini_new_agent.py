@@ -26,10 +26,11 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high"],
-        "effort_default": "high",
+        "effort_default": "",
         "provider_key": "google",
         "capabilities": {
             "effort": True,
+            "effort_required": True,
             "mcp": True,
             "resume": False,
             "runtime": True,
@@ -60,6 +61,10 @@ def test_rendered_dashboard_adds_capability_driven_resource_controls():
     assert "providerCaps.worktree_required" in rendered
     assert "payload.resources=resources" in rendered
     assert "const resourcesReady=!providerCaps.resources_required" in rendered
+    assert "capabilities=(provider&&provider.capabilities" in rendered
+    assert "provider.capabilities.effort_required" in rendered
+    assert "const effortReady=!providerCaps.effort_required" in rendered
+    assert "updateSpawnButton();" in rendered
     assert "spmSelectedProvider==='gemini'" not in rendered
 
 
@@ -78,6 +83,21 @@ def test_gemini_spawn_requires_declared_resources(monkeypatch, tmp_path):
     assert result == {"ok": False, "error": "resources required for provider gemini"}
 
 
+def test_gemini_spawn_requires_explicit_effort(monkeypatch, tmp_path):
+    adapter = tmp_path / "spawn_gemini_preregistered.sh"
+    adapter.write_text("#!/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path))
+    result = server.do_spawn({
+        "parent": "Parent-Curie",
+        "task": "inspect the dashboard",
+        "dir": str(tmp_path),
+        "provider": "gemini",
+        "model": "gemini-3.8-flash-high",
+        "resources": "src/**",
+    })
+    assert result == {"ok": False, "error": "effort required for provider gemini"}
+
+
 def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
     common = {
         "parent": "Parent-Curie",
@@ -90,7 +110,7 @@ def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
         "ok": False,
         "error": "standalone not supported for provider gemini",
     }
-    bad_model = server.do_spawn({**common, "model": "gemini-not-allowed"})
+    bad_model = server.do_spawn({**common, "model": "gemini-not-allowed", "effort": "high"})
     assert bad_model["error"] == "model not allowed for provider gemini: gemini-not-allowed"
     bad_effort = server.do_spawn({**common, "effort": "xhigh"})
     assert bad_effort["error"] == "effort not allowed for provider gemini: xhigh"
