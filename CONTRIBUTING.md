@@ -8,22 +8,38 @@ tests. Create the repo-local venv once and run the suite from it:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e packages/agentstack_mail pytest pytest-asyncio
-PYTHONPATH=. .venv/bin/python -m pytest -q
+.venv/bin/pip install -e packages/agentstack_mail pytest pytest-asyncio pytest-timeout pytest-xdist
+PYTHONPATH=. .venv/bin/python -m pytest -q -n auto --dist loadfile
 ```
 
 `.venv/` is gitignored. Do not install anything into a service venv under
 `~/.agentstack/` — those are production artifacts whose contents are pinned
 by cutover receipts.
 
-Two caveats learned by measurement:
+The full suite is about 1,650 tests. Serially it takes 20 minutes on a
+laptop; most of that is a long tail of installer and service rehearsals that
+each spawn real processes, not any one slow test. `-n auto --dist loadfile`
+runs files on parallel workers (6 minutes with six) while keeping the tests
+of one file together, since files share fixtures and fake homes. Every run
+prints its 25 slowest tests; a test over 120 s is failed by `pytest-timeout`
+(both set in `pytest.ini`). Before calling a test "environment-dependent",
+note that `tests/conftest.py` strips `AGENTSTACK_*` from the environment for
+the whole session, so a shell started by an installed stack runs the suite
+the way CI does.
+
+Caveats learned by measurement:
 
 - Do not pipe pytest through `tail` without `pipefail`: the pipeline exits
-  with `tail`'s status and a red suite reads as exit 0.
+  with `tail`'s status and a red suite reads as exit 0. Do not cut the
+  output with `tail -3` either: the FAILED lines above the summary are the
+  part that says what to fix.
 - Run the suite without other heavy processes (or a second concurrent
   pytest): the SIGKILL-timing parity tests in
   `packages/agentstack_mail/tests/test_pending_decision_d8_d9.py` can fail
   under CPU contention and pass in a clean single run.
+- A test that starts a daemon must stop it in `finally`, on every path. A
+  run that is interrupted or times out otherwise leaves the daemon behind;
+  `ps -eo pid,command | grep pytest-of-` after a run should print nothing.
 
 ## Regression priority: a truly fresh install first
 

@@ -52,7 +52,7 @@ jobs:
       - name: Install tmux and uv
         run: brew install tmux uv
       - name: Install test and package-build tools
-        run: python3 -m pip install pytest pytest-timeout build -e ./packages/agentstack_mail
+        run: python3 -m pip install pytest pytest-timeout pytest-xdist build -e ./packages/agentstack_mail
       # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
       # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
       # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。
@@ -61,7 +61,10 @@ jobs:
           set -euo pipefail
           # tests/windows/ is the community Windows lane; its conftest already skips collection off win32,
           # and --ignore keeps that explicit here.
-          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/
+          # -n auto: the suite is a long tail of process-spawning rehearsals (12 min serial on
+          # this runner); --dist loadfile keeps one file's tests on one worker, since files
+          # share fixtures and fake homes.
+          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q -n auto --dist loadfile tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/
       - name: Build and inspect agentstack-mail distribution
         run: |
           set -euo pipefail
