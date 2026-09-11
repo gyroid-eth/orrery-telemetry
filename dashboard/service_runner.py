@@ -114,6 +114,12 @@ def _forward_output(stream: TextIO, logger: logging.Logger) -> None:
         logger.info("server | %s", line.rstrip("\r\n"))
 
 
+def _default_server_path() -> pathlib.Path:
+    """Prefer an installed provider-aware entry point, otherwise use core."""
+    provider_server = HERE / "provider_server.py"
+    return provider_server if provider_server.is_file() else HERE / "server.py"
+
+
 def run(server_path: pathlib.Path) -> int:
     logger = _configure_logger()
     previous = _read_previous_state()
@@ -197,7 +203,7 @@ def run(server_path: pathlib.Path) -> int:
 
 
 def main() -> int:
-    server_path = pathlib.Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else HERE / "server.py"
+    server_path = pathlib.Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else _default_server_path()
     return run(server_path)
 
 
