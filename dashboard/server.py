@@ -402,6 +402,16 @@ PORTRAITS = _portrait_set()
 
 # tmux フォーマットのフィールド区切り。制御文字 US(0x1f) はペインタイトルに出ない。
 SEP = "\x1f"
+# tmux 3.4 (Ubuntu 24.04) は `-F` 出力の制御文字を可視化して 4 文字の "\037"
+# にする。macOS の 3.6a や WSL2 の tmux は素の 0x1f を返す。どちらも同じ
+# 区切りとして受けないと、Linux では list-sessions の全行が 1 フィールドに
+# なり、生きている agent が全部 gone に見える (#26)。
+_SEP_ESCAPED = "\\037"
+
+
+def _split_tmux_fields(line: str, maxsplit: int = -1) -> list[str]:
+    """Split one `-F` output row on SEP, whether tmux emitted it raw or escaped."""
+    return line.replace(_SEP_ESCAPED, SEP).split(SEP, maxsplit)
 
 def _is_activity_glyph(ch: str) -> bool:
     """Claude Code のスピナー/アクティビティ先頭グリフか判定。
@@ -494,7 +504,7 @@ def tmux_state() -> dict:
         "#{session_id}",
     ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
-        parts = line.split(SEP)
+        parts = _split_tmux_fields(line)
         if len(parts) < 3:
             continue
         name, created, activity = parts[0], parts[1], parts[2]
@@ -521,7 +531,7 @@ def tmux_state() -> dict:
         ]
     )
     for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
-        parts = line.split(SEP, 4)
+        parts = _split_tmux_fields(line, 4)
         if len(parts) == 5:
             name, flags, cmd, pane_pid, title = parts
         elif len(parts) == 4:
@@ -540,7 +550,7 @@ def tmux_state() -> dict:
 
     fmt = SEP.join(["#{client_session}", "#{client_tty}"])
     for line in _tmux(["list-clients", "-F", fmt]).splitlines():
-        parts = line.split(SEP)
+        parts = _split_tmux_fields(line)
         if len(parts) < 2:
             continue
         sname, tty = parts[0], parts[1]
@@ -2451,6 +2461,15 @@ def _codex_transcript_path(session: str) -> str | None:
     hit = _TPATH_CACHE.get(("codex", session))
     if hit and now - hit[0] < 120:
         return hit[1]
+
+    # The exact binding recorded at registration wins over the nearest-
+    # timestamp guess below, the same way `_transcript_path` prefers it for
+    # Claude. With several rollouts close together the guess picked another
+    # session's transcript for the History view (#27).
+    indexed = _indexed_transcript(session)
+    if indexed:
+        _TPATH_CACHE[("codex", session)] = (now, indexed)
+        return indexed
 
     if not os.path.isdir(_CODEX_SESSIONS_DIR):
         _TPATH_CACHE[("codex", session)] = (now, None)
