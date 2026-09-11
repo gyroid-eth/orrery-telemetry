@@ -25,7 +25,7 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
     monkeypatch.setattr(
         server,
         "build_agents",
-        lambda: [
+        lambda history_days=None: [
             {
                 "name": "GrayKepler",
                 "category": "agent",
@@ -70,7 +70,7 @@ def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> 
     monkeypatch.setattr(
         server,
         "build_agents",
-        lambda: [
+        lambda history_days=None: [
             {
                 "name": "GrayHopper",
                 "category": "agent",
@@ -145,7 +145,7 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
     monkeypatch.setattr(
         server,
         "build_agents",
-        lambda: [{"name": "GrayHopper", "category": "finished"}],
+        lambda history_days=None: [{"name": "GrayHopper", "category": "finished"}],
     )
 
     def forbidden_resume(_session):

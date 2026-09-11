@@ -78,7 +78,7 @@ def _run_exit(server, pane_cmd: str, tree: str, category: str):
     originals = (server.subprocess.run, server.build_agents, server._has_session, server.time.sleep)
     try:
         server.subprocess.run = fake_run
-        server.build_agents = lambda: [{"name": "SandyTuring", "category": category, "attached": False}]
+        server.build_agents = lambda history_days=None: [{"name": "SandyTuring", "category": category, "attached": False}]
         server._has_session = lambda _s: True
         server.time.sleep = lambda _s: None
         result = server.do_exit("SandyTuring")
