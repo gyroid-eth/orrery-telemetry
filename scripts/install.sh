@@ -967,6 +967,13 @@ adopt_running_native_mail_render() {
     if [[ -n "$runner" ]]; then
       dir="$(dirname "$runner")"
       [[ -f "$dir/service.env" ]] && candidate="$dir/service.env"
+      # The manifest this run writes replaces the one that recorded the runner.
+      # Only start_native_mail set the service record, so a reinstall over a
+      # running listener wrote a manifest with no ORRERY Mail entry, and the
+      # uninstaller -- which stops services from the manifest -- left the
+      # runner alive. Every installer test that installs twice leaked one.
+      AGENT_MAIL_SERVICE_KIND="nohup"
+      AGENT_MAIL_SERVICE_PATH="$NATIVE_MAIL_PIDFILE"
     fi
   fi
   if [[ -z "$candidate" && -f "$INSTALL_DIR/env.sh" ]]; then

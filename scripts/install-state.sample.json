@@ -147,6 +147,11 @@
       "unit": "org.agentstack.agentdashboard.service"
     },
     {
+      "kind": "nohup",
+      "pidfile": "/home/alice/.agentstack/mail-service/runtime/agentstack-mail.pid",
+      "role": "ORRERY Mail"
+    },
+    {
       "kind": "systemd-user",
       "path": "/home/alice/.config/systemd/user/org.agentstack.mail.timer",
       "role": "agent-mail-autostart",

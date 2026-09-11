@@ -605,6 +605,41 @@ def _stop_any_dashboard_this_module_started(tmp_path):
                 f"{mailctl}: {stopped.stdout.strip()} {stopped.stderr.strip()}"
             )
 
+    # After an uninstall there is no controller left to ask, but the runner it
+    # started can still be alive: its pidfile survives under mail-service/runtime.
+    # Ten of these were found running on one machine after a single full run.
+    # Stop it with the controller's provenance rule (the pid must still be the
+    # recorded runner) and report it, because a runner alive here means the
+    # uninstaller did not stop it, which is a product defect, not test dirt.
+    for home in (tmp_path / "home", tmp_path):
+        pidfile = home / ".agentstack" / "mail-service" / "runtime" / "agentstack-mail.pid"
+        if not pidfile.is_file():
+            continue
+        lines = pidfile.read_text(encoding="utf-8").splitlines()
+        try:
+            pid = int(lines[0].split()[0])
+        except (IndexError, ValueError):
+            continue
+        runner = lines[1].strip() if len(lines) > 1 else ""
+        if not runner:
+            continue
+        deadline = time.monotonic() + 5.0
+        while True:
+            command = subprocess.run(
+                ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                capture_output=True, text=True, check=False,
+            ).stdout
+            alive = bool(command.strip()) and runner in command
+            if not alive or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
+        if alive:
+            os.kill(pid, signal.SIGTERM)
+            failures.append(
+                f"ORRERY Mail runner pid {pid} was still running after the test "
+                f"(recorded in {pidfile}); the uninstall or teardown left it behind"
+            )
+
     # The fake system manager used by this module records its pid here rather
     # than in the install's runtime directory.
     harness_pidfile = tmp_path / "dashboard-service.pid"
