@@ -176,7 +176,7 @@ def test_kill_retires_through_the_mcp_tool():
     the roster never changed. It must use the `retire_agent` tool."""
     with tempfile.TemporaryDirectory() as directory:
         server = _load(_db_with(pathlib.Path(directory), retired=False))
-        server.build_agents = lambda: [{
+        server.build_agents = lambda history_days=None: [{
             "name": LIVE, "running": False, "attached": False, "category": "gone",
         }]
         server._has_session = lambda _name: False
@@ -196,7 +196,7 @@ def test_kill_retires_through_the_mcp_tool():
 def test_kill_reports_a_refused_retire_in_actions():
     with tempfile.TemporaryDirectory() as directory:
         server = _load(_db_with(pathlib.Path(directory), retired=False))
-        server.build_agents = lambda: [{
+        server.build_agents = lambda history_days=None: [{
             "name": LIVE, "running": False, "attached": False, "category": "gone",
         }]
         server._has_session = lambda _name: False

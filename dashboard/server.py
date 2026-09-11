@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -954,7 +955,40 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
     return "idle"
 
 
-def build_agents() -> list[dict]:
+HISTORY_DAYS_DEFAULT = 30.0
+
+
+def _parse_history_days(raw: str | None) -> float | None:
+    """`?days=` of /api/agents → days as float, None for the whole history.
+
+    Anything unparsable or non-positive falls back to the 30-day default so a
+    typo in the URL never widens the roster to every agent ever registered."""
+    text = (raw or "").strip().lower()
+    if text == "all":
+        return None
+    try:
+        days = float(text)
+    except ValueError:
+        return HISTORY_DAYS_DEFAULT
+    if not math.isfinite(days) or days <= 0:
+        return HISTORY_DAYS_DEFAULT
+    return days
+
+
+def _history_cutoff(days: float | None) -> tuple[str, tuple]:
+    """SQL fragment + params that bound `agents.last_active_ts` to the window.
+
+    `None` means no bound: the DECK's `all` history and the by-name lookups
+    behind jump / kill / exit, which must find an agent however old it is."""
+    if days is None:
+        return "", ()
+    return "AND a.last_active_ts > datetime('now', ?)", (f"-{days:g} days",)
+
+
+def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict]:
+    """Roster rows for the DECK. Live tmux sessions always appear; agents known
+    only to ORRERY Mail (gone / retired) appear when their last activity falls
+    within `history_days` (None = every agent ever registered)."""
     sessions = tmux_state()
     mail_agents, mail_instr = agentmail_state()
     # One `ps` snapshot per refresh (4.5s TTL) shared by every registered
@@ -1067,11 +1101,12 @@ def build_agents() -> list[dict]:
             con = _db()
             con.row_factory = sqlite3.Row
             cur = con.cursor()
-            # 過去30日に絞って historical noise を除外（587 件全部出すと deck が
-            # 飽和する）。直近 kill した相手を showAll で探す用途には十分。
+            # 既定は過去30日に絞って historical noise を除外（全件出すと deck が
+            # 飽和する）。DECK の history セレクタが 7d / 30d / all を選ぶ。
             retired_flag = (
                 "a.retired_at IS NOT NULL" if _has_retired_at() else "0"
             )
+            cutoff_sql, cutoff_params = _history_cutoff(history_days)
             cur.execute(
                 f"""
                 SELECT a.name, a.model, a.task_description, a.last_active_ts,
@@ -1079,10 +1114,10 @@ def build_agents() -> list[dict]:
                 FROM agents a
                 JOIN projects p ON a.project_id = p.id
                 WHERE p.human_key = ?
-                  AND a.last_active_ts > datetime('now', '-30 days')
+                  {cutoff_sql}
                 ORDER BY a.last_active_ts DESC
                 """,
-                (project_key,),
+                (project_key, *cutoff_params),
             )
             for r in cur.fetchall():
                 if r["name"] in seen:
@@ -3678,7 +3713,7 @@ def do_jump(session: str) -> dict:
     # 独自 running 判定を書かない＝2026-05-20 自己kill 事故の教訓）。
     cat = None
     try:
-        for r in build_agents():
+        for r in build_agents(None):  # by name: however old the agent is
             if r["name"] == session:
                 cat = r["category"]
                 break
@@ -3749,7 +3784,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
     # glyph) を信頼源として再利用する。
     target = None
     try:
-        for r in build_agents():
+        for r in build_agents(None):  # by name: however old the agent is
             if r["name"] == session:
                 target = r
                 break
@@ -4821,7 +4856,7 @@ def do_exit(session: str) -> dict:
 
     target = None
     try:
-        for r in build_agents():
+        for r in build_agents(None):  # by name: however old the agent is
             if r["name"] == session:
                 target = r
                 break
@@ -5182,8 +5217,14 @@ class Handler(BaseHTTPRequestHandler):
             payload = spawn_directory_suggestions((query.get("path") or [""])[0])
             self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
+            q = parse_qs(urlparse(self.path).query)
+            history_days = _parse_history_days((q.get("days") or [""])[0])
             body = json.dumps(
-                {"ts": int(time.time()), "agents": build_agents()},
+                {
+                    "ts": int(time.time()),
+                    "history_days": history_days,
+                    "agents": build_agents(history_days),
+                },
                 ensure_ascii=False,
             ).encode()
             self._send(200, body, "application/json; charset=utf-8")

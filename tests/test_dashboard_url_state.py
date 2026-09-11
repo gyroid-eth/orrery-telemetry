@@ -30,6 +30,9 @@ def _route_cases() -> list[dict]:
         ["", {"murmur": "off"}, ["ja-JP"]],
         ["?murmur=on", {"murmur": "off"}, ["en-US"]],
         ["?murmur=invalid", {"murmur": "off"}, ["en-US"]],
+        ["?history=all", {}, ["en-US"]],
+        ["?history=7d&showAll=1", {}, ["en-US"]],   # explicit range beats the legacy switch
+        ["?history=90d", {}, ["en-US"]],            # unknown range → live
     ]
     script = (
         match.group(1)
@@ -49,22 +52,26 @@ def _route_cases() -> list[dict]:
 
 def test_dashboard_route_parameters_are_allowlisted_and_composable():
     assert _route_cases() == [
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
-        {"view": "net", "showAll": False, "embed": False, "networkWindow": "all", "language": "en", "murmurEnabled": True},
-        {"view": "deck", "showAll": True, "embed": True, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": False},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": False},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
-        {"view": "deck", "showAll": False, "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": False},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
+        {"view": "net", "history": "live", "embed": False, "networkWindow": "all", "language": "en", "murmurEnabled": True},
+        {"view": "deck", "history": "30d", "embed": True, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": True},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": False},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "ja", "murmurEnabled": False},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": False},
+        {"view": "deck", "history": "all", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
+        {"view": "deck", "history": "7d", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
+        {"view": "deck", "history": "live", "embed": False, "networkWindow": "1", "language": "en", "murmurEnabled": True},
     ]
 
 
 def test_dashboard_applies_route_without_changing_default_initialization():
     html = INDEX.read_text(encoding="utf-8")
     assert "INITIAL_ROUTE.embed ||\n  window.parent!==window" in html
-    assert "showAllInput.checked=INITIAL_ROUTE.showAll;" in html
+    assert "b.setAttribute('aria-checked',String(b.dataset.history===INITIAL_ROUTE.history));" in html
+    assert "let historyRange=INITIAL_ROUTE.history;" in html
     assert 'let gWin=INITIAL_ROUTE.networkWindow' in html
     assert "if(gWin==='all'){\n    gWinLabel='ALL';lbl.textContent='ALL';btn.classList.add('on');" in html
     assert "if(INITIAL_ROUTE.view==='net')setView('net');\ntick();" in html

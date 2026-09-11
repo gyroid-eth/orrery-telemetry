@@ -20,10 +20,10 @@ dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、O
 | 親子関係を見る | [NETWORK](#network) に切り替える。parent と child は spawn edge で結ばれ、node をクリックすると個別の詳細 panel が開きます。 |
 | エージェント同士が何を話したか読む | NETWORK の communication edge をクリックする。右側の mail drawer に、その2者間の subject、importance、時刻、本文が表示されます。[mail 設定がない場合](#edge-と-mail)は `NOT CONFIGURED` になります。 |
 | 複数のエージェントをまとめて操作する | NETWORK 上部の `Select` を有効にし、node をクリックするか空白部分を矩形 drag する。選択後に画面下部へ出る action bar で、running / finished agent は `Exit N`、2人以上は `Replay N` を選べます。EXIT は同じ button をもう一度押す二段確認です。 |
-| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の `show all` または NETWORK の `ALL` で過去 agent を出し、カード / node → 詳細 panel → `OPEN TMUX` と進む。tmux session がなければ `/api/jump` が保存済み transcript の resume に切り替わります。NETWORK の `Select` で gone / retired node を選び、画面下部の `Resume N` を二度押す経路もあります。resume には transcript、元の cwd、対応 CLI、terminal adapter が必要です。 |
-| 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の `show all` を有効にする。DECK は直近30日の `gone` / `retired` card を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
+| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出し、カード / node → 詳細 panel → `OPEN TMUX` と進む。tmux session がなければ `/api/jump` が保存済み transcript の resume に切り替わります。NETWORK の `Select` で gone / retired node を選び、画面下部の `Resume N` を二度押す経路もあります。resume には transcript、元の cwd、対応 CLI、terminal adapter が必要です。 |
+| 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の history を `7d` / `30d` / `all` に切り替える。既定の `live` は running と finished だけで、`7d` / `30d` はその期間に活動した `gone` / `retired` card を、`all` は登録された全 agent を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
 
-NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の `show all`、親へ届く完了報告を確認してください。
+NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の history `all`、親へ届く完了報告を確認してください。
 
 ## DECK
 
@@ -114,7 +114,7 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 
 上部の `FILTER · name / task` は、名前だけでなく **task description、live pane title、最後に受け取った指示の subject と送信者**も対象にします。何をしていた agent かを覚えていれば、名前を思い出せなくても引けます。
 
-既定では running と finished しか出ません。`show all` を有効にすると直近30日の `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
+既定の history `live` では running と finished しか出ません。`7d` / `30d` / `all` に切り替えるとその範囲で活動した `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
 
 ### カード操作
 
@@ -130,11 +130,11 @@ KILL の可否は frontend の見た目だけで決めず、server の `build_ag
 
 正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire し、child runtime の credential と state を削除します。その command の終了に伴い tmux session も閉じます。
 
-このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。`show all` を有効にすると、直近30日の `gone` / `retired` agent もカードとして表示されます。
+このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。history を `30d` にすると直近30日の、`all` にすると全期間の `gone` / `retired` agent もカードとして表示されます。検索が 0 件のときは、どの範囲を見て 0 件だったかと、次に広い範囲へのリンクを空状態に出します。
 
-![DECK show all — FINISHED / GONE / RETIRED の各セクション](img/deck-show-all.jpg)
+![DECK history 30d — FINISHED / GONE / RETIRED の各セクション](img/deck-show-all.jpg)
 
-NETWORK は現在の稼働状態と選択した time window を重ねる表示です。完了や retire だけを理由に node を即座に隠すわけではありませんが、last activity が window 外になると child node と、それに接続する spawn / mail edge は表示されません。現在の window に見えないことだけでは task failure を意味しません。履歴を確認する場合は NETWORK の `ALL`、個別の終了状態を確認する場合は DECK の `show all` を使います。
+NETWORK は現在の稼働状態と選択した time window を重ねる表示です。完了や retire だけを理由に node を即座に隠すわけではありませんが、last activity が window 外になると child node と、それに接続する spawn / mail edge は表示されません。現在の window に見えないことだけでは task failure を意味しません。履歴を確認する場合は NETWORK の `ALL`、個別の終了状態を確認する場合は DECK の history（`30d` / `all`）を使います。
 
 ## Output / deliverables
 

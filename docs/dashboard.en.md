@@ -16,10 +16,10 @@ Here, ORRERY Mail / mail watcher means the mechanism for messages among agents i
 | See parent-child relationships | Switch to [NETWORK](#network). Spawn edges connect parents and children; click a node for its detail panel. |
 | Read what agents said to each other | Click a communication edge in NETWORK. The right-side mail drawer displays subject, importance, time, and body between those two agents. Without [mail configuration](#edges-and-mail), it shows `NOT CONFIGURED`. |
 | Operate several agents together | Enable `Select` above NETWORK, then click nodes or drag a rectangle over empty space. The bottom action bar offers `Exit N` for running / finished agents and `Replay N` for two or more. EXIT requires pressing the same button twice. |
-| Resume a finished agent | For tmux-based Claude / Codex CLI agents, show past agents with DECK `show all` or NETWORK `ALL`, then choose card / node → detail panel → `OPEN TMUX`. If the tmux session is absent, `/api/jump` switches to saved-transcript resume. Another path selects gone / retired nodes in NETWORK and presses bottom-bar `Resume N` twice. Resume requires the transcript, original cwd, corresponding CLI, and terminal adapter. |
-| See finished agents | Set NETWORK's time window to `ALL` or enable DECK `show all`. DECK shows `gone` / `retired` cards from the last 30 days. See also [After a child completes](#after-a-child-completes). |
+| Resume a finished agent | For tmux-based Claude / Codex CLI agents, show past agents with DECK history `30d` / `all` or NETWORK `ALL`, then choose card / node → detail panel → `OPEN TMUX`. If the tmux session is absent, `/api/jump` switches to saved-transcript resume. Another path selects gone / retired nodes in NETWORK and presses bottom-bar `Resume N` twice. Resume requires the transcript, original cwd, corresponding CLI, and terminal adapter. |
+| See finished agents | Set NETWORK's time window to `ALL` or switch DECK history to `7d` / `30d` / `all`. The default `live` shows only running and finished sessions; `7d` / `30d` add `gone` / `retired` cards active in that period, and `all` lists every agent ever registered. See also [After a child completes](#after-a-child-completes). |
 
-NETWORK may omit nodes outside its selected time window. Absence from the current graph alone does not mean task failure; check `ALL`, DECK `show all`, and the completion report delivered to the parent.
+NETWORK may omit nodes outside its selected time window. Absence from the current graph alone does not mean task failure; check `ALL`, DECK history `all`, and the completion report delivered to the parent.
 
 ## DECK
 
@@ -91,7 +91,7 @@ Running is not inferred from mail `last_active` alone. tmux process, pane state,
 
 Top-bar `FILTER · name / task` searches not only names but also **task descriptions, live pane titles, and the subject and sender of the last received instruction**. If you remember what an agent did, you can find it without remembering its name.
 
-By default only running and finished agents appear. Enabling `show all` adds `gone` / `retired` agents from the last 30 days, supporting the pattern of **finding a finished agent through search and resuming it**. This preserves a counterpart with old context for later restart; see “Resume a finished agent” under [Find an action](#find-an-action) for procedure and [After a child completes](#after-a-child-completes) for appearance.
+With the default history `live` only running and finished agents appear. Switching to `7d` / `30d` / `all` adds `gone` / `retired` agents active in that range, supporting the pattern of **finding a finished agent through search and resuming it**. This preserves a counterpart with old context for later restart; see “Resume a finished agent” under [Find an action](#find-an-action) for procedure and [After a child completes](#after-a-child-completes) for appearance.
 
 ### Card actions
 
@@ -107,11 +107,11 @@ KILL eligibility is not based only on frontend appearance; the server rechecks t
 
 In a normal completion flow, a child started by `/delegate` sends an ORRERY Mail completion report to its parent before exiting. The parent reads the report, verifies the artifact, and then returns the result to the user. After the child REPL ends, launcher cleanup releases reservations, soft-retires the remote identity, and removes child runtime credentials and state. The tmux session closes when that command ends.
 
-Thus a completed child's card disappears from the normal DECK view, but this is not a failure. Enabling `show all` displays `gone` / `retired` agents from the last 30 days.
+Thus a completed child's card disappears from the normal DECK view, but this is not a failure. History `30d` displays `gone` / `retired` agents from the last 30 days and `all` displays every period. When a search comes up empty, the empty state names the range it searched and links to the next wider one.
 
-![DECK show all — FINISHED / GONE / RETIRED sections](img/deck-show-all.jpg)
+![DECK history 30d — FINISHED / GONE / RETIRED sections](img/deck-show-all.jpg)
 
-NETWORK overlays current runtime state with the selected time window. Completion or retirement alone does not hide a node immediately, but when last activity leaves the window, the child node and connected spawn / mail edges disappear. Absence from the current window alone does not mean task failure. Use NETWORK `ALL` for history and DECK `show all` for an individual final state.
+NETWORK overlays current runtime state with the selected time window. Completion or retirement alone does not hide a node immediately, but when last activity leaves the window, the child node and connected spawn / mail edges disappear. Absence from the current window alone does not mean task failure. Use NETWORK `ALL` for history and DECK history (`30d` / `all`) for an individual final state.
 
 ## Output / deliverables
 
