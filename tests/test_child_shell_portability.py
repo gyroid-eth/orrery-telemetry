@@ -14,6 +14,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 import pytest
@@ -120,10 +121,19 @@ def test_dashboard_resume_uses_the_same_fallback(monkeypatch):
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "dash_server", ROOT / "dashboard" / "server.py"
+        f"dash_server_{id(ROOT)}", ROOT / "dashboard" / "server.py"
     )
     server = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(server)  # type: ignore[union-attr]
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = server
+    try:
+        spec.loader.exec_module(server)  # type: ignore[union-attr]
+    finally:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
     monkeypatch.delenv("AGENTSTACK_CHILD_SHELL", raising=False)
     monkeypatch.setattr(server.shutil, "which", lambda name: None if name == "zsh" else "/usr/bin/bash")
     assert server._login_shell() == "/usr/bin/bash"

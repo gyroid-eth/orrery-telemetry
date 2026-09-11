@@ -588,6 +588,14 @@ exit 0
     old_pid = int(pidfile.read_text(encoding="utf-8").strip())
     try:
         assert "falling back to supervised background mode" in first.stderr
+        # The checkout carries the optional Gemini dashboard extension; a core
+        # install must neither ship it nor let the runner start through it.
+        assert (repo / "dashboard" / "provider_server.py").is_file()
+        assert not (install_dir / "dashboard" / "provider_server.py").exists()
+        assert not (install_dir / "dashboard" / "gemini_provider_runtime.py").exists()
+        state = json.loads(
+            (install_dir / "runtime" / "dashboard-service.json").read_text(encoding="utf-8"))
+        assert state["server_path"] == str(install_dir / "dashboard" / "server.py")
         _wait_for_marker(port, "supervised-v1")
         _write_marker_dashboard(repo / "dashboard" / "server.py", "supervised-v2")
         second = subprocess.run(
@@ -1213,6 +1221,54 @@ while True:
     text = log_path.read_text(encoding="utf-8")
     assert "supervisor received signal=SIGTERM(15)" in text
     assert "dashboard supervisor stopped after requested signal" in text
+
+
+def test_runner_re_resolves_implicit_provider_path_after_provider_disappears(tmp_path):
+    dashboard = tmp_path / "dashboard"
+    dashboard.mkdir()
+    core = dashboard / "server.py"
+    core.write_text(
+        """import pathlib
+import time
+
+print('core-fallback', flush=True)
+pathlib.Path(__file__).with_name('core-ready').write_text('ready')
+while True:
+    time.sleep(1)
+""",
+        encoding="utf-8",
+    )
+    provider = dashboard / "provider_server.py"
+    provider.write_text(
+        """import pathlib
+
+print('provider-start', flush=True)
+pathlib.Path(__file__).unlink()
+raise SystemExit(1)
+""",
+        encoding="utf-8",
+    )
+    runner_script = dashboard / "service_runner.py"
+    shutil.copy2(RUNNER, runner_script)
+
+    env = _runner_env(tmp_path)
+    env["AGENTSTACK_DASHBOARD_SELF_RESTART"] = "1"
+    log_path = pathlib.Path(env["AGENTSTACK_DASHBOARD_LOG"])
+    runner = subprocess.Popen(
+        [sys.executable, str(runner_script)],
+        cwd=dashboard.parent,
+        env=env,
+    )
+    try:
+        text = _wait_for(log_path, "server | core-fallback")
+        assert "server | provider-start" in text
+        assert f"path={core}" in text
+        assert not provider.exists()
+    finally:
+        runner.send_signal(signal.SIGTERM)
+        runner.wait(timeout=10)
+
+    assert runner.returncode == 0
 
 
 def test_runner_rotates_logs_and_leaves_restart_to_service_manager(tmp_path):

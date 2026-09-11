@@ -1266,6 +1266,53 @@ copy_tree() {
   fi
 }
 
+# Install-relative files owned by optional provider installers (for example
+# scripts/install-gemini-provider.sh). service_runner.py starts
+# provider_server.py whenever it exists, so shipping it from the core would
+# activate an optional provider that was never installed. The provider's
+# dashboard runtime and its launcher hooks are one contract installed
+# together; a core reinstall overwriting only the hooks would pair an old
+# runtime with a new adapter (or the reverse). The core neither copies nor
+# removes these: an existing provider install keeps all of its files.
+OPTIONAL_PROVIDER_PAYLOAD=(
+  "dashboard/provider_server.py"
+  "dashboard/gemini_provider_runtime.py"
+  "hooks/spawn_gemini_child.sh"
+  "hooks/spawn_gemini_preregistered.sh"
+)
+
+is_optional_provider_payload() {
+  local relative="$1"
+  local owned
+  for owned in "${OPTIONAL_PROVIDER_PAYLOAD[@]}"; do
+    [[ "$relative" == "$owned" ]] && return 0
+  done
+  return 1
+}
+
+# copy_tree for a core directory that may also hold provider-owned files.
+# $3 is the directory's install-relative name (dashboard, hooks).
+copy_core_tree() {
+  local src="$1"
+  local dst="$2"
+  local relative_root="$3"
+  local entry
+  local name
+  plan "copy $src -> $dst (core files; optional provider payload excluded)"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  mkdir -p "$dst"
+  for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    name="${entry##*/}"
+    if is_optional_provider_payload "$relative_root/$name"; then
+      continue
+    fi
+    cp -R "$entry" "$dst/"
+  done
+}
+
 # The child MCP proxy that spawn_child.sh points each child at. It lives under
 # integrations/codex_app because the Codex App bridge introduced it, but a
 # spawned child's authenticated ORRERY Mail connection is a CORE feature: without
@@ -1308,7 +1355,7 @@ PY
 
 install_payload() {
   if [[ "$TIER" != "tier0" ]]; then
-    copy_tree "$REPO_ROOT/hooks" "$HOOKS_DIR"
+    copy_core_tree "$REPO_ROOT/hooks" "$HOOKS_DIR" "hooks"
     copy_tree "$REPO_ROOT/skills" "$SKILLS_DIR"
     copy_tree "$REPO_ROOT/codex" "$INSTALL_DIR/codex"
     copy_tree "$REPO_ROOT/claude" "$INSTALL_DIR/claude"
@@ -1317,7 +1364,7 @@ install_payload() {
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"
   fi
-  copy_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR"
+  copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
   plan "copy VERSION -> $INSTALL_DIR/VERSION"
   if [[ "$DRY_RUN" != true ]]; then
     cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"

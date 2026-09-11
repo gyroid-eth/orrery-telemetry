@@ -60,6 +60,12 @@ required preregistration, cleanup, MCP-proxy, or shared process-liveness
 infrastructure. It copies only Gemini-owned payload files; it never replaces
 `dashboard/server.py`.
 
+The Dashboard extension (`dashboard/provider_server.py` and
+`dashboard/gemini_provider_runtime.py`) ships only with this optional
+installer. The core `scripts/install.sh` does not copy those files, so a core
+install keeps running `dashboard/server.py`; a core reinstall also leaves an
+already-installed provider extension in place.
+
 ## Top-level launcher
 
 ```sh
@@ -70,7 +76,11 @@ Defaults:
 
 - binary: `agy`
 - model: `gemini-3.8-flash-high`
-- effort: `high`
+- effort: `high` (from `AGENTSTACK_GEMINI_EFFORT`)
+
+The CLI launchers (`agent-start-gemini`, `spawn_gemini_child.sh`, and a direct
+`spawn_gemini_preregistered.sh` run) keep this `high` fallback. The Dashboard
+does not use it; see [Dashboard NEW AGENT](#dashboard-new-agent).
 
 For binary-free validation:
 
@@ -100,6 +110,55 @@ task, argv, or Antigravity MCP configuration.
 A nominal Antigravity `SUCCESS` is not enough when required actions were denied
 or the textual response is empty. Those cases are reported to the parent as
 incomplete. A non-zero launcher/runtime status is likewise incomplete.
+
+## Dashboard NEW AGENT
+
+With the optional provider payload installed and the Dashboard restarted,
+`NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
+child path above through `spawn_gemini_preregistered.sh`.
+
+Requirements checked before ORRERY Mail registration, so a launch that cannot
+start does not leave a retained child identity behind:
+
+- a parent agent: standalone Antigravity launches are rejected, and the parent
+  must have its local runtime owner token;
+- the launch directory must be inside a git repository, and the worktree base
+  (default `HEAD`) must resolve to a commit;
+- `agy`, `tmux`, the selected Python, `git`, the adapter hook, and the Gemini
+  provider helpers under `~/.agentstack/bin` must be present;
+- the model must be in the Gemini allow-list (`AGENTSTACK_GEMINI_MODELS`,
+  default `gemini-3.8-flash-high,gemini-3.8-flash-medium`). An allow-list that
+  reuses a Claude or Codex model id disables the Antigravity tab.
+
+Engine and isolation rules:
+
+- **Effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
+  `SPAWN` disabled until `low`, `medium`, or `high` is chosen, and the server
+  rejects a request without one (`effort required for provider gemini`). The
+  CLI launchers' `high` fallback is not applied to Dashboard launches.
+- **Isolated worktree is forced.** The isolation checkbox is locked on while
+  Antigravity is selected; switching to Claude or Codex restores the previous
+  choice, and hidden resource declarations are not sent to those providers.
+- **Resources are required.** Enter comma-separated paths relative to the
+  repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
+  control characters, a leading `-`, backslashes, and `.git` are rejected, as
+  is any existing symlink component that resolves outside the repository. The
+  adapter repeats the check inside the new worktree before reserving anything.
+  Declarations are normalized (whitespace, `./`, duplicate slashes, repeats)
+  before they are reserved, and a leading `-` is rejected in the normalized
+  form too (`./-rf`). Wildcards are matched the way a case-insensitive
+  filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
+  is judged against `.git` or `src` in any letter case.
+
+The launcher delivers the full task to Antigravity and reports the result to
+the parent automatically, so the Dashboard sends no separate task mail for an
+Antigravity child. Launch status, `/api/spawn-status`, and
+`dashboard/logs/spawn.log` record `provider=gemini`.
+
+If the Dashboard page no longer matches what the extension expects, the page is
+served unmodified, the Antigravity tab is omitted, and Antigravity spawn
+requests fail closed; the reason is written to the Dashboard log. Claude and
+Codex are unaffected, including when the extension itself cannot be loaded.
 
 ## Dashboard controls
 

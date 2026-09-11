@@ -69,6 +69,228 @@ command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI not f
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || { echo "$PROG: selected Python is unavailable" >&2; exit 1; }
 [[ -x "$MAIL_HELPER" && -x "$STREAM_HELPER" && -x "$MCP_WRAPPER" ]] || { echo "$PROG: Gemini provider helpers are not installed" >&2; exit 1; }
 
+# Defend the resource boundary independently of the Dashboard. Without ROOT,
+# check declaration syntax and print the canonical form; with ROOT, also
+# reject any existing symlink component, at any depth of any path a resource
+# covers, that resolves outside ROOT.
+validate_resources() {
+  "$PYTHON_BIN" - "$RESOURCES" "${1:-}" <<'PY'
+import fnmatch, os, re, sys, unicodedata
+raw, root = sys.argv[1], sys.argv[2]
+def fail(message):
+    sys.stderr.write("spawn_gemini_preregistered.sh: " + message + "\n")
+    raise SystemExit(2)
+if re.search(r"[\x00-\x1f\x7f]", raw):
+    fail("resource contains a control character")
+canonical = []
+for item in (value.strip() for value in raw.split(",")):
+    if not item:
+        continue
+    if item.startswith(("~", "/", "-")) or "\\" in item:
+        fail("unsafe resource declaration: " + item)
+    parts = [part for part in item.split("/") if part not in ("", ".")]
+    # ./-rf normalizes to -rf, so check the form that is handed on as well.
+    if (not parts or parts[0].startswith("-") or ".." in parts
+            or any(part.lower() == ".git" for part in parts)):
+        fail("unsafe resource declaration: " + item)
+    value = "/".join(parts)
+    if value not in canonical:
+        canonical.append(value)
+if not canonical:
+    fail("Gemini dashboard launch requires declared resources")
+if root:
+    base = os.path.realpath(root)
+    budget = [200000]
+    def inside(path):
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+    def names_git(path):
+        return inside(path) and any(
+            part.casefold() == ".git" for part in os.path.relpath(path, base).split(os.sep))
+    # Resolve one hop at a time and classify every location visited inside the
+    # worktree, so src/meta -> ../.git is metadata whether .git is a directory,
+    # a gitdir file, or a symlink to a differently named store.
+    def reaches_git(start, names):
+        current, pending, hops = start, list(reversed(names)), 0
+        while pending and hops <= 40:
+            name = pending.pop()
+            if name in ("", "."):
+                continue
+            if name == "..":
+                current = os.path.dirname(current)
+                continue
+            candidate = os.path.join(current, name)
+            if names_git(candidate):
+                return True
+            try:
+                target = os.readlink(candidate)
+            except OSError:
+                current = candidate
+                continue
+            hops += 1
+            if target.startswith("/"):
+                current = "/"
+            pending.extend(reversed(target.split("/")))
+        return names_git(os.path.realpath(os.path.join(start, *names)))
+    def closure(pattern, positions):
+        closed, stack = set(), list(positions)
+        while stack:
+            index = stack.pop()
+            if index not in closed:
+                closed.add(index)
+                if index < len(pattern) and pattern[index] == "**":
+                    stack.append(index + 1)
+        return frozenset((len(pattern),)) if len(pattern) in closed else frozenset(closed)
+    # Default APFS equates case variants (with full folding) and normalization
+    # forms, so SR? opens src and .GI? opens .git. A component also matches
+    # after casefolding both sides, or through folded(), which compares the
+    # canonical caseless forms: a positive ASCII class folds to lowercase
+    # members; ? and any other class widen to one or more characters, since
+    # one character can fold to several and [!s] excludes only one case; and
+    # combining marks at a literal edge next to such a wildcard can be
+    # reordered across it, so the wildcard absorbs them. Folding only adds
+    # matches and reads names alone, so case-sensitive roots get the same answer.
+    def fold(text):
+        return unicodedata.normalize("NFD", unicodedata.normalize("NFD", text).casefold())
+    def trim(text, start, end):
+        while start and text and unicodedata.combining(text[0]):
+            text = text[1:]
+        while end and text and unicodedata.combining(text[-1]):
+            text = text[:-1]
+        return text
+    folded_cache = {}
+    def folded(part):
+        if part in folded_cache:
+            return folded_cache[part]
+        tokens, index = [], 0
+        while index < len(part):
+            char = part[index]
+            index += 1
+            if char == "[":
+                end = index + (part[index:index + 1] == "!")
+                end = part.find("]", end + (part[end:end + 1] == "]"))
+                if end >= 0:
+                    token, index = part[index - 1:end + 1], end + 1
+                    # fnmatch decides negation: [a-[!.] drops its empty range to [!.].
+                    if token.isascii() and not fnmatch.fnmatchcase("\u0100", token):
+                        members = sorted({chr(code).lower() for code in range(128)
+                                          if fnmatch.fnmatchcase(chr(code), token)})
+                        tokens.append(("class", "[" + "".join(map(re.escape, members)) + "]"
+                                       if members else "(?!)"))
+                    else:
+                        tokens.append(("wild", ".+"))
+                    continue
+            if char in "*?":
+                tokens.append(("wild", ".*" if char == "*" else ".+"))
+            elif tokens and tokens[-1][0] == "literal":
+                tokens[-1] = ("literal", tokens[-1][1] + char)
+            else:
+                tokens.append(("literal", char))
+        regex = []
+        for position, (kind, value) in enumerate(tokens):
+            if kind == "literal":
+                start = position > 0 and tokens[position - 1][0] == "wild"
+                end = position + 1 < len(tokens) and tokens[position + 1][0] == "wild"
+                value = trim(unicodedata.normalize("NFD", value), start, end)
+                value = re.escape(trim(fold(value), start, end))
+            regex.append(value)
+        folded_cache[part] = re.compile("".join(regex), re.S)
+        return folded_cache[part]
+    def matches(name, part):
+        try:
+            return (fnmatch.fnmatchcase(name, part)
+                    or fnmatch.fnmatchcase(name.casefold(), part.casefold())
+                    or folded(part).fullmatch(fold(name)) is not None)
+        except re.error:
+            # Some interpreters reject a reversed range such as casefolded [Z-a].
+            return True
+    def step(pattern, states, name):
+        # len(pattern) marks a match; a matched directory covers its subtree.
+        if len(pattern) in states:
+            return frozenset((len(pattern),))
+        nxt = set()
+        for index in states:
+            if pattern[index] == "**":
+                nxt.add(index)
+            elif matches(name, pattern[index]):
+                nxt.add(index + 1)
+        return closure(pattern, nxt)
+    def unverifiable(value, where):
+        if budget[0] < 0:
+            fail("resource covers too many paths to verify the worktree boundary: " + value)
+        fail("could not verify the worktree boundary for resource: " + value + " (" + where + ")")
+    # Walk every existing path the pattern covers at any depth. Symlinks are
+    # resolved, never followed implicitly; an inside directory target is walked
+    # once per (real directory, pattern state), so cycles terminate. Missing
+    # paths pass; unreadable directories and an exhausted budget fail closed.
+    # An inside symlink on a covered path that reaches git metadata is covered.
+    def escape(value, literal, pattern):
+        pending = [(os.path.realpath(os.path.join(base, *literal)), "/".join(literal),
+                    closure(pattern, {0}), reaches_git(base, literal))]
+        seen = set()
+        first_escape = ""
+        while pending:
+            directory, relative, states, in_git = pending.pop()
+            if (directory, states, in_git) in seen:
+                continue
+            seen.add((directory, states, in_git))
+            try:
+                entries = os.scandir(directory)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError:
+                unverifiable(value, relative or ".")
+            try:
+                with entries:
+                    for entry in entries:
+                        budget[0] -= 1
+                        if budget[0] < 0:
+                            unverifiable(value, relative or ".")
+                        nxt = step(pattern, states, entry.name)
+                        if not nxt:
+                            continue
+                        path = relative + "/" + entry.name if relative else entry.name
+                        covered_git = in_git or entry.name.casefold() == ".git"
+                        if covered_git and len(pattern) in nxt:
+                            return ("git", path)
+                        if entry.is_symlink():
+                            target = os.path.realpath(entry.path)
+                            if not inside(target):
+                                if not first_escape:
+                                    first_escape = path
+                                continue
+                            if reaches_git(directory, [entry.name]):
+                                return ("git", path)
+                            if os.path.isdir(target):
+                                pending.append((target, path, nxt, covered_git))
+                        elif entry.is_dir(follow_symlinks=False):
+                            pending.append((entry.path, path, nxt, covered_git))
+            except OSError:
+                unverifiable(value, relative or ".")
+        return ("escape", first_escape) if first_escape else ("", "")
+    for value in canonical:
+        parts = value.split("/")
+        literal = []
+        for part in parts:
+            if set("*?[") & set(part):
+                break
+            literal.append(part)
+        for index in range(1, len(literal) + 1):
+            if not inside(os.path.realpath(os.path.join(base, *literal[:index]))):
+                fail("resource escapes the worktree through a symlink: " + value)
+        for index in range(1, len(literal) + 1):
+            if reaches_git(base, literal[:index]):
+                fail("resource must not cover git metadata: " + value + " ("
+                     + "/".join(literal[:index]) + ")")
+        found_kind, found_path = escape(value, literal, parts[len(literal):])
+        if found_kind == "git":
+            fail("resource must not cover git metadata: " + value + " (" + found_path + ")")
+        if found_kind:
+            fail("resource escapes the worktree through a symlink: " + value + " (" + found_path + ")")
+print(",".join(canonical))
+PY
+}
+RESOURCES="$(validate_resources)" || exit 2
+
 SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
 if [[ -n "$WORKTREE_BASE_REV" ]]; then
@@ -121,10 +343,15 @@ cleanup_failure() {
       git -C "$SOURCE_REPO" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
       git -C "$SOURCE_REPO" branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
     fi
-    rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE"
+    rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
   fi
 }
 trap cleanup_failure EXIT
+# A readiness timeout signals this launcher; exit non-zero so the EXIT cleanup
+# releases, retires, and removes what was created so far.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Consume the one-shot token into the stable per-agent runtime path expected by
 # the MCP wrapper. The token value and token-file path are not embedded in the
@@ -146,6 +373,9 @@ WORKTREE_CREATED=true
 # metadata, so overlapping delegated children cannot remove each other's rule.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
 ( umask 077 && printf '%s\n' '.agents/mcp_config.json' > "$GIT_EXCLUDES_FILE" )
+
+# The worktree is what the child sees; check it before reserving anything.
+RESOURCES="$(validate_resources "$WORKTREE_DIR")" || exit 2
 
 mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
   --token-file "$DURABLE_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL"
@@ -176,24 +406,12 @@ import json, os, sys
 from pathlib import Path
 raw_path, event_path, child, parent, resources, worktree, source_repo = sys.argv[1:8]
 workspace_root = Path(worktree).resolve(strict=False)
-source_root = Path(source_repo).resolve(strict=False)
 task = open(raw_path, encoding="utf-8").read()
-anchored_resources = []
-for raw_resource in (item.strip() for item in resources.split(",")):
-    if not raw_resource:
-        continue
-    resource = Path(raw_resource).expanduser()
-    if resource.is_absolute():
-        resolved = resource.resolve(strict=False)
-        try:
-            relative = resolved.relative_to(source_root)
-        except ValueError:
-            anchored = resolved
-        else:
-            anchored = workspace_root / relative
-    else:
-        anchored = workspace_root / resource
-    anchored_resources.append(os.fspath(anchored))
+# validate_resources already produced canonical repository-relative entries,
+# so each one anchors lexically inside the worktree.
+anchored_resources = [
+    os.fspath(workspace_root / item) for item in resources.split(",") if item
+]
 resource_text = "\n".join(f"- {item}" for item in anchored_resources) or "- (explicitly none)"
 prefix = (
     f"You are {child}, a delegated Antigravity child of {parent}. "
@@ -290,5 +508,5 @@ TMUX_STARTED=true
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null || printf '%s\n' "$CHILD_NAME" >> "$MANAGED_FILE"
-trap - EXIT
+trap - EXIT HUP INT TERM
 printf '%s\n' "$CHILD_NAME"

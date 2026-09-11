@@ -28,10 +28,21 @@ _SERVER = pathlib.Path(__file__).resolve().parent.parent / "dashboard" / "server
 
 
 def _load_server():
-    spec = importlib.util.spec_from_file_location("agentstack_server", _SERVER)
+    spec = importlib.util.spec_from_file_location(
+        f"agentstack_server_{id(_SERVER)}", _SERVER
+    )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = mod
+    try:
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
 
 
 srv = _load_server()

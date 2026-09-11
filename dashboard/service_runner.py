@@ -120,12 +120,11 @@ def _default_server_path() -> pathlib.Path:
     return provider_server if provider_server.is_file() else HERE / "server.py"
 
 
-def run(server_path: pathlib.Path) -> int:
+def run(server_path: pathlib.Path | None) -> int:
     logger = _configure_logger()
     previous = _read_previous_state()
     if previous:
         logger.warning("unclean supervisor exit detected; previous_state=%s", previous)
-    _write_state(server_path)
 
     child: subprocess.Popen[str] | None = None
     watchdog_write_fd: int | None = None
@@ -147,15 +146,25 @@ def run(server_path: pathlib.Path) -> int:
             if stopping_signal is not None:
                 logger.info("dashboard supervisor stopped before next restart")
                 return 0
+            # In self-restart mode the optional provider entrypoint can be
+            # removed while a child is running (for example by a failed
+            # provider upgrade). Resolve the implicit path for every child so
+            # the next attempt falls back to the core dashboard. An explicit
+            # argv override remains fixed for the lifetime of the supervisor.
+            selected_server_path = (
+                server_path if server_path is not None else _default_server_path()
+            )
+            _write_state(selected_server_path)
             logger.info(
                 "starting dashboard server supervisor_pid=%d port=%s path=%s",
-                os.getpid(), os.environ.get("AGENTSTACK_PORT", "8770"), server_path,
+                os.getpid(), os.environ.get("AGENTSTACK_PORT", "8770"),
+                selected_server_path,
             )
             watchdog_read_fd, watchdog_write_fd = os.pipe()
             child_env = os.environ.copy()
             child_env["AGENTSTACK_DASHBOARD_SUPERVISOR_FD"] = str(watchdog_read_fd)
             child = subprocess.Popen(
-                [sys.executable, "-u", str(server_path)],
+                [sys.executable, "-u", str(selected_server_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -203,7 +212,7 @@ def run(server_path: pathlib.Path) -> int:
 
 
 def main() -> int:
-    server_path = pathlib.Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else _default_server_path()
+    server_path = pathlib.Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
     return run(server_path)
 
 

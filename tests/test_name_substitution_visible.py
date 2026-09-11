@@ -35,11 +35,16 @@ def _load_server(runtime_dir: pathlib.Path):
     os.environ["AGENTSTACK_RUNTIME_DIR"] = str(runtime_dir)
     sys.path.insert(0, str(ROOT / "dashboard"))
     try:
+        module_name = f"srv_subst_{runtime_dir.name}"
         spec = importlib.util.spec_from_file_location(
-            f"srv_subst_{runtime_dir.name}", SERVER)
+            module_name, SERVER)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            sys.modules.pop(module_name, None)
     finally:
         sys.path.remove(str(ROOT / "dashboard"))
         for key, value in saved.items():

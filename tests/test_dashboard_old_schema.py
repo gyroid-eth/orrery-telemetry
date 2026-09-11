@@ -94,10 +94,21 @@ def _load_server(db: pathlib.Path):
     os.environ["AGENTSTACK_PROJECT_KEY"] = "/proj"
     sys.path.insert(0, str(ROOT / "dashboard"))
     try:
-        spec = importlib.util.spec_from_file_location(f"srv_{db.parent.name}", SERVER)
+        spec = importlib.util.spec_from_file_location(
+            f"srv_{id(db)}", SERVER
+        )
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        module_name = spec.name
+        previous = sys.modules.get(module_name)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            if previous is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
     finally:
         sys.path.remove(str(ROOT / "dashboard"))
         for key, value in saved.items():
