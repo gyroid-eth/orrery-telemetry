@@ -1,103 +1,111 @@
 # ORRERY Mail extraction
 
-ORRERY Mail is the public installer's coordination service. It
-is developed inside this repository as a logically isolated package;
-repository extraction remains deferred until the versioned contract and
-independent export/test gates are stable.
+> English version: [agentstack-mail.en.md](agentstack-mail.en.md)
 
-The implementation is maintained in `packages/agentstack_mail`; its provenance
-snapshot remains an audit input rather than a runtime dependency.
+ORRERY Mail は public installer の coordination service です。この
+repository の中で論理的に隔離された package として開発されており、
+versioned contract と独立した export/test gate が安定するまで、repository
+からの extraction（切り出し）は先送りしています。
 
-The default endpoint is `http://127.0.0.1:18765/mcp`; data lives below
-`~/.agentstack/mail`. No test or migration may point legacy and current
-services at one writable database or archive.
+実装は `packages/agentstack_mail` で保守されています。その provenance
+snapshot は runtime dependency ではなく、あくまで audit の入力として残ります。
 
-The caller-derived compatibility surface is versioned in
-`packages/agentstack_mail/fixtures/compatibility-tools-v1.json`. Its 25 tools
-are the positive union of executable callers and shipped model-facing
-contracts, plus what the surface has gained since the cutover (see
-`post_cutover_published` in the same fixture). Permission deny entries, negative instructions, and Codex
-Bridge-local operations do not become source-extraction roots.
+既定の endpoint は `http://127.0.0.1:18765/mcp` で、data は
+`~/.agentstack/mail` 以下に置かれます。legacy と current の service を、
+同じ書き込み可能な database や archive に同時に向けることは、どの test や
+migration でも許していません。
 
-The implementation train was:
+caller-derived の compatibility surface は
+`packages/agentstack_mail/fixtures/compatibility-tools-v1.json` で
+version 管理されています。その 25 個の tool は、実行可能な caller と
+出荷済みの model-facing contract の union（和集合）に、cutover 以降に
+surface が獲得したもの（同じ fixture の `post_cutover_published` を参照）を
+足したものです。Permission deny entry、negative instruction、Codex
+Bridge-local の operation は source-extraction の root にはなりません。
 
-1. freeze provenance, live tool schemas, and the caller-derived tool contract;
-2. define isolated configuration and an exact-schema database copy/import gate;
-3. port identity, messaging/contact, receipt, reservation, and notification
-   behavior with differential tests against the live source;
-4. port HTTP and lifecycle stability without the machine-specific notify and
-   tmux daemons;
-5. update installer, doctor, bridge, and hooks atomically to the new endpoint,
-   authentication, and `orrery-mail` MCP key;
-6. run coexistence, migration, rollback, fault, and real-machine soak evidence
-   before the approved authority switch.
+実装は次の順で進めました。
 
-The first four gates are executable and hermetic via
-[`packages/agentstack_mail/scripts/cutover_gates.py`](../packages/agentstack_mail/scripts/cutover_gates.py).
-The automated contract lives in the gate script itself. The real-machine soak
-procedure and the handoff runbook were minutes of a one-time event and are not
-published; the decisions they recorded are enforced by the decision ledger
-fixture and its tests, where drift fails rather than merely disagreeing with a
-document.
+1. provenance、live tool schema、caller-derived tool contract を freeze する。
+2. 隔離された configuration と、exact-schema な database copy/import gate を
+   定義する。
+3. identity、messaging/contact、receipt、reservation、notification の
+   挙動を、live source に対する differential test 付きで port する。
+4. machine-specific な notify daemon と tmux daemon を除いた HTTP と
+   lifecycle の安定性を port する。
+5. installer、doctor、bridge、hooks を、新しい endpoint、authentication、
+   `orrery-mail` という MCP key へ一括で更新する。
+6. 承認された authority switch の前に、coexistence、migration、rollback、
+   fault、実機 soak の証跡を揃える。
 
-The provider identity and both client registration keys are `orrery-mail`.
-Install-time migrations recognize legacy client keys only to replace same-
-endpoint entries without creating a duplicate authority.
-Authority is determined by endpoint, data roots, and ownership in addition to
-the client-visible key.
+最初の 4 つの gate は
+[`packages/agentstack_mail/scripts/cutover_gates.py`](../packages/agentstack_mail/scripts/cutover_gates.py)
+によって実行可能かつ hermetic です。automated contract 自体もこの gate
+script の中にあります。実機 soak の手順と handoff runbook は一度限りの
+event の議事メモであり、公開されていません。そこで記録された決定は
+decision ledger fixture とその test によって強制され、drift は文書と
+食い違うだけでなく test が落ちる形になっています。
 
-## Current core boundary
+provider identity と両方の client registration key は `orrery-mail` です。
+install 時の migration は、同一 endpoint の entry を重複した authority を
+作らずに置き換えるためだけに、legacy な client key を認識します。
+authority は client から見える key に加えて、endpoint、data root、
+ownership によって決まります。
 
-The core train copies the live data/archive/tool-body seam into the renamed
-package and publishes exactly the versioned tools named by the contract
-through a fail-closed
-FastMCP subclass. MCP resources and the 16 non-compatibility tools are not
-published. Their bodies remain internal only until the differential train can
-prove that pruning them does not break macro or storage dependencies.
+## 現在の Core boundary
 
-Because no roster resource is published, tool descriptions direct callers to
-the identity assigned by the ORRERY Telemetry runtime or returned by
-`register_agent`/`macro_start_session`. `list_contacts` returns known links,
-`whois` verifies a known identity, and broadcast delivery does not require a
-roster response. Tool filtering cannot reduce the public surface: a profile
-that removes any contract tool makes server construction fail closed.
+core の実装は、live の data/archive/tool-body の境界をそのまま renamed
+package へ copy し、fail-closed な FastMCP subclass を通して contract が
+名指す versioned tool だけを厳密に publish します。MCP resource と
+compatibility 対象外の 16 個の tool は publish されません。それらの本体は、
+differential な作業で pruning してもマクロや storage の依存を壊さないと
+証明できるまで、internal only のままです。
 
-All production settings use the `AGENTSTACK_MAIL_*` namespace. With no new
-settings present, the resolved port is `18765` and database, archive, and
-signals are below `~/.agentstack/mail`; legacy unprefixed variables and a CWD
-`.env` are ignored. An installed package now exposes `agentstack-mail`, which
-serves the exact boundary on the loopback-only default
-`http://127.0.0.1:18765/mcp`. The first entry point rejects non-loopback binds
-and bearer/JWT settings rather than pretending to enforce authentication.
-`agentstack-mail --help` exits without starting a server; `--host`, `--port`,
-and `--path` override the namespaced endpoint settings for that process.
-Identity mode behavior remains frozen-source compatible: default `coerce` may
-return a generated name for a noncanonical explicit request, and an invalid
-mode falls back to `coerce`. The cutover profile must therefore set
-`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` for the fixed runtime
-identities; the legacy unprefixed key remains intentionally isolated. The
-Claude Code registration hook compares every explicit request with the returned
-name before recording success; a mismatch or unreadable response exits nonzero.
-This is a caller-side refusal, not a transaction rollback: because it
-runs after the tool call, a substituted server row may remain, and sessions with
-an existing `AGENT_NAME` are not universally stopped by the success-flag guard.
-Codex has no equivalent PostToolUse hook: reserved bootstrap and
-reregister paths already stop on mismatch, while direct spawn, raw MCP calls,
-and Codex App reauthentication remain follow-up coverage rather than a substitute
-for the required cutover setting.
-The service helper/controller and copy/verify/rollback-assess migration
-commands are implemented. The installer provisions this provider by default
-with the fixed `orrery-mail` client key.
+roster resource を publish していないため、tool の description は caller に、
+ORRERY Telemetry runtime が割り当てた identity か `register_agent`/
+`macro_start_session` が返した identity を使うよう指示します。
+`list_contacts` は既知の link を返し、`whois` は既知の identity を検証し、
+broadcast の配信は roster の応答を必要としません。Tool filtering で
+public surface を減らすことはできません。contract の tool を 1 つでも
+取り除く profile は、server の構築が fail closed します。
 
-## Installation and lifecycle
+すべての production 設定は `AGENTSTACK_MAIL_*` の namespace を使います。
+新しい設定が何もない状態では、解決される port は `18765` で、database、
+archive、signals は `~/.agentstack/mail` 以下です。legacy の unprefixed
+変数と CWD の `.env` は無視されます。install された package は今や
+`agentstack-mail` を公開し、loopback-only な既定 `http://127.0.0.1:18765/mcp`
+で厳密な boundary を配信します。最初の entry point は、authentication を
+実施しているふりをするのではなく、non-loopback な bind と bearer/JWT の
+設定を拒否します。`agentstack-mail --help` は server を起動せずに exit し、
+`--host`、`--port`、`--path` はその process 限りで namespaced な endpoint
+設定を上書きします。Identity mode の挙動は frozen source と互換のままです。
+既定の `coerce` は非 canonical な明示 request に対して生成した name を
+返すことがあり、不正な mode は `coerce` に fallback します。したがって
+cutover profile は、固定された runtime identity のために
+`AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough` を設定する必要が
+あり、legacy の unprefixed key は意図的に隔離されたままです。Claude Code の
+registration hook は、成功を記録する前に、明示された各 request を返された
+name と比較します。不一致や読み取れない応答は非 0 で exit します。これは
+transaction の rollback ではなく caller 側の拒否であり、tool call の後に
+実行されるため、置き換わった server row が残る場合があり、既存の
+`AGENT_NAME` を持つ session は success-flag guard によって一律に止められる
+わけではありません。Codex には相当する PostToolUse hook がありません。
+reserved な bootstrap と reregister の path はすでに不一致で止まりますが、
+direct spawn、raw MCP call、Codex App の再認証は、cutover に必須の設定を
+代替するものではなく、今後の課題として残っています。
+Service helper/controller と copy/verify/rollback-assess の migration
+command は実装済みです。Installer は既定でこの provider を、固定された
+`orrery-mail` の client key で provision します。
 
-The regular installer provisions the bundled package into an immutable
-candidate virtual environment, renders a namespaced service environment, and
-starts a supervised-background runner. The runner restarts a crashed server
-after five seconds; `agentstack-mail-service foreground` holds the state-root
-authority lock so a restart cannot create two writers. The thin lifecycle
-controller adds a PID file, exact rendered-runner identity check, endpoint and
-database health check, and a short-lived operation lock:
+## Install と lifecycle
+
+通常の installer は、bundled package を immutable な candidate virtual
+environment へ provision し、namespaced な service environment を
+render して、supervised-background な runner を起動します。runner は
+crash した server を 5 秒後に再起動します。
+`agentstack-mail-service foreground` は state-root の authority lock を
+保持するため、restart が 2 つの writer を作ることはありません。薄い lifecycle controller が、
+PID file、rendered-runner identity の厳密な照合、endpoint と database の
+health check、短命な operation lock を追加します。
 
 ```bash
 ~/.agentstack/bin/agentstack-mailctl start
@@ -106,84 +114,93 @@ database health check, and a short-lived operation lock:
 ~/.agentstack/bin/agentstack-mailctl restart
 ```
 
-The controller deliberately does not add a second supervision layer of its own.
-A live PID with the wrong command, a healthy endpoint without the owned PID
-file, or an endpoint reporting another database is refused rather than stopped
-or reused.
+controller は意図的に、自前の 2 段目の supervision layer を追加しません。
+command の異なる live な PID、owned PID file のない健全な endpoint、
+別の database を報告する endpoint は、止められたり再利用されたりせず、
+拒否されます。
 
-### Restart after a reboot
+### reboot 後の再起動
 
-The runner is started with `nohup`, which does not survive a reboot, so the
-installer registers a *supervising trigger* — `org.agentstack.mail` as a launchd
-job on macOS, or a oneshot service plus a `.timer` on Linux — whose only job is
-to run `agentstack-mailctl start` at login and every five minutes thereafter. It is registered on every install,
-including when the installer finds a healthy server already running, so
-re-running `install.sh` on an existing setup is enough to gain it.
+runner は `nohup` で起動されるため reboot を生き延びません。そのため
+installer は *supervising trigger* を登録します——macOS では launchd job
+`org.agentstack.mail`、Linux では oneshot service と `.timer` の組で、
+その仕事はただ 1 つ、login 時とその後 5 分おきに `agentstack-mailctl
+start` を実行することです。これはインストールのたびに、installer が
+すでに健全な server を見つけた場合を含めて登録されるため、既存の
+setup に対して `install.sh` を再実行するだけで得られます。
 
-The unit carries only `HOME`, `AGENTSTACK_HOME` and `PATH`: `agentstack-mailctl`
-reads `env.sh` for everything else, so the trigger runs exactly the command an
-operator runs by hand and picks up a re-rendered service env automatically.
-Freezing those paths into the unit instead would silently keep starting the
-previous render after a re-install. Each invocation is one-shot on purpose (`KeepAlive` false / `Type=oneshot`): the
-controller hands the server to `nohup` and exits, so a restart-always unit would
-respawn the *controller* in a loop instead of supervising the server. Repetition
-comes from `StartInterval` on launchd and from the timer on systemd. The systemd
-unit also sets `KillMode=process`: without it the default control-group cleanup
-kills the freshly started server the moment the oneshot controller exits (seen
-on WSL2). `start` is
-idempotent — it reports "already running" and exits 0 when the owned PID is alive
-and healthy — so re-running it costs nothing, and it stays silent when there is
-nothing to do. Its output goes to `agentstack-mail-autostart.log` (launchd
-`StandardOutPath`, systemd `StandardOutput=append:`), separate from the server's
-own log.
+unit が持つのは `HOME`、`AGENTSTACK_HOME`、`PATH` だけです。
+`agentstack-mailctl` はそれ以外のすべてを `env.sh` から読むため、
+trigger は operator が手で打つのと全く同じ command を実行し、
+再 render された service env を自動的に取り込みます。これらの path を
+unit に固めて焼き込んでしまうと、再インストール後も静かに以前の render を
+起動し続けてしまいます。それぞれの起動は意図的に one-shot です
+（`KeepAlive` false / `Type=oneshot`）。controller は server を `nohup`
+に渡して終了するため、restart-always な unit だと server ではなく
+*controller* をループで再起動してしまいます。繰り返しは launchd の
+`StartInterval` と systemd の timer から来ます。systemd の unit は
+`KillMode=process` も設定します。これがないと、既定の control-group
+cleanup が、oneshot controller が終了した瞬間に起動したばかりの server を
+kill してしまいます（WSL2 で確認）。`start` は冪等です——owned PID が
+生きていて健全なら "already running" と報告して 0 で exit するため、
+再実行のコストはなく、何もすることがなければ静かなままです。その出力は
+`agentstack-mail-autostart.log`（launchd の `StandardOutPath`、systemd の
+`StandardOutput=append:`）に書かれ、server 自体の log とは分かれています。
 
-`agentstack-mailctl stop` is honoured. It records the intent in
-`runtime/agentstack-mail.stopped`, and the sweep leaves a deliberately stopped
-server alone until an explicit `start` or `restart` releases the hold. Without
-that record the trigger would quietly undo an operator's stop at the next
-firing — measured before the fix: `stop` reported "ORRERY Mail stopped", and
-the following sweep reported "ORRERY Mail started".
+`agentstack-mailctl stop` は尊重されます。その意図を
+`runtime/agentstack-mail.stopped` に記録し、sweep は明示的な `start` や
+`restart` がその hold を解除するまで、意図的に止められた server を
+そのままにします。この記録がなければ、trigger は次の発火時に operator の
+stop を静かに取り消してしまいます——修正前に実測したところ、`stop` は
+「ORRERY Mail stopped」と報告し、続く sweep は「ORRERY Mail started」と
+報告しました。
 
-If neither launchd nor systemd is available, the installer says so explicitly
-rather than skipping quietly, because a missing autostart is invisible until the
-machine actually reboots. That is not hypothetical: on 2026-08-16 a reboot on the
-maintainer's Mac came back with the dashboard running, no mail server, and a
-stale legacy service holding port 8765 — every agent registered afterwards wrote
-to the wrong database, and nothing reported an error.
+launchd も systemd も使えない場合、installer は黙って skip するのでは
+なく明示的にそう伝えます。autostart の欠落は、machine が実際に reboot
+するまで見えないからです。これは仮定の話ではありません。2026-08-16、
+maintainer の Mac で reboot した後、dashboard は動いているのに mail
+server はなく、古い legacy service が port 8765 を握ったままでした——
+その後に登録されたすべての agent は間違った database に書き込み、何も
+error を報告しませんでした。
 
-`agentstack-uninstall` removes the trigger — both the launchd/systemd job and the
-unit file — along with the other services recorded in the install manifest.
+`agentstack-uninstall` は、install manifest に記録された他の service と
+一緒に、この trigger（launchd/systemd の job と unit file の両方）を
+削除します。
 
-**What it covers.** The rendered runner restarts a crashed *server* after five
-seconds. If the *runner itself* is killed the trigger picks it up on its next
-sweep (measured before the sweep existed: pidfile present, port closed, nothing
-restarting it until the next login). A stale PID with a free port recovers
-automatically; a stale PID whose port is held by an unhealthy or foreign listener
-is refused with a message rather than fought over — the sweep will retry, but it
-will not evict a listener it does not own. Immediate recovery is
-`agentstack-mailctl start`.
+**この仕組みがカバーする範囲。** render された runner は、crash した
+*server* を 5 秒後に再起動します。*runner 自体* が kill された場合は、
+trigger が次の sweep で拾います（sweep が存在する前に実測: pidfile は
+残り、port は閉じたまま、次の login まで何も再起動しませんでした）。
+port が空いている stale な PID は自動的に回復しますが、port を
+unhealthy な、または無関係な listener が握っている stale な PID は、
+奪い合うのではなくメッセージ付きで拒否されます——sweep は再試行します
+が、自分が所有していない listener を追い出すことはしません。即時の
+回復は `agentstack-mailctl start` です。
 
-### The watcher is a service too
+### watcher も 1 つの service
 
-Delivery into tmux is done by `hooks/watch_agent_mail_signals.sh`, a separate
-long-running process from the Mail server. Since 2026-09-07 the installer
-registers it as `org.agentstack.mail-watcher` (launchd, `KeepAlive`) or
-`org.agentstack.mail-watcher.service` (systemd user unit, `Restart=always`),
-logging to `~/.agentstack/runtime/mail-watcher.log`. Before that, only
-`agent-start` and the Codex bootstrap started it, as a detached tmux session, so
-a host whose agents were all spawned from the dashboard accumulated signals and
-delivered none (observed on WSL2 after `wsl --shutdown`). The watcher holds a
-single-instance lock, so the `agent-start` tmux fallback now stands down when
-the service already runs; the installer also retires a leftover `mail-watcher`
-tmux session when it registers the unit. `/api/mail-watcher-health` reports
-`watcher_mode` as `launchd`, `systemd-user` or `pidfile`.
+tmux への配信は `hooks/watch_agent_mail_signals.sh` が行い、Mail server
+とは別の長時間稼働 process です。2026-09-07 以降、installer はこれを
+`org.agentstack.mail-watcher`（launchd、`KeepAlive`）または
+`org.agentstack.mail-watcher.service`（systemd user unit、
+`Restart=always`）として登録し、`~/.agentstack/runtime/mail-watcher.log`
+へ log します。それ以前は `agent-start` と Codex bootstrap だけが、
+detached な tmux session としてこれを起動していたため、agent がすべて
+dashboard から spawn された host では signal が溜まる一方で何も配信され
+ませんでした（`wsl --shutdown` 後の WSL2 で確認）。watcher は
+single-instance lock を保持するため、`agent-start` の tmux fallback は
+service がすでに動いている場合は手を引くようになりました。installer は
+unit を登録する際、残っていた `mail-watcher` tmux session も退役させます。
+`/api/mail-watcher-health` は `watcher_mode` として `launchd`、
+`systemd-user`、`pidfile` のいずれかを報告します。
 
-## Manual migration from upstream
+## upstream からの手動 migration
 
-Migration is an operator-run procedure, not an installer step. First quiesce
-the upstream writer and determine the canonical absolute database, archive,
-and signals paths. The destination must not yet exist. From the repository
-checkout, copy and then verify all three projections:
+Migration は installer の step ではなく、operator が手で行う手続きです。
+まず upstream の writer を静止させ、canonical な絶対 path で database、
+archive、signals を特定します。移行先はまだ存在してはいけません。
+repository checkout から、3 つの projection すべてを copy し、その後
+verify します。
 
 ```bash
 LEGACY_DB=/absolute/path/to/storage.sqlite3
@@ -206,142 +223,155 @@ uv run --project packages/agentstack_mail agentstack-mail-migrate verify \
 ./scripts/install.sh
 ```
 
-This path was used for the 2026-08-12 live switch: the database plus archive,
-about 60,000 records in total, were copied and reconciled successfully. Keep
-the upstream service stopped between copy and verification so the source
-snapshot does not change under the verifier.
+この手順は 2026-08-12 の実際の切替で使われました。database と archive、
+合計約 6 万件の record が、無事に copy され照合されました。source
+snapshot が verifier の下で変化しないよう、copy と verification の間は
+upstream の service を止めたままにしてください。
 
 ## Rollback
 
-The installer does not switch back to an external provider. Stop ORRERY Mail
-and use the migration and configuration backups for a deliberate manual
-rollback.
+installer は external provider へ自動で切り戻すことはしません。ORRERY
+Mail を停止し、migration と configuration の backup を使って、意図的に
+手動で rollback してください。
 
-## Notification layout compatibility
+## Notification layout の互換性
 
-ORRERY Mail writes one signal per message at
-`signals/projects/<project>/agents/<agent>/<message-id>.signal`. The bundled
-`hooks/watch_agent_mail_signals.sh` recursively discovers that layout, extracts
-the nested `message` metadata, injects the notification, and removes only the
-successfully delivered per-message signal. The repository installer regression
-test exercises that exact producer-shaped path in an isolated signals/runtime
-root with a fake tmux boundary; it never touches the live watcher or ports.
+ORRERY Mail は、message ごとに 1 つの signal を
+`signals/projects/<project>/agents/<agent>/<message-id>.signal` に
+書き込みます。bundled の `hooks/watch_agent_mail_signals.sh` はこの
+layout を再帰的に発見し、入れ子になった `message` の metadata を抽出し、
+notification を注入し、正常に配信できた message 単位の signal だけを
+削除します。Repository installer の regression test は、隔離された
+signals/runtime root と fake tmux boundary の中で、まさにこの
+producer-shaped な path を検証します。live の watcher や port には
+一切触れません。
 
-File-reservation activity probes converge on upstream #240's one-pathspec Git
-walk, then add a process-global concurrency limit of eight, a three-second
-per-probe deadline, and a four-second status-pass budget. A timed-out, failed,
-or incomplete filesystem/Git probe is explicit unknown activity and therefore
-cannot trigger stale auto-release; TTL expiry is unchanged. The package-local
-performance gate repeats 57 concrete tracked paths five times, requires a
-six-second-or-better median and at least three fully matched/complete runs, and
-reports the maximum separately. Fingerprints exclude mutable activity
-timestamps.
+File-reservation の activity probe は upstream #240 の one-pathspec な
+Git walk に収束させたうえで、process-global な concurrency limit 8、
+probe ごとの 3 秒の deadline、status-pass 全体の 4 秒の budget を
+追加しています。timeout した、失敗した、または不完全な filesystem/Git
+probe は明示的に unknown な activity として扱われるため、stale な
+auto-release を引き起こすことはできません。TTL の失効は変わりません。
+package-local な performance gate は、57 個の具体的な tracked path を
+5 回繰り返し、6 秒以下の median と、完全に一致・完了した run を最低 3 回
+要求し、最大値は別に報告します。Fingerprint は可変な activity
+timestamp を除外します。
 
-## Archive commit latency and startup repair
+## Archive commit の latency と startup 時の修復
 
-Archive-writing tools durably update SQLite and write their audit files before
-returning. The Git commit for those files is queued asynchronously by default,
-so Git history construction is not part of request latency. Set
-`AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC=false` to restore the old synchronous
-behavior; this kill switch remains available if a deployment observes queue or
-commit failures.
+archive を書く tool は、返る前に SQLite を確実に更新し、audit file を
+書き込みます。それら file の Git commit は既定で非同期に queue される
+ため、Git history の構築は request の latency には含まれません。
+`AGENTSTACK_MAIL_ARCHIVE_COMMIT_ASYNC=false` を設定すると旧来の同期的な
+挙動に戻せます。この kill switch は、deployment で queue や commit の
+失敗が観測された場合に備えて残してあります。
 
-The trade-off is limited to the Git projection. A hard process or machine
-shutdown can cancel a commit after the tool has returned. The database remains
-committed and the audit files remain as uncommitted files in the archive working
-tree. At the next server startup, the existing archive heal pass removes stale
-lock artifacts, discovers untracked and modified audit files, and commits them
-synchronously before the service starts accepting work. A recovery or
-maintenance failure is logged but does not discard the database or files.
+trade-off は Git の projection に限られます。process や machine の
+hard shutdown は、tool が返った後で commit を取り消してしまうことが
+あります。database は commit されたままで、audit file は archive の
+working tree に uncommitted な file として残ります。次に server が
+起動したとき、既存の archive heal pass が stale な lock artifact を
+除去し、untracked かつ modified な audit file を発見して、service が
+work を受け付け始める前に同期的に commit します。recovery や
+maintenance の失敗は log されますが、database や file を破棄することは
+ありません。
 
-Startup also checks `git gc --auto`, rate-limited by a marker under `.git` to at
-most once every 24 hours. The daily limit avoids paying even the object-count
-check on every restart; `--auto` supplies the second gate, so a repack runs only
-when Git's own loose-object or pack thresholds say it is warranted. When Git
-does start maintenance, `gc.autoDetach=false` keeps completion and failure
-observable to the startup heal pass.
+Startup では `git gc --auto` もチェックしますが、`.git` 以下の marker に
+よって最大でも 24 時間に 1 回にレート制限されます。この日次の上限に
+より、毎回の restart で object-count のチェックすら払わずに済みます。
+`--auto` が第 2 の gate を担うため、repack が走るのは Git 自身の
+loose-object や pack のしきい値がそれを必要だと判断したときだけです。
+Git が実際に maintenance を始めたときは、`gc.autoDetach=false` により、
+完了と失敗が startup の heal pass から観測可能なままになります。
 
-For scale, the 2026-08-14 Tier-1 measurements were taken on the development
-MacBook Pro, with Python 3.12.2, an ephemeral loopback server, an empty scratch
-archive, 25 measured iterations after three warmups, and the production-shaped
-tool log enabled. With `commit_async=true`, register/send/
-reservation p50 values were 32/76/47 ms (p95 41/89/58 ms); on the same machine
-and scratch-archive shape with `commit_async=false`, they were 217/310/259 ms
-(p95 252/344/271 ms). These are comparison data for that machine and profile,
-not universal latency promises. The executable gate and full recorded settings
-live in [`bench/tier1_latency.py`](../bench/tier1_latency.py) and
-[`bench/README.md`](../bench/README.md).
+規模感として、2026-08-14 の Tier-1 計測は、開発用 MacBook Pro、Python
+3.12.2、ephemeral な loopback server、空の scratch archive、3 回の
+warmup 後の 25 回の計測、production 相当の tool log を有効にした状態で
+取得しました。`commit_async=true` では、register/send/reservation の
+p50 はそれぞれ 32/76/47 ms（p95 は 41/89/58 ms）でした。同じ machine・
+同じ scratch-archive 形状で `commit_async=false` の場合は、217/310/259
+ms（p95 252/344/271 ms）でした。これはその machine とその profile に
+限った比較 data であり、普遍的な latency の約束ではありません。実行
+可能な gate と記録済みの全設定は
+[`bench/tier1_latency.py`](../bench/tier1_latency.py) と
+[`bench/README.md`](../bench/README.md) にあります。
 
-The dirty patch remains a repository-only audit input, and the Git bundle it
-accompanied is no longer distributed
-and are excluded from wheels and source distributions. Distribution gates
-verify both artifact types still contain the runtime modules, NOTICE, both
-licenses, and the versioned fixtures.
+dirty patch は repository だけの audit 入力のままであり、それに付随して
+いた Git bundle はもう配布されておらず、wheel と source distribution
+からは除外されています。Distribution gate は、両方の artifact 種別が
+runtime module、NOTICE、両方の license、versioned な fixture を確かに
+含んでいることを検証します。
 
 ## Behavior differential gate
 
-The approved Core base full SHA is owned only by
-`fixtures/differential-expected-divergences-v2.json`; prose does not mirror
-it. Artifact verification byte-matches the packaged fixture to that checkout
-fixture and accepts the base only when its commit object is reachable from a
-persistent local branch, remote-tracking branch, or tag. CI fetches full
-history so a shallow/unfetched object and an existing-but-unreachable object
-produce distinct failures. The approved base is a review anchor, not the
-candidate: local and push lanes use the exact checked-out `HEAD`, while a
-pull-request lane uses the exact synthetic merge `HEAD` checked out by that
-lane. That same full candidate SHA must be supplied to exact-checkout,
-`candidate-source-bound`, and every candidate-bound evidence verifier; the
-two SHAs are never substituted for one another. Behavior tests authenticate
-and reconstruct the frozen live baseline, where the operator supplies it, from a Git bundle and
-dirty patch, then start live and Core in separate subprocesses. Worker
-environments inherit only
-an OS bootstrap allowlist; database, archive, signals, home, temporary files,
-Git identity, port, and import roots are explicitly isolated. Test inputs and
-outputs are private, symlink escape and source-origin drift fail closed, and no
-developer AgentMail checkout is consulted.
+承認された Core base の full SHA は
+`fixtures/differential-expected-divergences-v2.json` だけが所有し、
+prose はそれを反映しません。Artifact verification は、packaged fixture
+をその checkout の fixture と byte-match させ、その commit object が
+永続的な local branch、remote-tracking branch、または tag から到達可能な
+場合に限って base として受け入れます。CI は full history を fetch する
+ため、shallow / unfetched な object と、存在はするが到達不能な object は
+異なる失敗として区別されます。承認された base は review の anchor で
+あって candidate ではありません。Local と push の lane は checkout された
+まさにその `HEAD` を使い、pull-request の lane は、その lane が checkout
+した synthetic merge の `HEAD` をそのまま使います。同じ full な
+candidate SHA を、exact-checkout、`candidate-source-bound`、そして
+candidate-bound なすべての evidence verifier に渡す必要があり、この
+2 つの SHA が互いに取り違えられることはありません。Behavior test は、
+operator が供給する場合、frozen された live baseline を Git bundle と
+dirty patch から authenticate・再構築し、live と Core を別々の
+subprocess として起動します。Worker environment が継承するのは OS の
+bootstrap allowlist だけで、database、archive、signals、home、
+temporary file、Git identity、port、import root は明示的に隔離されます。
+Test の入出力は private で、symlink escape と source-origin drift は
+fail closed し、developer の AgentMail checkout は一切参照されません。
 
-The ordered scenarios are:
+順序付けられた scenario は次のとおりです。
 
-1. identity, contact, messaging, topic/inbox, mark-read, acknowledgement replay,
-   reply, full-text search, and heuristic thread summary;
-2. Unicode reservation idempotency/conflict/renew/release plus per-message
-   signals and BCC privacy;
-3. health, start-session, reservation-cycle, contact-handshake, summary fetch,
-   and retirement lifecycle.
+1. identity、contact、messaging、topic/inbox、mark-read、acknowledgement
+   replay、reply、full-text search、heuristic な thread summary。
+2. Unicode reservation の idempotency/conflict/renew/release と、
+   message 単位の signal、BCC の privacy。
+3. health、start-session、reservation-cycle、contact-handshake、
+   summary fetch、retirement の lifecycle。
 
-Their union is exactly the versioned tools named by the contract. Each operation records a call
-window so 300/900/604800-second TTL behavior can be checked without a flaky
-wall-clock estimate. The oracle validates public structured/text projections,
-SQLite integrity and foreign keys, schema identity, relational IDs, Git fsck
-and cleanliness, archive filename/frontmatter/copy/thread derivation, signal
-recipients, token non-disclosure, and receipt idempotency before normalizing
-absolute clock values. Timestamp normalization preserves chronological order
-and equality classes rather than replacing every timestamp with one wildcard.
+これらの union は、contract が名指す versioned tool と正確に一致します。
+それぞれの operation は call window を記録するため、300/900/604800 秒の
+TTL の挙動を、不安定な wall-clock 推定なしに検証できます。oracle は、
+公開される structured/text projection、SQLite の integrity と foreign
+key、schema identity、relational ID、Git の fsck と cleanliness、
+archive の filename/frontmatter/copy/thread derivation、signal の
+recipient、token の非開示、receipt の idempotency を、絶対 clock 値を
+正規化する前に検証します。Timestamp の正規化は、すべての timestamp を
+1 つの wildcard に置き換えるのではなく、時系列順と等価類を保存します。
 
-The versioned divergence manifest is packaged into wheel and sdist and is
-validated against the live fixture and Core source. It permits only the exact
-tools/concrete resources/resource templates/prompts publication surfaces of
-live 40/0/21/0 versus Core 25/0/0/0, renamed/isolation defaults, provenance and
-lazy-LLM boundary, and the three roster-resource description rewrites. The
-manifest's single `product_decisions` array is the normative decision ledger.
-Every entry independently records selection, implementation, and cutover state,
-so a selected design cannot be mistaken for implemented or cutover-approved
-behavior. This document deliberately does not duplicate entry scopes.
-Unselected and selected-but-unimplemented entries retain
-`comparator_disposition: fail`; implemented selections are not allowances and
-must assert their selected behavior. The current ledger records the approved
-authority-cutover selections as `go`; a separately scoped post-cutover
-follow-up may remain `no_go` without reversing that approval.
+versioned な divergence manifest は wheel と sdist に packaging され、
+live fixture と Core source に対して検証されます。許容するのは、
+live 40/0/21/0 対 Core 25/0/0/0 という exact な tool/concrete
+resource/resource template/prompt の publication surface、renamed と
+isolation の既定値、provenance と lazy-LLM boundary、3 件の
+roster-resource description の書き換えだけです。manifest の単一の
+`product_decisions` array が normative な decision ledger です。各
+entry は selection、implementation、cutover の各状態を独立に記録する
+ため、selected な design が implemented や cutover-approved な挙動と
+取り違えられることはありません。この文書は entry の scope を意図的に
+重複記載しません。unselected な entry と selected だが unimplemented な
+entry は `comparator_disposition: fail` のままです。実装済みの
+selection は allowance ではなく、選択された挙動を必ず assert しなければ
+なりません。現在の ledger は、承認済みの authority-cutover の選択を
+`go` として記録しています。別 scope の post-cutover の follow-up が
+`no_go` のままであっても、その承認を覆すことはありません。
 
 ## Decision material
 
-- The normative selections live in the decision manifest fixture and are pinned
-  by `test_decision_manifest.py`. The evidence packet that accompanied them was
-  cutover-era material and is not published.
-- [Claim/enrollment design](agentstack-mail-claim-enrollment-design.md) frames
-  credential issuance, legacy null-token ownership proof, recovery, macro
-  integration, migration, and rollback implications; normative selections stay
-  in the manifest ledger.
-- [Performance gate design](agentstack-mail-performance-gate.md) specifies the
-  separate measurement boundary needed to close the timing-normalization blind
-  spot. It is a design, not an implemented budget or release gate.
+- normative な選択は decision manifest fixture にあり、
+  `test_decision_manifest.py` によって pin されています。それに付随した
+  evidence packet は cutover 当時の資料であり、公開されていません。
+- [Claim/enrollment design](agentstack-mail-claim-enrollment-design.md)
+  は、credential 発行、legacy な null-token の ownership 証明、
+  recovery、macro との統合、migration、rollback への影響を扱います。
+  normative な選択は manifest ledger に留まります。
+- [Performance gate design](agentstack-mail-performance-gate.md) は、
+  timing-normalization の blind spot を埋めるために必要な、独立した
+  measurement boundary を規定します。これは design であって、実装済みの
+  budget や release gate ではありません。

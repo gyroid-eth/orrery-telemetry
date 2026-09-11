@@ -245,7 +245,7 @@ Use `--uninstall` on each helper to remove only its block. Codex targets `$CODEX
 
 The bundled ORRERY Mail runs with `AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough`, which registers exactly the identity requested by a launcher. Its default endpoint is `http://127.0.0.1:18765/mcp`, and its state root is `~/.agentstack/mail`. It does not use an HTTP bearer; each agent's owner token is handled through a tool argument / local proxy.
 
-If something already responds at the endpoint, the installer reuses it only when it is ORRERY Mail returning the same database. A listener returning another database is not reused, and installation stops before the first write. In a fresh environment, the installer places the bundled package's virtual environment under a candidate ID, initializes empty state, and continues only after confirming that the health response returns the configured database; see the [agentstack-mail document](agentstack-mail.md) for the internal structure.
+If something already responds at the endpoint, the installer reuses it only when it is ORRERY Mail returning the same database. A listener returning another database is not reused, and installation stops before the first write. In a fresh environment, the installer places the bundled package's virtual environment under a candidate ID, initializes empty state, and continues only after confirming that the health response returns the configured database; see the [agentstack-mail document](agentstack-mail.en.md) for the internal structure.
 
 The following controller operates the service. The runner restarts itself five seconds after a crash, while the controller checks the PID file, endpoint, and database and refuses duplicate startup or stopping an unrelated process.
 

@@ -45,7 +45,7 @@ def test_provenance_and_live_contract_fixture_are_present() -> None:
 
 
 def test_contract_documents_isolated_namespaces() -> None:
-    docs = (ROOT / "docs" / "agentstack-mail.md").read_text()
+    docs = (ROOT / "docs" / "agentstack-mail.en.md").read_text()
     normalized_docs = " ".join(docs.lower().split())
 
     assert SERVICE_IDENTITY["mcp_provider_identity"] == "orrery-mail"

@@ -1,39 +1,40 @@
-Community-maintained / experimental. Validation: Windows 11 build 26200, CPython 3.12.10, PowerShell, Chrome.
+Community-maintained / experimental。検証環境: Windows 11 build 26200、CPython 3.12.10、PowerShell、Chrome。
 
-# Native Windows launch boundary
+# ネイティブ Windows での起動境界
 
-On native Windows, opening NEW AGENT shows that spawn is not
-supported and that WSL2 is the primary Windows path. The SPAWN button remains
-disabled. The dialog remains available so users can read the reason.
+> English version: [windows-spawn.en.md](windows-spawn.en.md)
 
-`GET /api/spawn-names` returns HTTP 200 with the `unavailable` explanation plus
-`names` (name, portrait, occupancy status), `adjectives`, and `naming`.
-Windows reads these from the existing launcher array and scientist JSON using
-Python, without starting Bash. It is a vocabulary-only response: directories,
-providers and models are not advertised as usable launch options. The existing
-dialog deliberately continues to show its unavailable state, not a selectable
-roster. Native launch has not been implemented.
+ネイティブ Windows では、NEW AGENT を開くと spawn が非対応であること、WSL2 が
+Windows での主経路であることが表示されます。SPAWN button は無効のままです。
+理由を読めるよう、dialog 自体は表示されます。
 
-The reader accepts the current single literal ASCII-word adjective array, with
-LF or CRLF, and uses `AGENTSTACK_SCIENTISTS_JSON` when nonempty, otherwise the
-checkout's `dashboard/scientist_portraits.json`. JSON must be an object; keys
-are sorted and filtered with the launcher's ASCII alphabetic rule. Shell
-expressions, quoted array entries, empty vocabulary, duplicate adjectives and
-missing/malformed files fail closed. This is not a general Bash interpreter;
-changes to the source format must be reviewed with the Windows reader.
+`GET /api/spawn-names` は HTTP 200 で `unavailable` の説明に加え、
+`names`（name、portrait、occupancy status）、`adjectives`、`naming` を返します。
+Windows はこれらを既存の launcher array と scientist JSON から、Bash を起動せず
+Python で読みます。これは語彙のみの応答であり、directory、provider、model を
+使用可能な起動 option として提示するものではありません。既存 dialog は選択可能な
+roster ではなく、意図的に unavailable 状態のまま表示され続けます。ネイティブ
+launch は未実装です。
 
-Catalog read failures return HTTP 503. Name suggestions use the same reader
-and fail closed on unavailable data. Direct spawn requests on Windows return
-an error before registration or launcher work, so better vocabulary access
-cannot activate the unsupported spawn path.
+reader は現行の単一の literal ASCII-word adjective array を、LF でも CRLF でも
+受け付け、`AGENTSTACK_SCIENTISTS_JSON` が非空ならそれを、そうでなければ checkout
+内の `dashboard/scientist_portraits.json` を使います。JSON は object である必要が
+あり、key は launcher の ASCII alphabetic rule でソート・filter されます。Shell
+expression、quoted array entry、空の語彙、adjective の重複、file の欠落や不正な
+形式は fail closed します。これは汎用の Bash interpreter ではないため、source
+format への変更は Windows reader と合わせてレビューする必要があります。
 
-The existing non-Windows catalog path is unchanged. Native catalog retrieval
-and native launch are separate work under issue #9; this change only implements
-vocabulary reading, does not change the support table, and does not validate
-Codex App Bridge.
+Catalog の読み取り失敗は HTTP 503 を返します。Name suggestion は同じ reader を
+使い、data が利用できない場合は fail closed します。Windows での direct spawn
+request は登録や launcher の処理より前に error を返すため、vocabulary access が
+向上しても未対応の spawn path が有効化されることはありません。
 
-Validation covers the real HTTP handler without subprocess execution, the modal
-unavailable-state handler and stale-response guard, canonical vocabulary hashes,
-CRLF/Unicode paths, JSON overrides, malformed inputs, occupancy/suggestions,
-direct spawn rejection, and a Chrome check of the NEW AGENT dialog.
-The Windows suite does not establish full native support.
+既存の non-Windows catalog path は変更していません。ネイティブ catalog 取得と
+ネイティブ launch は issue #9 の別作業です。この変更は vocabulary の読み取りのみを
+実装するもので、support table は変更せず、Codex App Bridge の検証も行いません。
+
+検証範囲は、subprocess 実行を伴わない実際の HTTP handler、modal の
+unavailable-state handler と stale-response guard、正規の vocabulary hash、
+CRLF/Unicode path、JSON override、不正な入力、occupancy/suggestion、direct spawn
+の拒否、NEW AGENT dialog の Chrome での確認です。この Windows suite は完全な
+ネイティブ対応を保証するものではありません。

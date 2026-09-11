@@ -10,22 +10,23 @@ Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を
 
 ## 誰のためのものか
 
-- **対象は chat ではなく coding agent を使う人**: AI と会話して答えをもらうのではなく、Claude Code や Codex のように、指示を受けて自律的にコードを書き、ファイルを変え、command を実行する agent を、すでに手元で動かしている人向けです。terminal からでも、Claude Desktop や ChatGPT app のような desktop app からでも構いません
+- **対象は chat ではなく coding agent を使う人**: ChatGPT のような chat ではなく、Claude Code や Codex のように、指示を受けて自律的にコードを書き、ファイルを変え、command を実行する agent を、すでに手元で動かしている人向けです。terminal からでも、Claude Desktop や ChatGPT app のような desktop app からでも構いません
 - **向いている人**: agent を 2 体以上同時に動かしていて、terminal のタブを行き来しながら「いま誰が何をしているか」を追うのが辛くなった人
 - **向いていない人**: agent は 1 体で足りている人。このツールの価値は複数 agent の協調と、その観測にあります
 - **対応する agent**: Claude Code と Codex CLI が中心です。Codex Desktop の task と subagent、Google Antigravity / Gemini は、core install のあとに追加できる optional provider として同じ dashboard に載せられます
 
 ## 言葉の説明
 
-以下の 5 語だけ覚えれば、この README と docs はすべて読めます。
+以下の 6 語だけ覚えれば、この README と docs はすべて読めます。
 
 | 言葉 | 意味 |
 | --- | --- |
 | agent | terminal で動いている Claude Code / Codex CLI の 1 セッション。それぞれに科学者の名前が付きます |
-| child | ある agent が「この作業をやって」と頼んで起動した別の agent。頼んだ側が親です |
+| child | ある agent が「この作業をやって」と頼んで起動した別の agent。頼んだ側が親です。親が `/delegate` を使うと child が生まれ、child は終わると親に報告して消えます |
 | ORRERY Mail | agent 同士がメッセージを送り合い、名前と file の予約を管理する同梱の小さなサーバー |
 | dashboard | ブラウザで開く画面。全 agent の状態、親子関係、メッセージの往来を表示します |
 | project key | agent たちに作業させる project フォルダの絶対パス。「どの project の agent か」を区別する鍵です |
+| skill | agent に「こういう頼まれ方をしたらこの手順で動け」と教える手順書。`/delegate` のように先頭に slash を付けて呼びます。このツールは `/delegate` と `/log` の 2 つを同梱します（[下で説明](#同梱する-2-つの-skill)） |
 
 ## クイックスタート
 
@@ -73,13 +74,10 @@ open http://127.0.0.1:8770/
 
 ### 4. child を 1 体作る
 
-起動した agent の中で、次のように頼みます。Claude Code は skill なので先頭に slash を付け、Codex は普通の文で頼みます。
+起動した agent の中で、次のように頼みます。Claude Code でも Codex でも同じです。
 
 ```text
-# Claude Code
 /delegate 自分の名前と今日の日付を返事して
-# Codex
-child を 1 体 delegate して、自分の名前と今日の日付を返事させて
 ```
 
 **成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。
@@ -89,7 +87,6 @@ child を 1 体 delegate して、自分の名前と今日の日付を返事さ�
 install が本当にできたかを一度に確かめるには、Claude Code と Codex の child にしりとりをさせるのが手軽です。名前の登録、ORRERY Mail の往復、通知の差し込み、dashboard の描画がすべて動いていないと、しりとりは一巡もしません。
 
 ```text
-# Claude Code から（Codex からなら先頭の /delegate を外して同じ文で頼みます）
 /delegate Codex の child を 1 体作り、その child としりとりをしてください。1 ターンごとに ORRERY Mail で単語を送り合い、10 往復したら結果を報告してください
 ```
 
@@ -98,6 +95,22 @@ Codex から始めるなら child は Claude Code にします。どちらから
 **成功**: NETWORK に 2 体の間を往復する線が流れ続け、DECK の両カードの最後の指示が単語ごとに更新されます。作者の環境では 1 人あたり 1 ターン 5〜6 秒で回りました（[動画つきの投稿](https://x.com/i/status/2095650715008168255)、倍速再生）。
 
 ここまで通れば、あとは普段どおり agent を使うだけです。詳しい設定は[インストール](docs/install.md)と[設定](docs/configuration.md)、child の仕組みは[委任と child agent](docs/delegation.md)を参照してください。
+
+## 同梱する 2 つの skill
+
+skill は、agent に渡す手順書です。Claude Code はこれを `~/.claude/skills/` から自動で見つけ、`/delegate` のように先頭に slash を付けて呼ぶとその手順どおりに動きます。Codex では installer が置く管理下の指示（`~/.codex/AGENTS.md`）が同じ手順書の場所を教えるので、こちらも `/delegate` と打てば同じ手順で動きます。
+
+### `/delegate` : 仕事を child に頼む
+
+`/delegate <頼みたいこと>` と打つと、agent は新しい child を 1 体起動し、頼んだ内容を渡し、child が終わるまで見守り、結果を受け取ります。裏では child の名前登録、触るファイルの予約、tmux session の作成、完了報告の受け取りまでを一続きで行うので、child は起動した瞬間から dashboard に載り、他の agent と同じファイルをぶつけずに動きます。
+
+Claude Code にも Codex にも、もともと「subagent」という似た仕組みがありますが、そちらで作った子は dashboard に載りません。ORRERY Telemetry で見守りたい子は、必ず `/delegate` で作ってください。違いの詳しい説明は[委任と child agent](docs/delegation.md)にあります。
+
+### `/log` : この session で何をしたかを残す
+
+`/log` と打つと、agent はその session で決めたこと、変えたファイル、確かめたこと、次にやることを 1 本の Markdown に整理して `logs/` に書きます。Obsidian を使っている人は、環境変数を 1 つ設定すると vault の中に書いて Daily Note からリンクされるようになります（[設定](docs/configuration.md)）。dashboard の各カードの Output に並ぶのが、この log です。
+
+skill の置き場所と仕組みは [Launcher と identity](docs/launchers.md#skills2件と-file-reservation) を参照してください。
 
 ## 何が見えるか
 
@@ -158,7 +171,7 @@ Python 3.11 以上、`git`、`tmux`、`uv` が必須で、実行時には Claude
 | [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
 | [第三者コンポーネント](docs/third-party.md) | ORRERY Mail、license、credits |
 
-同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)（英語）、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。
+同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。
 
 ## 仕組み
 
