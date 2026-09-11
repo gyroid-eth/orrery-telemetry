@@ -557,6 +557,29 @@ function spawnSelectedProviderCapabilities(){
 function spawnProviderAcceptsResources(caps){
   return !!(caps&&(caps.resources_required||caps.resources));
 }
+function spawnProviderDisplayModels(provider){
+  const models=provider&&Array.isArray(provider.models)?provider.models:[];
+  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  const caps=provider&&provider.capabilities||{};
+  if(!caps.effort_required)return models;
+  const seen=new Set(),visible=[];
+  for(const model of models){
+    const id=String(model&&model.id||'').trim();
+    let label=id;
+    for(const effort of efforts){
+      const value=String(effort||'').trim();
+      const suffix=value?`-${value}`:'';
+      if(suffix&&id.endsWith(suffix)){
+        label=id.slice(0,-suffix.length);
+        break;
+      }
+    }
+    if(seen.has(label))continue;
+    seen.add(label);
+    visible.push({...model,label});
+  }
+  return visible;
+}
 function spawnProviderRequirementsMet(){
   const caps=spawnSelectedProviderCapabilities();
   const input=SPM('spm-resources');
@@ -624,6 +647,21 @@ _UI_PATCHES: tuple[tuple[str, str, str], ...] = (
       models,defaultModel,efforts,
       defaultEffort:String(provider&&provider.effort_default||'').trim(),
       capabilities};""",
+    ),
+    (
+        "effort-separated model cards",
+        """function renderSpawnModels(provider){
+  const root=SPM('spm-models');
+  const models=provider&&Array.isArray(provider.models)?provider.models:[];""",
+        """function renderSpawnModels(provider){
+  const root=SPM('spm-models');
+  const models=spawnProviderDisplayModels(provider);""",
+    ),
+    (
+        "effort-separated model labels",
+        """    const displayLabel=tone?(model.label||model.id):model.id;""",
+        """    const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
+      ?(model.label||model.id):(tone?(model.label||model.id):model.id);""",
     ),
     (
         "provider selection",
