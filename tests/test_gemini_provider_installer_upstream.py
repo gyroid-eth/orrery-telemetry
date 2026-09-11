@@ -24,6 +24,23 @@ def _agent_process_alive(pane_pid, process_tree, program):
 """.lstrip(),
         encoding="utf-8",
     )
+    # The current core service runner is the extension point that selects an
+    # optional provider_server.py when one has been installed.  Model that
+    # contract in the fake core so this fixture represents a current install,
+    # rather than an older core that the provider installer intentionally
+    # rejects during preflight.
+    (root / "dashboard" / "service_runner.py").write_text(
+        """
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+def _default_server_path():
+    provider_server = HERE / 'provider_server.py'
+    return provider_server if provider_server.is_file() else HERE / 'server.py'
+""".lstrip(),
+        encoding="utf-8",
+    )
     (root / "install-state.json").write_text(
         json.dumps({"owned_files": [], "owned_dirs": []}) + "\n",
         encoding="utf-8",
@@ -91,6 +108,7 @@ def test_optional_installer_never_replaces_core_dashboard() -> None:
     text = INSTALLER.read_text(encoding="utf-8")
     files_block = text.split("FILES=(", 1)[1].split(")", 1)[0]
     assert "dashboard/server.py" not in files_block
+    assert "dashboard/service_runner.py" not in files_block
     assert "dashboard/provider_runtime.py" not in files_block
     assert "dashboard/provider_classification.py" not in files_block
 
