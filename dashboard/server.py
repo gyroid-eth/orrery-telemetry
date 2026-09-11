@@ -641,29 +641,39 @@ def _is_claude_process_name(name: str) -> bool:
     )
 
 
+def _is_antigravity_process_name(name: str) -> bool:
+    executable = os.path.basename(name or "").lower()
+    return executable == "agy"
+
+
+def _supports_agent_process_liveness(program: str | None) -> bool:
+    return (program or "").startswith(("codex", "claude", "antigravity"))
+
+
 def _is_agent_process_name(name: str, program: str | None) -> bool:
     """Is this process the agent that `program` registered as?
 
-    Codex and Claude both sit behind a shell wrapper (`zsh > node > codex`,
-    `zsh > claude` on macOS), so the pane leader's name says nothing about
-    whether the agent is alive. The process tree does. #19 measured Codex
-    this way; Claude is measured the same way so DECK / NETWORK / EXIT stop
-    depending on whether the title happens to carry a glyph.
+    Codex, Claude, and Antigravity can all sit behind a shell wrapper, so the
+    pane leader's name says nothing about whether the agent is alive. One
+    provider-aware process-tree matcher is the source of truth for DECK,
+    NETWORK, and provider-specific EXIT revalidation.
     """
     if (program or "").startswith("codex"):
         return _is_codex_process_name(name)
     if (program or "").startswith("claude"):
         return _is_claude_process_name(name)
+    if (program or "").startswith("antigravity"):
+        return _is_antigravity_process_name(name)
     return False
 
 
-def _agent_process_alive(
+def _agent_process_pid(
     pane_pid: object,
     process_tree: tuple[dict[int, str], dict[int, list[int]]] | None,
     program: str | None,
-) -> bool | None:
-    """Return True/False when measured, None when liveness is unknowable."""
-    if not (program or "").startswith(("codex", "claude")):
+) -> int | None:
+    """Return the matching provider PID under a pane, or None when absent/unknown."""
+    if not _supports_agent_process_liveness(program):
         return None
     try:
         root = int(pane_pid or 0)
@@ -683,9 +693,29 @@ def _agent_process_alive(
             continue
         seen.add(pid)
         if _is_agent_process_name(names.get(pid, ""), program):
-            return True
+            return pid
         stack.extend(children.get(pid, ()))
-    return False
+    return None
+
+
+def _agent_process_alive(
+    pane_pid: object,
+    process_tree: tuple[dict[int, str], dict[int, list[int]]] | None,
+    program: str | None,
+) -> bool | None:
+    """Return True/False when measured, None when liveness is unknowable."""
+    if not _supports_agent_process_liveness(program):
+        return None
+    try:
+        root = int(pane_pid or 0)
+    except (TypeError, ValueError):
+        return None
+    if root <= 0 or process_tree is None:
+        return None
+    names, _children = process_tree
+    if root not in names:
+        return None
+    return _agent_process_pid(root, process_tree, program) is not None
 
 
 def _codex_process_alive(
@@ -1561,7 +1591,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
     programs = {n["name"]: (n.get("program") or "") for n in nodes}
     process_tree = (
         _process_tree_snapshot()
-        if any(program.startswith(("codex", "claude")) for program in programs.values())
+        if any(_supports_agent_process_liveness(program) for program in programs.values())
         else None
     )
     if show_all:
@@ -2238,6 +2268,14 @@ def do_resume(session: str) -> dict:
       する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
+    if program.startswith("antigravity"):
+        return {
+            "ok": False,
+            "error": (
+                "Antigravity resume is not supported by ORRERY; "
+                "start a new Antigravity session instead"
+            ),
+        }
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
@@ -2585,9 +2623,19 @@ def _events_from_codex_jsonl(path: str) -> list[dict]:
 def history_payload(session: str, limit: int) -> dict:
     if not _valid(session):
         return {"ok": False, "error": "invalid session name"}
+    # Provider-specific transcript formats must never fall through into
+    # another provider's heuristic search. Antigravity stream-json results are
+    # not Claude/Codex transcripts, so history is unavailable until a native
+    # Antigravity history source is implemented.
+    program = _agent_program(session)
+    if program.startswith("antigravity"):
+        return {
+            "ok": False,
+            "error": "Antigravity transcript history is not available",
+        }
     # codex agent は Claude 用 selfref 探索だと子の transcript を誤マッチする
     # ため、program で先に分岐する（do_resume と同じ理由）。
-    if _agent_program(session).startswith("codex"):
+    if program.startswith("codex"):
         path = _codex_transcript_path(session)
         is_codex = bool(path)
         if not path:                      # 念のため Claude 側もフォールバック
@@ -3605,8 +3653,10 @@ def do_jump(session: str) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
     # Codex App lives outside tmux and its provider owns the safe activation
-    # action.  Check it before the terminal-adapter gate.
-    if _agent_program(session) == "codex-app" and session in _codex_app_runtimes():
+    # action.  Check it before the terminal-adapter gate. Keep the program
+    # read-back for the finished-session policy below as well.
+    program = _agent_program(session)
+    if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if _terminal_adapter() == "none":
         return _terminal_unsupported()
@@ -3634,7 +3684,12 @@ def do_jump(session: str) -> dict:
                 break
     except Exception:  # noqa: BLE001
         cat = None
-    if cat == "finished":
+    # Claude/Codex finished sessions are husks whose provider-native resume
+    # path can restore the conversation. Antigravity currently has no ORRERY
+    # resume implementation; killing its surviving human shell here would turn
+    # a harmless attachable shell into irreversible data loss. Preserve that
+    # shell and let the normal terminal attach path handle the jump instead.
+    if cat == "finished" and not program.startswith("antigravity"):
         subprocess.run(
             ["tmux", "kill-session", "-t", f"={session}"],
             capture_output=True,
@@ -4654,7 +4709,48 @@ def do_spawn(payload: dict) -> dict:
     return result
 
 
-_AGENT_PROCESS_NAMES = {"claude", "codex", "node"}
+_AGENT_PROCESS_NAMES = {"claude", "codex", "node", "agy"}
+
+
+def _tmux_session_env(session: str, key: str) -> str:
+    """Read one tmux session environment value without executing shell text."""
+    if not _valid(session) or re.fullmatch(r"[A-Z0-9_]+", key or "") is None:
+        return ""
+    result = subprocess.run(
+        ["tmux", "show-environment", "-t", f"={session}", key],
+        capture_output=True, text=True, timeout=3,
+    )
+    if result.returncode != 0:
+        return ""
+    line = (result.stdout or "").strip()
+    prefix = f"{key}="
+    return line[len(prefix):] if line.startswith(prefix) else ""
+
+
+def _fresh_agent_process_pid(session: str, program: str | None) -> int | None:
+    """Re-read tmux + ps immediately before a destructive provider signal."""
+    if not _valid(session) or not _supports_agent_process_liveness(program):
+        return None
+    pane = subprocess.run(
+        ["tmux", "display-message", "-t", session, "-p", "#{pane_pid}"],
+        capture_output=True, text=True, timeout=3,
+    )
+    try:
+        pane_pid = int((pane.stdout or "").strip()) if pane.returncode == 0 else 0
+    except ValueError:
+        return None
+    if pane_pid <= 0:
+        return None
+    try:
+        measured = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,comm="],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if measured.returncode != 0:
+        return None
+    return _agent_process_pid(pane_pid, _parse_process_tree(measured.stdout), program)
 
 
 def _pane_agent_process(session: str, ps_output: str | None = None) -> str:
@@ -4744,6 +4840,35 @@ def do_exit(session: str) -> dict:
     actions = []
     if target.get("attached"):
         actions.append("warn-attached")
+
+    # Delegated Antigravity children are non-interactive stream-json runners.
+    # Sending `/exit` to their pane cannot reach the provider safely. Re-read
+    # the process tree now (not the 4.5s dashboard cache), signal only the
+    # measured `agy` PID, and leave the bash runner alive so it can report,
+    # release reservations, retire the child, and clean transient state.
+    program = _agent_program(session)
+    if (
+        target["category"] == "agent"
+        and program.startswith("antigravity")
+        and _tmux_session_env(session, "AGENTSTACK_RESERVED_IDENTITY") == "1"
+    ):
+        provider_pid = _fresh_agent_process_pid(session, program)
+        if provider_pid is None:
+            return {
+                "ok": False,
+                "error": "Antigravity process could not be revalidated; refusing to signal",
+            }
+        try:
+            os.kill(provider_pid, signal.SIGINT)
+        except ProcessLookupError:
+            return {
+                "ok": False,
+                "error": "Antigravity process exited before the interrupt could be sent",
+            }
+        except OSError as exc:
+            return {"ok": False, "error": f"Antigravity interrupt failed: {exc}"}
+        actions.extend(["provider-headless:antigravity", "interrupt-sent"])
+        return {"ok": True, "session": session, "actions": actions}
 
     # pane で動いているプロセスを確認
     # Claude Code は Python プロセス → "Python" / シェルゾンビは "zsh"/"bash" 等

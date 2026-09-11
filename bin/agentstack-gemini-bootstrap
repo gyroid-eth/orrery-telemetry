@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# agentstack-gemini-bootstrap — register a Google Antigravity CLI session with
+# ORRERY Mail before launching `agy`.
+#
+# USAGE: source this script inside the target tmux session, before exec'ing agy:
+#   source agentstack-gemini-bootstrap [WORK_DIR]
+#
+# Env (normally provided by ~/.agentstack/env.sh):
+#   AGENTSTACK_PROJECT_KEY          ORRERY Mail project key
+#   AGENTSTACK_MCP_URL              ORRERY Mail MCP endpoint (default :18765/mcp)
+#   AGENTSTACK_MAIL_ENV             file holding HTTP_BEARER_TOKEN
+#   AGENTSTACK_MANAGED_AGENTS_FILE  dashboard managed-agent list (optional)
+#   AGENTSTACK_HOOKS_DIR            mail watcher directory (optional)
+#   AGENTSTACK_GEMINI_MODEL         model label to register
+
+WORK_DIR="${1:-.}"
+if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
+SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
+if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
+
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
+MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
+HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
+GEMINI_MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
+RESERVED_IDENTITY="${AGENTSTACK_RESERVED_IDENTITY:-}"
+REQUESTED_AGENT_NAME=""
+if [[ "$RESERVED_IDENTITY" == "1" && -n "${AGENT_NAME:-}" ]]; then
+  REQUESTED_AGENT_NAME="$AGENT_NAME"
+else
+  unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+fi
+# shellcheck source=lib/agentstack-register.sh
+. "$SCRIPT_DIR/lib/agentstack-register.sh"
+
+TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
+if [[ -z "$TMUX_BIN" ]]; then
+  for _c in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+    [[ -x "$_c" ]] && { TMUX_BIN="$_c"; break; }
+  done
+fi
+
+CANDIDATE_AGENT_NAME=""
+REGISTER_MODE="candidate"
+if [[ -n "$REQUESTED_AGENT_NAME" ]]; then
+  CANDIDATE_AGENT_NAME="$REQUESTED_AGENT_NAME"
+  REGISTER_MODE="reserved"
+else
+  CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
+fi
+if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
+  AGENT_NAME="$CANDIDATE_AGENT_NAME"
+  export AGENT_NAME
+fi
+
+TMUX_PREFLIGHT_CONFLICT=0
+if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
+  CURRENT_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if [[ "$CURRENT_TMUX_SESSION" != "$AGENT_NAME" ]] && \
+     "$TMUX_BIN" has-session -t "=$AGENT_NAME" 2>/dev/null; then
+    TMUX_PREFLIGHT_CONFLICT=1
+    echo "warning: refusing identity registration: current tmux session '${CURRENT_TMUX_SESSION:-unknown}', target '$AGENT_NAME' already exists." >&2
+  fi
+fi
+
+TMUX_IDENTITY_MATCHED=0
+finalize_agent_name() {
+  local current_session="" renamed_session=""
+  if [[ -n "${TMUX:-}" && -n "$TMUX_BIN" && -n "${AGENT_NAME:-}" ]]; then
+    current_session="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+    if [[ "$current_session" == "$AGENT_NAME" ]]; then
+      TMUX_IDENTITY_MATCHED=1
+    elif "$TMUX_BIN" rename-session "$AGENT_NAME" 2>/dev/null; then
+      renamed_session="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+      if [[ "$renamed_session" == "$AGENT_NAME" ]]; then
+        TMUX_IDENTITY_MATCHED=1
+      else
+        echo "warning: tmux rename-session reported success, but current session is '${renamed_session:-unknown}' instead of '$AGENT_NAME'." >&2
+      fi
+    else
+      echo "warning: tmux rename-session failed: current session '${current_session:-unknown}', target '$AGENT_NAME'." >&2
+    fi
+  elif [[ -n "${AGENT_NAME:-}" ]]; then
+    echo "warning: cannot verify tmux session name for agent identity '$AGENT_NAME'." >&2
+  fi
+  if [[ "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
+    ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
+    command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
+  fi
+  export AGENT_NAME="${AGENT_NAME:-}"
+  [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]] && export CHILD_REGISTRATION_TOKEN
+  return 0
+}
+
+if [[ -z "$PROJECT_KEY" ]]; then
+  echo "warning: AGENTSTACK_PROJECT_KEY unset; launching Antigravity with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
+  finalize_agent_name
+  if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+    return 1 2>/dev/null || exit 1
+  fi
+  return 0 2>/dev/null || exit 0
+fi
+
+ags_mail_load_token
+if ! ags_mcp_call "health_check" >/dev/null 2>&1; then
+  echo "warning: ORRERY Mail unreachable at $MCP_URL; launching Antigravity with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
+  finalize_agent_name
+  if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+    return 1 2>/dev/null || exit 1
+  fi
+  return 0 2>/dev/null || exit 0
+fi
+
+ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
+
+REGISTERED_AGENT_NAME=""
+REGISTER_STATUS=1
+if [[ "$TMUX_PREFLIGHT_CONFLICT" != "1" ]]; then
+  if ags_register_session "$PROJECT_KEY" "antigravity" "$GEMINI_MODEL" "agy" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
+    REGISTER_STATUS=0
+    REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
+  else
+    REGISTER_STATUS=$?
+  fi
+fi
+
+if [[ "$REGISTER_STATUS" == "2" && "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+  echo "warning: ORRERY Mail changed reserved identity '${AGS_REQUESTED_AGENT_NAME:-$CANDIDATE_AGENT_NAME}' to '${AGS_SERVER_RETURNED_AGENT_NAME:-unknown}'; refusing to rename this child/resumed session." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  AGENT_NAME="$REGISTERED_AGENT_NAME"
+  if [[ "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
+    echo "warning: ORRERY Mail changed requested identity '${AGS_REQUESTED_AGENT_NAME:-$CANDIDATE_AGENT_NAME}' to '$REGISTERED_AGENT_NAME'; reconciling tmux session name." >&2
+  fi
+elif [[ "$TMUX_PREFLIGHT_CONFLICT" == "1" ]]; then
+  echo "warning: agent registration skipped because the target tmux session name is already in use." >&2
+else
+  echo "warning: agent registration failed; launching Antigravity with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
+fi
+
+finalize_agent_name
+if [[ -n "$REGISTERED_AGENT_NAME" && "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
+  echo "ORRERY Mail registered: $AGENT_NAME"
+elif [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  echo "warning: ORRERY Mail registered as $AGENT_NAME, but tmux session name is not synchronized." >&2
+else
+  echo "ORRERY Mail not registered; AGENT_NAME preselected: ${AGENT_NAME:-}"
+fi
+if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+  return 1 2>/dev/null || exit 1
+fi

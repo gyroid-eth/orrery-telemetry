@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# agent-start-gemini — launch Google Antigravity CLI (`agy`) inside a named
+# tmux session, registered with ORRERY Mail so it appears in the dashboard.
+#
+# Directory selection:
+#   agent-start-gemini [DIR]             use DIR explicitly
+#   agent-start-gemini --dry-run [DIR]   print the planned agy command only
+#   agent-start-gemini                   fzf-pick under $AGENTSTACK_BASE_DIR
+#
+# Env:
+#   AGENTSTACK_GEMINI_BIN      Antigravity CLI binary (default: agy)
+#   AGENTSTACK_GEMINI_MODEL    model slug (default: gemini-3.8-flash-high)
+#   AGENTSTACK_GEMINI_EFFORT   low|medium|high (default: high)
+#
+# The launcher deliberately does not override Antigravity permission/sandbox
+# settings. Those remain user-owned in ~/.gemini/antigravity-cli/settings.json.
+set -euo pipefail
+
+AGS_PROG="agent-start-gemini"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/agentstack-launch.sh
+. "$BIN_DIR/lib/agentstack-launch.sh"
+ags_load_env
+
+GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
+GEMINI_MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
+GEMINI_EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"
+BOOTSTRAP="$BIN_DIR/agentstack-gemini-bootstrap"
+DRY_RUN=false
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=true
+  shift
+fi
+
+case "$GEMINI_EFFORT" in
+  low|medium|high) ;;
+  *) ags_die "invalid AGENTSTACK_GEMINI_EFFORT '$GEMINI_EFFORT' (expected low, medium, or high)" ;;
+esac
+
+build_gemini_cmd() {
+  local out
+  out="$(printf '%q' "$GEMINI_BIN") --model $(printf '%q' "$GEMINI_MODEL") --effort $(printf '%q' "$GEMINI_EFFORT")"
+  printf '%s' "$out"
+}
+
+DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+[[ -n "$DIR" ]] || exit 0
+
+# CI and reviewers can exercise the launcher contract without installing the
+# optional Antigravity binary. Dry-run intentionally stops before tmux, Mail
+# registration, bootstrap, or `command -v agy` checks.
+if [[ "$DRY_RUN" == true ]]; then
+  printf '%s: dry-run cwd=%s\n' "$AGS_PROG" "$DIR"
+  printf '%s\n' "$(build_gemini_cmd)"
+  exit 0
+fi
+
+TMUX_BIN="$(ags_resolve_tmux)"
+[[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
+command -v "$GEMINI_BIN" >/dev/null 2>&1 || ags_die "Antigravity CLI not found on PATH (expected 'agy'; set AGENTSTACK_GEMINI_BIN to override)"
+[[ -f "$BOOTSTRAP" ]] || ags_die "missing $BOOTSTRAP"
+
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+SESSION="gemini-pending-$$"
+
+# Already inside a real tmux pane: register and run in place. Do not `exec`
+# Antigravity here: this is the human-interactive top-level path, so when the
+# REPL exits the invoking shell must remain. The dashboard can then observe the
+# real shell husk as `finished`, matching the normal top-level lifecycle.
+if [[ -n "${TMUX:-}" ]]; then
+  cd "$DIR"
+  export AGENTSTACK_GEMINI_MODEL="$GEMINI_MODEL"
+  # shellcheck disable=SC1090
+  source "$BOOTSTRAP" "$DIR"
+  GEMINI_CMD="$(build_gemini_cmd)"
+  eval "$GEMINI_CMD"
+  exit $?
+fi
+
+GEMINI_CMD="$(build_gemini_cmd)"
+INNER="$(mktemp -t agent-start-gemini.XXXXXX)"
+cat > "$INNER" <<EOF
+#!/usr/bin/env bash
+cd $(printf '%q' "$DIR") || exit 1
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+$(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  -e $(printf '%q' "AGENTSTACK_GEMINI_MODEL=$GEMINI_MODEL") \
+  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $GEMINI_CMD; exec \"\$SHELL\" -l"
+rm -f -- "\$0"
+exec "\$SHELL" -l
+EOF
+chmod +x "$INNER"
+
+echo "$AGS_PROG: launching Antigravity agent in tmux session '$SESSION' ($DIR)"
+exec "$INNER"

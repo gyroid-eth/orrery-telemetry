@@ -1,11 +1,9 @@
-"""Claude liveness comes from the process tree, like Codex after #19.
+"""Agent liveness comes from one provider-aware process-tree path.
 
-On macOS every Claude Code session is `zsh > claude` (the pane leader is the
-shell), so pane_current_command says "zsh" whether Claude is alive or already
-gone, and the title glyph is the only other signal. A live Claude whose title
-has no glyph was shown as FINISHED and EXIT typed a bare `exit` into it
-(2026-09-08). With the shared `ps` snapshot the classification no longer
-depends on the title.
+On macOS the pane leader is commonly a shell wrapper, so
+pane_current_command cannot distinguish a live provider process from a husk.
+Codex, Claude, and optional Antigravity sessions must all use the same shared
+process-tree measurement instead of provider-specific polling.
 """
 from types import SimpleNamespace
 
@@ -72,7 +70,6 @@ def test_live_claude_without_a_title_glyph_is_online(monkeypatch):
 
 
 def test_live_claude_named_by_its_version_is_online(monkeypatch):
-    # Claude Code 2.1.26x native binaries appear as "2.1.263" in ps.
     _patch_agent_inputs(monkeypatch, _tree("2.1.263"))
     row = server.build_agents()[0]
     assert row["category"] == "agent"
@@ -80,7 +77,6 @@ def test_live_claude_named_by_its_version_is_online(monkeypatch):
 
 
 def test_claude_husk_is_finished_even_with_a_glyph_in_the_title(monkeypatch):
-    # The title is whatever the last program left; the tree is what is true.
     _patch_agent_inputs(monkeypatch, _tree(None), title="✳ leftover title")
     row = server.build_agents()[0]
     assert row["category"] == "finished"
@@ -121,7 +117,17 @@ def test_agent_process_name_is_program_specific():
     assert server._is_agent_process_name("codex", "codex-cli")
     assert not server._is_agent_process_name("claude", "codex-cli")
     assert server._is_agent_process_name("claude", "claude-code")
-    assert server._is_agent_process_name("/Applications/Claude.app/Contents/MacOS/claude", "claude-code")
+    assert server._is_agent_process_name(
+        "/Applications/Claude.app/Contents/MacOS/claude", "claude-code"
+    )
     assert server._is_agent_process_name("2.1.263", "claude-code")
     assert not server._is_agent_process_name("codex", "claude-code")
-    assert server._agent_process_alive(ROOT, _tree("claude"), "gemini") is None
+
+    # Antigravity uses the same shared process-name dispatcher.  `gemini` is
+    # not the registered program name; ORRERY Mail uses `antigravity`.
+    assert server._is_agent_process_name("agy", "antigravity")
+    assert server._is_agent_process_name("/Users/test/.local/bin/agy", "antigravity")
+    assert not server._is_agent_process_name("claude", "antigravity")
+    assert server._agent_process_alive(ROOT, _tree("agy"), "antigravity") is True
+    assert server._agent_process_alive(ROOT, _tree(None), "antigravity") is False
+    assert server._agent_process_alive(ROOT, _tree("agy"), "gemini") is None

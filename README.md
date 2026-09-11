@@ -59,6 +59,8 @@ open http://127.0.0.1:8770/          # 別 terminal。DECK に親と child の�
 
 Codex Desktop の root task / subagent も同じ ORRERY Mail と dashboard に接続する場合は、任意の [Codex App 統合](docs/codex-app.md)を追加します。Codex CLI だけを使う場合、この追加 install は不要です。
 
+Google Antigravity / Gemini は、core install 後に追加できる optional provider です。`agy` の導入・認証、provider payload の dry-run / install、delegated child の制約は [Google Antigravity / Gemini provider](docs/antigravity.md) を参照してください。
+
 ## 機能ギャラリー
 
 ### 1. Launcher と identity
@@ -114,6 +116,7 @@ murmur は browser の言語から日本語 / 英語を自動選択し、`?lang=
 | [委任と child agent](docs/delegation.md) | 組み込み subagent との違い、いまどちらが動いているかの見分け方、使い分け |
 | [Hooks と運用 helper](docs/hooks.md) | Claude event hook 8件、launcher / watcher helper、発火条件、block / release / cleanup |
 | [Codex App 統合](docs/codex-app.md) | Codex Desktop plugin、Bridge、session-bound MCP、inbox 通知、cold wake |
+| [Google Antigravity / Gemini provider](docs/antigravity.md) | optional provider、launcher、delegated child、permission、実機検証 |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
 | [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
