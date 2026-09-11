@@ -637,6 +637,13 @@ def _migration_baseline(tmp_path: Path) -> tuple[Path, Path]:
         ],
         check=True,
     )
+    # The fixture commit can start a detached `git gc --auto`, whose transient
+    # .git/objects/maintenance.lock is exactly what the migration's writer-lock
+    # check refuses. Under parallel workers the window is wide enough to hit
+    # (CI, 2026-09-11). Same remedy as test_migration.py: this repository never
+    # needs maintenance, so turn it off here only.
+    for key, value in (("gc.auto", "0"), ("gc.autoDetach", "false"), ("maintenance.auto", "false")):
+        subprocess.run(["git", "-C", str(archive), "config", key, value], check=True)
     subprocess.run(["git", "-C", str(archive), "add", "."], check=True)
     subprocess.run(
         ["git", "-C", str(archive), "commit", "-q", "-m", "fixture"],
