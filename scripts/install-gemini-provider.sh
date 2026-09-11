@@ -64,12 +64,17 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || {
 
 MANIFEST="$INSTALL_DIR/install-state.json"
 INSTALLED_SERVER="$INSTALL_DIR/dashboard/server.py"
+INSTALLED_SERVICE_RUNNER="$INSTALL_DIR/dashboard/service_runner.py"
 [[ -f "$MANIFEST" ]] || {
   echo "$PROG: install-state.json not found under $INSTALL_DIR; install ORRERY core first" >&2
   exit 1
 }
 [[ -f "$INSTALLED_SERVER" ]] || {
   echo "$PROG: dashboard/server.py not found under $INSTALL_DIR; install ORRERY core first" >&2
+  exit 1
+}
+[[ -f "$INSTALLED_SERVICE_RUNNER" ]] || {
+  echo "$PROG: dashboard/service_runner.py not found under $INSTALL_DIR; install ORRERY core first" >&2
   exit 1
 }
 
@@ -106,6 +111,8 @@ FILES=(
   "bin/agentstack-gemini-stream"
   "hooks/spawn_gemini_child.sh"
   "hooks/spawn_gemini_preregistered.sh"
+  "dashboard/provider_server.py"
+  "dashboard/gemini_provider_runtime.py"
   "dashboard/assets/google.svg"
 )
 for relative in "${FILES[@]}"; do
@@ -118,17 +125,18 @@ done
 # The core owns process-tree classification.  The optional payload must only be
 # installed over a core that already recognizes program=antigravity / process=agy
 # through the shared _is_agent_process_name/_agent_process_alive path.
-"$PYTHON_BIN" - "$INSTALLED_SERVER" <<'PY'
+"$PYTHON_BIN" - "$INSTALLED_SERVER" "$INSTALLED_SERVICE_RUNNER" <<'PY'
 from pathlib import Path
 import ast
 import sys
 
-path = Path(sys.argv[1])
+server_path = Path(sys.argv[1])
+runner_path = Path(sys.argv[2])
 try:
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
+    source = server_path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(server_path))
 except (OSError, SyntaxError) as exc:
-    raise SystemExit(f"incompatible ORRERY core dashboard {path}: {exc}")
+    raise SystemExit(f"incompatible ORRERY core dashboard {server_path}: {exc}")
 
 functions = {
     node.name
@@ -146,6 +154,15 @@ if "antigravity" not in source or "agy" not in source:
     raise SystemExit(
         "incompatible ORRERY core dashboard: Antigravity is not on the shared "
         "process-tree liveness path; update ORRERY core first"
+    )
+try:
+    runner_source = runner_path.read_text(encoding="utf-8")
+except OSError as exc:
+    raise SystemExit(f"incompatible ORRERY dashboard service runner {runner_path}: {exc}")
+if "provider_server.py" not in runner_source:
+    raise SystemExit(
+        "incompatible ORRERY core dashboard: service runner cannot load optional "
+        "provider_server.py; update/reinstall ORRERY core first"
     )
 PY
 
