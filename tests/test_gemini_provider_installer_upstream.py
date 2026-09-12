@@ -183,7 +183,9 @@ raise SystemExit(result.returncode)
     script.chmod(0o755)
 
 
-def _write_failing_python(bin_dir: pathlib.Path, manifest_name: str) -> pathlib.Path:
+def _write_failing_python(
+    bin_dir: pathlib.Path, manifest_name: str, *, action: str = "update",
+) -> pathlib.Path:
     script = bin_dir / "python-failing-manifest"
     script.write_text(
         f"""#!{sys.executable}
@@ -192,7 +194,7 @@ import subprocess
 import sys
 
 if len(sys.argv) > 3 and Path(sys.argv[2]).name == {manifest_name!r}:
-    print("simulated manifest update failure", file=sys.stderr)
+    print("simulated manifest {action} failure", file=sys.stderr)
     raise SystemExit(98)
 result = subprocess.run([{str(pathlib.Path(sys.executable))!r}, *sys.argv[1:]], check=False)
 raise SystemExit(result.returncode)
@@ -398,6 +400,7 @@ def test_failed_upgrade_after_manifest_update_restores_ownership_without_restori
         assert "recovery: rerun the installer" in result.stderr
         assert not (install_root / "dashboard" / "provider_server.py").exists()
         assert manifest.read_bytes() == old_manifest
+        assert "rollback warning:" not in result.stderr
         data = json.loads(manifest.read_text(encoding="utf-8"))
         expected_files = {
             str(install_root.resolve() / relative) for relative in PROVIDER_FILES
@@ -406,6 +409,36 @@ def test_failed_upgrade_after_manifest_update_restores_ownership_without_restori
         for relative in PROVIDER_FILES:
             if relative != "dashboard/provider_server.py":
                 assert (install_root / relative).is_file()
+        assert not any(install_root.glob(".gemini-provider-staging.*"))
+
+
+def test_manifest_rollback_failure_reports_incomplete_cleanup() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        install_root = pathlib.Path(tmp) / "agentstack"
+        _seed_fake_core(install_root)
+        manifest = install_root / "install-state.json"
+        before = manifest.read_bytes()
+        bin_dir = pathlib.Path(tmp) / "fake-bin"
+        bin_dir.mkdir()
+        _write_failing_cp(
+            bin_dir, "provider_server.py", source_marker=".gemini-provider-staging.",
+        )
+        failing_python = _write_failing_python(
+            bin_dir, ".manifest-before", action="rollback",
+        )
+        env = _installer_env()
+        env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+        env["AGENTSTACK_PYTHON"] = str(failing_python)
+
+        result = _run_installer(install_root, env)
+
+        assert result.returncode == 97
+        assert "simulated manifest rollback failure" in result.stderr
+        assert manifest.read_bytes() != before
+        assert "rollback warning: ownership or payload cleanup did not complete" in result.stderr
+        assert "activation state: Gemini provider remains disabled" in result.stderr
+        assert "recovery: rerun the installer" in result.stderr
+        assert not any((install_root / relative).exists() for relative in PROVIDER_FILES)
         assert not any(install_root.glob(".gemini-provider-staging.*"))
 
 

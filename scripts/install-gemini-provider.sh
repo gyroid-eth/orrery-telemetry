@@ -253,7 +253,7 @@ cleanup_provider_transaction() {
     # The manifest is part of the same transaction. Restore its pre-image
     # atomically if ownership was recorded before activation failed.
     if [[ "$MANIFEST_UPDATED" == true && -n "$MANIFEST_BACKUP" ]]; then
-      if ! "$PYTHON_BIN" - "$MANIFEST_BACKUP" "$MANIFEST" <<'PY'
+      if "$PYTHON_BIN" - "$MANIFEST_BACKUP" "$MANIFEST" <<'PY'
 from pathlib import Path
 import os
 import tempfile
