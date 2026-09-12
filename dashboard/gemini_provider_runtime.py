@@ -557,23 +557,26 @@ function spawnSelectedProviderCapabilities(){
 function spawnProviderAcceptsResources(caps){
   return !!(caps&&(caps.resources_required||caps.resources));
 }
+function spawnProviderDisplayModelLabel(provider,modelId){
+  const id=String(modelId||'').trim();
+  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  const caps=provider&&provider.capabilities||{};
+  if(!caps.effort_required)return id;
+  for(const effort of efforts){
+    const value=String(effort||'').trim();
+    const suffix=value?`-${value}`:'';
+    if(suffix&&id.endsWith(suffix))return id.slice(0,-suffix.length);
+  }
+  return id;
+}
 function spawnProviderDisplayModels(provider){
   const models=provider&&Array.isArray(provider.models)?provider.models:[];
-  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
   const caps=provider&&provider.capabilities||{};
   if(!caps.effort_required)return models;
   const seen=new Set(),visible=[];
   for(const model of models){
     const id=String(model&&model.id||'').trim();
-    let label=id;
-    for(const effort of efforts){
-      const value=String(effort||'').trim();
-      const suffix=value?`-${value}`:'';
-      if(suffix&&id.endsWith(suffix)){
-        label=id.slice(0,-suffix.length);
-        break;
-      }
-    }
+    const label=spawnProviderDisplayModelLabel(provider,id);
     if(seen.has(label))continue;
     seen.add(label);
     visible.push({...model,label});
@@ -662,6 +665,18 @@ _UI_PATCHES: tuple[tuple[str, str, str], ...] = (
         """    const displayLabel=tone?(model.label||model.id):model.id;""",
         """    const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
       ?(model.label||model.id):(tone?(model.label||model.id):model.id);""",
+    ),
+    (
+        "effort-separated engine note",
+        """function renderSpawnEngineNote(){
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  const parts=[provider&&provider.label||spmSelectedProvider,
+    spmSelectedModel,spmSelectedEffort].filter(Boolean);""",
+        """function renderSpawnEngineNote(){
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);
+  const parts=[provider&&provider.label||spmSelectedProvider,
+    displayModel,spmSelectedEffort].filter(Boolean);""",
     ),
     (
         "provider selection",
