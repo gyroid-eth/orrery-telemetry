@@ -78,7 +78,10 @@ export AGENTSTACK_PROJECT_KEY=/absolute/project/path
 ./scripts/install.sh
 ```
 
-DECK の tmux state は設定なしでも見えます。mail edge、history / replay、spawn だけが使えない状態は意図された縮退動作です。Output は cwd / git root の `logs/` fallback を引き続き探索します。
+ページと infrastructure の状態表示は設定なしでも利用できます。通常 agent の表示、
+annotation、capture・操作、Mail、history、spawn には project の選択が必要です。
+別 project の状態を fallback として使うことはありません。
+[Project key がない場合](configuration.md#project-key-がない場合)も参照してください。
 
 ## Output が空、または link にならない
 
@@ -399,6 +402,25 @@ core doctor を実行します。
 ## Codex App Bridge / cold wake が動かない
 
 Codex Desktop 統合には core doctor とは別の doctor、runtime state、失敗分類があります。[Codex App 統合の「よくある失敗」](codex-app.md#よくある失敗)を参照してください。Codex CLI session が Bridge に現れないのは意図された surface filter です。
+
+## Project key と作業 repository が一致しない
+
+`agentstack-doctor` で、current repository、ambient project key、登録 metadata の
+project key / work directory、protected roots の不一致を確認します。同じ repository の
+linked worktree と main checkout は一致として扱います。
+
+別 repository の installed / parent-shell / tmux 設定が残っていても、新規
+`agent-start` / `agent-start-codex` / `agent-start-gemini` は起動先を解決します。
+一回の明示指定は `--project-key KEY` で渡してください。診断は既存 identity、
+token、Mail history、reservation を別 project へ移動しません。誤った namespace に
+登録済みの session は、その作業を確認したうえで正しい repository 用の launcher から
+新規起動してください。linked worktree ごとに key を手で作り分ける必要はありません。
+
+`PROJECT CONTEXT UNRESOLVED` は、project key または protected roots を
+読み取れなかったことを示します。`AGENTSTACK_PYTHON` が実行できるか、installed
+`env.sh` が読み取れるかを確認してください。SessionStart は名前の採用や登録案内を
+停止し、reservation guard は対象範囲を確認できない編集を拒否します。設定を直した
+後で新規 session を起動してください。
 
 ## Dashboard に agent が二重表示される
 

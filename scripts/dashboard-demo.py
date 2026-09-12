@@ -45,6 +45,12 @@ OWNED_TOP_LEVEL = {
     "runtime",
 }
 
+
+def _demo_project(root: Path) -> Path:
+    """Return the Mail-compatible physical spelling of the demo project."""
+    return (root / "project").resolve()
+
+
 AGENTS = (
     {
         "id": 1,
@@ -501,10 +507,19 @@ def _reset(root: Path) -> None:
 
 
 def _copy_tracked_payload(root: Path) -> None:
+    git_env = os.environ.copy()
+    for selector in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        git_env.pop(selector, None)
     result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib/agentstack-scientists.sh"],
+        [
+            "git", "-C", str(REPO_ROOT), "ls-files", "-z", "--",
+            "dashboard",
+            "bin/lib/agentstack-scientists.sh",
+            "hooks/project-context.sh",
+        ],
         capture_output=True,
         check=True,
+        env=git_env,
     )
     payload = root / "payload"
     for raw in result.stdout.split(b"\0"):
@@ -521,7 +536,7 @@ def _create_database(root: Path, now: datetime) -> None:
     mail_dir = root / "mail"
     mail_dir.mkdir(parents=True, exist_ok=True)
     db_path = mail_dir / "storage.sqlite3"
-    project_key = str(root / "project")
+    project_key = str(_demo_project(root))
     base = now.replace(second=0, microsecond=0) - timedelta(minutes=34)
     with sqlite3.connect(db_path) as con:
         con.executescript(
@@ -623,8 +638,17 @@ def _create_database(root: Path, now: datetime) -> None:
 def _create_runtime(root: Path) -> None:
     runtime = root / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
+    project_key = str(_demo_project(root))
+    annotations = {
+        name: {**values, "project_key": project_key}
+        for name, values in ANNOTATIONS.items()
+    }
     (runtime / "annotations.json").write_text(
-        json.dumps({"agents": ANNOTATIONS}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {"projects": {project_key: {"agents": annotations}}},
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
         encoding="utf-8",
     )
 
@@ -714,7 +738,11 @@ def _create_transcripts(root: Path, now: datetime) -> None:
             path = day / f"rollout-{inception:%Y-%m-%dT%H-%M-%S}-{uid}.jsonl"
             lines = [
                 {"type": "session_meta",
-                 "payload": {"id": uid, "timestamp": _iso(inception)}},
+                 "payload": {
+                     "id": uid,
+                     "timestamp": _iso(inception),
+                     "cwd": str(_demo_project(root)),
+                 }},
             ]
             for offset, (role, text) in enumerate(turns):
                 lines.append({
@@ -738,7 +766,7 @@ def _create_transcripts(root: Path, now: datetime) -> None:
                     "message": {"role": role,
                                 "content": [{"type": "text", "text": text}]},
                     "timestamp": _iso(inception + timedelta(minutes=offset)),
-                    "cwd": str(root / "project"),
+                    "cwd": str(_demo_project(root)),
                 })
             # Mirrors what hooks/record-session-index.py writes, including the
             # fields the server checks before treating a record as exact
@@ -749,8 +777,8 @@ def _create_transcripts(root: Path, now: datetime) -> None:
                             "agent_name": agent["name"],
                             "session_id": uid,
                             "transcript_path": str(path),
-                            "cwd": str(root / "project"),
-                            "project_key": str(root / "project"),
+                            "cwd": str(_demo_project(root)),
+                            "project_key": str(_demo_project(root)),
                             "registered_by": "",
                             "schema_version": 2,
                             "binding_kind": "self"},
@@ -765,7 +793,7 @@ def _create_transcripts(root: Path, now: datetime) -> None:
 
 
 def _create_deliverables(root: Path) -> None:
-    logs = root / "project" / "logs"
+    logs = _demo_project(root) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     bodies = {
         "Bright-Curie": "Fictional shot list for the Aurora Terrarium dashboard demo.",
@@ -807,6 +835,7 @@ import json
 import sys
 
 SESSIONS = json.loads({json.dumps(json.dumps(sessions, ensure_ascii=False))})
+PROJECT_CWD = {json.dumps(str(_demo_project(root)))}
 SEP = chr(31)
 args = sys.argv[1:]
 command = args[0] if args else ""
@@ -815,7 +844,7 @@ if command == "list-sessions":
         print(SEP.join((name, str(data["created"]), str(data["activity"]))))
 elif command == "list-panes":
     for name, data in SESSIONS.items():
-        print(SEP.join((name, "11", data["cmd"], data["title"])))
+        print(SEP.join((name, "11", data["cmd"], "0", PROJECT_CWD, data["title"])))
 elif command == "list-clients":
     print(SEP.join(("Bright-Curie", "/dev/ttys-demo")))
 elif command == "capture-pane":
@@ -893,6 +922,9 @@ if __name__ == "__main__":
 
 def _server_env(root: Path, port: int, control_token: str) -> dict[str, str]:
     env = os.environ.copy()
+    for selector in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        env.pop(selector, None)
+    project_key = str(_demo_project(root))
     env.update(
         {
             "HOME": str(root / "home"),
@@ -904,14 +936,19 @@ def _server_env(root: Path, port: int, control_token: str) -> dict[str, str]:
             "AGENTSTACK_MAIL_DB": str(root / "mail" / "storage.sqlite3"),
             "AGENTSTACK_MAIL_ENV": str(root / "mail" / ".env"),
             "AGENTSTACK_MAIL_HOME": str(root / "mail"),
-            "AGENTSTACK_PROJECT_KEY": str(root / "project"),
+            "AGENTSTACK_PROJECT_KEY": project_key,
+            "PROJECT_KEY": project_key,
+            "AGENTSTACK_PROJECT_CONTEXT": "1",
+            "AGENTSTACK_PROJECT_REPOSITORY": "",
+            "AGENTSTACK_PROJECT_WORK_DIR": project_key,
+            "AGENTSTACK_PROTECTED_ROOTS": project_key,
             "AGENTSTACK_VAULT": "",
             "AGENTSTACK_RUNTIME_DIR": str(root / "runtime"),
             "AGENTSTACK_HOOKS_DIR": str(root / "payload" / "hooks"),
             "AGENTSTACK_SIGNALS_DIR": str(root / "mail" / "signals"),
-            "AGENTSTACK_DELIVERABLE_ROOTS": str(root / "project" / "logs"),
-            "AGENTSTACK_SPAWN_ROOTS": str(root / "project"),
-            "AGENTSTACK_SPAWN_DIRS": str(root / "project"),
+            "AGENTSTACK_DELIVERABLE_ROOTS": str(_demo_project(root) / "logs"),
+            "AGENTSTACK_SPAWN_ROOTS": str(_demo_project(root)),
+            "AGENTSTACK_SPAWN_DIRS": str(_demo_project(root)),
             "AGENTSTACK_SPAWN_SCRIPT": str(root / "payload" / "disabled-demo-spawn"),
             "AGENTSTACK_DASHBOARD_LOG": str(root / "runtime" / "dashboard.log"),
             "AGENTSTACK_DASHBOARD_STATE": str(root / "runtime" / "dashboard-service-state.json"),
@@ -1115,7 +1152,7 @@ def up(root: Path, port: int) -> dict[str, Any]:
         try:
             process = subprocess.Popen(
                 [sys.executable, str(wrapper)],
-                cwd=root / "project",
+                cwd=_demo_project(root),
                 env=_server_env(root, port, marker["control_token"]),
                 stdin=subprocess.DEVNULL,
                 stdout=launcher_log,

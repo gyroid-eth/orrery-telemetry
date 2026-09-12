@@ -13,6 +13,11 @@ PROG="agentstack-reregister"
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+ENTRY_PROJECT_CONTEXT="${AGENTSTACK_PROJECT_CONTEXT:-}"
+ENTRY_PROJECT_REPOSITORY="${AGENTSTACK_PROJECT_REPOSITORY:-}"
+ENTRY_PROJECT_WORK_DIR="${AGENTSTACK_PROJECT_WORK_DIR:-}"
+ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 
 load_env_file() {
   local envf="$1"
@@ -24,6 +29,36 @@ load_env_file() {
 load_env_file "${AGENTSTACK_ENV_FILE:-}"
 load_env_file "${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
 load_env_file "$SCRIPT_DIR/../env.sh"
+
+# Installer defaults are useful for missing connection settings, but they must
+# not overwrite a live caller selection.  A non-Git legacy session may not yet
+# carry the new binding marker, while an established context restores its full
+# repository/workspace tuple as well.
+if [[ -n "$ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  AGENTSTACK_PROTECTED_ROOTS="$ENTRY_PROTECTED_ROOTS"
+  export AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROTECTED_ROOTS
+fi
+if [[ "$ENTRY_PROJECT_CONTEXT" == "1" && -n "$ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_CONTEXT="$ENTRY_PROJECT_CONTEXT"
+  AGENTSTACK_PROJECT_REPOSITORY="$ENTRY_PROJECT_REPOSITORY"
+  AGENTSTACK_PROJECT_WORK_DIR="$ENTRY_PROJECT_WORK_DIR"
+  export AGENTSTACK_PROJECT_CONTEXT
+  export AGENTSTACK_PROJECT_REPOSITORY AGENTSTACK_PROJECT_WORK_DIR
+fi
+
+PROJECT_CONTEXT_LIB="$SCRIPT_DIR/../hooks/project-context.sh"
+[[ -f "$PROJECT_CONTEXT_LIB" ]] || die "missing project context library: $PROJECT_CONTEXT_LIB"
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
+if [[ "${AGENTSTACK_PROJECT_CONTEXT:-}" == "1" ]] && \
+   ! agentstack_context_matches_target "${PWD:-}"; then
+  die "established project context does not match current work directory: ${PWD:-<unset>}"
+fi
+project_key="$(agentstack_resolve_project_key "${PWD:-}")"
+[[ -n "$project_key" ]] || die "project key is required"
+agentstack_export_project_context "$project_key" "${PWD:-}"
 
 REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}"
 [[ -f "$REGISTER_LIB" ]] || die "missing register library: $REGISTER_LIB"
@@ -69,9 +104,6 @@ case "$program" in
     ;;
 esac
 model="${3:-${AGENTSTACK_REREGISTER_MODEL:-$default_model}}"
-
-project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-[[ -n "$project_key" ]] || die "AGENTSTACK_PROJECT_KEY is required"
 
 ags_mail_load_token
 

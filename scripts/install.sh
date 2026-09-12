@@ -23,6 +23,7 @@ PORT="${AGENTSTACK_PORT:-8770}"
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+PROJECT_KEY_EXPLICIT=""
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
@@ -155,6 +156,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --project-key)
       PROJECT_KEY="$2"
+      PROJECT_KEY_EXPLICIT="$2"
       PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
       shift 2
       ;;
@@ -214,55 +216,12 @@ fi
 # shellcheck disable=SC1090
 . "$PROJECT_CONTEXT_LIB"
 PROJECT_KEY_INPUT="$PROJECT_KEY"
-PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0)"
-if [[ -z "$PROJECT_KEY" ]]; then
+# Preserve the first-install contract without invoking Python: when there is
+# no caller key and no installed env to inspect, the missing selection is
+# already certain and should be reported before unrelated preflight output.
+if [[ -z "$PROJECT_KEY" && -z "$PROJECT_KEY_EXPLICIT" && ! -f "$INSTALL_DIR/env.sh" ]]; then
   echo "error: project key is required on first install; pass --project-key /absolute/path/to/project or set AGENTSTACK_PROJECT_KEY" >&2
   exit 2
-fi
-PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
-# The dashboard runs under launchd/systemd, so a shell `export` never reaches
-# it: these presets only take effect when the installer persists them. A
-# re-install keeps what the previous install recorded unless told otherwise.
-if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
-  SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
-  SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
-  CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_NETWORK_SETTING" ]]; then
-  CODEX_NETWORK_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_NETWORK "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_ADD_DIRS_SETTING" ]]; then
-  CODEX_ADD_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_ADD_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_BIN_SETTING" ]]; then
-  CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")"
-  if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
-    # A stale path from an earlier install (Node upgraded, prefix moved) must
-    # not pin the dashboard to a binary that no longer exists. An explicit
-    # --codex-bin that does not exist is rejected below instead.
-    echo "note: installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is not executable; resolving codex again" >&2
-    CODEX_BIN_SETTING=""
-  fi
-  if [[ -z "$CODEX_BIN_SETTING" ]]; then
-    CODEX_BIN_SETTING="$(command -v codex 2>/dev/null || true)"
-  fi
-fi
-# Product defaults are written out explicitly so env.sh, the service definition
-# and install-state.json all say what a child actually gets.
-CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
-CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
-if [[ -z "$PORTRAITS_DIR_SETTING" ]]; then
-  PORTRAITS_DIR_SETTING="$(agentstack_installed_env_value AGENTSTACK_PORTRAITS_DIR "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
-  CUSTOM_PORTRAITS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CUSTOM_PORTRAITS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_MODELS_SETTING" ]]; then
-  CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")"
 fi
 
 HOOKS_DIR="$INSTALL_DIR/hooks"
@@ -332,7 +291,8 @@ NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-serv
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
 NATIVE_MAIL_SOURCE_ID="${AGENTSTACK_MAIL_CANDIDATE_ID:-}"
 if [[ -z "$NATIVE_MAIL_SOURCE_ID" ]]; then
-  NATIVE_MAIL_SOURCE_ID="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  NATIVE_MAIL_SOURCE_ID="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+    git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
   NATIVE_MAIL_SOURCE_ID="${NATIVE_MAIL_SOURCE_ID:-source}"
 fi
 NATIVE_MAIL_VENV_EXPLICIT="${AGENTSTACK_MAIL_SERVICE_VENV+x}"
@@ -386,29 +346,97 @@ validate_spawn_paths() {
     [[ -d "$expanded" ]] || warn "$name: directory does not exist yet: $entry"
   done
 }
-validate_spawn_paths AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING"
-validate_spawn_paths AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING"
-validate_spawn_paths AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING"
-validate_spawn_paths AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING"
-validate_spawn_paths AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING"
-case "$CODEX_CHILD_APPROVAL_SETTING" in
-  never|on-request|on-failure|untrusted) ;;
-  *)
-    echo "error: --codex-approval must be never, on-request, on-failure or untrusted (got: $CODEX_CHILD_APPROVAL_SETTING)" >&2
-    exit 2
-    ;;
-esac
-case "$CODEX_NETWORK_SETTING" in
-  on|off) ;;
-  *)
-    echo "error: --codex-network must be on or off (got: $CODEX_NETWORK_SETTING)" >&2
-    exit 2
-    ;;
-esac
-if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
-  echo "error: --codex-bin must point at an executable (got: $CODEX_BIN_SETTING)" >&2
-  exit 2
-fi
+
+resolve_install_context() {
+  if ! PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0 "$PROJECT_KEY_EXPLICIT")"; then
+    echo "error: project key resolution failed after Python preflight; verify AGENTSTACK_PYTHON and the installed env.sh" >&2
+    return 2
+  fi
+  if [[ -z "$PROJECT_KEY" ]]; then
+    echo "error: project key is required on first install; pass --project-key /absolute/path/to/project or set AGENTSTACK_PROJECT_KEY" >&2
+    return 2
+  fi
+  PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")" \
+    || die "could not resolve protected roots from the installed env.sh"
+
+  # The dashboard runs under launchd/systemd, so a shell `export` never reaches
+  # it: these presets only take effect when the installer persists them. A
+  # re-install keeps what the previous install recorded unless told otherwise.
+  if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
+    SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_SPAWN_DIRS from the installed env.sh"
+  fi
+  if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
+    SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_SPAWN_ROOTS from the installed env.sh"
+  fi
+  if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
+    CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CODEX_CHILD_APPROVAL from the installed env.sh"
+  fi
+  if [[ -z "$CODEX_NETWORK_SETTING" ]]; then
+    CODEX_NETWORK_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_NETWORK "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CODEX_NETWORK from the installed env.sh"
+  fi
+  if [[ -z "$CODEX_ADD_DIRS_SETTING" ]]; then
+    CODEX_ADD_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_ADD_DIRS "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CODEX_ADD_DIRS from the installed env.sh"
+  fi
+  if [[ -z "$CODEX_BIN_SETTING" ]]; then
+    CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CODEX_BIN from the installed env.sh"
+    if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
+      # A stale path from an earlier install (Node upgraded, prefix moved) must
+      # not pin the dashboard to a binary that no longer exists. An explicit
+      # --codex-bin that does not exist is rejected below instead.
+      warn "installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is not executable; resolving codex again"
+      CODEX_BIN_SETTING=""
+    fi
+    if [[ -z "$CODEX_BIN_SETTING" ]]; then
+      CODEX_BIN_SETTING="$(command -v codex 2>/dev/null || true)"
+    fi
+  fi
+  # Product defaults are written out explicitly so env.sh, the service
+  # definition and install-state.json all say what a child actually gets.
+  CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
+  CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
+  if [[ -z "$PORTRAITS_DIR_SETTING" ]]; then
+    PORTRAITS_DIR_SETTING="$(agentstack_installed_env_value AGENTSTACK_PORTRAITS_DIR "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_PORTRAITS_DIR from the installed env.sh"
+  fi
+  if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
+    CUSTOM_PORTRAITS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CUSTOM_PORTRAITS "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CUSTOM_PORTRAITS from the installed env.sh"
+  fi
+  if [[ -z "$CODEX_MODELS_SETTING" ]]; then
+    CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")" \
+      || die "could not read AGENTSTACK_CODEX_MODELS from the installed env.sh"
+  fi
+
+  validate_spawn_paths AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING"
+  validate_spawn_paths AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING"
+  validate_spawn_paths AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING"
+  validate_spawn_paths AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING"
+  validate_spawn_paths AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING"
+  case "$CODEX_CHILD_APPROVAL_SETTING" in
+    never|on-request|on-failure|untrusted) ;;
+    *)
+      echo "error: --codex-approval must be never, on-request, on-failure or untrusted (got: $CODEX_CHILD_APPROVAL_SETTING)" >&2
+      return 2
+      ;;
+  esac
+  case "$CODEX_NETWORK_SETTING" in
+    on|off) ;;
+    *)
+      echo "error: --codex-network must be on or off (got: $CODEX_NETWORK_SETTING)" >&2
+      return 2
+      ;;
+  esac
+  if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
+    echo "error: --codex-bin must point at an executable (got: $CODEX_BIN_SETTING)" >&2
+    return 2
+  fi
+}
 
 # The two mail jobs are different things: one runs the service, the other runs
 # `agentstack-mailctl start` on a timer. Sharing a label makes the controller
@@ -1316,6 +1344,12 @@ install_payload() {
   else
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"
+    plan "install project context resolver into $HOOKS_DIR"
+    if [[ "$DRY_RUN" != true ]]; then
+      mkdir -p "$HOOKS_DIR"
+      cp "$REPO_ROOT/hooks/project-context.sh" "$HOOKS_DIR/project-context.sh"
+      chmod +x "$HOOKS_DIR/project-context.sh"
+    fi
   fi
   copy_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR"
   plan "copy VERSION -> $INSTALL_DIR/VERSION"
@@ -1706,9 +1740,11 @@ ensure_native_mail_candidate() {
     return
   fi
   if [[ "$NATIVE_MAIL_PACKAGE_SOURCE" == "$REPO_ROOT/packages/agentstack_mail" ]] && \
-     git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+       git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local dirty_package
-    dirty_package="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- packages/agentstack_mail)"
+    dirty_package="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+      git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- packages/agentstack_mail)"
     [[ -z "$dirty_package" ]] || \
       die "bundled ORRERY Mail package is dirty; build a candidate from an exact clean commit"
   fi
@@ -2357,6 +2393,8 @@ PATH=$PATH_VALUE
 AGENTSTACK_MAIL_HOME=$MAIL_HOME
 AGENTSTACK_SIGNALS_DIR=$SIGNALS_DIR
 AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR
+AGENTSTACK_MCP_URL=$MCP_URL
+AGENTSTACK_PYTHON=$PYTHON_BIN
 ENVLIST
 } # end mail_watcher_environment
 
@@ -3101,6 +3139,15 @@ main() {
   say "ORRERY Telemetry core installer"
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
+  validate_assume_yes
+  if ! run_preflight; then
+    exit 1
+  fi
+  # env.sh is deliberately parsed as data, not sourced. It needs the Python
+  # interpreter selected and version-checked by preflight, so a fresh install
+  # cannot fail early with a misleading missing-project diagnostic.
+  AGENTSTACK_PYTHON="$PYTHON_BIN"
+  resolve_install_context
   say "project key: $PROJECT_KEY"
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
@@ -3108,10 +3155,6 @@ main() {
   say "codex network: $CODEX_NETWORK_SETTING"
   say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
-  validate_assume_yes
-  if ! run_preflight; then
-    exit 1
-  fi
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."
   elif [[ "$TIER" == "tier2" ]]; then

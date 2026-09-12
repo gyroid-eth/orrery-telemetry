@@ -3,7 +3,8 @@
 # current terminal tab, so it shows up in the dashboard and is click-to-jump-able.
 #
 # Directory selection (where `claude` runs):
-#   agent-start [DIR]    use DIR explicitly
+#   agent-start [DIR]                       use DIR explicitly
+#   agent-start --project-key KEY [DIR]     override this invocation's project
 #   agent-start          if fzf is installed, browse under $AGENTSTACK_BASE_DIR
 #                        (default: $HOME); otherwise fall back to the current dir
 #
@@ -21,15 +22,44 @@ set -euo pipefail
 
 AGS_PROG="agent-start"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGS_ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+AGS_ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
 # shellcheck source=lib/agentstack-register.sh
 . "$BIN_DIR/lib/agentstack-register.sh"
 ags_load_env
+if [[ -n "$AGS_ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_KEY="$AGS_ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$AGS_ENTRY_PROJECT_KEY"
+fi
+if [[ -n "$AGS_ENTRY_PROTECTED_ROOTS" ]]; then
+  AGENTSTACK_PROTECTED_ROOTS="$AGS_ENTRY_PROTECTED_ROOTS"
+fi
+# shellcheck source=../hooks/project-context.sh
+. "$BIN_DIR/../hooks/project-context.sh"
+
+EXPLICIT_PROJECT_KEY=""
+LAUNCH_DIR_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project-key)
+      [[ $# -ge 2 && -n "${2:-}" ]] || ags_die "--project-key requires a non-empty value"
+      EXPLICIT_PROJECT_KEY="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do LAUNCH_DIR_ARGS+=("$1"); shift; done
+      ;;
+    -*) ags_die "unknown option: $1" ;;
+    *) LAUNCH_DIR_ARGS+=("$1"); shift ;;
+  esac
+done
+[[ ${#LAUNCH_DIR_ARGS[@]} -le 1 ]] || ags_die "expected at most one directory"
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
 CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
@@ -38,12 +68,16 @@ TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
 command -v "$CLAUDE_BIN" >/dev/null 2>&1 || ags_die "claude not found on PATH (set AGENTSTACK_CLAUDE_BIN)"
 
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+DIR="$(ags_choose_dir ${LAUNCH_DIR_ARGS[@]+"${LAUNCH_DIR_ARGS[@]}"})" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
 
 # Prevent identity hijack: stale/inherited values must not select another agent
 # or become part of a newly created tmux server's global environment.
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+unset AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_PROJECT_REPOSITORY AGENTSTACK_PROJECT_WORK_DIR 2>/dev/null || true
+PROJECT_KEY="$(agentstack_resolve_project_key "$DIR" "" 1 "$EXPLICIT_PROJECT_KEY")"
+agentstack_export_project_context "$PROJECT_KEY" "$DIR"
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
 
 SESSION="pending-$$"
 CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
@@ -105,6 +139,18 @@ if [[ -n "${TMUX:-}" ]]; then
   # Warn (do not block) if this pane can't read a macOS privacy-protected project
   # dir — the child claude will inherit the same EPERM otherwise-undiagnosable.
   declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$DIR"
+  # Publish only now that every identity gate has passed: a failed launch must
+  # leave the invoking session's project tuple intact. Re-read the name, since
+  # the gates above may have renamed the session.
+  CONTEXT_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if [[ -n "$CONTEXT_SESSION" ]]; then
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_KEY "$PROJECT_KEY"
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" PROJECT_KEY "$PROJECT_KEY"
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_CONTEXT 1
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_REPOSITORY "$AGENTSTACK_PROJECT_REPOSITORY"
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_WORK_DIR "$AGENTSTACK_PROJECT_WORK_DIR"
+    "$TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROTECTED_ROOTS "$AGENTSTACK_PROTECTED_ROOTS"
+  fi
   exec "$CLAUDE_BIN"
 fi
 
@@ -129,7 +175,13 @@ $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf 
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
-  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  -e $(printf '%q' "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY") \
+  -e $(printf '%q' "PROJECT_KEY=$PROJECT_KEY") \
+  -e AGENTSTACK_PROJECT_CONTEXT=1 \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_REPOSITORY=$AGENTSTACK_PROJECT_REPOSITORY") \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_WORK_DIR=$AGENTSTACK_PROJECT_WORK_DIR") \
+  -e $(printf '%q' "AGENTSTACK_PROTECTED_ROOTS=$AGENTSTACK_PROTECTED_ROOTS") \
+  "unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

@@ -10,6 +10,14 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 
 TOOL_INPUT=$(cat)
 reservation_extract_session_id "$TOOL_INPUT"
+if [ "$PROJECT_CONTEXT_UNRESOLVED" = "1" ]; then
+    reservation_failure_log "release-all session=${SESSION_ID:-<none>} error=project-context-unresolved"
+    exit 0
+fi
+if [ "$PROJECT_CONTEXT_MISMATCH" = "1" ]; then
+    reservation_failure_log "release-all session=${SESSION_ID:-<none>} error=project-context-mismatch"
+    exit 0
+fi
 AGENT_RESULT="$(resolve_agent_name)"
 AGENT_SRC="${AGENT_RESULT%%|*}"
 AGENT="${AGENT_RESULT#*|}"

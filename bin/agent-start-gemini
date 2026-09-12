@@ -5,6 +5,7 @@
 # Directory selection:
 #   agent-start-gemini [DIR]             use DIR explicitly
 #   agent-start-gemini --dry-run [DIR]   print the planned agy command only
+#   agent-start-gemini --project-key KEY [DIR]
 #   agent-start-gemini                   fzf-pick under $AGENTSTACK_BASE_DIR
 #
 # Env:
@@ -18,20 +19,45 @@ set -euo pipefail
 
 AGS_PROG="agent-start-gemini"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGS_ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+AGS_ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
 ags_load_env
+if [[ -n "$AGS_ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_KEY="$AGS_ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$AGS_ENTRY_PROJECT_KEY"
+fi
+if [[ -n "$AGS_ENTRY_PROTECTED_ROOTS" ]]; then
+  AGENTSTACK_PROTECTED_ROOTS="$AGS_ENTRY_PROTECTED_ROOTS"
+fi
+# shellcheck source=../hooks/project-context.sh
+. "$BIN_DIR/../hooks/project-context.sh"
 
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
 GEMINI_MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
 GEMINI_EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"
 BOOTSTRAP="$BIN_DIR/agentstack-gemini-bootstrap"
 DRY_RUN=false
-
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN=true
-  shift
-fi
+EXPLICIT_PROJECT_KEY=""
+LAUNCH_DIR_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --project-key)
+      [[ $# -ge 2 && -n "${2:-}" ]] || ags_die "--project-key requires a non-empty value"
+      EXPLICIT_PROJECT_KEY="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do LAUNCH_DIR_ARGS+=("$1"); shift; done
+      ;;
+    -*) ags_die "unknown option: $1" ;;
+    *) LAUNCH_DIR_ARGS+=("$1"); shift ;;
+  esac
+done
+[[ ${#LAUNCH_DIR_ARGS[@]} -le 1 ]] || ags_die "expected at most one directory"
 
 case "$GEMINI_EFFORT" in
   low|medium|high) ;;
@@ -44,8 +70,13 @@ build_gemini_cmd() {
   printf '%s' "$out"
 }
 
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+DIR="$(ags_choose_dir ${LAUNCH_DIR_ARGS[@]+"${LAUNCH_DIR_ARGS[@]}"})" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+
+unset AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_PROJECT_REPOSITORY AGENTSTACK_PROJECT_WORK_DIR 2>/dev/null || true
+PROJECT_KEY="$(agentstack_resolve_project_key "$DIR" "" 1 "$EXPLICIT_PROJECT_KEY")"
+agentstack_export_project_context "$PROJECT_KEY" "$DIR"
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
 
 # CI and reviewers can exercise the launcher contract without installing the
 # optional Antigravity binary. Dry-run intentionally stops before tmux, Mail
@@ -71,8 +102,21 @@ SESSION="gemini-pending-$$"
 if [[ -n "${TMUX:-}" ]]; then
   cd "$DIR"
   export AGENTSTACK_GEMINI_MODEL="$GEMINI_MODEL"
+  LAUNCH_TMUX_BIN="$TMUX_BIN"  # the sourced bootstrap reassigns TMUX_BIN
   # shellcheck disable=SC1090
   source "$BOOTSTRAP" "$DIR"
+  # Publish only after the bootstrap's registration/name gates succeeded: a
+  # dry-run or failed launch must leave the invoking session's project tuple
+  # intact. Re-read the name, since the bootstrap may have renamed the session.
+  CONTEXT_SESSION="$("$LAUNCH_TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if [[ -n "$CONTEXT_SESSION" ]]; then
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_KEY "$PROJECT_KEY"
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" PROJECT_KEY "$PROJECT_KEY"
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_CONTEXT 1
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_REPOSITORY "$AGENTSTACK_PROJECT_REPOSITORY"
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROJECT_WORK_DIR "$AGENTSTACK_PROJECT_WORK_DIR"
+    "$LAUNCH_TMUX_BIN" set-environment -t "=$CONTEXT_SESSION" AGENTSTACK_PROTECTED_ROOTS "$AGENTSTACK_PROTECTED_ROOTS"
+  fi
   GEMINI_CMD="$(build_gemini_cmd)"
   eval "$GEMINI_CMD"
   exit $?
@@ -86,8 +130,14 @@ cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY") \
+  -e $(printf '%q' "PROJECT_KEY=$PROJECT_KEY") \
+  -e AGENTSTACK_PROJECT_CONTEXT=1 \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_REPOSITORY=$AGENTSTACK_PROJECT_REPOSITORY") \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_WORK_DIR=$AGENTSTACK_PROJECT_WORK_DIR") \
+  -e $(printf '%q' "AGENTSTACK_PROTECTED_ROOTS=$AGENTSTACK_PROTECTED_ROOTS") \
   -e $(printf '%q' "AGENTSTACK_GEMINI_MODEL=$GEMINI_MODEL") \
-  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $GEMINI_CMD; exec \"\$SHELL\" -l"
+  "unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $GEMINI_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

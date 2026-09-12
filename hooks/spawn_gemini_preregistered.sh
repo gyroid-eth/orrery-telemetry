@@ -31,6 +31,10 @@ MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
+PROJECT_CONTEXT_LIB="$HOOKS_DIR/project-context.sh"
+[[ -f "$PROJECT_CONTEXT_LIB" ]] || { echo "$PROG: missing project context helper: $PROJECT_CONTEXT_LIB" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
 
 usage() {
   cat >&2 <<'EOF'
@@ -63,18 +67,32 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
+if [[ "${AGENTSTACK_PROJECT_CONTEXT:-}" == "1" ]] && \
+   ! agentstack_context_matches_target "$WORK_DIR"; then
+  echo "$PROG: child workdir belongs to a different repository/workspace than its pre-registered project context: $WORK_DIR" >&2
+  exit 1
+fi
 case "$EFFORT" in low|medium|high) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
 command -v tmux >/dev/null 2>&1 || { echo "$PROG: tmux not found" >&2; exit 1; }
 command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI not found (expected agy)" >&2; exit 1; }
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || { echo "$PROG: selected Python is unavailable" >&2; exit 1; }
 [[ -x "$MAIL_HELPER" && -x "$STREAM_HELPER" && -x "$MCP_WRAPPER" ]] || { echo "$PROG: Gemini provider helpers are not installed" >&2; exit 1; }
 
-SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+SOURCE_REPO="$(agentstack_git_worktree_root "$WORK_DIR" 2>/dev/null || true)"
 [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
+CONFIGURED_REPO="$(agentstack_repository_key "$PROJECT_KEY" 2>/dev/null || true)"
+TARGET_REPO="$(agentstack_repository_key "$SOURCE_REPO" 2>/dev/null || true)"
+if [[ "${AGENTSTACK_PROJECT_CONTEXT:-}" != "1" && -n "$CONFIGURED_REPO" && \
+      "$CONFIGURED_REPO" != "$TARGET_REPO" ]]; then
+  echo "$PROG: child workdir repository does not match project key repository: $WORK_DIR" >&2
+  exit 1
+fi
+agentstack_export_project_context "$PROJECT_KEY" "$SOURCE_REPO"
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
 if [[ -n "$WORKTREE_BASE_REV" ]]; then
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
+  BASE_REV="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
 else
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
+  BASE_REV="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
 fi
 [[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
 
@@ -118,8 +136,10 @@ cleanup_failure() {
         --token-file "$DURABLE_TOKEN" >/dev/null 2>&1 || true
     fi
     if [[ "$WORKTREE_CREATED" == true ]]; then
-      git -C "$SOURCE_REPO" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
-      git -C "$SOURCE_REPO" branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$SOURCE_REPO" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$SOURCE_REPO" branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
     fi
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE"
   fi
@@ -134,12 +154,14 @@ chmod 600 "$DURABLE_TOKEN"
 rm -f "$CHILD_TOKEN_FILE"
 
 [[ ! -e "$WORKTREE_DIR" ]] || { echo "$PROG: worktree path already exists: $WORKTREE_DIR" >&2; exit 1; }
-if git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+  git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   echo "$PROG: child branch already exists: $BRANCH_NAME" >&2
   exit 1
 fi
-git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
 WORKTREE_CREATED=true
+agentstack_export_project_context "$PROJECT_KEY" "$WORKTREE_DIR"
 
 # Linked worktrees share .git/info/exclude. Use a child-owned excludes file
 # injected only into the Antigravity runner instead of mutating shared repo
@@ -151,7 +173,8 @@ mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
   --token-file "$DURABLE_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL"
 RESERVED=true
 
-if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
+if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+  git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
   echo "$PROG: tracked .agents/mcp_config.json exists; refusing to overwrite it" >&2
   exit 1
 fi
@@ -216,11 +239,17 @@ rm -f "$TASK_FILE"
 cat > "$RUNNER_FILE" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
 cd $(printf '%q' "$WORKTREE_DIR") || exit 1
 export AGENT_NAME=$(printf '%q' "$CHILD_NAME")
 export PARENT_AGENT=$(printf '%q' "$PARENT_AGENT")
 export AGENTSTACK_RESERVED_IDENTITY=1
 export AGENTSTACK_PROJECT_KEY=$(printf '%q' "$PROJECT_KEY")
+export PROJECT_KEY=$(printf '%q' "$PROJECT_KEY")
+export AGENTSTACK_PROJECT_CONTEXT=1
+export AGENTSTACK_PROJECT_REPOSITORY=$(printf '%q' "$AGENTSTACK_PROJECT_REPOSITORY")
+export AGENTSTACK_PROJECT_WORK_DIR=$(printf '%q' "$AGENTSTACK_PROJECT_WORK_DIR")
+export AGENTSTACK_PROTECTED_ROOTS=$(printf '%q' "$AGENTSTACK_PROTECTED_ROOTS")
 export AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR")
 export AGENTSTACK_HOOKS_DIR=$(printf '%q' "$HOOKS_DIR")
 export AGENTSTACK_RUNTIME_DIR=$(printf '%q' "$RUNTIME_DIR")
@@ -285,6 +314,11 @@ chmod 700 "$RUNNER_FILE"
 tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
   -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_AGENT" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
+  -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" \
+  -e "AGENTSTACK_PROJECT_CONTEXT=1" \
+  -e "AGENTSTACK_PROJECT_REPOSITORY=$AGENTSTACK_PROJECT_REPOSITORY" \
+  -e "AGENTSTACK_PROJECT_WORK_DIR=$AGENTSTACK_PROJECT_WORK_DIR" \
+  -e "AGENTSTACK_PROTECTED_ROOTS=$AGENTSTACK_PROTECTED_ROOTS" \
   "/bin/bash $(printf '%q' "$RUNNER_FILE")"
 TMUX_STARTED=true
 

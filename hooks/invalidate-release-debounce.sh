@@ -14,6 +14,8 @@ STATE_DIR="$RUNTIME_DIR/file_release_debounce"
 [ -d "$STATE_DIR" ] || exit 0
 
 reservation_extract_session_id "$TOOL_INPUT"
+[ "$PROJECT_CONTEXT_UNRESOLVED" != "1" ] || exit 0
+[ "$PROJECT_CONTEXT_MISMATCH" != "1" ] || exit 0
 AGENT_RESULT="$(resolve_agent_name)"
 AGENT_SRC="${AGENT_RESULT%%|*}"
 AGENT="${AGENT_RESULT#*|}"
@@ -21,7 +23,7 @@ AGENT="${AGENT_RESULT#*|}"
 [ -n "$AGENT" ] || exit 0
 
 QUERY_DOCUMENT="$TOOL_INPUT" QUERY_STATE_DIR="$STATE_DIR" \
-    QUERY_AGENT="$AGENT" QUERY_ROOTS="$PROTECTED_ROOTS" QUERY_CWD="$(pwd)" \
+    QUERY_AGENT="$AGENT" QUERY_ROOTS="$PROTECTED_ROOTS" QUERY_CWD="${HOOK_CWD:-$(pwd -P)}" \
     QUERY_HOME="$HOME" python3 - <<'PY' >/dev/null 2>&1 || true
 import hashlib
 import json

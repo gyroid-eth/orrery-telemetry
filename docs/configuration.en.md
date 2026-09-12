@@ -47,23 +47,16 @@ The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTAC
 
 ## Without a project key
 
-The following work even when both `AGENTSTACK_PROJECT_KEY` and `AGENTSTACK_VAULT` are unset.
+When both `AGENTSTACK_PROJECT_KEY` and `AGENTSTACK_VAULT` are unset, the
+Dashboard has no selected project. It does not attribute ordinary agent sessions,
+read or write their annotations, or allow capture and control of them. Mail,
+history, Graph, and NEW AGENT also require a configured project; an unknown
+project never falls back to another Mail project.
 
-- DECK tmux state
-- terminal open / local capture
-- local annotations
-- bundled portraits
-- Output / deliverables (fall back to `logs/` under cwd or the Git root)
-
-The following do not work.
-
-- launcher shell-side agent registration
-- NETWORK mail edges / drawer
-- mail history / DIGEST REPLAY
-- dashboard spawn
-- project-scoped retirement
-
-Only mail features become `NOT CONFIGURED`; local telemetry remains available for diagnosis.
+The page, bundled portraits, and infrastructure/warmup health entries remain
+available for diagnosis. Configure the Dashboard for the intended project to
+view and control its agents. A separate top-level launcher can still resolve its
+own Git target without a configured Dashboard key.
 
 ## Output / deliverables
 
@@ -95,7 +88,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_SERVICE_VENV` | derived from candidate ID | Path used to explicitly reuse a verified candidate virtual environment |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not use the legacy HTTP bearer |
 | `AGENTSTACK_PROJECT_KEY` | existing `env.sh` on reinstall; required initially | Human project key. `--project-key` has highest priority |
-| `AGENTSTACK_PROTECTED_ROOTS` | live project key, then existing `env.sh`, then resolved project key | Roots protected by the reservation hook |
+| `AGENTSTACK_PROTECTED_ROOTS` | Live project key, then existing `env.sh`, then resolved install key | Installed reservation-root fallback; runtime Git roots follow the worktree and canonical repository |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | Debounce seconds before releasing a reservation after successful Edit / Write. Legacy `FILE_RESERVATION_RELEASE_GRACE_SECONDS` is also accepted as a fallback |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | unset | `:`-separated Output-index scan roots, saved to env / service / manifest |
 | `AGENTSTACK_LANG` | unset | `ja` / `en` murmur override; browser-selected when unset |
@@ -111,7 +104,26 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 
 The installer's project-key precedence is `--project-key` / process `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → existing `env.sh` at the install destination. If none exist on first install, it does not guess that the repository checkout is the project; it stops with exit 2 before making changes. `AGENTSTACK_PROJECT_KEY` is recommended for persistent configuration.
 
-At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The installed `env.sh` is not sourced; only `AGENTSTACK_PROJECT_KEY`, and `AGENTSTACK_PROTECTED_ROOTS` when falling back for protected roots, are read literally. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
+Runtime project context is resolved by `hooks/project-context.sh`: an explicit launcher
+`--project-key KEY`, the target's canonical Git repository, existing
+`AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` for non-Git workspaces, installed
+`env.sh`, then cwd. A Git target takes precedence over another repository's
+stale key in installed settings, the parent shell, or tmux. There is no new
+project-scoped configuration file format.
+
+Linked worktrees share the repository identity resolved through
+`git rev-parse --git-common-dir`; a worktree directory is not a separate project.
+The launcher passes the resolved context to bootstrap, hooks, Mail, reservations,
+and child spawn. Explicit selection persists in the established session; a fresh
+top-level launcher does not treat its parent's selection as a new explicit override.
+
+Git protected roots follow the actual worktree and canonical repository and
+exclude stale roots from another repository. Reservation paths are relative to
+the worktree's repository root, so reservations for the same logical file contend
+across worktrees. Non-Git workspaces retain existing project/protected-root
+fallbacks. The selected workspace is always protected; an explicit project change
+does not inherit the old project's ambient roots. The shared resolver reads only literal export values from installed
+`env.sh`, without sourcing it. The installer's precedence above is unchanged.
 
 The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTACK_SIGNALS_DIR` from state / render and stores the state root together with `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` in `env.sh`.
 

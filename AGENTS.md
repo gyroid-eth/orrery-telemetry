@@ -131,6 +131,16 @@ developer's — the ORRERY Mail commit, the name-enforcement mode, the database
 schema, the file-descriptor limit — and that block answers all of those at
 once instead of over several rounds of questions.
 
+## Runtime project context
+
+The install-time project key is a fallback. New launchers resolve the target
+Git repository; linked worktrees share its canonical identity and different
+repositories stay separate. Use `--project-key KEY` for a per-invocation
+override. For Mail tools and reservations, use the resolved session key from
+the launcher or SessionStart, not a path copied from an older installation.
+A delegated child retains its established parent context across linked
+worktrees. See `docs/launchers.md` and `docs/configuration.md`.
+
 ## Reference
 
 | Topic | File |

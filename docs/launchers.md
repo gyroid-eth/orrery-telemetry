@@ -25,6 +25,36 @@ agent-start
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
 
+## Project context
+
+Claude / Codex / Antigravity の launcher は選択 directory の Git repository を
+project として解決します。同じ repository の linked worktree は同じ canonical key
+を共有し、別 repository は別の Mail / reservation namespace になります。
+install 時や親 shell、tmux に残った別 project の設定は起動先より優先されません。
+
+一回の起動だけ project key を明示する場合は、environment の継承と区別できる
+`--project-key` を使います。
+
+```bash
+agent-start --project-key /absolute/project/key ~/code/my-project
+agent-start-codex --project-key /absolute/project/key ~/code/my-project
+agent-start-gemini --project-key /absolute/project/key ~/code/my-project
+```
+
+filesystem path の key は symlink を解決した物理的な絶対 path に揃えます。
+明示 key の正規化は path の別表記を揃える範囲で、linked worktree を明示 key に
+選んだ場合は、その worktree の物理 path を namespace として維持します。
+
+解決済み context は bootstrap、SessionStart、再登録、予約、同じ repository の
+child に引き継ぎます。新規 top-level 起動では改めて起動先から解決します。
+Git 外の workspace は既存の live / installed 設定へ fallback します。
+詳しくは[設定](configuration.md)を参照してください。
+
+Mail の名前は project ごとですが、local tmux と owner token の保存先は
+machine 全体で共有します。別 project の local identity が使っている名前を
+再利用して token を上書きすることはできません。ハイフンの有無が違う名前も
+同じ候補として照合します。予約済み child の衝突時は別名へ切り替えず停止します。
+
 ## tmux session
 
 tmux 外から起動すると、新しい named session を作って現在の terminal tab を置き換えます。tmux 内からは current session を rename し、その場で CLI を `exec` します。
@@ -184,7 +214,7 @@ model の世代名は `spawn_child.sh` の model catalog が正本です。Claud
 5. ORRERY Mail の完了報告と `monitor_child_agent.sh` を読み、自分で成果物を検証する
 6. reservation を release してから親の結果として報告する
 
-worktree child の cwd は `/tmp/cc-worktrees/<name>` に変わりますが、ORRERY Mail project は変わりません。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。
+worktree child の cwd は `/tmp/cc-worktrees/<name>` に変わりますが、同じ repository の ORRERY Mail project は変わりません。別 repository への child spawn は登録前に拒否されます。その repository 用の新規 top-level agent を起動してください。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。
 
 monitor の danger command 検知は既定では passive です。`AGENTSTACK_MONITOR_DANGER_CHECK=1` で有効にすると一致時に soft stop します。出力が変わらない stasis の反復時は設定にかかわらず soft stop、`C-c`、process group freeze、session kill の順に段階化します。exit code の意味は skill 本文を参照してください。
 

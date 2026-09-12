@@ -38,7 +38,19 @@ RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
 
 TOOL_INPUT=$(cat)
-reservation_resolve_tool_context "$TOOL_INPUT" || exit 0
+reservation_resolve_tool_context "$TOOL_INPUT"
+CONTEXT_STATUS=$?
+if [ "$CONTEXT_STATUS" = "2" ]; then
+    echo "PROJECT CONTEXT UNRESOLVED: the project key or protected roots for ${HOOK_CWD:-$(pwd -P)} could not be determined," >&2
+    echo "so this edit cannot be checked against file reservations. Verify AGENTSTACK_PYTHON and the installed env.sh." >&2
+    exit 2
+fi
+[ "$CONTEXT_STATUS" = "0" ] || exit 0
+if [ "$PROJECT_CONTEXT_MISMATCH" = "1" ]; then
+    echo "PROJECT CONTEXT MISMATCH: this established session is bound to another repository/workspace." >&2
+    echo "Start a fresh top-level agent for ${HOOK_CWD:-$(pwd -P)} before editing." >&2
+    exit 2
+fi
 # Asked before anything decides which identity wins: the precedence resolver
 # returns on AGENT_NAME alone, so asking it about conflicts left named sessions
 # unchecked.

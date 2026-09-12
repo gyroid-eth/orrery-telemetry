@@ -25,6 +25,37 @@ agent-start
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
 
+## Project context
+
+The Claude, Codex, and Antigravity launchers resolve the selected directory's
+Git repository as the project. Linked worktrees share one canonical key;
+different repositories use separate Mail and reservation namespaces. Stale
+project settings from installation, a parent shell, or tmux do not override
+the target repository.
+
+Use `--project-key` for an explicit selection for one invocation, distinct
+from inherited environment variables:
+
+```bash
+agent-start --project-key /absolute/project/key ~/code/my-project
+agent-start-codex --project-key /absolute/project/key ~/code/my-project
+agent-start-gemini --project-key /absolute/project/key ~/code/my-project
+```
+
+Filesystem keys use physical absolute paths, resolving symlink aliases.
+An explicitly selected linked-worktree key keeps that worktree's physical path
+as its namespace; explicit-key normalization only aligns path spellings.
+
+Bootstrap, SessionStart, re-registration, reservations, and children in the
+same repository retain the established context. A new top-level invocation
+resolves its own target again. Non-Git workspaces retain existing live and
+installed fallbacks. See [Configuration](configuration.en.md).
+
+Mail names are project-local, while local tmux names and owner-token paths are
+shared across the machine. A name already used by another local project cannot
+be reused to overwrite its token. Hyphen variants count as the same candidate.
+A reserved child stops on a collision instead of adopting another identity.
+
 ## tmux session
 
 When launched from outside tmux, the launcher creates a new named session and replaces the current terminal tab. From inside tmux, it renames the current session and runs the CLI in place with `exec`.
@@ -182,7 +213,7 @@ The model generation names in `spawn_child.sh`'s model catalog are canonical. Fo
 5. Read the ORRERY Mail completion report and `monitor_child_agent.sh`, then verify the artifact yourself
 6. Release the reservation before reporting the parent's result
 
-A worktree child's cwd changes to `/tmp/cc-worktrees/<name>`, but its ORRERY Mail project does not change. The task must identify `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` as canonical. `--worktree-base <rev>` fixes the baseline for multiple children.
+A worktree child's cwd changes to `/tmp/cc-worktrees/<name>`, but its ORRERY Mail project remains the same for that repository. A child spawn into another repository is rejected before registration; start a new top-level agent for that repository. The task must identify `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` as canonical. `--worktree-base <rev>` fixes the baseline for multiple children.
 
 The monitor's dangerous-command detection is passive by default. When enabled with `AGENTSTACK_MONITOR_DANGER_CHECK=1`, a match causes a soft stop. Repeated stasis with unchanged output escalates through soft stop, `C-c`, process-group freeze, then session kill regardless of that setting. See the skill text for the exit codes.
 

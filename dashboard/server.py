@@ -144,6 +144,7 @@ HOOKS_DIR = _env_path("AGENTSTACK_HOOKS_DIR", "~/.agentstack/hooks")
 RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
 MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.agentstack/mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
+_PROJECT_KEY_CACHE: dict = {"signature": None, "value": ""}
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
 NOTIFY_DAEMON_LABEL = f"{LABEL_PREFIX}.notify-daemon"
 MAIL_WATCHER_PIDFILE = _env_path(
@@ -195,16 +196,233 @@ def _resolve_version() -> str:
         except OSError:
             pass
     try:
+        env = os.environ.copy()
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+            env.pop(name, None)
         return subprocess.run(
             ["git", "-C", os.path.dirname(HERE), "describe", "--tags", "--always", "--dirty"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=3, env=env,
         ).stdout.strip() or "unknown"
     except (OSError, subprocess.SubprocessError):
         return "unknown"
 
 
+def _normalize_project_key_value(value: object) -> str:
+    """Normalize filesystem keys like Mail while preserving logical names."""
+    if not isinstance(value, str):
+        return ""
+    project_key = value.strip()
+    if not project_key:
+        return ""
+    expanded = os.path.expanduser(project_key)
+    if os.path.isabs(expanded) or os.path.isdir(expanded):
+        return os.path.realpath(expanded)
+    return project_key
+
+
 def _project_key() -> str:
-    return PROJECT_KEY or VAULT
+    """Return the immutable configured Dashboard namespace.
+
+    An installed/configured path is a fallback, not an explicit invocation
+    argument.  Canonicalize Git paths through the shared common-directory rule
+    so a dashboard started from a linked worktree reads and writes the same
+    Mail project as NEW AGENT.  A fully bound established context may carry an
+    intentional logical key unrelated to its repository, and remains intact.
+    """
+    configured = PROJECT_KEY or VAULT
+    live_key = os.environ.get("AGENTSTACK_PROJECT_KEY", "") or os.environ.get(
+        "PROJECT_KEY", ""
+    )
+    signature = (
+        configured,
+        live_key,
+        os.environ.get("AGENTSTACK_PROJECT_CONTEXT", ""),
+        os.environ.get("AGENTSTACK_PROJECT_REPOSITORY", ""),
+        os.environ.get("AGENTSTACK_PROJECT_WORK_DIR", ""),
+    )
+    if signature == _PROJECT_KEY_CACHE.get("signature"):
+        return _PROJECT_KEY_CACHE.get("value", "")
+
+    normalized_configured = _normalize_project_key_value(configured)
+    resolved = normalized_configured
+    established = False
+    bound_work_dir = os.environ.get("AGENTSTACK_PROJECT_WORK_DIR", "").strip()
+    if (
+        configured
+        and _normalize_project_key_value(live_key) == normalized_configured
+        and os.environ.get("AGENTSTACK_PROJECT_CONTEXT") == "1"
+        and bound_work_dir
+        and os.path.isdir(os.path.expanduser(bound_work_dir))
+    ):
+        ok, bound_key = _context_helper_result(
+            "resolve-project-key",
+            os.path.realpath(os.path.expanduser(bound_work_dir)),
+            "/dev/null",
+            "0",
+            "",
+        )
+        established = ok and bound_key == normalized_configured
+        if established:
+            resolved = bound_key
+
+    if not established and configured:
+        configured_path = os.path.realpath(os.path.expanduser(configured))
+        if os.path.isdir(configured_path):
+            ok, fallback_key = _context_helper_result(
+                "resolve-project-key",
+                configured_path,
+                "/dev/null",
+                "0",
+                "",
+            )
+            # A successful non-Git resolution legitimately returns the live
+            # configured key. Operational resolver failure is different: an
+            # installed linked-worktree literal must not silently become a
+            # second Mail namespace when the required helper is unavailable.
+            resolved = fallback_key if ok and fallback_key else ""
+
+    _PROJECT_KEY_CACHE.update(signature=signature, value=resolved)
+    return resolved
+
+
+def _project_context_helper() -> str:
+    """Return the installed/shared resolver path, or an empty string.
+
+    A dashboard-only installation ships this one hook dependency explicitly;
+    source-tree execution uses the repository copy as a final equivalent path.
+    Spawning fails closed when neither exists.
+    """
+    candidates = (
+        os.path.join(os.path.dirname(HERE), "hooks", "project-context.sh"),
+        os.path.join(HOOKS_DIR, "project-context.sh"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "hooks", "project-context.sh",
+        ),
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _context_helper_result(
+        action: str, *args: str, configured_fallback: bool = False,
+) -> tuple[bool, str]:
+    helper = _project_context_helper()
+    if not helper:
+        return False, ""
+    env = os.environ.copy()
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        env.pop(name, None)
+    if configured_fallback:
+        env["AGENTSTACK_PROJECT_KEY"] = _project_key()
+        env["PROJECT_KEY"] = _project_key()
+        env.pop("AGENTSTACK_PROJECT_CONTEXT", None)
+        env.pop("AGENTSTACK_PROJECT_REPOSITORY", None)
+        env.pop("AGENTSTACK_PROJECT_WORK_DIR", None)
+    try:
+        result = subprocess.run(
+            ["/bin/bash", helper, action, *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return result.returncode == 0, getattr(result, "stdout", "").strip()
+
+
+def _context_helper_value(action: str, *args: str) -> str:
+    ok, value = _context_helper_result(action, *args)
+    return value if ok else ""
+
+
+def _resolved_work_dir_context(work_dir: str) -> tuple[dict[str, str] | None, str]:
+    """Resolve the one context used by NEW AGENT before any side effect."""
+    helper = _project_context_helper()
+    if not helper:
+        return None, "project context resolver missing; reinstall ORRERY Telemetry"
+    target = os.path.realpath(os.path.expanduser(work_dir))
+    if not os.path.isdir(target):
+        return None, f"dir does not exist: {target}"
+    resolved_ok, project_key = _context_helper_result(
+        "resolve-project-key", target, "/dev/null", "0", "",
+        configured_fallback=True,
+    )
+    if not resolved_ok or not project_key:
+        return None, "project context resolver failed for selected directory"
+    _repo_ok, repository = _context_helper_result("repository-key", target)
+    _worktree_ok, worktree = _context_helper_result("worktree-root", target)
+    if not project_key:
+        return None, "could not resolve project key"
+    roots_ok, protected_roots = _context_helper_result(
+        "resolve-runtime-protected-roots", project_key, target, "/dev/null",
+        configured_fallback=True,
+    )
+    if not roots_ok or not protected_roots:
+        return None, "project protected-root resolution failed for selected directory"
+    return {
+        "project_key": project_key,
+        "repository": repository,
+        "work_dir": worktree or target,
+        "launch_dir": target,
+        "protected_roots": protected_roots,
+    }, ""
+
+
+def _configured_workspace() -> str:
+    """Dashboard NEW AGENT default: configured workspace, never dashboard code."""
+    for value in (
+        os.environ.get("AGENTSTACK_PROJECT_WORK_DIR", ""),
+        PROJECT_KEY,
+        VAULT,
+    ):
+        expanded = os.path.realpath(os.path.expanduser(value)) if value else ""
+        if expanded and os.path.isdir(expanded):
+            return expanded
+    return ""
+
+
+def _context_matches_dashboard_project(context: dict[str, str]) -> bool:
+    """Whether a delegated target can safely inherit the dashboard project."""
+    configured = _project_key()
+    if not configured:
+        return False
+    configured_repository = ""
+    bound_repository = os.environ.get("AGENTSTACK_PROJECT_REPOSITORY", "").strip()
+    if bound_repository and os.path.isdir(bound_repository):
+        configured_repository = os.path.realpath(bound_repository)
+    elif os.path.isdir(os.path.expanduser(configured)):
+        configured_repository = _context_helper_value(
+            "repository-key", os.path.realpath(os.path.expanduser(configured))
+        )
+    if context["repository"]:
+        return bool(configured_repository) and (
+            context["repository"] == configured_repository
+        )
+    workspace = _configured_workspace()
+    if workspace:
+        try:
+            return os.path.commonpath([context["launch_dir"], workspace]) == workspace
+        except ValueError:
+            return False
+    return context["project_key"] == configured
+
+
+def _project_has_agent(project_key: str, name: str) -> bool:
+    if not project_key or not name or not os.path.exists(DB_PATH):
+        return False
+    try:
+        with _db() as con:
+            return con.execute(
+                "SELECT 1 FROM agents a JOIN projects p ON p.id=a.project_id "
+                "WHERE p.human_key=? AND a.name=? LIMIT 1",
+                (project_key, name),
+            ).fetchone() is not None
+    except sqlite3.Error:
+        return False
 
 # --- Model-string normalization (read-time, non-destructive) ---------------
 # Each session registers a free-form `model` string, so the same model shows
@@ -518,6 +736,7 @@ def tmux_state() -> dict:
             "client_tty": None,
             "cmd": "",
             "pane_pid": 0,
+            "cwd": "",
             "title": "",
         }
 
@@ -528,18 +747,23 @@ def tmux_state() -> dict:
             "#{window_active}#{pane_active}",
             "#{pane_current_command}",
             "#{pane_pid}",
+            "#{pane_current_path}",
             "#{pane_title}",
         ]
     )
     for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
-        parts = _split_tmux_fields(line, 4)
-        if len(parts) == 5:
+        parts = _split_tmux_fields(line, 5)
+        if len(parts) == 6:
+            name, flags, cmd, pane_pid, pane_cwd, title = parts
+        elif len(parts) == 5:
             name, flags, cmd, pane_pid, title = parts
+            pane_cwd = ""
         elif len(parts) == 4:
             # demo / older fake tmux adapters may still emit the historical
             # four-field row even when a fifth format field was requested.
             name, flags, cmd, title = parts
             pane_pid = ""
+            pane_cwd = ""
         else:
             continue
         if flags != "11":  # active window + active pane
@@ -547,6 +771,7 @@ def tmux_state() -> dict:
         if name in sessions:
             sessions[name]["cmd"] = cmd
             sessions[name]["pane_pid"] = _to_int(pane_pid)
+            sessions[name]["cwd"] = pane_cwd
             sessions[name]["title"] = title
 
     fmt = SEP.join(["#{client_session}", "#{client_tty}"])
@@ -836,22 +1061,31 @@ def agentmail_state() -> tuple[dict, dict]:
     instr: dict[str, dict] = {}
     if not os.path.exists(DB_PATH):
         return agents, instr
+    project_key = _project_key()
+    if not project_key:
+        return agents, instr
     con = None
     try:
         con = _db()
         con.row_factory = sqlite3.Row
         cur = con.cursor()
 
-        retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
+        retired_filter = "a2.retired_at IS NULL" if _has_retired_at() else "1=1"
         cur.execute(
             f"""
             SELECT a.name, a.model, a.program, a.task_description, a.last_active_ts
             FROM agents a
+            JOIN projects p ON p.id = a.project_id
             JOIN (
-                SELECT name, MAX(last_active_ts) m
-                FROM agents WHERE {retired_filter} GROUP BY name
+                SELECT a2.name, MAX(a2.last_active_ts) m
+                FROM agents a2
+                JOIN projects p2 ON p2.id = a2.project_id
+                WHERE p2.human_key = ? AND {retired_filter}
+                GROUP BY a2.name
             ) x ON a.name = x.name AND a.last_active_ts = x.m
-            """
+            WHERE p.human_key = ?
+            """,
+            (project_key, project_key),
         )
         for r in cur.fetchall():
             agents[r["name"]] = {
@@ -869,14 +1103,19 @@ def agentmail_state() -> tuple[dict, dict]:
             FROM message_recipients mr
             JOIN agents a   ON a.id  = mr.agent_id
             JOIN messages m ON m.id  = mr.message_id
+            JOIN projects p ON p.id  = m.project_id
             JOIN agents sn  ON sn.id = m.sender_id
             JOIN (
                 SELECT mr2.agent_id, MAX(m2.created_ts) mc
                 FROM message_recipients mr2
                 JOIN messages m2 ON m2.id = mr2.message_id
+                JOIN projects p2 ON p2.id = m2.project_id
+                WHERE p2.human_key = ?
                 GROUP BY mr2.agent_id
             ) last ON last.agent_id = mr.agent_id AND last.mc = m.created_ts
-            """
+            WHERE p.human_key = ?
+            """,
+            (project_key, project_key),
         )
         for r in cur.fetchall():
             instr[r["aname"]] = {
@@ -912,6 +1151,141 @@ def _iso_to_epoch(s: str | None) -> int:
 PENDING_RE = re.compile(r"^pending-\d+$")
 # Claude Code native binary の pane_current_command（例 "2.1.259"）
 _VERSION_CMD_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+# Never equal to a normalized project key: NUL cannot occur in one.
+_DURABLE_PROJECT_CONFLICT = "\0conflicting-durable-project"
+
+
+def _runtime_name_binding_project(name: str) -> str:
+    """Return the project named by every durable ownership record for `name`.
+
+    Reads only project metadata (name binding, token `.project` sidecar, child
+    state `project_key`); never inspects owner tokens.  "" means no record
+    exists, which legacy sessions may still pass on live key/cwd evidence.
+    An existing record that is unreadable, names another agent, or carries no
+    usable project, or records that disagree after normalization, yield
+    _DURABLE_PROJECT_CONFLICT so callers reject rather than fall through.
+    """
+    if not _valid(name):
+        return ""
+    projects: set[str] = set()
+
+    binding = os.path.join(
+        RUNTIME_DIR, "name-bindings", f"{_agent_name_comparison_key(name)}.json"
+    )
+    try:
+        with open(binding, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return _DURABLE_PROJECT_CONFLICT
+    else:
+        if not isinstance(data, dict) or data.get("agent_name") != name:
+            return _DURABLE_PROJECT_CONFLICT
+        value = _normalize_project_key_value(data.get("project_key"))
+        if not value:
+            return _DURABLE_PROJECT_CONFLICT
+        projects.add(value)
+
+    sidecar_project = _runtime_agent_token_project(name)
+    if sidecar_project == "":
+        return _DURABLE_PROJECT_CONFLICT
+    if sidecar_project is not None:
+        projects.add(sidecar_project)
+
+    state_file = os.path.join(RUNTIME_DIR, "child-agents", f"{name}.json")
+    try:
+        with open(state_file, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return _DURABLE_PROJECT_CONFLICT
+    else:
+        if not isinstance(data, dict) or data.get("agent_name", name) != name:
+            return _DURABLE_PROJECT_CONFLICT
+        # Pre-ownership child state has no project_key; that is absence.
+        if "project_key" in data:
+            value = _normalize_project_key_value(data["project_key"])
+            if not value:
+                return _DURABLE_PROJECT_CONFLICT
+            projects.add(value)
+
+    if len(projects) > 1:
+        return _DURABLE_PROJECT_CONFLICT
+    return projects.pop() if projects else ""
+
+
+def _tmux_session_env(name: str, variable: str) -> str:
+    raw = _tmux(["show-environment", "-t", f"={name}", variable]).strip()
+    prefix = f"{variable}="
+    return raw[len(prefix):] if raw.startswith(prefix) else ""
+
+
+def _session_matches_dashboard_project(
+        name: str,
+        session: dict,
+        path_eligibility: dict[str, bool] | None = None,
+) -> bool:
+    if name in INFRA_NAMES or name in WARMUP_NAMES:
+        return True
+    project_key = _project_key()
+    if not project_key:
+        return False
+    session_key = _tmux_session_env(name, "AGENTSTACK_PROJECT_KEY")
+    if not session_key:
+        session_key = _tmux_session_env(name, "PROJECT_KEY")
+    session_key = _normalize_project_key_value(session_key)
+    if session_key and session_key != project_key:
+        return False
+
+    durable_project = _runtime_name_binding_project(name)
+    if durable_project == _DURABLE_PROJECT_CONFLICT:
+        return False
+    if durable_project and durable_project != project_key:
+        return False
+
+    # A matching key alone is not enough when an older/inconsistent tmux
+    # session still points at another repository. Validate every available
+    # bound path, including the live pane cwd, against this Dashboard project.
+    bound_paths = [
+        _tmux_session_env(name, "AGENTSTACK_PROJECT_REPOSITORY"),
+        _tmux_session_env(name, "AGENTSTACK_PROJECT_WORK_DIR"),
+        str(session.get("cwd") or ""),
+    ]
+    checked_path = False
+    for bound_path in bound_paths:
+        if not bound_path or not os.path.isdir(bound_path):
+            continue
+        checked_path = True
+        path_key = os.path.realpath(bound_path)
+        if path_eligibility is None:
+            matches = _cwd_matches_dashboard_project(path_key)
+        elif path_key in path_eligibility:
+            matches = path_eligibility[path_key]
+        else:
+            matches = _cwd_matches_dashboard_project(path_key)
+            path_eligibility[path_key] = matches
+        if not matches:
+            return False
+
+    if session_key or durable_project:
+        return True
+    return checked_path
+
+
+def _live_session_matches_dashboard_project(name: str) -> bool:
+    """True only when an existing name is attributable to this project."""
+    session = tmux_state().get(name)
+    return bool(session and _session_matches_dashboard_project(name, session))
+
+
+def _live_session_conflicts_with_dashboard(name: str) -> bool:
+    """Detect a same-name tmux session owned by another/ambiguous project."""
+    session = tmux_state().get(name)
+    return bool(session and not _session_matches_dashboard_project(name, session))
 
 
 def classify(name: str, cmd: str, title: str, in_mail: bool,
@@ -1000,7 +1374,10 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     retired_names = _retired_names(_project_key())
     substitutions = _name_substitutions()
     rows = []
+    path_eligibility: dict[str, bool] = {}
     for name, s in sessions.items():
+        if not _session_matches_dashboard_project(name, s, path_eligibility):
+            continue
         m = mail_agents.get(name)
         program = (m or {}).get("program") or ""
         agent_alive = (
@@ -1227,6 +1604,11 @@ def _codex_app_runtimes() -> dict[str, dict]:
         name = rec.get("agent_name")
         if not isinstance(name, str) or not name:
             continue
+        if _normalize_project_key_value(rec.get("project_key")) != _project_key():
+            continue
+        cwd = rec.get("cwd")
+        if not isinstance(cwd, str) or not _cwd_matches_dashboard_project(cwd):
+            continue
         previous = records.get(name)
         if previous and (previous.get("last_seen_at") or "") > (rec.get("last_seen_at") or ""):
             continue
@@ -1267,22 +1649,77 @@ def _open_codex_app(name: str) -> dict:
     return {"ok": False, "error": "unknown Codex App runtime"}
 
 
-_GRAPH_CACHE: dict = {"ts": 0, "data": None}
+_GRAPH_CACHE: dict = {
+    "ts": 0, "project_key": None, "live_parents": None, "data": None,
+}
 
 
-def _raw_graph() -> dict:
+def _scoped_live_parents(sessions: dict) -> tuple[tuple[str, str], ...]:
+    """Sorted (child, parent) PARENT_AGENT pairs read now from gated sessions.
+
+    `sessions` must already have passed _session_matches_dashboard_project.
+    Each value is read fresh from that exact tmux session (by its session id
+    when known), never from graph_data's host-global parent cache, so a name
+    reused by another project's session cannot inherit an earlier parent.
+    Infra/warm-up sessions pass the gate without project evidence and never
+    qualify as children.
+    """
+    pairs = []
+    for name, session in sessions.items():
+        if name in INFRA_NAMES or name in WARMUP_NAMES:
+            continue
+        target = str(session.get("session_id") or "") or f"={name}"
+        raw = _tmux(["show-environment", "-t", target, "PARENT_AGENT"]).strip()
+        # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
+        if not raw.startswith("PARENT_AGENT="):
+            continue
+        parent = raw.split("=", 1)[1].strip()
+        if parent:
+            pairs.append((name, parent))
+    return tuple(sorted(pairs))
+
+
+def _raw_graph(live_parents: tuple[tuple[str, str], ...] | None = None) -> dict:
     """graph_data.build_graph() を遅延 import + 8 秒キャッシュ。
 
-    build_graph の集計をポーリングのたびに繰り返さないようにする。"""
+    build_graph の集計をポーリングのたびに繰り返さないようにする。
+    Live lineage comes only from `live_parents`, the child->parent pairs of
+    sessions passing the full Dashboard project gate; when omitted they are
+    derived here (graph_payload passes its already-gated pairs).
+    The cache is keyed by the selected project and those exact pairs."""
     now = time.time()
-    if _GRAPH_CACHE["data"] is not None and now - _GRAPH_CACHE["ts"] < 8:
+    project_key = _project_key()
+    if live_parents is None:
+        path_eligibility: dict[str, bool] = {}
+        live_parents = _scoped_live_parents({
+            name: session for name, session in tmux_state().items()
+            if _session_matches_dashboard_project(name, session, path_eligibility)
+        })
+    else:
+        live_parents = tuple(sorted(
+            live_parents.items() if isinstance(live_parents, dict) else live_parents
+        ))
+    if (
+        _GRAPH_CACHE["data"] is not None
+        and _GRAPH_CACHE.get("project_key") == project_key
+        and _GRAPH_CACHE.get("live_parents") == live_parents
+        and now - _GRAPH_CACHE["ts"] < 8
+    ):
         return _GRAPH_CACHE["data"]
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     import graph_data  # noqa: PLC0415  (lazy: 壊れても全体は落とさない)
 
-    data = graph_data.build_graph()
-    _GRAPH_CACHE.update(ts=now, data=data)
+    # graph_data is imported lazily but its standalone default captures the raw
+    # installed environment. Pass the same canonical/established key used by
+    # every other Dashboard Mail path without mutating process or module state.
+    data = graph_data.build_graph(
+        project_human_key=project_key,
+        live_parents=live_parents,
+    )
+    _GRAPH_CACHE.update(
+        ts=now, project_key=project_key, live_parents=live_parents, data=data,
+    )
     return data
 
 
@@ -1321,12 +1758,16 @@ def _deliverable_roots() -> list[str]:
             if not base:
                 base = cwd
                 try:
+                    env = os.environ.copy()
+                    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+                        env.pop(name, None)
                     result = subprocess.run(
                         ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
                         capture_output=True,
                         text=True,
                         timeout=2,
                         check=False,
+                        env=env,
                     )
                     if result.returncode == 0 and result.stdout.strip():
                         base = result.stdout.strip()
@@ -1426,7 +1867,7 @@ def _deliverables_index() -> dict:
 # --------------------------------------------------------------------------- #
 ANNOT_PATH = os.path.join(RUNTIME_DIR, "annotations.json")
 LEGACY_ANNOT_PATH = os.path.join(HERE, "annotations.json")
-_ANNOT_CACHE: dict = {"path": "", "mtime": -1.0, "data": {}}
+_ANNOT_CACHE: dict = {"path": "", "mtime": -1.0, "project_key": "", "data": {}}
 _ANNOT_LOCK = threading.Lock()
 
 
@@ -1443,38 +1884,72 @@ def _annotation_read_path() -> str:
     return ANNOT_PATH
 
 
-def _annotations() -> dict:
+def _annotations(project_key: str | None = None) -> dict:
     """{agent_name: {role, emoji, group}} を返す。mtime ベースで再読込。
 
     `{name: {...}}` の素形式と `{"agents": {name: {...}}}` ラッパの両対応。
     壊れた JSON / 不在は空 dict（チップを出さないだけで全体は落とさない）。"""
+    selected_project = _normalize_project_key_value(project_key or _project_key())
+    if not selected_project:
+        # Unconfigured: unkeyed entries would otherwise match "" == "".
+        return {}
     path = _annotation_read_path()
     try:
         mt = os.path.getmtime(path)
     except OSError:
-        _ANNOT_CACHE.update(path="", mtime=-1.0, data={})
+        _ANNOT_CACHE.update(path="", mtime=-1.0, project_key=selected_project, data={})
         return {}
-    if path == _ANNOT_CACHE.get("path") and mt == _ANNOT_CACHE["mtime"]:
+    if (path == _ANNOT_CACHE.get("path") and mt == _ANNOT_CACHE["mtime"]
+            and selected_project == _ANNOT_CACHE.get("project_key")):
         return _ANNOT_CACHE["data"]
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, ValueError):
-        if path == _ANNOT_CACHE.get("path"):
+        if (path == _ANNOT_CACHE.get("path")
+                and selected_project == _ANNOT_CACHE.get("project_key")):
             return _ANNOT_CACHE.get("data") or {}
         return {}
     data: dict[str, dict] = {}
     if isinstance(raw, dict):
-        src = raw.get("agents") if isinstance(raw.get("agents"), dict) else raw
+        projects = raw.get("projects")
+        if isinstance(projects, dict):
+            # A project bucket written before filesystem-key normalization may
+            # use a symlink spelling (for example /tmp rather than
+            # /private/tmp).  Read every alias-equivalent bucket, with the
+            # canonical bucket last so a newer write wins for duplicate names.
+            src = {}
+            matching_keys = [
+                key for key in projects
+                if (_normalize_project_key_value(key) == selected_project)
+            ]
+            matching_keys.sort(key=lambda key: key == selected_project)
+            for key in matching_keys:
+                project_entry = projects.get(key)
+                agents = (
+                    project_entry.get("agents", {})
+                    if isinstance(project_entry, dict)
+                    else {}
+                )
+                if isinstance(agents, dict):
+                    src.update(agents)
+        else:
+            src = raw.get("agents") if isinstance(raw.get("agents"), dict) else raw
         for name, v in src.items():
             if not isinstance(name, str) or not isinstance(v, dict):
+                continue
+            entry_project = _normalize_project_key_value(v.get("project_key"))
+            if entry_project != selected_project:
+                # A bucket name or current name binding is not evidence about
+                # who wrote historical metadata. Only entries carrying their
+                # contemporaneous alias-equivalent project may be attributed.
                 continue
             role = str(v.get("role", "")).strip()[:40]
             emoji = str(v.get("emoji", "")).strip()[:8]
             group = str(v.get("group", "")).strip()[:24]
             if role or emoji or group:
                 data[name] = {"role": role, "emoji": emoji, "group": group}
-    _ANNOT_CACHE.update(path=path, mtime=mt, data=data)
+    _ANNOT_CACHE.update(path=path, mtime=mt, project_key=selected_project, data=data)
     return data
 
 
@@ -1491,28 +1966,56 @@ def _annotations() -> dict:
 #   left to be inferred from an absence.
 # --------------------------------------------------------------------------- #
 SUBST_PATH = os.path.join(RUNTIME_DIR, "name-substitutions.json")
-_SUBST_CACHE: dict = {"mtime": -1.0, "data": {}}
+_SUBST_CACHE: dict = {"path": "", "mtime": -1.0, "project_key": "", "data": {}}
 _SUBST_LOCK = threading.Lock()
 
 
-def _name_substitutions() -> dict:
+def _name_substitutions(project_key: str | None = None) -> dict:
     """{registered: requested}. Missing or corrupt file means no claims made."""
+    selected_project = _normalize_project_key_value(project_key or _project_key())
+    if not selected_project:
+        # Unconfigured: unkeyed entries would otherwise match "" == "".
+        return {}
     try:
         mt = os.path.getmtime(SUBST_PATH)
     except OSError:
-        _SUBST_CACHE.update(mtime=-1.0, data={})
+        _SUBST_CACHE.update(path="", mtime=-1.0, project_key=selected_project, data={})
         return {}
-    if mt == _SUBST_CACHE["mtime"]:
+    if (SUBST_PATH == _SUBST_CACHE.get("path") and mt == _SUBST_CACHE["mtime"]
+            and selected_project == _SUBST_CACHE.get("project_key")):
         return _SUBST_CACHE["data"]
     try:
         with open(SUBST_PATH, "r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, ValueError):
-        return _SUBST_CACHE.get("data") or {}
+        if (SUBST_PATH == _SUBST_CACHE.get("path")
+                and selected_project == _SUBST_CACHE.get("project_key")):
+            return _SUBST_CACHE.get("data") or {}
+        return {}
     data: dict[str, str] = {}
     if isinstance(raw, dict):
-        for name, entry in raw.items():
+        projects = raw.get("projects")
+        if isinstance(projects, dict):
+            source = {}
+            matching_keys = [
+                key for key in projects
+                if (_normalize_project_key_value(key) == selected_project)
+            ]
+            matching_keys.sort(key=lambda key: key == selected_project)
+            for key in matching_keys:
+                project_entry = projects.get(key)
+                if isinstance(project_entry, dict):
+                    source.update(project_entry)
+        else:
+            source = raw
+        for name, entry in source.items():
             if not isinstance(name, str):
+                continue
+            entry_project = (
+                entry.get("project_key") if isinstance(entry, dict) else None
+            )
+            entry_project = _normalize_project_key_value(entry_project)
+            if entry_project != selected_project:
                 continue
             requested = ""
             if isinstance(entry, dict):
@@ -1521,17 +2024,22 @@ def _name_substitutions() -> dict:
                 requested = entry.strip()[:128]
             if requested and requested != name:
                 data[name] = requested
-    _SUBST_CACHE.update(mtime=mt, data=data)
+    _SUBST_CACHE.update(path=SUBST_PATH, mtime=mt,
+                        project_key=selected_project, data=data)
     return data
 
 
-def _record_name_substitution(registered: str, requested: str) -> None:
+def _record_name_substitution(
+        registered: str, requested: str, project_key: str | None = None,
+) -> None:
     """Persist that a requested identity was not the one granted.
 
     Best effort by design: failing to write this must not fail a spawn that
     otherwise worked. It is logged either way.
     """
-    if not registered or not requested or registered == requested:
+    selected_project = _normalize_project_key_value(project_key or _project_key())
+    if (not selected_project or not registered or not requested
+            or registered == requested):
         return
     try:
         with _SUBST_LOCK:
@@ -1542,10 +2050,33 @@ def _record_name_substitution(registered: str, requested: str) -> None:
                 store = {}
             if not isinstance(store, dict):
                 store = {}
-            store[registered] = {
+            projects = store.get("projects")
+            if not isinstance(projects, dict):
+                projects = {}
+                legacy = store if isinstance(store, dict) else {}
+                for name, entry in legacy.items():
+                    if name == "agents" or not isinstance(name, str):
+                        continue
+                    owner = (
+                        entry.get("project_key")
+                        if isinstance(entry, dict) else None
+                    )
+                    if isinstance(owner, str) and owner:
+                        owner = _normalize_project_key_value(owner)
+                        projects.setdefault(owner, {})[name] = entry
+            project_store = projects.setdefault(selected_project, {})
+            if not isinstance(project_store, dict):
+                project_store = {}
+                projects[selected_project] = project_store
+            project_store[registered] = {
                 "requested": requested,
+                "project_key": selected_project,
                 "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
+            # Retain unscoped legacy entries verbatim. They remain invisible
+            # until/unless their own embedded project_key verifies ownership;
+            # a later same-name binding must never reattribute them.
+            store["projects"] = projects
             os.makedirs(RUNTIME_DIR, exist_ok=True)
             tmp = f"{SUBST_PATH}.{os.getpid()}.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -1557,7 +2088,7 @@ def _record_name_substitution(registered: str, requested: str) -> None:
 
 
 def _write_annotation(name: str, role: str, emoji: str,
-                      group: str = "") -> dict:
+                      group: str = "", project_key: str | None = None) -> dict:
     """1 エージェント分の annotation を upsert / 削除。
 
     role / emoji / group がすべて空な場合だけ削除する。
@@ -1565,7 +2096,8 @@ def _write_annotation(name: str, role: str, emoji: str,
     runtime の annotations.json をロックして read-modify-write（atomic
     replace）。旧 dashboard path しかない場合は内容を引き継いで新 path
     に書く。"""
-    if not name or _NAME_RE.fullmatch(name) is None:
+    selected_project = _normalize_project_key_value(project_key or _project_key())
+    if not selected_project or not name or _NAME_RE.fullmatch(name) is None:
         return {"ok": False, "error": "invalid name"}
     role = (role or "").strip()[:40]
     emoji = (emoji or "").strip()[:8]
@@ -1579,21 +2111,60 @@ def _write_annotation(name: str, role: str, emoji: str,
                 raw = {}
         except (OSError, ValueError):
             raw = {}
-        wrapped = isinstance(raw.get("agents"), dict)
-        store = raw["agents"] if wrapped else raw
+        projects = raw.get("projects") if isinstance(raw, dict) else None
+        if not isinstance(projects, dict):
+            projects = {}
+            legacy = raw.get("agents") if isinstance(raw.get("agents"), dict) else raw
+            if isinstance(legacy, dict):
+                for legacy_name, entry in legacy.items():
+                    if not isinstance(legacy_name, str) or not isinstance(entry, dict):
+                        continue
+                    owner = entry.get("project_key")
+                    if isinstance(owner, str) and owner:
+                        owner = _normalize_project_key_value(owner)
+                        owner_entry = projects.setdefault(owner, {"agents": {}})
+                        owner_agents = owner_entry.setdefault("agents", {})
+                        if isinstance(owner_agents, dict):
+                            owner_agents[legacy_name] = entry
+        # Remove only this name from older alias-equivalent buckets.  This
+        # prevents a delete from revealing a stale value while preserving all
+        # other historical entries and every truly distinct project bucket.
+        for key, entry in projects.items():
+            if (key == selected_project
+                    or _normalize_project_key_value(key) != selected_project
+                    or not isinstance(entry, dict)):
+                continue
+            alias_agents = entry.get("agents")
+            if isinstance(alias_agents, dict):
+                alias_agents.pop(name, None)
+
+        project_entry = projects.get(selected_project)
+        if not isinstance(project_entry, dict):
+            project_entry = {}
+        store = project_entry.get("agents")
+        if not isinstance(store, dict):
+            store = {}
         removed = False
         if role or emoji or group:
-            store[name] = {"role": role, "emoji": emoji, "group": group}
+            store[name] = {
+                "role": role, "emoji": emoji, "group": group,
+                "project_key": selected_project,
+            }
         else:
             store.pop(name, None)
             removed = True
-        out = {"agents": store} if wrapped else store
+        project_entry["agents"] = store
+        projects[selected_project] = project_entry
+        # Preserve unscoped legacy data for recovery/migration without making
+        # it visible in any newly selected project.
+        out = dict(raw)
+        out["projects"] = projects
         os.makedirs(os.path.dirname(ANNOT_PATH), exist_ok=True)
         tmp = ANNOT_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
         os.replace(tmp, ANNOT_PATH)
-    _ANNOT_CACHE.update(path="", mtime=-1.0)  # 次回 _annotations で強制再読込
+    _ANNOT_CACHE.update(path="", mtime=-1.0, project_key="")  # 次回 _annotations で強制再読込
     if removed:
         return {"ok": True, "removed": name}
     return {"ok": True, "annot": {"name": name, "role": role,
@@ -1605,7 +2176,14 @@ def graph_payload(days: float, show_all: bool) -> dict:
 
     graph_data normalizes both Rust INTEGER microseconds and legacy ISO TEXT
     to UTC epoch seconds before this recency filter runs."""
-    g = _raw_graph()
+    # The same project-attributed sessions gate both live display and which
+    # live PARENT_AGENT lineage graph_data may admit.
+    path_eligibility: dict[str, bool] = {}
+    sessions = {
+        name: session for name, session in tmux_state().items()
+        if _session_matches_dashboard_project(name, session, path_eligibility)
+    }
+    g = _raw_graph(_scoped_live_parents(sessions))
     graph_health = {
         "timestamp_diagnostics": g.get(
             "timestamp_diagnostics", {"invalid_count": 0, "fields": {}}
@@ -1621,7 +2199,6 @@ def graph_payload(days: float, show_all: bool) -> dict:
 
     mx = max((n["last_active"] for n in nodes if n["last_active"]), default=0)
     win = days * 86400
-    sessions = tmux_state()  # name -> {attached, cmd, title, activity, ...}
     codex_apps = _codex_app_runtimes()
     programs = {n["name"]: (n.get("program") or "") for n in nodes}
     process_tree = (
@@ -2053,9 +2630,11 @@ def _agent_window(name: str) -> tuple[int, int]:
     try:
         con = _db()
         r = con.execute(
-            "SELECT inception_ts, last_active_ts FROM agents "
-            "WHERE name=? ORDER BY last_active_ts DESC LIMIT 1",
-            (name,),
+            "SELECT a.inception_ts, a.last_active_ts FROM agents a "
+            "JOIN projects p ON p.id=a.project_id "
+            "WHERE a.name=? AND p.human_key=? "
+            "ORDER BY a.last_active_ts DESC LIMIT 1",
+            (name, _project_key()),
         ).fetchone()
         if r:
             return (_iso_to_epoch(r[0]), _iso_to_epoch(r[1]))
@@ -2078,7 +2657,17 @@ def _all_transcripts() -> list[str]:
                     out.append(f.path)
     except OSError:
         pass
-    return out
+    eligible_cwds: dict[str, bool] = {}
+    scoped = []
+    for path in out:
+        cwd = _transcript_cwd(path)
+        if not cwd:
+            continue
+        if cwd not in eligible_cwds:
+            eligible_cwds[cwd] = _cwd_matches_dashboard_project(cwd)
+        if eligible_cwds[cwd]:
+            scoped.append(path)
+    return scoped
 
 
 SESSION_INDEX_DIR = os.path.join(RUNTIME_DIR, "session_index")
@@ -2088,16 +2677,17 @@ def _agent_id_for_name(name: str) -> int | None:
     """ORRERY Mail DB から name の最新 agent id を返す(無ければ None)。
 
     UNIQUE(project_id, name) なので 1 プロジェクト内では name→id は一意。
-    プロジェクトをまたぐ同名は last_active 最新を採る。"""
+    Dashboard の configured project 外にある同名は候補にしない。"""
     if not os.path.exists(DB_PATH):
         return None
     con = None
     try:
         con = _db()
         r = con.execute(
-            "SELECT id FROM agents WHERE name=? "
-            "ORDER BY last_active_ts DESC LIMIT 1",
-            (name,),
+            "SELECT a.id FROM agents a JOIN projects p ON p.id=a.project_id "
+            "WHERE a.name=? AND p.human_key=? "
+            "ORDER BY a.last_active_ts DESC LIMIT 1",
+            (name, _project_key()),
         ).fetchone()
         return int(r[0]) if r else None
     except Exception:
@@ -2136,11 +2726,15 @@ def _indexed_transcript(name: str) -> str | None:
         return None
     if o.get("agent_name") != name:
         return None
+    if _normalize_project_key_value(o.get("project_key")) != _project_key():
+        return None
     caller = o.get("registered_by")
     if not isinstance(caller, str) or (caller and caller != name):
         return None
     tp = o.get("transcript_path")
-    if isinstance(tp, str) and tp.endswith(".jsonl") and os.path.isfile(tp):
+    if (isinstance(tp, str) and tp.endswith(".jsonl")
+            and os.path.isfile(tp)
+            and _transcript_matches_dashboard_project(tp)):
         return tp
     return None
 
@@ -2184,7 +2778,7 @@ def _transcript_path(session: str) -> str | None:
         capture_output=True, text=True, timeout=4,
     )
     cwd = (out.stdout or "").strip()
-    if out.returncode == 0 and cwd:
+    if out.returncode == 0 and cwd and _cwd_matches_dashboard_project(cwd):
         d = os.path.join(CLAUDE_PROJECTS, re.sub(r"[^A-Za-z0-9]", "-", cwd))
         if os.path.isdir(d):
             js = sorted(
@@ -2260,11 +2854,43 @@ def _transcript_cwd(path: str) -> str | None:
                 except ValueError:
                     continue
                 c = o.get("cwd")
+                if not isinstance(c, str):
+                    payload = o.get("payload")
+                    if isinstance(payload, dict):
+                        c = payload.get("cwd")
                 if isinstance(c, str) and os.path.isdir(c):
                     return c
     except OSError:
         pass
     return None
+
+
+def _cwd_matches_dashboard_project(cwd: str) -> bool:
+    """Fail closed unless cwd is bound to this dashboard's project."""
+    if not cwd or not os.path.isdir(cwd):
+        return False
+    context, _error = _resolved_work_dir_context(cwd)
+    return bool(context and _context_matches_dashboard_project(context))
+
+
+def _transcript_matches_dashboard_project(path: str) -> bool:
+    cwd = _transcript_cwd(path)
+    return bool(cwd and _cwd_matches_dashboard_project(cwd))
+
+
+def _tmux_project_context_args(cwd: str) -> list[str] | None:
+    context, _error = _resolved_work_dir_context(cwd)
+    project_key = _project_key()
+    if not context or not project_key or not _context_matches_dashboard_project(context):
+        return None
+    return [
+        "-e", f"AGENTSTACK_PROJECT_KEY={project_key}",
+        "-e", f"PROJECT_KEY={project_key}",
+        "-e", "AGENTSTACK_PROJECT_CONTEXT=1",
+        "-e", f"AGENTSTACK_PROJECT_REPOSITORY={context['repository']}",
+        "-e", f"AGENTSTACK_PROJECT_WORK_DIR={context['work_dir']}",
+        "-e", f"AGENTSTACK_PROTECTED_ROOTS={context['protected_roots']}",
+    ]
 
 
 def _agent_program(session: str) -> str:
@@ -2302,6 +2928,8 @@ def do_resume(session: str) -> dict:
       Claude 用 _transcript_path の selfref 探索だと「その名前を最も多く参照
       する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
+    if _live_session_conflicts_with_dashboard(session):
+        return {"ok": False, "error": "same-name tmux session belongs to another project"}
     program = _agent_program(session)
     if program.startswith("antigravity"):
         return {
@@ -2326,6 +2954,9 @@ def do_resume(session: str) -> dict:
     if not cwd:
         return {"ok": False,
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
+    context_args = _tmux_project_context_args(cwd)
+    if context_args is None:
+        return {"ok": False, "error": "resume cwd belongs to another project"}
     if not os.path.exists(ABS_CLAUDE):
         return {"ok": False, "error": "claude CLI が見つかりません"}
     # 端末adapter経由で tmux new-session(-A=あれば attach)。
@@ -2347,8 +2978,9 @@ def do_resume(session: str) -> dict:
     # ランダム名を発番してしまう (2026-05-22 GreenOstwald 事例、
     # 2026-05-26 PinkGuericke 事例)。
     inner = (
+        'unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; '
         'export PATH="$HOME/.local/bin:$PATH"; '
-        f'export AGENT_NAME={session}; '
+        f'export AGENT_NAME={shlex.quote(session)}; '
         f'exec {ABS_CLAUDE} --resume {sid} -n {session}'
     )
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
@@ -2356,7 +2988,7 @@ def do_resume(session: str) -> dict:
     # 誤爆する(2026-06-02 調査)。dashboard が tmux 内から再起動された場合に備え剥がす。
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-         _login_shell(), "-lic", inner],
+         *context_args, _login_shell(), "-lic", inner],
         title=session,
     )
     if launch.get("ok"):
@@ -2441,6 +3073,8 @@ def _do_resume_codex(session: str) -> dict:
       - launch_codex_workspace.sh と同じ writable scope / sandbox / approval
     selfref 探索ではなく inception_ts 一致で rollout を引くので子の会話を
     誤マッチしない（_codex_transcript_path）。"""
+    if _live_session_conflicts_with_dashboard(session):
+        return {"ok": False, "error": "same-name tmux session belongs to another project"}
     path = _codex_transcript_path(session)
     if not path:
         return {"ok": False,
@@ -2451,13 +3085,19 @@ def _do_resume_codex(session: str) -> dict:
     if not cwd:
         return {"ok": False,
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
+    context_args = _tmux_project_context_args(cwd)
+    if context_args is None:
+        return {"ok": False, "error": "resume cwd belongs to another project"}
     bootstrap = os.path.expanduser("~/.codex/bin/codex_agent_bootstrap.sh")
-    # zsh -lic で .zshrc を読ませ codex を PATH 解決。bootstrap が無ければ
-    # source をスキップ（AGENT_NAME export と resume は維持）。
-    src = f'source {shlex.quote(bootstrap)}; ' if os.path.exists(bootstrap) else ''
+    if not os.path.isfile(bootstrap):
+        return {"ok": False, "error": "Codex bootstrap is missing; reinstall ORRERY Telemetry"}
+    # Bootstrap owns registration/project validation. Its nonzero result must
+    # stop the provider rather than being hidden by the following exec.
+    src = f'source {shlex.quote(bootstrap)} && '
     inner = (
+        'unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; '
         'export PATH="$HOME/.local/bin:$PATH"; '
-        f'export AGENT_NAME={session}; '
+        f'export AGENT_NAME={shlex.quote(session)}; '
         f'{src}'
         f'exec env -u OPENAI_API_KEY codex resume {sid} '
         f'-C {shlex.quote(cwd)} '
@@ -2465,7 +3105,7 @@ def _do_resume_codex(session: str) -> dict:
     )
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-         _login_shell(), "-lic", inner],
+         *context_args, _login_shell(), "-lic", inner],
         title=session,
     )
     if launch.get("ok"):
@@ -2574,6 +3214,7 @@ def _codex_transcript_path(session: str) -> str | None:
 
     best_path: str | None = None
     best_diff = 90  # 90 秒以内のみ採用
+    eligible_cwds: dict[str, bool] = {}
     for root, _dirs, files in os.walk(_CODEX_SESSIONS_DIR):
         for fn in files:
             if not fn.startswith("rollout-") or not fn.endswith(".jsonl"):
@@ -2587,7 +3228,16 @@ def _codex_transcript_path(session: str) -> str | None:
                     o = json.loads(first)
                     if o.get("type") != "session_meta":
                         continue
-                    ts_str = (o.get("payload") or {}).get("timestamp") or ""
+                    meta = o.get("payload") or {}
+                    rollout_cwd = meta.get("cwd")
+                    if not isinstance(rollout_cwd, str):
+                        continue
+                    if rollout_cwd not in eligible_cwds:
+                        eligible_cwds[rollout_cwd] = _cwd_matches_dashboard_project(
+                            rollout_cwd)
+                    if not eligible_cwds[rollout_cwd]:
+                        continue
+                    ts_str = meta.get("timestamp") or ""
                     ts = _iso_to_epoch(ts_str)
                     diff = abs(ts - inception) if ts else best_diff + 1
                     if diff < best_diff:
@@ -3590,6 +4240,8 @@ def term_capture(session: str, lines: int) -> dict:
         return {"ok": False, "error": "invalid session name"}
     if not _has_session(session):
         return {"ok": False, "error": f"session '{session}' は存在しません"}
+    if not _live_session_matches_dashboard_project(session):
+        return {"ok": False, "error": "tmux session belongs to another project"}
     lines = max(40, min(4000, lines))
     # capture-pane の -t はペイン指定。= 接頭辞は不可なのでセッション名を
     # そのまま渡す(存在は上で has-session -t =session で厳密確認済み)。
@@ -3631,6 +4283,8 @@ def ttyd_ensure(session: str) -> dict:
         return {"ok": False, "error": "invalid session name"}
     if not _has_session(session):
         return {"ok": False, "error": f"session '{session}' は存在しません"}
+    if not _live_session_matches_dashboard_project(session):
+        return {"ok": False, "error": "tmux session belongs to another project"}
     if not os.path.exists(TTYD_BIN):
         return {"ok": False, "error": "ttyd が見つかりません"}
     with _TTYD_LOCK:
@@ -3693,6 +4347,8 @@ def do_jump(session: str) -> dict:
     program = _agent_program(session)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
+    if _live_session_conflicts_with_dashboard(session):
+        return {"ok": False, "error": "same-name tmux session belongs to another project"}
     if _terminal_adapter() == "none":
         return _terminal_unsupported()
     if subprocess.run(
@@ -3776,6 +4432,8 @@ def do_kill(session: str, mode: str = "both") -> dict:
         return {"ok": False, "error": "invalid session name"}
     if session.startswith("warm-") or session.startswith("pending-"):
         return {"ok": False, "error": "warmup/pending sessions are protected"}
+    if mode in ("both", "tmux") and _live_session_conflicts_with_dashboard(session):
+        return {"ok": False, "error": "same-name tmux session belongs to another project"}
 
     # category check: build_agents() を信頼源にして finished/gone のみ許可。
     # 過去の事故 (2026-05-20): do_kill 内の独自 running 判定が cmd チェック
@@ -3917,15 +4575,54 @@ def _agent_name_comparison_key(name: str) -> str:
     return (name or "").replace("-", "").casefold()
 
 
-def _spawn_name_status(name: str) -> str:
+def _spawn_name_status(name: str, project_key: str | None = None) -> str:
     """Return available/occupied/unknown; database failures fail closed."""
-    if not name or not os.path.exists(DB_PATH):
+    if not name:
         return "unknown"
     comparison_key = _agent_name_comparison_key(name)
+    # Mail identities are project-local, but tmux names and durable runtime
+    # credentials are host-global. Check normalized spellings before remote
+    # registration so local `CalmNoether` also blocks `Calm-Noether`.
+    try:
+        binding_dir = os.path.join(RUNTIME_DIR, "name-bindings")
+        if os.path.isdir(binding_dir):
+            for entry in os.scandir(binding_dir):
+                local_key = entry.name[:-5] if entry.name.endswith(".json") else entry.name
+                if local_key == comparison_key:
+                    return "occupied"
+        for entry in os.scandir(RUNTIME_DIR):
+            if not entry.name.startswith("agent_token_"):
+                continue
+            local_name = entry.name[len("agent_token_"):]
+            if local_name.endswith(".project"):
+                local_name = local_name[:-8]
+            if _agent_name_comparison_key(local_name) == comparison_key:
+                return "occupied"
+        child_dir = os.path.join(RUNTIME_DIR, "child-agents")
+        if os.path.isdir(child_dir):
+            for entry in os.scandir(child_dir):
+                local_name = entry.name[:-5] if entry.name.endswith(".json") else entry.name
+                if _agent_name_comparison_key(local_name) == comparison_key:
+                    return "occupied"
+        for local_name in _tmux(["list-sessions", "-F", "#{session_name}"]).splitlines():
+            if _agent_name_comparison_key(local_name.strip()) == comparison_key:
+                return "occupied"
+    except OSError:
+        return "unknown"
+    if not os.path.exists(DB_PATH):
+        return "unknown"
+    selected_project = project_key or _project_key()
+    if not selected_project:
+        return "unknown"
     try:
         with _db() as con:
             registered_names = (
-                row[0] for row in con.execute("SELECT name FROM agents")
+                row[0] for row in con.execute(
+                    "SELECT a.name FROM agents a "
+                    "JOIN projects p ON p.id=a.project_id "
+                    "WHERE p.human_key=?",
+                    (selected_project,),
+                )
                 if isinstance(row[0], str)
             )
             occupied = any(
@@ -3935,6 +4632,117 @@ def _spawn_name_status(name: str) -> str:
         return "occupied" if occupied else "available"
     except sqlite3.Error:
         return "unknown"
+
+
+def _claim_spawn_local_identity(project_key: str, name: str) -> str:
+    """Atomically claim the host-global normalized name; return claim path."""
+    key = _agent_name_comparison_key(name)
+    if not project_key or not key:
+        return ""
+    directory = os.path.join(RUNTIME_DIR, "name-bindings")
+    path = os.path.join(directory, f"{key}.json")
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        os.chmod(directory, 0o700)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"project_key": project_key, "agent_name": name},
+                handle,
+                separators=(",", ":"),
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(path, 0o600)
+        return path
+    except OSError:
+        return ""
+
+
+def _update_spawn_local_identity(path: str, project_key: str, name: str) -> str:
+    if not path:
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            existing = json.load(handle)
+        if (_normalize_project_key_value(existing.get("project_key"))
+                != _normalize_project_key_value(project_key)):
+            return ""
+        old_key = os.path.basename(path).removesuffix(".json")
+        new_key = _agent_name_comparison_key(name)
+        if not new_key:
+            return ""
+        new_path = os.path.join(os.path.dirname(path), f"{new_key}.json")
+        if new_key != old_key:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(new_path, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"project_key": project_key, "agent_name": name},
+                    handle,
+                    separators=(",", ":"),
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(new_path, 0o600)
+            os.unlink(path)
+            return new_path
+        tmp = f"{path}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        fd = os.open(tmp, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"project_key": project_key, "agent_name": name},
+                handle,
+                separators=(",", ":"),
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        return path
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _release_spawn_local_identity(path: str, project_key: str, name: str) -> None:
+    """Remove only the exact claim this spawn owns."""
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            existing = json.load(handle)
+        if (_normalize_project_key_value(existing.get("project_key"))
+                == _normalize_project_key_value(project_key)
+                and existing.get("agent_name") == name):
+            os.unlink(path)
+    except (OSError, ValueError, AttributeError):
+        return
+
+
+def _spawn_local_identity_matches(path: str, project_key: str, name: str) -> bool:
+    if not path:
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            existing = json.load(handle)
+        bound_name = existing.get("agent_name")
+        return bool(
+            _normalize_project_key_value(existing.get("project_key"))
+            == _normalize_project_key_value(project_key)
+            and isinstance(bound_name, str)
+            and _agent_name_comparison_key(bound_name)
+            == _agent_name_comparison_key(name)
+        )
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
@@ -3969,7 +4777,9 @@ def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
     return scientists, adjectives
 
 
-def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
+def suggest_spawn_name(
+        scientist: str, attempts: int = 20, project_key: str | None = None,
+) -> str | None:
     """Pick an available Adjective-Scientist name; unknown fails closed."""
     if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
         return None
@@ -3978,12 +4788,14 @@ def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
         return None
     for adjective in secrets.SystemRandom().sample(adjectives, min(attempts, len(adjectives))):
         candidate = f"{adjective}-{scientist}"
-        if _spawn_name_status(candidate) == "available":
+        if _spawn_name_status(candidate, project_key) == "available":
             return candidate
     return None
 
 
-def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
+def _suggest_any_spawn_name(
+        attempts: int = 75, project_key: str | None = None,
+) -> str | None:
     """Generate a safe explicit name for AUTO spawn instead of MCP auto-name.
 
     A stock server can return a separator-less auto-name that is later coerced
@@ -3999,7 +4811,7 @@ def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
     ]
     for candidate in secrets.SystemRandom().sample(
             candidates, min(attempts, len(candidates))):
-        if _spawn_name_status(candidate) == "available":
+        if _spawn_name_status(candidate, project_key) == "available":
             return candidate
     return None
 
@@ -4058,20 +4870,24 @@ _SPAWN_STATUS_LOCK = threading.Lock()
 
 
 def _spawn_scientist_statuses(
-        adjectives: list[str], scientists: list[str]) -> dict[str, str]:
+        adjectives: list[str], scientists: list[str],
+        project_key: str | None = None) -> dict[str, str]:
     """Report whether each scientist has at least one free adjective pairing.
 
     Read the agent roster once, then evaluate every dynamically-loaded
     adjective/scientist combination in Python.  This remains one SQL query even
     when the vocabulary grows beyond SQLite's traditional parameter limit.
     """
-    if not adjectives or not scientists or not os.path.exists(DB_PATH):
+    selected_project = project_key or _project_key()
+    if (not selected_project or not adjectives or not scientists
+            or not os.path.exists(DB_PATH)):
         return {scientist: "unknown" for scientist in scientists}
     try:
         db_mtime = os.stat(DB_PATH).st_mtime_ns
     except OSError:
         return {scientist: "unknown" for scientist in scientists}
-    key = (DB_PATH, db_mtime, tuple(adjectives), tuple(scientists))
+    key = (DB_PATH, db_mtime, selected_project,
+           tuple(adjectives), tuple(scientists))
     now = time.monotonic()
     with _SPAWN_STATUS_LOCK:
         if (_SPAWN_STATUS_CACHE["key"] == key
@@ -4081,7 +4897,10 @@ def _spawn_scientist_statuses(
         with _db() as con:
             occupied = {
                 _agent_name_comparison_key(row[0])
-                for row in con.execute("SELECT name FROM agents")
+                for row in con.execute(
+                    "SELECT a.name FROM agents a "
+                    "JOIN projects p ON p.id=a.project_id "
+                    "WHERE p.human_key=?", (selected_project,))
                 if isinstance(row[0], str)
             }
     except sqlite3.Error:
@@ -4305,6 +5124,105 @@ def _runtime_agent_token(agent_name: str) -> str:
     return token if token and len(token) <= 4096 else ""
 
 
+def _runtime_agent_token_project(agent_name: str) -> str | None:
+    """Return the token sidecar project, or None for a legacy token."""
+    if not _valid(agent_name):
+        return ""
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", agent_name)
+    path = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}.project")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+        with os.fdopen(fd, encoding="utf-8") as project_file:
+            value = project_file.read(4097).strip()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return ""
+    return _normalize_project_key_value(value) if value and len(value) <= 4096 else ""
+
+
+def _record_runtime_token_project(agent_name: str, project_key: str) -> bool:
+    """Atomically upgrade one verified legacy token with project ownership."""
+    if not _valid(agent_name) or not project_key:
+        return False
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", agent_name)
+    path = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}.project")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return (
+            _runtime_agent_token_project(agent_name)
+            == _normalize_project_key_value(project_key)
+        )
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as project_file:
+            project_file.write(project_key + "\n")
+            project_file.flush()
+            os.fsync(project_file.fileno())
+        return True
+    except OSError:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return False
+
+
+def _project_agent_registration(project_key: str, name: str) -> dict | None:
+    """Read the exact existing parent fields needed for token verification."""
+    if not project_key or not name or not os.path.exists(DB_PATH):
+        return None
+    try:
+        with _db() as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT a.program, a.model, a.task_description FROM agents a "
+                "JOIN projects p ON p.id=a.project_id "
+                "WHERE p.human_key=? AND a.name=? LIMIT 1",
+                (project_key, name),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return {
+        "program": str(row["program"] or "unknown"),
+        "model": str(row["model"] or "unknown"),
+        "task_description": str(row["task_description"] or ""),
+    }
+
+
+def _verify_legacy_parent_token(
+        project_key: str, parent: str, token: str,
+) -> bool:
+    """Authenticate and migrate a pre-sidecar parent without guessing owner."""
+    # Re-register the exact existing row with its unchanged fields. Strict Mail
+    # validates the owner token before updating it, providing a canonical
+    # compatibility path without treating a later local binding as proof.
+    profile = _project_agent_registration(project_key, parent)
+    if profile is None:
+        return False
+    result = _mcp_call("register_agent", {
+        "project_key": project_key,
+        "program": profile["program"],
+        "model": profile["model"],
+        "task_description": profile["task_description"],
+        "registration_token": token,
+        "name": parent,
+    })
+    if not result.get("ok"):
+        return False
+    data = result.get("data") or {}
+    if data.get("name") != parent:
+        return False
+    return _record_runtime_token_project(parent, project_key)
+
+
 _SPAWN_LAUNCHES: dict[str, dict] = {}
 _SPAWN_LAUNCHES_LOCK = threading.Lock()
 _SPAWN_LAUNCH_RETENTION = 1800.0
@@ -4375,7 +5293,8 @@ def do_spawn(payload: dict) -> dict:
     worktree = bool(payload.get("worktree"))
     worktree_base = (payload.get("worktree_base") or "").strip()
     requested_name = (payload.get("name") or "").strip()
-    work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
+    requested_dir = (payload.get("dir") or _configured_workspace()).strip()
+    work_dir = os.path.expanduser(requested_dir) if requested_dir else ""
 
     if not standalone and (not parent or _NAME_RE.fullmatch(parent) is None):
         return {"ok": False, "error": "parent name invalid"}
@@ -4402,22 +5321,108 @@ def do_spawn(payload: dict) -> dict:
             r"[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?",
             requested_name) is None:
         return {"ok": False, "error": "name invalid"}
-    if requested_name and _spawn_name_status(requested_name) != "available":
-        return {"ok": False, "error": "name is occupied or cannot be verified"}
+    if not work_dir:
+        return {"ok": False, "error": "configured project workspace is unavailable"}
     if not os.path.isdir(work_dir):
         return {"ok": False, "error": f"dir does not exist: {work_dir}"}
     if not os.path.exists(SPAWN_SCRIPT):
         return {"ok": False, "error": f"spawn script missing: {SPAWN_SCRIPT}"}
-    project_key = _project_key()
+    context, context_error = _resolved_work_dir_context(work_dir)
+    if context is None:
+        return {"ok": False, "error": context_error}
+    work_dir = context["launch_dir"]
+    if not standalone:
+        if not _context_matches_dashboard_project(context):
+            return {
+                "ok": False,
+                "error": "delegated child work directory belongs to another project/repository",
+            }
+        # The registered parent owns this exact existing namespace. A linked
+        # worktree may canonicalize to the main checkout, but must not split a
+        # pre-existing parent token into a second Mail project.
+        context["project_key"] = _project_key()
+    project_key = context["project_key"]
     if not project_key:
-        return {"ok": False, "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
+        return {"ok": False, "error": "could not resolve project key"}
+    parent_token = ""
+    if not standalone:
+        # Authenticate the selected parent namespace before creating any child
+        # identity or writing task/annotation state. A token from another
+        # project must never cross this boundary even if strict Mail later
+        # rejects the eventual send_message call.
+        if not _project_has_agent(project_key, parent):
+            return {
+                "ok": False,
+                "error": f"parent '{parent}' is not registered in the selected project",
+            }
+        parent_token = _runtime_agent_token(parent)
+        if not parent_token:
+            return {
+                "ok": False,
+                "error": (
+                    f"parent registration credential for '{parent}' is not "
+                    "durably bound to the selected project"
+                ),
+            }
+        credential_project = _runtime_agent_token_project(parent)
+        if credential_project is None:
+            if not _verify_legacy_parent_token(project_key, parent, parent_token):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"legacy parent credential for '{parent}' could not be "
+                        "authenticated in the selected project"
+                    ),
+                }
+        elif credential_project != project_key:
+            return {
+                "ok": False,
+                "error": (
+                    f"parent registration credential for '{parent}' belongs "
+                    "to another project"
+                ),
+            }
+    if requested_name:
+        name_status = _spawn_name_status(requested_name, project_key)
+        if name_status != "available":
+            return {"ok": False, "error": "name is occupied or cannot be verified"}
 
     if not requested_name:
-        requested_name = _suggest_any_spawn_name() or ""
+        requested_name = _suggest_any_spawn_name(project_key=project_key) or ""
         if not requested_name:
             return {"ok": False,
                     "error": "no available agent name could be verified"}
 
+    if standalone:
+        # A standalone target may be a repository Mail has never seen, and
+        # register_agent does not create projects. Ensure it before any local
+        # claim or Mail registration; delegated children stay in the parent's
+        # already-registered project. Mail resolves the key and matches by
+        # slug, so accept only the exact canonical identity we will register.
+        ensured = _mcp_call("ensure_project", {"human_key": project_key})
+        if not ensured.get("ok"):
+            return {"ok": False,
+                    "error": f"ensure_project failed: {ensured.get('error')}"}
+        ensured_data = ensured.get("data")
+        ensured_key = (
+            ensured_data.get("human_key") if isinstance(ensured_data, dict) else None
+        )
+        if ensured_key != project_key:
+            return {
+                "ok": False,
+                "error": (
+                    f"ensure_project returned project {ensured_key!r}, not "
+                    f"the selected project {project_key!r}"
+                ),
+            }
+
+    local_claim = _claim_spawn_local_identity(project_key, requested_name)
+    if not local_claim:
+        return {
+            "ok": False,
+            "error": f"local identity '{requested_name}' was claimed concurrently",
+        }
+    local_claim_name = requested_name
     task_short = task[:80]
 
     # 1) Always send an explicit hyphenated request name.  The response name
@@ -4432,13 +5437,32 @@ def do_spawn(payload: dict) -> dict:
         "name": requested_name,
     })
     if not reg["ok"]:
+        _release_spawn_local_identity(
+            local_claim, project_key, local_claim_name)
         return {"ok": False,
                 "error": f"register_agent failed: {reg.get('error')}"}
     registration = reg["data"] or {}
     child_name = registration.get("name", "")
     if not child_name or _NAME_RE.fullmatch(child_name) is None:
+        _release_spawn_local_identity(
+            local_claim, project_key, local_claim_name)
         return {"ok": False,
                 "error": f"invalid child name from register: {child_name!r}"}
+    updated_claim = _update_spawn_local_identity(
+        local_claim, project_key, child_name)
+    if not updated_claim:
+        _release_spawn_local_identity(
+            local_claim, project_key, local_claim_name)
+        return {
+            "ok": False,
+            "error": (
+                f"registered child '{child_name}' remains, but its local "
+                "project identity could not be bound safely"
+            ),
+            "registration_retained": True,
+        }
+    local_claim = updated_claim
+    local_claim_name = child_name
     server_token = registration.get("registration_token", "")
     if not isinstance(server_token, str):
         server_token = ""
@@ -4448,13 +5472,14 @@ def do_spawn(payload: dict) -> dict:
         logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
         # A log line nobody reads is how this stayed invisible. Persist it so
         # the agent carries the discrepancy in the UI for as long as it exists.
-        _record_name_substitution(child_name, requested_name)
+        _record_name_substitution(child_name, requested_name, project_key)
 
     # 2) role/emoji/group annotation (best-effort, failure is non-fatal)
     annot_status = "skipped"
     if role or group:
         try:
-            ar = _write_annotation(child_name, role, "", group)
+            ar = _write_annotation(
+                child_name, role, "", group, project_key=project_key)
             annot_status = "ok" if ar.get("ok") else f"fail:{ar.get('error')}"
         except Exception as e:  # noqa: BLE001
             annot_status = f"err:{e}"
@@ -4500,10 +5525,6 @@ def do_spawn(payload: dict) -> dict:
     # children have no parent/sender, so the launcher receives the full task
     # directly and no synthetic self-mail is created.
     if not standalone:
-        parent_token = _runtime_agent_token(parent)
-        if not parent_token:
-            return retained_registration_error(
-                f"parent registration token unavailable for '{parent}'")
         subject = f"タスク依頼: {task[:50]}"
         body_lines = [
             "> [via dashboard +NEW AGENT]",
@@ -4546,13 +5567,22 @@ def do_spawn(payload: dict) -> dict:
     def remove_spawn_credentials() -> None:
         """Remove both the one-shot handoff and any launcher-persisted copies."""
         nonlocal token_created
+        if not _spawn_local_identity_matches(
+                local_claim, project_key, local_claim_name):
+            logging.warning(
+                "refusing failed-spawn cleanup: local identity ownership changed for %s",
+                child_name,
+            )
+            return
         paths = []
         if token_created and token_file:
             paths.append(token_file)
         token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", child_name)
         paths.extend([
             os.path.join(RUNTIME_DIR, f"agent_token_{token_key}"),
+            os.path.join(RUNTIME_DIR, f"agent_token_{token_key}.project"),
             os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.json"),
+            os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.mcp.json"),
         ])
         for path in paths:
             try:
@@ -4562,6 +5592,10 @@ def do_spawn(payload: dict) -> dict:
             except OSError as e:
                 logging.warning(
                     "failed to remove failed-spawn credential %s: %s", path, e)
+        shutil.rmtree(
+            os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.codex-home"),
+            ignore_errors=True,
+        )
         token_created = False
 
     def kill_spawn_session() -> None:
@@ -4606,11 +5640,18 @@ def do_spawn(payload: dict) -> dict:
             args.extend(["--worktree-base", worktree_base])
     args.extend([task[:4000] if standalone else task_short, work_dir])
     env = os.environ.copy()
+    for git_selector in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        env.pop(git_selector, None)
     if standalone:
         env.pop("PARENT_AGENT", None)
     else:
         env["PARENT_AGENT"] = parent
     env["PROJECT_KEY"] = project_key
+    env["AGENTSTACK_PROJECT_KEY"] = project_key
+    env["AGENTSTACK_PROJECT_CONTEXT"] = "1"
+    env["AGENTSTACK_PROJECT_REPOSITORY"] = context["repository"]
+    env["AGENTSTACK_PROJECT_WORK_DIR"] = context["work_dir"]
+    env["AGENTSTACK_PROTECTED_ROOTS"] = context["protected_roots"]
     # launchd の最小 PATH には ~/.local/bin が無く、spawn_child.sh が tmux 内で
     # 起動する `zsh -lc` は非対話シェルのため ~/.zshrc を source せず claude が
     # PATH に乗らない (cold start で claude 即落ち → tmux session が cleanup-
@@ -4853,6 +5894,8 @@ def do_exit(session: str) -> dict:
         return {"ok": False, "error": "invalid session name"}
     if session.startswith("warm-") or session.startswith("pending-"):
         return {"ok": False, "error": "warmup/pending sessions are protected"}
+    if _live_session_conflicts_with_dashboard(session):
+        return {"ok": False, "error": "same-name tmux session belongs to another project"}
 
     target = None
     try:
@@ -5592,6 +6635,8 @@ def do_reactivate(session: str) -> dict:
         return {"ok": False,
                 "error": f"agent '{session}' has no live tmux session; "
                          "use resume to restore a finished one"}
+    if not _live_session_matches_dashboard_project(session):
+        return {"ok": False, "error": "tmux session belongs to another project"}
     con = None
     try:
         con = _db()

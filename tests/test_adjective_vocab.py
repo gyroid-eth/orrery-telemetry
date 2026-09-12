@@ -30,7 +30,7 @@ def test_expanded_adjective_vocabulary_is_valid_and_single_sourced(monkeypatch):
         "c7ae2d219d650889108b49047531011afccc93408f187f69415476b39a8c28dc"
     )
 
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     payload = server.spawn_names_payload()
     assert payload["adjectives"] == adjectives
     suggestion = server.suggest_spawn_name("Curie")

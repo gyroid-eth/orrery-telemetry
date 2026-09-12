@@ -41,7 +41,7 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-`--project-key` には、agent たちに作業させる project の絶対パスを渡します（この repository の checkout ではありません）。初回は必須で、未指定なら installer は何も書かずに停止します。2 回目以降は前回の値を `~/.agentstack/env.sh` から引き継ぐので省略できます。
+`--project-key` には、agent たちに作業させる project の絶対パスを渡します（この repository の checkout ではありません）。初回は必須で、未指定なら installer は何も書かずに停止します。2 回目以降は前回の値を `~/.agentstack/env.sh` から引き継ぐので省略できます。この値は install-time fallback です。新規 agent は起動先の repository から project context を解決し、同じ repository の linked worktree は同じ project を共有します。別 repository を使うたびの再 install は不要です（[Launcher](launchers.md#project-context)）。
 
 installer は途中で 3 つの変更を preview し、それぞれ `yes` を求めます。
 

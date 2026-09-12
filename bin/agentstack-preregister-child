@@ -15,6 +15,8 @@ PROG="agentstack-preregister-child"
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 
 load_env_file() {
   local envf="$1"
@@ -26,6 +28,16 @@ load_env_file() {
 load_env_file "${AGENTSTACK_ENV_FILE:-}"
 load_env_file "${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
 load_env_file "$SCRIPT_DIR/../env.sh"
+
+if [[ -n "$ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  export AGENTSTACK_PROJECT_KEY PROJECT_KEY
+fi
+if [[ -n "$ENTRY_PROTECTED_ROOTS" ]]; then
+  AGENTSTACK_PROTECTED_ROOTS="$ENTRY_PROTECTED_ROOTS"
+  export AGENTSTACK_PROTECTED_ROOTS
+fi
 
 REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}"
 [[ -f "$REGISTER_LIB" ]] || die "missing register library: $REGISTER_LIB"
@@ -90,6 +102,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$project_key" ]] || die "AGENTSTACK_PROJECT_KEY or --project-key is required"
+project_key="$(ags_normalize_project_key "$project_key")" \
+  || die "could not normalize project key"
 [[ -n "$program" ]] || die "--program is required"
 [[ -n "$model" ]] || die "--model is required"
 [[ -n "$token_file_out" ]] || die "--token-file-out is required"
@@ -112,6 +126,13 @@ elif ! ags_has_scientist_suffix "$agent_name"; then
     die "refusing off-list name '$agent_name' (AGENTSTACK_STRICT_AGENT_NAMES=1)"
   fi
 fi
+if ags_local_agent_name_conflicts "$project_key" "$agent_name"; then
+  die "local identity '$agent_name' is already bound to another project"
+fi
+if ! ags_acquire_local_name_claim "$project_key" "$agent_name" candidate; then
+  die "local identity '$agent_name' was claimed concurrently"
+fi
+trap 'ags_release_local_name_claim' EXIT
 
 # Ignore any parent/session token inherited from the caller. This helper always
 # creates a child-owned token and uses that exact value for registration.
@@ -142,13 +163,19 @@ fi
 
 registered="$(ags_extract_agent_name <<<"$register_result")"
 [[ -n "$registered" ]] || die "could not read registered child name"
+if ! ags_update_local_name_claim "$project_key" "$registered"; then
+  die "server-returned identity '$registered' could not adopt the local project claim"
+fi
+if ags_local_agent_name_conflicts "$project_key" "$registered" reserved; then
+  die "server-returned identity '$registered' is already bound to another local project"
+fi
 if [[ "$registered" != "$agent_name" ]]; then
   printf "%s: ORRERY Mail changed requested identity '%s' to '%s'; the child tmux session must use the server-returned name\n" \
     "$PROG" "$agent_name" "$registered" >&2
   # A warning on stderr is read once, by whoever happened to be looking. The
   # child then runs for hours under a name its parent does not know. Record it
   # where the dashboard can state it for as long as the agent exists.
-  ags_record_name_substitution "$registered" "$agent_name" || true
+  ags_record_name_substitution "$registered" "$agent_name" "$project_key" || true
 fi
 
 # The token the child must present is the one the SERVER persisted, not the one
@@ -169,7 +196,8 @@ tmp_file="${token_file_out}.$$"
 mv "$tmp_file" "$token_file_out" || die "could not install token file"
 chmod 600 "$token_file_out" 2>/dev/null || true
 
-ags_store_registration_token "$registered" "$effective_token" || true
+ags_store_registration_token "$registered" "$effective_token" "$project_key" \
+  || die "could not persist project-scoped child credential"
 ags_apply_contact_policy "$project_key" "$registered" "$effective_token"
 
 printf '%s\n' "$registered"

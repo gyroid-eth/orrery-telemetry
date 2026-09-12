@@ -7,9 +7,11 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-${RUNTIME_DIR:-$HOME/.agentstack/runtime}
 PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
 # shellcheck disable=SC1090
 . "$PROJECT_CONTEXT_LIB"
-LIVE_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-PROJECT_KEY="$(agentstack_resolve_project_key "$(pwd -P)")"
-PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$LIVE_PROJECT_KEY")"
+PROJECT_KEY="${PROJECT_KEY:-}"
+PROTECTED_ROOTS=""
+HOOK_CWD=""
+PROJECT_CONTEXT_MISMATCH=0
+PROJECT_CONTEXT_UNRESOLVED=0
 
 POLICY_LIB_EARLY="$HOOKS_DIR/session-identity-policy.sh"
 if [ -f "$POLICY_LIB_EARLY" ]; then
@@ -40,6 +42,52 @@ expand_path() {
         printf '%s\n' "$HOME/${p:2}"
     else
         printf '%s\n' "$p"
+    fi
+}
+
+canonicalize_path() {
+    python3 - "$1" <<'PY' 2>/dev/null
+import os
+import sys
+
+print(os.path.realpath(os.path.expanduser(sys.argv[1])))
+PY
+}
+
+# Resolve project context from the hook document itself.  Hook processes may
+# inherit an unrelated cwd (notably installed helpers and resumed sessions),
+# while Claude supplies the authoritative session cwd in every payload.
+reservation_resolve_project_context() {
+    local tool_document="$1"
+    local fallback_cwd=""
+    HOOK_CWD=$(printf '%s' "$tool_document" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read()).get("cwd", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")
+    fallback_cwd="${HOOK_CWD:-$(pwd -P)}"
+    PROJECT_CONTEXT_MISMATCH=0
+    if [ "${AGENTSTACK_PROJECT_CONTEXT:-}" = "1" ] && \
+        ! agentstack_context_matches_target "$fallback_cwd"; then
+        PROJECT_CONTEXT_MISMATCH=1
+    fi
+    # A resolver failure (for example an unreadable installed env.sh) is not
+    # "no protected roots": flag it so consumers never treat it as outside-root.
+    PROJECT_CONTEXT_UNRESOLVED=0
+    if ! PROJECT_KEY="$(agentstack_resolve_project_key "$fallback_cwd")"; then
+        PROJECT_KEY=""
+        PROTECTED_ROOTS=""
+        PROJECT_CONTEXT_UNRESOLVED=1
+        return 1
+    fi
+    if ! PROTECTED_ROOTS="$(agentstack_resolve_runtime_protected_roots \
+        "$PROJECT_KEY" "$fallback_cwd")"; then
+        PROTECTED_ROOTS=""
+        PROJECT_CONTEXT_UNRESOLVED=1
+        return 1
     fi
 }
 
@@ -104,9 +152,11 @@ legacy_bearer_enabled() {
 
 # Populate SESSION_ID, FILE_PATH, MATCHED_ROOT, REL_PATH, and
 # RESERVATION_PROJECT_KEY from an Edit/Write hook document. Return 1 for the
-# intentional no-op cases (no file or a file outside all protected roots).
+# intentional no-op cases (no file or a file outside all protected roots), and
+# 2 when a file was named but project context/roots could not be resolved.
 reservation_resolve_tool_context() {
     local tool_document="$1"
+    reservation_resolve_project_context "$tool_document"
     SESSION_ID=$(printf '%s' "$tool_document" | python3 -c '
 import json, sys
 try:
@@ -125,14 +175,16 @@ except Exception:
     print("")
 ' 2>/dev/null || echo "")
     [ -n "$FILE_PATH" ] || return 1
+    [ "$PROJECT_CONTEXT_UNRESOLVED" != "1" ] || return 2
 
     if [[ "$FILE_PATH" == /* ]]; then
         :
     elif [[ "$FILE_PATH" == "~/"* ]]; then
         FILE_PATH="$HOME/${FILE_PATH:2}"
     else
-        FILE_PATH="$(pwd)/$FILE_PATH"
+        FILE_PATH="${HOOK_CWD:-$(pwd -P)}/$FILE_PATH"
     fi
+    FILE_PATH="$(canonicalize_path "$FILE_PATH")" || return 1
 
     MATCHED_ROOT=""
     if [[ -n "$PROTECTED_ROOTS" ]]; then
@@ -142,6 +194,7 @@ except Exception:
         for root in $PROTECTED_ROOTS; do
             root="$(expand_path "$root")"
             [[ -z "$root" ]] && continue
+            root="$(canonicalize_path "$root")" || continue
             [[ "$root" != "/" ]] && root="${root%/}"
             case "$FILE_PATH" in
                 "$root"|"$root/"*)
@@ -165,6 +218,7 @@ except Exception:
 
 reservation_extract_session_id() {
     local tool_document="$1"
+    reservation_resolve_project_context "$tool_document"
     SESSION_ID=$(printf '%s' "$tool_document" | python3 -c '
 import json, sys
 try:

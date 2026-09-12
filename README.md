@@ -60,6 +60,8 @@ agentstack-selftest
 
 ### 3. 最初の agent を起動し、dashboard で見る
 
+起動先の Git repository ごとに project context を解決します。同じ repository の linked worktree は Mail / reservation を共有し、別 repository は分離されます。install 時の project key は fallback です（[Launcher](docs/launchers.md#project-context)）。
+
 ```bash
 agent-start ~/code/my-project          # Codex CLI なら agent-start-codex ~/code/my-project
 ```

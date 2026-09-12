@@ -227,8 +227,12 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
     assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
     assert text.count('-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN"') == 2
-    assert text.count('env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD"') == 2
-    assert 'env -u OPENAI_API_KEY codex -C "$PWD"' not in text
+    launch = (
+        'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR '
+        '-u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD"'
+    )
+    assert text.count(launch) == 2
+    assert '-u OPENAI_API_KEY codex -C "$PWD"' not in text
 
 
 def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:

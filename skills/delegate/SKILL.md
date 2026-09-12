@@ -24,7 +24,13 @@ Use these variables instead of hard-coded personal paths:
 - `AGENTSTACK_RUNTIME_DIR`, used by monitor state
 
 If the child runs outside the project directory, explicitly tell it to use `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY` for `ensure_project`, `register_agent`, `fetch_inbox`, and completion messages. Do not let the child infer the project from its current working directory.
-`AGENTSTACK_PROJECT_KEY` must be set before spawning. It is the ORRERY Mail project identity and may be different from the code worktree or the child's current working directory.
+`AGENTSTACK_PROJECT_KEY` must be set to the parent's resolved session key before
+preregistration and spawning. Linked worktrees have different directories but
+share one canonical repository/project identity. Do not copy the install-time
+fallback or another repository's key into a new task. A pre-registered child
+targeting another repository is rejected; launch a new top-level agent for that
+repository instead. Keep the parent's established context bindings intact when
+spawning a child.
 
 ## Naming Rules
 

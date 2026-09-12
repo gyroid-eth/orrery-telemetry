@@ -28,9 +28,26 @@ def _free_port() -> int:
 )
 def test_dashboard_demo_up_verify_down(tmp_path: Path):
     demo = tmp_path / "dashboard-demo"
+    stale_project = tmp_path / "stale-parent-project"
+    stale_project.mkdir()
+    demo_env = os.environ.copy()
+    demo_env.update(
+        {
+            "AGENTSTACK_PROJECT_KEY": str(stale_project),
+            "PROJECT_KEY": str(stale_project),
+            "AGENTSTACK_PROJECT_CONTEXT": "1",
+            "AGENTSTACK_PROJECT_REPOSITORY": str(stale_project),
+            "AGENTSTACK_PROJECT_WORK_DIR": str(stale_project),
+            "AGENTSTACK_PROTECTED_ROOTS": str(stale_project),
+            "GIT_DIR": str(stale_project / ".git"),
+            "GIT_WORK_TREE": str(stale_project),
+            "GIT_COMMON_DIR": str(stale_project / ".git"),
+        }
+    )
     port = _free_port()
     up = subprocess.run(
         [sys.executable, str(SCRIPT), "up", "--install-dir", str(demo), "--port", str(port)],
+        env=demo_env,
         capture_output=True,
         text=True,
         timeout=30,
@@ -74,6 +91,7 @@ def test_dashboard_demo_up_verify_down(tmp_path: Path):
 
         recreated = subprocess.run(
             [sys.executable, str(SCRIPT), "up", "--install-dir", str(demo), "--port", str(port)],
+            env=demo_env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -96,6 +114,7 @@ def test_dashboard_demo_up_verify_down(tmp_path: Path):
 
         verify = subprocess.run(
             [sys.executable, str(SCRIPT), "verify", "--install-dir", str(demo), "--port", str(port)],
+            env=demo_env,
             capture_output=True,
             text=True,
             timeout=15,
@@ -119,6 +138,7 @@ def test_dashboard_demo_up_verify_down(tmp_path: Path):
     finally:
         subprocess.run(
             [sys.executable, str(SCRIPT), "down", "--install-dir", str(demo)],
+            env=demo_env,
             capture_output=True,
             text=True,
             timeout=20,

@@ -67,7 +67,10 @@ export AGENTSTACK_PROJECT_KEY=/absolute/project/path
 ./scripts/install.sh
 ```
 
-DECK tmux state remains visible without this configuration. It is an intentional degraded mode where only mail edges, history / replay, and spawn are unavailable. Output still searches the cwd / Git-root `logs/` fallback.
+The page and infrastructure health entries remain available without this
+configuration. Ordinary agent sessions, annotations, capture/control, Mail,
+history, and spawn require a selected project so another project's state is
+never used as a fallback. See [Without a project key](configuration.en.md#without-a-project-key).
 
 ## Output is empty or not linked
 
@@ -377,6 +380,26 @@ If it warns `child MCP proxy missing` or about an incomplete source tree, rerun 
 ## Codex App Bridge / cold wake does not work
 
 Codex Desktop integration has its own doctor, runtime state, and failure classifications separate from the core doctor. See [Common failures in Codex App integration](codex-app.en.md#common-failures). A Codex CLI session's absence from the Bridge is an intentional surface filter.
+
+## Project key and working repository disagree
+
+Run `agentstack-doctor` to inspect disagreement between the current repository,
+ambient project key, registered project/work-directory metadata, and protected
+roots. A linked worktree and its main checkout count as the same repository.
+
+A new `agent-start`, `agent-start-codex`, or `agent-start-gemini` resolves its
+target even when installed, parent-shell, or tmux settings refer to another
+repository. Pass `--project-key KEY` for an explicit invocation. Diagnostics do
+not migrate existing identities, tokens, Mail history, or reservations. Review
+work in a session registered under the wrong namespace, then start a new session
+through the launcher for the correct repository. Do not invent separate keys
+for linked worktrees.
+
+`PROJECT CONTEXT UNRESOLVED` means the project key or protected roots could
+not be read. Check that `AGENTSTACK_PYTHON` can run and the installed `env.sh`
+is readable. SessionStart stops identity adoption and registration guidance;
+the reservation guard refuses edits whose protected scope cannot be determined.
+Correct the configuration, then start a new session.
 
 ## Agent appears twice on the dashboard
 

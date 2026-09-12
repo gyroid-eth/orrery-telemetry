@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import http.server
 import os
 import pathlib
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import stop_dashboard
@@ -30,6 +34,63 @@ def _write_command(directory: pathlib.Path, name: str, body: str) -> None:
     command = directory / name
     command.write_text(body, encoding="utf-8")
     command.chmod(0o755)
+
+
+class _ProjectResourceServer:
+    def __init__(self, slug: str, human_key: str) -> None:
+        self.requests: list[dict] = []
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - stdlib callback
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                owner.requests.append(request)
+                uri = request.get("params", {}).get("uri", "")
+                descriptor = {
+                    "id": 1,
+                    "slug": slug,
+                    "human_key": human_key,
+                    "agents": [],
+                }
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "contents": [
+                            {
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": json.dumps(descriptor),
+                            }
+                        ]
+                    },
+                }
+                body = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}/mcp"
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
 
 
 def _fake_linux_bin(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -434,6 +495,12 @@ def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     tmux_log = tmp_path / "tmux.log"
+    wrong_python_log = tmp_path / "wrong-python.log"
+    _write_command(
+        fake_bin,
+        "python3",
+        "#!/bin/sh\nprintf '%s\\n' called > \"$WRONG_PYTHON_LOG\"\nexit 97\n",
+    )
     _write_command(
         fake_bin,
         "tmux",
@@ -441,6 +508,7 @@ def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
 printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
 case "$1" in
   has-session) exit 0 ;;
+  show-environment) printf '%s\n' "-${4:-UNKNOWN}"; exit 0 ;;
   capture-pane) printf '%s\n' 'Claude Code' ;;
   send-keys) exit 0 ;;
   *) exit 1 ;;
@@ -449,6 +517,17 @@ esac
     )
     signals = tmp_path / "signals"
     runtime = tmp_path / "runtime"
+    child_state = runtime / "child-agents" / "BreezyMaxwell.json"
+    child_state.parent.mkdir(parents=True)
+    child_state.write_text(
+        json.dumps(
+            {
+                "agent_name": "BreezyMaxwell",
+                "project_key": "/isolated/project",
+            }
+        ),
+        encoding="utf-8",
+    )
     lock = tmp_path / "watcher.lock"
     signal_file = (
         signals
@@ -475,15 +554,23 @@ esac
         ),
         encoding="utf-8",
     )
+    project_resource = _ProjectResourceServer(
+        "isolated-project", "/isolated/project"
+    )
+    project_resource.start()
     env = os.environ.copy()
     env.update(
         {
             "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
             "FAKE_TMUX_LOG": str(tmux_log),
+            "WRONG_PYTHON_LOG": str(wrong_python_log),
             "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
             "AGENTSTACK_SIGNALS_DIR": str(signals),
             "AGENTSTACK_RUNTIME_DIR": str(runtime),
             "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(lock),
+            "AGENTSTACK_MCP_URL": project_resource.url,
+            "AGENTSTACK_PYTHON": sys.executable,
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
             "TMUX_TIMEOUT": "2",
         }
     )
@@ -503,18 +590,437 @@ esac
                 state = json.loads(state_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 state = {}
-            if (
-                state.get("BreezyMaxwell:42", {}).get("last_result") == "success"
-                and not signal_file.exists()
+            successful = [
+                entry for entry in state.values()
+                if isinstance(entry, dict) and entry.get("last_result") == "success"
+            ]
+            if len(successful) == 1 and not signal_file.exists():
+                break
+            time.sleep(0.1)
+        successful = [
+            entry for entry in state.values()
+            if isinstance(entry, dict) and entry.get("last_result") == "success"
+        ]
+        assert len(successful) == 1, state
+        assert not signal_file.exists()
+        calls = tmux_log.read_text(encoding="utf-8")
+        assert "has-session -t =BreezyMaxwell" in calls
+        assert "show-environment" in calls
+        assert "capture-pane -t =BreezyMaxwell" in calls
+        assert "send-keys -t =BreezyMaxwell" in calls
+        assert "message from ProOpus [high]: per-message verification" in calls
+        assert any(
+            request.get("method") == "resources/read"
+            and request.get("params", {}).get("uri")
+            == "resource://project/isolated-project"
+            for request in project_resource.requests
+        )
+        assert not wrong_python_log.exists()
+    finally:
+        watcher.terminate()
+        watcher.wait(timeout=10)
+        project_resource.close()
+
+
+def test_watcher_refuses_same_name_tmux_session_from_another_project(tmp_path):
+    """A project-A dirty bit must never type into project-B's same-named pane."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    tmux_log = tmp_path / "tmux.log"
+    _write_command(
+        fake_bin,
+        "tmux",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+case "$1" in
+  has-session) exit 0 ;;
+  show-environment)
+    case "$*" in
+      *AGENTSTACK_PROJECT_KEY*) printf '%s\n' 'AGENTSTACK_PROJECT_KEY=/isolated/project-b' ;;
+      *PROJECT_KEY*) printf '%s\n' 'PROJECT_KEY=/isolated/project-b' ;;
+    esac
+    exit 0 ;;
+  capture-pane) printf '%s\n' 'Claude Code' ;;
+  send-keys) exit 0 ;;
+  *) exit 1 ;;
+esac
+""",
+    )
+    signals = tmp_path / "signals"
+    runtime = tmp_path / "runtime"
+    signal_file = (
+        signals / "projects" / "project-a-slug" / "agents"
+        / "SharedCurie" / "73.signal"
+    )
+    signal_file.parent.mkdir(parents=True)
+    signal_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-12T00:00:00+00:00",
+                "project": "project-a-slug",
+                "project_key": "/isolated/project-a",
+                "agent": "SharedCurie",
+                "message": {
+                    "id": 73,
+                    "from": "ParentCurie",
+                    "subject": "must stay in project A",
+                    "importance": "high",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("AGENTSTACK_") or name in {"PROJECT_KEY", "TMUX", "TMUX_PANE"}:
+            env.pop(name, None)
+    env.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "FAKE_TMUX_LOG": str(tmux_log),
+            "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+            "AGENTSTACK_SIGNALS_DIR": str(signals),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(tmp_path / "watcher.lock"),
+            "TMUX_TIMEOUT": "2",
+        }
+    )
+    watcher = subprocess.Popen(
+        ["/bin/bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        state_file = runtime / "notify-state.json"
+        deadline = time.monotonic() + 10
+        state: dict[str, dict[str, object]] = {}
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            if state:
+                break
+            time.sleep(0.1)
+        results = [
+            str(entry.get("last_result", ""))
+            for entry in state.values()
+            if isinstance(entry, dict)
+        ]
+        assert any("project" in value and "mismatch" in value for value in results), state
+        assert signal_file.exists(), "a rejected delivery remains fetchable"
+        calls = tmux_log.read_text(encoding="utf-8")
+        assert "show-environment" in calls
+        assert "capture-pane" not in calls
+        assert "send-keys" not in calls
+    finally:
+        watcher.terminate()
+        watcher.wait(timeout=10)
+
+
+def test_watcher_keeps_legacy_signal_pending_without_durable_session_project(tmp_path):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    tmux_log = tmp_path / "tmux.log"
+    _write_command(
+        fake_bin,
+        "tmux",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+case "$1" in
+  has-session) exit 0 ;;
+  show-environment) exit 1 ;;
+  capture-pane) printf '%s\n' 'Claude Code' ;;
+  send-keys) exit 0 ;;
+  *) exit 1 ;;
+esac
+""",
+    )
+    signals = tmp_path / "signals"
+    runtime = tmp_path / "runtime"
+    signal_file = (
+        signals / "projects" / "legacy-project-a" / "agents"
+        / "AmbiguousCurie" / "74.signal"
+    )
+    signal_file.parent.mkdir(parents=True)
+    signal_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-12T00:00:00+00:00",
+                "project": "legacy-project-a",
+                "agent": "AmbiguousCurie",
+                "message": {
+                    "id": 74,
+                    "from": "ParentCurie",
+                    "subject": "ambiguous legacy target",
+                    "importance": "high",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    project_resource = _ProjectResourceServer(
+        "legacy-project-a", "/isolated/project-a"
+    )
+    project_resource.start()
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("AGENTSTACK_") or name in {"PROJECT_KEY", "TMUX", "TMUX_PANE"}:
+            env.pop(name, None)
+    env.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "FAKE_TMUX_LOG": str(tmux_log),
+            "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
+            "AGENTSTACK_SIGNALS_DIR": str(signals),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(tmp_path / "watcher.lock"),
+            "AGENTSTACK_MCP_URL": project_resource.url,
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
+            "TMUX_TIMEOUT": "2",
+        }
+    )
+    watcher = subprocess.Popen(
+        ["/bin/bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        state_file = runtime / "notify-state.json"
+        deadline = time.monotonic() + 10
+        state: dict[str, dict[str, object]] = {}
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            if state:
+                break
+            time.sleep(0.1)
+        results = [
+            str(entry.get("last_result", ""))
+            for entry in state.values()
+            if isinstance(entry, dict)
+        ]
+        assert any(
+            "project" in value and (
+                "unknown" in value or "unresolved" in value or "mismatch" in value
+            )
+            for value in results
+        ), state
+        assert signal_file.exists()
+        calls = tmux_log.read_text(encoding="utf-8")
+        assert "show-environment" in calls
+        assert "capture-pane" not in calls
+        assert "send-keys" not in calls
+        assert any(
+            request.get("method") == "resources/read"
+            for request in project_resource.requests
+        )
+    finally:
+        watcher.terminate()
+        watcher.wait(timeout=10)
+        project_resource.close()
+
+
+@pytest.mark.parametrize(
+    ("session_location", "expect_delivery", "use_project_alias"),
+    [("other", False, False), ("linked", True, False), ("main", True, True)],
+    ids=[
+        "stale-key-cross-repository",
+        "same-repository-linked-worktree",
+        "filesystem-key-alias",
+    ],
+)
+def test_watcher_corroborates_matching_legacy_key_with_live_repository(
+    tmp_path, session_location, expect_delivery, use_project_alias,
+):
+    def git(cwd, *args):
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    main = tmp_path / "watcher-repo-main"
+    other = tmp_path / "watcher-repo-other"
+    linked = tmp_path / "watcher-repo-linked"
+    main.mkdir()
+    other.mkdir()
+    for repository in (main, other):
+        git(repository, "init", "-q")
+        git(
+            repository,
+            "-c", "user.name=Issue16 Test",
+            "-c", "user.email=issue16@example.invalid",
+            "commit", "--allow-empty", "-q", "-m", "initial",
+        )
+    git(main, "worktree", "add", "-q", "-b", "watcher-linked", str(linked))
+    alias = tmp_path / "watcher-repo-alias"
+    alias.symlink_to(main, target_is_directory=True)
+    session_cwd = {
+        "other": other,
+        "linked": linked,
+        "main": main,
+    }[session_location]
+    session_project_key = str(alias) if use_project_alias else str(main.resolve())
+
+    fake_bin = tmp_path / f"fake-bin-{session_location}"
+    fake_bin.mkdir()
+    tmux_log = tmp_path / f"tmux-{session_location}.log"
+    _write_command(
+        fake_bin,
+        "tmux",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+case "$1" in
+  has-session) exit 0 ;;
+  show-environment)
+    case "${4:-}" in
+      AGENTSTACK_PROJECT_KEY) printf '%s\n' "AGENTSTACK_PROJECT_KEY=$ISSUE16_PROJECT_KEY" ;;
+      PROJECT_KEY) printf '%s\n' "PROJECT_KEY=$ISSUE16_PROJECT_KEY" ;;
+      *) printf '%s\n' "-${4:-UNKNOWN}" ;;
+    esac
+    exit 0 ;;
+  display-message) printf '%s\n' "$ISSUE16_SESSION_CWD" ;;
+  capture-pane) printf '%s\n' 'Claude Code' ;;
+  send-keys) exit 0 ;;
+  *) exit 1 ;;
+esac
+""",
+    )
+    signals = tmp_path / f"signals-{session_location}"
+    runtime = tmp_path / f"runtime-{session_location}"
+    if use_project_alias:
+        (runtime / "child-agents").mkdir(parents=True)
+        (runtime / "name-bindings").mkdir(parents=True)
+        (runtime / "agent_token_SharedCurie.project").write_text(
+            f"{alias}\n", encoding="utf-8"
+        )
+        (runtime / "child-agents" / "SharedCurie.json").write_text(
+            json.dumps(
+                {"agent_name": "SharedCurie", "project_key": str(main.resolve())}
+            ),
+            encoding="utf-8",
+        )
+        (runtime / "name-bindings" / "sharedcurie.json").write_text(
+            json.dumps(
+                {"agent_name": "SharedCurie", "project_key": str(alias)}
+            ),
+            encoding="utf-8",
+        )
+    elif session_location == "other":
+        # Truly distinct durable evidence remains ambiguous/fail-closed even
+        # after filesystem aliases are normalized before uniqueness.
+        (runtime / "child-agents").mkdir(parents=True)
+        (runtime / "agent_token_SharedCurie.project").write_text(
+            f"{main.resolve()}\n", encoding="utf-8"
+        )
+        (runtime / "child-agents" / "SharedCurie.json").write_text(
+            json.dumps(
+                {"agent_name": "SharedCurie", "project_key": str(other.resolve())}
+            ),
+            encoding="utf-8",
+        )
+    message_id = 81 if expect_delivery else 80
+    signal_file = (
+        signals / "projects" / "project-a" / "agents"
+        / "SharedCurie" / f"{message_id}.signal"
+    )
+    signal_file.parent.mkdir(parents=True)
+    signal_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-12T00:00:00+00:00",
+                "project": "project-a",
+                "project_key": str(main.resolve()),
+                "agent": "SharedCurie",
+                "message": {
+                    "id": message_id,
+                    "from": "ParentCurie",
+                    "subject": "repository corroboration",
+                    "importance": "high",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("AGENTSTACK_") or name in {
+            "PROJECT_KEY", "TMUX", "TMUX_PANE", "GIT_DIR", "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+        }:
+            env.pop(name, None)
+    env.update(
+        {
+            "HOME": str(tmp_path / f"home-{session_location}"),
+            "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "FAKE_TMUX_LOG": str(tmux_log),
+            "ISSUE16_PROJECT_KEY": session_project_key,
+            "ISSUE16_SESSION_CWD": str(session_cwd.resolve()),
+            "AGENTSTACK_MAIL_HOME": str(tmp_path / f"mail-{session_location}"),
+            "AGENTSTACK_SIGNALS_DIR": str(signals),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_MAIL_WATCHER_LOCK_DIR": str(
+                tmp_path / f"watcher-{session_location}.lock"
+            ),
+            "TMUX_TIMEOUT": "2",
+        }
+    )
+    watcher = subprocess.Popen(
+        ["/bin/bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        state_file = runtime / "notify-state.json"
+        deadline = time.monotonic() + 10
+        state = {}
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            results = [
+                str(entry.get("last_result", ""))
+                for entry in state.values()
+                if isinstance(entry, dict)
+            ]
+            if (expect_delivery and "success" in results and not signal_file.exists()) or (
+                not expect_delivery and "project_mismatch" in results
             ):
                 break
             time.sleep(0.1)
-        assert state.get("BreezyMaxwell:42", {}).get("last_result") == "success"
-        assert not signal_file.exists()
         calls = tmux_log.read_text(encoding="utf-8")
-        assert "has-session -t BreezyMaxwell" in calls
-        assert "capture-pane -t BreezyMaxwell" in calls
-        assert "message from ProOpus [high]: per-message verification" in calls
+        assert "display-message -t =SharedCurie" in calls
+        if expect_delivery:
+            assert any(
+                entry.get("last_result") == "success"
+                for entry in state.values()
+                if isinstance(entry, dict)
+            ), state
+            assert not signal_file.exists()
+            assert "capture-pane -t =SharedCurie" in calls
+            assert "send-keys -t =SharedCurie" in calls
+        else:
+            assert any(
+                entry.get("last_result") == "project_mismatch"
+                for entry in state.values()
+                if isinstance(entry, dict)
+            ), state
+            assert signal_file.exists()
+            assert "capture-pane" not in calls
+            assert "send-keys" not in calls
     finally:
         watcher.terminate()
         watcher.wait(timeout=10)

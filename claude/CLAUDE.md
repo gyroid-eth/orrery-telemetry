@@ -4,9 +4,14 @@ rules before doing project work.
 
 ## Session Startup
 
+Resolve the project context from the launcher/SessionStart output before using
+these examples. In MCP arguments, replace `$AGENTSTACK_PROJECT_KEY` with the
+actual resolved key. The install fallback below is not a fixed key for every
+repository.
+
 First calls:
 
-1. `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`.
+1. `ensure_project(human_key="$AGENTSTACK_PROJECT_KEY")`.
 2. If SessionStart says the shell hook already registered your resolved name,
    do not call `register_agent` again. Otherwise call `register_agent` with the
    resolved `name` (`$AGENT_NAME`, or the name printed by the SessionStart
@@ -40,9 +45,23 @@ MCP tool session.
 
 Details and exceptions for the first calls:
 
-- The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
-  `ensure_project`, `register_agent`, `fetch_inbox`, and reservations. Do not
-  infer a different project from your current directory.
+- Use the resolved project key from the launcher, SessionStart reminder, or
+  canonical embedded child task for `ensure_project`, `register_agent`,
+  `fetch_inbox`, messages, and reservations. It is exported as
+  `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`; substitute its actual value in MCP
+  arguments, not the literal string `$AGENTSTACK_PROJECT_KEY`.
+- The install-time fallback is `__AGENTSTACK_PROJECT_KEY__`. It must not
+  override the repository selected for a new invocation. Linked worktrees
+  share their repository's canonical project key; another repository has a
+  separate key. Keep an already registered child's project from its launch
+  context, even when its worktree directory differs.
+- If the resolved key is unavailable, use the SessionStart output or the
+  canonical embedded task. For an unregistered session, the shared helper
+  `bash __AGENTSTACK_HOOKS_DIR__/project-context.sh resolve-project-key "$PWD"`
+  resolves it without sourcing installed shell code. Do not guess a key from
+  a worktree pathname or reuse the install fallback when a repository was
+  resolved. Report an existing identity/project mismatch instead of silently
+  registering the same name in another project.
 - On SessionStart, `session-start-reminder.sh` resolves an existing identity
   before registration (`AGENT_NAME` -> per-pane metadata -> tmux session name)
   and reminds you to re-register with the same `name`. For cc/cx sessions that
@@ -51,7 +70,7 @@ Details and exceptions for the first calls:
   generate a new one.
 - If you were launched with `agent-start`, you should already have
   `AGENT_NAME` exported and your tmux session should be named after it. At
-  session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
+  session start, call `ensure_project(human_key="$AGENTSTACK_PROJECT_KEY")`,
   then call `register_agent` with `program="claude-code"` and
   `name="$AGENT_NAME"` when `AGENT_NAME` is set. If
   `printenv CHILD_REGISTRATION_TOKEN` is non-empty, pass that value as
@@ -100,7 +119,7 @@ Details and exceptions for the first calls:
   and report completion to `PARENT_AGENT` with `send_message`. There is no task
   mail in this mode.
 - Otherwise, always call
-  `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`
+  `fetch_inbox(project_key="$AGENTSTACK_PROJECT_KEY", agent_name="$AGENT_NAME")`
   after registration. If `PARENT_AGENT` is set, treat the inbox request as the
   canonical task and report completion to that parent with `send_message`.
 - If `PARENT_AGENT` is not set and registration or inbox access is truly
@@ -112,7 +131,7 @@ Details and exceptions for the first calls:
 
 Before editing files under the project, reserve the specific paths you plan to
 touch with `file_reservation_paths` or `macro_file_reservation_cycle` using
-`project_key="__AGENTSTACK_PROJECT_KEY__"` and your agent name. The
+`project_key="$AGENTSTACK_PROJECT_KEY"` and your agent name. The
 `PreToolUse` hook blocks an unreserved `Edit`/`Write` under a protected root.
 
 - **`ttl_seconds` must be at least 600.** Generating the edit takes tens of

@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -238,24 +239,50 @@ def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in con.execute(f"PRAGMA table_info({table})"))
 
 
-def _resolve_project_id(con) -> int:
+def _resolve_project_id(
+        con, project_human_key: str | None = None,
+) -> int:
     """project human_key から project id を解決。
-    見つからなければ PROJECT_ID(=1) にフォールバック。"""
-    if not PROJECT_HUMAN_KEY:
-        return PROJECT_ID
+    A configured-but-unknown key must fail closed instead of leaking project 1."""
+    selected_key = (
+        PROJECT_HUMAN_KEY if project_human_key is None else project_human_key
+    )
+    if not selected_key:
+        # Preserve graph_data's standalone legacy default only when no caller
+        # supplied a project. The Dashboard always passes its resolved key;
+        # an empty fail-closed resolution must never expose project id 1.
+        return PROJECT_ID if project_human_key is None else -1
     try:
         row = con.execute(
             "SELECT id FROM projects WHERE human_key = ?",
-            (PROJECT_HUMAN_KEY,),
+            (selected_key,),
         ).fetchone()
         if row and row[0] is not None:
             return int(row[0])
     except sqlite3.Error:
-        pass
-    return PROJECT_ID
+        return -1
+    return -1
 
 
-def build_graph() -> dict:
+def build_graph(
+        project_human_key: str | None = None,
+        live_parents: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+) -> dict:
+    """Build nodes, message edges and spawn lineage for one Mail project.
+
+    `live_parents` is the caller's child->parent PARENT_AGENT mapping, read
+    from sessions already attributed to this project; it is used as given and
+    the host-global `_live_parents()` cache is not consulted.  With no
+    arguments (standalone use) that host-global map is used as before; an
+    explicit project without a mapping admits no live lineage.
+    """
+    if live_parents is not None:
+        items = live_parents.items() if isinstance(live_parents, Mapping) else live_parents
+        scoped_live_parents: dict[str, str] | None = dict(items)
+    elif project_human_key is None:
+        scoped_live_parents = None
+    else:
+        scoped_live_parents = {}
     diagnostics = _TimestampDiagnostics()
     if not os.path.exists(DB_PATH):
         return {
@@ -267,7 +294,7 @@ def build_graph() -> dict:
     try:
         cur = con.cursor()
         # 設定された project human_key から project id を解決する。
-        PROJECT_ID = _resolve_project_id(con)
+        PROJECT_ID = _resolve_project_id(con, project_human_key)
 
         # activity: 直近 ACT_WINDOW_SEC のメッセージ参加数（送信+受信）。
         # INTEGER microseconds と legacy ISO TEXT を同じ epoch seconds にしてから
@@ -429,7 +456,10 @@ def build_graph() -> dict:
         # Live sessions first: PARENT_AGENT is the spawn relationship itself,
         # not a trace of it, so it holds for a child that has not spoken yet.
         node_names = {n["name"] for n in nodes}
-        for child, parent in _live_parents().items():
+        live_lineage = (
+            _live_parents() if scoped_live_parents is None else scoped_live_parents
+        )
+        for child, parent in live_lineage.items():
             if child in node_names and parent in node_names and child != parent:
                 seen.add(child)
                 spawn.append(

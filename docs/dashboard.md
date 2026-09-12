@@ -193,7 +193,7 @@ NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚
 
 ![NETWORK の通信が増え、エッジ上に通信回数2や3が表示されている](images/net_humanloop.png)
 
-`AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと mail edge と drawer は `NOT CONFIGURED` になります。tmux telemetry は残るため、mail 設定不足と dashboard 全停止を区別できます。
+`AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと mail edge と drawer は `NOT CONFIGURED` になります。ページと infrastructure の状態表示は利用できますが、通常 agent の表示・操作には project の選択が必要です。[Project key がない場合](configuration.md#project-key-がない場合)も参照してください。
 
 ![edge click 後の mail drawer — 二者間の subject / importance / 時刻 / 本文](img/network-edge-drawer.jpg)
 
@@ -275,6 +275,20 @@ server の provider / model / effort allow-list を catalog と validation の�
 
 typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
 
+NEW AGENT は選択 directory の canonical repository から project context を解決します。
+サービスの install-time project key を別 repository の起動に使い回しません。
+同じ repository の linked worktree は同じ project を共有します。parent を選ぶ場合は
+その確立済み context と起動先が同じ repository である必要があり、不一致は登録前に
+拒否します。別 repository は STANDALONE で起動してください。
+
+Deck・Graph・履歴の agent 情報は、Dashboard サービスに設定した project の範囲で
+表示します。別 repository に起動した STANDALONE は、その project を設定した
+Dashboard で確認してください。
+
+role / group と名前置換の記録も project ごとに保存します。project 情報のない
+旧記録は保存したまま表示対象から外し、同名 agent の再利用で別 project に
+引き継ぎません。必要な role / group は対象 project の Dashboard で再設定できます。
+
 ### Task と ADVANCED
 
 task は必須、最大4000文字です。ADVANCED の開閉状態は `localStorage` に保存します。
@@ -287,6 +301,12 @@ task は必須、最大4000文字です。ADVANCED の開閉状態は `localStor
 parent を選ばないと `standalone: true` を送り、`PARENT_AGENT` のない独立 agent として起動します。parent を選ぶと通常 child になり、task を child inbox へ送り、parent を CC した audit trail を残します。
 
 ### Spawn 順序
+
+project / work directory と local name の整合性を先に検証します。parent を指定した
+場合は、その登録と owner credential が選択 project に属することも確認し、
+不一致なら child を登録せず停止します。STANDALONE では、選択 project を
+`ensure_project` で確認・作成してから agent を登録します。確認に失敗した場合は
+agent 登録や task の作成に進みません。
 
 1. `register_agent` で child identity と専用 token を作成
 2. role / group annotation（best effort）

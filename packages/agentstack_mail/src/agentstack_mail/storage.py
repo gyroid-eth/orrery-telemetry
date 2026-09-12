@@ -3406,6 +3406,7 @@ async def emit_notification_signal(
     project_slug: str,
     agent_name: str,
     message_metadata: dict[str, Any] | None = None,
+    project_key: str | None = None,
 ) -> bool:
     """Emit a notification signal for an agent in a project.
 
@@ -3417,6 +3418,7 @@ async def emit_notification_signal(
         project_slug: Project identifier
         agent_name: Target agent name
         message_metadata: Optional dict with message info (id, from, subject, importance)
+        project_key: Canonical human project key used to validate local delivery.
 
     Returns:
         True if signal was emitted, False if notifications disabled or debounced
@@ -3455,6 +3457,8 @@ async def emit_notification_signal(
         "project": project_slug,
         "agent": agent_name,
     }
+    if project_key:
+        signal_data["project_key"] = project_key
 
     if settings.notifications.include_metadata and message_metadata:
         signal_data["message"] = {

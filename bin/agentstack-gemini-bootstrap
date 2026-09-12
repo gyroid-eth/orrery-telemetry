@@ -16,9 +16,47 @@
 WORK_DIR="${1:-.}"
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
 SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
-if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
+ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+ENTRY_PROJECT_CONTEXT="${AGENTSTACK_PROJECT_CONTEXT:-}"
+ENTRY_PROJECT_REPOSITORY="${AGENTSTACK_PROJECT_REPOSITORY:-}"
+ENTRY_PROJECT_WORK_DIR="${AGENTSTACK_PROJECT_WORK_DIR:-}"
+ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
+if [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
+if [ -n "$ENTRY_PROJECT_KEY" ]; then
+  AGENTSTACK_PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  AGENTSTACK_PROTECTED_ROOTS="$ENTRY_PROTECTED_ROOTS"
+fi
+if [ "$ENTRY_PROJECT_CONTEXT" = "1" ]; then
+  AGENTSTACK_PROJECT_CONTEXT=1
+  AGENTSTACK_PROJECT_REPOSITORY="$ENTRY_PROJECT_REPOSITORY"
+  AGENTSTACK_PROJECT_WORK_DIR="$ENTRY_PROJECT_WORK_DIR"
+fi
 
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+PROJECT_CONTEXT_LIB="$SCRIPT_DIR/../hooks/project-context.sh"
+if [ ! -f "$PROJECT_CONTEXT_LIB" ]; then
+  echo "agentstack-gemini-bootstrap: missing project context helper: $PROJECT_CONTEXT_LIB" >&2
+  return 1 2>/dev/null || exit 1
+fi
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
+if [ "${AGENTSTACK_PROJECT_CONTEXT:-}" = "1" ] && \
+   ! agentstack_context_matches_target "$WORK_DIR"; then
+  echo "agentstack-gemini-bootstrap: established project context does not match target work directory: $WORK_DIR" >&2
+  return 1 2>/dev/null || exit 1
+fi
+# Stop before any name, token, Mail, or provider work when the project cannot
+# be resolved or exported: `source bootstrap && provider` must not start a
+# provider under an empty or stale project context.
+if ! PROJECT_KEY="$(agentstack_resolve_project_key "$WORK_DIR")" || [ -z "$PROJECT_KEY" ]; then
+  echo "agentstack-gemini-bootstrap: could not resolve the ORRERY Mail project for work directory: $WORK_DIR (verify AGENTSTACK_PYTHON and the installed env.sh)" >&2
+  return 1 2>/dev/null || exit 1
+fi
+if ! agentstack_export_project_context "$PROJECT_KEY" "$WORK_DIR"; then
+  echo "agentstack-gemini-bootstrap: could not export project context for work directory: $WORK_DIR (verify AGENTSTACK_PYTHON and the installed env.sh)" >&2
+  return 1 2>/dev/null || exit 1
+fi
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"

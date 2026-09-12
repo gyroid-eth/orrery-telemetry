@@ -47,7 +47,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 ### `check-file-reservation.sh`
 
 - **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
-- **project key:** `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` の `AGENTSTACK_PROJECT_KEY` → hook input の cwd の順で解決します。installed `env.sh` は shell として source せず、対象の `export AGENTSTACK_PROJECT_KEY=...` だけを literal として読みます。この共通 resolver は registration guard、session reminder、child cleanup、`agentstack-await-reply` も使うため、launcher を経由しない editor session でも install 時と同じ project を参照します。
+- **project key:** shared `project-context.sh` は確立済み session の明示選択を維持し、そうでなければ hook input の cwd が属する canonical Git repository を優先します。linked worktree は同じ project、別 repository は別 project です。Git 外は `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → installed `env.sh` → cwd に fallback します。installed export は literal 読み取りで、shell code を実行しません。registration guard、SessionStart、child cleanup、`agentstack-await-reply` もこの resolver を共有します。Git の protected roots は実 worktree と canonical repository に合わせ、予約は repository-relative path に正規化します。
 - **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。tmux 外の client でも、`register_agent` を呼んで `<runtime>/session_index/` に記録されていれば、hook input の `session_id` から identity を解決します（優先度は env → tmux → session index）。`session_id` は `[a-zA-Z0-9_-]` 以外を含むなら使わず、symlink の index entry は読みません。identity source が1つも無い session の扱いは下記「unmanaged session」に従います。
 - **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
@@ -151,9 +151,9 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ### `watch_agent_mail_signals.sh`
 
-`fswatch` があれば event watch、なければ2秒 polling を使います。signal file は server-owned dirty bit として削除せず、runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。30秒の periodic scan が取りこぼしを救済します。
+`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease は `(project, agent, message)` ごとに重複注入を抑えます。配送成功後は per-message signal を削除し、旧形式の server-owned dirty bit は残します。30秒の periodic scan が取りこぼしを救済します。
 
-配送先は agent 名と完全一致する tmux session だけです。bare shell や無関係 session を避け、通知 text を literal send した後、submit を別 call の `C-m` で送ります。tmux call は timeout 付き worker に分離し、server stall が watcher 全体を止めないようにします。
+配送先は agent 名と完全一致し、signal の canonical project key と project が一致する tmux session だけです。新しい signal は canonical key を含み、旧形式の project slug は ORRERY Mail の project resource から解決します。session の project は tmux context、または project を記録した runtime metadata で確認します。project が不明・不一致なら capture や通知を行わず、signal を未配送のまま残します。bare shell を避け、通知 text を literal send した後、submit を別 call の `C-m` で送ります。tmux call は timeout 付き worker に分離し、server stall が watcher 全体を止めないようにします。
 
 ## Codex との違い
 

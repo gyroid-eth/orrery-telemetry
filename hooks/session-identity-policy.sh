@@ -415,6 +415,19 @@ wanted = os.environ.get("AGENTSTACK_CONFLICT_SESSION", "")
 project = os.environ.get("AGENTSTACK_CONFLICT_PROJECT", "")
 env_name = os.environ.get("AGENTSTACK_CONFLICT_ENV_NAME", "")
 directory = pathlib.Path(os.environ.get("AGENTSTACK_CONFLICT_DIR", ""))
+
+def project_key(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    path = pathlib.Path(value)
+    if path.is_absolute() or path.is_dir():
+        try:
+            return str(path.resolve())
+        except (OSError, RuntimeError):
+            return ""
+    return value
+
+project = project_key(project)
 names = set()
 if directory.is_dir():
     for entry in directory.glob("*.json"):
@@ -432,7 +445,7 @@ if directory.is_dir():
         if not isinstance(caller, str) or (caller and caller != record.get("agent_name")):
             continue
         if project:
-            recorded = record.get("project_key")
+            recorded = project_key(record.get("project_key"))
             if not isinstance(recorded, str) or recorded != project:
                 continue
         name = record.get("agent_name")

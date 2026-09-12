@@ -6,6 +6,7 @@ set -euo pipefail
 # cleanup may retire only an agent named explicitly by the caller or its entry
 # environment, never one guessed from surrounding pane/session state.
 AGENT_NAME_ENV_AT_ENTRY="${AGENT_NAME:-}"
+PROJECT_KEY_ENV_AT_ENTRY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 if [[ -z "${1:-}" && -z "$AGENT_NAME_ENV_AT_ENTRY" ]]; then
     exit 0
 fi
@@ -15,6 +16,9 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
 # shellcheck disable=SC1090
 . "$PROJECT_CONTEXT_LIB"
+if [[ -n "$PROJECT_KEY_ENV_AT_ENTRY" ]]; then
+    PROJECT_KEY_ENV_AT_ENTRY="$(agentstack_normalize_project_key "$PROJECT_KEY_ENV_AT_ENTRY")"
+fi
 STATE_DIR="$RUNTIME_DIR/child-agents"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 PROJECT_KEY_DEFAULT="$(agentstack_resolve_project_key "$(pwd -P)")"
@@ -76,7 +80,7 @@ legacy_http_bearer_enabled() {
 
 RESOLVED_AGENT="$(resolve_agent_name)"
 AGENT_NAME="${1:-${RESOLVED_AGENT:-${AGENT_NAME:-}}}"
-PROJECT_KEY="${PROJECT_KEY:-$PROJECT_KEY_DEFAULT}"
+PROJECT_KEY="${PROJECT_KEY_ENV_AT_ENTRY:-$PROJECT_KEY_DEFAULT}"
 
 if [[ -z "$AGENT_NAME" ]]; then
     exit 0
@@ -90,6 +94,7 @@ fi
 STATE_FILE="$STATE_DIR/${AGENT_NAME}.json"
 TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
+TOKEN_PROJECT_FILE="$TOKEN_FILE.project"
 MCP_CONFIG_FILE="$STATE_DIR/${AGENT_NAME}.mcp.json"
 CODEX_HOME_DIR="$STATE_DIR/${AGENT_NAME}.codex-home"
 if [[ -f "$STATE_FILE" ]]; then
@@ -106,6 +111,11 @@ PYEOF
         exit 1
     fi
     if [[ -n "$STATE_PROJECT_KEY" ]]; then
+        STATE_PROJECT_KEY="$(agentstack_normalize_project_key "$STATE_PROJECT_KEY")"
+        if [[ -n "$PROJECT_KEY_ENV_AT_ENTRY" && "$PROJECT_KEY_ENV_AT_ENTRY" != "$STATE_PROJECT_KEY" ]]; then
+            echo "[cleanup-child-agent] child state project mismatch for '$AGENT_NAME'; refusing cleanup" >&2
+            exit 1
+        fi
         PROJECT_KEY="$STATE_PROJECT_KEY"
     else
         echo "[cleanup-child-agent] child state for '$AGENT_NAME' has no project key; using the configured project key if available" >&2
@@ -118,6 +128,60 @@ fi
 
 if [[ -z "$PROJECT_KEY" ]]; then
     echo "[cleanup-child-agent] project key is unavailable for '$AGENT_NAME'; leaving child state intact" >&2
+    exit 1
+fi
+
+# Prove ownership of every host-global name-keyed artifact before performing
+# remote release/retire calls or deleting anything. Keep the normalized name
+# binding in place until all other artifacts are gone so another project cannot
+# claim the name while this cleanup is still running.
+OWNERSHIP_PROVEN=0
+if [[ -n "${STATE_PROJECT_KEY:-}" ]]; then
+    OWNERSHIP_PROVEN=1
+fi
+if [[ -f "$TOKEN_PROJECT_FILE" ]]; then
+    IFS= read -r TOKEN_PROJECT < "$TOKEN_PROJECT_FILE" || TOKEN_PROJECT=""
+    if [[ -n "$TOKEN_PROJECT" ]]; then
+        TOKEN_PROJECT="$(agentstack_normalize_project_key "$TOKEN_PROJECT")"
+    fi
+    if [[ "$TOKEN_PROJECT" != "$PROJECT_KEY" ]]; then
+        echo "[cleanup-child-agent] token project metadata mismatch for '$AGENT_NAME'; refusing cleanup" >&2
+        exit 1
+    fi
+    OWNERSHIP_PROVEN=1
+fi
+BINDING_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -d '-' | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+BINDING_FILE="$RUNTIME_DIR/name-bindings/$BINDING_KEY.json"
+if [[ -e "$BINDING_FILE" ]]; then
+    if ! python3 - "$BINDING_FILE" "$PROJECT_KEY" "$BINDING_KEY" <<'PYEOF'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+
+def project_key(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    candidate = pathlib.Path(value)
+    if candidate.is_absolute() or candidate.is_dir():
+        return str(candidate.resolve())
+    return value
+
+bound_name = str(data.get("agent_name") or "")
+bound_key = bound_name.replace("-", "").lower()
+if project_key(data.get("project_key")) != project_key(sys.argv[2]) or bound_key != sys.argv[3]:
+    raise SystemExit(1)
+PYEOF
+    then
+        echo "[cleanup-child-agent] local name binding mismatch for '$AGENT_NAME'; refusing cleanup" >&2
+        exit 1
+    fi
+    OWNERSHIP_PROVEN=1
+fi
+if [[ "$OWNERSHIP_PROVEN" != "1" ]]; then
+    echo "[cleanup-child-agent] no project ownership metadata for '$AGENT_NAME'; refusing credential cleanup" >&2
     exit 1
 fi
 
@@ -222,7 +286,36 @@ except OSError:
     raise SystemExit(0)
 path.write_text("\n".join(line for line in lines if line != name) + "\n", encoding="utf-8")
 PYEOF
-rm -f "$STATE_FILE" "$TOKEN_FILE" "$MCP_CONFIG_FILE"
+rm -f "$STATE_FILE" "$TOKEN_FILE" "$TOKEN_PROJECT_FILE" "$MCP_CONFIG_FILE"
 rm -rf "$CODEX_HOME_DIR"
+
+# Release the comparison-key claim last. Revalidate immediately before unlink
+# so an operator replacement can never be removed by this cleanup.
+if [[ -e "$BINDING_FILE" ]]; then
+    python3 - "$BINDING_FILE" "$PROJECT_KEY" "$BINDING_KEY" <<'PYEOF' || {
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+
+def project_key(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    candidate = pathlib.Path(value)
+    if candidate.is_absolute() or candidate.is_dir():
+        return str(candidate.resolve())
+    return value
+
+bound_name = str(data.get("agent_name") or "")
+if project_key(data.get("project_key")) != project_key(sys.argv[2]) or bound_name.replace("-", "").lower() != sys.argv[3]:
+    raise SystemExit(1)
+path.unlink()
+PYEOF
+        echo "[cleanup-child-agent] local name binding changed during cleanup for '$AGENT_NAME'; leaving it intact" >&2
+        exit 1
+    }
+fi
 
 exit 0

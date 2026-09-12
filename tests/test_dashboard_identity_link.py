@@ -40,6 +40,9 @@ def _build(monkeypatch, tmux_name: str, mail_name: str, *, attached: bool):
     monkeypatch.setattr(server, "_deliverables_index", lambda: {})
     monkeypatch.setattr(server, "_agent_runtime", lambda *_args: {})
     monkeypatch.setattr(server, "_project_key", lambda: "")
+    monkeypatch.setattr(
+        server, "_session_matches_dashboard_project", lambda *_args, **_kwargs: True
+    )
     return server.build_agents()[0]
 
 

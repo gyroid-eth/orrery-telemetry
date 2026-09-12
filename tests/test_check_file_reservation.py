@@ -242,7 +242,10 @@ class ReservationHookTests(unittest.TestCase):
             fake_tmux.chmod(0o755)
             env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
         payload = json.dumps(
-            {"tool_input": {"file_path": str(file_path or root / "note.md")}}
+            {
+                "cwd": str(root),
+                "tool_input": {"file_path": str(file_path or root / "note.md")},
+            }
         )
         return subprocess.run(
             ["/bin/bash", str(HOOK)],
@@ -250,6 +253,7 @@ class ReservationHookTests(unittest.TestCase):
             text=True,
             capture_output=True,
             env=env,
+            cwd=root,
             check=False,
             timeout=10,
         )

@@ -60,6 +60,7 @@ def _run(guard: Path, payload: str, tmp_path: Path, **env: str) -> subprocess.Co
         text=True,
         timeout=60,
         env=environment,
+        cwd=tmp_path,
     )
 
 
@@ -997,7 +998,9 @@ def test_the_session_start_reminder_finds_an_existing_binding(tmp_path: Path) ->
     session binding was told it had no identity and invited to register a new
     one -- the way duplicate agents get created.
     """
-    project = str(tmp_path / "project")
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project = str(project_dir)
     _record_registration(tmp_path, "resume-1", 41, "IcyGauss", project)
     environment = dict(BASE_ENV)
     environment["HOME"] = str(tmp_path / "home")
@@ -1007,7 +1010,13 @@ def test_the_session_start_reminder_finds_an_existing_binding(tmp_path: Path) ->
     Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         ["/bin/bash", str(SESSION_START)],
-        input=json.dumps({"session_id": "resume-1", "hook_event_name": "SessionStart"}),
+        input=json.dumps(
+            {
+                "session_id": "resume-1",
+                "cwd": project,
+                "hook_event_name": "SessionStart",
+            }
+        ),
         capture_output=True,
         text=True,
         timeout=60,
@@ -1503,6 +1512,49 @@ def test_a_launcher_name_that_disagrees_with_the_binding_is_a_conflict(
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "AGENT IDENTITY CONFLICT" in result.stderr
+
+
+def test_legacy_alias_binding_still_conflicts_with_a_different_launcher_name(
+    tmp_path: Path, answering_endpoint: str
+) -> None:
+    physical = tmp_path / "identity-physical"
+    alias = tmp_path / "identity-alias"
+    physical.mkdir()
+    alias.symlink_to(physical, target_is_directory=True)
+    target = physical / "note.md"
+    target.write_text("x", encoding="utf-8")
+    _bind(tmp_path, 41, "alias-conflict", "RegisteredName", str(alias))
+    registration_payload = json.loads(_registration_payload("alias-conflict"))
+    registration_payload["cwd"] = str(physical.resolve())
+    reservation_payload = json.loads(_edit_payload("alias-conflict", target))
+    reservation_payload["cwd"] = str(physical.resolve())
+    context = {
+        "AGENTSTACK_PROJECT_KEY": str(physical.resolve()),
+        "PROJECT_KEY": str(physical.resolve()),
+        "AGENTSTACK_PROJECT_CONTEXT": "1",
+        "AGENTSTACK_PROJECT_WORK_DIR": str(physical.resolve()),
+        "AGENTSTACK_PROTECTED_ROOTS": str(physical.resolve()),
+        "AGENTSTACK_MCP_URL": answering_endpoint,
+    }
+
+    registration = _run(
+        REGISTRATION_GUARD,
+        json.dumps(registration_payload),
+        tmp_path,
+        AGENT_NAME="DifferentName",
+        **context,
+    )
+    reservation = _run(
+        RESERVATION_GUARD,
+        json.dumps(reservation_payload),
+        tmp_path,
+        AGENT_NAME="DifferentName",
+        **context,
+    )
+
+    for result in (registration, reservation):
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "AGENT IDENTITY CONFLICT" in result.stderr
 
 
 def test_a_launcher_name_that_agrees_is_not_a_conflict(

@@ -27,7 +27,13 @@ _HELPER = _ROOT / "bin" / "agentstack-preregister-child"
 # helper's real control flow without touching a live ORRERY Mail server.
 _FAKE_LIB = r"""
 ags_mail_load_token() { :; }
+ags_normalize_project_key() { printf '%s\n' "$1"; }
 ags_pick_available_agent_name() { echo "PICKER_CALLED" >&2; printf 'Picked-Curie\n'; }
+ags_local_agent_name_conflicts() { return 1; }
+ags_acquire_local_name_claim() { return 0; }
+ags_update_local_name_claim() { return 0; }
+ags_release_local_name_claim() { :; }
+ags_commit_local_name_claim() { :; }
 ags_has_scientist_suffix() {
   case "$1" in
     *Curie|*Bohr|*Fermi) return 0 ;;

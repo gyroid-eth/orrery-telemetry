@@ -4,6 +4,11 @@ set -euo pipefail
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MANIFEST="$INSTALL_DIR/install-state.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENTRY_PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+ENTRY_PROJECT_CONTEXT="${AGENTSTACK_PROJECT_CONTEXT:-}"
+ENTRY_PROJECT_REPOSITORY="${AGENTSTACK_PROJECT_REPOSITORY:-}"
+ENTRY_PROJECT_WORK_DIR="${AGENTSTACK_PROJECT_WORK_DIR:-}"
+ENTRY_PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 
 usage() {
   cat <<'EOF'
@@ -52,6 +57,20 @@ if [[ -f "$INSTALL_DIR/env.sh" ]]; then
 else
   echo "missing: env $INSTALL_DIR/env.sh" >&2
   status=1
+fi
+
+if [[ -n "$ENTRY_PROJECT_KEY" ]]; then
+  AGENTSTACK_PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  PROJECT_KEY="$ENTRY_PROJECT_KEY"
+  export AGENTSTACK_PROJECT_KEY PROJECT_KEY
+fi
+if [[ "$ENTRY_PROJECT_CONTEXT" == "1" ]]; then
+  AGENTSTACK_PROJECT_CONTEXT=1
+  AGENTSTACK_PROJECT_REPOSITORY="$ENTRY_PROJECT_REPOSITORY"
+  AGENTSTACK_PROJECT_WORK_DIR="$ENTRY_PROJECT_WORK_DIR"
+  AGENTSTACK_PROTECTED_ROOTS="$ENTRY_PROTECTED_ROOTS"
+  export AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_PROJECT_REPOSITORY
+  export AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROTECTED_ROOTS
 fi
 
 check_cmd() {
@@ -418,6 +437,207 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
 
+PROJECT_AUDIT_STATUS=0
+PROJECT_AUDIT="$(${PYTHON_BIN:-python3} - \
+  "${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}" \
+  "${AGENTSTACK_PROJECT_REPOSITORY:-}" \
+  "${AGENTSTACK_PROJECT_WORK_DIR:-$PWD}" \
+  "${AGENTSTACK_PROTECTED_ROOTS:-}" "$RUNTIME_DIR" \
+  "$ENTRY_PROJECT_CONTEXT" "$ENTRY_PROJECT_WORK_DIR" <<'PY' 2>/dev/null
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+project_key, repository_hint, work_dir, roots_raw, runtime_raw = sys.argv[1:6]
+established_context, established_work_dir = sys.argv[6:8]
+runtime = pathlib.Path(runtime_raw)
+warnings = []
+
+
+def real(value):
+    try:
+        return os.path.realpath(os.path.expanduser(str(value)))
+    except (OSError, TypeError, ValueError):
+        return ""
+
+
+def git(args, cwd):
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        env.pop(key, None)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", cwd, *args], env=env, text=True,
+            capture_output=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def git_context(value):
+    path = real(value)
+    if not path or not os.path.isdir(path):
+        return None
+    top = git(["rev-parse", "--show-toplevel"], path)
+    common = git(["rev-parse", "--git-common-dir"], path)
+    if not top or not common:
+        return None
+    if not os.path.isabs(common):
+        # rev-parse reports this relative to the directory queried with -C,
+        # including when that directory is below the worktree root.
+        common = os.path.join(path, common)
+    common = real(common)
+    repository = real(os.path.dirname(common) if os.path.basename(common) == ".git" else common)
+    return {"worktree": real(top), "repository": repository}
+
+
+pwd_context = git_context(os.getcwd())
+work_context = git_context(work_dir)
+repository_context = git_context(repository_hint)
+project_context = git_context(project_key)
+current = pwd_context or work_context or repository_context or project_context
+current_repo = current["repository"] if current else ""
+if current_repo:
+    for label, context, value in (
+        ("configured project_key", project_context, project_key),
+        ("bound repository", repository_context, repository_hint),
+        ("bound work_dir", work_context, work_dir),
+    ):
+        if context and context["repository"] != current_repo:
+            warnings.append(
+                f"warn: {label} repository mismatch with current cwd: {real(value)}"
+            )
+
+# A non-Git cwd has no repository to compare, and `current` then falls back to
+# the bound work_dir. For an established (inherited) context, the cwd must lie
+# inside that physical work_dir, as the hooks require.
+if established_context == "1" and established_work_dir and pwd_context is None:
+    cwd_path = real(os.getcwd())
+    bound_path = real(established_work_dir)
+    if cwd_path and bound_path and os.path.isdir(bound_path):
+        inside = cwd_path == bound_path or cwd_path.startswith(
+            bound_path.rstrip(os.sep) + os.sep
+        )
+        if not inside:
+            warnings.append(
+                "warn: established project context work_dir does not contain "
+                f"current non-Git cwd: cwd={cwd_path} work_dir={bound_path}"
+            )
+
+
+def record_cwd(data):
+    for key in ("work_dir", "cwd", "workspace"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    transcript = data.get("transcript_path")
+    if isinstance(transcript, str) and os.path.isfile(transcript):
+        try:
+            with open(transcript, encoding="utf-8", errors="ignore") as handle:
+                for _ in range(60):
+                    line = handle.readline()
+                    if not line:
+                        break
+                    item = json.loads(line)
+                    value = item.get("cwd")
+                    if not isinstance(value, str) and isinstance(item.get("payload"), dict):
+                        value = item["payload"].get("cwd")
+                    if isinstance(value, str) and value:
+                        return value
+        except (OSError, ValueError):
+            pass
+    return ""
+
+
+def audit_record(label, data):
+    if not isinstance(data, dict):
+        return
+    record_project = data.get("project_key")
+    record_repository = data.get("repository")
+    cwd = record_cwd(data)
+    project_binding = (
+        git_context(record_project)
+        if isinstance(record_project, str) and record_project
+        else None
+    )
+    repository_binding = (
+        git_context(record_repository)
+        if isinstance(record_repository, str) and record_repository
+        else None
+    )
+    record_context = git_context(cwd) if cwd else None
+    if project_binding and repository_binding:
+        if project_binding["repository"] != repository_binding["repository"]:
+            warnings.append(
+                f"warn: {label} project_key/repository binding mismatch: "
+                f"project_key={record_project} repository={real(record_repository)}"
+            )
+    expected_context = repository_binding or project_binding
+    if record_context and expected_context:
+        if record_context["repository"] != expected_context["repository"]:
+            warnings.append(
+                f"warn: {label} work_dir/cwd repository mismatch: "
+                f"{real(cwd)} expected={expected_context['repository']}"
+            )
+
+
+for directory, prefix in (
+    (runtime / "child-agents", "child agent"),
+    (runtime / "session_index", "session index"),
+):
+    if not directory.is_dir():
+        continue
+    for path in sorted(directory.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        name = data.get("agent_name") if isinstance(data, dict) else ""
+        audit_record(f"{prefix} {name or path.stem}", data)
+
+snapshot = runtime / "codex-app" / "snapshot.json"
+if snapshot.is_file():
+    try:
+        snapshot_data = json.loads(snapshot.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        snapshot_data = None
+    if isinstance(snapshot_data, dict):
+        records = snapshot_data.get("runtimes", snapshot_data)
+        if isinstance(records, dict):
+            for name, data in records.items():
+                audit_record(f"Codex App snapshot {name}", data)
+        elif isinstance(records, list):
+            for index, data in enumerate(records):
+                name = data.get("agent_name", index) if isinstance(data, dict) else index
+                audit_record(f"Codex App snapshot {name}", data)
+
+if current and roots_raw:
+    roots = [real(value) for value in roots_raw.split(":") if value]
+    expected = {current["worktree"], current["repository"]}
+    for missing in sorted(expected.difference(roots)):
+        warnings.append(f"warn: protected roots missing current project root: {missing}")
+    for root in roots:
+        root_context = git_context(root)
+        if root_context and root_context["repository"] != current_repo:
+            warnings.append(f"warn: protected root belongs to another repository: {root}")
+
+for warning in dict.fromkeys(warnings):
+    print(warning)
+raise SystemExit(1 if warnings else 0)
+PY
+)" || PROJECT_AUDIT_STATUS=$?
+if [[ -n "$PROJECT_AUDIT" ]]; then
+  printf '%s\n' "$PROJECT_AUDIT"
+fi
+if [[ "$PROJECT_AUDIT_STATUS" != "0" ]]; then
+  status=1
+elif [[ -n "${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}" ]]; then
+  echo "ok: project context metadata matches the current repository"
+fi
+
 collect_managed_agent_names() {
   if [[ -f "$MANAGED_AGENTS_FILE" ]]; then
     sed '/^[[:space:]]*$/d' "$MANAGED_AGENTS_FILE"
@@ -484,7 +704,9 @@ fi
 # owner token value.
 if tmux info >/dev/null 2>&1; then
   STALE_IDENTITY_VARS=()
-  for identity_var in AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY; do
+  for identity_var in AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+    AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_CONTEXT \
+    AGENTSTACK_PROJECT_REPOSITORY AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROTECTED_ROOTS; do
     if tmux show-environment -g "$identity_var" 2>/dev/null | grep -q "^${identity_var}="; then
       STALE_IDENTITY_VARS+=("$identity_var")
     fi
@@ -520,8 +742,10 @@ if [[ "$REPORT" == "1" ]]; then
   echo '## Environment'
   echo
   printf -- '- stack: %s\n' "$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo 'VERSION not installed')"
-  if git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD >/dev/null 2>&1; then
-    printf -- '- stack commit: %s\n' "$(git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD)"
+  if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+      git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD >/dev/null 2>&1; then
+    printf -- '- stack commit: %s\n' "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+      git -C "${AGENTSTACK_REPO:-$INSTALL_DIR}" rev-parse --short HEAD)"
   fi
   printf -- '- host: %s %s (%s)\n' "$(uname -s)" "$(uname -r)" "$(uname -m)"
   if [[ "$(uname -s)" == "Darwin" ]] && command -v sw_vers >/dev/null 2>&1; then
@@ -544,10 +768,13 @@ if [[ "$REPORT" == "1" ]]; then
   echo
   ags_mail_dir="${AGENTSTACK_MAIL_DIR:-$HOME/.agentstack/mail-service}"
   printf -- '- directory: %s\n' "$ags_mail_dir"
-  if git -C "$ags_mail_dir" rev-parse --short HEAD >/dev/null 2>&1; then
-    printf -- '- commit: %s\n' "$(git -C "$ags_mail_dir" rev-parse --short HEAD)"
+  if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+      git -C "$ags_mail_dir" rev-parse --short HEAD >/dev/null 2>&1; then
+    printf -- '- commit: %s\n' "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+      git -C "$ags_mail_dir" rev-parse --short HEAD)"
     printf -- '- ahead of origin: %s commit(s)\n' \
-      "$(git -C "$ags_mail_dir" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 'unknown')"
+      "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$ags_mail_dir" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 'unknown')"
   else
     echo '- commit: not a git checkout'
   fi

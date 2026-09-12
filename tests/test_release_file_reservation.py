@@ -388,7 +388,10 @@ class ReleaseHookTests(unittest.TestCase):
             self.assertEqual(request["params"]["name"], "release_file_reservations")
             self.assertEqual(
                 request["params"]["arguments"],
-                {"project_key": str(project), "agent_name": "PluckyEinstein"},
+                {
+                    "project_key": str(project.resolve()),
+                    "agent_name": "PluckyEinstein",
+                },
             )
 
     def test_template_wires_all_release_hooks(self) -> None:

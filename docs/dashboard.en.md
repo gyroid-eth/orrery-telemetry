@@ -170,7 +170,7 @@ As communication increases, the number on the same pair's edge rises. The next i
 
 ![NETWORK with more communication and message counts two and three on edges](images/net_humanloop.png)
 
-Without `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT`, mail edges and the drawer show `NOT CONFIGURED`. tmux telemetry remains, distinguishing missing mail configuration from a complete dashboard failure.
+Without `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT`, mail edges and the drawer show `NOT CONFIGURED`. The page and infrastructure health entries remain available, while ordinary agent sessions require a selected project for display and control. See [Without a project key](configuration.en.md#without-a-project-key).
 
 ![Mail drawer after an edge click — pairwise subject / importance / time / body](img/network-edge-drawer.jpg)
 
@@ -252,6 +252,21 @@ Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist p
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
 
+NEW AGENT resolves project context from the selected directory's canonical
+repository. It does not reuse the service's install-time project key for another
+repository. Linked worktrees share one project. When a parent is selected, its
+established context and the target must belong to the same repository; a
+mismatch is rejected before registration. Use STANDALONE for another repository.
+
+Agent information in Deck, Graph, and history is scoped to the Dashboard
+service's configured project. View a standalone agent launched in another
+repository through a Dashboard configured for that project.
+
+Role/group annotations and name-substitution records are also stored per project.
+Legacy records without project information are preserved but not displayed or
+inherited by a same-name agent in another project. Reassign any needed role/group
+in the Dashboard configured for the intended project.
+
 ### Task and ADVANCED
 
 Task is required and limited to 4,000 characters. ADVANCED open/closed state is saved in `localStorage`.
@@ -264,6 +279,12 @@ Task is required and limited to 4,000 characters. ADVANCED open/closed state is 
 With no parent, the request sends `standalone: true` and starts an independent agent without `PARENT_AGENT`. Selecting a parent creates a normal child, sends the task to the child's inbox, and leaves a CC audit trail for the parent.
 
 ### Spawn sequence
+
+First validate project/work-directory consistency and the local name. With a
+parent selected, verify that its registration and owner credential belong to the
+selected project; a mismatch stops before child registration. STANDALONE first
+confirms or creates the selected project with `ensure_project`. If that step
+fails, agent registration and task creation do not proceed.
 
 1. Create child identity and dedicated token with `register_agent`
 2. Apply role / group annotation best-effort

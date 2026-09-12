@@ -123,6 +123,19 @@ wanted = os.environ.get("AGENTSTACK_LOOKUP_SESSION", "")
 project = os.environ.get("AGENTSTACK_LOOKUP_PROJECT_KEY", "")
 directory = pathlib.Path(os.environ.get("AGENTSTACK_LOOKUP_DIR", ""))
 names = set()
+
+def project_key(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    path = pathlib.Path(value)
+    if path.is_absolute() or path.is_dir():
+        try:
+            return str(path.resolve())
+        except (OSError, RuntimeError):
+            return ""
+    return value
+
+project = project_key(project)
 if wanted and directory.is_dir():
     for entry in directory.glob("*.json"):
         if entry.is_symlink() or not entry.is_file():
@@ -152,7 +165,7 @@ if wanted and directory.is_dir():
         if caller and caller != name:
             continue
         if project:
-            recorded = record.get("project_key")
+            recorded = project_key(record.get("project_key"))
             # A record from before project keys were stored cannot prove it
             # belongs here, and a record from elsewhere proves it does not.
             if not isinstance(recorded, str) or recorded != project:

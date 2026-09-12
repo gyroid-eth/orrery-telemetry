@@ -159,6 +159,9 @@ def test_a_legacy_index_record_is_not_exact_authority(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(index_dir))
     monkeypatch.setattr(server, "_agent_id_for_name", lambda name: 77)
+    project = "transcript-project"
+    monkeypatch.setattr(server, "_project_key", lambda: project)
+    monkeypatch.setattr(server, "_transcript_matches_dashboard_project", lambda _p: True)
     assert server._indexed_transcript("LegacyChild") is None
 
     # The null case: a record that shows what it is still resolves.
@@ -172,6 +175,7 @@ def test_a_legacy_index_record_is_not_exact_authority(tmp_path, monkeypatch):
                 "registered_by": "",
                 "schema_version": 2,
                 "binding_kind": "self",
+                "project_key": project,
             }
         ),
         encoding="utf-8",

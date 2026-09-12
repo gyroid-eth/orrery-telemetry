@@ -47,6 +47,7 @@ def test_resolved_project_key_prefers_installed_env(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_PROJECT_KEY", raising=False)
     monkeypatch.delenv("PROJECT_KEY", raising=False)
     monkeypatch.chdir(cwd)
+    monkeypatch.setattr(await_reply, "DEFAULT_PROJECT_KEY", str(cwd))
 
     assert await_reply._resolved_project_key() == str(project)
 

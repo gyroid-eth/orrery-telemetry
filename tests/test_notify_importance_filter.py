@@ -103,7 +103,9 @@ def test_a_filtered_message_is_not_consumed():
     # the two by where they were explained rather than where they run.
     text = body.group(0)
     filter_at = text.find('"below_min_importance" "watcher"')
-    lease_at = text.find('acquire_delivery_lease "$agent_name"')
+    lease_at = text.find(
+        'acquire_delivery_lease "$signal_project_key" "$agent_name"'
+    )
     assert filter_at != -1, "the importance filter is not in handle_signal_file"
     assert lease_at != -1, "the delivery lease is not in handle_signal_file"
     assert filter_at < lease_at, (

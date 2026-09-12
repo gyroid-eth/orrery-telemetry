@@ -12,7 +12,9 @@ PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-conte
 . "$PROJECT_CONTEXT_LIB"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HEALTH_URL="${AGENTSTACK_MCP_HEALTH_URL:-${MCP_AGENT_MAIL_HEALTH_URL:-}}"
-PROJECT_KEY="$(agentstack_resolve_project_key "$(pwd -P)")"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+PROJECT_CONTEXT_MISMATCH=0
+SESSION_START_CWD=""
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 SHELL_REGISTERED_AGENT=""
@@ -131,7 +133,35 @@ except Exception:
     print("")
 ' 2>/dev/null || echo "")"
     export AGENTSTACK_SESSION_ID
+    SESSION_START_CWD="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("cwd", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")"
 fi
+
+PROJECT_CONTEXT_TARGET="${SESSION_START_CWD:-$(pwd -P)}"
+if [ "${AGENTSTACK_PROJECT_CONTEXT:-}" = "1" ] && \
+   ! agentstack_context_matches_target "$PROJECT_CONTEXT_TARGET"; then
+    PROJECT_CONTEXT_MISMATCH=1
+fi
+if ! PROJECT_KEY="$(agentstack_resolve_project_key "$PROJECT_CONTEXT_TARGET")"; then
+    # An unresolved project must not fall through to an unscoped identity
+    # lookup: that can name, and register, an agent from another project.
+    # Stop before resolve-agent-name, Mail, token, or runtime-state work.
+    for stream in 1 2; do
+        {
+            echo "PROJECT CONTEXT UNRESOLVED: the ORRERY Mail project for SessionStart cwd '$PROJECT_CONTEXT_TARGET' could not be determined."
+            echo "Do not register or adopt an agent name in this session. Verify AGENTSTACK_PYTHON and the installed env.sh, then start a new session."
+        } >&"$stream"
+    done
+    return 0 2>/dev/null || exit 0
+fi
+AGENTSTACK_LOOKUP_PROJECT_KEY="$PROJECT_KEY"
+export AGENTSTACK_LOOKUP_PROJECT_KEY
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     # shellcheck disable=SC1091
@@ -187,7 +217,7 @@ shell_register_resolved_agent() {
 
     CHILD_REGISTRATION_TOKEN="$restored_token"
     export CHILD_REGISTRATION_TOKEN
-    work_dir="${PWD:-$PROJECT_KEY}"
+    work_dir="${SESSION_START_CWD:-${PWD:-$PROJECT_KEY}}"
     # spawn_child.sh hands the child its model as CLAUDE_CHILD_MODEL; without
     # it this re-registration overwrote the pre-registered model with the
     # program name, and the dashboard lost the provider (no logo, chip said
@@ -251,7 +281,10 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
     "${CURRENT_SESSION:-}" \
     >> "$RUNTIME_DIR/session-start-resolve.log" 2>/dev/null
 
-if mail_server_is_answering; then
+if [ "$PROJECT_CONTEXT_MISMATCH" = "1" ]; then
+    echo "PROJECT CONTEXT MISMATCH: the established project does not match SessionStart cwd '$PROJECT_CONTEXT_TARGET'." >&2
+    echo "Refusing automatic re-registration under another repository; start a fresh top-level session for that repository." >&2
+elif mail_server_is_answering; then
     if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
         echo "ORRERY Mail server is running. This session is already registered."
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"

@@ -20,9 +20,41 @@ def _set_annotation_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "ANNOT_PATH", str(path))
     monkeypatch.setattr(server, "LEGACY_ANNOT_PATH", str(legacy))
     monkeypatch.setattr(
-        server, "_ANNOT_CACHE", {"path": "", "mtime": -1.0, "data": {}}
+        server,
+        "_ANNOT_CACHE",
+        {"path": "", "mtime": -1.0, "project_key": "", "data": {}},
     )
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
     return path, legacy
+
+
+def _scoped_annotations(path: pathlib.Path, project: str = "/project") -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))["projects"][project][
+        "agents"
+    ]
+
+
+def _set_spawn_context(monkeypatch, work_dir: pathlib.Path, project: str = "/project"):
+    resolved = str(work_dir.resolve())
+    context = {
+        "project_key": project,
+        "repository": "",
+        "work_dir": resolved,
+        "launch_dir": resolved,
+        "protected_roots": resolved,
+    }
+    monkeypatch.setattr(
+        server, "_resolved_work_dir_context", lambda _work_dir: (dict(context), "")
+    )
+    monkeypatch.setattr(server, "_context_matches_dashboard_project", lambda _ctx: True)
+
+
+def _set_parent_identity(monkeypatch, runtime: pathlib.Path, project: str = "/project"):
+    runtime.mkdir(parents=True, exist_ok=True)
+    token = runtime / "agent_token_Parent"
+    token.write_text("parent-owner-token", encoding="utf-8")
+    token.with_name(token.name + ".project").write_text(project, encoding="utf-8")
+    monkeypatch.setattr(server, "_project_has_agent", lambda *_args: True)
 
 
 def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
@@ -31,8 +63,9 @@ def test_group_only_annotation_is_persisted(monkeypatch, tmp_path):
     result = server._write_annotation("WiseFaraday", "", "", "runtime-audit")
 
     assert result["ok"] is True
-    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"] == {
+    assert _scoped_annotations(path)["WiseFaraday"] == {
         "role": "", "emoji": "", "group": "runtime-audit",
+        "project_key": "/project",
     }
     assert server._annotations()["WiseFaraday"]["group"] == "runtime-audit"
 
@@ -41,26 +74,51 @@ def test_annotation_is_removed_only_when_all_fields_are_empty(monkeypatch, tmp_p
     path, _legacy = _set_annotation_paths(monkeypatch, tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text(
-        json.dumps({"WiseFaraday": {"role": "", "emoji": "", "group": "audit"}}),
+        json.dumps(
+            {
+                "projects": {
+                    "/project": {
+                        "agents": {
+                            "WiseFaraday": {
+                                "role": "",
+                                "emoji": "",
+                                "group": "audit",
+                                "project_key": "/project",
+                            }
+                        }
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
     result = server._write_annotation("WiseFaraday", "", "", "")
 
     assert result == {"ok": True, "removed": "WiseFaraday"}
-    assert json.loads(path.read_text(encoding="utf-8")) == {}
+    assert _scoped_annotations(path) == {}
 
 
 def test_legacy_annotation_is_read_then_migrated_on_write(monkeypatch, tmp_path):
     path, legacy = _set_annotation_paths(monkeypatch, tmp_path)
     legacy.parent.mkdir(parents=True)
     legacy_data = {
-        "WiseFaraday": {"role": "auditor", "emoji": "", "group": "runtime"},
-        "ProOpus": {"role": "parent", "emoji": "", "group": "runtime"},
+        "WiseFaraday": {
+            "role": "auditor", "emoji": "", "group": "runtime",
+            "project_key": "/project",
+        },
+        "ProOpus": {
+            "role": "parent", "emoji": "", "group": "runtime",
+            "project_key": "/project",
+        },
     }
     legacy.write_text(json.dumps(legacy_data), encoding="utf-8")
 
-    assert server._annotations() == legacy_data
+    expected_display = {
+        name: {key: value for key, value in entry.items() if key != "project_key"}
+        for name, entry in legacy_data.items()
+    }
+    assert server._annotations() == expected_display
 
     result = server._write_annotation(
         "WiseFaraday", "runtime maintainer", "", "runtime"
@@ -68,10 +126,13 @@ def test_legacy_annotation_is_read_then_migrated_on_write(monkeypatch, tmp_path)
 
     assert result["ok"] is True
     migrated = json.loads(path.read_text(encoding="utf-8"))
-    assert migrated["WiseFaraday"]["role"] == "runtime maintainer"
-    assert migrated["ProOpus"] == legacy_data["ProOpus"]
+    scoped = migrated["projects"]["/project"]["agents"]
+    assert scoped["WiseFaraday"]["role"] == "runtime maintainer"
+    assert scoped["ProOpus"] == legacy_data["ProOpus"]
+    assert migrated["WiseFaraday"] == legacy_data["WiseFaraday"]
     assert json.loads(legacy.read_text(encoding="utf-8")) == legacy_data
-    assert server._annotations() == migrated
+    assert server._annotations()["WiseFaraday"]["role"] == "runtime maintainer"
+    assert server._annotations()["ProOpus"] == expected_display["ProOpus"]
 
 
 def test_new_annotation_path_wins_over_legacy(monkeypatch, tmp_path):
@@ -79,17 +140,27 @@ def test_new_annotation_path_wins_over_legacy(monkeypatch, tmp_path):
     path.parent.mkdir(parents=True)
     legacy.parent.mkdir(parents=True)
     path.write_text(
-        json.dumps({"WiseFaraday": {"role": "new", "emoji": "", "group": ""}}),
+        json.dumps(
+            {"WiseFaraday": {
+                "role": "new", "emoji": "", "group": "",
+                "project_key": "/project",
+            }}
+        ),
         encoding="utf-8",
     )
     legacy.write_text(
-        json.dumps({"WiseFaraday": {"role": "old", "emoji": "", "group": ""}}),
+        json.dumps(
+            {"WiseFaraday": {
+                "role": "old", "emoji": "", "group": "",
+                "project_key": "/project",
+            }}
+        ),
         encoding="utf-8",
     )
 
     assert server._annotations()["WiseFaraday"]["role"] == "new"
     server._write_annotation("WiseFaraday", "updated", "", "")
-    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"]["role"] == "updated"
+    assert _scoped_annotations(path)["WiseFaraday"]["role"] == "updated"
 
 
 def test_annotation_null_case_creates_runtime_store(monkeypatch, tmp_path):
@@ -102,7 +173,7 @@ def test_annotation_null_case_creates_runtime_store(monkeypatch, tmp_path):
     result = server._write_annotation("WiseFaraday", "maintainer", "", "")
 
     assert result["ok"] is True
-    assert json.loads(path.read_text(encoding="utf-8"))["WiseFaraday"]["role"] == "maintainer"
+    assert _scoped_annotations(path)["WiseFaraday"]["role"] == "maintainer"
 
 
 def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
@@ -128,9 +199,11 @@ def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_pa
     )
     db = tmp_path / "mail.sqlite3"
     with sqlite3.connect(db) as con:
-        con.execute("CREATE TABLE agents (name TEXT)")
+        con.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, human_key TEXT)")
+        con.execute("CREATE TABLE agents (name TEXT, project_id INTEGER)")
+        con.execute("INSERT INTO projects(id, human_key) VALUES (1, '/project')")
         con.executemany(
-            "INSERT INTO agents(name) VALUES (?)",
+            "INSERT INTO agents(name, project_id) VALUES (?, 1)",
             [
                 ("SunnyBoltzmann",),
                 ("ZestyBoltzmann",),
@@ -140,6 +213,11 @@ def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_pa
         )
     monkeypatch.setattr(server, "SPAWN_SCIENTISTS_SCRIPT", str(script))
     monkeypatch.setattr(server, "DB_PATH", str(db))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    monkeypatch.setattr(server, "_tmux", lambda _args: "")
     server._SPAWN_STATUS_CACHE.update(ts=0.0, key=None, data={})
 
     names = {
@@ -161,7 +239,7 @@ def test_spawn_name_status_fails_closed_when_db_missing(monkeypatch):
 def test_spawn_names_keeps_home_preset_symbolic(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     assert server.spawn_names_payload()["dirs"] == ["~"]
 
 
@@ -241,12 +319,12 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "agent_token_Parent").write_text("parent-owner-token")
+    _set_parent_identity(monkeypatch, runtime)
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    _set_spawn_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server.time, "sleep", lambda _: None)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
@@ -288,12 +366,14 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "agent_token_Parent").write_text("parent-owner-token")
+    _set_parent_identity(monkeypatch, runtime)
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
-    monkeypatch.setattr(server, "_suggest_any_spawn_name", lambda: "Zesty-Curie")
+    _set_spawn_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        server, "_suggest_any_spawn_name", lambda project_key: "Zesty-Curie"
+    )
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server.time, "sleep", lambda _: None)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
@@ -328,6 +408,8 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
 
     def mcp(method, args, timeout=15):
         calls.append((method, args))
+        if method == "ensure_project":
+            return {"ok": True, "data": {"human_key": "/project"}}
         return {
             "ok": True,
             "data": {
@@ -343,7 +425,8 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    _set_spawn_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server.subprocess, "Popen", popen)
     monkeypatch.setattr(
@@ -363,9 +446,10 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
     assert result["ok"] is True
     assert result["standalone"] is True
     assert [method for method, _ in calls] == [
-        "register_agent", "set_contact_policy",
+        "ensure_project", "register_agent", "set_contact_policy",
     ]
-    assert calls[1][1]["registration_token"] == "server-child-token"
+    assert calls[0] == ("ensure_project", {"human_key": "/project"})
+    assert calls[2][1]["registration_token"] == "server-child-token"
     args, kwargs = launched[0]
     assert pathlib.Path(args[4]).read_text() == "server-child-token"
     assert "--standalone" in args
@@ -392,7 +476,7 @@ def test_suggest_name_refuses_exhausted_candidates(monkeypatch, tmp_path):
         'ags_scientist_list() { printf "Boltzmann\\n"; }\n'
     )
     monkeypatch.setattr(server, "SPAWN_SCIENTISTS_SCRIPT", str(script))
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "occupied")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "occupied")
     assert server.suggest_spawn_name("Boltzmann") is None
 
 
@@ -403,7 +487,7 @@ def test_suggest_name_rejects_scientist_outside_roster(monkeypatch, tmp_path):
         'ags_scientist_list() { printf "Boltzmann\\n"; }\n'
     )
     monkeypatch.setattr(server, "SPAWN_SCIENTISTS_SCRIPT", str(script))
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     assert server.suggest_spawn_name("NotAScientist") is None
     assert server.suggest_spawn_name("Boltzmann") == "Stormy-Boltzmann"
 
@@ -454,13 +538,16 @@ def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, 
             return 0
 
     def mcp(method, args, timeout=15):
+        if method == "ensure_project":
+            return {"ok": True, "data": {"human_key": "/project"}}
         return {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if method == "register_agent" else {}}
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    _set_spawn_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: SlowProc())
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
@@ -495,8 +582,22 @@ def test_sync_spawn_is_unchanged_without_the_async_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
-    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
-    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
+    _set_spawn_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_spawn_name_status", lambda *_: "available")
+    monkeypatch.setattr(
+        server,
+        "_mcp_call",
+        lambda m, a, timeout=15: {
+            "ok": True,
+            "data": (
+                {"human_key": "/project"}
+                if m == "ensure_project"
+                else {"name": "QuietCurie", "registration_token": "tok"}
+                if m == "register_agent"
+                else {}
+            ),
+        },
+    )
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: Proc())
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
     result = server.do_spawn({"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)})

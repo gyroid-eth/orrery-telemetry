@@ -39,6 +39,13 @@ class _Mail(http.server.BaseHTTPRequestHandler):
             result = {"structuredContent": {"status": "ok"}}
         elif name == "ensure_project":
             result = {"structuredContent": {"id": 1}}
+        elif name == "whois":
+            args = params.get("arguments") or {}
+            result = {"structuredContent": {
+                "id": AGENT_ID,
+                "name": args.get("agent_name"),
+                "project": args.get("project_key"),
+            }}
         elif name == "register_agent":
             args = params.get("arguments") or {}
             _Mail.register_args.append(dict(args))
@@ -152,6 +159,11 @@ def test_the_index_is_exact_authority_for_the_dashboard(mail: str, tmp_path: Pat
 
     monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(runtime / "session_index"))
     monkeypatch.setattr(server, "_agent_id_for_name", lambda name: AGENT_ID if name == CHILD else None)
+    record = json.loads(
+        (runtime / "session_index" / f"{AGENT_ID}.json").read_text(encoding="utf-8")
+    )
+    monkeypatch.setattr(server, "_project_key", lambda: record["project_key"])
+    monkeypatch.setattr(server, "_transcript_matches_dashboard_project", lambda _p: True)
     assert server._indexed_transcript(CHILD) == str(transcript)
 
 

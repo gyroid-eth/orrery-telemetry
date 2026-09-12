@@ -34,6 +34,12 @@ except:
     print('')
 " 2>/dev/null)
 
+if [ "${AGENTSTACK_PROJECT_CONTEXT:-}" = "1" ] && \
+   ! agentstack_context_matches_target "${HOOK_CWD:-$(pwd -P)}"; then
+    echo "PROJECT CONTEXT MISMATCH: this established session is bound to another repository/workspace." >&2
+    echo "Start a fresh top-level agent for ${HOOK_CWD:-$(pwd -P)} instead of reusing this identity." >&2
+    exit 2
+fi
 LOOKUP_PROJECT="$(agentstack_resolve_project_key "${HOOK_CWD:-$(pwd -P)}")"
 
 # Three questions, in this order, and none of them is skipped for a session

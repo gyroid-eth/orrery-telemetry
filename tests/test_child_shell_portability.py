@@ -42,7 +42,8 @@ def test_launch_snippets_avoid_zsh_only_expansions():
 
 def _codex_snippet() -> str:
     m = re.search(
-        r'EXTRA_ARGS=\(\)\n(.*?)env -u OPENAI_API_KEY "\$AGENTSTACK_CODEX_BIN"',
+        r'EXTRA_ARGS=\(\)\n(.*?)env -u GIT_DIR -u GIT_WORK_TREE '
+        r'-u GIT_COMMON_DIR -u OPENAI_API_KEY "\$AGENTSTACK_CODEX_BIN"',
         _spawn_text(),
         re.S,
     )

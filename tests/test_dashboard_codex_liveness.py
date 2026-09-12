@@ -56,6 +56,9 @@ def _patch_agent_inputs(monkeypatch, process_tree):
     monkeypatch.setattr(server, "_name_substitutions", lambda: {})
     monkeypatch.setattr(server, "_agent_runtime", lambda *_args: {})
     monkeypatch.setattr(server, "_project_key", lambda: "")
+    monkeypatch.setattr(
+        server, "_session_matches_dashboard_project", lambda *_args, **_kwargs: True
+    )
     return root
 
 
@@ -106,7 +109,7 @@ def test_graph_uses_the_same_husk_liveness(monkeypatch):
     monkeypatch.setattr(
         server,
         "_raw_graph",
-        lambda: {
+        lambda _live_parents=None: {
             "nodes": [{
                 "name": "MintBoltzmann",
                 "program": "codex-cli",

@@ -53,7 +53,17 @@ print("false" if failed else "true")
 # This is the same path/project resolver used by the PreToolUse guard. A
 # different root or path spelling can make release look successful while it
 # releases nothing.
-reservation_resolve_tool_context "$TOOL_OUTPUT" || exit 0
+reservation_resolve_tool_context "$TOOL_OUTPUT"
+CONTEXT_STATUS=$?
+if [ "$CONTEXT_STATUS" = "2" ]; then
+    reservation_failure_log "release session=${SESSION_ID:-<none>} path=${FILE_PATH:-<none>} error=project-context-unresolved"
+    exit 0
+fi
+[ "$CONTEXT_STATUS" = "0" ] || exit 0
+if [ "$PROJECT_CONTEXT_MISMATCH" = "1" ]; then
+    reservation_failure_log "release session=${SESSION_ID:-<none>} path=${FILE_PATH:-<none>} error=project-context-mismatch"
+    exit 0
+fi
 
 if [ -f "$POLICY_LIB_EARLY" ] \
     && [ "$(agentstack_session_binding_conflict "$SESSION_ID" "$RESERVATION_PROJECT_KEY" "${AGENT_NAME:-}")" = "conflict" ]; then

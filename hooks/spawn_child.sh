@@ -64,13 +64,20 @@ MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
-PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
 if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
     AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
 fi
 REREGISTER_HELPER="${AGENTSTACK_HOME_DIR:+$AGENTSTACK_HOME_DIR/bin/agentstack-reregister}"
+PROJECT_CONTEXT_LIB="$HOOKS_DIR/project-context.sh"
+if [[ ! -f "$PROJECT_CONTEXT_LIB" ]]; then
+    echo "spawn_child.sh: missing project context helper: $PROJECT_CONTEXT_LIB" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$PROJECT_CONTEXT_LIB"
 
 # Source the shared register lib early (function definitions only — no side
 # effects) so the macOS TCC access guard is available in every launch path,
@@ -336,6 +343,7 @@ import sys
 agent_name, project_key, source, token_file, state_file, consume = sys.argv[1:7]
 source_path = pathlib.Path(source)
 token_path = pathlib.Path(token_file)
+project_path = token_path.with_name(token_path.name + ".project")
 state_path = pathlib.Path(state_file)
 flags = os.O_RDONLY
 if hasattr(os, "O_NOFOLLOW"):
@@ -359,12 +367,18 @@ state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(state_path.parent, 0o700)
 
 token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+project_tmp = project_path.with_name(project_path.name + f".tmp.{os.getpid()}")
 state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
 with open(token_tmp, "x", encoding="utf-8") as f:
     f.write(registration_token)
     f.flush()
     os.fsync(f.fileno())
 os.chmod(token_tmp, 0o600)
+with open(project_tmp, "x", encoding="utf-8") as f:
+    f.write(project_key + "\n")
+    f.flush()
+    os.fsync(f.fileno())
+os.chmod(project_tmp, 0o600)
 with open(state_tmp, "x", encoding="utf-8") as f:
     json.dump({
         "agent_name": agent_name,
@@ -374,8 +388,10 @@ with open(state_tmp, "x", encoding="utf-8") as f:
     f.flush()
     os.fsync(f.fileno())
 os.chmod(state_tmp, 0o600)
+os.replace(project_tmp, project_path)
 os.replace(token_tmp, token_path)
 os.replace(state_tmp, state_path)
+os.chmod(project_path, 0o600)
 os.chmod(token_path, 0o600)
 os.chmod(state_path, 0o600)
 if consume == "true" and source_path != token_path:
@@ -383,6 +399,7 @@ if consume == "true" and source_path != token_path:
         source_path.unlink()
     except Exception:
         token_path.unlink(missing_ok=True)
+        project_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
         raise
 print(token_path)
@@ -546,7 +563,8 @@ maybe_create_worktree() {
         return 0
     fi
 
-    if ! git -C "$source_dir" rev-parse --git-dir > /dev/null 2>&1; then
+    if ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$source_dir" rev-parse --git-dir > /dev/null 2>&1; then
         echo "Error: --worktree requires source_dir to be a git repository: $source_dir" >&2
         return 1
     fi
@@ -570,7 +588,8 @@ maybe_create_worktree() {
         return 1
     fi
 
-    if git -C "$source_dir" show-ref --verify --quiet "refs/heads/$branch_name"; then
+    if env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$source_dir" show-ref --verify --quiet "refs/heads/$branch_name"; then
         echo "Error: branch $branch_name already exists in $source_dir (delete it first: git -C $source_dir branch -D $branch_name)" >&2
         return 1
     fi
@@ -580,7 +599,8 @@ maybe_create_worktree() {
     local base_label="HEAD"
     if [[ -n "$WORKTREE_BASE_REV" ]]; then
         local resolved
-        if ! resolved=$(git -C "$source_dir" rev-parse --verify "${WORKTREE_BASE_REV}^{commit}" 2>/dev/null); then
+        if ! resolved=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+            git -C "$source_dir" rev-parse --verify "${WORKTREE_BASE_REV}^{commit}" 2>/dev/null); then
             echo "Error: cannot resolve --worktree-base '$WORKTREE_BASE_REV' (commit/branch/tag not found)" >&2
             return 1
         fi
@@ -591,7 +611,8 @@ maybe_create_worktree() {
 
     echo "[spawn_child] Creating git worktree: $worktree_dir (branch: $branch_name, base: $base_label)" >&2
     # set -u 下で空配列展開を許容する慣用句: ${base_args[@]+"${base_args[@]}"}
-    if ! git -C "$source_dir" worktree add "$worktree_dir" -b "$branch_name" ${base_args[@]+"${base_args[@]}"} >&2; then
+    if ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$source_dir" worktree add "$worktree_dir" -b "$branch_name" ${base_args[@]+"${base_args[@]}"} >&2; then
         echo "Error: git worktree add failed" >&2
         return 1
     fi
@@ -605,9 +626,11 @@ maybe_create_worktree() {
 cleanup_worktree() {
     if [[ -n "${WORKTREE_DIR:-}" && -d "$WORKTREE_DIR" && -n "${WORKTREE_SOURCE:-}" ]]; then
         echo "[spawn_child] cleanup: removing worktree $WORKTREE_DIR" >&2
-        git -C "$WORKTREE_SOURCE" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+            git -C "$WORKTREE_SOURCE" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
         if [[ -n "${CHILD_NAME:-}" ]]; then
-            git -C "$WORKTREE_SOURCE" branch -D "exp/${CHILD_NAME}" 2>/dev/null || true
+            env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                git -C "$WORKTREE_SOURCE" branch -D "exp/${CHILD_NAME}" 2>/dev/null || true
         fi
     fi
 }
@@ -1319,18 +1342,25 @@ if not token:
     raise ValueError("register_agent returned no usable registration token")
 
 token_path = pathlib.Path(token_file)
+project_path = token_path.with_name(token_path.name + ".project")
 state_path = pathlib.Path(state_file)
 token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(token_path.parent, 0o700)
 os.chmod(state_path.parent, 0o700)
 token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+project_tmp = project_path.with_name(project_path.name + f".tmp.{os.getpid()}")
 state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
 with open(token_tmp, "x", encoding="utf-8") as handle:
     handle.write(token)
     handle.flush()
     os.fsync(handle.fileno())
 os.chmod(token_tmp, 0o600)
+with open(project_tmp, "x", encoding="utf-8") as handle:
+    handle.write(project_key + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(project_tmp, 0o600)
 with open(state_tmp, "x", encoding="utf-8") as handle:
     json.dump({
         "agent_name": agent_name,
@@ -1340,8 +1370,10 @@ with open(state_tmp, "x", encoding="utf-8") as handle:
     handle.flush()
     os.fsync(handle.fileno())
 os.chmod(state_tmp, 0o600)
+os.replace(project_tmp, project_path)
 os.replace(token_tmp, token_path)
 os.replace(state_tmp, state_path)
+os.chmod(project_path, 0o600)
 os.chmod(token_path, 0o600)
 os.chmod(state_path, 0o600)
 pathlib.Path(sent_file).unlink(missing_ok=True)
@@ -1384,6 +1416,34 @@ if [[ -z "$PROJECT_KEY" ]]; then
     exit 1
 fi
 
+establish_child_project_context() {
+    local target="$1"
+    local target_repo="" configured_repo=""
+    if [[ "${AGENTSTACK_PROJECT_CONTEXT:-}" == "1" ]]; then
+        if ! agentstack_context_matches_target "$target"; then
+            echo "Error: child workdir belongs to a different repository/workspace than the established parent project context: $target" >&2
+            echo "  Start a fresh top-level agent in that repository instead of reusing a pre-registered child identity." >&2
+            return 1
+        fi
+    else
+        # Compatibility for parents launched before repository provenance was
+        # exported: path-valued project keys can still be compared safely.
+        target_repo="$(agentstack_repository_key "$target" 2>/dev/null || true)"
+        configured_repo="$(agentstack_repository_key "$PROJECT_KEY" 2>/dev/null || true)"
+        if [[ -n "$target_repo" && -n "$configured_repo" && "$target_repo" != "$configured_repo" ]]; then
+            echo "Error: child workdir repository does not match project key repository: $target" >&2
+            return 1
+        fi
+    fi
+    agentstack_export_project_context "$PROJECT_KEY" "$target"
+}
+
+# This check precedes pre-registered token adoption and every direct Mail call.
+# Cross-repository child selection must not create credentials, reservations,
+# worktrees, or a second namespace for an already-reserved identity.
+establish_child_project_context "$WORK_DIR" || exit 1
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR 2>/dev/null || true
+
 # --- Pre-registered mode ---
 # 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths を
 # 済ませてから呼ぶモード。通常は task mail を正本にし、--embed-task 使用時は
@@ -1416,6 +1476,19 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         echo "Error: workdir does not exist: $WORK_DIR" >&2
         exit 1
     fi
+    if ! declare -F ags_local_agent_name_conflicts >/dev/null 2>&1 || \
+       ! declare -F ags_acquire_local_name_claim >/dev/null 2>&1; then
+        echo "Error: shared local identity claim helper is unavailable" >&2
+        exit 1
+    fi
+    if ags_local_agent_name_conflicts "$PROJECT_KEY" "$CHILD_NAME" adopt; then
+        echo "Error: local identity '$CHILD_NAME' is occupied or has ambiguous project ownership" >&2
+        exit 1
+    fi
+    if ! ags_acquire_local_name_claim "$PROJECT_KEY" "$CHILD_NAME" adopt; then
+        echo "Error: local identity '$CHILD_NAME' was claimed concurrently" >&2
+        exit 1
+    fi
 
     EMBEDDED_TASK_PROMPT=""
     if [[ "$EMBED_TASK" == true ]]; then
@@ -1438,14 +1511,25 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
+        # WORKTREE_DIR/WORKTREE_SOURCE are set only after this invocation's
+        # `git worktree add` succeeds.  A child that exits before readiness may
+        # already have run cleanup-child-agent.sh and released its name binding;
+        # the outer launcher must still roll back the worktree it created.
+        # Keep every name-keyed artifact below behind the binding validation so
+        # a replacement identity is never removed by this older invocation.
+        cleanup_worktree
+        if ! ags_validate_local_name_binding "$PROJECT_KEY" "$CHILD_NAME"; then
+            echo "[spawn_child/pre-reg] cleanup refused: local identity ownership changed for $CHILD_NAME" >&2
+            return
+        fi
         warn_if_uninjected
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
         fi
         if [[ "$PRE_REGISTERED_TOKEN_CREATED" == true ]]; then
-            rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
+            rm -f "$CHILD_TOKEN_FILE" "$CHILD_TOKEN_FILE.project" \
+                "$CHILD_STATE_DIR/$CHILD_NAME.json"
         fi
-        cleanup_worktree
         if [[ -f "$MANAGED_FILE" ]]; then
             python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
 import pathlib
@@ -1463,6 +1547,10 @@ path.write_text(
 )
 PY
         fi
+        rm -f "$CHILD_STATE_DIR/$CHILD_NAME.mcp.json"
+        rm -rf "$CHILD_STATE_DIR/$CHILD_NAME.codex-home"
+        ags_remove_local_name_binding "$PROJECT_KEY" "$CHILD_NAME" || true
+        ags_release_local_name_claim
     }
     trap cleanup_preregister_failure EXIT
 
@@ -1476,6 +1564,7 @@ PY
             exit 1
         fi
         PRE_REGISTERED_TOKEN_CREATED=true
+        ags_commit_local_name_claim
     else
         CHILD_TOKEN_FILE="$(child_token_file_path "$CHILD_NAME")"
         if [[ ! -s "$CHILD_TOKEN_FILE" ]]; then
@@ -1497,6 +1586,7 @@ PY
         exit 1
     fi
         WORK_DIR="$WORKTREE_DIR"
+        agentstack_export_project_context "$PROJECT_KEY" "$WORK_DIR"
         echo "[spawn_child/pre-reg] WORK_DIR overridden to worktree: $WORK_DIR" >&2
     fi
 
@@ -1514,7 +1604,7 @@ PY
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_CONTEXT=1" -e "AGENTSTACK_PROJECT_REPOSITORY=$AGENTSTACK_PROJECT_REPOSITORY" -e "AGENTSTACK_PROJECT_WORK_DIR=$AGENTSTACK_PROJECT_WORK_DIR" -e "AGENTSTACK_PROTECTED_ROOTS=$AGENTSTACK_PROTECTED_ROOTS" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
@@ -1568,7 +1658,7 @@ ${TASK}"
                     [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
                 done
                 IFS="$_ifs"
-                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+                env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
                     "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -1693,7 +1783,7 @@ ${TASK}"
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-                "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+                "$CHILD_SHELL"' -lc '"'"'unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
@@ -1999,7 +2089,13 @@ pick_available_child_agent_name() {
         candidate="$(ags_pick_adjective_scientist_name)" || return 1
         name_status="$(child_agent_name_status "$candidate")"
         case "$name_status" in
-            available) printf '%s\n' "$candidate"; return 0 ;;
+            available)
+                if declare -F ags_local_agent_name_conflicts >/dev/null 2>&1 && \
+                   ags_local_agent_name_conflicts "$PROJECT_KEY" "$candidate"; then
+                    unknowns=0
+                    continue
+                fi
+                printf '%s\n' "$candidate"; return 0 ;;
             occupied)  unknowns=0 ;;
             *)
                 unknowns=$((unknowns + 1))
@@ -2017,7 +2113,13 @@ pick_available_child_agent_name() {
         candidate="${adjective}-${i}-${scientist}"
         name_status="$(child_agent_name_status "$candidate")"
         case "$name_status" in
-            available) printf '%s\n' "$candidate"; return 0 ;;
+            available)
+                if declare -F ags_local_agent_name_conflicts >/dev/null 2>&1 && \
+                   ags_local_agent_name_conflicts "$PROJECT_KEY" "$candidate"; then
+                    unknowns=0
+                    continue
+                fi
+                printf '%s\n' "$candidate"; return 0 ;;
             occupied)  unknowns=0 ;;
             *)
                 unknowns=$((unknowns + 1))
@@ -2082,6 +2184,11 @@ if ! CHILD_NAME_CANDIDATE="$(pick_available_child_agent_name)"; then
     echo "Error: failed to generate an available child agent name" >&2
     exit 1
 fi
+if ! declare -F ags_acquire_local_name_claim >/dev/null 2>&1 || \
+   ! ags_acquire_local_name_claim "$PROJECT_KEY" "$CHILD_NAME_CANDIDATE" candidate; then
+    echo "Error: child identity '$CHILD_NAME_CANDIDATE' was claimed concurrently" >&2
+    exit 1
+fi
 
 TOKEN_HANDOFF_DIR="$RUNTIME_DIR/spawn-tokens"
 TOKEN_NONCE="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
@@ -2106,11 +2213,13 @@ print(json.dumps(args))
 
 if ! REGISTER_RESULT=$(call_mcp "register_agent" "$REGISTER_ARGS"); then
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    ags_release_local_name_claim
     echo "Error: register_agent request failed" >&2
     exit 1
 fi
 if printf '%s' "$REGISTER_RESULT" | mcp_response_has_error; then
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    ags_release_local_name_claim
     echo "Error: register_agent returned an error" >&2
     exit 1
 fi
@@ -2119,10 +2228,17 @@ CHILD_NAME="$(printf '%s' "$REGISTER_RESULT" | mcp_extract_agent_name)"
 if [[ -z "$CHILD_NAME" || ! "$CHILD_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "Error: register_agent returned no valid child agent name" >&2
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    ags_release_local_name_claim
     exit 1
 fi
 if [[ "$CHILD_NAME" != "$CHILD_NAME_CANDIDATE" ]]; then
     echo "[spawn_child] register_agent normalized '$CHILD_NAME_CANDIDATE' to actual identity '$CHILD_NAME'" >&2
+fi
+if ! ags_update_local_name_claim "$PROJECT_KEY" "$CHILD_NAME"; then
+    rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    ags_release_local_name_claim
+    echo "Error: server-returned child identity could not be bound locally" >&2
+    exit 1
 fi
 
 # Adopt the token the server persisted, not the one we sent. Legacy servers
@@ -2137,9 +2253,11 @@ if ! CHILD_TOKEN_FILE="$(
             "$DIRECT_ONE_SHOT_TOKEN_FILE"
 )"; then
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
+    ags_release_local_name_claim
     echo "Error: failed to persist the registered child token" >&2
     exit 1
 fi
+ags_commit_local_name_claim
 
 # --- 失敗時cleanup trap ---
 # Launcher が完全に readiness/prompt injection を終える前に異常終了したら、
@@ -2148,6 +2266,17 @@ SPAWN_COMPLETED=false
 CHILD_SESSION_STARTED=false
 cleanup_on_failure() {
     if [[ "$SPAWN_COMPLETED" == true ]]; then
+        return
+    fi
+    # Worktree ownership belongs to this launcher invocation, independently of
+    # the host-global agent name.  An immediately exiting child can legitimately
+    # release the name binding before the parent notices the failed launch.
+    # Roll back only the worktree recorded after our successful creation, then
+    # retain the binding gate for all name-keyed cleanup below.
+    cleanup_worktree
+    if [[ -n "${CHILD_NAME:-}" ]] && \
+       ! ags_validate_local_name_binding "$PROJECT_KEY" "$CHILD_NAME"; then
+        echo "[spawn_child] cleanup refused: local identity ownership changed for $CHILD_NAME" >&2
         return
     fi
     warn_if_uninjected
@@ -2170,9 +2299,10 @@ print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
             retire_agent_with_token_file "$CHILD_NAME" "$CHILD_TOKEN_FILE" > /dev/null 2>&1 || true
         fi
     fi
-    # worktree も作っていれば撤去
-    cleanup_worktree
-    rm -f "${CHILD_TOKEN_FILE:-}" "$CHILD_STATE_DIR/${CHILD_NAME:-}.json"
+    rm -f "${CHILD_TOKEN_FILE:-}" "${CHILD_TOKEN_FILE:-}.project" \
+        "$CHILD_STATE_DIR/${CHILD_NAME:-}.json" \
+        "$CHILD_STATE_DIR/${CHILD_NAME:-}.mcp.json"
+    rm -rf "$CHILD_STATE_DIR/${CHILD_NAME:-}.codex-home"
     if [[ -n "${CHILD_NAME:-}" && -f "$MANAGED_FILE" ]]; then
         python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
 import pathlib
@@ -2189,6 +2319,9 @@ path.write_text(
     encoding="utf-8",
 )
 PY
+    fi
+    if [[ -n "${CHILD_NAME:-}" ]]; then
+        ags_remove_local_name_binding "$PROJECT_KEY" "$CHILD_NAME" || true
     fi
 }
 trap cleanup_on_failure EXIT
@@ -2235,18 +2368,6 @@ else:
 
     if [[ "$HAS_CONFLICT" == "yes" ]]; then
         echo "Error: resource conflict detected; aborting spawn." >&2
-        # クリーンアップ: 部分成功した予約を解放 + 子エージェントを retire
-        RELEASE_ARGS=$(python3 -c "
-import json, sys
-print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
-" "$PROJECT_KEY" "$CHILD_NAME")
-        call_mcp "release_file_reservations" "$RELEASE_ARGS" > /dev/null 2>&1 || true
-        if [[ -s "${CHILD_TOKEN_FILE:-}" ]]; then
-            retire_agent_with_token_file "$CHILD_NAME" "$CHILD_TOKEN_FILE" > /dev/null 2>&1 || true
-        fi
-        echo "[spawn_child] Released reservations and retired $CHILD_NAME" >&2
-        rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
-        SPAWN_COMPLETED=true  # cleanup already completed explicitly above
         exit 21
     fi
 fi
@@ -2259,6 +2380,7 @@ if [[ "$USE_WORKTREE" == true ]]; then
         exit 1
     fi
     WORK_DIR="$WORKTREE_DIR"
+    agentstack_export_project_context "$PROJECT_KEY" "$WORK_DIR"
     echo "[spawn_child] WORK_DIR overridden to worktree: $WORK_DIR" >&2
 fi
 
@@ -2332,7 +2454,7 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
-TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_CONTEXT=1" -e "AGENTSTACK_PROJECT_REPOSITORY=$AGENTSTACK_PROJECT_REPOSITORY" -e "AGENTSTACK_PROJECT_WORK_DIR=$AGENTSTACK_PROJECT_WORK_DIR" -e "AGENTSTACK_PROTECTED_ROOTS=$AGENTSTACK_PROTECTED_ROOTS" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi
@@ -2371,7 +2493,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
             done
             IFS="$_ifs"
-            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+            env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
                 "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
@@ -2463,7 +2585,7 @@ else
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-        "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+        "$CHILD_SHELL"' -lc '"'"'unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
     CHILD_SESSION_STARTED=true
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機

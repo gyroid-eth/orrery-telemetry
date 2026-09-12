@@ -25,6 +25,7 @@ here must not disturb registration.
 """
 import json
 import os
+import pathlib
 import sys
 import time
 
@@ -85,6 +86,19 @@ EXIT_WRITE_FAILED = 6
 _SOURCES_THAT_MAY_BIND = {"none", "env", "tmux-session", "metafile+tmux-session", "session-index"}
 
 
+def _project_key(value):
+    """Match Mail's filesystem-key spelling without rewriting logical keys."""
+    if not isinstance(value, str) or not value:
+        return ""
+    path = pathlib.Path(value)
+    if path.is_absolute() or path.is_dir():
+        try:
+            return str(path.resolve())
+        except (OSError, RuntimeError):
+            return ""
+    return value
+
+
 def _bindings_for(out_dir, session_id):
     """Names already bound to this session by an authoritative record."""
     names = set()
@@ -135,9 +149,7 @@ def main():
     # Agent names are project-local, so a binding is only meaningful together
     # with the project it was made in. resolve-agent-name.sh refuses a record
     # that cannot show it belongs to the project being enforced.
-    project_key = tool_input.get("project_key") or ""
-    if not isinstance(project_key, str):
-        project_key = ""
+    project_key = _project_key(tool_input.get("project_key"))
 
     # Who called register_agent, as mark-agent-registered.sh resolved it. Both
     # halves are required: the name alone cannot distinguish "nobody claims this

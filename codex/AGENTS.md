@@ -5,6 +5,11 @@ participant. Follow the rules below.
 
 ## Coordination (ORRERY Mail)
 
+Resolve the project context from the launcher/SessionStart output before using
+these examples. In MCP arguments, replace `$AGENTSTACK_PROJECT_KEY` with the
+actual resolved key. The install fallback below is not a fixed key for every
+repository.
+
 First calls:
 
 1. Confirm your name with `echo "$AGENT_NAME"`. If it is empty, use the
@@ -12,7 +17,7 @@ First calls:
    helper or `register_agent` with an empty name.
 2. Always try the token-safe helper first, even if bootstrap only left you with
    `AGENT_NAME`:
-   `AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"`.
+   `AGENTSTACK_PROJECT_KEY="$AGENTSTACK_PROJECT_KEY" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"`.
 3. If that succeeds, do not call `register_agent` again.
 4. Tokens: **if your ORRERY Mail MCP server runs through the local proxy, you
    never touch a token.** Spawned Codex children are configured that way (their
@@ -42,9 +47,23 @@ MCP tool session.
 
 Details and exceptions for the first calls:
 
-- The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
-  `ensure_project`, `register_agent`, `fetch_inbox`, and reservations — do not
-  infer a different project from your current directory.
+- Use the resolved project key from the launcher, SessionStart reminder, or
+  canonical embedded child task for `ensure_project`, `register_agent`,
+  `fetch_inbox`, messages, and reservations. It is exported as
+  `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`; substitute its actual value in MCP
+  arguments, not the literal string `$AGENTSTACK_PROJECT_KEY`.
+- The install-time fallback is `__AGENTSTACK_PROJECT_KEY__`. It must not
+  override the repository selected for a new invocation. Linked worktrees
+  share their repository's canonical project key; another repository has a
+  separate key. Keep an already registered child's project from its launch
+  context, even when its worktree directory differs.
+- If the resolved key is unavailable, use the SessionStart output or the
+  canonical embedded task. For an unregistered session, the shared helper
+  `bash __AGENTSTACK_HOOKS_DIR__/project-context.sh resolve-project-key "$PWD"`
+  resolves it without sourcing installed shell code. Do not guess a key from
+  a worktree pathname or reuse the install fallback when a repository was
+  resolved. Report an existing identity/project mismatch instead of silently
+  registering the same name in another project.
 - On SessionStart, `session-start-reminder.sh` resolves an existing identity
   before registration (`AGENT_NAME` -> per-pane metadata -> tmux session name)
   and reminds you to re-register with the same `name`. For cc/cx sessions that
@@ -56,13 +75,13 @@ Details and exceptions for the first calls:
   first run:
 
   ```bash
-  AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"
+  AGENTSTACK_PROJECT_KEY="$AGENTSTACK_PROJECT_KEY" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"
   ```
 
   It restores the owner token from runtime state and re-registers without
   printing the token. If that succeeds, do not call `register_agent` again;
   continue with
-  `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`.
+  `fetch_inbox(project_key="$AGENTSTACK_PROJECT_KEY", agent_name="$AGENT_NAME")`.
 - `agentstack-reregister` success prints `agentstack-reregister: registered
   <name>` on stdout and exits 0. Failures print an error on stderr and exit
   nonzero.
@@ -73,8 +92,8 @@ Details and exceptions for the first calls:
   of relying on sandbox-visible env. In Codex, do not try to decide whether the
   token is set by `printenv`; the helper is the check.
 - If `agentstack-reregister` is unavailable or fails before registration, call
-  `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
-  `register_agent(project_key="__AGENTSTACK_PROJECT_KEY__", program="codex",
+  `ensure_project(human_key="$AGENTSTACK_PROJECT_KEY")`, then
+  `register_agent(project_key="$AGENTSTACK_PROJECT_KEY", program="codex",
   name="$AGENT_NAME", ...)` when `AGENT_NAME` is set. If
   `CHILD_REGISTRATION_TOKEN` is visible, pass it as `registration_token`; stock
   ORRERY Mail is token-strict for existing names, so same-name re-registration
@@ -121,7 +140,7 @@ Failure handling:
   `ensure_project`, `register_agent`, `agentstack-reregister`, and `fetch_inbox`;
   start the embedded task immediately and report completion with `send_message`
   to the parent. There is no task mail in this mode. Otherwise, read the task
-  from `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__",
+  from `fetch_inbox(project_key="$AGENTSTACK_PROJECT_KEY",
   agent_name="$AGENT_NAME")` before doing anything and treat that inbox request
   as canonical. Do not invent a task from context.
 - If `PARENT_AGENT` is not set and registration or inbox access is truly
@@ -158,7 +177,7 @@ Before you Edit/Write any file under the project, take a reservation so another
 agent does not clobber it:
 
 - Acquire: `macro_file_reservation_cycle` (or `file_reservation_paths`) with
-  `project_key="__AGENTSTACK_PROJECT_KEY__"`, your agent name, and the paths
+  `project_key="$AGENTSTACK_PROJECT_KEY"`, your agent name, and the paths
   (project-relative). **`ttl_seconds` must be at least 600**: composing the
   edit takes tens of seconds and a shorter reservation expires before you
   write.

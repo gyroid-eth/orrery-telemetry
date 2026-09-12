@@ -123,6 +123,7 @@ def test_reactivate_refuses_an_agent_that_is_not_retired(monkeypatch=None):
     with tempfile.TemporaryDirectory() as directory:
         server = _load(_db_with(pathlib.Path(directory), retired=False))
         server._has_session = lambda _name: True
+        server._live_session_matches_dashboard_project = lambda _name: True
         result = server.do_reactivate(LIVE)
         assert result["ok"] is False
         assert "not retired" in result["error"]
@@ -149,6 +150,7 @@ def test_reactivate_unretires_through_the_mcp_tool():
     with tempfile.TemporaryDirectory() as directory:
         server = _load(_db_with(pathlib.Path(directory), retired=True))
         server._has_session = lambda _name: True
+        server._live_session_matches_dashboard_project = lambda _name: True
         calls = []
 
         def fake_mcp_call(method, args, timeout=15):
@@ -165,6 +167,7 @@ def test_reactivate_reports_a_refused_unretire():
     with tempfile.TemporaryDirectory() as directory:
         server = _load(_db_with(pathlib.Path(directory), retired=True))
         server._has_session = lambda _name: True
+        server._live_session_matches_dashboard_project = lambda _name: True
         server._mcp_call = lambda *_a, **_k: {"ok": False, "error": "HTTP Error 404"}
         result = server.do_reactivate(LIVE)
         assert result["ok"] is False

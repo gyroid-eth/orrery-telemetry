@@ -28,11 +28,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVER = ROOT / "dashboard" / "server.py"
 REGISTER_LIB = ROOT / "bin" / "lib" / "agentstack-register.sh"
 INDEX = ROOT / "dashboard" / "index.html"
+PROJECT = "test-substitution-project"
 
 
 def _load_server(runtime_dir: pathlib.Path):
-    saved = {k: os.environ.get(k) for k in ("AGENTSTACK_RUNTIME_DIR",)}
+    saved = {
+        k: os.environ.get(k)
+        for k in ("AGENTSTACK_RUNTIME_DIR", "AGENTSTACK_PROJECT_KEY", "PROJECT_KEY")
+    }
     os.environ["AGENTSTACK_RUNTIME_DIR"] = str(runtime_dir)
+    os.environ["AGENTSTACK_PROJECT_KEY"] = PROJECT
+    os.environ["PROJECT_KEY"] = PROJECT
     sys.path.insert(0, str(ROOT / "dashboard"))
     try:
         spec = importlib.util.spec_from_file_location(
@@ -60,7 +66,7 @@ def test_a_recorded_substitution_is_reported():
     with tempfile.TemporaryDirectory() as directory:
         runtime = pathlib.Path(directory)
         server = _load_server(runtime)
-        server._record_name_substitution("GreenLake", "Zesty-Einstein")
+        server._record_name_substitution("GreenLake", "Zesty-Einstein", PROJECT)
         assert server._name_substitutions() == {"GreenLake": "Zesty-Einstein"}
 
 
@@ -69,7 +75,7 @@ def test_a_name_that_was_granted_is_not_marked():
     with tempfile.TemporaryDirectory() as directory:
         runtime = pathlib.Path(directory)
         server = _load_server(runtime)
-        server._record_name_substitution("Zesty-Einstein", "Zesty-Einstein")
+        server._record_name_substitution("Zesty-Einstein", "Zesty-Einstein", PROJECT)
         assert server._name_substitutions() == {}
         assert not (runtime / "name-substitutions.json").exists()
 
@@ -86,8 +92,8 @@ def test_the_record_survives_a_second_spawn():
     with tempfile.TemporaryDirectory() as directory:
         runtime = pathlib.Path(directory)
         server = _load_server(runtime)
-        server._record_name_substitution("GreenLake", "Zesty-Einstein")
-        server._record_name_substitution("BlueStone", "Airy-Fermi")
+        server._record_name_substitution("GreenLake", "Zesty-Einstein", PROJECT)
+        server._record_name_substitution("BlueStone", "Airy-Fermi", PROJECT)
         assert server._name_substitutions() == {
             "GreenLake": "Zesty-Einstein",
             "BlueStone": "Airy-Fermi",
@@ -100,7 +106,7 @@ def test_the_shell_helper_writes_what_the_server_reads():
         runtime = pathlib.Path(directory)
         script = (
             f'source "{REGISTER_LIB}"\n'
-            f'ags_record_name_substitution "GreenLake" "Zesty-Einstein"\n'
+            f'ags_record_name_substitution "GreenLake" "Zesty-Einstein" "{PROJECT}"\n'
         )
         result = subprocess.run(
             ["bash", "-c", script],
@@ -112,7 +118,10 @@ def test_the_shell_helper_writes_what_the_server_reads():
         store = runtime / "name-substitutions.json"
         assert store.is_file(), result.stderr
         written = json.loads(store.read_text(encoding="utf-8"))
-        assert written["GreenLake"]["requested"] == "Zesty-Einstein"
+        assert (
+            written["projects"][PROJECT]["GreenLake"]["requested"]
+            == "Zesty-Einstein"
+        )
 
         server = _load_server(runtime)
         assert server._name_substitutions() == {"GreenLake": "Zesty-Einstein"}
@@ -123,7 +132,7 @@ def test_the_shell_helper_records_nothing_when_the_name_was_granted():
         runtime = pathlib.Path(directory)
         script = (
             f'source "{REGISTER_LIB}"\n'
-            f'ags_record_name_substitution "Zesty-Einstein" "Zesty-Einstein"\n'
+            f'ags_record_name_substitution "Zesty-Einstein" "Zesty-Einstein" "{PROJECT}"\n'
         )
         result = subprocess.run(
             ["bash", "-c", script],

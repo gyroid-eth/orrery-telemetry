@@ -29,6 +29,7 @@ INSTALLER = ROOT / "scripts" / "install.sh"
 REGISTER_LIB = ROOT / "bin" / "lib" / "agentstack-register.sh"
 SERVER = ROOT / "dashboard" / "server.py"
 LABEL_PREFIX = "org.agentstack.test.mail-watcher"
+WATCHER_MCP_URL = "http://127.0.0.1:43111/custom-mcp"
 
 
 def _autostart_helpers():
@@ -67,6 +68,7 @@ def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tupl
         f"MAIL_HOME='{home}/.agentstack/mail'\n"
         f"SIGNALS_DIR='{home}/.agentstack/mail/signals'\n"
         f"PYTHON_BIN='{sys.executable}'\n"
+        f"MCP_URL='{WATCHER_MCP_URL}'\n"
         "PATH_VALUE=/usr/bin:/bin\n"
         f"MAIL_WATCHER_LABEL={LABEL_PREFIX}.mail-watcher\n"
         "AGENT_MAIL_WATCHER_KIND=\n"
@@ -107,6 +109,8 @@ def test_launchd_unit_keeps_the_watcher_alive():
     env = plist["EnvironmentVariables"]
     assert env["AGENTSTACK_SIGNALS_DIR"].endswith("mail/signals")
     assert env["AGENTSTACK_RUNTIME_DIR"].endswith(".agentstack/runtime")
+    assert env["AGENTSTACK_MCP_URL"] == WATCHER_MCP_URL
+    assert env["AGENTSTACK_PYTHON"] == sys.executable
     assert plist["StandardOutPath"].endswith("mail-watcher.log")
     assert f"launchctl bootstrap gui/" in calls and ".mail-watcher.plist" in calls, calls
     # Bootstrapped from a non-GUI context (ssh), RunAtLoad never fires: the Air
@@ -128,6 +132,10 @@ def test_systemd_unit_restarts_the_watcher():
     assert re.search(r"^Restart=always$", text, re.M), text
     assert re.search(r'^ExecStart=/bin/bash ".*hooks/watch_agent_mail_signals\.sh"$', text, re.M), text
     assert re.search(r'^Environment=AGENTSTACK_SIGNALS_DIR=".*mail/signals"$', text, re.M), text
+    assert (
+        f'Environment=AGENTSTACK_MCP_URL="{WATCHER_MCP_URL}"' in text
+    ), text
+    assert f'Environment=AGENTSTACK_PYTHON="{sys.executable}"' in text, text
     assert re.search(r"^WantedBy=default\.target$", text, re.M), text
     assert f"systemctl --user enable --now {LABEL_PREFIX}.mail-watcher.service" in calls, calls
     # `enable --now` leaves an already-running service on the old unit file.

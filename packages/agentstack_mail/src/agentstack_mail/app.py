@@ -5157,6 +5157,7 @@ def build_mcp_server() -> FastMCP:
                             project.slug,
                             agent.name,
                             message_meta,
+                            project_key=project.human_key,
                         )
 
         await ctx.info(

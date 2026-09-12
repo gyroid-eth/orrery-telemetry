@@ -307,6 +307,7 @@ def test_signals_are_per_message_debounced_by_message_id_and_fully_cleared(
             project_slug,
             agent_name,
             {"id": 101, "from": "GreenCastle", "subject": "first"},
+            project_key="/canonical/runtime-contract",
         )
         second = await emit_notification_signal(
             settings,
@@ -334,6 +335,13 @@ def test_signals_are_per_message_debounced_by_message_id_and_fully_cleared(
         assert (per_message_dir / "101.signal").is_file()
         assert (per_message_dir / "102.signal").is_file()
         assert legacy_path.is_file()
+        first_signal = json.loads(
+            (per_message_dir / "101.signal").read_text(encoding="utf-8")
+        )
+        legacy_signal = json.loads(legacy_path.read_text(encoding="utf-8"))
+        assert first_signal["project"] == project_slug
+        assert first_signal["project_key"] == "/canonical/runtime-contract"
+        assert "project_key" not in legacy_signal
 
         cleared = asyncio.run(
             clear_notification_signal(settings, project_slug, agent_name)

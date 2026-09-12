@@ -228,7 +228,7 @@ def test_graph_payload_and_spawn_only_preserve_timestamp_health(monkeypatch):
         },
         "degraded": True,
     }
-    monkeypatch.setattr(server, "_raw_graph", lambda: unhealthy)
+    monkeypatch.setattr(server, "_raw_graph", lambda _live_parents=None: unhealthy)
     payload = server.graph_payload(4, True)
     assert payload["degraded"] is True
     assert payload["timestamp_diagnostics"]["invalid_count"] == 1

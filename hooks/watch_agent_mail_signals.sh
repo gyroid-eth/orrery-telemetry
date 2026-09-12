@@ -13,8 +13,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_CONTEXT_HELPER="$SCRIPT_DIR/project-context.sh"
+if [[ -f "$PROJECT_CONTEXT_HELPER" ]]; then
+    # shellcheck disable=SC1090
+    source "$PROJECT_CONTEXT_HELPER"
+fi
+
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
+MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
 WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
 WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
@@ -61,6 +70,17 @@ mkdir -p "$STATE_DIR" "$LEASE_DIR"
 
 log() { echo "[mail-watcher $(date '+%H:%M:%S')] $*"; }
 
+watcher_normalize_project_key() {
+    local project_key="${1:-}"
+    if type agentstack_normalize_project_key >/dev/null 2>&1; then
+        agentstack_normalize_project_key "$project_key"
+    else
+        # Missing-helper mode cannot safely infer path aliases. Preserve the
+        # literal so mismatches remain fail-closed rather than guessed.
+        printf '%s\n' "$project_key"
+    fi
+}
+
 # run_to <secs> <cmd...> : cmd を最大 secs 秒で実行。超過したら TERM→KILL で
 # 強制終了し非ゼロを返す。macOS には timeout(1)/gtimeout が無く、watcher は
 # bash 3.2 で動くため、background + watchdog で自前実装する。これにより
@@ -81,7 +101,7 @@ run_to() {
 }
 
 read_signal_meta() {
-    python3 - "$1" <<'PY'
+    "$PYTHON_BIN" - "$1" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 try:
@@ -101,14 +121,178 @@ print(int(st.st_mtime))
 snippet = (msg.get("body_snippet") or "").replace("\r", " ").replace("\n", " ⏎ ")
 print(snippet[:500])
 print("1" if msg.get("body_truncated") else "0")
+print(data.get("project_key") or "")
+print(data.get("project") or "")
 PY
 }
 
+resolve_signal_project_key() {
+    local project_slug="$1"
+    [[ -n "$project_slug" ]] || return 1
+    "$PYTHON_BIN" - "$MCP_URL" "$project_slug" <<'PY' 2>/dev/null
+import json
+import os
+import sys
+import urllib.request
+
+url, slug = sys.argv[1:3]
+payload = json.dumps({
+    "jsonrpc": "2.0",
+    "id": "agentstack-watcher-project",
+    "method": "resources/read",
+    "params": {"uri": f"resource://project/{slug}"},
+}).encode()
+headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+token = os.environ.get("MCP_AGENT_MAIL_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+with urllib.request.urlopen(request, timeout=3) as response:
+    raw = response.read().decode("utf-8", errors="replace")
+for line in raw.splitlines():
+    if line.startswith("data:"):
+        raw = line[5:].strip()
+        break
+body = json.loads(raw)
+result = body.get("result") or {}
+contents = result.get("contents") or []
+if not contents:
+    raise SystemExit(1)
+text = contents[0].get("text") or "{}"
+data = json.loads(text)
+human_key = data.get("human_key")
+if not isinstance(human_key, str) or not human_key:
+    raise SystemExit(1)
+print(human_key)
+PY
+}
+
+durable_agent_project_key() {
+    "$PYTHON_BIN" - "$STATE_DIR" "$1" <<'PY' 2>/dev/null
+import json
+import pathlib
+import re
+import sys
+
+runtime = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+projects = set()
+
+def project_key(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    path = pathlib.Path(value)
+    if path.is_absolute() or path.is_dir():
+        try:
+            return str(path.resolve())
+        except (OSError, RuntimeError):
+            return ""
+    return value
+
+token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+sidecar = runtime / f"agent_token_{token_key}.project"
+try:
+    value = sidecar.read_text(encoding="utf-8").strip()
+    if value:
+        projects.add(project_key(value))
+except OSError:
+    pass
+
+for path in (
+    runtime / "child-agents" / f"{name}.json",
+    runtime / "name-bindings" / f"{name.replace('-', '').lower()}.json",
+):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+    if path.parent.name == "name-bindings":
+        bound_name = data.get("agent_name")
+        if not isinstance(bound_name, str) or bound_name.replace("-", "").lower() != name.replace("-", "").lower():
+            continue
+    value = data.get("project_key")
+    if isinstance(value, str) and value:
+        projects.add(project_key(value))
+
+index_dir = runtime / "session_index"
+if index_dir.is_dir():
+    for path in index_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if data.get("agent_name") == name:
+            value = data.get("project_key")
+            if isinstance(value, str) and value:
+                projects.add(project_key(value))
+
+projects.discard("")
+
+if len(projects) == 1:
+    print(projects.pop())
+elif len(projects) > 1:
+    print("__AGENTSTACK_AMBIGUOUS__")
+PY
+}
+
+tmux_session_env_value() {
+    local session="$1" variable="$2" raw=""
+    raw="$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session" "$variable" 2>/dev/null || true)"
+    case "$raw" in
+        "$variable="*) printf '%s\n' "${raw#"$variable="}" ;;
+    esac
+}
+
+session_context_is_consistent() {
+    local signal_project="$1" session="$2" durable_project="$3"
+    local session_repository="$4" session_work_dir="$5" session_cwd="$6"
+    local reference_repository="" candidate_repository="" value=""
+
+    signal_project="$(watcher_normalize_project_key "$signal_project")"
+    if [[ -n "$durable_project" && "$durable_project" != "__AGENTSTACK_AMBIGUOUS__" ]]; then
+        durable_project="$(watcher_normalize_project_key "$durable_project")"
+    fi
+
+    [[ -z "$durable_project" || "$durable_project" == "$signal_project" ]] || return 1
+    if ! type agentstack_repository_key >/dev/null 2>&1; then
+        # No repository-bearing tuple may be accepted without the shared,
+        # selector-sanitizing resolver. Pure legacy non-Git evidence remains
+        # usable when its durable project identity agrees.
+        [[ ! -d "$signal_project" && ! -d "$session_repository" ]] || return 1
+        return 0
+    fi
+    for value in "$signal_project" "$session_repository" "$session_work_dir" "$session_cwd"; do
+        [[ -n "$value" && -d "$value" ]] || continue
+        candidate_repository="$(agentstack_repository_key "$value" 2>/dev/null || true)"
+        [[ -n "$candidate_repository" ]] || continue
+        if [[ -n "$reference_repository" && "$candidate_repository" != "$reference_repository" ]]; then
+            return 1
+        fi
+        reference_repository="$candidate_repository"
+    done
+
+    # For a non-Git pinned tuple, a live cwd outside its established work_dir
+    # is contradictory even though neither path has a Git repository identity.
+    if [[ -n "$session_work_dir" && -d "$session_work_dir" && -n "$session_cwd" && -d "$session_cwd" ]]; then
+        local work_physical="" cwd_physical=""
+        work_physical="$(agentstack_physical_dir "$session_work_dir" 2>/dev/null || true)"
+        cwd_physical="$(agentstack_physical_dir "$session_cwd" 2>/dev/null || true)"
+        if [[ -n "$work_physical" && -n "$cwd_physical" ]]; then
+            case "$cwd_physical" in
+                "$work_physical"|"$work_physical"/*) ;;
+                *) return 1 ;;
+            esac
+        fi
+    fi
+    return 0
+}
+
 state_should_attempt() {
-    python3 - "$STATE_FILE" "$1" "$2" "$RETRY_COOLDOWN" <<'PY'
+    "$PYTHON_BIN" - "$STATE_FILE" "$1" "$2" "$3" "$RETRY_COOLDOWN" <<'PY'
 import json, sys, time
-path, agent, msg_key, cooldown = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-compound = f"{agent}:{msg_key}"
+path, project, agent, msg_key = sys.argv[1:5]
+cooldown = int(sys.argv[5])
+compound = f"{project}:{agent}:{msg_key}"
 try:
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
@@ -127,11 +311,11 @@ PY
 }
 
 state_mark_result() {
-    python3 - "$STATE_FILE" "$1" "$2" "$3" "$4" <<'PY'
+    "$PYTHON_BIN" - "$STATE_FILE" "$1" "$2" "$3" "$4" "$5" <<'PY'
 import fcntl, json, sys, time
 from pathlib import Path
-path, agent, msg_key, result, source = sys.argv[1:6]
-compound = f"{agent}:{msg_key}"
+path, project, agent, msg_key, result, source = sys.argv[1:7]
+compound = f"{project}:{agent}:{msg_key}"
 p = Path(path)
 p.parent.mkdir(parents=True, exist_ok=True)
 # 配送 worker を background 化したため複数プロセスが同時に state を read-modify-
@@ -149,6 +333,7 @@ try:
     entry = data.get(compound, {})
     entry.update({
         "agent": agent,
+        "project_key": project,
         "msg_key": msg_key,
         "last_result": result,
         "last_attempt_epoch": now,
@@ -169,9 +354,9 @@ PY
 }
 
 acquire_delivery_lease() {
-    local agent="$1"
-    local msg_key="$2"
-    local lease_path="${LEASE_DIR}/${agent}-${msg_key}.lock"
+    local project="$1" agent="$2" msg_key="$3" scope
+    scope="$("$PYTHON_BIN" -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$project")"
+    local lease_path="${LEASE_DIR}/${scope}-${agent}-${msg_key}.lock"
     local now
     now=$(date +%s)
 
@@ -193,7 +378,9 @@ acquire_delivery_lease() {
 }
 
 release_delivery_lease() {
-    rm -rf "${LEASE_DIR}/$1-$2.lock" 2>/dev/null || true
+    local project="$1" agent="$2" msg_key="$3" scope
+    scope="$("$PYTHON_BIN" -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$project")"
+    rm -rf "${LEASE_DIR}/${scope}-${agent}-${msg_key}.lock" 2>/dev/null || true
 }
 
 is_pid_running() {
@@ -287,6 +474,7 @@ handle_signal_file() {
     # 重複処理防止は state_should_attempt + acquire_delivery_lease で行う。
     # bash 3.2 (macOS system) 互換: mapfile を使わず逐次 read する。
     local msg_id from subject importance mtime body_snippet body_truncated msg_key
+    local signal_project_key signal_project_slug
     {
         IFS= read -r msg_id
         IFS= read -r from
@@ -295,6 +483,8 @@ handle_signal_file() {
         IFS= read -r mtime
         IFS= read -r body_snippet
         IFS= read -r body_truncated
+        IFS= read -r signal_project_key
+        IFS= read -r signal_project_slug
     } < <(read_signal_meta "$signal_file")
     msg_id="${msg_id:-}"
     from="${from:-unknown}"
@@ -303,12 +493,22 @@ handle_signal_file() {
     mtime="${mtime:-0}"
     body_snippet="${body_snippet:-}"
     body_truncated="${body_truncated:-0}"
+    signal_project_key="${signal_project_key:-}"
+    signal_project_slug="${signal_project_slug:-}"
+    if [[ -z "$signal_project_key" && -n "$signal_project_slug" ]]; then
+        signal_project_key="$(resolve_signal_project_key "$signal_project_slug" || true)"
+    fi
+    signal_project_key="$(watcher_normalize_project_key "$signal_project_key")"
+    if [[ -z "$signal_project_key" ]]; then
+        log "Skipping signal for '$agent_name': canonical project key unavailable"
+        return 0
+    fi
     msg_key="${msg_id:-mtime-${mtime}}"
 
     # `set -e` 下で `|| return` だと return が直前の exit code を継承して
     # 関数が non-zero で抜け、呼び出し元の while ループが止まる。
     # 早期スキップは `return 0` を明示してスクリプト継続を保証する。
-    state_should_attempt "$agent_name" "$msg_key" || return 0
+    state_should_attempt "$signal_project_key" "$agent_name" "$msg_key" || return 0
 
     # 割り込みの閾値。既定は low = 従来どおり全部通す。
     #
@@ -318,11 +518,11 @@ handle_signal_file() {
     # 消費しないまま state に記録するだけなので、次に fetch_inbox を呼べば普通に
     # 読める。奪うのは割り込む権利であって、届く権利ではない。
     if ! importance_at_least "$importance" "$NOTIFY_MIN_IMPORTANCE"; then
-        state_mark_result "$agent_name" "$msg_key" "below_min_importance" "watcher"
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "below_min_importance" "watcher"
         return 0
     fi
 
-    acquire_delivery_lease "$agent_name" "$msg_key" || return 0
+    acquire_delivery_lease "$signal_project_key" "$agent_name" "$msg_key" || return 0
 
     log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
 
@@ -336,7 +536,7 @@ handle_signal_file() {
     while [ "$(jobs -p 2>/dev/null | wc -l | tr -d ' ')" -ge "$MAX_WORKERS" ]; do
         sleep 0.1
     done
-    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" &
+    deliver_worker "$signal_file" "$signal_project_key" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" &
 }
 
 # deliver_worker: 1 signal の配送を完結させる background ジョブ。すべての tmux
@@ -349,14 +549,42 @@ handle_signal_file() {
 # BoldLeeuwenhoek の古い signal が SwiftFaraday へ誤配)。session 不在は誤配より
 # 安全な skip として扱う。
 deliver_worker() {
-    local signal_file="$1" agent_name="$2" msg_key="$3"
-    local from="$4" subject="$5" importance="$6" per_msg_file="$7"
-    local body_snippet="${8:-}" body_truncated="${9:-0}"
+    local signal_file="$1" signal_project_key="$2" agent_name="$3" msg_key="$4"
+    local from="$5" subject="$6" importance="$7" per_msg_file="$8"
+    local body_snippet="${9:-}" body_truncated="${10:-0}"
     local session_name="$agent_name"
 
-    if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then
-        state_mark_result "$agent_name" "$msg_key" "session_not_found" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+    if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "=$session_name" 2>/dev/null; then
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "session_not_found" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
+        return 0
+    fi
+
+    local session_project="" session_repository="" session_work_dir="" session_cwd="" durable_project=""
+    session_project="$(tmux_session_env_value "$session_name" AGENTSTACK_PROJECT_KEY)"
+    if [[ -z "$session_project" ]]; then
+        session_project="$(tmux_session_env_value "$session_name" PROJECT_KEY)"
+    fi
+    durable_project="$(durable_agent_project_key "$agent_name" || true)"
+    if [[ -z "$session_project" ]]; then
+        session_project="$durable_project"
+    fi
+    session_project="$(watcher_normalize_project_key "$session_project")"
+    if [[ -n "$durable_project" && "$durable_project" != "__AGENTSTACK_AMBIGUOUS__" ]]; then
+        durable_project="$(watcher_normalize_project_key "$durable_project")"
+    fi
+    if [[ -z "$session_project" || "$session_project" != "$signal_project_key" ]]; then
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "project_mismatch" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
+        return 0
+    fi
+    session_repository="$(tmux_session_env_value "$session_name" AGENTSTACK_PROJECT_REPOSITORY)"
+    session_work_dir="$(tmux_session_env_value "$session_name" AGENTSTACK_PROJECT_WORK_DIR)"
+    session_cwd="$(run_to "$TMUX_TIMEOUT" tmux display-message -t "=$session_name" -p '#{pane_current_path}' 2>/dev/null || true)"
+    if ! session_context_is_consistent "$signal_project_key" "$session_name" \
+        "$durable_project" "$session_repository" "$session_work_dir" "$session_cwd"; then
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "project_mismatch" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
         return 0
     fi
 
@@ -368,17 +596,17 @@ deliver_worker() {
     # (Claude が input をキューし、ターン完了後に処理する = むしろ望ましい挙動)。
     # したがって busy でも inject する (旧 watcher と同じ配送方針に戻す)。
     local last_lines rc=0
-    last_lines=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "$session_name" -p -S -5 2>/dev/null) || rc=$?
+    last_lines=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "=$session_name" -p -S -5 2>/dev/null) || rc=$?
     if [ "$rc" -ne 0 ]; then
         # capture が時間内に返らない = server stall。inject せず後で再試行。
-        state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "capture_timeout" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
         return 0
     fi
     if echo "$last_lines" | grep -qE '(\$ ?$|% ?$)' && \
        ! echo "$last_lines" | grep -qE '(❯|Claude|claude|ctx:|Sonnet|Opus|Haiku|›)'; then
-        state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "bare_shell" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
         return 0
     fi
 
@@ -391,9 +619,9 @@ deliver_worker() {
         prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
     fi
 
-    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" -l "$prompt" 2>/dev/null; then
-        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "=$session_name" -l "$prompt" 2>/dev/null; then
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "inject_failed" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
         return 0
     fi
     sleep 0.2
@@ -402,14 +630,14 @@ deliver_worker() {
     # REPL では Enter が submit されないことがある（2026-06-05 WildCurie が Enter で
     # 固まった件）。Claude Code は Enter/C-m 両方 submit するので C-m に統一しても無回帰
     # （捨て子 Claude で実測確認）。
-    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" C-m 2>/dev/null; then
-        state_mark_result "$agent_name" "$msg_key" "submit_failed" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "=$session_name" C-m 2>/dev/null; then
+        state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "submit_failed" "watcher"
+        release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
         return 0
     fi
 
-    state_mark_result "$agent_name" "$msg_key" "success" "watcher"
-    release_delivery_lease "$agent_name" "$msg_key"
+    state_mark_result "$signal_project_key" "$agent_name" "$msg_key" "success" "watcher"
+    release_delivery_lease "$signal_project_key" "$agent_name" "$msg_key"
     log "  Injected notification into '$agent_name' (session: $session_name)"
     # Per-message files are watcher-owned (each represents one delivery); unlink
     # them on success so identical msg_ids never re-fire. Legacy single-file

@@ -60,6 +60,8 @@ agentstack-selftest
 
 ### 3. Start the first agent and watch it on the dashboard
 
+Project context follows the target Git repository. Linked worktrees share Mail and reservations; different repositories stay separate. The install-time project key is a fallback; see [Launchers](docs/launchers.en.md#project-context).
+
 ```bash
 agent-start ~/code/my-project          # for Codex CLI: agent-start-codex ~/code/my-project
 ```

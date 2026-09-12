@@ -125,6 +125,11 @@ ags_mcp_call() {{
 ags_generate_registration_token() {{ printf '%s\\n' requested-owner-token; }}
 ags_store_registration_token() {{ printf '%s|%s\\n' "$1" "$2"; }}
 ags_apply_contact_policy() {{ :; }}
+ags_pick_available_agent_name() {{ printf '%s\\n' "$3"; }}
+ags_local_agent_name_conflicts() {{ return 1; }}
+ags_acquire_local_name_claim() {{ return 0; }}
+ags_release_local_name_claim() {{ :; }}
+ags_commit_local_name_claim() {{ :; }}
 for _ in 1 2; do
   ags_register_session /project codex model cx /work Frosty-Pasteur candidate >/dev/null
   printf 'registered=%s token=%s substituted=%s requested=%s returned=%s\\n' \
@@ -154,6 +159,11 @@ ags_mcp_call() {{
     printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
   fi
 }}
+ags_agent_name_status() {{ printf 'occupied\\n'; }}
+ags_local_agent_name_conflicts() {{ return 1; }}
+ags_acquire_local_name_claim() {{ return 0; }}
+ags_release_local_name_claim() {{ :; }}
+ags_commit_local_name_claim() {{ :; }}
 CHILD_REGISTRATION_TOKEN=reserved-owner-token
 export CHILD_REGISTRATION_TOKEN
 set +e
@@ -179,6 +189,11 @@ def _run_root_claude_substitution(*, collision: bool):
     launcher = bindir / "agent-start"
     launcher.write_text(_read("bin/agent-start"), encoding="utf-8")
     launcher.chmod(0o755)
+    hooksdir = tmpdir / "hooks"
+    hooksdir.mkdir()
+    project_context = hooksdir / "project-context.sh"
+    project_context.write_text(_read("hooks/project-context.sh"), encoding="utf-8")
+    project_context.chmod(0o755)
     tmux_log = tmpdir / "tmux.log"
     tmux_state = tmpdir / "tmux.state"
     fake_tmux = tmpdir / "tmux"
@@ -224,7 +239,7 @@ def _run_root_claude_substitution(*, collision: bool):
         "AGENTSTACK_CLAUDE_BIN": str(fake_claude),
         "AGENTSTACK_PROJECT_KEY": "/project",
         "AGENTSTACK_MANAGED_AGENTS_FILE": str(tmpdir / "managed"),
-        "AGENTSTACK_HOOKS_DIR": str(tmpdir),
+        "AGENTSTACK_HOOKS_DIR": str(hooksdir),
     })
     result = subprocess.run(
         [str(launcher), str(tmpdir)],
