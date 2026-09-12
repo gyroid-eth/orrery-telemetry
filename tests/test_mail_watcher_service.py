@@ -33,22 +33,12 @@ LABEL_PREFIX = "org.agentstack.test.mail-watcher"
 
 def _autostart_helpers():
     spec = importlib.util.spec_from_file_location(
-        f"test_mail_autostart_helpers_{id(ROOT)}",
-        ROOT / "tests" / "test_mail_autostart.py",
+        "test_mail_autostart_helpers", ROOT / "tests" / "test_mail_autostart.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    module_name = spec.name
-    previous = sys.modules.get(module_name)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        if previous is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = previous
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tuple[subprocess.CompletedProcess, str]:
