@@ -169,6 +169,7 @@ Python 3.11 以上、`git`、`tmux`、`uv` が必須で、実行時には Claude
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
 | [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
 | [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
+| [デザイン言語](docs/design.md) | dashboard の見え方と動きの正本。UI を足す前に読む |
 | [第三者コンポーネント](docs/third-party.md) | ORRERY Mail、license、credits |
 
 同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。

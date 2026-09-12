@@ -6,6 +6,8 @@
 
 The dashboard is served at `http://127.0.0.1:8770/` by default. It combines tmux, ORRERY Mail SQLite, runtime state, project logs, and optional Obsidian-link hints into one screen for observation and safe control operations.
 
+How it looks and moves is set out in the [design language](design.en.md). Read that before adding to or changing the UI.
+
 Here, ORRERY Mail / mail watcher means the mechanism for messages among agents inside ORRERY Telemetry. It never accesses the user's email account, mail client, or inbox.
 
 ## Find an action

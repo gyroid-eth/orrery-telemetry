@@ -169,6 +169,7 @@ The Japanese documentation is canonical. The main guides have English versions.
 | [API reference](docs/api.en.md) | Every route, query / request fields, response schemas |
 | [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
 | [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, authentication |
+| [Design language](docs/design.en.md) | The canonical account of how the dashboard looks and moves. Read before adding UI |
 | [Third-party components](docs/third-party.md) | ORRERY Mail, licensing, credits |
 
 For the internals of the bundled server see the [ORRERY Mail design document](docs/agentstack-mail.en.md), and see [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.

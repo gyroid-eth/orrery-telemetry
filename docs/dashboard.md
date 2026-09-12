@@ -6,6 +6,8 @@
 
 dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、ORRERY Mail SQLite、runtime state、project log、任意の Obsidian link hint を読み合わせ、観測と安全な control operation を一つの画面にまとめます。
 
+見え方と動きの決まりは [デザイン言語](design.md) にあります。UI を足す・直す前にそちらを読んでください。
+
 起動時には `pkill` で前回の browser terminal（ttyd）の残存プロセスを整理します。
 `pkill` がない環境では、この整理だけをスキップして HTTP server を起動します。
 この処理は Windows native の installer や Codex App Bridge を対応済みにするものではありません。

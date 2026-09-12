@@ -131,6 +131,20 @@ below makes that a property of the tree rather than of each review.
   the evidence. Keep one concern per PR (see #7 for the shape that merges
   quickly).
 
+## Dashboard UI changes
+
+The dashboard has a design language, and it is the maintainer's, not a
+matter of taste per PR. Read [docs/design.en.md](docs/design.en.md)
+([日本語](docs/design.md)) before touching `dashboard/index.html`,
+`theme_light.css`, or anything the page renders, and before asking an AI to
+build UI for it. Compose new elements from the tokens, the two typefaces, and
+the hierarchy described there; a new hue, a new face, or a literal colour is a
+regression. If what you need does not fit, open an issue with a screenshot
+before writing code. Include dark and light screenshots in the PR (light is
+one console call away, see the design document's light-theme section), and
+run `scripts/dashboard_theme_manifest.py --write` then `--check` after any
+CSS change so the embedded theme keeps applying.
+
 ## License of contributions
 
 Work written for ORRERY Telemetry in this repository ("AgentStack" in file names is the former project name) is under the
