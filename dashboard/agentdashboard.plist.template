@@ -24,6 +24,8 @@
   <dict>
     <key>PATH</key>
     <string>__PATH__</string>
+    <key>AGENTSTACK_PYTHON</key>
+    <string>__PYTHON__</string>
     <key>AGENTSTACK_PORT</key>
     <string>__PORT__</string>
     <key>AGENTSTACK_LABEL_PREFIX</key>
