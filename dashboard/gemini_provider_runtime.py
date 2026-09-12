@@ -26,6 +26,7 @@ PROVIDER_ID = "gemini"
 _DEFAULT_MODELS = (
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
 )
 _EFFORTS = ("low", "medium", "high")
 # Dashboard launches require an explicit effort.  The direct CLI launchers keep
@@ -860,6 +861,16 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
             effort = "high"
         if effort not in _EFFORTS:
             return {"ok": False, "error": f"effort not allowed for provider gemini: {effort}"}
+        # The UI groups effort-qualified ids into one model family. Resolve
+        # the selected effort before registration so roster, log, and agy agree.
+        family, separator, model_effort = model.rpartition("-")
+        if separator and model_effort in _EFFORTS:
+            resolved_model = f"{family}-{effort}"
+            if resolved_model not in models:
+                return {"ok": False, "error": (
+                    f"model not allowed for provider gemini at effort {effort}: {resolved_model}"
+                )}
+            model = resolved_model
         try:
             resources = normalize_resources(payload.get("resources"))
         except ValueError as exc:

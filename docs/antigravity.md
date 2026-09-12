@@ -127,8 +127,16 @@ start does not leave a retained child identity behind:
 - `agy`, `tmux`, the selected Python, `git`, the adapter hook, and the Gemini
   provider helpers under `~/.agentstack/bin` must be present;
 - the model must be in the Gemini allow-list (`AGENTSTACK_GEMINI_MODELS`,
-  default `gemini-3.8-flash-high,gemini-3.8-flash-medium`). An allow-list that
+  default `gemini-3.8-flash-high,gemini-3.8-flash-medium,gemini-3.8-flash-low`). An allow-list that
   reuses a Claude or Codex model id disables the Antigravity tab.
+
+The model card displays one family, `gemini-3.8-flash`. Before registration,
+Dashboard resolves the selected effort to the matching allowed CLI model:
+`low` → `gemini-3.8-flash-low`, `medium` → `gemini-3.8-flash-medium`, and
+`high` → `gemini-3.8-flash-high`. Registration, launch logs, and `agy --model`
+use that same resolved id alongside the explicit `--effort`. A custom model
+allow-list must include the matching variant; otherwise the request is rejected
+before registration. Model ids without an effort suffix are passed unchanged.
 
 Engine and isolation rules:
 

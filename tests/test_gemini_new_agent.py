@@ -195,7 +195,7 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
         "id": "gemini",
         "label": "Antigravity",
         "program": "antigravity",
-        "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium"],
+        "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high"],
         "effort_default": "",
@@ -711,12 +711,12 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
 
     assert result["ok"] is True
     assert result["provider"] == "gemini"
-    assert result["model"] == "gemini-3.8-flash-high"
+    assert result["model"] == "gemini-3.8-flash-medium"
     assert result["effort"] == "medium"
     assert result["worktree"] is True
     registration = gemini_env.launches.registrations["Sunny-Curie"]
     assert registration["program"] == "antigravity"
-    assert registration["model"] == "gemini-3.8-flash-high"
+    assert registration["model"] == "gemini-3.8-flash-medium"
     # One task authority: the launcher's full-task handoff, not a task mail
     # asking the child to reply while the launcher also reports.
     assert [method for method, _ in gemini_env.launches.mcp_calls] == [
@@ -726,11 +726,11 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
     [(args, kwargs)] = gemini_env.launches.launched
     assert args[0] == str(gemini_env.adapter)
     assert args[1:4] == ["--pre-registered", "Sunny-Curie", "--child-token-file"]
-    assert args[5:] == ["--model", "gemini-3.8-flash-high", "--worktree",
+    assert args[5:] == ["--model", "gemini-3.8-flash-medium", "--worktree",
                         "implement the requested change", str(gemini_env.repo)]
     env = kwargs["env"]
     assert env["PARENT_AGENT"] == "Parent"
-    assert env["AGENTSTACK_GEMINI_MODEL"] == "gemini-3.8-flash-high"
+    assert env["AGENTSTACK_GEMINI_MODEL"] == "gemini-3.8-flash-medium"
     assert env["AGENTSTACK_GEMINI_EFFORT"] == "medium"
     assert env["AGENTSTACK_GEMINI_RESOURCES"] == "src/**,tests/**"
     assert env["AGENTSTACK_HOME"] == str(gemini_env.home)
@@ -765,7 +765,7 @@ def test_async_gemini_status_and_log_report_gemini_identity(gemini_env):
 
     assert pending["ok"] is True and pending["pending"] is True
     assert (pending["provider"], pending["model"], pending["effort"]) == (
-        "gemini", "gemini-3.8-flash-high", "medium")
+        "gemini", "gemini-3.8-flash-medium", "medium")
     launching = server.spawn_launch_status("Brisk-Hopper")
     assert launching["state"] == "launching"
     task_file = pathlib.Path(
@@ -775,13 +775,13 @@ def test_async_gemini_status_and_log_report_gemini_identity(gemini_env):
     release.set()
     status = _wait_for_state("Brisk-Hopper", "ready")
     assert status["result"]["provider"] == "gemini"
-    assert status["result"]["model"] == "gemini-3.8-flash-high"
+    assert status["result"]["model"] == "gemini-3.8-flash-medium"
     assert status["result"]["effort"] == "medium"
     assert not task_file.exists()
 
     log = (gemini_env.tmp / "logs" / "spawn.log").read_text(encoding="utf-8")
     assert ("spawn child=Brisk-Hopper parent=Parent provider=gemini "
-            "model=gemini-3.8-flash-high effort=medium") in log
+            "model=gemini-3.8-flash-medium effort=medium") in log
     assert "provider=claude" not in log
 
 
@@ -1361,3 +1361,34 @@ def test_gemini_dashboard_adapter_is_shell_parseable():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("selected", ["high", "medium", "low"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_gemini_selected_effort_reaches_registration_and_launcher(gemini_env, selected, effort):
+    result = server.do_spawn(_gemini_payload(
+        gemini_env, model=f"gemini-3.8-flash-{selected}", effort=effort))
+    expected = f"gemini-3.8-flash-{effort}"
+    assert result["ok"] is True
+    assert (result["model"], result["effort"]) == (expected, effort)
+    assert gemini_env.launches.registrations["Sunny-Curie"]["model"] == expected
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[args.index("--model") + 1] == expected
+    assert kwargs["env"]["AGENTSTACK_GEMINI_MODEL"] == expected
+    assert kwargs["env"]["AGENTSTACK_GEMINI_EFFORT"] == effort
+
+
+def test_gemini_effort_resolution_cannot_bypass_model_allowlist(gemini_env, monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "gemini-3.8-flash-high")
+    result = server.do_spawn(_gemini_payload(gemini_env, effort="low"))
+    assert result == {"ok": False, "error": (
+        "model not allowed for provider gemini at effort low: gemini-3.8-flash-low")}
+    assert not gemini_env.launches.mcp_calls
+    assert not gemini_env.launches.launched
+
+
+def test_gemini_unqualified_custom_model_is_preserved(gemini_env, monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "custom-model")
+    result = server.do_spawn(_gemini_payload(gemini_env, model="custom-model", effort="low"))
+    assert result["ok"] is True
+    assert result["model"] == "custom-model"
