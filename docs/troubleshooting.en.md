@@ -193,6 +193,15 @@ tail ~/.agentstack/runtime/mail-watcher.log
 
 Confirm that `AGENTSTACK_MAIL_HOME` and `AGENTSTACK_SIGNALS_DIR` match between service and launcher.
 
+**If mail reaches inboxes but nothing is injected into tmux, and the log repeats `Stale watcher lock detected; taking ownership` followed by `mkdir: ... File exists` every few seconds**, the watcher is failing to take over its lock and the service manager keeps restarting it. A previous watcher that died without running its EXIT trap (SIGKILL, a host crash, a deploy that replaced the process) leaves its heartbeat inside the lock dir, and watchers before 2026-09-12 could not clear it. A `runs` count in the thousands under `launchctl print` is the tell. Recovery is removing the lock dir; keepalive picks it up on the next start:
+
+```bash
+rm -rf /tmp/orrery-mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
+tail -3 ~/.agentstack/runtime/mail-watcher.log
+```
+
+Update the repo and re-run `bash scripts/install.sh`; from then on takeover succeeds regardless of leftovers.
+
 ## Dashboard spawn disappears immediately
 
 1. Read the end of `dashboard/logs/spawn.log`

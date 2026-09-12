@@ -227,8 +227,13 @@ acquire_lock() {
     fi
 
     log "Stale watcher lock detected; taking ownership"
-    rm -f "$WATCHER_PIDFILE"
-    rmdir "$WATCHER_LOCK_DIR" 2>/dev/null || true
+    # A watcher that died without running its EXIT trap leaves the heartbeat
+    # (and possibly the pidfile) inside the lock dir. `rmdir` refuses a
+    # non-empty dir, the following `mkdir` then fails, and under `set -e` the
+    # process exits 1 - which the service manager restarts every few seconds,
+    # forever. Clear the whole dir so takeover cannot wedge on leftovers.
+    rm -f "$WATCHER_PIDFILE" "$WATCHER_HEARTBEAT"
+    rm -rf "$WATCHER_LOCK_DIR"
     mkdir "$WATCHER_LOCK_DIR"
     mkdir -p "$(dirname "$WATCHER_PIDFILE")"
     printf '%s\n' "$$" > "$WATCHER_PIDFILE"

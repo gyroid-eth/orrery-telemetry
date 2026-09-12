@@ -208,6 +208,15 @@ tail ~/.agentstack/runtime/mail-watcher.log
 
 `AGENTSTACK_MAIL_HOME` と `AGENTSTACK_SIGNALS_DIR` が service と launcher で一致しているか確認します。
 
+**mail は inbox に届くのに tmux に通知が入らず、log に `Stale watcher lock detected; taking ownership` と `mkdir: ... File exists` が数秒おきに並ぶ**なら、watcher が lock の取り直しに失敗して service manager に再起動され続けています。前の watcher が EXIT trap を通らずに死ぬ（SIGKILL、host のクラッシュ、process を差し替える deploy）と lock dir に heartbeat が残り、2026-09-12 より前の watcher はそれを片付けられませんでした。`launchctl print` の `runs` が数千になっているのが目印です。復旧は lock dir を消すだけです（keepalive が次の起動で取り直します）:
+
+```bash
+rm -rf /tmp/orrery-mail-watcher.lock   # AGENTSTACK_MAIL_WATCHER_LOCK_DIR を変えていればそのパス
+tail -3 ~/.agentstack/runtime/mail-watcher.log
+```
+
+repo を更新して `bash scripts/install.sh` を再実行すれば、以後の takeover は残り物があっても通ります。
+
 ## Dashboard spawn がすぐ消える
 
 1. `dashboard/logs/spawn.log` の末尾を見る

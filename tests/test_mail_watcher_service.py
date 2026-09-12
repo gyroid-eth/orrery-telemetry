@@ -259,3 +259,57 @@ if __name__ == "__main__":
                 failures += 1
                 print(f"FAIL {name}: {error}")
     sys.exit(1 if failures else 0)
+
+
+WATCHER = ROOT / "hooks" / "watch_agent_mail_signals.sh"
+
+
+def _acquire_lock_against(lock: pathlib.Path, pid: int) -> "subprocess.CompletedProcess[str]":
+    """Run the watcher's real acquire_lock() against a pre-populated lock dir."""
+    funcs = " ".join(
+        f"/^{name}()/,/^}}/p;" for name in ("log", "is_pid_running", "write_heartbeat", "acquire_lock")
+    )
+    script = lock.parent / "acquire.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        "LOCK_ACQUIRED=0\n"
+        f"WATCHER_LOCK_DIR='{lock}'\n"
+        f"WATCHER_PIDFILE='{lock}/watcher.pid'\n"
+        f"WATCHER_HEARTBEAT='{lock}/heartbeat'\n"
+        f"eval \"$(sed -n '{funcs}' {WATCHER})\"\n"
+        "acquire_lock\n"
+        "echo acquired=$LOCK_ACQUIRED\n",
+        encoding="utf-8",
+    )
+    return subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=60)
+
+
+def test_watcher_takes_over_a_stale_lock_that_still_holds_a_heartbeat():
+    # A watcher killed without its EXIT trap (SIGKILL, host crash, a deploy that
+    # replaced the process) leaves heartbeat + pidfile inside the lock dir.
+    # 2026-09-11: takeover did `rmdir || true` then `mkdir`, so the non-empty dir
+    # made every restart exit 1 and launchd relaunched it every 5 s for 32 hours.
+    # Mail kept landing in inboxes; nothing was injected into any tmux session.
+    with tempfile.TemporaryDirectory() as td:
+        lock = pathlib.Path(td) / "lock"
+        lock.mkdir()
+        (lock / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
+        (lock / "heartbeat").write_text("", encoding="utf-8")
+        r = _acquire_lock_against(lock, os.getpid())
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Stale watcher lock detected" in r.stdout
+        assert "acquired=1" in r.stdout
+        assert (lock / "watcher.pid").read_text(encoding="utf-8").strip().isdigit()
+        assert (lock / "heartbeat").exists()
+
+
+def test_watcher_still_yields_to_a_live_holder():
+    with tempfile.TemporaryDirectory() as td:
+        lock = pathlib.Path(td) / "lock"
+        lock.mkdir()
+        (lock / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        (lock / "heartbeat").write_text("", encoding="utf-8")
+        r = _acquire_lock_against(lock, os.getpid())
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "already running" in r.stdout
+        assert (lock / "watcher.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
