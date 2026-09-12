@@ -2614,6 +2614,7 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 env = {
+    "AGENTSTACK_PYTHON": "$PYTHON_BIN",
     "AGENTSTACK_PORT": "$PORT",
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
     "AGENTSTACK_MAIL_DB": "$MAIL_DB",

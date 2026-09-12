@@ -19,3 +19,12 @@ def test_launchd_exports_installer_selected_python_to_dashboard_children():
     installer = INSTALLER.read_text(encoding="utf-8")
     assert 'PYTHON_BIN="${AGENTSTACK_PYTHON:-}"' in installer
     assert '"__PYTHON__": "$PYTHON_BIN"' in installer
+
+
+def test_systemd_unit_exports_installer_selected_python_to_dashboard_children():
+    # Linux / WSL2 render a systemd user unit instead of the plist; the same
+    # handoff has to be present there or the fix only covers macOS.
+    installer = INSTALLER.read_text(encoding="utf-8")
+    unit_block = installer[installer.index('render systemd user unit $unit"') :]
+    unit_block = unit_block[: unit_block.index("WantedBy=default.target")]
+    assert '"AGENTSTACK_PYTHON": "$PYTHON_BIN",' in unit_block

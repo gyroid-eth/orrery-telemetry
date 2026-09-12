@@ -852,6 +852,11 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         line for line in systemd_unit.splitlines() if line.startswith("ExecStart=")
     )
     assert exec_start.split()[-1] == str(install_dir / "dashboard" / "service_runner.py")
+    # The unit must hand the installer-selected interpreter to dashboard children,
+    # mirroring the launchd plist (PR #29); otherwise providers spawned from the
+    # service fall back to whatever python3 is first on PATH.
+    unit_python = exec_start[len("ExecStart="):].split()[0]
+    assert f'Environment="AGENTSTACK_PYTHON={unit_python}"' in systemd_unit
     assert "Restart=always" in systemd_unit
     assert (
         f'Environment="AGENTSTACK_DASHBOARD_LOG={install_dir}/runtime/dashboard.log"'
