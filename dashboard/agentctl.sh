@@ -183,9 +183,6 @@ start_any() {
   fi
   if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
     render_plist
-    # A disabled label makes bootstrap fail with EIO, and bootout completes
-    # asynchronously. Clear both states before using bootstrap as the GUI-domain
-    # capability probe.
     if launchctl enable "$GUI/$LABEL"; then
       launchctl bootout "$GUI/$LABEL" 2>/dev/null || true
       if wait_for_launchd_unload && \
@@ -206,11 +203,6 @@ start_any() {
 
 stop_all() {
   stop_background
-  # Only unload a label whose plist we wrote under this HOME. launchd labels
-  # live in the user domain and ignore HOME, so a run pointed at a scratch
-  # HOME -- a test, a trial install, a second checkout -- would otherwise boot
-  # out the dashboard the real install owns and leave the machine without one.
-  # A missing plist here means this HOME never registered the job.
   if command -v launchctl >/dev/null 2>&1 && [[ -f "$PLIST_DST" ]]; then
     launchctl bootout "$GUI/$LABEL" 2>/dev/null || true
   fi
@@ -268,7 +260,10 @@ case "${1:-status}" in
     open "$URL"
     ;;
   fg)
-    exec "$PYTHON" "$HERE/server.py"
+    SERVER="$HERE/quota_server.py"
+    [[ -f "$SERVER" ]] || SERVER="$HERE/provider_server.py"
+    [[ -f "$SERVER" ]] || SERVER="$HERE/server.py"
+    exec "$PYTHON" "$SERVER"
     ;;
   *)
     echo "usage: agentctl.sh {install|start|stop|uninstall|restart|status|open|fg}"
