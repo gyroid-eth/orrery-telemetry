@@ -115,7 +115,10 @@ def _forward_output(stream: TextIO, logger: logging.Logger) -> None:
 
 
 def _default_server_path() -> pathlib.Path:
-    """Prefer an installed provider-aware entry point, otherwise use core."""
+    """Prefer quota telemetry, then optional providers, otherwise core."""
+    quota_server = HERE / "quota_server.py"
+    if quota_server.is_file():
+        return quota_server
     provider_server = HERE / "provider_server.py"
     return provider_server if provider_server.is_file() else HERE / "server.py"
 
@@ -146,11 +149,9 @@ def run(server_path: pathlib.Path | None) -> int:
             if stopping_signal is not None:
                 logger.info("dashboard supervisor stopped before next restart")
                 return 0
-            # In self-restart mode the optional provider entrypoint can be
-            # removed while a child is running (for example by a failed
-            # provider upgrade). Resolve the implicit path for every child so
-            # the next attempt falls back to the core dashboard. An explicit
-            # argv override remains fixed for the lifetime of the supervisor.
+            # In self-restart mode an optional provider entrypoint can be
+            # removed while a child is running. Resolve the implicit path for
+            # every child so the next attempt follows the current install.
             selected_server_path = (
                 server_path if server_path is not None else _default_server_path()
             )
