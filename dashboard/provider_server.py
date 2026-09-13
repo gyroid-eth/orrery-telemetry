@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Provider-aware Dashboard entry point.
 
-The canonical ``dashboard/server.py`` stays the core. Optional provider
+The canonical ``dashboard/server.py`` stays the core.  Optional provider
 payloads extend the control plane here, and the service runner falls back to
-the core server when this file is not installed. Provider policy lives in the
+the core server when this file is not installed.  Provider policy lives in the
 extension modules themselves; this file only loads them.
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ _CORE_MODULE_NAME = "_orrery_provider_dashboard_core"
 # (module name, sibling file) for each optional provider extension.
 _EXTENSIONS = (
     ("_orrery_provider_dashboard_gemini", "gemini_provider_runtime.py"),
-    ("_orrery_provider_dashboard_quota", "quota_provider_runtime.py"),
 )
 
 
@@ -45,8 +44,8 @@ def _install_extensions(base) -> list[str]:
     """Install every loadable extension; return the ones that failed.
 
     A broken or partially installed provider payload must not take the
-    canonical Claude/Codex dashboard down with it. The failing provider is
-    simply absent from the extension surface.
+    canonical Claude/Codex dashboard down with it.  The failing provider is
+    simply absent from the catalog and cannot be spawned.
     """
     failed = []
     for name, filename in _EXTENSIONS:
