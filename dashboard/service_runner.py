@@ -149,9 +149,11 @@ def run(server_path: pathlib.Path | None) -> int:
             if stopping_signal is not None:
                 logger.info("dashboard supervisor stopped before next restart")
                 return 0
-            # In self-restart mode an optional provider entrypoint can be
-            # removed while a child is running. Resolve the implicit path for
-            # every child so the next attempt follows the current install.
+            # In self-restart mode the optional provider entrypoint can be
+            # removed while a child is running (for example by a failed
+            # provider upgrade). Resolve the implicit path for every child so
+            # the next attempt falls back to the core dashboard. An explicit
+            # argv override remains fixed for the lifetime of the supervisor.
             selected_server_path = (
                 server_path if server_path is not None else _default_server_path()
             )
