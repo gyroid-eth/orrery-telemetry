@@ -37,6 +37,7 @@ def install(base: Any) -> Any:
         raise RuntimeError("dashboard core lacks HTTP Handler")
 
     original = base.Handler.do_GET
+    base._QUOTA_SERVICE = _SERVICE
 
     def do_GET(self: Any) -> None:
         if urlparse(self.path).path != "/api/quotas":
@@ -52,7 +53,7 @@ def install(base: Any) -> Any:
             )
             return
         body = json.dumps(
-            _SERVICE.read_all(),
+            base._QUOTA_SERVICE.read_all(),
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -60,5 +61,4 @@ def install(base: Any) -> Any:
 
     base.Handler.do_GET = do_GET
     base._QUOTA_PROVIDER_RUNTIME_INSTALLED = True
-    base._QUOTA_SERVICE = _SERVICE
     return base
