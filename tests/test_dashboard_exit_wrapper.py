@@ -22,11 +22,22 @@ def _load_server():
     backup = dict(os.environ)
     os.environ.setdefault("AGENTSTACK_TERMINAL", "none")
     try:
-        spec = importlib.util.spec_from_file_location("agentstack_server_exit_test", SERVER)
+        spec = importlib.util.spec_from_file_location(
+            f"agentstack_server_exit_test_{id(SERVER)}", SERVER
+        )
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
-        spec.loader.exec_module(module)
-        return module
+        module_name = spec.name
+        previous = sys.modules.get(module_name)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            if previous is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
     finally:
         os.environ.clear()
         os.environ.update(backup)

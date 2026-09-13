@@ -34318,10 +34318,23 @@ function scheduleSpawnDirOptions(value,delay=250){
   },delay);
 }
 
+// How long to watch one async launch. The server derives
+// verdict_deadline_seconds from the launcher's readiness timeout and
+// termination grace; a missing or malformed value keeps the 140s default, and
+// no value shortens it or keeps a watcher alive past an hour.
+const SPAWN_WATCH_DEFAULT_MS=140000;
+const SPAWN_WATCH_MAX_MS=3600000;
+function spawnWatchLimitMs(pending){
+  const seconds=pending?pending.verdict_deadline_seconds:undefined;
+  if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0)
+    return SPAWN_WATCH_DEFAULT_MS;
+  return Math.min(Math.max(seconds*1000,SPAWN_WATCH_DEFAULT_MS),SPAWN_WATCH_MAX_MS);
+}
+
 // Poll the background verdict of an async spawn and report it as a toast.
-async function watchSpawnLaunch(name,dir){
+async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS){
   const started=Date.now();
-  while(Date.now()-started<140000){
+  while(Date.now()-started<limitMs){
     await new Promise(r=>setTimeout(r,2000));
     let j=null;
     try{
@@ -34338,7 +34351,7 @@ async function watchSpawnLaunch(name,dir){
     }
     return;
   }
-  toast('✕ SPAWN','> '+name+' :: no verdict after 140s',true);
+  toast('✕ SPAWN','> '+name+' :: no verdict after '+Math.round(limitMs/1000)+'s',true);
 }
 
 function renderSpawnDirs(dirs){
@@ -34774,7 +34787,7 @@ async function submitSpawn(){
         '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL');
       updateSpawnButton();
       closeSpawnModal();
-      watchSpawnLaunch(j.child_name,payload.dir);
+      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j));
       return;
     }
     clearSpawnTaskDraft(payload.dir);

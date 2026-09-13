@@ -26,10 +26,12 @@ import shlex
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
@@ -4353,51 +4355,327 @@ def spawn_launch_statuses() -> dict:
     return {"ok": True, "launches": {name: spawn_launch_status(name) for name in list(_SPAWN_LAUNCHES)}}
 
 
+@dataclass(frozen=True)
+class SpawnLaunchSpec:
+    """Resolved launch contract for one NEW AGENT child.
+
+    Only trusted Python code builds a spec: ``do_spawn`` for the built-in
+    Claude/Codex providers, and optional provider extensions loaded by
+    ``provider_server.py``.  A ``/api/spawn`` payload never supplies one, so it
+    cannot choose the launcher, registered program, provider identity, or
+    launcher environment.  Every launch carries its own spec, so concurrent
+    spawns never share or temporarily rewrite module-level launcher state.
+    """
+
+    provider: str
+    program: str
+    model: str
+    script: str
+    effort: str = ""
+    # Launcher flags placed after --standalone and before --model.
+    provider_args: tuple[str, ...] = ()
+    effort_arg: bool = False
+    standalone_supported: bool = True
+    worktree_required: bool = False
+    # False when the launcher delivers the canonical task itself.
+    task_mail: bool = True
+    launcher_env: tuple[tuple[str, str], ...] = ()
+    # Launcher-only handoff files, removed once the launcher has exited.
+    handoff_paths: tuple[str, ...] = ()
+    # Deliver a readiness timeout to the launcher's whole process group.  Such
+    # a launcher owns its TERM/EXIT cleanup (reservations, registration,
+    # worktree, branch), so it is given the cleanup grace below.
+    signal_process_group: bool = False
+    # Seconds a signalled launcher may spend exiting before SIGKILL.  None
+    # selects the canonical grace for this kind of launcher.
+    termination_grace: float | None = None
+
+    def __post_init__(self) -> None:
+        grace = self.termination_grace
+        if grace is not None and (
+                isinstance(grace, bool) or not isinstance(grace, (int, float))
+                or not math.isfinite(grace) or grace <= 0):
+            raise ValueError("termination_grace must be a positive number of seconds")
+
+
+# How long a launcher may take to report readiness before it is signalled.
+_SPAWN_READINESS_TIMEOUT_SECONDS = 120
+# Canonical Claude/Codex launchers have no cleanup of their own: TERM, then
+# KILL shortly after.
+_SPAWN_TERMINATE_GRACE_SECONDS = 5.0
+# A launcher that owns cleanup releases and retires over ORRERY Mail and
+# removes a git worktree before it exits.  Each of those calls is itself
+# time-bounded, so allow their sum instead of killing the cleanup midway.
+_SPAWN_CLEANUP_GRACE_SECONDS = 150.0
+# After SIGKILL, only reap; nothing is left to finish.
+_SPAWN_KILL_REAP_SECONDS = 5.0
+# The page's wait for an asynchronous verdict: never shorter than the 140s it
+# has always used, which is exactly the Claude/Codex worst case plus the margin.
+_SPAWN_DEFAULT_WATCH_SECONDS = 140
+# Covers the page's 2s poll, the tmux probes and the credential checks that run
+# after the launcher is reaped but before the verdict is recorded.
+_SPAWN_WATCH_MARGIN_SECONDS = 10.0
+# Longest registration token read back from a runtime credential file.
+_AGENT_TOKEN_MAX_CHARS = 4096
+
+
+def _spawn_termination_grace(spec: SpawnLaunchSpec) -> float:
+    if spec.termination_grace is not None:
+        return float(spec.termination_grace)
+    if spec.signal_process_group:
+        return _SPAWN_CLEANUP_GRACE_SECONDS
+    return _SPAWN_TERMINATE_GRACE_SECONDS
+
+
+def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec) -> int:
+    """Seconds the page should wait for an asynchronous launch verdict.
+
+    Derived only from server constants and the trusted spec: readiness timeout,
+    then the full termination grace, then the post-SIGKILL reap.  A spawn
+    payload has no say in it.
+    """
+    worst = (_SPAWN_READINESS_TIMEOUT_SECONDS + _spawn_termination_grace(spec)
+             + _SPAWN_KILL_REAP_SECONDS + _SPAWN_WATCH_MARGIN_SECONDS)
+    return max(_SPAWN_DEFAULT_WATCH_SECONDS, math.ceil(worst))
+
+
+# Credential states that are a copy interrupted midway (or never started) and
+# may therefore be replaced by the complete token.
+_SPAWN_CREDENTIAL_REPLACEABLE = ("missing", "empty", "partial")
+_SPAWN_CREDENTIAL_STATE_TEXT = {
+    "missing": "missing",
+    "empty": "empty",
+    "partial": "a partial copy",
+    "foreign": "holding a different value",
+    "oversized": "oversized",
+    "not-regular": "not a regular file",
+    "not-owned": "owned by another user",
+    "unreadable": "unreadable",
+}
+
+
+def _spawn_credential_state(path: str, expected: str) -> str:
+    """Classify one spawn credential file without following symlinks.
+
+    ``complete`` only for a regular file owned by this user whose whole content
+    is the registered token.  An empty file or a prefix of the token is a copy
+    that was interrupted; any other content was not written from this launch's
+    token and is never treated as usable or replaceable.
+    """
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unreadable"
+    if not stat.S_ISREG(info.st_mode):
+        return "not-regular"
+    if info.st_uid != os.getuid():
+        return "not-owned"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unreadable"
+    with os.fdopen(fd, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            return "not-regular"
+        if opened.st_uid != os.getuid():
+            return "not-owned"
+        raw = handle.read(_AGENT_TOKEN_MAX_CHARS + 2)
+    if len(raw) > _AGENT_TOKEN_MAX_CHARS + 1:
+        return "oversized"
+    try:
+        token = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return "foreign"
+    if not token:
+        return "empty"
+    if len(token) > _AGENT_TOKEN_MAX_CHARS:
+        return "oversized"
+    if token == expected:
+        return "complete"
+    if expected.startswith(token):
+        return "partial"
+    return "foreign"
+
+
+def _promote_spawn_credential(path: str, token: str, current_state: str) -> bool:
+    """Install ``token`` at ``path`` (mode 0600) in one atomic step.
+
+    The token is written and synced to an exclusive temporary file first, so
+    ``path`` never shows a partial copy.  A missing path is claimed with
+    link(2), which fails instead of replacing a credential that appeared in
+    the meantime; an empty or partial regular file is replaced with rename(2),
+    which swaps the directory entry and never writes through a symlink.
+    """
+    if current_state not in _SPAWN_CREDENTIAL_REPLACEABLE:
+        return False
+    temp = os.path.join(
+        os.path.dirname(path),
+        f".{os.path.basename(path)}.{secrets.token_hex(8)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(temp, flags, 0o600)
+    except OSError as e:
+        logging.warning("failed to stage recovery credential %s: %s", path, e)
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(token)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Re-inspect right before installing, so a credential that became
+        # complete, foreign or a link since the first look is left alone.
+        if _spawn_credential_state(path, token) != current_state:
+            return False
+        if current_state == "missing":
+            os.link(temp, path)
+        else:
+            os.replace(temp, path)
+        return True
+    except OSError as e:
+        logging.warning("failed to install recovery credential %s: %s", path, e)
+        return False
+    finally:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+
+
+def _spawn_unavailable_error() -> dict | None:
+    if sys.platform == "win32":
+        from scripts.windows.spawn_catalog import UNAVAILABLE
+        return {"ok": False, "error": UNAVAILABLE}
+    return None
+
+
+def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
+    """Validate the provider-independent NEW AGENT fields of a payload."""
+    if "standalone" in payload and not isinstance(payload["standalone"], bool):
+        return None, {"ok": False, "error": "standalone must be boolean"}
+    standalone = payload.get("standalone", False)
+    request = {
+        "standalone": standalone,
+        "parent": (payload.get("parent") or "").strip(),
+        "task": (payload.get("task") or "").strip(),
+        "role": (payload.get("role") or "").strip()[:40],
+        "group": (payload.get("group") or "").strip()[:24],
+        "worktree": bool(payload.get("worktree")),
+        "worktree_base": (payload.get("worktree_base") or "").strip(),
+        "requested_name": (payload.get("name") or "").strip(),
+        "work_dir": os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip()),
+    }
+    if not standalone and (
+            not request["parent"]
+            or _NAME_RE.fullmatch(request["parent"]) is None):
+        return None, {"ok": False, "error": "parent name invalid"}
+    if standalone:
+        request["parent"] = ""
+    if not request["task"]:
+        return None, {"ok": False, "error": "task description required"}
+    return request, None
+
+
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
     payload: {parent?, standalone?, name?, dir?, role?, group?, task,
               provider?, model?, effort?}.
     """
-    if sys.platform == "win32":
-        from scripts.windows.spawn_catalog import UNAVAILABLE
-        return {"ok": False, "error": UNAVAILABLE}
-    if "standalone" in payload and not isinstance(payload["standalone"], bool):
-        return {"ok": False, "error": "standalone must be boolean"}
-    standalone = payload.get("standalone", False)
-    parent = (payload.get("parent") or "").strip()
-    task = (payload.get("task") or "").strip()
-    role = (payload.get("role") or "").strip()[:40]
-    group = (payload.get("group") or "").strip()[:24]
+    unavailable = _spawn_unavailable_error()
+    if unavailable:
+        return unavailable
+    _request, error = _spawn_request(payload)
+    if error:
+        return error
     provider = (payload.get("provider") or "claude").strip().lower()
     model = (payload.get("model") or ("claude-sonnet-5" if provider == "claude" else _codex_models()[0])).strip()
     effort = (payload.get("effort") or "").strip().lower()
-    worktree = bool(payload.get("worktree"))
-    worktree_base = (payload.get("worktree_base") or "").strip()
-    requested_name = (payload.get("name") or "").strip()
-    work_dir = os.path.expanduser((payload.get("dir") or SOURCE_REPO).strip())
-
-    if not standalone and (not parent or _NAME_RE.fullmatch(parent) is None):
-        return {"ok": False, "error": "parent name invalid"}
-    if standalone:
-        parent = ""
-    if not task:
-        return {"ok": False, "error": "task description required"}
     if provider == "claude":
         if model not in _SPAWN_MODELS:
             return {"ok": False, "error": f"model not allowed for provider claude: {model}"}
         if effort:
             return {"ok": False, "error": "effort not supported for provider: claude"}
         program, model_str = _SPAWN_MODELS[model]
+        spec = SpawnLaunchSpec(
+            provider="claude", program=program, model=model_str,
+            script=SPAWN_SCRIPT,
+        )
     elif provider == "codex":
         if model not in _codex_models():
             return {"ok": False, "error": f"model not allowed for provider codex: {model}"}
         effort = effort or "xhigh"
         if effort not in _CODEX_EFFORTS:
             return {"ok": False, "error": f"effort not allowed for provider codex: {effort}"}
-        program, model_str = "codex-cli", model
+        spec = SpawnLaunchSpec(
+            provider="codex", program="codex-cli", model=model,
+            script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",),
+            effort_arg=True,
+        )
     else:
         return {"ok": False, "error": f"provider not allowed: {provider}"}
+    return spawn_with_launch_spec(payload, spec)
+
+
+def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
+    """Launch one child from a payload and a trusted, already-validated spec.
+
+    This is the internal extension point for provider code running inside the
+    dashboard process; the HTTP API only reaches ``do_spawn``.  From this call
+    onward the spec's handoff files belong to the launch and are removed once
+    no launcher can still read them.
+    """
+    if not isinstance(spec, SpawnLaunchSpec):
+        raise TypeError("spawn_with_launch_spec requires a SpawnLaunchSpec")
+    handoff = {"transferred": False}
+
+    def discard_handoff() -> None:
+        for path in spec.handoff_paths:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logging.warning("failed to remove spawn handoff %s: %s", path, e)
+
+    try:
+        unavailable = _spawn_unavailable_error()
+        if unavailable:
+            return unavailable
+        request, error = _spawn_request(payload)
+        if error:
+            return error
+        return _spawn_launch(payload, request, spec, handoff, discard_handoff)
+    finally:
+        if not handoff["transferred"]:
+            discard_handoff()
+
+
+def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
+                  handoff: dict, discard_handoff) -> dict:
+    standalone = request["standalone"]
+    parent = request["parent"]
+    task = request["task"]
+    role = request["role"]
+    group = request["group"]
+    worktree = request["worktree"] or spec.worktree_required
+    worktree_base = request["worktree_base"]
+    requested_name = request["requested_name"]
+    work_dir = request["work_dir"]
+    provider = spec.provider
+    program = spec.program
+    model_str = spec.model
+    effort = spec.effort
+
+    if standalone and not spec.standalone_supported:
+        return {"ok": False,
+                "error": f"standalone not supported for provider {provider}"}
     if requested_name and re.fullmatch(
             r"[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?",
             requested_name) is None:
@@ -4406,8 +4684,8 @@ def do_spawn(payload: dict) -> dict:
         return {"ok": False, "error": "name is occupied or cannot be verified"}
     if not os.path.isdir(work_dir):
         return {"ok": False, "error": f"dir does not exist: {work_dir}"}
-    if not os.path.exists(SPAWN_SCRIPT):
-        return {"ok": False, "error": f"spawn script missing: {SPAWN_SCRIPT}"}
+    if not os.path.exists(spec.script):
+        return {"ok": False, "error": f"spawn script missing: {spec.script}"}
     project_key = _project_key()
     if not project_key:
         return {"ok": False, "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
@@ -4459,7 +4737,8 @@ def do_spawn(payload: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             annot_status = f"err:{e}"
 
-    def retained_registration_error(error: str, **extra) -> dict:
+    def retained_registration_error(
+            error: str, *, registration_may_remain: bool = False, **extra) -> dict:
         """Report a post-registration failure without pretending it rolled back.
 
         The dashboard's service credential can create registrations, but it is
@@ -4467,10 +4746,11 @@ def do_spawn(payload: dict) -> dict:
         this explicit so callers do not retry and silently create more junk
         identities.
         """
+        registration_status = "may remain" if registration_may_remain else "remains"
         result = {
             "ok": False,
             "error": (
-                f"{error}; child registration '{child_name}' remains because "
+                f"{error}; child registration '{child_name}' {registration_status} because "
                 "the dashboard server has no permission to delete it"
             ),
             "child_name": child_name,
@@ -4504,6 +4784,9 @@ def do_spawn(payload: dict) -> dict:
         if not parent_token:
             return retained_registration_error(
                 f"parent registration token unavailable for '{parent}'")
+    # A launcher that delivers the task itself owns the only task authority;
+    # a second copy by mail would carry conflicting completion instructions.
+    if not standalone and spec.task_mail:
         subject = f"タスク依頼: {task[:50]}"
         body_lines = [
             "> [via dashboard +NEW AGENT]",
@@ -4543,17 +4826,24 @@ def do_spawn(payload: dict) -> dict:
     token_created = False
     log_fh = None
 
-    def remove_spawn_credentials() -> None:
-        """Remove both the one-shot handoff and any launcher-persisted copies."""
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", child_name)
+    owner_credential = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+
+    def remove_spawn_credentials(keep_owner_credential: bool = False) -> None:
+        """Remove both the one-shot handoff and any launcher-persisted copies.
+
+        ``keep_owner_credential`` removes only the one-shot handoff; callers
+        use it once ``retain_recovery_credential`` has decided what survives.
+        """
         nonlocal token_created
         paths = []
         if token_created and token_file:
             paths.append(token_file)
-        token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", child_name)
-        paths.extend([
-            os.path.join(RUNTIME_DIR, f"agent_token_{token_key}"),
-            os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.json"),
-        ])
+        if not keep_owner_credential:
+            paths.extend([
+                owner_credential,
+                os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.json"),
+            ])
         for path in paths:
             try:
                 os.unlink(path)
@@ -4563,6 +4853,59 @@ def do_spawn(payload: dict) -> dict:
                 logging.warning(
                     "failed to remove failed-spawn credential %s: %s", path, e)
         token_created = False
+
+    def retain_recovery_credential() -> tuple[str, dict]:
+        """Keep one usable owner credential after a launcher's cleanup was killed.
+
+        The launcher may have died before, during, or after copying the
+        one-shot handoff to the owner path.  Prefer the owner path, the only
+        one cleanup-child-agent.sh reads: keep it when complete, or install the
+        unconsumed handoff there when it is missing, empty or a partial copy.
+        Otherwise keep the handoff itself and say where it is, or say that no
+        usable copy is left.  Returns the error clause and result fields.
+        """
+        nonlocal token_created
+        owner_state = _spawn_credential_state(owner_credential, effective_child_token)
+        handoff_state = (
+            _spawn_credential_state(token_file, effective_child_token)
+            if token_created and token_file else "missing")
+        promoted = False
+        if owner_state in _SPAWN_CREDENTIAL_REPLACEABLE and handoff_state == "complete":
+            promoted = _promote_spawn_credential(
+                owner_credential, effective_child_token, owner_state)
+            owner_state = _spawn_credential_state(owner_credential, effective_child_token)
+        if owner_state == "complete":
+            remove_spawn_credentials(keep_owner_credential=True)
+            origin = ("installed from the unconsumed one-shot handoff at"
+                      if promoted else "kept at")
+            return (
+                f"owner credential {origin} {owner_credential}; "
+                f"cleanup-child-agent.sh {child_name} can retire the "
+                "registration with it and requests release of its file "
+                "reservations, but does not remove the worktree or branch",
+                {"recovery_credential": owner_credential,
+                 "cleanup_child_agent_can_recover": True})
+        owner_text = _SPAWN_CREDENTIAL_STATE_TEXT.get(owner_state, owner_state)
+        if handoff_state == "complete":
+            # The handoff is now the only usable copy: hand it to the human.
+            token_created = False
+            return (
+                "the only usable owner credential is the unconsumed one-shot "
+                f"handoff kept at {token_file}; {owner_credential} is "
+                f"{owner_text} and was left untouched, and "
+                "cleanup-child-agent.sh reads only that path, so it cannot "
+                "retire this child or release its file reservations",
+                {"recovery_credential": token_file,
+                 "cleanup_child_agent_can_recover": False})
+        handoff_text = _SPAWN_CREDENTIAL_STATE_TEXT.get(handoff_state, handoff_state)
+        remove_spawn_credentials(keep_owner_credential=True)
+        return (
+            f"no usable owner credential remains ({owner_credential} is "
+            f"{owner_text}; the one-shot handoff is {handoff_text}), so "
+            "cleanup-child-agent.sh cannot retire this child or release its "
+            "file reservations",
+            {"recovery_credential": None,
+             "cleanup_child_agent_can_recover": False})
 
     def kill_spawn_session() -> None:
         try:
@@ -4592,13 +4935,12 @@ def do_spawn(payload: dict) -> dict:
         remove_spawn_credentials()
         return retained_registration_error(f"spawn token write failed: {e}")
 
-    args = [SPAWN_SCRIPT, "--pre-registered", child_name, "--child-token-file", token_file]
+    args = [spec.script, "--pre-registered", child_name, "--child-token-file", token_file]
     if standalone:
         args.append("--standalone")
-    if provider == "codex":
-        args.append("--codex")
+    args.extend(spec.provider_args)
     args.extend(["--model", model_str])
-    if provider == "codex":
+    if spec.effort_arg:
         args.extend(["--effort", effort])
     if worktree:
         args.append("--worktree")
@@ -4606,6 +4948,8 @@ def do_spawn(payload: dict) -> dict:
             args.extend(["--worktree-base", worktree_base])
     args.extend([task[:4000] if standalone else task_short, work_dir])
     env = os.environ.copy()
+    # Provider values first: the identity/context keys below always win.
+    env.update(dict(spec.launcher_env))
     if standalone:
         env.pop("PARENT_AGENT", None)
     else:
@@ -4636,23 +4980,59 @@ def do_spawn(payload: dict) -> dict:
         # The launcher performs readiness/death detection and consumes the
         # one-shot token before returning.  Wait for that verdict instead of
         # treating a briefly-created tmux session as success.
+        def signal_launcher(signum: int) -> None:
+            if spec.signal_process_group:
+                # start_new_session made the launcher its group leader, so the
+                # group also reaches whichever helper it is waiting on.
+                os.killpg(proc.pid, signum)
+            elif signum == signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+
+        grace = _spawn_termination_grace(spec)
+
+        def stop_launcher() -> bool:
+            """TERM the launcher; True when it exited within its grace."""
+            try:
+                signal_launcher(signal.SIGTERM)
+                proc.wait(timeout=grace)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                signal_launcher(signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                proc.wait(timeout=_SPAWN_KILL_REAP_SECONDS)
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
         def settle() -> dict:
             if hasattr(proc, "wait"):
                 try:
-                    returncode = proc.wait(timeout=120)
+                    returncode = proc.wait(timeout=_SPAWN_READINESS_TIMEOUT_SECONDS)
                 except subprocess.TimeoutExpired:
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=5)
-                    except Exception:  # noqa: BLE001
-                        try:
-                            proc.kill()
-                        except Exception:  # noqa: BLE001
-                            pass
+                    stopped = stop_launcher()
                     kill_spawn_session()
-                    remove_spawn_credentials()
+                    error = ("spawn launcher did not finish readiness checks "
+                             f"within {_SPAWN_READINESS_TIMEOUT_SECONDS:g}s")
+                    if stopped or not spec.signal_process_group:
+                        remove_spawn_credentials()
+                        return retained_registration_error(
+                            error, registration_may_remain=spec.signal_process_group)
+                    # The launcher's own cleanup was killed midway, so nothing
+                    # it created is known to be gone.  Say so, and keep a
+                    # credential that can still release and retire it.
+                    recovery, fields = retain_recovery_credential()
                     return retained_registration_error(
-                        "spawn launcher did not finish readiness checks within 120s")
+                        f"{error}; its cleanup did not finish within {grace:g}s "
+                        "of SIGTERM and was killed, so its file reservations, "
+                        "registration, worktree and branch may remain; "
+                        f"{recovery}",
+                        cleanup_incomplete=True, **fields)
                 if returncode != 0:
                     kill_spawn_session()
                     remove_spawn_credentials()
@@ -4713,6 +5093,9 @@ def do_spawn(payload: dict) -> dict:
                 "provider": provider,
                 "model": model_str,
                 "effort": effort or None,
+                # How long the page waits for the verdict; from the spec and
+                # server constants only, never from the payload.
+                "verdict_deadline_seconds": _spawn_verdict_deadline_seconds(spec),
             }
             _spawn_launch_record(child_name, pending)
             owned_log = log_fh
@@ -4727,9 +5110,11 @@ def do_spawn(payload: dict) -> dict:
                     verdict = retained_registration_error(f"spawn launch failed: {e}")
                 finally:
                     owned_log.close()
+                    discard_handoff()
                 _spawn_launch_record(child_name, verdict)
 
             threading.Thread(target=runner, name=f"spawn-{child_name}", daemon=True).start()
+            handoff["transferred"] = True
             return pending
 
         result = settle()
