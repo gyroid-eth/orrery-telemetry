@@ -81,7 +81,7 @@ The information hierarchy is fixed, top to bottom. A new element declares which 
 2. sector heading (a mono capitals line such as `ACTIVE AGENTS [ 27 ]` with a rule fading to the right)
 3. bay (the agent card)
 4. auxiliary bands (history sparkline, usage, …; weaker than agent cards, collapsible)
-5. overlays (NEW AGENT modal, agent detail, edge thread drawer, Tune)
+5. overlays (NEW AGENT modal, agent detail, edge thread drawer, settings drawer)
 
 ### Header and grid
 
@@ -144,7 +144,7 @@ Bands that sit above or between agent cards (history, usage, notices) rank below
 - Labels are serif (name 10.5px, running 11px) and mono (role 6.8px, counts 9px). A node whose registered name differs from the requested one shows mono 10px with a dotted amber underline. Above 300 nodes (dense) names, roles, counts, badges, and arcs are hidden. When many nodes make labels collide, disclose on hover / focus by highlighting the neighbourhood instead of showing more labels all the time
 - Edges are thin `--ink-dim` lines at opacity .22. Spawn edges are solid `--ln-delegate` at 1.25 / .4. Mail counts sit at the edge midpoint in mono with the ground colour burned in behind the glyphs
 - The background is a 48px grid and a faint central ellipse. The grid is `--hair-2` and never louder than the ground
-- Floating panels (Tune, legend, sel-toggle) share one glass material: `--panel` at 90%, hairline, 9px radius, shadow 0 16px 42px black 18%. Only the legend popover, being large, uses a slightly heavier material: 10px radius, 9% white border, blur 26px, shadow 0 30px 90px black 52%
+- Floating panels (legend, sel-toggle) share one glass material: `--panel` at 90%, hairline, 9px radius, shadow 0 16px 42px black 18%. Only the legend popover, being large, uses a slightly heavier material: 10px radius, 9% white border, blur 26px, shadow 0 30px 90px black 52%
 
 ## 8. Overlays (NEW AGENT modal and others)
 
@@ -164,17 +164,14 @@ NEW AGENT, agent detail, and the edge thread drawer share one glass material. Wh
 
 Telemetry has two themes, dark and light. Light is a warm-paper cream ground on which text, surfaces, hairlines, and the accent all take values different from dark. Light is what the maintainer uses day to day.
 
-The light palette and the code that applies it ship with telemetry. `dashboard/theme_core.js` derives the palette from OKLCH seeds, `dashboard/theme_controller.js` writes `html[data-color-theme="light"]` and the token values, and `dashboard/theme_light.css` adds the light-only corrections. The default is dark, and there are two ways to switch today:
+The light palette and the code that applies it ship with telemetry. `dashboard/theme_core.js` derives the palette from OKLCH seeds, `dashboard/theme_controller.js` writes `html[data-color-theme="light"]` and the token values, and `dashboard/theme_light.css` adds the light-only corrections. The default is dark, and there are two ways to switch:
 
-- Embedded in the cockpit (`orrery`): the host announces the theme by same-origin `postMessage` and the controller applies it
-- Opened on its own: there is no user-facing toggle yet. From the developer console:
+- Embedded in the cockpit (`orrery`): the host announces the theme by same-origin `postMessage` and the controller applies it. The browser's stored choice is not read
+- Opened on its own: `SETTINGS` at the right end of the header opens a drawer whose APPEARANCE row offers `dark` / `light` / `system`. The choice is stored in `localStorage` (`agentdash.colorTheme`); `system` follows the OS `prefers-color-scheme`. When embedded the same control is disabled and says so in words: `SET BY THE COCKPIT`
 
-```js
-window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})
-window.AgentStackColorTheme.apply({preference: 'dark', resolved: 'dark'})
-```
+The settings drawer uses the drawer material and placement of §8 (pinned to the right edge, rounded on the left only) at `min(340px, 100vw - 18px)` wide. Below APPEARANCE it holds the NETWORK sliders (the former Tune panel), so it is the one place for what this browser remembers. The developer console still works: `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` switches without storing; `setPreference('light')` stores.
 
-Planned: standalone telemetry will switch between dark and light from the header (with the choice persisted, and the cockpit's setting winning when embedded). Alongside that, the literal colours left in the old layer will be replaced with tokens; today the cockpit gets by rewriting those literals at runtime when it embeds telemetry.
+Planned: the literal colours left in the old layer will be replaced with tokens; today the cockpit gets by rewriting those literals at runtime when it embeds telemetry.
 
 Only one mechanism makes themes work: colours are written by name (the tokens of §4), and a theme swaps the values behind the names. So the rule in §4 and §10, "write colours as tokens, never as literal values", is the rule that makes themes possible, and `grep` can check it. On 2026-08-10, text became unreadable in light in 14 places because literal colours in the old layer were not swapped.
 

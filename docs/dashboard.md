@@ -161,7 +161,7 @@ Codex App runtime には tmux pane がありません。terminal attach、dashbo
 
 NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚の force graph に重ねます。まず、**ノードはエージェント、線は関係**と読んでください。
 
-次の初期状態では3ノードに対して `0 links · 0 spawn` なので、まだ親子関係も通信もありません。右側には配置を調整する `TUNE` パネルが見えます。
+次の初期状態では3ノードに対して `0 links · 0 spawn` なので、まだ親子関係も通信もありません。配置の調整は header 右端の `SETTINGS` から開く drawer の NETWORK で行います。
 
 ![NETWORK の初期状態。3ノードで通信線と spawn 線はまだない](images/net_start.png)
 
@@ -204,8 +204,8 @@ NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚
 - time window slider / ALL
 - legend
 - node search
-- TUNE: `NODE SIZE`、`LINK DIST`、`LINK WIDTH`、`REPEL`、`CENTER`、`LINK FORCE`。右側の slider でノード同士の配置を見やすく調整
-- TUNE 値を `localStorage` に保存
+- SETTINGS › NETWORK: `NODE SIZE`、`LINK DIST`、`LINK WIDTH`、`REPEL`、`CENTER`、`LINK FORCE`。header 右端の `SETTINGS` で開く drawer の slider でノード同士の配置を見やすく調整
+- 値は `localStorage` に保存。同じ drawer の APPEARANCE で dark / light / system も切り替えられる（単体で開いたとき。cockpit 埋め込み時は cockpit が決める）
 - 300 node 超で dense mode
 
 dense mode は label、annotation、provider badge、context arc を隠し、大規模 graph の描画負荷を抑えます。

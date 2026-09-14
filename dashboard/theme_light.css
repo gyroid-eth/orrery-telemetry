@@ -52,7 +52,6 @@ html[data-color-theme="light"] .node .provider-seat{fill:var(--panel);stroke:var
 html[data-color-theme="light"] .node .provider-seat-shadow{fill:var(--ink);opacity:.09}
 html[data-color-theme="light"] .win,
 html[data-color-theme="light"] .netinfo,
-html[data-color-theme="light"] .nctl,
 html[data-color-theme="light"] .sel-toggle,
 html[data-color-theme="light"] .legend,
 html[data-color-theme="light"] #gtip{background:color-mix(in srgb,var(--panel) 94%,transparent);box-shadow:0 16px 38px var(--theme-shadow-low)}
@@ -66,7 +65,8 @@ html[data-color-theme="light"] #term,
 html[data-color-theme="light"] #spawnmd{background:rgb(var(--theme-ink-rgb)/.24)}
 html[data-color-theme="light"] #term .tm-box,
 html[data-color-theme="light"] #spawnmd .spm-frame,
-html[data-color-theme="light"] #edrawer{
+html[data-color-theme="light"] #edrawer,
+html[data-color-theme="light"] #settings{
   background:linear-gradient(180deg,rgb(255 255 255/.28),transparent 140px),var(--panel);
   border-color:var(--hair);box-shadow:0 24px 72px var(--theme-shadow-low);
 }

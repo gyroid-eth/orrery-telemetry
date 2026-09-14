@@ -138,7 +138,7 @@ A Codex App runtime has no tmux pane. The dashboard performs no terminal attach,
 
 NETWORK overlays “who spawned whom” and “who communicated” in one force graph. Read **nodes as agents and lines as relationships**.
 
-The initial state below has three nodes and `0 links · 0 spawn`, so there are no parent-child relationships or communications yet. The right-side `TUNE` panel adjusts layout.
+The initial state below has three nodes and `0 links · 0 spawn`, so there are no parent-child relationships or communications yet. Layout is adjusted under NETWORK in the drawer opened by `SETTINGS` at the right end of the header.
 
 ![Initial NETWORK state with three nodes and no communication or spawn lines](images/net_start.png)
 
@@ -181,8 +181,8 @@ Without `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT`, mail edges and the drawer
 - time-window slider / ALL
 - legend
 - node search
-- TUNE: `NODE SIZE`, `LINK DIST`, `LINK WIDTH`, `REPEL`, `CENTER`, `LINK FORCE`; right-side sliders adjust node layout
-- save TUNE values in `localStorage`
+- SETTINGS › NETWORK: `NODE SIZE`, `LINK DIST`, `LINK WIDTH`, `REPEL`, `CENTER`, `LINK FORCE`; sliders in the drawer opened by `SETTINGS` at the right end of the header adjust node layout
+- values are saved in `localStorage`; the same drawer's APPEARANCE switches dark / light / system (standalone only; the cockpit decides when embedded)
 - dense mode above 300 nodes
 
 Dense mode hides labels, annotations, provider badges, and context arcs to reduce rendering load for large graphs.

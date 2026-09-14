@@ -81,7 +81,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 2. sector 見出し（`ACTIVE AGENTS [ 27 ]` のような mono 大文字の行と、右へ消える罫線）
 3. bay（agent card）
 4. 補助の帯（履歴の sparkline、残量など。agent card より弱く、折りたためる）
-5. overlay（NEW AGENT modal、agent detail、edge thread drawer、Tune）
+5. overlay（NEW AGENT modal、agent detail、edge thread drawer、settings drawer）
 
 ### header と grid
 
@@ -144,7 +144,7 @@ agent card の上や間に入る帯（履歴、残量、通知）は、agent car
 - label は serif（名前 10.5px、running は 11px）と mono（役割 6.8px、件数 9px）。要求名と登録名が違う node は mono 10px に amber の点線下線。301 node 以上では名前・役割・件数・badge・弧を隠す（dense）。多数の node で label が重なるときは、常時表示を増やさず hover / focus で近傍を強調して開示します
 - 辺は `--ink-dim` の細線で opacity .22。spawn の辺は `--ln-delegate` の実線で 1.25 / .4。mail の件数は辺の中点に mono で載せ、文字の下に地の色を焼き込んで可読性を保ちます
 - 背景は 48px の格子と中央の淡い楕円。格子は `--hair-2` で、地より目立ちません
-- Tune、legend、sel-toggle などの浮遊パネルは同じガラス材（`--panel` 90%、hairline、角丸 9px、影 0 16px 42px 黒 18%）。legend の popover だけは大きいので角丸 10px、白 9% の枠、blur 26px、影 0 30px 90px 黒 52% と、少し重い材質です
+- legend、sel-toggle などの浮遊パネルは同じガラス材（`--panel` 90%、hairline、角丸 9px、影 0 16px 42px 黒 18%）。legend の popover だけは大きいので角丸 10px、白 9% の枠、blur 26px、影 0 30px 90px 黒 52% と、少し重い材質です
 
 ## 8. overlay（NEW AGENT modal ほか）
 
@@ -164,17 +164,14 @@ NEW AGENT、agent detail、edge thread drawer は同じガラス材を共有し�
 
 telemetry には dark と light の 2 つの theme があります。light は warm-paper のクリーム地で、文字、面、罫線、accent がすべて dark とは別の値になります。maintainer が日常に使うのは light です。
 
-light の palette と適用処理は telemetry に同梱されています。`dashboard/theme_core.js` が OKLCH の seed から palette を導出し、`dashboard/theme_controller.js` が `html[data-color-theme="light"]` と token の値を書き込み、`dashboard/theme_light.css` が light 専用の補正を当てます。既定は dark で、いまの切替経路は 2 つです:
+light の palette と適用処理は telemetry に同梱されています。`dashboard/theme_core.js` が OKLCH の seed から palette を導出し、`dashboard/theme_controller.js` が `html[data-color-theme="light"]` と token の値を書き込み、`dashboard/theme_light.css` が light 専用の補正を当てます。既定は dark で、切替経路は 2 つです:
 
-- cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します
-- 単体で開いたとき: 利用者向けの切替 UI はまだありません。開発者 console から次で切り替えられます
+- cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します。この browser の保存値は読みません
+- 単体で開いたとき: header 右端の `SETTINGS` で開く drawer の APPEARANCE で `dark` / `light` / `system` を選びます。選択は `localStorage`（`agentdash.colorTheme`）に保存され、`system` は OS の `prefers-color-scheme` に追随します。埋め込み時は同じ control を操作不可にし、`SET BY THE COCKPIT` と文字で言います
 
-```js
-window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})
-window.AgentStackColorTheme.apply({preference: 'dark', resolved: 'dark'})
-```
+settings drawer は §8 の drawer と同じ材質と配置（右端固定、角丸は左だけ）で、幅は `min(340px, 100vw - 18px)`。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
 
-予定: 単体でも header から dark と light を切り替えられるようにします（設定の保存と、埋め込み時は cockpit 側が勝つこと、を含む）。あわせて、古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
+予定: 古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
 
 theme が成り立つ仕組みは 1 つだけです。色は名前（§4 の token）で書かれていて、theme はその名前の中身を差し替えます。だから §4 と §10 の「色は token で書く。literal な値を書かない」が theme の規則そのもので、守れているかは `grep` で確かめられます。2026-08-10 に light で 14 か所の文字が読めなくなったのは、古い層の literal 色が差し替わらなかったためです。
 
