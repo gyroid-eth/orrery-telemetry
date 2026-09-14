@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -67,13 +68,8 @@ class ClaudeAccountQuotaProvider:
         self._token_reader = token_reader or read_access_token
         self._quiet_until = 0.0
 
-    def available(self) -> bool:
-        """Whether this machine can answer at all, without spending a request."""
-        if os.environ.get(DISABLE_ENV, "").strip().lower() in {"0", "off", "false", "no"}:
-            return False
-        return bool(self._token_reader())
-
     def read(self) -> QuotaSnapshot:
+        """Answer without touching the network when it already cannot help."""
         now = int(self._clock())
         if os.environ.get(DISABLE_ENV, "").strip().lower() in {"0", "off", "false", "no"}:
             return self._unavailable(now, "account_usage_disabled")
@@ -147,10 +143,19 @@ def parse_account_usage(payload: Mapping[str, Any], *, observed_at: int) -> Quot
         used = _percent_or_none(entry.get("percent"))
         if used is None:
             continue
-        slug = "".join(ch if ch.isalnum() else "-" for ch in name.strip().lower()).strip("-")
+        # Two different models can slug to the same id ("A/B" and "A-B"), and
+        # dropping one would silently hide a window — possibly the tighter of
+        # the two. Prefer the id the API gives the model, and keep every
+        # distinct window even when the names collide.
+        identity = model.get("id") if isinstance(model, Mapping) else None
+        key = identity.strip() if isinstance(identity, str) and identity.strip() else name.strip()
+        slug = "".join(ch if ch.isalnum() else "-" for ch in key.lower()).strip("-")
         bucket_id = f"model-{slug or 'model'}"
         if bucket_id in seen:
-            continue
+            suffix = 2
+            while f"{bucket_id}-{suffix}" in seen:
+                suffix += 1
+            bucket_id = f"{bucket_id}-{suffix}"
         seen.add(bucket_id)
         buckets.append(
             QuotaBucket.from_used(
@@ -222,6 +227,42 @@ def _token_from_credentials(data: object) -> str | None:
     return token.strip() if isinstance(token, str) and token.strip() else None
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect while carrying the account token.
+
+    urllib copies request headers, Authorization included, onto the redirect
+    target. The usage endpoint is a fixed HTTPS address; if it ever answered
+    with a redirect, following it would hand the token to whatever host the
+    response named.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
+def _retry_after_seconds(value: object) -> int:
+    """`Retry-After` is either delta-seconds or an HTTP-date."""
+    if not isinstance(value, str) or not value.strip():
+        return 0
+    text = value.strip()
+    try:
+        return max(0, int(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return 0
+    if when is None:
+        return 0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0, int(when.timestamp() - time.time()))
+
+
 def _fetch_usage(token: str, timeout: float) -> Mapping[str, Any]:
     request = urllib.request.Request(
         USAGE_URL,
@@ -233,17 +274,14 @@ def _fetch_usage(token: str, timeout: float) -> Mapping[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             raise _AuthRequired() from None
         if exc.code == 429:
-            try:
-                retry = int(exc.headers.get("Retry-After") or 0)
-            except (TypeError, ValueError):
-                retry = 0
-            raise _RateLimited(max(retry, BACKOFF_SECONDS)) from None
+            raise _RateLimited(max(_retry_after_seconds(exc.headers.get("Retry-After")),
+                                   BACKOFF_SECONDS)) from None
         raise RuntimeError(f"http_{exc.code}") from None
     data = json.loads(body)
     if not isinstance(data, Mapping):

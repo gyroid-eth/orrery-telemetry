@@ -36672,6 +36672,12 @@ const USAGE_REASON={
   sign_in_required:'sign in required',
   rate_limited:'rate limited · waiting',
   account_usage_disabled:'account usage turned off',
+  account_usage_failed:'account usage unreachable',
+  fallback_rate_limited:'account rate limited',
+  fallback_sign_in_required:'not signed in',
+  fallback_account_usage_failed:'account usage unreachable',
+  fallback_account_usage_disabled:'account usage turned off',
+  fallback_account_unavailable:'account usage unavailable',
 };
 let usageSeen=false, usageLast=null;
 // Which providers this browser shows (Settings › USAGE). Stored as the list
@@ -36807,6 +36813,12 @@ function renderUsagePopover(data){
     const note=stale?`stale · observed ${usageClock(pv.observed_at)}`
       :(bind&&bind.resets_at?`next reset ${usageReset(bind.resets_at)}`:'');
     let html=`<div class="up-prov"><div class="up-h">${head}<span>${esc(note)}</span></div>`;
+    // `degraded` means a second source answered and it knows fewer windows —
+    // without this line the shorter list would read as the whole account.
+    if(pv.status==='degraded'){
+      const why=USAGE_REASON[pv.reason]||pv.reason||'';
+      html+=`<div class="up-wait"><b>PARTIAL</b> · some windows are missing${why?' · '+esc(why):''}</div>`;
+    }
     if(ordinary.length) html+=`<div class="up-dials">${ordinary.map(b=>usageDial(b,stale)).join('')}</div>`;
     for(const [name,wins] of extra){
       if(wins.every(w=>w.remaining_percent>=99.5)){

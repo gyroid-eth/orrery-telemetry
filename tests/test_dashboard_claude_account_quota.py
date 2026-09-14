@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.request
+from email.utils import formatdate
 
 import pytest
 
@@ -56,22 +58,49 @@ def test_a_limit_that_is_not_model_scoped_is_not_turned_into_a_window():
     assert snapshot.reason == "no_windows_returned"
 
 
+class _Opener:
+    """Stands in for the module's opener so the real request path is exercised."""
+
+    def __init__(self, handler):
+        self._handler = handler
+        self.calls = []
+
+    def open(self, request, timeout=None):
+        self.calls.append(request)
+        return self._handler(request)
+
+
 def _http_error(code: int, headers: dict[str, str] | None = None):
-    def raiser(request, timeout=None):
+    def raiser(request):
         raise urllib.error.HTTPError(
             claude_account.USAGE_URL, code, "denied", headers or {}, None)
     return raiser
+
+
+def _json_response(body):
+    class _Response:
+        def read(self):
+            return json.dumps(body).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def handler(request):
+        return _Response()
+
+    return handler
 
 
 def test_a_rate_limit_is_answered_once_and_then_stays_quiet(monkeypatch):
     calls = []
     now = [1000.0]
 
-    def urlopen(request, timeout=None):
-        calls.append(request)
-        _http_error(429, {"Retry-After": "30"})(request)
-
-    monkeypatch.setattr(claude_account.urllib.request, "urlopen", urlopen)
+    opener = _Opener(_http_error(429, {"Retry-After": "30"}))
+    calls = opener.calls
+    monkeypatch.setattr(claude_account, "_OPENER", opener)
     provider = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: now[0])
 
     first = provider.read()
@@ -87,42 +116,81 @@ def test_a_rate_limit_is_answered_once_and_then_stays_quiet(monkeypatch):
 
 
 def test_an_expired_login_asks_for_sign_in_rather_than_looking_broken(monkeypatch):
-    monkeypatch.setattr(claude_account.urllib.request, "urlopen", _http_error(401))
+    monkeypatch.setattr(claude_account, "_OPENER", _Opener(_http_error(401)))
     provider = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: 1000.0)
 
     assert provider.read().reason == "sign_in_required"
 
 
 def test_the_request_carries_the_token_as_a_bearer_and_no_body(monkeypatch):
-    seen = {}
+    opener = _Opener(_json_response(USAGE_BODY))
+    monkeypatch.setattr(claude_account, "_OPENER", opener)
 
-    def urlopen(request, timeout=None):
-        seen["url"] = request.full_url
-        seen["auth"] = request.get_header("Authorization")
-        seen["body"] = request.data
-        seen["method"] = request.get_method()
-
-        class _Response:
-            def read(self):
-                return json.dumps(USAGE_BODY).encode()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        return _Response()
-
-    monkeypatch.setattr(claude_account.urllib.request, "urlopen", urlopen)
     snapshot = ClaudeAccountQuotaProvider(token_reader=lambda: "secret",
                                           clock=lambda: 1000.0).read()
 
+    request = opener.calls[0]
     assert snapshot.status == "ok"
-    assert seen["url"] == claude_account.USAGE_URL
-    assert seen["auth"] == "Bearer secret"
-    assert seen["body"] is None
-    assert seen["method"] == "GET"
+    assert request.full_url == claude_account.USAGE_URL
+    assert request.get_header("Authorization") == "Bearer secret"
+    assert request.data is None
+    assert request.get_method() == "GET"
+
+
+def test_a_redirect_is_refused_so_the_token_cannot_follow_it():
+    """urllib copies Authorization onto a redirect target; this one must not run."""
+    handler = claude_account._NoRedirects()
+
+    assert handler.redirect_request(
+        urllib.request.Request(claude_account.USAGE_URL), None, 302, "Found", {},
+        "https://example.invalid/") is None
+
+
+def test_a_retry_after_date_is_honoured_rather_than_read_as_zero(monkeypatch):
+    monkeypatch.setattr(claude_account.time, "time", lambda: 1_000_000.0)
+    later = formatdate(1_000_000.0 + 900, usegmt=True)
+
+    assert claude_account._retry_after_seconds(later) == pytest.approx(900, abs=2)
+    assert claude_account._retry_after_seconds("45") == 45
+    assert claude_account._retry_after_seconds("not a date") == 0
+    assert claude_account._retry_after_seconds(None) == 0
+
+
+def test_a_long_retry_after_wins_over_the_adapter_floor(monkeypatch):
+    now = [1000.0]
+    opener = _Opener(_http_error(429, {"Retry-After": str(claude_account.BACKOFF_SECONDS * 4)}))
+    monkeypatch.setattr(claude_account, "_OPENER", opener)
+    provider = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: now[0])
+
+    provider.read()
+    now[0] += claude_account.BACKOFF_SECONDS * 2
+    provider.read()
+
+    assert len(opener.calls) == 1, "the server asked for longer than the floor"
+
+
+def test_two_models_whose_names_collide_both_keep_a_window():
+    body = {"limits": [
+        {"kind": "weekly_scoped", "percent": 10, "scope": {"model": {"display_name": "A/B"}}},
+        {"kind": "weekly_scoped", "percent": 90, "scope": {"model": {"display_name": "A-B"}}},
+    ]}
+
+    snapshot = parse_account_usage(body, observed_at=1000)
+
+    assert [(b.id, b.label, round(b.remaining_percent)) for b in snapshot.buckets] == [
+        ("model-a-b", "A/B", 90),
+        ("model-a-b-2", "A-B", 10),
+    ]
+
+
+def test_the_model_id_is_preferred_over_the_display_name_for_the_window_id():
+    body = {"limits": [{"kind": "weekly_scoped", "percent": 10,
+                        "scope": {"model": {"id": "claude-fable-5-1", "display_name": "Fable"}}}]}
+
+    snapshot = parse_account_usage(body, observed_at=1000)
+
+    assert snapshot.buckets[0].id == "model-claude-fable-5-1"
+    assert snapshot.buckets[0].label == "Fable"
 
 
 def test_a_transport_failure_never_carries_the_token_into_the_error():
@@ -140,14 +208,12 @@ def test_the_operator_can_turn_the_account_source_off(monkeypatch):
     monkeypatch.setenv(claude_account.DISABLE_ENV, "off")
     provider = _provider()
 
-    assert provider.available() is False
     assert provider.read().reason == "account_usage_disabled"
 
 
 def test_a_machine_without_stored_credentials_asks_for_sign_in():
     provider = _provider(token_reader=lambda: None)
 
-    assert provider.available() is False
     assert provider.read().reason == "sign_in_required"
 
 
@@ -161,13 +227,11 @@ def test_the_token_is_read_from_the_local_credentials_file(tmp_path, monkeypatch
 
 
 class _Stub:
-    def __init__(self, snapshot: QuotaSnapshot, available: bool = True) -> None:
-        self._snapshot = snapshot
-        self._available = available
-        self.reads = 0
+    source_name = "stub"
 
-    def available(self) -> bool:
-        return self._available
+    def __init__(self, snapshot: QuotaSnapshot) -> None:
+        self._snapshot = snapshot
+        self.reads = 0
 
     def read(self) -> QuotaSnapshot:
         self.reads += 1
@@ -200,18 +264,52 @@ def test_a_rate_limited_account_degrades_to_the_observer_rather_than_to_nothing(
 
     snapshot = route.read()
 
-    assert snapshot.status == "ok"
     assert snapshot.source == "claude-statusline"
+    assert snapshot.buckets
+    # The observer answers with fewer windows, so the payload has to say that
+    # this is the lesser answer and why the fuller one was missed.
+    assert snapshot.status == "degraded"
+    assert snapshot.reason == "fallback_rate_limited"
 
 
-def test_a_signed_out_machine_with_no_observation_says_sign_in():
-    route = ClaudeQuotaRoute(_Stub(_down("claude-account-usage", "sign_in_required"), available=False),
+def test_a_transport_failure_still_lets_the_observer_answer():
+    """A timeout is the commonest account failure and must not end the read."""
+    class _Raising:
+        source_name = "claude-account-usage"
+
+        def read(self):
+            raise RuntimeError("claude usage probe failed: TimeoutError")
+
+    statusline = _Stub(_ok("claude-statusline"))
+    snapshot = ClaudeQuotaRoute(_Raising(), statusline, clock=lambda: 1000.0).read()
+
+    assert statusline.reads == 1
+    assert snapshot.status == "degraded"
+    assert snapshot.reason == "fallback_account_usage_failed"
+
+
+def test_a_transport_failure_with_no_observation_reports_the_account_failure():
+    class _Raising:
+        source_name = "claude-account-usage"
+
+        def read(self):
+            raise RuntimeError("claude usage probe failed: URLError")
+
+    route = ClaudeQuotaRoute(_Raising(), _Stub(_down("claude-statusline", "not_observed")),
+                             clock=lambda: 1000.0)
+
+    assert route.read().reason == "account_usage_failed"
+
+
+def test_a_signed_out_machine_reports_that_rather_than_the_observer_silence():
+    route = ClaudeQuotaRoute(_Stub(_down("claude-account-usage", "sign_in_required")),
                              _Stub(_down("claude-statusline", "not_observed")))
 
-    assert route.read().reason == "not_observed"
+    # Both are down, and the account's reason is the one a person can act on.
+    assert route.read().reason == "sign_in_required"
 
 
-def test_a_failing_account_read_reports_its_own_reason_when_nothing_was_observed():
+def test_a_rate_limited_account_reports_its_own_reason_when_nothing_was_observed():
     route = ClaudeQuotaRoute(_Stub(_down("claude-account-usage", "rate_limited")),
                              _Stub(_down("claude-statusline", "not_observed")))
 

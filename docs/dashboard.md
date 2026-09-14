@@ -70,7 +70,7 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ### 残量（LEFT）
 
-ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。model 別の枠は、アカウントの usage を読む経路でだけ出ます。予備の statusLine 経路は報告されなくなった枠を reset まで持ち越し、dial に `seen HH:MM`（最後に見えた時刻）を添えます。週次の枠は reset まで減らないので、持ち越した値は下限として読めます。
+ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。model 別の枠は、アカウントの usage を読む経路でだけ出ます。予備の statusLine 経路に落ちているときは枠が減るので、その旨と理由を `PARTIAL` として出します。
 
 - 数字は provider が返した通常枠のうち残りが最も少ない window で、色は残りが 50% 以下で amber、20% 以下で alert になります
 - 表示する provider は SETTINGS（NETWORK タブ）の USAGE で選べます。隠した provider は pill と展開表示の両方から消えます。設定はこの browser にだけ残ります
@@ -86,9 +86,9 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 | Claude Code（予備） | 上が使えないとき（未ログイン、rate limit、off）に、statusLine に渡される rate limit を observer が保存したものを読みます。**この経路では 5h と 7d しか取れません**（Claude Code は model 別の枠を statusLine に渡さないことを実測で確認しています） | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。自前の statusLine がある場合は `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <既存のコマンド>` と包みます。`--exec` は観測だけを行い、payload をそのまま渡して出力を素通しします |
 | Antigravity | read-only の usage を読みます | optional provider の導入と opt-in が必要です（[Antigravity](antigravity.md)） |
 
-API は `GET /api/quotas` で、provider ごとに 60 秒 cache し、失敗時は前回の値を `stale` として返します。
+API は `GET /api/quotas` で、provider ごとに cache します（Claude 120 秒・Codex 120 秒・Antigravity 180 秒。60 秒は provider が指定しない場合の既定値）。失敗時は前回の値を `stale` として返します。cache と 429 後の沈黙は dashboard の process 内だけの状態なので、同じマシンで dashboard を複数 process 動かすと、その数だけ問い合わせが増えます。
 
-マシンの外に出るのは、Claude のアカウント usage を読むときの認証付き GET が1本だけです（body なし。プロジェクト名・エージェント名・作業内容は送りません）。token はローカルの Claude 認証情報から読み、log にも snapshot にも書きません。429 を受けたら最低5分は問い合わせを止め、その間は予備の statusLine 経路に落ちます。Codex と Antigravity はローカルのプロセスに聞くだけです。
+残量の取得でマシンの外に出るのは、Claude のアカウント usage を読む認証付き GET が1本だけです（body なし。プロジェクト名・エージェント名・作業内容は送りません）。redirect は追いません（追うと token が転送先に渡るため）。token はローカルの Claude 認証情報から読み、log にも snapshot にも書きません。429 を受けたら最低5分は問い合わせを止め、その間は予備の statusLine 経路に落ちます。Codex と Antigravity はローカルのプロセスに聞くだけです。
 
 ### 人の介入待ちを見逃さない
 
