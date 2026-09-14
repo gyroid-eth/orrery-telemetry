@@ -66,7 +66,7 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 
 ### Usage left (LEFT)
 
-The header's `LEFT` is separate from each card's context remaining: it is **what is left of the provider account's usage limits**. It exists to answer "where do I send the next task" when several providers run side by side, and shows each provider's logo with its remaining %. Clicking opens a dial per window the provider returned (5h, 7d, a model-specific cap, …) with the next reset time. Only a session running that model reports its window, so the observer carries a window it stops hearing about until it resets and the dial notes `seen HH:MM`, the time it was last reported — a weekly window cannot fall before it resets, so the carried value reads as a floor.
+The header's `LEFT` is separate from each card's context remaining: it is **what is left of the provider account's usage limits**. It exists to answer "where do I send the next task" when several providers run side by side, and shows each provider's logo with its remaining %. Clicking opens a dial per window the provider returned (5h, 7d, a model-specific cap, …) with the next reset time. A per-model window comes from the account usage route. On the fallback status-line route the observer carries a window it stops hearing about until it resets and the dial notes `seen HH:MM`, the time it was last reported — a weekly window cannot fall before it resets, so the carried value reads as a floor.
 
 - The number is the ordinary window with the least remaining; it turns amber at 50% and below and alert at 20% and below
 - Which providers appear is chosen under USAGE in SETTINGS (NETWORK tab). A hidden provider leaves both the pill and the expanded view. The choice stays in this browser only
@@ -78,10 +78,13 @@ Acquisition differs per provider (the acquisition layer was contributed by [kame
 | Provider | How it is read | Setup |
 | --- | --- | --- |
 | Codex | `account/rateLimits/read` over `codex app-server` | None. It appears once `codex` is logged in |
-| Claude Code | An observer stores the rate limits Claude Code passes to its statusLine, and the dashboard reads that snapshot. It only updates after Claude Code receives an API response, so an idle period shows `WAITING FOR UPDATE` | Set `statusLine.command` in `~/.claude/settings.json` to `python3 ~/.agentstack/dashboard/claude_quota_observe.py`. An existing statusLine is never overwritten; if you have your own, wrap it as `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <your command>`, which observes only and passes the payload and the output through |
+| Claude Code | The account's own usage, read with the credentials Claude Code already stored on this machine — the same ones the CLI uses. The per-model weekly windows (Fable and friends) come from here, alongside 5h and 7d | None. It appears once `claude` is signed in. Turn it off with `AGENTSTACK_CLAUDE_ACCOUNT_QUOTA=off` |
+| Claude Code (fallback) | When the above cannot answer (signed out, rate limited, turned off), the snapshot an observer stores from the rate limits Claude Code passes to its statusLine. **This route carries 5h and 7d only** — measured: Claude Code does not pass the per-model windows to a status line, not even from a session running that model | Set `statusLine.command` in `~/.claude/settings.json` to `python3 ~/.agentstack/dashboard/claude_quota_observe.py`. An existing statusLine is never overwritten; if you have your own, wrap it as `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <your command>`, which observes only and passes the payload and the output through |
 | Antigravity | Read-only usage | Install the optional provider and opt in ([Antigravity](antigravity.md)) |
 
 The API is `GET /api/quotas`, cached 60 s per provider; on failure the previous value is returned as `stale`.
+
+One authenticated GET to Anthropic's usage endpoint is the only thing that leaves the machine — no request body, no project, agent, or task data. The token is read from the local Claude credentials and never reaches a log line or the snapshot. After a 429 the adapter stays quiet for at least five minutes and falls back to the status-line route meanwhile. Codex and Antigravity are asked locally.
 
 ### Do not miss human intervention
 
