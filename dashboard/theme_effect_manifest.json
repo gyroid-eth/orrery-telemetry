@@ -15240,26 +15240,28 @@
           "channels": [
             "color"
           ],
-          "consumer": false,
-          "id": "03ab89bac251d855",
+          "consumer": true,
+          "id": "b35d96714a3cf414",
           "important": false,
-          "line": 2319,
+          "line": 2321,
           "property": "color",
           "references": [
-            "--amber"
+            "--ink"
           ],
           "selector": ".st-h",
-          "tokens": [],
-          "value": "var(--amber)"
+          "tokens": [
+            "--ink"
+          ],
+          "value": "var(--ink)"
         },
         {
           "channels": [
             "color"
           ],
           "consumer": true,
-          "id": "8fff8200fd78cdd6",
+          "id": "827c84b21f1692ba",
           "important": false,
-          "line": 2320,
+          "line": 2322,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15275,9 +15277,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "11a1095b1af8302e",
+          "id": "f3d987ca4c2f177f",
           "important": false,
-          "line": 2321,
+          "line": 2323,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15293,9 +15295,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "d8428afcf60957cd",
+          "id": "77e0e428ada9d6fa",
           "important": false,
-          "line": 2324,
+          "line": 2326,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15311,9 +15313,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "924ccee0fde06896",
+          "id": "f6723d6135da9de6",
           "important": false,
-          "line": 2325,
+          "line": 2327,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15332,9 +15334,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "d24889a249a80604",
+          "id": "e44db460b8b688f2",
           "important": false,
-          "line": 2328,
+          "line": 2330,
           "property": "border",
           "references": [
             "--hair"
@@ -15350,9 +15352,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "0845c6c8b2f8f412",
+          "id": "1f5aa8e02250d9d5",
           "important": false,
-          "line": 2329,
+          "line": 2331,
           "property": "background",
           "references": [
             "--panel"
@@ -15368,9 +15370,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "deeb1d746497645f",
+          "id": "512125cbb37610f5",
           "important": false,
-          "line": 2331,
+          "line": 2333,
           "property": "background",
           "references": [
             "--ink-faint"
@@ -15386,9 +15388,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "6a4a5f3326ad9423",
+          "id": "332dcb5d59435c12",
           "important": false,
-          "line": 2332,
+          "line": 2334,
           "property": "background",
           "references": [
             "--amber-glow"
@@ -15405,9 +15407,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "429c6b189fe50780",
+          "id": "0a9b7fb778fc0f9c",
           "important": false,
-          "line": 2332,
+          "line": 2334,
           "property": "border-color",
           "references": [
             "--amber"
@@ -15421,9 +15423,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "7bc13aae76e6df75",
+          "id": "b0a9746a867dfc1a",
           "important": false,
-          "line": 2333,
+          "line": 2335,
           "property": "background",
           "references": [
             "--amber"
@@ -15437,9 +15439,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "91c3a9dd6b646b26",
+          "id": "2c4f2c05605c8f62",
           "important": false,
-          "line": 2336,
+          "line": 2338,
           "property": "background",
           "references": [
             "--ink-faint"
@@ -15458,9 +15460,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "4d0c6272c50d096f",
+          "id": "8315e34d036d27f5",
           "important": false,
-          "line": 2338,
+          "line": 2340,
           "property": "border-color",
           "references": [
             "--hair"
@@ -15476,9 +15478,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "d2b29224cdd112db",
+          "id": "e5fd3bbe941ed9d4",
           "important": false,
-          "line": 2339,
+          "line": 2341,
           "property": "background",
           "references": [
             "--panel"
@@ -15497,9 +15499,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "19a587bb565aa2e0",
+          "id": "c8e2b5666ac50afd",
           "important": false,
-          "line": 2341,
+          "line": 2343,
           "property": "border-color",
           "references": [
             "--hair"
@@ -15515,9 +15517,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "917a4c9b147467ba",
+          "id": "fb1d75d7f5587bae",
           "important": false,
-          "line": 2342,
+          "line": 2344,
           "property": "color",
           "references": [
             "--amber"
@@ -15531,9 +15533,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "a5d32d2c6b7342f7",
+          "id": "638048c9916d8ee2",
           "important": false,
-          "line": 2342,
+          "line": 2344,
           "property": "background",
           "references": [
             "--amber-glow"
@@ -15547,9 +15549,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "6d24652387ac220f",
+          "id": "11cea49a2e85b8e6",
           "important": false,
-          "line": 2343,
+          "line": 2345,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15565,9 +15567,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "f21b1c8e3e0c8bf0",
+          "id": "8bc99aa184b6ff90",
           "important": false,
-          "line": 2346,
+          "line": 2348,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15583,9 +15585,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "79a9acf949195b96",
+          "id": "af088fb38bce04ff",
           "important": false,
-          "line": 2347,
+          "line": 2349,
           "property": "color",
           "references": [
             "--ink"
@@ -15601,9 +15603,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "f535cb54067037f2",
+          "id": "3efe6c6316b7f6a0",
           "important": false,
-          "line": 2350,
+          "line": 2352,
           "property": "background",
           "references": [],
           "selector": ".st-row input[type=range]",
@@ -15615,37 +15617,40 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "35b1a7839be0cf00",
+          "id": "df09e127a1a2ec87",
           "important": false,
-          "line": 2352,
+          "line": 2354,
           "property": "background",
           "references": [
-            "--amber",
+            "--ink-dim",
             "--fill",
             "--hair",
             "--fill"
           ],
           "selector": ".st-row input[type=range]::-webkit-slider-runnable-track",
           "tokens": [
-            "--hair"
+            "--hair",
+            "--ink-dim"
           ],
-          "value": "linear-gradient(90deg,var(--amber) 0 var(--fill,50%), var(--hair) var(--fill,50%) 100%)"
+          "value": "linear-gradient(90deg,var(--ink-dim) 0 var(--fill,50%), var(--hair) var(--fill,50%) 100%)"
         },
         {
           "channels": [
             "backgroundColor"
           ],
-          "consumer": false,
-          "id": "c4cc73e32b8ac01f",
+          "consumer": true,
+          "id": "85fb3158dfe42e6e",
           "important": false,
-          "line": 2356,
+          "line": 2358,
           "property": "background",
           "references": [
-            "--amber"
+            "--ink"
           ],
           "selector": ".st-row input[type=range]::-webkit-slider-thumb",
-          "tokens": [],
-          "value": "var(--amber)"
+          "tokens": [
+            "--ink"
+          ],
+          "value": "var(--ink)"
         },
         {
           "channels": [
@@ -15655,9 +15660,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "aa0503938870f21b",
+          "id": "185a65e7ad0ddaff",
           "important": false,
-          "line": 2356,
+          "line": 2358,
           "property": "border",
           "references": [
             "--bg"
@@ -15670,12 +15675,28 @@
         },
         {
           "channels": [
+            "backgroundColor"
+          ],
+          "consumer": false,
+          "id": "88d7700721e09576",
+          "important": false,
+          "line": 2360,
+          "property": "background",
+          "references": [
+            "--amber"
+          ],
+          "selector": ".st-row input[type=range]:hover::-webkit-slider-thumb, .st-row input[type=range]:active::-webkit-slider-thumb",
+          "tokens": [],
+          "value": "var(--amber)"
+        },
+        {
+          "channels": [
             "color"
           ],
           "consumer": true,
-          "id": "f15ff8f77a255481",
+          "id": "1a37da3bb847fea2",
           "important": false,
-          "line": 2359,
+          "line": 2363,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15691,9 +15712,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "09f1a04cf57e65e2",
+          "id": "f59086f5d02ef437",
           "important": false,
-          "line": 2360,
+          "line": 2364,
           "property": "background",
           "references": [],
           "selector": ".st-reset",
@@ -15708,9 +15729,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "26d7508bc399f106",
+          "id": "465c66d25e85a34a",
           "important": false,
-          "line": 2360,
+          "line": 2364,
           "property": "border",
           "references": [
             "--hair"
@@ -15726,9 +15747,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "867f5a0354750cc8",
+          "id": "156c5eca91c04a43",
           "important": false,
-          "line": 2362,
+          "line": 2366,
           "property": "color",
           "references": [
             "--amber"
@@ -15745,9 +15766,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "0c82c2f79a6dc056",
+          "id": "4f373a64af221774",
           "important": false,
-          "line": 2363,
+          "line": 2367,
           "property": "border-color",
           "references": [
             "--amber"
@@ -15761,9 +15782,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "c21b5d15b7b4a58b",
+          "id": "08863647ce18d951",
           "important": false,
-          "line": 2370,
+          "line": 2374,
           "property": "background",
           "references": [
             "--bg"
@@ -15779,9 +15800,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "4dfb1635862876c1",
+          "id": "2420bef298eabd10",
           "important": false,
-          "line": 2378,
+          "line": 2382,
           "property": "background",
           "references": [],
           "selector": ".tm-spark",
@@ -15793,9 +15814,9 @@
             "borderBottomColor"
           ],
           "consumer": true,
-          "id": "63aae0423cb42e13",
+          "id": "3bb02cd7452d6921",
           "important": false,
-          "line": 2379,
+          "line": 2383,
           "property": "border-bottom",
           "references": [
             "--hair"
@@ -15811,9 +15832,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "3998f11dd3400bbd",
+          "id": "ad93e04cca466b22",
           "important": false,
-          "line": 2382,
+          "line": 2386,
           "property": "background",
           "references": [
             "--amber"
@@ -15827,9 +15848,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "f399f544282cc713",
+          "id": "c68bbb2735f12709",
           "important": false,
-          "line": 2386,
+          "line": 2390,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15845,9 +15866,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "be58a319406c2aff",
+          "id": "995775dbfc05c0a2",
           "important": false,
-          "line": 2387,
+          "line": 2391,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15866,9 +15887,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "07a581a2d93677f3",
+          "id": "5ef40f9a75bf6de4",
           "important": false,
-          "line": 2389,
+          "line": 2393,
           "property": "border",
           "references": [
             "--hair"
@@ -15884,9 +15905,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "d7bf6f8caf375b9e",
+          "id": "9c9aa475d3c02487",
           "important": false,
-          "line": 2390,
+          "line": 2394,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -15898,9 +15919,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c8f8b4e79943f21c",
+          "id": "8adbf737ffe6dd41",
           "important": false,
-          "line": 2391,
+          "line": 2395,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15916,9 +15937,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "1439ca60c71e9b47",
+          "id": "f9c290da39f61228",
           "important": false,
-          "line": 2393,
+          "line": 2397,
           "property": "color",
           "references": [
             "--amber"
@@ -15935,9 +15956,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "b8a23ba7b53dd676",
+          "id": "633cfb5517785b9d",
           "important": false,
-          "line": 2394,
+          "line": 2398,
           "property": "border-color",
           "references": [
             "--theme-accent-rgb"
@@ -15954,9 +15975,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "a8c4c339d5319288",
+          "id": "b517522a7b9aee8d",
           "important": false,
-          "line": 2395,
+          "line": 2399,
           "property": "border",
           "references": [
             "--hair"
@@ -15972,9 +15993,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "3960def392de4b33",
+          "id": "38490be597d798ac",
           "important": false,
-          "line": 2396,
+          "line": 2400,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -15986,9 +16007,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "6db58c160e39a24e",
+          "id": "c9f1bb509b3b451a",
           "important": false,
-          "line": 2400,
+          "line": 2404,
           "property": "stroke",
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -16000,9 +16021,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "fdaeab04dbf12e39",
+          "id": "ae3d1dfbd272a3e4",
           "important": false,
-          "line": 2401,
+          "line": 2405,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -16016,9 +16037,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "18a7bc8ea2dcaadb",
+          "id": "d1e179b522ed3fee",
           "important": false,
-          "line": 2403,
+          "line": 2407,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -16032,9 +16053,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "5873d3966146e0f4",
+          "id": "6a6e60e11beff9fb",
           "important": false,
-          "line": 2406,
+          "line": 2410,
           "property": "stroke",
           "references": [
             "--amber"
@@ -16048,9 +16069,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "f72d454185950917",
+          "id": "15f17e387d7e93aa",
           "important": false,
-          "line": 2408,
+          "line": 2412,
           "property": "fill",
           "references": [
             "--amber"
@@ -16064,9 +16085,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "0f59c65dc25356dc",
+          "id": "aedbfe785c7ad7af",
           "important": false,
-          "line": 2410,
+          "line": 2414,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -16082,9 +16103,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "bbcefd6346935fd1",
+          "id": "2ce7c2bf797f47ff",
           "important": false,
-          "line": 2416,
+          "line": 2420,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -16099,9 +16120,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "5902e6932fbe3e64",
+          "id": "fb76db236b53bd48",
           "important": false,
-          "line": 2416,
+          "line": 2420,
           "property": "border",
           "references": [
             "--hair"
@@ -16117,9 +16138,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "4d3572173ac1f5da",
+          "id": "8adb43b2b9ae0aa5",
           "important": false,
-          "line": 2417,
+          "line": 2421,
           "property": "border-left",
           "references": [
             "--theme-accent-rgb"
@@ -16133,9 +16154,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "83b19dc142bab18a",
+          "id": "8855a6f471bbc448",
           "important": false,
-          "line": 2422,
+          "line": 2426,
           "property": "color",
           "references": [
             "--amber"
@@ -16149,9 +16170,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "b80f1ab389b1be6e",
+          "id": "c25e409720e06215",
           "important": false,
-          "line": 2425,
+          "line": 2429,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -16167,9 +16188,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c98f5f4d40e08ff8",
+          "id": "c80599f145222641",
           "important": false,
-          "line": 2427,
+          "line": 2431,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -16185,9 +16206,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "3d1e81726b7d6d9b",
+          "id": "15da642248ee0167",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "color",
           "references": [
             "--ink"
@@ -16203,9 +16224,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "0a0285390db2d1e9",
+          "id": "7f5e4c57d55aef7c",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "background",
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -16220,9 +16241,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "230ffae02cc23b55",
+          "id": "10243c3d9b6d5e68",
           "important": false,
-          "line": 2430,
+          "line": 2434,
           "property": "border",
           "references": [
             "--hair"
@@ -16238,9 +16259,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "e34e0048046c4e77",
+          "id": "58831539e038e0c9",
           "important": false,
-          "line": 2432,
+          "line": 2436,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -16256,9 +16277,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "a9c3efd86997a1d2",
+          "id": "de69d3abfe1a414f",
           "important": false,
-          "line": 2432,
+          "line": 2436,
           "property": "background",
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -16273,9 +16294,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "e1b628b553c2ae56",
+          "id": "87a84a4ef6b1273e",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "border-color",
           "references": [
             "--hair"
@@ -16291,9 +16312,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "1ae0bfd522e44ff4",
+          "id": "282ee81c1a0d3575",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "border-left",
           "references": [
             "--amber"
@@ -16307,9 +16328,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "896910fe26504cb9",
+          "id": "e3da26879e74db85",
           "important": false,
-          "line": 2434,
+          "line": 2438,
           "property": "color",
           "references": [
             "--amber"
@@ -31171,25 +31192,25 @@
             "color"
           ],
           "consumer": false,
-          "id": "a17e75b8d8b33177",
+          "id": "693dbf28154d10fc",
           "important": false,
-          "line": 2319,
+          "line": 2321,
           "property": "color",
           "references": [
-            "--amber"
+            "--ink"
           ],
           "selector": ".st-h",
           "tokens": [],
-          "value": "var(--amber)"
+          "value": "var(--ink)"
         },
         {
           "channels": [
             "color"
           ],
           "consumer": true,
-          "id": "504f0204572ccb1f",
+          "id": "c0a389bc248c0867",
           "important": false,
-          "line": 2320,
+          "line": 2322,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31205,9 +31226,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "2d6b4e67998300f0",
+          "id": "a29a046d55cc990c",
           "important": false,
-          "line": 2321,
+          "line": 2323,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31223,9 +31244,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c36968cb3d05681b",
+          "id": "7596526773681016",
           "important": false,
-          "line": 2324,
+          "line": 2326,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31241,9 +31262,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "fa553bfbb7c8284b",
+          "id": "46416bb5fa4d8106",
           "important": false,
-          "line": 2325,
+          "line": 2327,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31262,9 +31283,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "6a7ca975cf8fd466",
+          "id": "4f85b3e359297230",
           "important": false,
-          "line": 2328,
+          "line": 2330,
           "property": "border",
           "references": [
             "--hair"
@@ -31278,9 +31299,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "eab6efdc5682f101",
+          "id": "97c476e39267e7ba",
           "important": false,
-          "line": 2329,
+          "line": 2331,
           "property": "background",
           "references": [
             "--panel"
@@ -31294,9 +31315,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "837126efe023eb15",
+          "id": "d03d758e103b2bee",
           "important": false,
-          "line": 2331,
+          "line": 2333,
           "property": "background",
           "references": [
             "--ink-faint"
@@ -31312,9 +31333,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "941ce1904e1af9b5",
+          "id": "fe9d117fa933c818",
           "important": false,
-          "line": 2332,
+          "line": 2334,
           "property": "background",
           "references": [
             "--amber-glow"
@@ -31331,9 +31352,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "98d58ee365719cb1",
+          "id": "ace2fcfefb51c202",
           "important": false,
-          "line": 2332,
+          "line": 2334,
           "property": "border-color",
           "references": [
             "--amber"
@@ -31347,9 +31368,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "a47548f645d7444a",
+          "id": "7f6c821f073326f3",
           "important": false,
-          "line": 2333,
+          "line": 2335,
           "property": "background",
           "references": [
             "--amber"
@@ -31363,9 +31384,9 @@
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "ea027795d4592328",
+          "id": "2fbbb6c4a44cd006",
           "important": false,
-          "line": 2336,
+          "line": 2338,
           "property": "background",
           "references": [
             "--ink-faint"
@@ -31384,9 +31405,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "1c4fce757359f494",
+          "id": "4346e0c32b5e0e16",
           "important": false,
-          "line": 2338,
+          "line": 2340,
           "property": "border-color",
           "references": [
             "--hair"
@@ -31400,9 +31421,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "09c7156822525abd",
+          "id": "58d0f659b60e1108",
           "important": false,
-          "line": 2339,
+          "line": 2341,
           "property": "background",
           "references": [
             "--panel"
@@ -31419,9 +31440,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "4e7d29cc268f1688",
+          "id": "e1c2bbdff8e12eba",
           "important": false,
-          "line": 2341,
+          "line": 2343,
           "property": "border-color",
           "references": [
             "--hair"
@@ -31435,9 +31456,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "2556db084e2199b9",
+          "id": "776b17bf0e0f901b",
           "important": false,
-          "line": 2342,
+          "line": 2344,
           "property": "color",
           "references": [
             "--amber"
@@ -31451,9 +31472,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "7de93948835c0736",
+          "id": "d445f7ce75d1af12",
           "important": false,
-          "line": 2342,
+          "line": 2344,
           "property": "background",
           "references": [
             "--amber-glow"
@@ -31467,9 +31488,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "01475690f4570616",
+          "id": "7d2c3a6d9351427a",
           "important": false,
-          "line": 2343,
+          "line": 2345,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31485,9 +31506,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "4162d27c06e6c6cd",
+          "id": "fb74e930b54de29e",
           "important": false,
-          "line": 2346,
+          "line": 2348,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31503,9 +31524,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "198488f4a6a063c2",
+          "id": "b09e3e3294d5462a",
           "important": false,
-          "line": 2347,
+          "line": 2349,
           "property": "color",
           "references": [
             "--ink"
@@ -31519,9 +31540,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "6026ff323a4955ab",
+          "id": "c1c00dad71f7c3e7",
           "important": false,
-          "line": 2350,
+          "line": 2352,
           "property": "background",
           "references": [],
           "selector": ".st-row input[type=range]",
@@ -31532,36 +31553,38 @@
           "channels": [
             "backgroundColor"
           ],
-          "consumer": false,
-          "id": "48619859cb0a10c5",
+          "consumer": true,
+          "id": "b19972baa87627c9",
           "important": false,
-          "line": 2352,
+          "line": 2354,
           "property": "background",
           "references": [
-            "--amber",
+            "--ink-dim",
             "--fill",
             "--hair",
             "--fill"
           ],
           "selector": ".st-row input[type=range]::-webkit-slider-runnable-track",
-          "tokens": [],
-          "value": "linear-gradient(90deg,var(--amber) 0 var(--fill,50%), var(--hair) var(--fill,50%) 100%)"
+          "tokens": [
+            "--ink-dim"
+          ],
+          "value": "linear-gradient(90deg,var(--ink-dim) 0 var(--fill,50%), var(--hair) var(--fill,50%) 100%)"
         },
         {
           "channels": [
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "d7b42b4e3e38e9a7",
+          "id": "418c03c7897c8a8b",
           "important": false,
-          "line": 2356,
+          "line": 2358,
           "property": "background",
           "references": [
-            "--amber"
+            "--ink"
           ],
           "selector": ".st-row input[type=range]::-webkit-slider-thumb",
           "tokens": [],
-          "value": "var(--amber)"
+          "value": "var(--ink)"
         },
         {
           "channels": [
@@ -31571,9 +31594,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "8563ead5470355ce",
+          "id": "d459880356d55fee",
           "important": false,
-          "line": 2356,
+          "line": 2358,
           "property": "border",
           "references": [
             "--bg"
@@ -31584,12 +31607,28 @@
         },
         {
           "channels": [
+            "backgroundColor"
+          ],
+          "consumer": false,
+          "id": "83f188c877d14f36",
+          "important": false,
+          "line": 2360,
+          "property": "background",
+          "references": [
+            "--amber"
+          ],
+          "selector": ".st-row input[type=range]:hover::-webkit-slider-thumb, .st-row input[type=range]:active::-webkit-slider-thumb",
+          "tokens": [],
+          "value": "var(--amber)"
+        },
+        {
+          "channels": [
             "color"
           ],
           "consumer": true,
-          "id": "a6286e0755bc2ddc",
+          "id": "fa9edfb81ec9f365",
           "important": false,
-          "line": 2359,
+          "line": 2363,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31605,9 +31644,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "92895fd901aa5ca3",
+          "id": "dbdfd2a9a7e6b5b9",
           "important": false,
-          "line": 2360,
+          "line": 2364,
           "property": "background",
           "references": [],
           "selector": ".st-reset",
@@ -31622,9 +31661,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "73f6e936e4e7e08f",
+          "id": "8baf1a673dbda730",
           "important": false,
-          "line": 2360,
+          "line": 2364,
           "property": "border",
           "references": [
             "--hair"
@@ -31638,9 +31677,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "15403faab8a91f27",
+          "id": "02acecc887d2a80e",
           "important": false,
-          "line": 2362,
+          "line": 2366,
           "property": "color",
           "references": [
             "--amber"
@@ -31657,9 +31696,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "8e46ccd7b8626b81",
+          "id": "3267537a6a95b77a",
           "important": false,
-          "line": 2363,
+          "line": 2367,
           "property": "border-color",
           "references": [
             "--amber"
@@ -31673,9 +31712,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "c40fe8e52f47abb0",
+          "id": "d460bc4161de2907",
           "important": false,
-          "line": 2370,
+          "line": 2374,
           "property": "background",
           "references": [
             "--bg"
@@ -31689,9 +31728,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "1851dbd16db6886d",
+          "id": "37b8456b9b5d0784",
           "important": false,
-          "line": 2378,
+          "line": 2382,
           "property": "background",
           "references": [],
           "selector": ".tm-spark",
@@ -31703,9 +31742,9 @@
             "borderBottomColor"
           ],
           "consumer": false,
-          "id": "88179d5f19ce4bee",
+          "id": "2bbe58106c0d38e1",
           "important": false,
-          "line": 2379,
+          "line": 2383,
           "property": "border-bottom",
           "references": [
             "--hair"
@@ -31719,9 +31758,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "4d8b1633ee44d776",
+          "id": "ba3f74f0a1a2133c",
           "important": false,
-          "line": 2382,
+          "line": 2386,
           "property": "background",
           "references": [
             "--amber"
@@ -31735,9 +31774,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "f5fea606b581f165",
+          "id": "2d63232b6942f06e",
           "important": false,
-          "line": 2386,
+          "line": 2390,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31753,9 +31792,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "6171e4bc92a144ee",
+          "id": "1e4b61fdd68feb68",
           "important": false,
-          "line": 2387,
+          "line": 2391,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31774,9 +31813,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "7b70d557ed23be21",
+          "id": "a3bd12e64af27c7c",
           "important": false,
-          "line": 2389,
+          "line": 2393,
           "property": "border",
           "references": [
             "--hair"
@@ -31790,9 +31829,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "aba47d943177a49b",
+          "id": "0ad6871048e22f39",
           "important": false,
-          "line": 2390,
+          "line": 2394,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -31804,9 +31843,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "2b11868fa4e1846a",
+          "id": "1ca8b2b48c0dd11b",
           "important": false,
-          "line": 2391,
+          "line": 2395,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31822,9 +31861,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "1fbed19cb095d102",
+          "id": "1fac5cdb28499a0a",
           "important": false,
-          "line": 2393,
+          "line": 2397,
           "property": "color",
           "references": [
             "--amber"
@@ -31841,9 +31880,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "11961bb5c293d3fe",
+          "id": "cf8a01667b8fd19e",
           "important": false,
-          "line": 2394,
+          "line": 2398,
           "property": "border-color",
           "references": [
             "--theme-accent-rgb"
@@ -31860,9 +31899,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "b0d08774aad39f97",
+          "id": "8793ad8ce01e92a6",
           "important": false,
-          "line": 2395,
+          "line": 2399,
           "property": "border",
           "references": [
             "--hair"
@@ -31876,9 +31915,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "0187bae3abb5cf54",
+          "id": "7e5483bd6d203138",
           "important": false,
-          "line": 2396,
+          "line": 2400,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -31890,9 +31929,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "359d81551b4fcbdb",
+          "id": "f38aae88f190c0cb",
           "important": false,
-          "line": 2400,
+          "line": 2404,
           "property": "stroke",
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -31904,9 +31943,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "4c63880ffe7e3b30",
+          "id": "9b531425dd336274",
           "important": false,
-          "line": 2401,
+          "line": 2405,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -31920,9 +31959,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "8e8b315ce5404e11",
+          "id": "7b68abd8219e5ef1",
           "important": false,
-          "line": 2403,
+          "line": 2407,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -31936,9 +31975,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "6d822ab6e7177535",
+          "id": "a861107a2fa85793",
           "important": false,
-          "line": 2406,
+          "line": 2410,
           "property": "stroke",
           "references": [
             "--amber"
@@ -31952,9 +31991,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "29e6f81f717bf571",
+          "id": "ca5988c790f1169a",
           "important": false,
-          "line": 2408,
+          "line": 2412,
           "property": "fill",
           "references": [
             "--amber"
@@ -31968,9 +32007,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "798a2b7c75e4072f",
+          "id": "4c2137c2166f8805",
           "important": false,
-          "line": 2410,
+          "line": 2414,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -31986,9 +32025,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "71515ac0544a7eaa",
+          "id": "1b22dd99933b0a5c",
           "important": false,
-          "line": 2416,
+          "line": 2420,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -32003,9 +32042,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "85045900c6b89f66",
+          "id": "296b3e65fb3c1622",
           "important": false,
-          "line": 2416,
+          "line": 2420,
           "property": "border",
           "references": [
             "--hair"
@@ -32019,9 +32058,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "fc0eea2e6516357a",
+          "id": "c27eb048b1b98d12",
           "important": false,
-          "line": 2417,
+          "line": 2421,
           "property": "border-left",
           "references": [
             "--theme-accent-rgb"
@@ -32035,9 +32074,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "4ad1f2301bc40d1f",
+          "id": "20690b161f0ee57b",
           "important": false,
-          "line": 2422,
+          "line": 2426,
           "property": "color",
           "references": [
             "--amber"
@@ -32051,9 +32090,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "e05d55acf105799c",
+          "id": "1d67ed8449b1ca22",
           "important": false,
-          "line": 2425,
+          "line": 2429,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -32069,9 +32108,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "2c0f0d7fafad35e9",
+          "id": "a465d70b70f7b02b",
           "important": false,
-          "line": 2427,
+          "line": 2431,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -32087,9 +32126,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "1b804360bf5cd621",
+          "id": "aff7cc645b489eda",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "color",
           "references": [
             "--ink"
@@ -32103,9 +32142,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "82653adc6f17eb9f",
+          "id": "489bc5caec89a460",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "background",
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -32120,9 +32159,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "33d37687e05e2c0a",
+          "id": "42caaca08500fd6e",
           "important": false,
-          "line": 2430,
+          "line": 2434,
           "property": "border",
           "references": [
             "--hair"
@@ -32136,9 +32175,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "7b96d1fed176185b",
+          "id": "70b115586c514f35",
           "important": false,
-          "line": 2432,
+          "line": 2436,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -32154,9 +32193,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "5e002bf1fc22c8fa",
+          "id": "be2ebdb682f9d9c3",
           "important": false,
-          "line": 2432,
+          "line": 2436,
           "property": "background",
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -32171,9 +32210,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "4248801d9895e924",
+          "id": "1afd532661f3d7e7",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "border-color",
           "references": [
             "--hair"
@@ -32187,9 +32226,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "6e21371637d0c8fd",
+          "id": "8927cd85edbbd469",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "border-left",
           "references": [
             "--amber"
@@ -32203,9 +32242,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "b99343a247f128d1",
+          "id": "cb089fcc1be4fa06",
           "important": false,
-          "line": 2434,
+          "line": 2438,
           "property": "color",
           "references": [
             "--amber"
@@ -34638,8 +34677,8 @@
               "value": "inset 0 12px 30px rgba(0,0,0,.18)"
             }
           ],
-          "id": "1dab5e73d06e6156",
-          "line": 2399,
+          "id": "34e73e36799c0037",
+          "line": 2403,
           "property": "box-shadow",
           "selector": ".tm-spark .sp-frame",
           "value": "inset 0 12px 30px rgba(0,0,0,.18)"
@@ -34665,8 +34704,8 @@
               "value": "0 8px 24px rgba(0,0,0,.28)"
             }
           ],
-          "id": "20e436d953f0d38c",
-          "line": 2418,
+          "id": "7753b03c9969680d",
+          "line": 2422,
           "property": "box-shadow",
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
           "value": "0 8px 24px rgba(0,0,0,.28)"
@@ -35505,73 +35544,73 @@
           "value": "10px"
         },
         {
-          "line": 2319,
+          "line": 2322,
           "property": "font-size",
-          "selector": ".st-h",
+          "selector": ".st-h span",
           "value": "10px"
         },
         {
-          "line": 2321,
+          "line": 2323,
           "property": "font-size",
           "selector": ".st-note",
           "value": "9px"
         },
         {
-          "line": 2324,
+          "line": 2326,
           "property": "font-size",
           "selector": ".st-switch .lab",
           "value": "9px"
         },
         {
-          "line": 2325,
+          "line": 2327,
           "property": "font-size",
           "selector": ".st-switch-hint",
           "value": "9px"
         },
         {
-          "line": 2340,
+          "line": 2342,
           "property": "font-size",
           "selector": "#settings .seg button",
           "value": "9.5px"
         },
         {
-          "line": 2346,
+          "line": 2348,
           "property": "font-size",
           "selector": ".st-row .lab",
           "value": "9px"
         },
         {
-          "line": 2347,
+          "line": 2349,
           "property": "font-size",
           "selector": ".st-row .val",
           "value": "10px"
         },
         {
-          "line": 2359,
+          "line": 2363,
           "property": "font-size",
           "selector": ".st-reset",
           "value": "9px"
         },
         {
-          "line": 2384,
+          "line": 2388,
           "property": "font-size",
           "selector": ".tm-spark .sp-ttl,.tm-spark .sp-tot,.tm-spark .sp-axis",
           "value": "8.5px"
         },
         {
-          "line": 2391,
+          "line": 2395,
           "property": "font-size",
           "selector": ".tm-spark .sp-leg .sp-chip",
           "value": "7.5px"
         },
         {
-          "line": 2425,
+          "line": 2429,
           "property": "font-size",
           "selector": ".msg .who,.msg.user .who,.msg.assistant .who",
           "value": "8px"
         },
         {
-          "line": 2455,
+          "line": 2459,
           "property": "font-size",
           "selector": ".tm-exit-btn,.tm-open,.tm-x",
           "value": "11px"
@@ -35952,8 +35991,8 @@
     }
   },
   "observed": {
-    "background_consumer_records": 369,
-    "dim_contrast_consumer_records": 153,
+    "background_consumer_records": 371,
+    "dim_contrast_consumer_records": 154,
     "glow_color_literals": 97,
     "glow_mutable_components": 41,
     "glow_source_declarations": 78,
@@ -48628,21 +48667,23 @@
             "channels": [
               "color"
             ],
-            "consumer": false,
-            "id": "03ab89bac251d855",
+            "consumer": true,
+            "id": "b35d96714a3cf414",
             "important": false,
             "references": [
-              "--amber"
+              "--ink"
             ],
             "selector": ".st-h",
-            "tokens": []
+            "tokens": [
+              "--ink"
+            ]
           },
           {
             "channels": [
               "color"
             ],
             "consumer": true,
-            "id": "8fff8200fd78cdd6",
+            "id": "827c84b21f1692ba",
             "important": false,
             "references": [
               "--ink-dim"
@@ -48657,7 +48698,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "11a1095b1af8302e",
+            "id": "f3d987ca4c2f177f",
             "important": false,
             "references": [
               "--ink-faint"
@@ -48672,7 +48713,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "d8428afcf60957cd",
+            "id": "77e0e428ada9d6fa",
             "important": false,
             "references": [
               "--ink-dim"
@@ -48687,7 +48728,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "924ccee0fde06896",
+            "id": "f6723d6135da9de6",
             "important": false,
             "references": [
               "--ink-faint"
@@ -48705,7 +48746,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "d24889a249a80604",
+            "id": "e44db460b8b688f2",
             "important": false,
             "references": [
               "--hair"
@@ -48720,7 +48761,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "0845c6c8b2f8f412",
+            "id": "1f5aa8e02250d9d5",
             "important": false,
             "references": [
               "--panel"
@@ -48735,7 +48776,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "deeb1d746497645f",
+            "id": "512125cbb37610f5",
             "important": false,
             "references": [
               "--ink-faint"
@@ -48750,7 +48791,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "6a4a5f3326ad9423",
+            "id": "332dcb5d59435c12",
             "important": false,
             "references": [
               "--amber-glow"
@@ -48766,7 +48807,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "429c6b189fe50780",
+            "id": "0a9b7fb778fc0f9c",
             "important": false,
             "references": [
               "--amber"
@@ -48779,7 +48820,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "7bc13aae76e6df75",
+            "id": "b0a9746a867dfc1a",
             "important": false,
             "references": [
               "--amber"
@@ -48792,7 +48833,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "91c3a9dd6b646b26",
+            "id": "2c4f2c05605c8f62",
             "important": false,
             "references": [
               "--ink-faint"
@@ -48810,7 +48851,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "4d0c6272c50d096f",
+            "id": "8315e34d036d27f5",
             "important": false,
             "references": [
               "--hair"
@@ -48825,7 +48866,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "d2b29224cdd112db",
+            "id": "e5fd3bbe941ed9d4",
             "important": false,
             "references": [
               "--panel"
@@ -48843,7 +48884,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "19a587bb565aa2e0",
+            "id": "c8e2b5666ac50afd",
             "important": false,
             "references": [
               "--hair"
@@ -48858,7 +48899,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "917a4c9b147467ba",
+            "id": "fb1d75d7f5587bae",
             "important": false,
             "references": [
               "--amber"
@@ -48871,7 +48912,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "a5d32d2c6b7342f7",
+            "id": "638048c9916d8ee2",
             "important": false,
             "references": [
               "--amber-glow"
@@ -48884,7 +48925,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "6d24652387ac220f",
+            "id": "11cea49a2e85b8e6",
             "important": false,
             "references": [
               "--ink-faint"
@@ -48899,7 +48940,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "f21b1c8e3e0c8bf0",
+            "id": "8bc99aa184b6ff90",
             "important": false,
             "references": [
               "--ink-dim"
@@ -48914,7 +48955,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "79a9acf949195b96",
+            "id": "af088fb38bce04ff",
             "important": false,
             "references": [
               "--ink"
@@ -48929,7 +48970,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "f535cb54067037f2",
+            "id": "3efe6c6316b7f6a0",
             "important": false,
             "references": [],
             "selector": ".st-row input[type=range]",
@@ -48940,31 +48981,34 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "35b1a7839be0cf00",
+            "id": "df09e127a1a2ec87",
             "important": false,
             "references": [
-              "--amber",
+              "--ink-dim",
               "--fill",
               "--hair",
               "--fill"
             ],
             "selector": ".st-row input[type=range]::-webkit-slider-runnable-track",
             "tokens": [
-              "--hair"
+              "--hair",
+              "--ink-dim"
             ]
           },
           {
             "channels": [
               "backgroundColor"
             ],
-            "consumer": false,
-            "id": "c4cc73e32b8ac01f",
+            "consumer": true,
+            "id": "85fb3158dfe42e6e",
             "important": false,
             "references": [
-              "--amber"
+              "--ink"
             ],
             "selector": ".st-row input[type=range]::-webkit-slider-thumb",
-            "tokens": []
+            "tokens": [
+              "--ink"
+            ]
           },
           {
             "channels": [
@@ -48974,7 +49018,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "aa0503938870f21b",
+            "id": "185a65e7ad0ddaff",
             "important": false,
             "references": [
               "--bg"
@@ -48986,10 +49030,23 @@
           },
           {
             "channels": [
+              "backgroundColor"
+            ],
+            "consumer": false,
+            "id": "88d7700721e09576",
+            "important": false,
+            "references": [
+              "--amber"
+            ],
+            "selector": ".st-row input[type=range]:hover::-webkit-slider-thumb, .st-row input[type=range]:active::-webkit-slider-thumb",
+            "tokens": []
+          },
+          {
+            "channels": [
               "color"
             ],
             "consumer": true,
-            "id": "f15ff8f77a255481",
+            "id": "1a37da3bb847fea2",
             "important": false,
             "references": [
               "--ink-dim"
@@ -49004,7 +49061,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "09f1a04cf57e65e2",
+            "id": "f59086f5d02ef437",
             "important": false,
             "references": [],
             "selector": ".st-reset",
@@ -49018,7 +49075,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "26d7508bc399f106",
+            "id": "465c66d25e85a34a",
             "important": false,
             "references": [
               "--hair"
@@ -49033,7 +49090,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "867f5a0354750cc8",
+            "id": "156c5eca91c04a43",
             "important": false,
             "references": [
               "--amber"
@@ -49049,7 +49106,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "0c82c2f79a6dc056",
+            "id": "4f373a64af221774",
             "important": false,
             "references": [
               "--amber"
@@ -49062,7 +49119,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "c21b5d15b7b4a58b",
+            "id": "08863647ce18d951",
             "important": false,
             "references": [
               "--bg"
@@ -49077,7 +49134,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "4dfb1635862876c1",
+            "id": "2420bef298eabd10",
             "important": false,
             "references": [],
             "selector": ".tm-spark",
@@ -49088,7 +49145,7 @@
               "borderBottomColor"
             ],
             "consumer": true,
-            "id": "63aae0423cb42e13",
+            "id": "3bb02cd7452d6921",
             "important": false,
             "references": [
               "--hair"
@@ -49103,7 +49160,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "3998f11dd3400bbd",
+            "id": "ad93e04cca466b22",
             "important": false,
             "references": [
               "--amber"
@@ -49116,7 +49173,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "f399f544282cc713",
+            "id": "c68bbb2735f12709",
             "important": false,
             "references": [
               "--ink-dim"
@@ -49131,7 +49188,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "be58a319406c2aff",
+            "id": "995775dbfc05c0a2",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49149,7 +49206,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "07a581a2d93677f3",
+            "id": "5ef40f9a75bf6de4",
             "important": false,
             "references": [
               "--hair"
@@ -49164,7 +49221,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "d7bf6f8caf375b9e",
+            "id": "9c9aa475d3c02487",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-leg .sp-chip",
@@ -49175,7 +49232,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c8f8b4e79943f21c",
+            "id": "8adbf737ffe6dd41",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49190,7 +49247,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "1439ca60c71e9b47",
+            "id": "f9c290da39f61228",
             "important": false,
             "references": [
               "--amber"
@@ -49206,7 +49263,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "b8a23ba7b53dd676",
+            "id": "633cfb5517785b9d",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49222,7 +49279,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "a8c4c339d5319288",
+            "id": "b517522a7b9aee8d",
             "important": false,
             "references": [
               "--hair"
@@ -49237,7 +49294,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "3960def392de4b33",
+            "id": "38490be597d798ac",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-frame",
@@ -49248,7 +49305,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "6db58c160e39a24e",
+            "id": "c9f1bb509b3b451a",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-svg .grid",
@@ -49259,7 +49316,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "fdaeab04dbf12e39",
+            "id": "ae3d1dfbd272a3e4",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49272,7 +49329,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "18a7bc8ea2dcaadb",
+            "id": "d1e179b522ed3fee",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49285,7 +49342,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "5873d3966146e0f4",
+            "id": "6a6e60e11beff9fb",
             "important": false,
             "references": [
               "--amber"
@@ -49298,7 +49355,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "f72d454185950917",
+            "id": "15f17e387d7e93aa",
             "important": false,
             "references": [
               "--amber"
@@ -49311,7 +49368,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "0f59c65dc25356dc",
+            "id": "aedbfe785c7ad7af",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49326,7 +49383,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "bbcefd6346935fd1",
+            "id": "2ce7c2bf797f47ff",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -49340,7 +49397,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "5902e6932fbe3e64",
+            "id": "fb76db236b53bd48",
             "important": false,
             "references": [
               "--hair"
@@ -49355,7 +49412,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "4d3572173ac1f5da",
+            "id": "8adb43b2b9ae0aa5",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49368,7 +49425,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "83b19dc142bab18a",
+            "id": "8855a6f471bbc448",
             "important": false,
             "references": [
               "--amber"
@@ -49381,7 +49438,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "b80f1ab389b1be6e",
+            "id": "c25e409720e06215",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49396,7 +49453,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c98f5f4d40e08ff8",
+            "id": "c80599f145222641",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49411,7 +49468,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "3d1e81726b7d6d9b",
+            "id": "15da642248ee0167",
             "important": false,
             "references": [
               "--ink"
@@ -49426,7 +49483,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "0a0285390db2d1e9",
+            "id": "7f5e4c57d55aef7c",
             "important": false,
             "references": [],
             "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -49440,7 +49497,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "230ffae02cc23b55",
+            "id": "10243c3d9b6d5e68",
             "important": false,
             "references": [
               "--hair"
@@ -49455,7 +49512,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "e34e0048046c4e77",
+            "id": "58831539e038e0c9",
             "important": false,
             "references": [
               "--ink-dim"
@@ -49470,7 +49527,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "a9c3efd86997a1d2",
+            "id": "de69d3abfe1a414f",
             "important": false,
             "references": [],
             "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -49484,7 +49541,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "e1b628b553c2ae56",
+            "id": "87a84a4ef6b1273e",
             "important": false,
             "references": [
               "--hair"
@@ -49499,7 +49556,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "1ae0bfd522e44ff4",
+            "id": "282ee81c1a0d3575",
             "important": false,
             "references": [
               "--amber"
@@ -49512,7 +49569,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "896910fe26504cb9",
+            "id": "e3da26879e74db85",
             "important": false,
             "references": [
               "--amber"
@@ -61637,10 +61694,10 @@
               "color"
             ],
             "consumer": false,
-            "id": "a17e75b8d8b33177",
+            "id": "693dbf28154d10fc",
             "important": false,
             "references": [
-              "--amber"
+              "--ink"
             ],
             "selector": ".st-h",
             "tokens": []
@@ -61650,7 +61707,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "504f0204572ccb1f",
+            "id": "c0a389bc248c0867",
             "important": false,
             "references": [
               "--ink-dim"
@@ -61665,7 +61722,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "2d6b4e67998300f0",
+            "id": "a29a046d55cc990c",
             "important": false,
             "references": [
               "--ink-faint"
@@ -61680,7 +61737,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c36968cb3d05681b",
+            "id": "7596526773681016",
             "important": false,
             "references": [
               "--ink-dim"
@@ -61695,7 +61752,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "fa553bfbb7c8284b",
+            "id": "46416bb5fa4d8106",
             "important": false,
             "references": [
               "--ink-faint"
@@ -61713,7 +61770,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "6a7ca975cf8fd466",
+            "id": "4f85b3e359297230",
             "important": false,
             "references": [
               "--hair"
@@ -61726,7 +61783,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "eab6efdc5682f101",
+            "id": "97c476e39267e7ba",
             "important": false,
             "references": [
               "--panel"
@@ -61739,7 +61796,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "837126efe023eb15",
+            "id": "d03d758e103b2bee",
             "important": false,
             "references": [
               "--ink-faint"
@@ -61754,7 +61811,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "941ce1904e1af9b5",
+            "id": "fe9d117fa933c818",
             "important": false,
             "references": [
               "--amber-glow"
@@ -61770,7 +61827,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "98d58ee365719cb1",
+            "id": "ace2fcfefb51c202",
             "important": false,
             "references": [
               "--amber"
@@ -61783,7 +61840,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "a47548f645d7444a",
+            "id": "7f6c821f073326f3",
             "important": false,
             "references": [
               "--amber"
@@ -61796,7 +61853,7 @@
               "backgroundColor"
             ],
             "consumer": true,
-            "id": "ea027795d4592328",
+            "id": "2fbbb6c4a44cd006",
             "important": false,
             "references": [
               "--ink-faint"
@@ -61814,7 +61871,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "1c4fce757359f494",
+            "id": "4346e0c32b5e0e16",
             "important": false,
             "references": [
               "--hair"
@@ -61827,7 +61884,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "09c7156822525abd",
+            "id": "58d0f659b60e1108",
             "important": false,
             "references": [
               "--panel"
@@ -61843,7 +61900,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "4e7d29cc268f1688",
+            "id": "e1c2bbdff8e12eba",
             "important": false,
             "references": [
               "--hair"
@@ -61856,7 +61913,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "2556db084e2199b9",
+            "id": "776b17bf0e0f901b",
             "important": false,
             "references": [
               "--amber"
@@ -61869,7 +61926,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "7de93948835c0736",
+            "id": "d445f7ce75d1af12",
             "important": false,
             "references": [
               "--amber-glow"
@@ -61882,7 +61939,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "01475690f4570616",
+            "id": "7d2c3a6d9351427a",
             "important": false,
             "references": [
               "--ink-faint"
@@ -61897,7 +61954,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "4162d27c06e6c6cd",
+            "id": "fb74e930b54de29e",
             "important": false,
             "references": [
               "--ink-dim"
@@ -61912,7 +61969,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "198488f4a6a063c2",
+            "id": "b09e3e3294d5462a",
             "important": false,
             "references": [
               "--ink"
@@ -61925,7 +61982,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "6026ff323a4955ab",
+            "id": "c1c00dad71f7c3e7",
             "important": false,
             "references": [],
             "selector": ".st-row input[type=range]",
@@ -61935,27 +61992,29 @@
             "channels": [
               "backgroundColor"
             ],
-            "consumer": false,
-            "id": "48619859cb0a10c5",
+            "consumer": true,
+            "id": "b19972baa87627c9",
             "important": false,
             "references": [
-              "--amber",
+              "--ink-dim",
               "--fill",
               "--hair",
               "--fill"
             ],
             "selector": ".st-row input[type=range]::-webkit-slider-runnable-track",
-            "tokens": []
+            "tokens": [
+              "--ink-dim"
+            ]
           },
           {
             "channels": [
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "d7b42b4e3e38e9a7",
+            "id": "418c03c7897c8a8b",
             "important": false,
             "references": [
-              "--amber"
+              "--ink"
             ],
             "selector": ".st-row input[type=range]::-webkit-slider-thumb",
             "tokens": []
@@ -61968,7 +62027,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "8563ead5470355ce",
+            "id": "d459880356d55fee",
             "important": false,
             "references": [
               "--bg"
@@ -61978,10 +62037,23 @@
           },
           {
             "channels": [
+              "backgroundColor"
+            ],
+            "consumer": false,
+            "id": "83f188c877d14f36",
+            "important": false,
+            "references": [
+              "--amber"
+            ],
+            "selector": ".st-row input[type=range]:hover::-webkit-slider-thumb, .st-row input[type=range]:active::-webkit-slider-thumb",
+            "tokens": []
+          },
+          {
+            "channels": [
               "color"
             ],
             "consumer": true,
-            "id": "a6286e0755bc2ddc",
+            "id": "fa9edfb81ec9f365",
             "important": false,
             "references": [
               "--ink-dim"
@@ -61996,7 +62068,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "92895fd901aa5ca3",
+            "id": "dbdfd2a9a7e6b5b9",
             "important": false,
             "references": [],
             "selector": ".st-reset",
@@ -62010,7 +62082,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "73f6e936e4e7e08f",
+            "id": "8baf1a673dbda730",
             "important": false,
             "references": [
               "--hair"
@@ -62023,7 +62095,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "15403faab8a91f27",
+            "id": "02acecc887d2a80e",
             "important": false,
             "references": [
               "--amber"
@@ -62039,7 +62111,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "8e46ccd7b8626b81",
+            "id": "3267537a6a95b77a",
             "important": false,
             "references": [
               "--amber"
@@ -62052,7 +62124,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "c40fe8e52f47abb0",
+            "id": "d460bc4161de2907",
             "important": false,
             "references": [
               "--bg"
@@ -62065,7 +62137,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "1851dbd16db6886d",
+            "id": "37b8456b9b5d0784",
             "important": false,
             "references": [],
             "selector": ".tm-spark",
@@ -62076,7 +62148,7 @@
               "borderBottomColor"
             ],
             "consumer": false,
-            "id": "88179d5f19ce4bee",
+            "id": "2bbe58106c0d38e1",
             "important": false,
             "references": [
               "--hair"
@@ -62089,7 +62161,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "4d8b1633ee44d776",
+            "id": "ba3f74f0a1a2133c",
             "important": false,
             "references": [
               "--amber"
@@ -62102,7 +62174,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "f5fea606b581f165",
+            "id": "2d63232b6942f06e",
             "important": false,
             "references": [
               "--ink-dim"
@@ -62117,7 +62189,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "6171e4bc92a144ee",
+            "id": "1e4b61fdd68feb68",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62135,7 +62207,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "7b70d557ed23be21",
+            "id": "a3bd12e64af27c7c",
             "important": false,
             "references": [
               "--hair"
@@ -62148,7 +62220,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "aba47d943177a49b",
+            "id": "0ad6871048e22f39",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-leg .sp-chip",
@@ -62159,7 +62231,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "2b11868fa4e1846a",
+            "id": "1ca8b2b48c0dd11b",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62174,7 +62246,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "1fbed19cb095d102",
+            "id": "1fac5cdb28499a0a",
             "important": false,
             "references": [
               "--amber"
@@ -62190,7 +62262,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "11961bb5c293d3fe",
+            "id": "cf8a01667b8fd19e",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62206,7 +62278,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "b0d08774aad39f97",
+            "id": "8793ad8ce01e92a6",
             "important": false,
             "references": [
               "--hair"
@@ -62219,7 +62291,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "0187bae3abb5cf54",
+            "id": "7e5483bd6d203138",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-frame",
@@ -62230,7 +62302,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "359d81551b4fcbdb",
+            "id": "f38aae88f190c0cb",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-svg .grid",
@@ -62241,7 +62313,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "4c63880ffe7e3b30",
+            "id": "9b531425dd336274",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62254,7 +62326,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "8e8b315ce5404e11",
+            "id": "7b68abd8219e5ef1",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62267,7 +62339,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "6d822ab6e7177535",
+            "id": "a861107a2fa85793",
             "important": false,
             "references": [
               "--amber"
@@ -62280,7 +62352,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "29e6f81f717bf571",
+            "id": "ca5988c790f1169a",
             "important": false,
             "references": [
               "--amber"
@@ -62293,7 +62365,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "798a2b7c75e4072f",
+            "id": "4c2137c2166f8805",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62308,7 +62380,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "71515ac0544a7eaa",
+            "id": "1b22dd99933b0a5c",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -62322,7 +62394,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "85045900c6b89f66",
+            "id": "296b3e65fb3c1622",
             "important": false,
             "references": [
               "--hair"
@@ -62335,7 +62407,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "fc0eea2e6516357a",
+            "id": "c27eb048b1b98d12",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62348,7 +62420,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "4ad1f2301bc40d1f",
+            "id": "20690b161f0ee57b",
             "important": false,
             "references": [
               "--amber"
@@ -62361,7 +62433,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "e05d55acf105799c",
+            "id": "1d67ed8449b1ca22",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62376,7 +62448,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "2c0f0d7fafad35e9",
+            "id": "a465d70b70f7b02b",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62391,7 +62463,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "1b804360bf5cd621",
+            "id": "aff7cc645b489eda",
             "important": false,
             "references": [
               "--ink"
@@ -62404,7 +62476,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "82653adc6f17eb9f",
+            "id": "489bc5caec89a460",
             "important": false,
             "references": [],
             "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -62418,7 +62490,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "33d37687e05e2c0a",
+            "id": "42caaca08500fd6e",
             "important": false,
             "references": [
               "--hair"
@@ -62431,7 +62503,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "7b96d1fed176185b",
+            "id": "70b115586c514f35",
             "important": false,
             "references": [
               "--ink-dim"
@@ -62446,7 +62518,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "5e002bf1fc22c8fa",
+            "id": "be2ebdb682f9d9c3",
             "important": false,
             "references": [],
             "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -62460,7 +62532,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "4248801d9895e924",
+            "id": "1afd532661f3d7e7",
             "important": false,
             "references": [
               "--hair"
@@ -62473,7 +62545,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "6e21371637d0c8fd",
+            "id": "8927cd85edbbd469",
             "important": false,
             "references": [
               "--amber"
@@ -62486,7 +62558,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "b99343a247f128d1",
+            "id": "cb089fcc1be4fa06",
             "important": false,
             "references": [
               "--amber"
@@ -62579,8 +62651,8 @@
           "ab2ab3da88061795",
           "976a3356c21cd734",
           "2a899da3bf8852b8",
-          "1dab5e73d06e6156",
-          "20e436d953f0d38c"
+          "34e73e36799c0037",
+          "7753b03c9969680d"
         ],
         "unit": "declaration"
       },
@@ -62724,18 +62796,18 @@
           "03afe1043a868bcd",
           "89091b48a02a078f",
           "ce396c2f9c267b71",
-          "dcbf35b849ff8e72",
-          "ad383256c0f1291e",
-          "60300b71af29cb52",
-          "402d35ffa3c1700b",
-          "c4fc301acd208483",
-          "309e33cd847530de",
-          "f0f175a1d8abb2ed",
-          "788210e5dadb5904",
-          "ecf23924acb97620",
-          "eed205300cddd68d",
-          "06043a72304f705a",
-          "bd4b8c419c6a4a4c"
+          "654d9af8098f685c",
+          "7d0127e1bb8de84f",
+          "cd37b5bed85fa075",
+          "a781ec14bb8f8cd6",
+          "84073b6b734deef7",
+          "88b3b3a1fe47d7b8",
+          "c0bb8f0992b73464",
+          "52985e2e83c54c3a",
+          "c6738508043bb382",
+          "9e6718d15683cc49",
+          "b437aaaa563db448",
+          "f77889d6d38bcab5"
         ],
         "unit": "declaration"
       },
@@ -62969,9 +63041,9 @@
     },
     "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
     "schema_version": 1,
-    "source_digest": "8948a11845b6db4eb6bf2bd8464e21f34bbbfefb7dc7883984ed3a2a1d582668"
+    "source_digest": "c9c9073e12c7b48b2028cdd93d6f61957b017d58b3442be9911c95c14029ae44"
   },
   "schema_version": 1,
   "source": "dashboard/index.html",
-  "source_digest": "8948a11845b6db4eb6bf2bd8464e21f34bbbfefb7dc7883984ed3a2a1d582668"
+  "source_digest": "c9c9073e12c7b48b2028cdd93d6f61957b017d58b3442be9911c95c14029ae44"
 }
