@@ -92,7 +92,11 @@ class QuotaService:
     def _read_provider(self, provider: QuotaProvider) -> QuotaSnapshot:
         name = provider.provider_name
         lock = self._provider_locks[name]
-        if not lock.acquire(blocking=False):
+        # A route that owns credential-bound fallback must see the refresh that
+        # is already in flight. Returning its generic prior success here could
+        # resurrect a value while that refresh discovers a sign-out.
+        managed_fallback = bool(getattr(provider, "manages_fallback", False))
+        if not lock.acquire(blocking=managed_fallback):
             return self._stale_or_unavailable(provider, self._clock(), "refresh_in_progress")
         try:
             now = self._clock()
@@ -167,6 +171,19 @@ class QuotaService:
         provider: QuotaProvider,
         now: float,
     ) -> QuotaSnapshot:
+        if getattr(provider, "manages_fallback", False):
+            # The provider did not return a credential-checked snapshot. Its
+            # own previous value is deliberately unavailable to this layer.
+            self._last_success.pop(provider.provider_name, None)
+            return QuotaSnapshot(
+                provider=provider.provider_name,
+                source=provider.source_name,
+                observed_at=int(now),
+                status="unavailable",
+                reason="provider_read_failed",
+                degraded=True,
+                partial=True,
+            )
         return self._stale_or_unavailable(provider, now, "provider_read_failed")
 
     def _stale_or_unavailable(

@@ -213,6 +213,20 @@ def test_claude_observer_concurrent_writes_are_atomic(tmp_path, monkeypatch):
         assert target.stat().st_mode & 0o777 == 0o600
 
 
+def test_claude_observer_uses_the_stable_model_id_when_it_is_available():
+    snapshot = claude_quota.parse_claude_statusline(
+        {"rate_limits": {"model_scoped": [{
+            "model_id": "claude-fable-5-1",
+            "display_name": "Fable",
+            "utilization": 0.67,
+        }]}},
+        observed_at=1000,
+    )
+
+    assert snapshot.buckets[0].id == "model-claude-fable-5-1"
+    assert snapshot.buckets[0].label == "Fable"
+
+
 class _BlockingProvider:
     provider_name = "codex"
     source_name = "fixture"

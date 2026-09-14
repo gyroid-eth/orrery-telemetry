@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -78,7 +79,9 @@ class ClaudeAccountQuotaProvider:
         self._jitter = jitter or (lambda maximum: random.uniform(0.0, maximum))
         self.fetch_interval_seconds = max(1, int(fetch_interval_seconds))
         self._next_fetch_at = 0.0
-        self._last_success: QuotaSnapshot | None = None
+        # A successful authenticated response is an identity/freshness floor
+        # even when it contains no windows. Keep that bucketless response too.
+        self._last_authenticated: QuotaSnapshot | None = None
         self._last_reason = ""
         self._rate_limit_failures = 0
         self._token_fingerprint: bytes | None = None
@@ -111,7 +114,13 @@ class ClaudeAccountQuotaProvider:
         try:
             payload = self._fetch(token, self.timeout)
         except _AuthRequired:
-            self._forget_account(identity_unconfirmed=True)
+            # The same rejected fingerprint is still "sign in required", not
+            # evidence that a different account appeared. Retain only its
+            # digest so the budget-cached answer keeps the same reason.
+            self._forget_account(
+                identity_unconfirmed=False,
+                preserve_fingerprint=True,
+            )
             self._last_reason = "sign_in_required"
             self._schedule(self.fetch_interval_seconds)
             return self._unavailable(now, "sign_in_required")
@@ -133,8 +142,13 @@ class ClaudeAccountQuotaProvider:
                 else "account_usage_failed"
             )
             self._schedule(self.fetch_interval_seconds)
-            if self._last_success is not None:
-                return self._last_success.with_status("stale", self._last_reason)
+            if self._last_authenticated is not None:
+                return self._retained_or_unavailable(now, self._last_reason)
+            if self._identity_unconfirmed:
+                # A failed first request for a changed credential cannot prove
+                # which account the local observer belongs to. Preserve that
+                # identity signal so the route clears its old registry.
+                return self._unavailable(now, self._last_reason)
             # The token must not reach a log line through an exception message.
             raise RuntimeError(f"claude usage probe failed: {type(exc).__name__}") from None
         snapshot = parse_account_usage(payload, observed_at=now)
@@ -142,12 +156,7 @@ class ClaudeAccountQuotaProvider:
         self._rate_limit_failures = 0
         self._last_reason = "account_refresh_scheduled"
         self._schedule(self.fetch_interval_seconds)
-        if snapshot.status == "ok" and snapshot.buckets:
-            self._last_success = snapshot
-        else:
-            # A successful full response that names no windows is not evidence
-            # that the prior account still has them.
-            self._last_success = None
+        self._last_authenticated = snapshot
         return snapshot
 
     def _schedule(self, seconds: int | float) -> None:
@@ -155,17 +164,29 @@ class ClaudeAccountQuotaProvider:
         self._next_fetch_at = self._clock() + max(0.0, float(seconds)) + jitter
 
     def _retained_or_unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
-        if self._last_success is not None:
-            return self._last_success.with_status("stale", reason)
+        if self._last_authenticated is not None:
+            if self._last_authenticated.buckets:
+                return self._last_authenticated.with_status("stale", reason)
+            # Preserve the authenticated empty response's original observation
+            # time and reason as the account freshness floor.
+            if reason == "account_refresh_scheduled":
+                return self._last_authenticated
+            return replace(self._last_authenticated, reason=reason)
         return self._unavailable(observed_at, reason)
 
-    def _forget_account(self, *, identity_unconfirmed: bool) -> None:
-        self._last_success = None
+    def _forget_account(
+        self,
+        *,
+        identity_unconfirmed: bool,
+        preserve_fingerprint: bool = False,
+    ) -> None:
+        self._last_authenticated = None
         self._last_reason = ""
         # Identity changes invalidate values, not the machine-wide outbound
-        # budget. A token rotation must not buy an extra request inside 600 s.
-        self._rate_limit_failures = 0
-        self._token_fingerprint = None
+        # budget or its 429 streak. Only an authenticated success resets the
+        # exponent, and token rotation must not buy an earlier request.
+        if not preserve_fingerprint:
+            self._token_fingerprint = None
         self._identity_unconfirmed = identity_unconfirmed
 
     def _unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
@@ -234,8 +255,7 @@ def parse_account_usage(payload: Mapping[str, Any], *, observed_at: int) -> Quot
         if fingerprint in repeated:
             continue
         repeated.add(fingerprint)
-        slug = "".join(ch if ch.isalnum() else "-" for ch in key.lower()).strip("-")
-        bucket_id = f"model-{slug or 'model'}"
+        bucket_id = _model_bucket_id(key)
         if bucket_id in seen:
             suffix = 2
             while f"{bucket_id}-{suffix}" in seen:
@@ -380,6 +400,11 @@ def _percent_or_none(value: object) -> float | None:
     if number != number or number in {float("inf"), float("-inf")}:
         return None
     return number
+
+
+def _model_bucket_id(identity: str) -> str:
+    slug = "".join(ch if ch.isalnum() else "-" for ch in identity.lower()).strip("-")
+    return slug if slug.startswith("model-") else f"model-{slug or 'model'}"
 
 
 def _epoch_or_none(value: object) -> int | None:

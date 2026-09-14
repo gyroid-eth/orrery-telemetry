@@ -13,6 +13,7 @@ from dashboard.quotas import claude_account
 from dashboard.quotas.base import QuotaBucket, QuotaSnapshot
 from dashboard.quotas.claude_account import ClaudeAccountQuotaProvider, parse_account_usage
 from dashboard.quotas.claude_route import ClaudeQuotaRoute
+from dashboard.quotas.service import QuotaService
 
 
 USAGE_BODY = {
@@ -121,6 +122,24 @@ def test_an_expired_login_asks_for_sign_in_rather_than_looking_broken(monkeypatc
     provider = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: 1000.0)
 
     assert provider.read().reason == "sign_in_required"
+
+
+def test_an_expired_login_keeps_its_reason_during_the_outbound_wait(monkeypatch):
+    now = [1000.0]
+    opener = _Opener(_http_error(401))
+    monkeypatch.setattr(claude_account, "_OPENER", opener)
+    provider = ClaudeAccountQuotaProvider(
+        token_reader=lambda: "token",
+        clock=lambda: now[0],
+        jitter=lambda maximum: 0,
+    )
+
+    assert provider.read().reason == "sign_in_required"
+    now[0] = 1030
+    cached = provider.read()
+
+    assert cached.reason == "sign_in_required"
+    assert len(opener.calls) == 1
 
 
 def test_the_request_carries_the_token_as_a_bearer_and_no_body(monkeypatch):
@@ -252,6 +271,43 @@ def test_success_resets_the_429_exponent():
     assert calls == [1000, 1600, 2200, 2800]
 
 
+def test_credential_rotation_does_not_reset_the_machine_wide_429_exponent():
+    now = [1000.0]
+    token = ["account-a"]
+    calls = []
+
+    def limited(value, timeout):
+        calls.append((value, now[0]))
+        raise claude_account._RateLimited(0)
+
+    provider = ClaudeAccountQuotaProvider(
+        token_reader=lambda: token[0],
+        fetch=limited,
+        clock=lambda: now[0],
+        jitter=lambda maximum: 0,
+    )
+
+    provider.read()  # 600 s
+    now[0] = 1600
+    provider.read()  # 1200 s
+    token[0] = "account-b"
+    now[0] = 1700
+    assert provider.read().reason == "account_identity_changed"
+    now[0] = 2800
+    provider.read()  # still the third failure: 2400 s
+    now[0] = 5199
+    provider.read()
+
+    assert calls == [
+        ("account-a", 1000.0),
+        ("account-a", 1600),
+        ("account-b", 2800),
+    ]
+    now[0] = 5200
+    provider.read()
+    assert calls[-1] == ("account-b", 5200)
+
+
 def test_retry_after_longer_than_the_cap_is_not_shortened():
     now = [1000.0]
     calls = []
@@ -308,6 +364,36 @@ def test_sign_out_and_credential_change_never_reuse_the_old_snapshot():
     signed_out = provider.read()
     assert signed_out.reason == "sign_in_required"
     assert signed_out.buckets == ()
+
+
+def test_failed_first_fetch_for_a_changed_credential_keeps_the_identity_gate():
+    now = [1000.0]
+    token = ["account-a"]
+    outcomes = [USAGE_BODY, TimeoutError("offline")]
+
+    def fetch(value, timeout):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    account = ClaudeAccountQuotaProvider(
+        token_reader=lambda: token[0],
+        fetch=fetch,
+        clock=lambda: now[0],
+        jitter=lambda maximum: 0,
+    )
+    observer = _Stub(_ok("claude-statusline"))
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: now[0])
+    assert route.read().buckets
+
+    token[0] = "account-b"
+    now[0] = 1600
+    changed = route.read()
+
+    assert changed.reason == "account_identity_changed"
+    assert changed.buckets == ()
+    assert observer.reads == 1, "the prior account's observer must stay behind the identity gate"
 
 
 def test_two_models_whose_names_collide_both_keep_a_window():
@@ -625,6 +711,238 @@ def test_authenticated_empty_account_response_rejects_an_older_observer():
 
     assert snapshot.reason == "no_windows_returned"
     assert snapshot.buckets == ()
+
+
+def test_authenticated_empty_account_floor_survives_the_next_local_read():
+    now = [1000.0]
+    calls = []
+
+    def empty_usage(token, timeout):
+        calls.append(now[0])
+        return {}
+
+    account = ClaudeAccountQuotaProvider(
+        token_reader=lambda: "token",
+        fetch=empty_usage,
+        clock=lambda: now[0],
+        jitter=lambda maximum: 0,
+    )
+    observer = _Stub(_ok("claude-statusline", observed_at=999))
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: now[0])
+
+    assert route.read().buckets == ()
+    now[0] = 1030
+    second = route.read()
+
+    assert second.reason == "no_windows_returned"
+    assert second.buckets == ()
+    assert calls == [1000.0]
+
+
+def test_retained_empty_account_floor_does_not_erase_a_newer_observer_window():
+    now = [1000.0]
+    account = ClaudeAccountQuotaProvider(
+        token_reader=lambda: "token",
+        fetch=lambda token, timeout: {},
+        clock=lambda: now[0],
+        jitter=lambda maximum: 60,
+    )
+    observer = _Stub(_down("claude-statusline", "not_observed"))
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: now[0])
+    assert route.read().buckets == ()
+
+    observer._snapshot = QuotaSnapshot(
+        provider="claude",
+        source="claude-statusline",
+        observed_at=1010,
+        status="ok",
+        buckets=(QuotaBucket.from_used(
+            id="model-fable", label="Fable", scope="account", used_percent=70,
+            window_seconds=604800, resets_at=5000),),
+    )
+    now[0] = 1030
+    assert route.read().buckets[0].value_status == "current"
+
+    observer._snapshot = _down("claude-statusline", "observation_stale")
+    now[0] = 1611  # observer is >600 s old; account's 600+60 s budget is not due
+    retained = route.read().buckets[0]
+
+    assert (retained.id, retained.observed_at, retained.value_status) == (
+        "model-fable", 1010, "previous")
+
+
+def test_observer_only_window_remains_named_after_the_observer_file_expires():
+    now = [1000.0]
+    fable = QuotaSnapshot(
+        provider="claude",
+        source="claude-statusline",
+        observed_at=1000,
+        status="ok",
+        buckets=(QuotaBucket.from_used(
+            id="model-fable", label="Fable", scope="account", used_percent=70,
+            window_seconds=604800, resets_at=5000),),
+    )
+    observer = _Stub(fable)
+    route = ClaudeQuotaRoute(
+        _Stub(_down("claude-account-usage", "rate_limited")),
+        observer,
+        clock=lambda: now[0],
+    )
+    assert route.read().buckets[0].value_status == "current"
+
+    observer._snapshot = _down("claude-statusline", "observation_stale")
+    now[0] = 1601
+    retained = route.read().buckets[0]
+    assert (retained.id, retained.observed_at, retained.value_status) == (
+        "model-fable", 1000, "previous")
+
+    now[0] = 2800
+    expired = route.read().buckets[0]
+    assert (expired.id, expired.observed_at, expired.value_status) == (
+        "model-fable", 1000, "unknown")
+
+
+def test_stable_account_model_id_wins_when_observer_only_has_the_display_name():
+    account = QuotaSnapshot(
+        provider="claude",
+        source="claude-account-usage",
+        observed_at=1000,
+        status="stale",
+        reason="rate_limited",
+        buckets=(QuotaBucket.from_used(
+            id="model-claude-fable-5-1", label="Fable", scope="account", used_percent=70,
+            window_seconds=604800, resets_at=5000),),
+    )
+    observer = QuotaSnapshot(
+        provider="claude",
+        source="claude-statusline",
+        observed_at=1060,
+        status="ok",
+        buckets=(QuotaBucket.from_used(
+            id="model-fable", label="  fable  ", scope="account", used_percent=75,
+            window_seconds=604800, resets_at=5000),),
+    )
+
+    snapshot = ClaudeQuotaRoute(
+        _Stub(account), _Stub(observer), clock=lambda: 1060.0).read()
+
+    assert len(snapshot.buckets) == 1
+    bucket = snapshot.buckets[0]
+    assert bucket.id == "model-claude-fable-5-1"
+    assert (bucket.source, bucket.observed_at, round(bucket.remaining_percent)) == (
+        "claude-statusline", 1060, 25)
+
+
+def test_ambiguous_display_names_are_not_guessed_to_be_the_same_model():
+    account = QuotaSnapshot(
+        provider="claude",
+        source="claude-account-usage",
+        observed_at=1000,
+        status="stale",
+        reason="rate_limited",
+        buckets=tuple(
+            QuotaBucket.from_used(
+                id=bucket_id, label="Fable", scope="account", used_percent=used,
+                window_seconds=604800, resets_at=5000)
+            for bucket_id, used in (
+                ("model-claude-fable-5-1", 60),
+                ("model-claude-fable-5-2", 70),
+            )
+        ),
+    )
+    observer = QuotaSnapshot(
+        provider="claude",
+        source="claude-statusline",
+        observed_at=1060,
+        status="ok",
+        buckets=(QuotaBucket.from_used(
+            id="model-fable", label="Fable", scope="account", used_percent=75,
+            window_seconds=604800, resets_at=5000),),
+    )
+
+    snapshot = ClaudeQuotaRoute(
+        _Stub(account), _Stub(observer), clock=lambda: 1060.0).read()
+
+    assert {bucket.id for bucket in snapshot.buckets} == {
+        "model-claude-fable-5-1",
+        "model-claude-fable-5-2",
+        "model-fable",
+    }
+
+
+def test_an_existing_observer_window_does_not_make_ambiguous_account_names_unique():
+    now = [1000.0]
+    observer = QuotaSnapshot(
+        provider="claude",
+        source="claude-statusline",
+        observed_at=1000,
+        status="ok",
+        buckets=(QuotaBucket.from_used(
+            id="model-fable", label="Fable", scope="account", used_percent=75,
+            window_seconds=604800, resets_at=5000),),
+    )
+    account = _Stub(_down("claude-account-usage", "rate_limited"))
+    statusline = _Stub(observer)
+    route = ClaudeQuotaRoute(account, statusline, clock=lambda: now[0])
+    assert [bucket.id for bucket in route.read().buckets] == ["model-fable"]
+
+    account._snapshot = QuotaSnapshot(
+        provider="claude",
+        source="claude-account-usage",
+        observed_at=1000,
+        status="stale",
+        reason="rate_limited",
+        buckets=tuple(
+            QuotaBucket.from_used(
+                id=bucket_id, label="Fable", scope="account", used_percent=used,
+                window_seconds=604800, resets_at=5000)
+            for bucket_id, used in (
+                ("model-claude-fable-5-1", 60),
+                ("model-claude-fable-5-2", 70),
+            )
+        ),
+    )
+    statusline._snapshot = _down("claude-statusline", "observation_stale")
+    now[0] = 1030
+
+    assert {bucket.id for bucket in route.read().buckets} == {
+        "model-fable",
+        "model-claude-fable-5-1",
+        "model-claude-fable-5-2",
+    }
+
+
+def test_sign_in_clears_prior_windows_before_a_broken_observer_is_read():
+    class _Observer:
+        source_name = "claude-statusline"
+
+        def __init__(self):
+            self.reads = 0
+            self.fail = False
+
+        def read(self):
+            self.reads += 1
+            if self.fail:
+                raise RuntimeError("broken status-line file")
+            return _ok(self.source_name)
+
+    account = _Stub(_ok("claude-account-usage"))
+    observer = _Observer()
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: 1000.0)
+    now = [1000.0]
+    route._clock = lambda: now[0]
+    service = QuotaService([route], clock=lambda: now[0])
+    assert service.read_all()["providers"][0]["buckets"]
+
+    account._snapshot = _down("claude-account-usage", "sign_in_required")
+    observer.fail = True
+    now[0] = 1030
+    signed_out = service.read_all()["providers"][0]
+
+    assert signed_out["reason"] == "sign_in_required"
+    assert signed_out["buckets"] == []
+    assert signed_out["last_observed_at"] is None
+    assert observer.reads == 1, "identity rejection must happen before observer I/O"
 
 
 def test_a_rate_limited_account_reports_its_own_reason_when_nothing_was_observed():
