@@ -2432,6 +2432,10 @@
   .st-switch{display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;
     column-gap:12px;align-items:center;cursor:pointer;margin:0 0 4px}
   .st-switch .lab{font-size:9px;letter-spacing:.16em;color:var(--ink-dim);text-transform:uppercase}
+  /* A provider row carries its logo: lay the label out as a row so the logo
+     keeps its own box instead of sitting on the text baseline. */
+  .st-switch .lab:has(.up-logo){display:flex;align-items:center;gap:8px}
+  .st-switch .lab .up-logo{width:14px;height:14px}
   .st-switch-hint{grid-row:2;font-size:9px;letter-spacing:.06em;color:var(--ink-faint)}
   .st-switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
   .st-switch-track{grid-column:2;grid-row:1/3;position:relative;width:30px;height:16px;
@@ -16213,7 +16217,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "ba5361aef5cfabab",
+          "id": "82d62986b7bdacc5",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16231,7 +16235,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "e629df63d51f8ef8",
+          "id": "d54b25cd464a7735",
           "important": false,
           "references": [
             "--hair"
@@ -16246,7 +16250,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "9df5575506c4833a",
+          "id": "2c7c31e7919c8932",
           "important": false,
           "references": [
             "--panel"
@@ -16261,7 +16265,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "4413cc1096cd6b07",
+          "id": "41db6f40d579256b",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16276,7 +16280,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "eb517ea6e42ec70d",
+          "id": "1f4d1125e9d34d7e",
           "important": false,
           "references": [
             "--amber-glow"
@@ -16292,7 +16296,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "4a3dfd6fc022a0c3",
+          "id": "99aa5045eee2c169",
           "important": false,
           "references": [
             "--amber"
@@ -16305,7 +16309,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "afc0e3edddd918c8",
+          "id": "cb9c139b5d191452",
           "important": false,
           "references": [
             "--amber"
@@ -16318,7 +16322,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "fb6934998890297c",
+          "id": "21df42391d83a137",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16336,7 +16340,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "deeeeb93692053a7",
+          "id": "d4503752fead641e",
           "important": false,
           "references": [
             "--hair"
@@ -16351,7 +16355,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "449ced2a09f581b7",
+          "id": "9c7e75f130d3e0f1",
           "important": false,
           "references": [
             "--panel"
@@ -16369,7 +16373,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "5be21d308e450cfd",
+          "id": "b52d5a481c3dff78",
           "important": false,
           "references": [
             "--hair"
@@ -16384,7 +16388,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "ae57b822c0911e44",
+          "id": "4690bc133b67387d",
           "important": false,
           "references": [
             "--amber"
@@ -16397,7 +16401,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "03e6239c67b6f5fe",
+          "id": "360260f78a7c5eac",
           "important": false,
           "references": [
             "--amber-glow"
@@ -16410,7 +16414,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "e18c1d1be3266d8e",
+          "id": "38437952d2c8aa16",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16425,7 +16429,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "c4a0dac727b4095b",
+          "id": "da7ff2810d2beff4",
           "important": false,
           "references": [
             "--ink-dim"
@@ -16440,7 +16444,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "130acc64a5b7e3d8",
+          "id": "4f23a63dda167e0c",
           "important": false,
           "references": [
             "--accent-control"
@@ -16453,7 +16457,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "22e59eef864988ea",
+          "id": "f2554c697a38a177",
           "important": false,
           "references": [],
           "selector": ".st-row input[type=range]",
@@ -16464,7 +16468,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "fbc3a3e3e0eed85b",
+          "id": "44069717fa9163ae",
           "important": false,
           "references": [
             "--accent-control",
@@ -16480,7 +16484,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "6f808fc6058677d3",
+          "id": "f18508e8dedeaa9e",
           "important": false,
           "references": [
             "--accent-control"
@@ -16493,7 +16497,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "e4a96a58c43557cc",
+          "id": "7a34f441c6d3d2dd",
           "important": false,
           "references": [
             "--ink-dim"
@@ -16508,7 +16512,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "94a30ac0c1e9c36f",
+          "id": "963f3f13a0a632e8",
           "important": false,
           "references": [],
           "selector": ".st-reset",
@@ -16522,7 +16526,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "4d0c41530d2b273e",
+          "id": "a8700bfa4c185c4f",
           "important": false,
           "references": [
             "--hair"
@@ -16537,7 +16541,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "c9dd5f7b5610a086",
+          "id": "f7f1c40ccae20798",
           "important": false,
           "references": [
             "--amber"
@@ -16553,7 +16557,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "083e7e5ea38f620d",
+          "id": "97f8ff05e1958593",
           "important": false,
           "references": [
             "--amber"
@@ -16566,7 +16570,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "58b114e9308af4e3",
+          "id": "8e149501772a1cbc",
           "important": false,
           "references": [
             "--bg"
@@ -16581,7 +16585,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "36eb376e96ca2023",
+          "id": "970bbf788c377b88",
           "important": false,
           "references": [],
           "selector": ".tm-spark",
@@ -16592,7 +16596,7 @@ OFF = legacy snapshot+comet mode">
             "borderBottomColor"
           ],
           "consumer": true,
-          "id": "d9847d0e8ef3cf7e",
+          "id": "3e120e83788f00b7",
           "important": false,
           "references": [
             "--hair"
@@ -16607,7 +16611,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "1a3e373e6a78e3c2",
+          "id": "6547b66a9ead2fab",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-bar",
@@ -16618,7 +16622,7 @@ OFF = legacy snapshot+comet mode">
             "borderBottomColor"
           ],
           "consumer": false,
-          "id": "998267899bbb543e",
+          "id": "7d610f2d94460587",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-bar",
@@ -16629,7 +16633,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "133206c09663a237",
+          "id": "63e47ee3d3e71ad8",
           "important": false,
           "references": [
             "--amber"
@@ -16642,7 +16646,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "9875d5d0810994fc",
+          "id": "8b20547eae307ccb",
           "important": false,
           "references": [
             "--ink-dim"
@@ -16657,7 +16661,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "a2859d233201c94f",
+          "id": "d304cd8434cbbee2",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16675,7 +16679,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "4a214eb699712df7",
+          "id": "ae4b00998d48a7a0",
           "important": false,
           "references": [
             "--hair"
@@ -16690,7 +16694,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "57b1e072edf83652",
+          "id": "0948b2179c7c8e9e",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -16701,7 +16705,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "cbd67a9a81e5773e",
+          "id": "ad9fddef00119584",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16716,7 +16720,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "086696cd5bd73dde",
+          "id": "9ef3ffbcb8c00fb9",
           "important": false,
           "references": [
             "--amber"
@@ -16732,7 +16736,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "e08e9e51fdf9a4bd",
+          "id": "87d6a72f78e10f3e",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -16748,7 +16752,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "ea6f72d31ca05b7d",
+          "id": "fe8a597f9ab82b5d",
           "important": false,
           "references": [
             "--hair"
@@ -16763,7 +16767,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "d31d295d5e1fe447",
+          "id": "40bc4481c473f5f0",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -16774,7 +16778,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "89dcea823d004aa9",
+          "id": "642cc2fd1c72ba4c",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -16785,7 +16789,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "010cffd6d88f104b",
+          "id": "f1dd5e38079541b2",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -16798,7 +16802,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "bffa30291d30cd97",
+          "id": "7daff80eab0ef1bd",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -16811,7 +16815,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "7fd6d4dfe6555fb4",
+          "id": "d91e16d87438b315",
           "important": false,
           "references": [
             "--amber"
@@ -16824,7 +16828,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "6f63931135f2eac9",
+          "id": "050337b843c0ca23",
           "important": false,
           "references": [
             "--amber"
@@ -16837,7 +16841,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "cd6b78334f480d0f",
+          "id": "59bda8d6c7c14cab",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16852,7 +16856,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "e426d79e9404e015",
+          "id": "1f41d37d789b5475",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -16866,7 +16870,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "816e9dcfcd01db02",
+          "id": "9b63c4d5ede6f57f",
           "important": false,
           "references": [
             "--hair"
@@ -16881,7 +16885,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "6015dd83af59e998",
+          "id": "ab054889365e45a6",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -16894,7 +16898,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "3d27c7f78d92b894",
+          "id": "1e55b6ca98c36455",
           "important": false,
           "references": [
             "--amber"
@@ -16907,7 +16911,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "5c0bb79178e535d2",
+          "id": "7c61491f1f88956c",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16922,7 +16926,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "26da246e136891d4",
+          "id": "49d2c59b6bae4c49",
           "important": false,
           "references": [
             "--ink-faint"
@@ -16937,7 +16941,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "85799e0ab4b531d1",
+          "id": "02d0e7fc00f96ca2",
           "important": false,
           "references": [
             "--ink"
@@ -16952,7 +16956,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "1bd571b0d39b345e",
+          "id": "367479628bb729fb",
           "important": false,
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -16966,7 +16970,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "98b71868727c70e6",
+          "id": "8581ce3ed4766026",
           "important": false,
           "references": [
             "--hair"
@@ -16981,7 +16985,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "1fccc0135a6ffa42",
+          "id": "c1fb8eb6336d9868",
           "important": false,
           "references": [
             "--ink-dim"
@@ -16996,7 +17000,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "927a35f9a1c19940",
+          "id": "cb2aba80ec4bf5fa",
           "important": false,
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -17010,7 +17014,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "5a13673f870a6a07",
+          "id": "b649740ea76691c4",
           "important": false,
           "references": [
             "--hair"
@@ -17025,7 +17029,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "66325139dee022a9",
+          "id": "bfbe8d1e9297027a",
           "important": false,
           "references": [
             "--amber"
@@ -17038,7 +17042,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "32ca87a79162e0ed",
+          "id": "5740c1956ea95cda",
           "important": false,
           "references": [
             "--amber"
@@ -29808,7 +29812,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "ad030e2738f9d79b",
+          "id": "d04431038296284b",
           "important": false,
           "references": [
             "--ink-faint"
@@ -29826,7 +29830,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "9ae1744055f91d56",
+          "id": "33f52510ebf2257b",
           "important": false,
           "references": [
             "--hair"
@@ -29839,7 +29843,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "6fdf9eaebf4f8707",
+          "id": "c2e2d675063af4af",
           "important": false,
           "references": [
             "--panel"
@@ -29852,7 +29856,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "5303ecb904c96dd6",
+          "id": "b90ff6b31cbae673",
           "important": false,
           "references": [
             "--ink-faint"
@@ -29867,7 +29871,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "8d6a88f8ee712dcf",
+          "id": "256ed24e444b822f",
           "important": false,
           "references": [
             "--amber-glow"
@@ -29883,7 +29887,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "f71cabb0cb5ff04f",
+          "id": "c021c2cf108a9c01",
           "important": false,
           "references": [
             "--amber"
@@ -29896,7 +29900,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "b7ec8bbc3b609177",
+          "id": "aac5a5fe59f0e175",
           "important": false,
           "references": [
             "--amber"
@@ -29909,7 +29913,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": true,
-          "id": "ad3c849a34cf9d0e",
+          "id": "d793f80995290728",
           "important": false,
           "references": [
             "--ink-faint"
@@ -29927,7 +29931,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "5a56410c149e3f6e",
+          "id": "1f77a0d08df2e565",
           "important": false,
           "references": [
             "--hair"
@@ -29940,7 +29944,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "83f6c8e58e082dde",
+          "id": "3c7e0b0711fa409b",
           "important": false,
           "references": [
             "--panel"
@@ -29956,7 +29960,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "6ecb362eff3d6d02",
+          "id": "a8ede21c123fa2e2",
           "important": false,
           "references": [
             "--hair"
@@ -29969,7 +29973,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "9c3d9a0b20094b11",
+          "id": "1a272e5dd2294369",
           "important": false,
           "references": [
             "--amber"
@@ -29982,7 +29986,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "5895e8bad2f5ae22",
+          "id": "2705c8773b1c83bf",
           "important": false,
           "references": [
             "--amber-glow"
@@ -29995,7 +29999,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "71697228528bb334",
+          "id": "e4df776660a648db",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30010,7 +30014,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "b6861fe585ce5eb3",
+          "id": "449eef32de08f84d",
           "important": false,
           "references": [
             "--ink-dim"
@@ -30025,7 +30029,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "8301021b86522f7d",
+          "id": "958ce3bff0f4e7de",
           "important": false,
           "references": [
             "--accent-control"
@@ -30038,7 +30042,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "6c7d855fc9a2e7fb",
+          "id": "02003fe4f8867ae7",
           "important": false,
           "references": [],
           "selector": ".st-row input[type=range]",
@@ -30049,7 +30053,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "d4a2a867ea55a5c5",
+          "id": "345ed8da1ad7c48c",
           "important": false,
           "references": [
             "--accent-control",
@@ -30065,7 +30069,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "9f687ec8dcdff95a",
+          "id": "f3c689be3da69a8e",
           "important": false,
           "references": [
             "--accent-control"
@@ -30078,7 +30082,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "1463d5127bad32bc",
+          "id": "0ac6a139d527ac83",
           "important": false,
           "references": [
             "--ink-dim"
@@ -30093,7 +30097,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "12d39f6aa5da8471",
+          "id": "aecfd18748158e9d",
           "important": false,
           "references": [],
           "selector": ".st-reset",
@@ -30107,7 +30111,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "0fde355062806337",
+          "id": "1f2f5f52b1bbb6b2",
           "important": false,
           "references": [
             "--hair"
@@ -30120,7 +30124,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "94743e1e731f762a",
+          "id": "5b25f51dff679c1a",
           "important": false,
           "references": [
             "--amber"
@@ -30136,7 +30140,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "b5a4e6189de1daee",
+          "id": "8e22991fde76a15a",
           "important": false,
           "references": [
             "--amber"
@@ -30149,7 +30153,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "5f57c51e8de6a47c",
+          "id": "b03b8bbcbb8f4252",
           "important": false,
           "references": [
             "--bg"
@@ -30162,7 +30166,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "26c16104c49742d5",
+          "id": "66759d68991537b9",
           "important": false,
           "references": [],
           "selector": ".tm-spark",
@@ -30173,7 +30177,7 @@ OFF = legacy snapshot+comet mode">
             "borderBottomColor"
           ],
           "consumer": false,
-          "id": "711a72738c64fd91",
+          "id": "c20e6a5223d2fdf1",
           "important": false,
           "references": [
             "--hair"
@@ -30186,7 +30190,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "378749e3cf89c041",
+          "id": "93221f9c627adda0",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-bar",
@@ -30197,7 +30201,7 @@ OFF = legacy snapshot+comet mode">
             "borderBottomColor"
           ],
           "consumer": false,
-          "id": "ab9070832e6b3982",
+          "id": "c9d8c48a350d286a",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-bar",
@@ -30208,7 +30212,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "38729fb3cd2ad863",
+          "id": "96a59c5a697d086f",
           "important": false,
           "references": [
             "--amber"
@@ -30221,7 +30225,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "12cf8f0b456b8237",
+          "id": "6e02c21865f46a13",
           "important": false,
           "references": [
             "--ink-dim"
@@ -30236,7 +30240,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "92627f80eac62085",
+          "id": "c16cca9ac3bd3e46",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30254,7 +30258,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "d3d11847e897bb65",
+          "id": "7b4f1a8cf610b5fd",
           "important": false,
           "references": [
             "--hair"
@@ -30267,7 +30271,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "e16d83f59acda46a",
+          "id": "03de909f248ff47d",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -30278,7 +30282,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "ffa8e3e13e562b78",
+          "id": "c387f0552fc7a5f9",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30293,7 +30297,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "f12d98f24f4dd158",
+          "id": "c692cca416857bcc",
           "important": false,
           "references": [
             "--amber"
@@ -30309,7 +30313,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "9a278fb55f119896",
+          "id": "2a0e800a5faa737b",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -30325,7 +30329,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "954f3859a08e6010",
+          "id": "3cecd149cb127e94",
           "important": false,
           "references": [
             "--hair"
@@ -30338,7 +30342,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "e2619312bcf54d07",
+          "id": "cb582e6bfeac964b",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -30349,7 +30353,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "ad1fc9413cf6f061",
+          "id": "847ee3311e229b7d",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -30360,7 +30364,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "d4df5d9e69973b0c",
+          "id": "51e368dd8842ae2a",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -30373,7 +30377,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "486989fd027311a2",
+          "id": "d2ca3c4cf43b6f44",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -30386,7 +30390,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "86efb326be13a77a",
+          "id": "7863ff5bbb4de49d",
           "important": false,
           "references": [
             "--amber"
@@ -30399,7 +30403,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "51e64d70fe1d556a",
+          "id": "cab7b13b52ce6044",
           "important": false,
           "references": [
             "--amber"
@@ -30412,7 +30416,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "138ecb22a67f198a",
+          "id": "f3f61a0fd40ac7b9",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30427,7 +30431,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "ac1253bc43eaa522",
+          "id": "dd8b2a6721b2f375",
           "important": false,
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -30441,7 +30445,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "6ffc1784e030663b",
+          "id": "e7455b3e834c0889",
           "important": false,
           "references": [
             "--hair"
@@ -30454,7 +30458,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "c9af0fa6f6b7461f",
+          "id": "75d8736a59df008f",
           "important": false,
           "references": [
             "--theme-accent-rgb"
@@ -30467,7 +30471,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "aa74b8d5aaf52242",
+          "id": "ee76b0ed8080acbe",
           "important": false,
           "references": [
             "--amber"
@@ -30480,7 +30484,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "8e83b2e77d304ce9",
+          "id": "d24ed2d5124c354e",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30495,7 +30499,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "af35ac0a7dbaa950",
+          "id": "c11e02ed72f46e7e",
           "important": false,
           "references": [
             "--ink-faint"
@@ -30510,7 +30514,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "2b09d67887a0cc97",
+          "id": "8c7655541ecd0217",
           "important": false,
           "references": [
             "--ink"
@@ -30523,7 +30527,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "e734fac958ff515c",
+          "id": "b7487aae4a410bc2",
           "important": false,
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -30537,7 +30541,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "cd9f844f7ceb01ec",
+          "id": "33102cf9bf77130f",
           "important": false,
           "references": [
             "--hair"
@@ -30550,7 +30554,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "b7d5559198de97fd",
+          "id": "a9ac3fe767cce8f2",
           "important": false,
           "references": [
             "--ink-dim"
@@ -30565,7 +30569,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "50fccb0274de00a5",
+          "id": "b8f3f68b7e452235",
           "important": false,
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -30579,7 +30583,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "566949a67d371116",
+          "id": "3c64618cf9cbbf6f",
           "important": false,
           "references": [
             "--hair"
@@ -30592,7 +30596,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "1683d498a8380c10",
+          "id": "b170a07685418ec9",
           "important": false,
           "references": [
             "--amber"
@@ -30605,7 +30609,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "29d20e09149c12b8",
+          "id": "d7679fb432276788",
           "important": false,
           "references": [
             "--amber"
@@ -30699,8 +30703,8 @@ OFF = legacy snapshot+comet mode">
         "ef776e456c83d80a",
         "395fa8b3bab79c49",
         "b6ede674eb65c157",
-        "af9fe5c2a543ed55",
-        "271573a8702846ad"
+        "19292bc59e838d4b",
+        "53518094d04f84dd"
       ],
       "unit": "declaration"
     },
@@ -30856,15 +30860,15 @@ OFF = legacy snapshot+comet mode">
         "0ce24c6d56856818",
         "b3a7a2d8def57af4",
         "0e192a7f31409f39",
-        "f2a2777121420c8c",
-        "8b5a94b3fea049eb",
-        "30d164e73448b7ec",
-        "c4b0fc4057176c67",
-        "6f9437d236cfcd97",
-        "c6f31dba53612af8",
-        "3c5382a941379389",
-        "c36ec03eb3523cfd",
-        "c371e56dce833cd0"
+        "fe1d467b10504d0b",
+        "695eff2f6dce0dd4",
+        "2211ff3d4a8bea1b",
+        "5d09fd6d46075957",
+        "48af38ea557a9ded",
+        "f1af783e2cfb8399",
+        "331f4270b488046b",
+        "28565bafa0c7c161",
+        "2a9937c68dc89ba9"
       ],
       "unit": "declaration"
     },
@@ -31098,7 +31102,7 @@ OFF = legacy snapshot+comet mode">
   },
   "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
   "schema_version": 1,
-  "source_digest": "9480f34c5b16081e04b2aaabd437d723f541cf623f35fd84b7bea5928409eaf6"
+  "source_digest": "84618a31575bf88e68ced9c42122fc310adc43f2dc7c9b680c3dc70d864f7558"
 }
 </script>
 <script>
