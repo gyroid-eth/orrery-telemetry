@@ -3,18 +3,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
-import sys
-
-import dashboard.provider_server  # noqa: F401 - loads the optional provider runtime
 
 
-gemini_runtime = sys.modules["_orrery_provider_dashboard_gemini"]
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _ui_helpers() -> str:
+    source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
+    helpers = re.search(
+        r"/\* provider-capabilities:start \*/.*?/\* provider-capabilities:end \*/",
+        source, re.DOTALL)
+    assert helpers, "provider capability helpers missing"
+    return helpers.group(0)
 
 
 def _run_helper(provider: dict, expression: str):
     script = (
-        gemini_runtime._UI_HELPERS
+        _ui_helpers()
         + "\nconst provider="
         + json.dumps(provider)
         + ";\nprocess.stdout.write(JSON.stringify("
@@ -70,14 +77,12 @@ def test_engine_note_model_label_does_not_repeat_effort_suffix():
 
 
 def test_engine_note_uses_effort_free_display_model():
-    source = Path(gemini_runtime.__file__).with_name("index.html").read_text(encoding="utf-8")
-    patched, error = gemini_runtime.apply_ui_patches(source)
-    assert error == ""
+    source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
     assert (
         "const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);"
-        in patched
+        in source
     )
-    assert "displayModel,spmSelectedEffort" in patched
+    assert "displayModel,spmSelectedEffort" in source
 
 
 def test_other_provider_model_display_is_unchanged():

@@ -33663,7 +33663,7 @@
           "line": 704,
           "property": "font-size",
           "selector": "#spawnmd .spm-hint",
-          "value": "8px"
+          "value": "9px"
         },
         {
           "line": 707,
@@ -60215,7 +60215,7 @@
           "9e4dd25a15b3f9c8",
           "0c616722aaf23672",
           "964c7b3089b60d4d",
-          "a5e27f65cfaf3abd",
+          "3b15ac7c3bb86e5e",
           "1a06bd51691dd1b8",
           "9d53cf2f7a2fa6ab",
           "bb6aa713547da448",
@@ -60555,9 +60555,9 @@
     },
     "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
     "schema_version": 1,
-    "source_digest": "38644f732eee4fc4f2bf4a02b8dc64ce81f13849e33a0b5024d5152627b640b8"
+    "source_digest": "d9894fb19639827915b454af98f7aac1ce87097ff65a87e62b78c244e8793493"
   },
   "schema_version": 1,
   "source": "dashboard/index.html",
-  "source_digest": "38644f732eee4fc4f2bf4a02b8dc64ce81f13849e33a0b5024d5152627b640b8"
+  "source_digest": "d9894fb19639827915b454af98f7aac1ce87097ff65a87e62b78c244e8793493"
 }

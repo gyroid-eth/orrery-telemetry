@@ -547,222 +547,6 @@ def _write_task_file(base: Any, task: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Capability-driven modal controls
-# --------------------------------------------------------------------------- #
-_UI_HELPERS = """/* provider-capabilities:start */
-let spmWorktreeForced=false,spmWorktreeChoice=false;
-function spawnSelectedProviderCapabilities(){
-  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
-  return provider&&provider.capabilities||{};
-}
-function spawnProviderAcceptsResources(caps){
-  return !!(caps&&(caps.resources_required||caps.resources));
-}
-function spawnProviderDisplayModelLabel(provider,modelId){
-  const id=String(modelId||'').trim();
-  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
-  const caps=provider&&provider.capabilities||{};
-  if(!caps.effort_required)return id;
-  for(const effort of efforts){
-    const value=String(effort||'').trim();
-    const suffix=value?`-${value}`:'';
-    if(suffix&&id.endsWith(suffix))return id.slice(0,-suffix.length);
-  }
-  return id;
-}
-function spawnProviderDisplayModels(provider){
-  const models=provider&&Array.isArray(provider.models)?provider.models:[];
-  const caps=provider&&provider.capabilities||{};
-  if(!caps.effort_required)return models;
-  const seen=new Set(),visible=[];
-  for(const model of models){
-    const id=String(model&&model.id||'').trim();
-    const label=spawnProviderDisplayModelLabel(provider,id);
-    if(seen.has(label))continue;
-    seen.add(label);
-    visible.push({...model,label});
-  }
-  return visible;
-}
-function spawnProviderRequirementsMet(){
-  const caps=spawnSelectedProviderCapabilities();
-  const input=SPM('spm-resources');
-  if(caps.resources_required&&
-     !(input&&input.value.split(',').some(item=>item.trim())))return false;
-  if(caps.effort_required&&!spmSelectedEffort)return false;
-  return true;
-}
-function applySpawnProviderCapabilities(provider){
-  const caps=provider&&provider.capabilities||{};
-  const acceptsResources=spawnProviderAcceptsResources(caps);
-  const row=SPM('spm-resources-row');
-  const input=SPM('spm-resources');
-  if(row)row.style.display=acceptsResources?'grid':'none';
-  if(input){
-    // Declarations belong to the provider that asked for them.
-    if(!acceptsResources)input.value='';
-    input.oninput=updateSpawnButton;
-  }
-  const worktree=SPM('spm-worktree');
-  if(worktree){
-    if(caps.worktree_required){
-      if(!spmWorktreeForced)spmWorktreeChoice=worktree.checked;
-      spmWorktreeForced=true;
-      worktree.checked=true;
-    }else if(spmWorktreeForced){
-      // Give back the isolation choice that was in place before forcing.
-      spmWorktreeForced=false;
-      worktree.checked=spmWorktreeChoice;
-    }
-    worktree.disabled=!!caps.worktree_required;
-    SPM('spm-wt-base').classList.toggle('on',worktree.checked);
-  }
-}
-function resetSpawnProviderCapabilities(){
-  spmWorktreeForced=false;spmWorktreeChoice=false;
-  if(SPM('spm-worktree'))SPM('spm-worktree').disabled=false;
-  if(SPM('spm-resources'))SPM('spm-resources').value='';
-  if(SPM('spm-resources-row'))SPM('spm-resources-row').style.display='none';
-}
-/* provider-capabilities:end */
-"""
-
-_UI_PATCHES: tuple[tuple[str, str, str], ...] = (
-    (
-        "resource row",
-        """          <div class="spm-row full">
-            <label class="spm-lab">isolation</label>""",
-        """          <div class="spm-row full" id="spm-resources-row" style="display:none">
-            <label class="spm-lab" for="spm-resources">resources</label>
-            <input type="text" id="spm-resources" placeholder="src/**,tests/**" autocomplete="off">
-            <div class="spm-hint">Comma-separated repository paths reserved for providers that require resource isolation.</div>
-          </div>
-          <div class="spm-row full">
-            <label class="spm-lab">isolation</label>""",
-    ),
-    (
-        "provider capability normalization",
-        """    return {id,label:String(provider&&provider.label||id).trim(),
-      models,defaultModel,efforts,
-      defaultEffort:String(provider&&provider.effort_default||'').trim()};""",
-        """    const capabilities=(provider&&provider.capabilities&&typeof provider.capabilities==='object')
-      ?provider.capabilities:{};
-    return {id,label:String(provider&&provider.label||id).trim(),
-      models,defaultModel,efforts,
-      defaultEffort:String(provider&&provider.effort_default||'').trim(),
-      capabilities};""",
-    ),
-    (
-        "effort-separated model cards",
-        """function renderSpawnModels(provider){
-  const root=SPM('spm-models');
-  const models=provider&&Array.isArray(provider.models)?provider.models:[];""",
-        """function renderSpawnModels(provider){
-  const root=SPM('spm-models');
-  const models=spawnProviderDisplayModels(provider);""",
-    ),
-    (
-        "effort-separated model labels",
-        """    const displayLabel=tone?(model.label||model.id):model.id;""",
-        """    const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
-      ?(model.label||model.id):(tone?(model.label||model.id):model.id);""",
-    ),
-    (
-        "effort-separated engine note",
-        """function renderSpawnEngineNote(){
-  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
-  const parts=[provider&&provider.label||spmSelectedProvider,
-    spmSelectedModel,spmSelectedEffort].filter(Boolean);""",
-        """function renderSpawnEngineNote(){
-  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
-  const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);
-  const parts=[provider&&provider.label||spmSelectedProvider,
-    displayModel,spmSelectedEffort].filter(Boolean);""",
-    ),
-    (
-        "provider selection",
-        """function selectSpawnProvider(providerId){
-  const provider=spmProviders.find(item=>item.id===providerId);
-  spmSelectedProvider=provider?provider.id:'';
-  spmSelectedModel='';
-  spmSelectedEffort='';
-""",
-        _UI_HELPERS + """function selectSpawnProvider(providerId){
-  const provider=spmProviders.find(item=>item.id===providerId);
-  spmSelectedProvider=provider?provider.id:'';
-  spmSelectedModel='';
-  spmSelectedEffort='';
-  applySpawnProviderCapabilities(provider);
-""",
-    ),
-    (
-        "explicit effort selection",
-        """  const fallback=efforts.includes(provider&&provider.defaultEffort)
-    ? provider.defaultEffort:(efforts[0]||'');
-  selectSpawnEffort(fallback);""",
-        """  const effortRequired=!!(provider&&provider.capabilities&&provider.capabilities.effort_required);
-  const fallback=effortRequired?'':(
-    efforts.includes(provider&&provider.defaultEffort)
-      ?provider.defaultEffort:(efforts[0]||''));
-  selectSpawnEffort(fallback);""",
-    ),
-    (
-        "effort button refresh",
-        """  hint.textContent=copy?`${spmSelectedEffort} · ${copy}`:'';
-  renderSpawnEngineNote();
-}""",
-        """  hint.textContent=copy?`${spmSelectedEffort} · ${copy}`:'';
-  renderSpawnEngineNote();
-  updateSpawnButton();
-}""",
-    ),
-    (
-        "launch readiness gate",
-        """  const identityReady=!spmSelectedName||spmIdentityState==='verified';
-  button.disabled=spmBusy||!spmReady||!identityReady;""",
-        """  const identityReady=!spmSelectedName||spmIdentityState==='verified';
-  const providerReady=spawnProviderRequirementsMet();
-  button.disabled=spmBusy||!spmReady||!identityReady||!providerReady;""",
-    ),
-    (
-        "resource payload",
-        """  if(spmSelectedEffort)payload.effort=spmSelectedEffort;
-  if(SPM('spm-worktree').checked){""",
-        """  if(spmSelectedEffort)payload.effort=spmSelectedEffort;
-  const resources=(SPM('spm-resources')&&SPM('spm-resources').value||'').trim();
-  if(spawnProviderAcceptsResources(spawnSelectedProviderCapabilities())&&resources)
-    payload.resources=resources;
-  if(SPM('spm-worktree').checked){""",
-    ),
-    (
-        "modal reset",
-        """  SPM('spm-worktree').checked=false;
-  SPM('spm-wt-base').classList.remove('on');""",
-        """  SPM('spm-worktree').checked=false;
-  resetSpawnProviderCapabilities();
-  SPM('spm-wt-base').classList.remove('on');""",
-    ),
-)
-
-
-def apply_ui_patches(text: str) -> tuple[str, str]:
-    """Apply every modal patch or none of them.
-
-    Returns ``(patched, "")`` on success and ``(text, error)`` when any target
-    is missing or ambiguous, so a drifted page is served unmodified instead of
-    with a partial provider integration.
-    """
-    patched = text
-    for label, old, new in _UI_PATCHES:
-        count = patched.count(old)
-        if count != 1:
-            state = "missing" if count == 0 else "ambiguous"
-            return text, f"dashboard UI patch target {state}: {label}"
-        patched = patched.replace(old, new, 1)
-    return patched, ""
-
-
-# --------------------------------------------------------------------------- #
 # Installation into the provider-aware dashboard
 # --------------------------------------------------------------------------- #
 class _Integration:
@@ -792,7 +576,11 @@ class _Integration:
                 return self._ui_error
         try:
             with open(path, encoding="utf-8") as handle:
-                _patched, error = apply_ui_patches(handle.read())
+                source = handle.read()
+            error = ""
+            if ("/* provider-capabilities:start */" not in source or
+                    'id="spm-resources-row"' not in source):
+                error = "dashboard core lacks provider capability controls"
         except (OSError, UnicodeDecodeError) as exc:
             error = f"dashboard index unavailable: {exc}"
         with self._lock:
@@ -912,24 +700,6 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
     base.do_spawn = do_spawn
 
 
-def _install_render(base: Any, integration: _Integration) -> None:
-    original = base._render_dashboard_index
-
-    def _render_dashboard_index(source: bytes, *args: Any, **kwargs: Any) -> bytes:
-        rendered = original(source, *args, **kwargs)
-        try:
-            text = rendered.decode("utf-8")
-        except UnicodeDecodeError:
-            return rendered
-        patched, error = apply_ui_patches(text)
-        if error:
-            integration.report(error)
-            return rendered
-        return patched.encode("utf-8")
-
-    base._render_dashboard_index = _render_dashboard_index
-
-
 def install(base: Any) -> Any:
     if getattr(base, "_GEMINI_PROVIDER_RUNTIME_INSTALLED", False):
         return base
@@ -942,6 +712,5 @@ def install(base: Any) -> Any:
     integration = _Integration(base)
     _install_catalog(base, integration)
     _install_spawn(base, integration)
-    _install_render(base, integration)
     base._GEMINI_PROVIDER_RUNTIME_INSTALLED = True
     return base

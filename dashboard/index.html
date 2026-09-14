@@ -701,7 +701,7 @@
   /* Generic one-line hint under a modal control (used by optional
      provider rows such as resources): same stamp as .spm-name-hint. */
   #spawnmd .spm-hint{margin-top:4px;color:var(--ink-faint);
-    font-family:var(--mono);font-size:8px;letter-spacing:.04em;line-height:1.5}
+    font-family:var(--mono);font-size:9px;letter-spacing:.04em;line-height:1.5}
   #spawnmd .spm-shuffle{margin-left:auto;border:1px solid var(--hair);
     border-radius:999px;background:transparent;color:var(--ink-dim);
     padding:6px 9px;font-family:var(--mono);font-size:8px;
@@ -2708,6 +2708,11 @@ OFF = legacy snapshot+comet mode">
         <label class="spm-lab" for="spm-task">task description</label>
         <textarea id="spm-task" maxlength="4000" rows="6"
           placeholder="What should the child do? (becomes the inbox message body)"></textarea>
+      </div>
+      <div class="spm-row full" id="spm-resources-row" style="display:none">
+        <label class="spm-lab" for="spm-resources">resources</label>
+        <input type="text" id="spm-resources" placeholder="src/**,tests/**" autocomplete="off">
+        <div class="spm-hint">Comma-separated repository paths reserved for providers that require resource isolation.</div>
       </div>
       <details class="spm-row full spm-advanced" id="spm-advanced">
         <summary>
@@ -28192,7 +28197,7 @@ OFF = legacy snapshot+comet mode">
         "9e4dd25a15b3f9c8",
         "0c616722aaf23672",
         "964c7b3089b60d4d",
-        "a5e27f65cfaf3abd",
+        "3b15ac7c3bb86e5e",
         "1a06bd51691dd1b8",
         "9d53cf2f7a2fa6ab",
         "bb6aa713547da448",
@@ -28532,7 +28537,7 @@ OFF = legacy snapshot+comet mode">
   },
   "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
   "schema_version": 1,
-  "source_digest": "38644f732eee4fc4f2bf4a02b8dc64ce81f13849e33a0b5024d5152627b640b8"
+  "source_digest": "d9894fb19639827915b454af98f7aac1ce87097ff65a87e62b78c244e8793493"
 }
 </script>
 <script>
@@ -34003,7 +34008,9 @@ function updateSpawnButton(){
   const button=SPM('spm-spawn');
   if(!button)return;
   const identityReady=!spmSelectedName||spmIdentityState==='verified';
-  button.disabled=spmBusy||!spmReady||!identityReady;
+  const providerReady=spawnProviderRequirementsMet();
+  button.disabled=spmBusy||!spmReady||!identityReady||!providerReady;
+  updateSpawnProviderRequirementStatus();
 }
 
 function populateParentSelect(){
@@ -34458,12 +34465,122 @@ function normalizeSpawnProviders(catalog){
     const efforts=[...new Set((Array.isArray(provider&&provider.efforts)
       ? provider.efforts:[]).map(value=>String(value||'').trim())
       .filter(Boolean))];
+    const rawCapabilities=provider&&provider.capabilities;
+    const capabilities=(rawCapabilities&&typeof rawCapabilities==='object'&&
+      !Array.isArray(rawCapabilities))?rawCapabilities:{};
     return {id,label:String(provider&&provider.label||id).trim(),
       models,defaultModel,efforts,
-      defaultEffort:String(provider&&provider.effort_default||'').trim()};
+      defaultEffort:String(provider&&provider.effort_default||'').trim(),
+      capabilities};
   }).filter(provider=>/^[a-z][a-z0-9_-]*$/.test(provider.id)&&
     provider.models.length);
 }
+
+/* provider-capabilities:start */
+let spmWorktreeForced=false,spmWorktreeChoice=false;
+let spmProviderRequirementStatus=false;
+function spawnSelectedProviderCapabilities(){
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  return provider&&provider.capabilities||{};
+}
+function spawnProviderAcceptsResources(caps){
+  return !!(caps&&(caps.resources_required||caps.resources));
+}
+function spawnProviderDisplayModelLabel(provider,modelId){
+  const id=String(modelId||'').trim();
+  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  const caps=provider&&provider.capabilities||{};
+  if(!caps.effort_required)return id;
+  for(const effort of efforts){
+    const value=String(effort||'').trim();
+    const suffix=value?`-${value}`:'';
+    if(suffix&&id.endsWith(suffix))return id.slice(0,-suffix.length);
+  }
+  return id;
+}
+function spawnProviderDisplayModels(provider){
+  const models=provider&&Array.isArray(provider.models)?provider.models:[];
+  const caps=provider&&provider.capabilities||{};
+  if(!caps.effort_required)return models;
+  const seen=new Set(),visible=[];
+  for(const model of models){
+    const id=String(model&&model.id||'').trim();
+    const label=spawnProviderDisplayModelLabel(provider,id);
+    if(seen.has(label))continue;
+    seen.add(label);
+    visible.push({...model,label});
+  }
+  return visible;
+}
+function spawnProviderRequirementsMissing(){
+  const caps=spawnSelectedProviderCapabilities();
+  const input=SPM('spm-resources');
+  if(caps.resources_required&&
+     !(input&&input.value.split(',').some(item=>item.trim())))
+    return 'resources are required for this provider';
+  if(caps.effort_required&&!spmSelectedEffort)
+    return 'select an effort for this provider';
+  return '';
+}
+function spawnProviderRequirementsMet(){
+  return !spawnProviderRequirementsMissing();
+}
+function updateSpawnProviderRequirementStatus(){
+  const missing=spawnProviderRequirementsMissing();
+  const stat=SPM('spm-stat');
+  if(!stat||spmBusy||!spmReady||stat.classList.contains('err'))return;
+  if(spmDraftRestored&&stat.textContent.startsWith('restored saved task draft'))return;
+  const requirementMessages=new Set([
+    'resources are required for this provider',
+    'select an effort for this provider'
+  ]);
+  const ownsStatus=spmProviderRequirementStatus&&
+    requirementMessages.has(stat.textContent);
+  const normalStatus=!stat.textContent||stat.textContent.startsWith('ready ·');
+  if(missing&&(ownsStatus||normalStatus)){
+    setSpawnStat(missing,'');
+    spmProviderRequirementStatus=true;
+  }else if(!missing&&ownsStatus){
+    spmProviderRequirementStatus=false;
+    setSpawnStat('ready · review the launch manifest','');
+  }else if(!missing){
+    spmProviderRequirementStatus=false;
+  }
+}
+function applySpawnProviderCapabilities(provider){
+  const caps=provider&&provider.capabilities||{};
+  const acceptsResources=spawnProviderAcceptsResources(caps);
+  const row=SPM('spm-resources-row');
+  const input=SPM('spm-resources');
+  if(row)row.style.display=acceptsResources?'grid':'none';
+  if(input){
+    // Declarations belong to the provider that asked for them.
+    if(!acceptsResources)input.value='';
+    input.oninput=updateSpawnButton;
+  }
+  const worktree=SPM('spm-worktree');
+  if(worktree){
+    if(caps.worktree_required){
+      if(!spmWorktreeForced)spmWorktreeChoice=worktree.checked;
+      spmWorktreeForced=true;
+      worktree.checked=true;
+    }else if(spmWorktreeForced){
+      // Give back the isolation choice that was in place before forcing.
+      spmWorktreeForced=false;
+      worktree.checked=spmWorktreeChoice;
+    }
+    worktree.disabled=!!caps.worktree_required;
+    SPM('spm-wt-base').classList.toggle('on',worktree.checked);
+  }
+}
+function resetSpawnProviderCapabilities(){
+  spmWorktreeForced=false;spmWorktreeChoice=false;
+  spmProviderRequirementStatus=false;
+  if(SPM('spm-worktree'))SPM('spm-worktree').disabled=false;
+  if(SPM('spm-resources'))SPM('spm-resources').value='';
+  if(SPM('spm-resources-row'))SPM('spm-resources-row').style.display='none';
+}
+/* provider-capabilities:end */
 
 const SPM_MODEL_TONES=Object.freeze({
   'gpt-5.6-sol':'deepest reasoning · hard problems',
@@ -34507,6 +34624,7 @@ function selectSpawnProvider(providerId){
   spmSelectedProvider=provider?provider.id:'';
   spmSelectedModel='';
   spmSelectedEffort='';
+  applySpawnProviderCapabilities(provider);
   SPM('spm-providers').querySelectorAll('.spm-provider-tab').forEach(btn=>{
     const on=btn.dataset.provider===spmSelectedProvider;
     btn.classList.toggle('on',on);
@@ -34518,12 +34636,13 @@ function selectSpawnProvider(providerId){
 
 function renderSpawnModels(provider){
   const root=SPM('spm-models');
-  const models=provider&&Array.isArray(provider.models)?provider.models:[];
+  const models=spawnProviderDisplayModels(provider);
   const fallback=models.some(model=>model.id===provider.defaultModel)
     ? provider.defaultModel:((models[0]||{}).id||'');
   root.innerHTML=models.map(model=>{
     const tone=spawnModelTone(provider&&provider.id||'',model.id);
-    const displayLabel=tone?(model.label||model.id):model.id;
+    const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
+      ?(model.label||model.id):(tone?(model.label||model.id):model.id);
     const catalogId=tone&&displayLabel!==model.id
       ? `<small>${esc(model.id)}</small>`:'';
     return `<button type="button" class="spm-chip spm-model-chip" `+
@@ -34568,8 +34687,10 @@ function renderSpawnEfforts(provider){
   root.querySelectorAll('.spm-effort-chip').forEach(btn=>{
     btn.onclick=()=>selectSpawnEffort(btn.dataset.effort);
   });
-  const fallback=efforts.includes(provider&&provider.defaultEffort)
-    ? provider.defaultEffort:(efforts[0]||'');
+  const effortRequired=!!(provider&&provider.capabilities&&provider.capabilities.effort_required);
+  const fallback=effortRequired?'':(
+    efforts.includes(provider&&provider.defaultEffort)
+      ?provider.defaultEffort:(efforts[0]||''));
   selectSpawnEffort(fallback);
 }
 
@@ -34587,12 +34708,14 @@ function selectSpawnEffort(effort){
   hint.hidden=!copy;
   hint.textContent=copy?`${spmSelectedEffort} · ${copy}`:'';
   renderSpawnEngineNote();
+  updateSpawnButton();
 }
 
 function renderSpawnEngineNote(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);
   const parts=[provider&&provider.label||spmSelectedProvider,
-    spmSelectedModel,spmSelectedEffort].filter(Boolean);
+    displayModel,spmSelectedEffort].filter(Boolean);
   SPM('spm-engine-note').textContent=parts.length
     ? parts.join(' · '):'provider · model';
 }
@@ -34624,9 +34747,9 @@ async function loadSpawnCatalog(seq){
     selectSpawnName('');
     renderSpawnProviders(providers);
     renderSpawnDirs(catalog.dirs);
+    setSpawnDraftStatus(spmDraftRestored);
     spmReady=true;
     updateSpawnButton();
-    setSpawnDraftStatus(spmDraftRestored);
   }catch(error){
     if(seq!==spmLoadSeq)return;
     spmReady=false;
@@ -34676,6 +34799,7 @@ function openSpawnModal(){
   };
   SPM('spm-role').value='';
   SPM('spm-worktree').checked=false;
+  resetSpawnProviderCapabilities();
   SPM('spm-wt-base').classList.remove('on');
   SPM('spm-worktree-base').value='';
   spmBusy=false;spmReady=false;spmSelectedName='';
@@ -34760,6 +34884,9 @@ function buildSpawnPayload(){
      spmNameStatus.get(spmSelectedName)==='available')
     payload.name=spmSuggestedName;
   if(spmSelectedEffort)payload.effort=spmSelectedEffort;
+  const resources=(SPM('spm-resources')&&SPM('spm-resources').value||'').trim();
+  if(spawnProviderAcceptsResources(spawnSelectedProviderCapabilities())&&resources)
+    payload.resources=resources;
   if(SPM('spm-worktree').checked){
     payload.worktree=true;
     const base=SPM('spm-worktree-base').value.trim();

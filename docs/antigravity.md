@@ -163,10 +163,13 @@ the parent automatically, so the Dashboard sends no separate task mail for an
 Antigravity child. Launch status, `/api/spawn-status`, and
 `dashboard/logs/spawn.log` record `provider=gemini`.
 
-If the Dashboard page no longer matches what the extension expects, the page is
-served unmodified, the Antigravity tab is omitted, and Antigravity spawn
-requests fail closed; the reason is written to the Dashboard log. Claude and
-Codex are unaffected, including when the extension itself cannot be loaded.
+The core Dashboard modal interprets the provider `capabilities` contract. The
+optional payload only adds the Antigravity catalog item and its `/api/spawn`
+branch; it does not rewrite the page while serving it. If the core page lacks
+the capability marker or resources control, the Antigravity tab is omitted and
+Antigravity spawn requests fail closed; the reason is written to the Dashboard
+log. Claude and Codex are unaffected, including when the extension itself
+cannot be loaded.
 
 ## Dashboard controls
 

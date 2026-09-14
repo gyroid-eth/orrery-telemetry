@@ -156,7 +156,7 @@ NEW AGENT、agent detail、edge thread drawer は同じガラス材を共有し�
 - body は 2 列 grid（間隔 12px 16px、padding 18px 19px）で主要 4 節は全幅。identity / engine / directory は `--hair` の枠と角丸 10px、黒系 30% の地、padding 12px。task は枠なし。節ラベルは 8.5px / .14em で、左に 11×1px の amber の短い線（`▸` ではありません）
 - identity は任意。AUTO NAME の preview（44px の丸 portrait）と横 scroll の scientist 列（幅 68px、42px の丸 portrait、角丸 8px）。選択は amber 22% の地と 55% の枠、使えないものは opacity .3
 - engine は provider の tab（最小幅 108px）と model の card（最小幅 155px、間隔 7px）、必要な provider には effort の chip。選択肢は catalog から来るので固定で列挙しません
-- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。入力は 13px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
+- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。選択した provider が resources を求める場合だけ task の直下に resources 行を出し、表示時は必須なので折りたたまれた ADVANCED の外に置きます。入力は 13px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
 - 4 節の下に折りたたみの ADVANCED。foot は上に罫線、padding 13px 19px。CANCEL は hairline の枠だけ、SPAWN は透明に amber 40% の枠で、hover / focus で amber に塗る。主操作を常時塗らないのは、塗りを「押せる」合図に取っておくためです
 - 背景クリック、`Esc`、× で閉じます（送信中は閉じない）。現状: 閉じたあとの focus 復帰は未実装です。破壊的操作（KILL / EXIT）は card 上では 2 段階（arm → confirm、5 秒で解除）です。現状: detail にも EXIT があり、こちらは 1 段階で送信します。原則は 2 段階で、detail 側は追いついていません
 
