@@ -82,6 +82,24 @@ open http://127.0.0.1:8770/
 
 **成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。
 
+### 同時に動かす agent 数を決める
+
+最初は、親を含めて **2 体** を上限にすることを勧めます。
+親が 1 体動いている間に、child を 1 体だけ同時に動かせる設定です。
+
+WSL2 に 1 GiB を割り当てた確認では、親を含めて 3 体にした時点で swap の使用量が大きくなりました。
+必要なメモリは model、MCP、作業 directory によって変わるため、2 体は安全性を保証する値ではなく、様子を見るための出発点です。
+child をさらに 1 体並行で動かす必要がある場合だけ、実際のメモリと swap に余裕があることを確かめて 3 に増やします。
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+すでに install 済みなら、同じように環境変数を付けて installer を再実行します。
+この数は child だけでなく、親、child、dashboard から再開した agent を合計した数です。
+詳しい数え方と変更方法は[設定の「同時に動かす agent 数」](docs/configuration.md#同時に動かす-agent-数)を参照してください。
+
 ### 5. しりとりで通しの確認をする
 
 install が本当にできたかを一度に確かめるには、Claude Code と Codex の child にしりとりをさせるのが手軽です。名前の登録、ORRERY Mail の往復、通知の差し込み、dashboard の描画がすべて動いていないと、しりとりは一巡もしません。

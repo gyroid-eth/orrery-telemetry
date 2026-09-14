@@ -12,6 +12,13 @@ fi
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+release_running_agent_capacity() {
+    local lease="${AGENTSTACK_RUNNING_AGENT_LEASE:-}"
+    [[ -n "$lease" ]] || return 0
+    [[ -f "$HOOKS_DIR/running_agent_capacity.sh" ]] || return 0
+    AGENTSTACK_RUNNING_AGENT_LEASE="$lease" \
+        bash "$HOOKS_DIR/running_agent_capacity.sh" release >/dev/null 2>&1 || true
+}
 PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
 # shellcheck disable=SC1090
 . "$PROJECT_CONTEXT_LIB"
@@ -86,6 +93,11 @@ if [[ ! "$AGENT_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     # Reject path separators instead of normalizing an API identity.
     exit 0
 fi
+
+# A child claims its capacity slot before the CLI begins. Cleanup is reached
+# after that CLI exits, so release here rather than waiting for reconciliation
+# on the next launch attempt.
+trap release_running_agent_capacity EXIT
 
 STATE_FILE="$STATE_DIR/${AGENT_NAME}.json"
 TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"

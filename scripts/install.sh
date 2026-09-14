@@ -50,6 +50,9 @@ CODEX_BIN_SETTING="${AGENTSTACK_CODEX_BIN:-}"
 PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
 CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
+# Empty keeps the historical unlimited behavior. A set value is shared by
+# launchers and the Dashboard service through env.sh and service definitions.
+MAX_RUNNING_AGENTS_SETTING="${AGENTSTACK_MAX_RUNNING_AGENTS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -286,6 +289,13 @@ if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
 fi
 if [[ -z "$CODEX_MODELS_SETTING" ]]; then
   CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")"
+fi
+if [[ -z "$MAX_RUNNING_AGENTS_SETTING" ]]; then
+  MAX_RUNNING_AGENTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_MAX_RUNNING_AGENTS "$INSTALL_DIR/env.sh")"
+fi
+if [[ -n "$MAX_RUNNING_AGENTS_SETTING" && ! "$MAX_RUNNING_AGENTS_SETTING" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: AGENTSTACK_MAX_RUNNING_AGENTS must be a positive integer" >&2
+  exit 2
 fi
 
 HOOKS_DIR="$INSTALL_DIR/hooks"
@@ -1084,6 +1094,8 @@ validate_repo_assets() {
   [[ -f "$REPO_ROOT/dashboard/scientist_portraits.json" ]] || die "missing dashboard/scientist_portraits.json"
   if [[ "$TIER" != "tier0" ]]; then
     [[ -f "$REPO_ROOT/hooks/check-file-reservation.sh" ]] || die "missing hooks/check-file-reservation.sh"
+    [[ -f "$REPO_ROOT/hooks/running_agent_capacity.py" ]] || die "missing hooks/running_agent_capacity.py"
+    [[ -f "$REPO_ROOT/hooks/running_agent_capacity.sh" ]] || die "missing hooks/running_agent_capacity.sh"
     [[ -f "$REPO_ROOT/hooks/settings.template.json" ]] || die "missing hooks/settings.template.json"
     [[ -d "$REPO_ROOT/skills" ]] || die "missing skills directory"
     [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
@@ -1752,6 +1764,7 @@ values = {
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_MAX_RUNNING_AGENTS": "$MAX_RUNNING_AGENTS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -2685,6 +2698,7 @@ repl = {
     "__PORTRAITS_DIR__": "$PORTRAITS_DIR_SETTING",
     "__CUSTOM_PORTRAITS__": "$CUSTOM_PORTRAITS_SETTING",
     "__CODEX_MODELS__": "$CODEX_MODELS_SETTING",
+    "__MAX_RUNNING_AGENTS__": "$MAX_RUNNING_AGENTS_SETTING",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
     "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
@@ -2751,6 +2765,7 @@ env = {
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_MAX_RUNNING_AGENTS": "$MAX_RUNNING_AGENTS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -3153,6 +3168,7 @@ manifest = {
         "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+        "AGENTSTACK_MAX_RUNNING_AGENTS": "$MAX_RUNNING_AGENTS_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",

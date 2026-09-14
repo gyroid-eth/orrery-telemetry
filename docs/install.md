@@ -43,6 +43,17 @@ cd orrery-telemetry
 
 `--project-key` には、agent たちに作業させる project の絶対パスを渡します（この repository の checkout ではありません）。初回は必須で、未指定なら installer は何も書かずに停止します。2 回目以降は前回の値を `~/.agentstack/env.sh` から引き継ぐので省略できます。
 
+親を含めて同時に動かす agent 数を制限する場合は、installer に `AGENTSTACK_MAX_RUNNING_AGENTS` を渡します。
+親 1 体と child 1 体から始めるなら `2` です。
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+値は `env.sh` と dashboard service に保存されます。
+詳しい数え方と増やす判断は[設定](configuration.md#同時に動かす-agent-数)を参照してください。
+
 installer は途中で 3 つの変更を preview し、それぞれ `yes` を求めます。
 
 1. Claude Code の MCP 登録（`~/.claude.json` に `orrery-mail` を追加）

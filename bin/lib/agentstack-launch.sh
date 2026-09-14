@@ -8,6 +8,9 @@
 #   ags_resolve_tmux        print the tmux binary path (or empty)
 #   ags_abspath DIR         print the absolute path of DIR
 #   ags_choose_dir [DIR]    resolve the working dir (arg / fzf picker / cwd)
+#   ags_reserve_running_agent_slot PURPOSE
+#   ags_claim_running_agent_slot PROGRAM SESSION TMUX
+#   ags_release_running_agent_slot
 #
 # Env it honours:
 #   AGENTSTACK_HOME       install dir (default ~/.agentstack); env.sh lives here
@@ -82,4 +85,58 @@ ags_choose_dir() {
   echo "$AGS_PROG: fzf not installed; using current directory ($PWD)" >&2
   echo "          pass a path ($AGS_PROG DIR) or install fzf to browse a vault" >&2
   return 0
+}
+
+# The cap is implemented in hooks so Dashboard and every shell launcher use
+# the same lock and state file.  Keep this wrapper in the launcher library so
+# top-level Claude, Codex, and Antigravity starts all reserve before they make
+# an ORRERY Mail registration.
+ags_running_agent_capacity_control() {
+  local hooks_dir lib_dir install_root
+  hooks_dir="${AGENTSTACK_HOOKS_DIR:-}"
+  if [[ -z "$hooks_dir" ]]; then
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    install_root="$(cd "$lib_dir/../.." && pwd)"
+    hooks_dir="$install_root/hooks"
+  fi
+  printf '%s\n' "$hooks_dir/running_agent_capacity.sh"
+}
+
+ags_reserve_running_agent_slot() {
+  local purpose="$1" control lease
+  AGENTSTACK_RUNNING_AGENT_LEASE=""
+  export AGENTSTACK_RUNNING_AGENT_LEASE
+  [[ -n "${AGENTSTACK_MAX_RUNNING_AGENTS:-}" ]] || return 0
+  control="$(ags_running_agent_capacity_control)"
+  if [[ ! -f "$control" ]]; then
+    printf '%s: running-agent limit is configured, but the helper is missing: %s\n' \
+      "$AGS_PROG" "$control" >&2
+    return 1
+  fi
+  if ! lease="$(bash "$control" reserve "$purpose")"; then
+    return 1
+  fi
+  AGENTSTACK_RUNNING_AGENT_LEASE="$lease"
+  export AGENTSTACK_RUNNING_AGENT_LEASE
+}
+
+ags_claim_running_agent_slot() {
+  local program="$1" session="$2" tmux_bin="$3" control
+  [[ -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]] || return 0
+  control="$(ags_running_agent_capacity_control)"
+  [[ -f "$control" ]] || {
+    printf '%s: running-agent limit helper is missing: %s\n' "$AGS_PROG" "$control" >&2
+    return 1
+  }
+  bash "$control" claim "$program" "$session" "$tmux_bin" >/dev/null
+}
+
+ags_release_running_agent_slot() {
+  local control
+  [[ -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]] || return 0
+  control="$(ags_running_agent_capacity_control)"
+  [[ -f "$control" ]] || return 1
+  bash "$control" release >/dev/null
+  AGENTSTACK_RUNNING_AGENT_LEASE=""
+  export AGENTSTACK_RUNNING_AGENT_LEASE
 }

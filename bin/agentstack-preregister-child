@@ -32,6 +32,68 @@ REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}
 # shellcheck disable=SC1090
 . "$REGISTER_LIB"
 
+# A direct /delegate flow registers before it asks spawn_child.sh to create
+# tmux.  Reserve here, rather than in the later spawner, so a full limit does
+# not leave an identity that never received a process.  The one-shot lease is
+# carried next to the already one-shot token file; it is never printed.
+CAPACITY_CONTROL="${AGENTSTACK_HOOKS_DIR:-$SCRIPT_DIR/../hooks}/running_agent_capacity.sh"
+CAPACITY_LEASE=""
+CAPACITY_HANDOFF_FILE=""
+CAPACITY_HANDED_IN=false
+
+capacity_acquire() {
+  local lease
+  if [[ "${AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF:-}" == "1" \
+      && -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]]; then
+    CAPACITY_LEASE="$AGENTSTACK_RUNNING_AGENT_LEASE"
+    CAPACITY_HANDED_IN=true
+  else
+    # A delegated child inherits the parent's environment.  Its lease cannot
+    # be reused for a new child unless a launcher explicitly marked a handoff.
+    unset AGENTSTACK_RUNNING_AGENT_LEASE
+    if [[ -n "${AGENTSTACK_MAX_RUNNING_AGENTS:-}" ]]; then
+      [[ -f "$CAPACITY_CONTROL" ]] || {
+        printf '%s: running-agent limit helper is missing: %s\n' \
+          "$PROG" "$CAPACITY_CONTROL" >&2
+        return 1
+      }
+      lease="$(bash "$CAPACITY_CONTROL" reserve "child-preregister")" || return 1
+      CAPACITY_LEASE="$lease"
+    fi
+  fi
+  unset AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF
+  export AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE"
+}
+
+capacity_release() {
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+    bash "$CAPACITY_CONTROL" release >/dev/null 2>&1 || true
+  CAPACITY_LEASE=""
+  unset AGENTSTACK_RUNNING_AGENT_LEASE
+}
+
+capacity_write_handoff() {
+  local temporary
+  [[ "$CAPACITY_HANDED_IN" == true ]] && return 0
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  CAPACITY_HANDOFF_FILE="${token_file_out}.running-agent-lease"
+  temporary="${CAPACITY_HANDOFF_FILE}.$$"
+  ( umask 077 && printf '%s\n' "$CAPACITY_LEASE" > "$temporary" ) || return 1
+  chmod 600 "$temporary" 2>/dev/null || true
+  mv "$temporary" "$CAPACITY_HANDOFF_FILE"
+  chmod 600 "$CAPACITY_HANDOFF_FILE" 2>/dev/null || true
+}
+
+capacity_cleanup() {
+  local status="$1"
+  if [[ "$status" -ne 0 ]]; then
+    capacity_release
+    [[ -n "${CAPACITY_HANDOFF_FILE:-}" ]] && rm -f "$CAPACITY_HANDOFF_FILE"
+  fi
+  return "$status"
+}
+
 usage() {
   cat >&2 <<'EOF'
 Usage: agentstack-preregister-child --project-key <path> [--name <agent>] \
@@ -93,6 +155,11 @@ done
 [[ -n "$program" ]] || die "--program is required"
 [[ -n "$model" ]] || die "--model is required"
 [[ -n "$token_file_out" ]] || die "--token-file-out is required"
+
+if ! capacity_acquire; then
+  die "could not reserve a running-agent slot"
+fi
+trap 'capacity_cleanup $?' EXIT
 
 ags_mail_load_token
 
@@ -171,5 +238,9 @@ chmod 600 "$token_file_out" 2>/dev/null || true
 
 ags_store_registration_token "$registered" "$effective_token" || true
 ags_apply_contact_policy "$project_key" "$registered" "$effective_token"
+
+if ! capacity_write_handoff; then
+  die "could not write the running-agent slot handoff"
+fi
 
 printf '%s\n' "$registered"

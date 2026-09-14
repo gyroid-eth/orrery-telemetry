@@ -40,6 +40,7 @@
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:` 区切りの spawn directory preset |
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:` 区切りの directory typeahead 許可 root |
 | `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,` 区切りの dashboard Codex model allow-list |
+| `AGENTSTACK_MAX_RUNNING_AGENTS` | 未設定 | 同じ runtime で同時に動かす agent CLI process の上限 |
 
 path 系は `~` を展開します。空文字は未設定として扱います。integer の `AGENTSTACK_PORT` が不正なら `8770` に戻ります。
 
@@ -51,6 +52,63 @@ murmur の言語は `?lang=ja` / `?lang=en`、`AGENTSTACK_LANG`、browser の
 Murmur switch でも on / off を切り替えられ、その選択は browser に保存されます
 （優先順は URL、browser の保存値、service 既定）。環境変数を
 常駐 service に反映するには、設定後に installer を再実行してください。
+
+## 同時に動かす agent 数
+
+`AGENTSTACK_MAX_RUNNING_AGENTS` は、同じ `AGENTSTACK_RUNTIME_DIR` を使う ORRERY が同時に起動できる agent の上限です。
+値には 1 以上の整数を指定します。
+未設定のままなら、従来どおり上限はありません。
+`0` や文字列は指定できません。
+
+ここで数える「動いている agent」は、ORRERY が管理している Claude Code、Codex、Antigravity の CLI process です。
+top-level launcher で起動した親、`/delegate` で起動した child、dashboard の RESUME で新しく起動した agent を、すべて合計します。
+child だけに別の上限を設ける設定ではありません。
+
+次は上限に含めません。
+
+- ORRERY Mail の active / retired 表示や、履歴に残っている agent
+- Mail watcher
+- 終了済みの tmux session
+- すでに動いている tmux session を dashboard から OPEN TMUX する操作
+
+OPEN TMUX は新しい process を起動しないため、枠を新たに使いません。
+その session がまだ agent を動かしている場合は、すでに上限の 1 体として数えられています。
+
+上限に達したとき、`/delegate`、dashboard の NEW AGENT、dashboard の RESUME、top-level launcher は新しい agent を起動しません。
+dashboard は `running_agent_limit_reached` と現在数・上限を返し、入力済みの内容を残して理由を表示します。
+runtime の状態や tmux process を確認できないときも、新しい agent は起動しません。
+これは、確認できないときに上限をすり抜けないためです。
+
+この設定は、待ち行列、自動停止、自動再開を追加しません。
+上限に達したら、利用者が既存 agent を終了するか、設定値を見直してから改めて起動します。
+
+### 最初の値
+
+まずは必要な並行作業の数を、親も含めて数えます。
+
+| 使い方 | 設定の出発点 | 意味 |
+| --- | --- | --- |
+| 親だけを動かす | `1` | child は起動しない |
+| 親 1 体と child 1 体を同時に動かす | `2` | ふだんの最初の設定として推奨 |
+| 親 1 体と child 2 体を同時に動かす | `3` | 実際のメモリと swap に余裕があることを確認してから増やす |
+
+WSL2 に 1 GiB を割り当てた確認では、親を含めて 3 体にした時点で swap の使用量が大きくなりました。
+そのため、この環境では `2` から始めることを勧めます。
+model、MCP、作業 directory、別の常駐 process によって必要なメモリは変わるため、この値は安全性を保証するものではありません。
+上限を増やすときは 1 ずつ増やし、実際のメモリと swap の変化を見ます。
+
+設定は installer に渡して保存します。
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+すでに install 済みなら、値を変えて同じ installer を再実行します。
+shell だけで `export` しても、常駐している dashboard service には届きません。
+
+上限は project ごとではなく runtime ごとです。
+同じ `AGENTSTACK_RUNTIME_DIR` を共有する別 project の agent も、同じ上限に数えます。
 
 ## Project key がない場合
 
@@ -107,6 +165,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | Output index の `:` 区切り走査 root。env / service / manifest へ保存 |
 | `AGENTSTACK_LANG` | 未設定 | murmur の `ja` / `en` override。未設定時は browser 判定 |
 | `AGENTSTACK_MURMUR` | 未設定 | `off` で murmur を無効化 |
+| `AGENTSTACK_MAX_RUNNING_AGENTS` | 未設定 | runtime 内で同時に動かす agent CLI process の上限。1 以上の整数 |
 | `AGENTSTACK_PORT` | `8770` | dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | service label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |

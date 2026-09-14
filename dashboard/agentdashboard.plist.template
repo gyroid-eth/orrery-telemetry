@@ -72,6 +72,8 @@
     <string>__CUSTOM_PORTRAITS__</string>
     <key>AGENTSTACK_CODEX_MODELS</key>
     <string>__CODEX_MODELS__</string>
+    <key>AGENTSTACK_MAX_RUNNING_AGENTS</key>
+    <string>__MAX_RUNNING_AGENTS__</string>
     <key>AGENTSTACK_HOOKS_DIR</key>
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>

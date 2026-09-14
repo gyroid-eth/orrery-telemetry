@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -272,6 +273,88 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     assert calls[2][1]["sender_token"] == "parent-owner-token"
     assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", "gpt-5.6-sol", "--effort", "high", "work", str(tmp_path)]
+
+
+def test_dashboard_limit_is_checked_before_registering_a_child(monkeypatch, tmp_path):
+    launcher = tmp_path / "spawn_child.sh"
+    launcher.write_text("#!/bin/bash\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    registered = []
+    monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    monkeypatch.setattr(
+        server,
+        "_reserve_running_agent_slot",
+        lambda _: {
+            "ok": False,
+            "code": "running_agent_limit_reached",
+            "error": "running-agent limit reached: 2 running, limit 2",
+            "running": 2,
+            "limit": 2,
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "_mcp_call",
+        lambda *args, **kwargs: registered.append((args, kwargs)),
+    )
+    spec = server.SpawnLaunchSpec(
+        provider="claude", program="claude-code", model="claude-sonnet-5",
+        script=str(launcher),
+    )
+
+    result = server.spawn_with_launch_spec({
+        "parent": "Parent", "name": "Sunny-Curie", "task": "work",
+        "dir": str(tmp_path),
+    }, spec)
+
+    assert result == {
+        "ok": False,
+        "error": "running-agent limit reached: 2 running, limit 2",
+        "code": "running_agent_limit_reached",
+        "running": 2,
+        "limit": 2,
+    }
+    assert registered == []
+
+
+def test_dashboard_claim_shell_uses_the_tmux_pane_pid_at_runtime():
+    shell = server._running_agent_claim_shell(
+        "abcdefghijklmno", "Sunny-Curie", "codex"
+    )
+
+    assert "--pane-pid $$" in shell
+    assert "--pane-pid '$$'" not in shell
+
+
+def test_dashboard_resume_releases_the_slot_when_the_cli_exits(monkeypatch, tmp_path):
+    """The shell that starts a resume returns the CLI status after release."""
+    transcript = tmp_path / "12345678-1234-1234-1234-123456789abc.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    captured = []
+    monkeypatch.setattr(server, "_agent_program", lambda _: "claude-code")
+    monkeypatch.setattr(server, "_transcript_path", lambda _: str(transcript))
+    monkeypatch.setattr(server, "_transcript_cwd", lambda _: str(tmp_path))
+    monkeypatch.setattr(server, "ABS_CLAUDE", sys.executable)
+    monkeypatch.setattr(
+        server,
+        "_reserve_running_agent_slot",
+        lambda _: {"ok": True, "lease_id": "abcdefghijklmno"},
+    )
+    monkeypatch.setattr(
+        server,
+        "_open_terminal_tmux",
+        lambda args, **kwargs: (captured.append(args), {"ok": True, "adapter": "test"})[1],
+    )
+
+    result = server.do_resume("Sunny-Curie")
+
+    assert result["ok"] is True
+    inner = captured[0][-1]
+    assert "_agentstack_resume_status=$?" in inner
+    assert "release --lease abcdefghijklmno" in inner
+    assert "exit $_agentstack_resume_status" in inner
 
 
 def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path):

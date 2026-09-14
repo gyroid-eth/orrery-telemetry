@@ -40,10 +40,68 @@ Its file mode is `0600`. Service environment is written into the launchd plist /
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:`-separated spawn-directory presets |
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:`-separated roots allowed for directory typeahead |
 | `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,`-separated dashboard Codex model allowlist |
+| `AGENTSTACK_MAX_RUNNING_AGENTS` | unset | Maximum agent CLI processes running in the same runtime |
 
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
 
 The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTACK_LANG`, then browser `navigator.language` / `navigator.languages`. A Japanese `ja` locale selects Japanese; all others select English. `?murmur=on` / `?murmur=off` overrides the service default for that URL only, while `AGENTSTACK_MURMUR=off` disables bubbles as the service default. A viewer can also switch murmurs on or off from the dashboard's `SETTINGS` › DISPLAY; that choice is stored in the browser (precedence: URL, then the browser's stored choice, then the service default). To apply an environment variable to a resident service, rerun the installer after setting it.
+
+## Concurrent-agent limit
+
+`AGENTSTACK_MAX_RUNNING_AGENTS` limits the agents that ORRERY can start at the same time when they share one `AGENTSTACK_RUNTIME_DIR`.
+Set it to a positive integer.
+When it is unset, the historic unlimited behavior remains.
+`0` and non-numeric values are invalid.
+
+An agent counts while ORRERY is running its Claude Code, Codex, or Antigravity CLI process.
+The total includes a parent started by a top-level launcher, children started by `/delegate`, and an agent newly started by dashboard RESUME.
+It is not a child-only limit.
+
+The following do not consume a slot.
+
+- Active or retired ORRERY Mail records and historical agents
+- The Mail watcher
+- A tmux session whose agent has already exited
+- Opening an already-running tmux session through dashboard OPEN TMUX
+
+OPEN TMUX starts no process, so it consumes no new slot.
+If that session still runs an agent, it was already counted as one of the running agents.
+
+When the limit is full, `/delegate`, dashboard NEW AGENT, dashboard RESUME, and top-level launchers do not start another agent.
+The dashboard returns `running_agent_limit_reached` with the current count and the limit, while preserving the entered request for display.
+If ORRERY cannot verify runtime state or tmux processes, it also refuses the new start.
+That prevents an unverified state from bypassing the configured limit.
+
+This setting does not add a queue, automatic stop, or automatic resume.
+When the limit is full, end an existing agent or adjust the setting before trying again.
+
+### Starting values
+
+Count the parent as well as the work you want to run in parallel.
+
+| Intended work | Starting value | Meaning |
+| --- | --- | --- |
+| Parent only | `1` | No child can start |
+| One parent and one child at the same time | `2` | Recommended normal starting point |
+| One parent and two children at the same time | `3` | Increase only after observing memory and swap headroom |
+
+In a check with 1 GiB assigned to WSL2, swap use grew substantially at three total agents.
+For that environment, start at `2`.
+The required memory varies with the model, MCP servers, working directory, and other resident processes, so this is not a safety guarantee.
+Increase the limit one agent at a time and watch actual memory and swap use.
+
+Pass the value to the installer so it is persisted.
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+For an existing installation, change the value and rerun the same installer.
+An `export` in one shell does not reach the resident dashboard service.
+
+The limit is per runtime, not per project.
+Agents for distinct projects that share one `AGENTSTACK_RUNTIME_DIR` count toward the same limit.
 
 ## Without a project key
 
@@ -100,6 +158,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_DELIVERABLE_ROOTS` | unset | `:`-separated Output-index scan roots, saved to env / service / manifest |
 | `AGENTSTACK_LANG` | unset | `ja` / `en` murmur override; browser-selected when unset |
 | `AGENTSTACK_MURMUR` | unset | Set to `off` to disable murmurs |
+| `AGENTSTACK_MAX_RUNNING_AGENTS` | unset | Maximum agent CLI processes running in the runtime. Positive integer only |
 | `AGENTSTACK_PORT` | `8770` | Dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | Service-label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | Terminal integration: `ghostty / iterm / terminal / wt / none`. `wt` is Windows Terminal on WSL2 (`auto` picks it when `wt.exe` is reachable inside WSL2) |

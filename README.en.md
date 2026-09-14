@@ -82,6 +82,24 @@ Inside the running agent, ask for a child. This is the same in Claude Code and C
 
 **Success**: a second card appears on the dashboard with a line from the parent to the child. When the child finishes, a "done" message arrives in the parent's terminal. The NETWORK tab shows the messages passing between the two.
 
+### Choose a concurrent-agent limit
+
+Start with a limit of **2 agents**, including the parent.
+That lets one parent and one child run at the same time.
+
+In a check with 1 GiB assigned to WSL2, swap use grew substantially once a parent and two children were running.
+Models, MCP servers, and working directories change the memory requirement, so 2 is a cautious starting point rather than a safety guarantee.
+Increase to 3 only when you truly need two children in parallel and have observed enough memory and swap headroom.
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+If ORRERY is already installed, rerun the installer with the same environment variable.
+The number covers parents, children, and agents resumed from the dashboard, not children alone.
+For the exact counting rules and how to change it, see [Concurrent-agent limit](docs/configuration.en.md#concurrent-agent-limit).
+
 ### 5. Play shiritori as an end-to-end check
 
 The quickest way to confirm the whole install at once is a game of shiritori (Japanese word chain) between a Claude Code agent and a Codex child. Name registration, ORRERY Mail round trips, notification injection, and dashboard rendering all have to work for even one round to complete.

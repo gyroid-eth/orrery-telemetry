@@ -238,6 +238,8 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_PORTRAITS_DIR"] == "__PORTRAITS_DIR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CUSTOM_PORTRAITS"] == "__CUSTOM_PORTRAITS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_MODELS"] == "__CODEX_MODELS__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_MAX_RUNNING_AGENTS"] == "__MAX_RUNNING_AGENTS__"
+    assert '"__MAX_RUNNING_AGENTS__": "$MAX_RUNNING_AGENTS_SETTING"' in installer_text
 
     installer = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert 'ExecStart={esc(\'$PYTHON_BIN\')} {esc(\'$DASHBOARD_DIR/service_runner.py\')}' in installer

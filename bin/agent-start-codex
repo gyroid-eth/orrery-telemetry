@@ -41,9 +41,24 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 # Prevent identity hijack; the bootstrap re-exports the selected name after
 # registering. Clear the explicit reserved-identity marker as well: this is a
 # top-level launcher, never a delegated/resume path.
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_RUNNING_AGENT_LEASE AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF 2>/dev/null || true
 
 SESSION="codex-pending-$$"
+
+# A top-level Codex session registers from its bootstrap.  Reserve before that
+# bootstrap so a full process cap cannot create an identity that has no process.
+ags_reserve_running_agent_slot "top-level-codex" || \
+  ags_die "could not reserve a running-agent slot"
+CAPACITY_SETTLED=false
+release_capacity_on_abort() {
+  local status=$?
+  if [[ "$CAPACITY_SETTLED" != true ]]; then
+    ags_release_running_agent_slot >/dev/null 2>&1 || true
+  fi
+  return "$status"
+}
+trap release_capacity_on_abort EXIT
 
 # Assemble codex flags. OPENAI_API_KEY is stripped because Codex uses ChatGPT
 # OAuth; an API key present in the environment overrides and breaks it.
@@ -63,26 +78,50 @@ if [[ -n "${TMUX:-}" ]]; then
   export CLAUDECODE=1
   # shellcheck disable=SC1090
   source "$BOOTSTRAP" "$DIR"
-  eval "exec $(build_codex_cmd "$DIR")"
+  CURRENT_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if ! ags_claim_running_agent_slot "codex" "$CURRENT_TMUX_SESSION" "$TMUX_BIN"; then
+    ags_release_running_agent_slot >/dev/null 2>&1 || true
+    ags_die "could not claim the running-agent slot"
+  fi
+  if eval "$(build_codex_cmd "$DIR")"; then
+    CODEX_STATUS=0
+  else
+    CODEX_STATUS=$?
+  fi
+  ags_release_running_agent_slot >/dev/null 2>&1 || true
+  CAPACITY_SETTLED=true
+  exit "$CODEX_STATUS"
 fi
 
 # Otherwise replace the current terminal tab with a fresh tmux session that runs
 # the bootstrap (registration + Adjective-Scientist name) and then codex. The temp script
 # keeps the tab alive after codex exits, then self-deletes.
 CODEX_CMD="$(build_codex_cmd "$DIR")"
+CAPACITY_CONTROL="$(ags_running_agent_capacity_control)"
+CAPACITY_RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 INNER="$(mktemp -t agent-start-codex.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
-$(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF 2>/dev/null || true
+if ! $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
   -e CLAUDECODE=1 \
-  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
+  -e $(printf '%q' "AGENTSTACK_HOOKS_DIR=${AGENTSTACK_HOOKS_DIR:-$BIN_DIR/../hooks}") \
+  -e $(printf '%q' "AGENTSTACK_RUNTIME_DIR=$CAPACITY_RUNTIME_DIR") \
+  -e $(printf '%q' "AGENTSTACK_MAX_RUNNING_AGENTS=${AGENTSTACK_MAX_RUNNING_AGENTS:-}") \
+  -e $(printf '%q' "AGENTSTACK_RUNNING_AGENT_LEASE=${AGENTSTACK_RUNNING_AGENT_LEASE:-}") \
+  -e $(printf '%q' "AGENTSTACK_PYTHON=${AGENTSTACK_PYTHON:-python3}") \
+  "if source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && bash $(printf '%q' "$CAPACITY_CONTROL") claim codex \"\$AGENT_NAME\" $(printf '%q' "$TMUX_BIN"); then if $CODEX_CMD; then agent_status=0; else agent_status=\$?; fi; else agent_status=1; fi; bash $(printf '%q' "$CAPACITY_CONTROL") release >/dev/null 2>&1 || true; exec \"\$SHELL\" -l"; then
+  bash $(printf '%q' "$CAPACITY_CONTROL") release >/dev/null 2>&1 || true
+  exit 1
+fi
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF
 chmod +x "$INNER"
 
 echo "$AGS_PROG: launching Codex agent in tmux session '$SESSION' ($DIR)"
+CAPACITY_SETTLED=true
 exec "$INNER"

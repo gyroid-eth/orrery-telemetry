@@ -105,6 +105,8 @@ INSTALLED_SERVICE_RUNNER="$INSTALL_DIR/dashboard/service_runner.py"
 CORE_REQUIRED_FILES=(
   "bin/lib/agentstack-register.sh"
   "hooks/project-context.sh"
+  "hooks/running_agent_capacity.py"
+  "hooks/running_agent_capacity.sh"
 )
 CORE_REQUIRED_EXECUTABLES=(
   "bin/agentstack-preregister-child"

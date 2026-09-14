@@ -59,6 +59,7 @@
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
     "AGENTSTACK_MAIL_LAUNCHD_LABEL": "",
     "AGENTSTACK_MAIL_STATE_ROOT": "/home/alice/.agentstack/mail",
+    "AGENTSTACK_MAX_RUNNING_AGENTS": "",
     "AGENTSTACK_MCP_URL": "http://127.0.0.1:18765/mcp",
     "AGENTSTACK_MURMUR": "",
     "AGENTSTACK_PORT": "8770",

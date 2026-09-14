@@ -200,7 +200,10 @@ def _run_root_claude_substitution(*, collision: bool):
         'ags_die() { printf "%s: %s\\n" "$AGS_PROG" "$*" >&2; exit 1; }\n'
         "ags_load_env() { :; }\n"
         'ags_resolve_tmux() { printf "%s\\n" "$FAKE_TMUX"; }\n'
-        'ags_choose_dir() { printf "%s\\n" "$1"; }\n',
+        'ags_choose_dir() { printf "%s\\n" "$1"; }\n'
+        "ags_reserve_running_agent_slot() { :; }\n"
+        "ags_claim_running_agent_slot() { :; }\n"
+        "ags_release_running_agent_slot() { :; }\n",
         encoding="utf-8",
     )
     (libdir / "agentstack-register.sh").write_text(
@@ -263,7 +266,11 @@ def test_reserved_child_marker_and_rename_failure_are_explicit():
     assert "agent registration skipped" in bootstrap
     assert "tmux rename-session failed: current session" in bootstrap
     assert '"$TMUX_IDENTITY_MATCHED" == "1"' in bootstrap
-    assert 'source $(printf \'%q\' "$BOOTSTRAP") $(printf \'%q\' "$DIR") && $CODEX_CMD' in launcher
+    assert (
+        'source $(printf \'%q\' "$BOOTSTRAP") $(printf \'%q\' "$DIR") '
+        '&& bash $(printf \'%q\' "$CAPACITY_CONTROL") claim codex'
+    ) in launcher
+    assert 'if $CODEX_CMD; then' in launcher
 
 
 def test_doctor_and_hook_do_not_print_owner_token_value():

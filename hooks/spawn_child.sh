@@ -71,6 +71,74 @@ if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
     AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
 fi
 REREGISTER_HELPER="${AGENTSTACK_HOME_DIR:+$AGENTSTACK_HOME_DIR/bin/agentstack-reregister}"
+CAPACITY_CONTROL="$HOOKS_DIR/running_agent_capacity.sh"
+CAPACITY_LEASE=""
+
+capacity_take_token_handoff() {
+    local handoff_file lease
+    handoff_file="${CHILD_TOKEN_FILE}.running-agent-lease"
+    [[ -f "$handoff_file" ]] || return 1
+    if ! IFS= read -r lease < "$handoff_file"; then
+        echo "Error: could not read the running-agent slot handoff" >&2
+        return 2
+    fi
+    if [[ ! "$lease" =~ ^[A-Za-z0-9_-]{12,128}$ ]]; then
+        echo "Error: running-agent slot handoff is invalid" >&2
+        return 2
+    fi
+    CAPACITY_LEASE="$lease"
+    rm -f "$handoff_file"
+}
+
+# A child inherits its parent's environment, including the parent's own lease.
+# Only Dashboard marks a freshly reserved lease as a one-shot handoff.  Without
+# that marker every /delegate would accidentally reuse the parent's slot.  A
+# direct /delegate preregistration writes the same one-shot handoff beside its
+# token file before it creates the ORRERY Mail identity.
+capacity_acquire() {
+    local purpose="$1" lease
+    if [[ "${AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF:-}" == "1" \
+        && -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]]; then
+        CAPACITY_LEASE="$AGENTSTACK_RUNNING_AGENT_LEASE"
+    else
+        unset AGENTSTACK_RUNNING_AGENT_LEASE
+        if [[ -n "${AGENTSTACK_MAX_RUNNING_AGENTS:-}" ]]; then
+            if [[ -n "${PRE_REGISTERED:-}" ]]; then
+                if ! capacity_take_token_handoff; then
+                    echo "Error: pre-registered child has no running-agent slot handoff." >&2
+                    echo "  Re-run agentstack-preregister-child from this installation before spawning." >&2
+                    return 1
+                fi
+            else
+                [[ -f "$CAPACITY_CONTROL" ]] || {
+                    echo "Error: running-agent limit helper is missing: $CAPACITY_CONTROL" >&2
+                    return 1
+                }
+                if ! lease="$(bash "$CAPACITY_CONTROL" reserve "$purpose")"; then
+                    return 1
+                fi
+                CAPACITY_LEASE="$lease"
+            fi
+        fi
+    fi
+    unset AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF
+    export AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE"
+}
+
+capacity_release() {
+    [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+    AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+        bash "$CAPACITY_CONTROL" release >/dev/null 2>&1 || true
+    CAPACITY_LEASE=""
+    unset AGENTSTACK_RUNNING_AGENT_LEASE
+}
+
+capacity_claim() {
+    local program="$1" session="$2"
+    [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+    AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+        bash "$CAPACITY_CONTROL" claim "$program" "$session" tmux >/dev/null
+}
 
 # Source the shared register lib early (function definitions only — no side
 # effects) so the macOS TCC access guard is available in every launch path,
@@ -1582,6 +1650,10 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         echo "Error: workdir does not exist: $WORK_DIR" >&2
         exit 1
     fi
+    if ! capacity_acquire "child-pre-registered"; then
+        echo "Error: could not reserve a running-agent slot" >&2
+        exit 1
+    fi
 
     EMBEDDED_TASK_PROMPT=""
     if [[ "$EMBED_TASK" == true ]]; then
@@ -1604,6 +1676,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
+        capacity_release
         warn_if_uninjected
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -1681,6 +1754,9 @@ PY
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
     TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+    if [[ -n "$CAPACITY_LEASE" ]]; then
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_RUNNING_AGENT_LEASE=$CAPACITY_LEASE")
+    fi
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
@@ -1931,6 +2007,16 @@ ${TASK}"
         sleep 2
         flush_queued_prompt "$CHILD_NAME" || true
         verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
+    fi
+
+    if [[ "$USE_CODEX" == true ]]; then
+        CAPACITY_PROGRAM="codex"
+    else
+        CAPACITY_PROGRAM="claude-code"
+    fi
+    if ! capacity_claim "$CAPACITY_PROGRAM" "$CHILD_NAME"; then
+        echo "Error: could not claim the running-agent slot" >&2
+        exit 1
     fi
 
     open_child_terminal "$CHILD_NAME"
@@ -2232,6 +2318,15 @@ if ! call_mcp "health_check" "{}" > /dev/null 2>&1; then
     exit 1
 fi
 
+if ! capacity_acquire "child"; then
+    echo "Error: could not reserve a running-agent slot" >&2
+    exit 1
+fi
+capacity_release_before_registration() {
+    capacity_release
+}
+trap capacity_release_before_registration EXIT
+
 # --- 2. 子エージェントを事前登録 ---
 TASK_SHORT="${TASK:0:80}"
 if [[ "$USE_CODEX" == true ]]; then
@@ -2316,6 +2411,7 @@ cleanup_on_failure() {
     if [[ "$SPAWN_COMPLETED" == true ]]; then
         return
     fi
+    capacity_release
     warn_if_uninjected
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
         tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -2412,6 +2508,7 @@ print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
         fi
         echo "[spawn_child] Released reservations and retired $CHILD_NAME" >&2
         rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
+        capacity_release
         SPAWN_COMPLETED=true  # cleanup already completed explicitly above
         exit 21
     fi
@@ -2499,6 +2596,9 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
 TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+if [[ -n "$CAPACITY_LEASE" ]]; then
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_RUNNING_AGENT_LEASE=$CAPACITY_LEASE")
+fi
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi
@@ -2687,6 +2787,11 @@ else
     sleep 2
     flush_queued_prompt "$CHILD_NAME" || true
     verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
+fi
+
+if ! capacity_claim "$CHILD_PROGRAM" "$CHILD_NAME"; then
+    echo "Error: could not claim the running-agent slot" >&2
+    exit 1
 fi
 
 open_child_terminal "$CHILD_NAME"

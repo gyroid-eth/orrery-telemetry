@@ -31,6 +31,56 @@ MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
+CAPACITY_CONTROL="$HOOKS_DIR/running_agent_capacity.sh"
+CAPACITY_LEASE=""
+
+capacity_take_token_handoff() {
+  local handoff_file lease
+  handoff_file="${CHILD_TOKEN_FILE}.running-agent-lease"
+  [[ -f "$handoff_file" ]] || return 1
+  if ! IFS= read -r lease < "$handoff_file"; then
+    echo "$PROG: could not read the running-agent slot handoff" >&2
+    return 2
+  fi
+  if [[ ! "$lease" =~ ^[A-Za-z0-9_-]{12,128}$ ]]; then
+    echo "$PROG: running-agent slot handoff is invalid" >&2
+    return 2
+  fi
+  CAPACITY_LEASE="$lease"
+  rm -f "$handoff_file"
+}
+
+capacity_acquire() {
+  if [[ "${AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF:-}" == "1" \
+      && -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]]; then
+    CAPACITY_LEASE="$AGENTSTACK_RUNNING_AGENT_LEASE"
+  else
+    unset AGENTSTACK_RUNNING_AGENT_LEASE
+    if [[ -n "${AGENTSTACK_MAX_RUNNING_AGENTS:-}" ]]; then
+      if ! capacity_take_token_handoff; then
+        echo "$PROG: pre-registered child has no running-agent slot handoff." >&2
+        echo "$PROG: re-run agentstack-preregister-child from this installation before spawning." >&2
+        return 1
+      fi
+    fi
+  fi
+  unset AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF
+  export AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE"
+}
+
+capacity_release() {
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+    bash "$CAPACITY_CONTROL" release >/dev/null 2>&1 || true
+  CAPACITY_LEASE=""
+  unset AGENTSTACK_RUNNING_AGENT_LEASE
+}
+
+capacity_claim() {
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+    bash "$CAPACITY_CONTROL" claim antigravity "$CHILD_NAME" tmux >/dev/null
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -291,6 +341,11 @@ PY
 }
 RESOURCES="$(validate_resources)" || exit 2
 
+if ! capacity_acquire; then
+  echo "$PROG: could not reserve a running-agent slot" >&2
+  exit 1
+fi
+
 SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
 if [[ -n "$WORKTREE_BASE_REV" ]]; then
@@ -327,6 +382,7 @@ mail_helper() {
 cleanup_failure() {
   status=$?
   if [[ $status -ne 0 ]]; then
+    capacity_release
     if [[ "$TMUX_STARTED" == true && -n "$CHILD_NAME" ]]; then
       tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
       TMUX_STARTED=false
@@ -503,8 +559,14 @@ chmod 700 "$RUNNER_FILE"
 tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
   -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_AGENT" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
+  -e "AGENTSTACK_RUNNING_AGENT_LEASE=$CAPACITY_LEASE" \
   "/bin/bash $(printf '%q' "$RUNNER_FILE")"
 TMUX_STARTED=true
+
+if ! capacity_claim; then
+  echo "$PROG: could not claim the running-agent slot" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null || printf '%s\n' "$CHILD_NAME" >> "$MANAGED_FILE"

@@ -39,6 +39,17 @@ cd orrery-telemetry
 
 Pass the absolute path of the project where agents will work to `--project-key`, not the checkout of this repository. It is required on first install, and the installer stops without writing anything if it is omitted. Later installations inherit the previous value from `~/.agentstack/env.sh`, so it can be omitted.
 
+To limit the agents running at once, including the parent, pass `AGENTSTACK_MAX_RUNNING_AGENTS` to the installer.
+Use `2` to start with one parent and one child.
+
+```bash
+AGENTSTACK_MAX_RUNNING_AGENTS=2 \
+  ./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+The value is saved in `env.sh` and the dashboard service definition.
+See [Configuration](configuration.en.md#concurrent-agent-limit) for the counting rules and guidance on increasing it.
+
 The installer previews three changes and asks for `yes` for each.
 
 1. Claude Code MCP registration (add `orrery-mail` to `~/.claude.json`)

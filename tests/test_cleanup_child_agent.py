@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -118,6 +119,49 @@ def test_cleanup_with_entry_environment_still_cleans_child(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr
     assert not any(path.exists() for path in artifacts)
+
+
+def test_cleanup_releases_its_running_agent_slot(tmp_path: Path) -> None:
+    """A finished child must not occupy a slot until a later reconciliation."""
+    if os.name == "nt":
+        return
+    agent_name, env, _artifacts = _arrange_child_state(tmp_path)
+    hooks = Path(env["AGENTSTACK_HOOKS_DIR"])
+    for filename in ("running_agent_capacity.py", "running_agent_capacity.sh"):
+        shutil.copy2(ROOT / "hooks" / filename, hooks / filename)
+    env.update({
+        "AGENTSTACK_MAX_RUNNING_AGENTS": "1",
+        "AGENTSTACK_PYTHON": sys.executable,
+    })
+    helper = hooks / "running_agent_capacity.py"
+    held = subprocess.run(
+        [sys.executable, str(helper), "--output", "json", "reserve", "--purpose", "child"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert held.returncode == 0, held.stderr
+    env["AGENTSTACK_RUNNING_AGENT_LEASE"] = json.loads(held.stdout)["lease_id"]
+
+    result = subprocess.run(
+        ["/bin/bash", str(HOOK), agent_name],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+    retry = subprocess.run(
+        [sys.executable, str(helper), "--output", "json", "reserve", "--purpose", "next"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert retry.returncode == 0, retry.stderr
 
 
 def test_invalid_child_state_fails_loudly_without_partial_cleanup(

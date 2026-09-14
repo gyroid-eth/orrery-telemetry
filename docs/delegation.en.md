@@ -30,6 +30,15 @@ The former is enough for a short investigation. The latter is necessary when **p
 | Progress visibility | Unknown until it finishes | Intermediate progress can be watched in its pane. A monitoring loop can run |
 | Best suited for | Short investigations, searches, and one-off decisions | Long implementations, parallel work, and work whose progress people need to see |
 
+## Concurrent-agent limit
+
+When `AGENTSTACK_MAX_RUNNING_AGENTS` is set, a `/delegate` child shares the limit with its parent.
+For example, with a limit of `2`, one parent can run one child at the same time.
+
+When the limit is full, `/delegate` stops before registering the child or creating its tmux session, and explains that the limit was reached.
+It does not add a queue or silently switch to another mechanism.
+For choosing a value and the full rules, including dashboard RESUME, see [Concurrent-agent limit](configuration.en.md#concurrent-agent-limit).
+
 ## How to tell them apart
 
 The most reliable method is to **look at the dashboard**. A built-in subagent does not register with ORRERY Mail, so it does not appear as a node. It is not merely missing a line: **it does not exist there**.

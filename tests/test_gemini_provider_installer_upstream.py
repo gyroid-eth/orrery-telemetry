@@ -74,6 +74,8 @@ def _default_server_path():
     required_files = (
         "bin/lib/agentstack-register.sh",
         "hooks/project-context.sh",
+        "hooks/running_agent_capacity.py",
+        "hooks/running_agent_capacity.sh",
     )
     required_executables = (
         "bin/agentstack-preregister-child",

@@ -38,6 +38,7 @@ ags_generate_registration_token() { printf 'test-token\n'; }
 ags_mcp_call() {
   case "$1" in
     register_agent)
+      [[ -n "${FAKE_REGISTER_TOUCH:-}" ]] && printf 'called\n' > "$FAKE_REGISTER_TOUCH"
       for arg in "$@"; do
         case "$arg" in
           name=*)
@@ -115,6 +116,77 @@ def test_on_list_name_passes_silently():
     assert result.returncode == 0, result.stderr
     assert "does not end in a known scientist" not in result.stderr
     assert result.stdout.strip() == "Curious-Curie"
+
+
+def test_limit_is_checked_before_preregistering_an_identity():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        lib = tmpdir / "fake-register.sh"
+        lib.write_text(_FAKE_LIB, encoding="utf-8")
+        runtime = tmpdir / "runtime"
+        token = tmpdir / "tok"
+        touched = tmpdir / "register-called"
+        environment = os.environ.copy()
+        environment.update({
+            "AGENTSTACK_REGISTER_LIB": str(lib),
+            "AGENTSTACK_ENV_FILE": "",
+            "AGENTSTACK_HOME": str(tmpdir),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+            "AGENTSTACK_PROJECT_KEY": "/p",
+            "AGENTSTACK_MAX_RUNNING_AGENTS": "1",
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "FAKE_REGISTER_TOUCH": str(touched),
+        })
+        capacity = _ROOT / "hooks" / "running_agent_capacity.py"
+        held = subprocess.run(
+            [sys.executable, str(capacity), "reserve", "--purpose", "held"],
+            env=environment, text=True, capture_output=True, check=False,
+        )
+        assert held.returncode == 0, held.stderr
+
+        result = subprocess.run(
+            [str(_HELPER), "--token-file-out", str(token), "--program", "claude-code", "--model", "m"],
+            cwd=_ROOT, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+        assert result.returncode != 0
+        assert not touched.exists(), "register_agent ran after the configured limit was full"
+        assert not token.exists()
+
+
+def test_preregister_writes_a_private_capacity_handoff():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        lib = tmpdir / "fake-register.sh"
+        lib.write_text(_FAKE_LIB, encoding="utf-8")
+        token = tmpdir / "tok"
+        environment = os.environ.copy()
+        environment.update({
+            "AGENTSTACK_REGISTER_LIB": str(lib),
+            "AGENTSTACK_ENV_FILE": "",
+            "AGENTSTACK_HOME": str(tmpdir),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+            "AGENTSTACK_PROJECT_KEY": "/p",
+            "AGENTSTACK_MAX_RUNNING_AGENTS": "1",
+            "AGENTSTACK_RUNTIME_DIR": str(tmpdir / "runtime"),
+        })
+
+        result = subprocess.run(
+            [str(_HELPER), "--token-file-out", str(token), "--program", "claude-code", "--model", "m"],
+            cwd=_ROOT, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+        handoff = token.with_name(token.name + ".running-agent-lease")
+        assert result.returncode == 0, result.stderr
+        assert handoff.is_file()
+        assert handoff.read_text(encoding="utf-8").strip()
+        assert handoff.stat().st_mode & 0o077 == 0
 
 
 def test_server_substitution_is_reported_and_returned_name_is_authoritative():

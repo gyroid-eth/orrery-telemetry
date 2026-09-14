@@ -32,7 +32,7 @@ CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
-HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
+HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$BIN_DIR/../hooks}"
 
 TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
@@ -43,7 +43,8 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 
 # Prevent identity hijack: stale/inherited values must not select another agent
 # or become part of a newly created tmux server's global environment.
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_RUNNING_AGENT_LEASE AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF 2>/dev/null || true
 
 SESSION="pending-$$"
 CANDIDATE_AGENT_NAME="$(ags_pick_adjective_scientist_name 2>/dev/null || true)"
@@ -51,6 +52,20 @@ if [[ -n "$CANDIDATE_AGENT_NAME" ]]; then
   AGENT_NAME="$CANDIDATE_AGENT_NAME"
   SESSION="$AGENT_NAME"
 fi
+
+# Reserve before registration so a capped launch never leaves a new ORRERY
+# Mail identity behind merely because the process limit was already full.
+ags_reserve_running_agent_slot "top-level-claude" || \
+  ags_die "could not reserve a running-agent slot"
+CAPACITY_SETTLED=false
+release_capacity_on_abort() {
+  local status=$?
+  if [[ "$CAPACITY_SETTLED" != true ]]; then
+    ags_release_running_agent_slot >/dev/null 2>&1 || true
+  fi
+  return "$status"
+}
+trap release_capacity_on_abort EXIT
 
 if [[ -n "$PROJECT_KEY" ]]; then
   ags_mail_load_token
@@ -105,7 +120,19 @@ if [[ -n "${TMUX:-}" ]]; then
   # Warn (do not block) if this pane can't read a macOS privacy-protected project
   # dir — the child claude will inherit the same EPERM otherwise-undiagnosable.
   declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$DIR"
-  exec "$CLAUDE_BIN"
+  CURRENT_TMUX_SESSION="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
+  if ! ags_claim_running_agent_slot "claude-code" "$CURRENT_TMUX_SESSION" "$TMUX_BIN"; then
+    ags_release_running_agent_slot >/dev/null 2>&1 || true
+    ags_die "could not claim the running-agent slot"
+  fi
+  if "$CLAUDE_BIN"; then
+    CLAUDE_STATUS=0
+  else
+    CLAUDE_STATUS=$?
+  fi
+  ags_release_running_agent_slot >/dev/null 2>&1 || true
+  CAPACITY_SETTLED=true
+  exit "$CLAUDE_STATUS"
 fi
 
 # Otherwise replace the current terminal tab with a fresh tmux session. Keep
@@ -118,22 +145,35 @@ SESSION_TOKEN_FILE=""
 if [[ -n "$SESSION_AGENT_NAME" ]]; then
   SESSION_TOKEN_FILE="$(ags_registration_token_file "$SESSION_AGENT_NAME" 2>/dev/null || true)"
 fi
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+CAPACITY_CONTROL="$(ags_running_agent_capacity_control)"
+CAPACITY_RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF 2>/dev/null || true
 
 INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
-$(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF 2>/dev/null || true
+if ! $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
-  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  -e $(printf '%q' "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR") \
+  -e $(printf '%q' "AGENTSTACK_RUNTIME_DIR=$CAPACITY_RUNTIME_DIR") \
+  -e $(printf '%q' "AGENTSTACK_MAX_RUNNING_AGENTS=${AGENTSTACK_MAX_RUNNING_AGENTS:-}") \
+  -e $(printf '%q' "AGENTSTACK_RUNNING_AGENT_LEASE=${AGENTSTACK_RUNNING_AGENT_LEASE:-}") \
+  -e $(printf '%q' "AGENTSTACK_PYTHON=${AGENTSTACK_PYTHON:-python3}") \
+  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; if ! bash $(printf '%q' "$CAPACITY_CONTROL") claim claude-code $(printf '%q' "$SESSION") $(printf '%q' "$TMUX_BIN"); then bash $(printf '%q' "$CAPACITY_CONTROL") release >/dev/null 2>&1 || true; exit 1; fi; if $(printf '%q' "$CLAUDE_BIN"); then agent_status=0; else agent_status=\$?; fi; bash $(printf '%q' "$CAPACITY_CONTROL") release >/dev/null 2>&1 || true; exec \"\$SHELL\" -l"; then
+  bash $(printf '%q' "$CAPACITY_CONTROL") release >/dev/null 2>&1 || true
+  exit 1
+fi
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF
 chmod +x "$INNER"
 
 echo "$AGS_PROG: launching Claude agent in tmux session '$SESSION' ($DIR)"
+CAPACITY_SETTLED=true
 exec "$INNER"

@@ -44,6 +44,44 @@ MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
+CAPACITY_CONTROL="$HOOKS_DIR/running_agent_capacity.sh"
+CAPACITY_LEASE=""
+
+capacity_acquire() {
+  local lease
+  # A delegated child inherits the parent's lease.  It may only consume a
+  # lease when Dashboard explicitly marked it as this launch's handoff.
+  if [[ "${AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF:-}" == "1" \
+      && -n "${AGENTSTACK_RUNNING_AGENT_LEASE:-}" ]]; then
+    CAPACITY_LEASE="$AGENTSTACK_RUNNING_AGENT_LEASE"
+  else
+    unset AGENTSTACK_RUNNING_AGENT_LEASE
+    if [[ -n "${AGENTSTACK_MAX_RUNNING_AGENTS:-}" ]]; then
+      [[ -f "$CAPACITY_CONTROL" ]] || {
+        echo "$PROG: running-agent limit helper is missing: $CAPACITY_CONTROL" >&2
+        return 1
+      }
+      lease="$(bash "$CAPACITY_CONTROL" reserve "gemini-child")" || return 1
+      CAPACITY_LEASE="$lease"
+    fi
+  fi
+  unset AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF
+  export AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE"
+}
+
+capacity_release() {
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+    bash "$CAPACITY_CONTROL" release >/dev/null 2>&1 || true
+  CAPACITY_LEASE=""
+  unset AGENTSTACK_RUNNING_AGENT_LEASE
+}
+
+capacity_claim() {
+  [[ -n "${CAPACITY_LEASE:-}" ]] || return 0
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+    bash "$CAPACITY_CONTROL" claim antigravity "$CHILD_NAME" tmux >/dev/null
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -131,6 +169,11 @@ else
 fi
 [[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
 
+if ! capacity_acquire; then
+  echo "$PROG: could not reserve a running-agent slot" >&2
+  exit 1
+fi
+
 mkdir -p "$RUNTIME_DIR" "$WORKTREE_ROOT"
 chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 TOKEN_FILE="$RUNTIME_DIR/gemini-preregister-$$.token"
@@ -175,6 +218,7 @@ PY
 cleanup_failure() {
   status=$?
   if [[ $status -ne 0 ]]; then
+    capacity_release
     if [[ "$TMUX_STARTED" == true && -n "$CHILD_NAME" ]]; then
       tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
       TMUX_STARTED=false
@@ -217,6 +261,8 @@ CHILD_NAME="$(
   AGENTSTACK_MCP_URL="$MCP_URL" \
   AGENTSTACK_MAIL_ENV="$MAIL_ENV" \
   AGENTSTACK_MAIL_HTTP_BEARER_MODE="$HTTP_BEARER_MODE" \
+  AGENTSTACK_RUNNING_AGENT_LEASE="$CAPACITY_LEASE" \
+  AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF=1 \
     "$PREREGISTER" --project-key "$PROJECT_KEY" --program antigravity \
       --model "$MODEL" --task-description "Delegated Antigravity child" \
       --token-file-out "$TOKEN_FILE"
@@ -414,8 +460,14 @@ chmod 700 "$RUNNER_FILE"
 tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
   -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
+  -e "AGENTSTACK_RUNNING_AGENT_LEASE=$CAPACITY_LEASE" \
   "/bin/bash $(printf '%q' "$RUNNER_FILE")"
 TMUX_STARTED=true
+
+if ! capacity_claim; then
+  echo "$PROG: could not claim the running-agent slot" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then

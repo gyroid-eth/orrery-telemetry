@@ -165,6 +165,9 @@ LABEL_PREFIX = _env_text("AGENTSTACK_LABEL_PREFIX", "org.agentstack")
 TERMINAL_SETTING = _env_text("AGENTSTACK_TERMINAL", "auto").lower()
 HOOKS_DIR = _env_path("AGENTSTACK_HOOKS_DIR", "~/.agentstack/hooks")
 RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
+RUNNING_AGENT_CAPACITY_HELPER = os.path.join(
+    HOOKS_DIR, "running_agent_capacity.py"
+)
 MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.agentstack/mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
@@ -1816,6 +1819,99 @@ def _has_session(session: str) -> bool:
     ).returncode == 0
 
 
+def _running_agent_capacity(command: str, *args: str) -> dict:
+    """Call the shared runtime-capacity helper and preserve its error code.
+
+    The Dashboard must reserve before it registers a child.  Calling the same
+    helper as the shell launchers keeps an API spawn and a `/delegate` from
+    admitting one process each during the same race.
+    """
+    configured = os.environ.get("AGENTSTACK_MAX_RUNNING_AGENTS", "").strip()
+    if command in {"reserve", "status"} and not configured:
+        return {"ok": True, "limited": False, "lease_id": ""}
+    if not os.path.isfile(RUNNING_AGENT_CAPACITY_HELPER):
+        return {
+            "ok": False,
+            "code": "running_agent_limit_unavailable",
+            "error": (
+                "running-agent limit is configured, but its helper is missing: "
+                f"{RUNNING_AGENT_CAPACITY_HELPER}"
+            ),
+        }
+    python = os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable
+    try:
+        result = subprocess.run(
+            [python, RUNNING_AGENT_CAPACITY_HELPER, "--output", "json", command, *args],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "ok": False,
+            "code": "running_agent_limit_unavailable",
+            "error": f"cannot check running-agent capacity: {exc}",
+        }
+    try:
+        payload = json.loads((result.stdout or "").strip())
+    except ValueError:
+        detail = (result.stderr or result.stdout or "").strip()
+        return {
+            "ok": False,
+            "code": "running_agent_limit_unavailable",
+            "error": "running-agent capacity returned an invalid response"
+            + (f": {detail}" if detail else ""),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "code": "running_agent_limit_unavailable",
+            "error": "running-agent capacity returned a non-object response",
+        }
+    return payload
+
+
+def _reserve_running_agent_slot(purpose: str) -> dict:
+    return _running_agent_capacity("reserve", "--purpose", purpose)
+
+
+def _release_running_agent_slot(lease_id: str) -> None:
+    if lease_id:
+        _running_agent_capacity("release", "--lease", lease_id)
+
+
+def _running_agent_claim_shell(lease_id: str, session: str, program: str) -> str:
+    """Return a shell fragment that claims a reserved slot in its tmux pane."""
+    if not lease_id:
+        return ""
+    python = os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable
+    claim = (
+        shlex.join([
+            python, RUNNING_AGENT_CAPACITY_HELPER, "claim", "--lease", lease_id,
+            "--session", session,
+        ])
+        + f" --pane-pid $$ --program {shlex.quote(program)}"
+    )
+    release = shlex.join([
+        python, RUNNING_AGENT_CAPACITY_HELPER, "release", "--lease", lease_id,
+    ])
+    return (
+        f"if ! {claim} >/dev/null; then {release} >/dev/null 2>&1 || true; "
+        "exit 1; fi; "
+    )
+
+
+def _running_agent_release_shell(lease_id: str) -> str:
+    """Return a best-effort shell fragment to release a claimed slot."""
+    if not lease_id:
+        return ""
+    python = os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable
+    release = shlex.join([
+        python, RUNNING_AGENT_CAPACITY_HELPER, "release", "--lease", lease_id,
+    ])
+    return f"{release} >/dev/null 2>&1 || true; "
+
+
 ITERM_OSA = """
 on run argv
   set cmd to item 1 of argv
@@ -2351,6 +2447,16 @@ def do_resume(session: str) -> dict:
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
     if not os.path.exists(ABS_CLAUDE):
         return {"ok": False, "error": "claude CLI が見つかりません"}
+    capacity = _reserve_running_agent_slot("dashboard-resume-claude")
+    if not capacity.get("ok"):
+        return {
+            "ok": False,
+            "error": capacity.get("error", "running-agent capacity check failed"),
+            "code": capacity.get("code"),
+            "running": capacity.get("running"),
+            "limit": capacity.get("limit"),
+        }
+    capacity_lease = str(capacity.get("lease_id") or "")
     # 端末adapter経由で tmux new-session(-A=あれば attach)。
     #
     # 重要: claude を「単一文字列」で tmux に渡すと tmux は `/bin/sh -c`
@@ -2360,19 +2466,23 @@ def do_resume(session: str) -> dict:
     # 対策: `zsh -lic <inner>` を独立 argv で渡す。tmux は複数引数なら
     # execvp で直接起動するので sh 層が消え、ログイン対話 zsh が .zshrc
     # (24行目で ~/.local/bin を PATH へ追加) を source する。多重防御
-    # として inner 先頭でも明示 export し、exec で claude にプロセス
-    # 置換(余分なシェルを残さず tmux セッション名=エージェント名を維持)。
+    # として inner 先頭でも明示 export する。終了後に予約を直ちに解放する
+    # ため、ここでは CLI を exec で置換せず、終了状態をそのまま返す。
     # zshexit 事故(2026-05-18)は .zshrc 側で根治済み(真因は巨大 context
     # ではなく zshexit が Bash サブシェル exit 毎に tmux セッションを kill
     # していた事)。サイズに関わらず常に --resume で会話を完全復元する。
-    # AGENT_NAME を export してから exec claude する。これがないと claude
+    # AGENT_NAME を export してから claude を起動する。これがないと claude
     # 内部の register_agent で AGENT_NAME 環境変数が空となり、サーバーが
     # ランダム名を発番してしまう (2026-05-22 GreenOstwald 事例、
     # 2026-05-26 PinkGuericke 事例)。
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={session}; '
-        f'exec {ABS_CLAUDE} --resume {sid} -n {session}'
+        f'{_running_agent_claim_shell(capacity_lease, session, "claude-code")}'
+        f'{ABS_CLAUDE} --resume {sid} -n {session}; '
+        '_agentstack_resume_status=$?; '
+        f'{_running_agent_release_shell(capacity_lease)}'
+        'exit $_agentstack_resume_status'
     )
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が
@@ -2389,6 +2499,7 @@ def do_resume(session: str) -> dict:
             "detail": f"会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
+    _release_running_agent_slot(capacity_lease)
     return {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
 
 
@@ -2474,6 +2585,16 @@ def _do_resume_codex(session: str) -> dict:
     if not cwd:
         return {"ok": False,
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
+    capacity = _reserve_running_agent_slot("dashboard-resume-codex")
+    if not capacity.get("ok"):
+        return {
+            "ok": False,
+            "error": capacity.get("error", "running-agent capacity check failed"),
+            "code": capacity.get("code"),
+            "running": capacity.get("running"),
+            "limit": capacity.get("limit"),
+        }
+    capacity_lease = str(capacity.get("lease_id") or "")
     bootstrap = os.path.expanduser("~/.codex/bin/codex_agent_bootstrap.sh")
     # zsh -lic で .zshrc を読ませ codex を PATH 解決。bootstrap が無ければ
     # source をスキップ（AGENT_NAME export と resume は維持）。
@@ -2482,9 +2603,13 @@ def _do_resume_codex(session: str) -> dict:
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={session}; '
         f'{src}'
-        f'exec env -u OPENAI_API_KEY codex resume {sid} '
+        f'{_running_agent_claim_shell(capacity_lease, session, "codex")}'
+        f'env -u OPENAI_API_KEY codex resume {sid} '
         f'-C {shlex.quote(cwd)} '
-        f'{_codex_child_launch_flags()}'
+        f'{_codex_child_launch_flags()}; '
+        '_agentstack_resume_status=$?; '
+        f'{_running_agent_release_shell(capacity_lease)}'
+        'exit $_agentstack_resume_status'
     )
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
@@ -2498,6 +2623,7 @@ def _do_resume_codex(session: str) -> dict:
             "detail": f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
+    _release_running_agent_slot(capacity_lease)
     return {"ok": False, "error": f"codex resume 起動失敗: {launch.get('error')}"}
 
 
@@ -4719,6 +4845,27 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
 
     task_short = task[:80]
 
+    # Reserve before register_agent.  The dashboard cannot delete a child
+    # registration with its service credential, so admitting the process first
+    # prevents a full cap from leaving an identity that never had a session.
+    capacity = _reserve_running_agent_slot("dashboard-spawn")
+    if not capacity.get("ok"):
+        return {
+            "ok": False,
+            "error": capacity.get("error", "running-agent capacity check failed"),
+            "code": capacity.get("code"),
+            "running": capacity.get("running"),
+            "limit": capacity.get("limit"),
+        }
+    capacity_lease = str(capacity.get("lease_id") or "")
+    capacity_released = False
+
+    def release_capacity() -> None:
+        nonlocal capacity_released
+        if not capacity_released and capacity_lease:
+            _release_running_agent_slot(capacity_lease)
+            capacity_released = True
+
     # 1) Always send an explicit hyphenated request name.  The response name
     # is authoritative and may be separator-less on a local patched server.
     child_token = secrets.token_urlsafe(32)
@@ -4731,11 +4878,13 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         "name": requested_name,
     })
     if not reg["ok"]:
+        release_capacity()
         return {"ok": False,
                 "error": f"register_agent failed: {reg.get('error')}"}
     registration = reg["data"] or {}
     child_name = registration.get("name", "")
     if not child_name or _NAME_RE.fullmatch(child_name) is None:
+        release_capacity()
         return {"ok": False,
                 "error": f"invalid child name from register: {child_name!r}"}
     server_token = registration.get("registration_token", "")
@@ -4767,6 +4916,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         this explicit so callers do not retry and silently create more junk
         identities.
         """
+        release_capacity()
         registration_status = "may remain" if registration_may_remain else "remains"
         result = {
             "ok": False,
@@ -4976,6 +5126,12 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     else:
         env["PARENT_AGENT"] = parent
     env["PROJECT_KEY"] = project_key
+    if capacity_lease:
+        # spawn_child.sh accepts this only with the marker.  A child itself
+        # inherits its parent's lease but must reserve a fresh slot for any
+        # nested /delegate.
+        env["AGENTSTACK_RUNNING_AGENT_LEASE"] = capacity_lease
+        env["AGENTSTACK_RUNNING_AGENT_LEASE_HANDOFF"] = "1"
     # launchd の最小 PATH には ~/.local/bin が無く、spawn_child.sh が tmux 内で
     # 起動する `zsh -lc` は非対話シェルのため ~/.zshrc を source せず claude が
     # PATH に乗らない (cold start で claude 即落ち → tmux session が cleanup-

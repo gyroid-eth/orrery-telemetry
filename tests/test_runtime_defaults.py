@@ -739,6 +739,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_DELIVERABLE_ROOTS": "",
         "AGENTSTACK_LANG": "ja",
         "AGENTSTACK_MURMUR": "off",
+        "AGENTSTACK_MAX_RUNNING_AGENTS": "2",
         "AGENTSTACK_SPAWN_DIRS": f"~/code:{project_dir}",
         "AGENTSTACK_SPAWN_ROOTS": str(project_dir),
         "AGENTSTACK_PORTRAITS_DIR": "~/faces",
@@ -870,6 +871,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert 'Environment="AGENTSTACK_LANG=ja"' in systemd_unit
     assert 'Environment="AGENTSTACK_MURMUR=off"' in systemd_unit
+    assert 'Environment="AGENTSTACK_MAX_RUNNING_AGENTS=2"' in systemd_unit
     assert f'Environment="AGENTSTACK_SPAWN_DIRS=~/code:{project_dir}"' in systemd_unit
     assert f'Environment="AGENTSTACK_SPAWN_ROOTS={project_dir}"' in systemd_unit
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
@@ -881,6 +883,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
     assert "export AGENTSTACK_LANG=ja" in generated_env
     assert "export AGENTSTACK_MURMUR=off" in generated_env
+    assert "export AGENTSTACK_MAX_RUNNING_AGENTS=2" in generated_env
     assert f"export AGENTSTACK_SPAWN_DIRS='~/code:{project_dir}'" in generated_env
     assert f"export AGENTSTACK_SPAWN_ROOTS={project_dir}" in generated_env
     assert (
@@ -891,6 +894,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert "export AGENTSTACK_PORTRAITS_DIR='~/faces'" in generated_env
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
+    assert manifest["env"]["AGENTSTACK_MAX_RUNNING_AGENTS"] == "2"
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
@@ -921,6 +925,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:18765/mcp"
     normalized_env["AGENTSTACK_LANG"] = ""
     normalized_env["AGENTSTACK_MURMUR"] = ""
+    normalized_env["AGENTSTACK_MAX_RUNNING_AGENTS"] = ""
     normalized_env["AGENTSTACK_SPAWN_DIRS"] = ""
     normalized_env["AGENTSTACK_SPAWN_ROOTS"] = ""
     normalized_env["AGENTSTACK_PORTRAITS_DIR"] = ""
