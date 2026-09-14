@@ -47,7 +47,7 @@ process.stdout.write(JSON.stringify({vars:theme.cssVariables,report:core.contras
         "--ln-remote": "#673f8d",
         "--ln-delegate": "#335b16",
         "--alert": "#a6060e",
-        "--cyan": "#005a65",
+        "--cyan": "#704a00",
         "--void": "#f5efe1",
         "--bone": "#010100",
         "--bone-dim": "#3a3528",
