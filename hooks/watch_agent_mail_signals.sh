@@ -384,9 +384,9 @@ deliver_worker() {
 
     local prompt
     if [[ -n "$body_snippet" && "$body_truncated" == "0" ]]; then
-        prompt="AgentStack mail notification: message from ${from} [${importance}]: ${subject}. Body (complete; no inbox fetch needed): ${body_snippet}"
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body (complete; no inbox fetch needed): ${body_snippet}"
     elif [[ -n "$body_snippet" ]]; then
-        prompt="AgentStack mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
     else
         prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
     fi
