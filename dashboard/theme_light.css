@@ -16,6 +16,7 @@ html[data-color-theme="light"] body.embed>header{
 html[data-color-theme="light"] .mail-health,
 html[data-color-theme="light"] .sesschip,
 html[data-color-theme="light"] .usage-pill,
+html[data-color-theme="light"] .crew-row,
 html[data-color-theme="light"] .viewtog,
 html[data-color-theme="light"] .seg,
 html[data-color-theme="light"] input[type=search]{background:color-mix(in srgb,var(--panel) 88%,transparent)}

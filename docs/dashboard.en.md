@@ -52,9 +52,17 @@ The next image has grown to 12 cards, and cards such as Warm-Lovelace show `RX`.
 
 ### Separating header counters from card states
 
-The header's `12 / 29 AGENTS` is a **count**, not a description of individual work. The left number is the cards whose agent process is running, the right is the total of active agents, and the underline's length is their ratio. Active agents whose process is not running (standby) are the right minus the left, so they get no instrument of their own.
+The header numbers are a **tally** of the states each card shows in its top-right corner and border.
 
-Therefore, the 12 in `12 / 29` alone does not mean all 12 agents are progressing. **Read overall counts in the header and each agent's working / waiting / intervention state from the card's top-right and border.**
+| Item | What it counts | On the card |
+| --- | --- | --- |
+| `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
+| `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
+| `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
+
+`NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
+
+**Decide where the next task goes from the header (WAITING and LEFT); read what each agent is doing from its card.**
 
 ### Usage left (LEFT)
 

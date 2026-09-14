@@ -80,7 +80,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 画面の情報階層は上から順に決まっています。新しい要素は、必ずどの階層に入るかを宣言してから作ります。
 
-1. header（wordmark、DECK / NETWORK 切替、`29 / 29 AGENTS` の統計、MAIL の健全性、LEFT の pill、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
+1. header（wordmark、DECK / NETWORK 切替、crew の状態（NEED YOU の chip と `12 WORKING · 15 WAITING` の pill）、MAIL の健全性、LEFT の pill、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
 2. sector 見出し（`ACTIVE AGENTS [ 27 ]` のような mono 大文字の行と、右へ消える罫線）
 3. bay（agent card）
 4. 補助の帯（履歴の sparkline など。agent card より弱く、折りたためる）
@@ -88,7 +88,8 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 ### header と grid
 
-- header は sticky、最小 58px、padding 9px 22px、要素間 22px。統計は「数字 → ラベル → 2px の下線」の縦積みで、稼働中 / 登録数を `29 / 29` の 1 計器にまとめ、下線の幅が稼働率です（standby は登録数から稼働数を引いた値なので独立した計器にしません）。DECK / NETWORK の切替、MAIL、LEFT は pill（角丸 999px、hairline。地は切替が `--panel` 74%、MAIL と LEFT が 62%）。検索は幅 226px。NEW AGENT は amber 22% の地に amber 32% の枠、角丸 7px、amber の文字
+- header は sticky、最小 58px、padding 9px 22px、要素間 22px。DECK / NETWORK の切替、crew の pill、MAIL、LEFT は pill（角丸 999px、hairline。地は切替が `--panel` 74%、それ以外が 62%）。検索は幅 226px。NEW AGENT は amber 22% の地に amber 32% の枠、角丸 7px、amber の文字
+- crew の状態は card と同じ `act_state` の集計です。`12 WORKING · 15 WAITING` の pill（数字は 13px の serif、WORKING の数字だけ amber）が「turn 進行中」と「prompt で待っていて仕事を渡せる」の数。人を待っている agent（承認待ち `ask`、選択肢を聞いている `question`）がいるときだけ、その左に alert 色の `2 NEED YOU` chip が現れます（alert 14% の地に 55% の枠、7px の点が 1 秒で明滅。reduce では止まる）。0 のときは沈めるのではなく chip ごと無くします。クリックで DECK をその agent だけに絞り、もう一度で戻ります。登録数は sector 見出しの `[ 29 ]` に任せ、header では数えません。process が止まって shell に戻った agent はどの数にも入らず、card の `○ SHELL` で読みます
 - LEFT の pill は provider ごとの残量を「logo → 数字%」で並べます。logo は agent card と同じ 16px の provider asset、数字は 12px の mono。数字の色は残量の 3 段（§4: 50% 超は `--ln-local`、50% 以下は amber、20% 以下は alert）で、provider が返した通常枠のうち残りが最も少ない window の値です。どの provider を出すかは settings drawer の USAGE で切り替えられ（この browser だけ）、隠した provider は pill にも popover にも出ません。クリックで popover（§8）が開き、provider ごとに 20px の logo と名前、window ごとの dial（64px、輪の太さ 7、中央に 18px の serif の数字、下に window 名と reset 時刻）、名前付きの追加枠は `additional limit · 名前` の小見出しの下に分け、すべて 100% なら 1 行に畳みます。取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出し、古い値は `stale` と観測時刻を添えて dial を ink-dim に沈めます。5h / 7d の枠は仮定せず、provider が返した window だけを描きます
 - main は padding 22px 22px 0、`repeat(auto-fill, minmax(440px, 1fr))`、間隔 10px。760px 以下は 1 列で左右 13px、統計を隠す
 - sector 見出しは margin 16px 2px 4px、9px / .22em、`--ink-dim`、左に 7px の amber 菱形、右へ `--hair` の罫線が消えていく
