@@ -16,7 +16,9 @@ html[data-color-theme="light"] body.embed>header{
 html[data-color-theme="light"] .mail-health,
 html[data-color-theme="light"] .sesschip,
 html[data-color-theme="light"] .viewtog,
+html[data-color-theme="light"] .seg,
 html[data-color-theme="light"] input[type=search]{background:color-mix(in srgb,var(--panel) 88%,transparent)}
+html[data-color-theme="light"] .seg button[aria-checked="true"]{background:color-mix(in srgb,var(--amber) 12%,transparent)}
 html[data-color-theme="light"] .kv span{color:var(--ink-dim)}
 html[data-color-theme="light"] input[type=search],
 html[data-color-theme="light"] input[type=text],
