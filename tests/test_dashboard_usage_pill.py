@@ -83,7 +83,7 @@ def _render_popover(providers: list[dict]) -> dict:
         block(r"const USAGE_SOURCE=\{.*?\n\};\n"),
         block(r"function usageSource\(source\)\{.*?\n\}\n"),
         block(r"function usageClock\(ts\)\{.*?\n\}\n"),
-        block(r"function usageReset\(ts\)\{.*?\n\}\n"),
+        block(r"function usageReset\(ts,compact\)\{.*?\n\}\n"),
         block(r"function usageGroups\(provider,buckets\)\{.*?\n\}\n"),
         block(r"function usageBinding\(provider,buckets\)\{.*?\n\}\n"),
         block(r"function usageDial\(b,stale\)\{.*?\n\}\n"),

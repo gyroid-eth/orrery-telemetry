@@ -36814,12 +36814,20 @@ function usageClock(ts){
   if(!ts) return '';
   return new Date(ts*1000).toLocaleTimeString([],USAGE_HM);
 }
-function usageReset(ts){
+function usageReset(ts,compact){
   if(!ts) return '';
   const d=new Date(ts*1000), now=new Date();
   const t=d.toLocaleTimeString([],USAGE_HM);
   if(d.toDateString()===now.toDateString()) return t;
-  return d.toLocaleDateString([],{weekday:'short'})+' '+t;
+  // A weekday alone answers "which day" only for the next few days; a weekly
+  // window resets far enough out that "Mon" costs the reader a calendar, so
+  // the date joins it. Under a dial there is room for one or the other, and
+  // the date is the half that does not need counting.
+  const soon=(d-now)<36*60*60*1000;
+  const day=d.toLocaleDateString([],{weekday:'short'});
+  const date=d.toLocaleDateString([],{month:'numeric',day:'numeric'});
+  if(soon) return day+' '+t;
+  return (compact?date:`${day} ${date}`)+' '+t;
 }
 // With one limit the labels are plain ("7d"). With several, every label is
 // prefixed "<limit name> · 7d"; the ordinary limit carries the provider's
@@ -36865,7 +36873,7 @@ function usageDial(b,stale){
     <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="t" cx="32" cy="32" r="${r}"/>
     <circle class="f" cx="32" cy="32" r="${r}" stroke-dasharray="${(c*p/100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 32 32)"/>
     <text class="n" x="32" y="32" text-anchor="middle" dominant-baseline="central">${p}</text></svg>
-    <span class="lab">${esc(b.label)}</span><span class="rs">${esc(usageReset(b.resets_at))}</span>
+    <span class="lab">${esc(b.label)}</span><span class="rs">${esc(usageReset(b.resets_at,true))}</span>
     ${previous?'<span class="rs seen">previous value</span>':''}
     ${notable&&provenance?`<span class="rs seen">${esc(provenance)}</span>`:''}</div>`;
 }
