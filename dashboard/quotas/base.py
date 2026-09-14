@@ -34,6 +34,10 @@ class QuotaBucket:
     window_seconds: int | None
     resets_at: int | None
     quality: QuotaQuality = "exact"
+    # When this window itself was last reported, if that is older than the
+    # provider's observation (a per-model window a later session did not
+    # report). None means it is as fresh as the snapshot.
+    observed_at: int | None = None
 
     def __post_init__(self) -> None:
         if not all(isinstance(value, str) and value.strip() for value in (self.id, self.label, self.scope)):
@@ -46,15 +50,17 @@ class QuotaBucket:
             raise ValueError("window_seconds must be positive")
         if self.resets_at is not None and (type(self.resets_at) is not int or self.resets_at < 0):
             raise ValueError("resets_at must be non-negative")
+        if self.observed_at is not None and (type(self.observed_at) is not int or self.observed_at < 0):
+            raise ValueError("observed_at must be non-negative")
         if abs(used + remaining - 100.0) > 0.00001:
             raise ValueError("used and remaining percentages must add up to 100")
         object.__setattr__(self, "used_percent", used)
         object.__setattr__(self, "remaining_percent", remaining)
 
     @classmethod
-    def from_used(cls, *, id: str, label: str, scope: str, used_percent: object, window_seconds: int | None, resets_at: int | None, quality: QuotaQuality = "exact") -> "QuotaBucket":
+    def from_used(cls, *, id: str, label: str, scope: str, used_percent: object, window_seconds: int | None, resets_at: int | None, quality: QuotaQuality = "exact", observed_at: int | None = None) -> "QuotaBucket":
         used = normalize_percent(used_percent)
-        return cls(id=id, label=label, scope=scope, used_percent=used, remaining_percent=normalize_percent(100.0 - used), window_seconds=window_seconds, resets_at=resets_at, quality=quality)
+        return cls(id=id, label=label, scope=scope, used_percent=used, remaining_percent=normalize_percent(100.0 - used), window_seconds=window_seconds, resets_at=resets_at, quality=quality, observed_at=observed_at)
 
     @classmethod
     def from_remaining(cls, *, id: str, label: str, scope: str, remaining_percent: object, window_seconds: int | None, resets_at: int | None, quality: QuotaQuality = "exact") -> "QuotaBucket":
@@ -62,7 +68,7 @@ class QuotaBucket:
         return cls(id=id, label=label, scope=scope, used_percent=normalize_percent(100.0 - remaining), remaining_percent=remaining, window_seconds=window_seconds, resets_at=resets_at, quality=quality)
 
     def to_dict(self) -> dict[str, object]:
-        return {"id": self.id, "label": self.label, "scope": self.scope, "used_percent": round(self.used_percent, 3), "remaining_percent": round(self.remaining_percent, 3), "window_seconds": self.window_seconds, "resets_at": self.resets_at, "quality": self.quality}
+        return {"id": self.id, "label": self.label, "scope": self.scope, "used_percent": round(self.used_percent, 3), "remaining_percent": round(self.remaining_percent, 3), "window_seconds": self.window_seconds, "resets_at": self.resets_at, "quality": self.quality, "observed_at": self.observed_at}
 
 
 @dataclass(frozen=True, slots=True)

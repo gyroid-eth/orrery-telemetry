@@ -12,6 +12,7 @@ import time
 import pytest
 
 from dashboard import claude_quota_observe
+from dashboard.quotas import claude as claude_quota
 from dashboard.quotas import codex as codex_quota
 from dashboard.quotas.antigravity import AntigravityQuotaProvider
 from dashboard.quotas.base import QuotaBucket, QuotaSnapshot
@@ -354,3 +355,48 @@ def test_observer_without_exec_still_prints_its_own_line(tmp_path, monkeypatch, 
 
     assert code == 0
     assert captured.out.strip() == "[Opus] | 5h 60% left"
+
+
+def test_observer_carries_a_model_window_a_later_session_did_not_report(tmp_path, monkeypatch, capsys):
+    """An Opus session reports no Fable window; the last one must survive."""
+    snapshot = tmp_path / "claude-quota.json"
+    fable = json.dumps({"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 5},
+                                        "model_scoped": [{"display_name": "Fable", "utilization": 0.67,
+                                                          "resets_at": "2099-01-01T00:00:00Z"}]}})
+    opus = json.dumps({"rate_limits": {"five_hour": {"used_percentage": 20, "resets_at": 5}}})
+
+    _observe([], fable, tmp_path, monkeypatch, capsys)
+    _observe([], opus, tmp_path, monkeypatch, capsys)
+
+    stored = json.loads(snapshot.read_text(encoding="utf-8"))
+    assert stored["rate_limits"]["five_hour"]["used_percentage"] == 20
+    carried = stored["rate_limits"]["model_scoped"]
+    assert [entry["display_name"] for entry in carried] == ["Fable"]
+    assert carried[0]["utilization"] == 0.67
+    assert carried[0]["observed_at"] <= stored["observed_at"]
+
+    parsed = claude_quota.parse_claude_statusline(stored, observed_at=stored["observed_at"] + 60)
+    window = next(b for b in parsed.buckets if b.id == "model-fable")
+    assert round(window.remaining_percent) == 33
+    assert window.observed_at == carried[0]["observed_at"]
+
+
+def test_observer_drops_a_model_window_once_it_has_reset(tmp_path, monkeypatch, capsys):
+    expired = json.dumps({"rate_limits": {"model_scoped": [{"display_name": "Fable", "utilization": 0.67,
+                                                            "resets_at": "2000-01-01T00:00:00Z"}]}})
+    _observe([], expired, tmp_path, monkeypatch, capsys)
+    _observe([], json.dumps({"rate_limits": {"five_hour": {"used_percentage": 20, "resets_at": 5}}}),
+             tmp_path, monkeypatch, capsys)
+
+    stored = json.loads((tmp_path / "claude-quota.json").read_text(encoding="utf-8"))
+    assert "model_scoped" not in stored["rate_limits"]
+
+
+def test_a_fresh_model_window_is_not_marked_as_carried(tmp_path, monkeypatch, capsys):
+    payload = json.dumps({"rate_limits": {"model_scoped": [{"display_name": "Fable", "utilization": 0.1,
+                                                            "resets_at": "2099-01-01T00:00:00Z"}]}})
+    _observe([], payload, tmp_path, monkeypatch, capsys)
+    stored = json.loads((tmp_path / "claude-quota.json").read_text(encoding="utf-8"))
+
+    parsed = claude_quota.parse_claude_statusline(stored, observed_at=stored["observed_at"])
+    assert next(b for b in parsed.buckets if b.id == "model-fable").observed_at is None

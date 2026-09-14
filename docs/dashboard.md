@@ -70,7 +70,7 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ### 残量（LEFT）
 
-ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。
+ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。model 別の枠は、その model で動いている session だけが報告します。observer は報告されなくなった枠を reset まで持ち越し、dial に `seen HH:MM`（最後に見えた時刻）を添えます。週次の枠は reset まで減らないので、持ち越した値は下限として読めます。
 
 - 数字は provider が返した通常枠のうち残りが最も少ない window で、色は残りが 50% 以下で amber、20% 以下で alert になります
 - 表示する provider は SETTINGS（NETWORK タブ）の USAGE で選べます。隠した provider は pill と展開表示の両方から消えます。設定はこの browser にだけ残ります

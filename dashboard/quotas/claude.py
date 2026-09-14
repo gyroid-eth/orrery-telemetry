@@ -130,6 +130,10 @@ def parse_claude_statusline(
             if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
                 continue
             slug = "".join(ch if ch.isalnum() else "-" for ch in name.strip().lower()).strip("-")
+            # Claude Code reports only the running model's window, so the
+            # observer carries the others until they reset. Such a window keeps
+            # the time it was last seen; a window seen just now keeps None.
+            seen = _int_or_none(entry.get("observed_at"))
             buckets.append(
                 QuotaBucket.from_used(
                     id=f"model-{slug or 'model'}",
@@ -139,6 +143,7 @@ def parse_claude_statusline(
                     window_seconds=7 * 24 * 60 * 60,
                     resets_at=_epoch_or_none(entry.get("resets_at")),
                     quality="exact",
+                    observed_at=seen if seen is not None and seen < observed_at else None,
                 )
             )
 

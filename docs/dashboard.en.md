@@ -66,7 +66,7 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 
 ### Usage left (LEFT)
 
-The header's `LEFT` is separate from each card's context remaining: it is **what is left of the provider account's usage limits**. It exists to answer "where do I send the next task" when several providers run side by side, and shows each provider's logo with its remaining %. Clicking opens a dial per window the provider returned (5h, 7d, a model-specific cap, …) with the next reset time.
+The header's `LEFT` is separate from each card's context remaining: it is **what is left of the provider account's usage limits**. It exists to answer "where do I send the next task" when several providers run side by side, and shows each provider's logo with its remaining %. Clicking opens a dial per window the provider returned (5h, 7d, a model-specific cap, …) with the next reset time. Only a session running that model reports its window, so the observer carries a window it stops hearing about until it resets and the dial notes `seen HH:MM`, the time it was last reported — a weekly window cannot fall before it resets, so the carried value reads as a floor.
 
 - The number is the ordinary window with the least remaining; it turns amber at 50% and below and alert at 20% and below
 - Which providers appear is chosen under USAGE in SETTINGS (NETWORK tab). A hidden provider leaves both the pill and the expanded view. The choice stays in this browser only

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 
 
 def _snapshot_path() -> pathlib.Path:
@@ -48,12 +49,70 @@ def _replace_snapshot(temporary: pathlib.Path, target: pathlib.Path) -> None:
             delay *= 2
 
 
+def _reset_epoch(value: object) -> int | None:
+    """`resets_at` arrives as an epoch on the account windows, ISO per model."""
+    if type(value) is int:
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+    return None
+
+
+def _carry_model_windows(rate_limits: dict, now: int) -> None:
+    """Keep the per-model windows a later session did not report.
+
+    Claude Code projects `model_scoped` for the model the session runs, so an
+    Opus session reports no Fable window at all and a snapshot that simply
+    replaced the list would drop it. A weekly window's utilization cannot fall
+    before it resets, so the last value stays a valid floor until `resets_at`;
+    each entry carries the time it was seen so the dashboard can say how old
+    the number is.
+    """
+    kept: dict[str, dict] = {}
+    for entry in _previous_model_windows():
+        name = entry.get("display_name")
+        resets_at = _reset_epoch(entry.get("resets_at"))
+        if isinstance(name, str) and name.strip() and resets_at is not None and resets_at > now:
+            kept[name.strip()] = entry
+    fresh = rate_limits.get("model_scoped")
+    for entry in fresh if isinstance(fresh, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("display_name")
+        if isinstance(name, str) and name.strip():
+            kept[name.strip()] = {**entry, "observed_at": now}
+    if kept:
+        rate_limits["model_scoped"] = list(kept.values())
+
+
+def _previous_model_windows() -> list[dict]:
+    try:
+        stored = json.loads(_snapshot_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    rate_limits = stored.get("rate_limits") if isinstance(stored, dict) else None
+    windows = rate_limits.get("model_scoped") if isinstance(rate_limits, dict) else None
+    return [entry for entry in windows if isinstance(entry, dict)] if isinstance(windows, list) else []
+
+
 def _write_snapshot(rate_limits: object) -> None:
     if not isinstance(rate_limits, dict):
         return
     target = _snapshot_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"observed_at": int(time.time()), "rate_limits": rate_limits}
+    now = int(time.time())
+    rate_limits = dict(rate_limits)
+    _carry_model_windows(rate_limits, now)
+    payload = {"observed_at": now, "rate_limits": rate_limits}
     temporary: pathlib.Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
