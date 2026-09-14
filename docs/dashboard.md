@@ -82,7 +82,7 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 | provider | 取得方法 | 必要な設定 |
 | --- | --- | --- |
 | Codex | `codex app-server` の `account/rateLimits/read` を読みます | なし。`codex` にログイン済みなら表示されます |
-| Claude Code | statusLine に渡される rate limit を observer が保存し、それを読みます。Claude Code が API 応答を受けた後にしか更新されないので、しばらく使っていないと `WAITING FOR UPDATE` になります | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。既に自前の statusLine がある場合は、その中から同じ script に stdin を渡してください |
+| Claude Code | statusLine に渡される rate limit を observer が保存し、それを読みます。Claude Code が API 応答を受けた後にしか更新されないので、しばらく使っていないと `WAITING FOR UPDATE` になります | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。自前の statusLine がある場合は `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <既存のコマンド>` と包みます。`--exec` は観測だけを行い、payload をそのまま渡して出力を素通しします |
 | Antigravity | read-only の usage を読みます | optional provider の導入と opt-in が必要です（[Antigravity](antigravity.md)） |
 
 API は `GET /api/quotas` で、provider ごとに 60 秒 cache し、失敗時は前回の値を `stale` として返します。

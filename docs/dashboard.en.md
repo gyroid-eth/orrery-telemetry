@@ -78,7 +78,7 @@ Acquisition differs per provider (the acquisition layer was contributed by [kame
 | Provider | How it is read | Setup |
 | --- | --- | --- |
 | Codex | `account/rateLimits/read` over `codex app-server` | None. It appears once `codex` is logged in |
-| Claude Code | An observer stores the rate limits Claude Code passes to its statusLine, and the dashboard reads that snapshot. It only updates after Claude Code receives an API response, so an idle period shows `WAITING FOR UPDATE` | Set `statusLine.command` in `~/.claude/settings.json` to `python3 ~/.agentstack/dashboard/claude_quota_observe.py`. An existing statusLine is never overwritten; if you have your own, pipe its stdin through the same script |
+| Claude Code | An observer stores the rate limits Claude Code passes to its statusLine, and the dashboard reads that snapshot. It only updates after Claude Code receives an API response, so an idle period shows `WAITING FOR UPDATE` | Set `statusLine.command` in `~/.claude/settings.json` to `python3 ~/.agentstack/dashboard/claude_quota_observe.py`. An existing statusLine is never overwritten; if you have your own, wrap it as `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <your command>`, which observes only and passes the payload and the output through |
 | Antigravity | Read-only usage | Install the optional provider and opt in ([Antigravity](antigravity.md)) |
 
 The API is `GET /api/quotas`, cached 60 s per provider; on failure the previous value is returned as `stale`.
