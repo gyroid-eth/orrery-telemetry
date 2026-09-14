@@ -311,16 +311,24 @@ def _observe(argv, payload, tmp_path, monkeypatch, capsys):
     return code, capsys.readouterr()
 
 
+def _status_line_script(tmp_path, record_to=None):
+    """A stand-in for the operator's own status line, runnable on any platform."""
+    script = tmp_path / "mine.py"
+    body = "import sys\ndata = sys.stdin.read()\n"
+    if record_to is not None:
+        body += f"open({str(record_to)!r}, 'w', encoding='utf-8').write(data)\n"
+    body += "sys.stdout.write('MY LINE')\n"
+    script.write_text(body, encoding="utf-8")
+    return [sys.executable, str(script)]
+
+
 def test_observer_wrapping_a_status_line_passes_the_payload_through(tmp_path, monkeypatch, capsys):
     """--exec must observe only: the operator keeps their own status line."""
-    echo = tmp_path / "mine.sh"
-    echo.write_text("#!/bin/sh\ncat > \"$1\"\nprintf 'MY LINE'\n", encoding="utf-8")
-    echo.chmod(0o755)
     seen = tmp_path / "seen.json"
     payload = json.dumps({"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 5}}})
 
     code, captured = _observe(
-        ["--exec", "/bin/sh", str(echo), str(seen)], payload, tmp_path, monkeypatch, capsys)
+        ["--exec", *_status_line_script(tmp_path, seen)], payload, tmp_path, monkeypatch, capsys)
 
     assert code == 0
     assert captured.out == "MY LINE"
@@ -330,11 +338,8 @@ def test_observer_wrapping_a_status_line_passes_the_payload_through(tmp_path, mo
 
 
 def test_observer_keeps_the_status_line_when_the_payload_is_unreadable(tmp_path, monkeypatch, capsys):
-    echo = tmp_path / "mine.sh"
-    echo.write_text("#!/bin/sh\nprintf 'MY LINE'\n", encoding="utf-8")
-    echo.chmod(0o755)
-
-    code, captured = _observe(["--exec", "/bin/sh", str(echo)], "not json", tmp_path, monkeypatch, capsys)
+    code, captured = _observe(
+        ["--exec", *_status_line_script(tmp_path)], "not json", tmp_path, monkeypatch, capsys)
 
     assert code == 0
     assert captured.out == "MY LINE"
