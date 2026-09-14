@@ -57,8 +57,8 @@ html[data-color-theme="light"] .node .murmur .mtail{fill:var(--theme-surface-ter
 html[data-color-theme="light"] .node .murmur .mtx{fill:var(--ink);stroke:var(--theme-surface-terminal)}
 /* Provider logos are shipped as SVG files painted in bone; a file cannot read tokens, so light darkens them. */
 html[data-color-theme="light"] .idrow .prov-logo,
+html[data-color-theme="light"] .idrow .prov-logo.on,
 html[data-color-theme="light"] .node .provider-logo{filter:brightness(0)}
-html[data-color-theme="light"] .idrow .prov-logo.on{filter:brightness(0) drop-shadow(0 0 3.5px var(--amber))}
 html[data-color-theme="light"] .win,
 html[data-color-theme="light"] .netinfo,
 html[data-color-theme="light"] .sel-toggle,
