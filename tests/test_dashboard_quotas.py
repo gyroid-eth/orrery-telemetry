@@ -28,6 +28,32 @@ def test_claude_statusline_normalizes_subscription_windows():
     assert [bucket.remaining_percent for bucket in snapshot.buckets] == [76.5, 58.8]
 
 
+def test_claude_statusline_reads_model_scoped_weekly_windows():
+    # Claude Code 2.1.268 appends per-model weekly windows unscaled: utilization
+    # is a 0..1 fraction and resets_at an ISO-8601 string.
+    snapshot = parse_claude_statusline(
+        {
+            "rate_limits": {
+                "seven_day": {"used_percentage": 41.2, "resets_at": 3000},
+                "model_scoped": [
+                    {"display_name": "Fable", "utilization": 0.67, "resets_at": "1970-01-01T00:50:00Z"},
+                    {"display_name": "", "utilization": 0.1, "resets_at": None},
+                    {"display_name": "Nullish", "utilization": None, "resets_at": None},
+                    "junk",
+                ],
+            }
+        },
+        observed_at=1000,
+    )
+
+    assert [bucket.id for bucket in snapshot.buckets] == ["seven_day", "model-fable"]
+    fable = snapshot.buckets[1]
+    assert fable.label == "Fable"
+    assert fable.remaining_percent == 33.0
+    assert fable.window_seconds == 7 * 24 * 60 * 60
+    assert fable.resets_at == 3000
+
+
 def test_claude_provider_expires_old_observation(tmp_path):
     path = tmp_path / "claude-quota.json"
     path.write_text(

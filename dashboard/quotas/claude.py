@@ -11,6 +11,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +115,33 @@ def parse_claude_statusline(
             )
         )
 
+    # Per-model weekly windows (Claude Code 2.1.268+, `rate_limits.model_scoped`).
+    # The status line hands these through unscaled: `utilization` is a 0..1
+    # fraction and `resets_at` an ISO-8601 string, unlike the top-level windows.
+    model_scoped = rate_limits.get("model_scoped")
+    if isinstance(model_scoped, list):
+        for entry in model_scoped:
+            if not isinstance(entry, Mapping):
+                continue
+            name = entry.get("display_name")
+            utilization = entry.get("utilization")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+                continue
+            slug = "".join(ch if ch.isalnum() else "-" for ch in name.strip().lower()).strip("-")
+            buckets.append(
+                QuotaBucket.from_used(
+                    id=f"model-{slug or 'model'}",
+                    label=name.strip(),
+                    scope="account",
+                    used_percent=float(utilization) * 100.0,
+                    window_seconds=7 * 24 * 60 * 60,
+                    resets_at=_epoch_or_none(entry.get("resets_at")),
+                    quality="exact",
+                )
+            )
+
     if not buckets:
         return QuotaSnapshot(
             provider="claude",
@@ -143,3 +171,22 @@ def _default_snapshot_path() -> Path:
 
 def _int_or_none(value: object) -> int | None:
     return value if type(value) is int and value >= 0 else None
+
+
+def _epoch_or_none(value: object) -> int | None:
+    """Accept an epoch integer or an ISO-8601 string; anything else is unknown."""
+    if type(value) is int:
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        epoch = int(parsed.timestamp())
+        return epoch if epoch >= 0 else None
+    return None
