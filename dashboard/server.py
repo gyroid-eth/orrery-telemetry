@@ -45,6 +45,27 @@ try:
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     from providers.codex_app import CodexAppRuntimeProvider
 
+try:
+    from dashboard.quotas import build_default_service as _build_quota_service
+except ModuleNotFoundError:  # direct `python dashboard/server.py`
+    from quotas import build_default_service as _build_quota_service
+
+# Account quota telemetry is core: it reads what the local Claude and Codex
+# installs already report, so it belongs to the canonical server rather than
+# to an optional provider payload.  Acquisition lives in dashboard/quotas/.
+QUOTA_SERVICE = _build_quota_service()
+
+
+def _same_origin_request(handler) -> bool:
+    origin = (handler.headers.get("Origin") or "").strip()
+    fetch_site = (handler.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    expected_origin = f"http://{handler.headers.get('Host', '')}"
+    return (not origin or origin == expected_origin) and fetch_site in {
+        "",
+        "none",
+        "same-origin",
+    }
+
 
 def _env_path(name: str, default: str = "") -> str:
     value = os.environ.get(name, default).strip()
@@ -5579,6 +5600,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, file.read(), content_type)
             except FileNotFoundError:
                 self._send(404, b"theme asset missing", "text/plain")
+        elif path == "/api/quotas":
+            # A cold read can start an authenticated provider process. Reject a
+            # cross-origin browser request before any provider refresh begins.
+            if not _same_origin_request(self):
+                self._send(403, b'{"error":"cross_origin_quota_request"}',
+                           "application/json; charset=utf-8")
+                return
+            body = json.dumps(QUOTA_SERVICE.read_all(), ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8")
+            self._send(200, body, "application/json; charset=utf-8")
         elif path == "/api/version":
             version = _resolve_version()
             self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 1}).encode(), "application/json; charset=utf-8")

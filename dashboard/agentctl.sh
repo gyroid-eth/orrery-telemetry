@@ -268,8 +268,7 @@ case "${1:-status}" in
     open "$URL"
     ;;
   fg)
-    SERVER="$HERE/quota_server.py"
-    [[ -f "$SERVER" ]] || SERVER="$HERE/provider_server.py"
+    SERVER="$HERE/provider_server.py"
     [[ -f "$SERVER" ]] || SERVER="$HERE/server.py"
     exec "$PYTHON" "$SERVER"
     ;;

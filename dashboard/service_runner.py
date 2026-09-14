@@ -115,10 +115,7 @@ def _forward_output(stream: TextIO, logger: logging.Logger) -> None:
 
 
 def _default_server_path() -> pathlib.Path:
-    """Prefer quota telemetry, then optional providers, otherwise core."""
-    quota_server = HERE / "quota_server.py"
-    if quota_server.is_file():
-        return quota_server
+    """Prefer the optional provider-aware server, otherwise the core."""
     provider_server = HERE / "provider_server.py"
     return provider_server if provider_server.is_file() else HERE / "server.py"
 

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from http.server import ThreadingHTTPServer
+import importlib
 import json
 import threading
 import urllib.error
 import urllib.request
 
-import dashboard.quota_server as quota_server
-from dashboard import service_runner
+import dashboard.server as dashboard_server
 
 
 class _FakeQuotaService:
@@ -55,7 +55,7 @@ class _FakeQuotaService:
 
 
 def _serve_once():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), quota_server.Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dashboard_server.Handler)
     worker = threading.Thread(target=server.handle_request, daemon=True)
     worker.start()
     return server, worker
@@ -63,7 +63,7 @@ def _serve_once():
 
 def test_api_quotas_returns_partial_failure_as_200(monkeypatch):
     service = _FakeQuotaService()
-    monkeypatch.setattr(quota_server, "QUOTA_SERVICE", service)
+    monkeypatch.setattr(dashboard_server, "QUOTA_SERVICE", service)
     server, worker = _serve_once()
     try:
         with urllib.request.urlopen(
@@ -89,7 +89,7 @@ def test_api_quotas_returns_partial_failure_as_200(monkeypatch):
 
 def test_cross_origin_browser_request_is_rejected_before_provider_refresh(monkeypatch):
     service = _FakeQuotaService()
-    monkeypatch.setattr(quota_server, "QUOTA_SERVICE", service)
+    monkeypatch.setattr(dashboard_server, "QUOTA_SERVICE", service)
     server, worker = _serve_once()
     request = urllib.request.Request(
         f"http://127.0.0.1:{server.server_port}/api/quotas",
@@ -128,13 +128,33 @@ def test_non_quota_routes_are_delegated_to_underlying_dashboard():
     assert payload["api"] == 1
 
 
-def test_quota_entrypoint_composes_with_optional_provider_server_when_present():
-    provider_server = quota_server.HERE / "provider_server.py"
-    assert provider_server.is_file()
-    assert getattr(quota_server.legacy, "_GEMINI_PROVIDER_RUNTIME_INSTALLED", False) is True
+def test_optional_provider_server_still_serves_the_quota_route(monkeypatch):
+    """The endpoint is core, so an installed provider payload keeps serving it.
 
+    ``provider_server.py`` loads the core as its own module instance; the quota
+    route lives in ``server.py`` instead of in a third entry point so that this
+    instance cannot lose it.
+    """
+    provider_server = importlib.import_module("dashboard.provider_server")
+    assert getattr(provider_server, "_GEMINI_PROVIDER_RUNTIME_INSTALLED", False) is True
 
-def test_service_runner_prefers_quota_entrypoint():
-    selected = service_runner._default_server_path()
-    assert selected.name == "quota_server.py"
-    assert selected.is_file()
+    service = _FakeQuotaService()
+    monkeypatch.setattr(provider_server, "QUOTA_SERVICE", service)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), provider_server.Handler)
+    worker = threading.Thread(target=server.handle_request, daemon=True)
+    worker.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_port}/api/quotas", timeout=5
+        ) as response:
+            assert response.status == 200
+            payload = json.loads(response.read())
+    finally:
+        worker.join(timeout=6)
+        server.server_close()
+
+    assert service.calls == 1
+    assert [provider["provider"] for provider in payload["providers"]] == [
+        "codex",
+        "antigravity",
+    ]
