@@ -15832,9 +15832,37 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "ad93e04cca466b22",
+          "id": "dc5ca0692202a6b2",
           "important": false,
-          "line": 2386,
+          "line": 2387,
+          "property": "background",
+          "references": [],
+          "selector": ".tm-spark .sp-bar",
+          "tokens": [],
+          "value": "none"
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": false,
+          "id": "118b29775db02279",
+          "important": false,
+          "line": 2387,
+          "property": "border-bottom",
+          "references": [],
+          "selector": ".tm-spark .sp-bar",
+          "tokens": [],
+          "value": "0"
+        },
+        {
+          "channels": [
+            "backgroundColor"
+          ],
+          "consumer": false,
+          "id": "c3c333a08d95b093",
+          "important": false,
+          "line": 2390,
           "property": "background",
           "references": [
             "--amber"
@@ -15848,9 +15876,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c68bbb2735f12709",
+          "id": "94eaa1c4ba2a1e7f",
           "important": false,
-          "line": 2390,
+          "line": 2394,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -15866,9 +15894,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "995775dbfc05c0a2",
+          "id": "36d7137ad11355ec",
           "important": false,
-          "line": 2391,
+          "line": 2395,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15887,9 +15915,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "5ef40f9a75bf6de4",
+          "id": "c309668c4188a01a",
           "important": false,
-          "line": 2393,
+          "line": 2397,
           "property": "border",
           "references": [
             "--hair"
@@ -15905,9 +15933,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "9c9aa475d3c02487",
+          "id": "bb1e5ed3b32991ce",
           "important": false,
-          "line": 2394,
+          "line": 2398,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -15919,9 +15947,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "8adbf737ffe6dd41",
+          "id": "8bece9dccf083f5b",
           "important": false,
-          "line": 2395,
+          "line": 2399,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -15937,9 +15965,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "f9c290da39f61228",
+          "id": "5b607adc356ea760",
           "important": false,
-          "line": 2397,
+          "line": 2401,
           "property": "color",
           "references": [
             "--amber"
@@ -15956,9 +15984,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "633cfb5517785b9d",
+          "id": "5f0e9ac8327552ad",
           "important": false,
-          "line": 2398,
+          "line": 2402,
           "property": "border-color",
           "references": [
             "--theme-accent-rgb"
@@ -15975,9 +16003,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "b517522a7b9aee8d",
+          "id": "800fd5f97206b74e",
           "important": false,
-          "line": 2399,
+          "line": 2403,
           "property": "border",
           "references": [
             "--hair"
@@ -15993,9 +16021,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "38490be597d798ac",
+          "id": "ae6ffd0d12b0959d",
           "important": false,
-          "line": 2400,
+          "line": 2404,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -16007,9 +16035,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "c9f1bb509b3b451a",
+          "id": "c0094e5a149f0424",
           "important": false,
-          "line": 2404,
+          "line": 2408,
           "property": "stroke",
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -16021,9 +16049,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "ae3d1dfbd272a3e4",
+          "id": "0819cf27c78116c3",
           "important": false,
-          "line": 2405,
+          "line": 2409,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -16037,9 +16065,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "d1e179b522ed3fee",
+          "id": "5467f038b55c9017",
           "important": false,
-          "line": 2407,
+          "line": 2411,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -16053,9 +16081,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "6a6e60e11beff9fb",
+          "id": "26a32b6d44d4caf7",
           "important": false,
-          "line": 2410,
+          "line": 2414,
           "property": "stroke",
           "references": [
             "--amber"
@@ -16069,9 +16097,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "15f17e387d7e93aa",
+          "id": "9cf2d16f04c0dffe",
           "important": false,
-          "line": 2412,
+          "line": 2416,
           "property": "fill",
           "references": [
             "--amber"
@@ -16085,9 +16113,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "aedbfe785c7ad7af",
+          "id": "8b2aafac7a015028",
           "important": false,
-          "line": 2414,
+          "line": 2418,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -16103,9 +16131,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "2ce7c2bf797f47ff",
+          "id": "6c3157319c8c7c79",
           "important": false,
-          "line": 2420,
+          "line": 2424,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -16120,9 +16148,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "fb76db236b53bd48",
+          "id": "60d188a9dd6f0f04",
           "important": false,
-          "line": 2420,
+          "line": 2424,
           "property": "border",
           "references": [
             "--hair"
@@ -16138,9 +16166,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "8adb43b2b9ae0aa5",
+          "id": "46c27d2beddff074",
           "important": false,
-          "line": 2421,
+          "line": 2425,
           "property": "border-left",
           "references": [
             "--theme-accent-rgb"
@@ -16154,9 +16182,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "8855a6f471bbc448",
+          "id": "a900bfd676907e1e",
           "important": false,
-          "line": 2426,
+          "line": 2430,
           "property": "color",
           "references": [
             "--amber"
@@ -16170,9 +16198,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c25e409720e06215",
+          "id": "709fe9f9ddd4d534",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -16188,9 +16216,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "c80599f145222641",
+          "id": "33533fb8346bb4c9",
           "important": false,
-          "line": 2431,
+          "line": 2435,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -16206,9 +16234,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "15da642248ee0167",
+          "id": "c7092b8f893f530a",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "color",
           "references": [
             "--ink"
@@ -16224,9 +16252,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "7f5e4c57d55aef7c",
+          "id": "9128049fe2d60e3d",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "background",
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -16241,9 +16269,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "10243c3d9b6d5e68",
+          "id": "c5ff03605ea60e3c",
           "important": false,
-          "line": 2434,
+          "line": 2438,
           "property": "border",
           "references": [
             "--hair"
@@ -16259,9 +16287,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "58831539e038e0c9",
+          "id": "0a8c44aa9310897e",
           "important": false,
-          "line": 2436,
+          "line": 2440,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -16277,9 +16305,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "de69d3abfe1a414f",
+          "id": "6203de2c2b80ba1e",
           "important": false,
-          "line": 2436,
+          "line": 2440,
           "property": "background",
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -16294,9 +16322,9 @@
             "borderLeftColor"
           ],
           "consumer": true,
-          "id": "87a84a4ef6b1273e",
+          "id": "d54ce30c7f6c8011",
           "important": false,
-          "line": 2437,
+          "line": 2441,
           "property": "border-color",
           "references": [
             "--hair"
@@ -16312,9 +16340,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "282ee81c1a0d3575",
+          "id": "cb32b02e12a991c1",
           "important": false,
-          "line": 2437,
+          "line": 2441,
           "property": "border-left",
           "references": [
             "--amber"
@@ -16328,9 +16356,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "e3da26879e74db85",
+          "id": "81a788ec2ee7bedb",
           "important": false,
-          "line": 2438,
+          "line": 2442,
           "property": "color",
           "references": [
             "--amber"
@@ -31758,9 +31786,37 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "ba3f74f0a1a2133c",
+          "id": "21905d552c09c446",
           "important": false,
-          "line": 2386,
+          "line": 2387,
+          "property": "background",
+          "references": [],
+          "selector": ".tm-spark .sp-bar",
+          "tokens": [],
+          "value": "none"
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": false,
+          "id": "f18379f689db278c",
+          "important": false,
+          "line": 2387,
+          "property": "border-bottom",
+          "references": [],
+          "selector": ".tm-spark .sp-bar",
+          "tokens": [],
+          "value": "0"
+        },
+        {
+          "channels": [
+            "backgroundColor"
+          ],
+          "consumer": false,
+          "id": "a6b2a0d02d91b73e",
+          "important": false,
+          "line": 2390,
           "property": "background",
           "references": [
             "--amber"
@@ -31774,9 +31830,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "2d63232b6942f06e",
+          "id": "4fa334f8161aba39",
           "important": false,
-          "line": 2390,
+          "line": 2394,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -31792,9 +31848,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "1e4b61fdd68feb68",
+          "id": "7639e5d97768de46",
           "important": false,
-          "line": 2391,
+          "line": 2395,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31813,9 +31869,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "a3bd12e64af27c7c",
+          "id": "21a436918a3db7f9",
           "important": false,
-          "line": 2393,
+          "line": 2397,
           "property": "border",
           "references": [
             "--hair"
@@ -31829,9 +31885,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "0ad6871048e22f39",
+          "id": "8baa02dccf490bca",
           "important": false,
-          "line": 2394,
+          "line": 2398,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-leg .sp-chip",
@@ -31843,9 +31899,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "1ca8b2b48c0dd11b",
+          "id": "173d7a16a73c8a20",
           "important": false,
-          "line": 2395,
+          "line": 2399,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -31861,9 +31917,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "1fac5cdb28499a0a",
+          "id": "7e17caf1389fc4fd",
           "important": false,
-          "line": 2397,
+          "line": 2401,
           "property": "color",
           "references": [
             "--amber"
@@ -31880,9 +31936,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "cf8a01667b8fd19e",
+          "id": "ec28e6068ae1d398",
           "important": false,
-          "line": 2398,
+          "line": 2402,
           "property": "border-color",
           "references": [
             "--theme-accent-rgb"
@@ -31899,9 +31955,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "8793ad8ce01e92a6",
+          "id": "6f1ddcf7f0f7f4b2",
           "important": false,
-          "line": 2399,
+          "line": 2403,
           "property": "border",
           "references": [
             "--hair"
@@ -31915,9 +31971,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "7e5483bd6d203138",
+          "id": "9f9e6ced2ce68566",
           "important": false,
-          "line": 2400,
+          "line": 2404,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-frame",
@@ -31929,9 +31985,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "f38aae88f190c0cb",
+          "id": "5b64fc81f3edf147",
           "important": false,
-          "line": 2404,
+          "line": 2408,
           "property": "stroke",
           "references": [],
           "selector": ".tm-spark .sp-svg .grid",
@@ -31943,9 +31999,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "9b531425dd336274",
+          "id": "e6f54bece3c0e402",
           "important": false,
-          "line": 2405,
+          "line": 2409,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -31959,9 +32015,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "7b68abd8219e5ef1",
+          "id": "5cd724d97a246e10",
           "important": false,
-          "line": 2407,
+          "line": 2411,
           "property": "stroke",
           "references": [
             "--theme-accent-rgb"
@@ -31975,9 +32031,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "a861107a2fa85793",
+          "id": "ce38cd49950ee1a9",
           "important": false,
-          "line": 2410,
+          "line": 2414,
           "property": "stroke",
           "references": [
             "--amber"
@@ -31991,9 +32047,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "ca5988c790f1169a",
+          "id": "e3cf4d765de4a55f",
           "important": false,
-          "line": 2412,
+          "line": 2416,
           "property": "fill",
           "references": [
             "--amber"
@@ -32007,9 +32063,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "4c2137c2166f8805",
+          "id": "e70cdf111448cd4c",
           "important": false,
-          "line": 2414,
+          "line": 2418,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -32025,9 +32081,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "1b22dd99933b0a5c",
+          "id": "961a6789647c4c2c",
           "important": false,
-          "line": 2420,
+          "line": 2424,
           "property": "background",
           "references": [],
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -32042,9 +32098,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "296b3e65fb3c1622",
+          "id": "4e869a5238de5467",
           "important": false,
-          "line": 2420,
+          "line": 2424,
           "property": "border",
           "references": [
             "--hair"
@@ -32058,9 +32114,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "c27eb048b1b98d12",
+          "id": "26beafeef171d9de",
           "important": false,
-          "line": 2421,
+          "line": 2425,
           "property": "border-left",
           "references": [
             "--theme-accent-rgb"
@@ -32074,9 +32130,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "20690b161f0ee57b",
+          "id": "ce6f5ae2143c012f",
           "important": false,
-          "line": 2426,
+          "line": 2430,
           "property": "color",
           "references": [
             "--amber"
@@ -32090,9 +32146,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "1d67ed8449b1ca22",
+          "id": "218bc36ad051c6fc",
           "important": false,
-          "line": 2429,
+          "line": 2433,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -32108,9 +32164,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "a465d70b70f7b02b",
+          "id": "4a2879b8c29e6311",
           "important": false,
-          "line": 2431,
+          "line": 2435,
           "property": "color",
           "references": [
             "--ink-faint"
@@ -32126,9 +32182,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "aff7cc645b489eda",
+          "id": "65eae3b4b9f43f9e",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "color",
           "references": [
             "--ink"
@@ -32142,9 +32198,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "489bc5caec89a460",
+          "id": "f204198a7dac78e6",
           "important": false,
-          "line": 2433,
+          "line": 2437,
           "property": "background",
           "references": [],
           "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -32159,9 +32215,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "42caaca08500fd6e",
+          "id": "768ed1a5338d7f96",
           "important": false,
-          "line": 2434,
+          "line": 2438,
           "property": "border",
           "references": [
             "--hair"
@@ -32175,9 +32231,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "70b115586c514f35",
+          "id": "e492c2dbb14da306",
           "important": false,
-          "line": 2436,
+          "line": 2440,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -32193,9 +32249,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "be2ebdb682f9d9c3",
+          "id": "b26928aef20c432d",
           "important": false,
-          "line": 2436,
+          "line": 2440,
           "property": "background",
           "references": [],
           "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -32210,9 +32266,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "1afd532661f3d7e7",
+          "id": "9cedf60a82cd239c",
           "important": false,
-          "line": 2437,
+          "line": 2441,
           "property": "border-color",
           "references": [
             "--hair"
@@ -32226,9 +32282,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "8927cd85edbbd469",
+          "id": "fff8c909462ab361",
           "important": false,
-          "line": 2437,
+          "line": 2441,
           "property": "border-left",
           "references": [
             "--amber"
@@ -32242,9 +32298,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "cb089fcc1be4fa06",
+          "id": "db213e240662cb63",
           "important": false,
-          "line": 2438,
+          "line": 2442,
           "property": "color",
           "references": [
             "--amber"
@@ -34677,8 +34733,8 @@
               "value": "inset 0 12px 30px rgba(0,0,0,.18)"
             }
           ],
-          "id": "34e73e36799c0037",
-          "line": 2403,
+          "id": "81d2bc437f940ee5",
+          "line": 2407,
           "property": "box-shadow",
           "selector": ".tm-spark .sp-frame",
           "value": "inset 0 12px 30px rgba(0,0,0,.18)"
@@ -34704,8 +34760,8 @@
               "value": "0 8px 24px rgba(0,0,0,.28)"
             }
           ],
-          "id": "7753b03c9969680d",
-          "line": 2422,
+          "id": "f321aa17da4a99c8",
+          "line": 2426,
           "property": "box-shadow",
           "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
           "value": "0 8px 24px rgba(0,0,0,.28)"
@@ -35592,25 +35648,25 @@
           "value": "9px"
         },
         {
-          "line": 2388,
+          "line": 2392,
           "property": "font-size",
           "selector": ".tm-spark .sp-ttl,.tm-spark .sp-tot,.tm-spark .sp-axis",
           "value": "8.5px"
         },
         {
-          "line": 2395,
+          "line": 2399,
           "property": "font-size",
           "selector": ".tm-spark .sp-leg .sp-chip",
           "value": "7.5px"
         },
         {
-          "line": 2429,
+          "line": 2433,
           "property": "font-size",
           "selector": ".msg .who,.msg.user .who,.msg.assistant .who",
           "value": "8px"
         },
         {
-          "line": 2459,
+          "line": 2463,
           "property": "font-size",
           "selector": ".tm-exit-btn,.tm-open,.tm-x",
           "value": "11px"
@@ -49160,7 +49216,29 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "ad93e04cca466b22",
+            "id": "dc5ca0692202a6b2",
+            "important": false,
+            "references": [],
+            "selector": ".tm-spark .sp-bar",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "borderBottomColor"
+            ],
+            "consumer": false,
+            "id": "118b29775db02279",
+            "important": false,
+            "references": [],
+            "selector": ".tm-spark .sp-bar",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "backgroundColor"
+            ],
+            "consumer": false,
+            "id": "c3c333a08d95b093",
             "important": false,
             "references": [
               "--amber"
@@ -49173,7 +49251,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c68bbb2735f12709",
+            "id": "94eaa1c4ba2a1e7f",
             "important": false,
             "references": [
               "--ink-dim"
@@ -49188,7 +49266,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "995775dbfc05c0a2",
+            "id": "36d7137ad11355ec",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49206,7 +49284,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "5ef40f9a75bf6de4",
+            "id": "c309668c4188a01a",
             "important": false,
             "references": [
               "--hair"
@@ -49221,7 +49299,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "9c9aa475d3c02487",
+            "id": "bb1e5ed3b32991ce",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-leg .sp-chip",
@@ -49232,7 +49310,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "8adbf737ffe6dd41",
+            "id": "8bece9dccf083f5b",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49247,7 +49325,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "f9c290da39f61228",
+            "id": "5b607adc356ea760",
             "important": false,
             "references": [
               "--amber"
@@ -49263,7 +49341,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "633cfb5517785b9d",
+            "id": "5f0e9ac8327552ad",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49279,7 +49357,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "b517522a7b9aee8d",
+            "id": "800fd5f97206b74e",
             "important": false,
             "references": [
               "--hair"
@@ -49294,7 +49372,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "38490be597d798ac",
+            "id": "ae6ffd0d12b0959d",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-frame",
@@ -49305,7 +49383,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "c9f1bb509b3b451a",
+            "id": "c0094e5a149f0424",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-svg .grid",
@@ -49316,7 +49394,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "ae3d1dfbd272a3e4",
+            "id": "0819cf27c78116c3",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49329,7 +49407,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "d1e179b522ed3fee",
+            "id": "5467f038b55c9017",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49342,7 +49420,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "6a6e60e11beff9fb",
+            "id": "26a32b6d44d4caf7",
             "important": false,
             "references": [
               "--amber"
@@ -49355,7 +49433,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "15f17e387d7e93aa",
+            "id": "9cf2d16f04c0dffe",
             "important": false,
             "references": [
               "--amber"
@@ -49368,7 +49446,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "aedbfe785c7ad7af",
+            "id": "8b2aafac7a015028",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49383,7 +49461,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "2ce7c2bf797f47ff",
+            "id": "6c3157319c8c7c79",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -49397,7 +49475,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "fb76db236b53bd48",
+            "id": "60d188a9dd6f0f04",
             "important": false,
             "references": [
               "--hair"
@@ -49412,7 +49490,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "8adb43b2b9ae0aa5",
+            "id": "46c27d2beddff074",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -49425,7 +49503,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "8855a6f471bbc448",
+            "id": "a900bfd676907e1e",
             "important": false,
             "references": [
               "--amber"
@@ -49438,7 +49516,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c25e409720e06215",
+            "id": "709fe9f9ddd4d534",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49453,7 +49531,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "c80599f145222641",
+            "id": "33533fb8346bb4c9",
             "important": false,
             "references": [
               "--ink-faint"
@@ -49468,7 +49546,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "15da642248ee0167",
+            "id": "c7092b8f893f530a",
             "important": false,
             "references": [
               "--ink"
@@ -49483,7 +49561,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "7f5e4c57d55aef7c",
+            "id": "9128049fe2d60e3d",
             "important": false,
             "references": [],
             "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -49497,7 +49575,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "10243c3d9b6d5e68",
+            "id": "c5ff03605ea60e3c",
             "important": false,
             "references": [
               "--hair"
@@ -49512,7 +49590,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "58831539e038e0c9",
+            "id": "0a8c44aa9310897e",
             "important": false,
             "references": [
               "--ink-dim"
@@ -49527,7 +49605,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "de69d3abfe1a414f",
+            "id": "6203de2c2b80ba1e",
             "important": false,
             "references": [],
             "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -49541,7 +49619,7 @@
               "borderLeftColor"
             ],
             "consumer": true,
-            "id": "87a84a4ef6b1273e",
+            "id": "d54ce30c7f6c8011",
             "important": false,
             "references": [
               "--hair"
@@ -49556,7 +49634,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "282ee81c1a0d3575",
+            "id": "cb32b02e12a991c1",
             "important": false,
             "references": [
               "--amber"
@@ -49569,7 +49647,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "e3da26879e74db85",
+            "id": "81a788ec2ee7bedb",
             "important": false,
             "references": [
               "--amber"
@@ -62161,7 +62239,29 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "ba3f74f0a1a2133c",
+            "id": "21905d552c09c446",
+            "important": false,
+            "references": [],
+            "selector": ".tm-spark .sp-bar",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "borderBottomColor"
+            ],
+            "consumer": false,
+            "id": "f18379f689db278c",
+            "important": false,
+            "references": [],
+            "selector": ".tm-spark .sp-bar",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "backgroundColor"
+            ],
+            "consumer": false,
+            "id": "a6b2a0d02d91b73e",
             "important": false,
             "references": [
               "--amber"
@@ -62174,7 +62274,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "2d63232b6942f06e",
+            "id": "4fa334f8161aba39",
             "important": false,
             "references": [
               "--ink-dim"
@@ -62189,7 +62289,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "1e4b61fdd68feb68",
+            "id": "7639e5d97768de46",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62207,7 +62307,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "a3bd12e64af27c7c",
+            "id": "21a436918a3db7f9",
             "important": false,
             "references": [
               "--hair"
@@ -62220,7 +62320,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "0ad6871048e22f39",
+            "id": "8baa02dccf490bca",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-leg .sp-chip",
@@ -62231,7 +62331,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "1ca8b2b48c0dd11b",
+            "id": "173d7a16a73c8a20",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62246,7 +62346,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "1fac5cdb28499a0a",
+            "id": "7e17caf1389fc4fd",
             "important": false,
             "references": [
               "--amber"
@@ -62262,7 +62362,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "cf8a01667b8fd19e",
+            "id": "ec28e6068ae1d398",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62278,7 +62378,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "8793ad8ce01e92a6",
+            "id": "6f1ddcf7f0f7f4b2",
             "important": false,
             "references": [
               "--hair"
@@ -62291,7 +62391,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "7e5483bd6d203138",
+            "id": "9f9e6ced2ce68566",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-frame",
@@ -62302,7 +62402,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "f38aae88f190c0cb",
+            "id": "5b64fc81f3edf147",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-svg .grid",
@@ -62313,7 +62413,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "9b531425dd336274",
+            "id": "e6f54bece3c0e402",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62326,7 +62426,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "7b68abd8219e5ef1",
+            "id": "5cd724d97a246e10",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62339,7 +62439,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "a861107a2fa85793",
+            "id": "ce38cd49950ee1a9",
             "important": false,
             "references": [
               "--amber"
@@ -62352,7 +62452,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "ca5988c790f1169a",
+            "id": "e3cf4d765de4a55f",
             "important": false,
             "references": [
               "--amber"
@@ -62365,7 +62465,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "4c2137c2166f8805",
+            "id": "e70cdf111448cd4c",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62380,7 +62480,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "1b22dd99933b0a5c",
+            "id": "961a6789647c4c2c",
             "important": false,
             "references": [],
             "selector": ".tm-spark .sp-tip,.tm-spark .sp-tip.mail_recv, .tm-spark .sp-tip.mail_sent,.tm-spark .sp-tip.spawn, .tm-spark .sp-tip.retire,.tm-spark .sp-tip.exit",
@@ -62394,7 +62494,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "296b3e65fb3c1622",
+            "id": "4e869a5238de5467",
             "important": false,
             "references": [
               "--hair"
@@ -62407,7 +62507,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "c27eb048b1b98d12",
+            "id": "26beafeef171d9de",
             "important": false,
             "references": [
               "--theme-accent-rgb"
@@ -62420,7 +62520,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "20690b161f0ee57b",
+            "id": "ce6f5ae2143c012f",
             "important": false,
             "references": [
               "--amber"
@@ -62433,7 +62533,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "1d67ed8449b1ca22",
+            "id": "218bc36ad051c6fc",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62448,7 +62548,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "a465d70b70f7b02b",
+            "id": "4a2879b8c29e6311",
             "important": false,
             "references": [
               "--ink-faint"
@@ -62463,7 +62563,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "aff7cc645b489eda",
+            "id": "65eae3b4b9f43f9e",
             "important": false,
             "references": [
               "--ink"
@@ -62476,7 +62576,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "489bc5caec89a460",
+            "id": "f204198a7dac78e6",
             "important": false,
             "references": [],
             "selector": ".bub,.msg.user .bub,.msg.assistant .bub",
@@ -62490,7 +62590,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "42caaca08500fd6e",
+            "id": "768ed1a5338d7f96",
             "important": false,
             "references": [
               "--hair"
@@ -62503,7 +62603,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "70b115586c514f35",
+            "id": "e492c2dbb14da306",
             "important": false,
             "references": [
               "--ink-dim"
@@ -62518,7 +62618,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "be2ebdb682f9d9c3",
+            "id": "b26928aef20c432d",
             "important": false,
             "references": [],
             "selector": ".bub.tool,.bub.think,.bub.tool.res",
@@ -62532,7 +62632,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "1afd532661f3d7e7",
+            "id": "9cedf60a82cd239c",
             "important": false,
             "references": [
               "--hair"
@@ -62545,7 +62645,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "8927cd85edbbd469",
+            "id": "fff8c909462ab361",
             "important": false,
             "references": [
               "--amber"
@@ -62558,7 +62658,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "cb089fcc1be4fa06",
+            "id": "db213e240662cb63",
             "important": false,
             "references": [
               "--amber"
@@ -62651,8 +62751,8 @@
           "ab2ab3da88061795",
           "976a3356c21cd734",
           "2a899da3bf8852b8",
-          "34e73e36799c0037",
-          "7753b03c9969680d"
+          "81d2bc437f940ee5",
+          "f321aa17da4a99c8"
         ],
         "unit": "declaration"
       },
@@ -62804,10 +62904,10 @@
           "88b3b3a1fe47d7b8",
           "c0bb8f0992b73464",
           "52985e2e83c54c3a",
-          "c6738508043bb382",
-          "9e6718d15683cc49",
-          "b437aaaa563db448",
-          "f77889d6d38bcab5"
+          "fc632ff85420a275",
+          "0e183dd9ae7380d3",
+          "bf490cf1f314cb1d",
+          "aec1968ea700bf3c"
         ],
         "unit": "declaration"
       },
@@ -63041,9 +63141,9 @@
     },
     "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
     "schema_version": 1,
-    "source_digest": "c9c9073e12c7b48b2028cdd93d6f61957b017d58b3442be9911c95c14029ae44"
+    "source_digest": "95a567f8607095f6677cfb4a58a383612278328869b2fdda0a0b3a1686e87242"
   },
   "schema_version": 1,
   "source": "dashboard/index.html",
-  "source_digest": "c9c9073e12c7b48b2028cdd93d6f61957b017d58b3442be9911c95c14029ae44"
+  "source_digest": "95a567f8607095f6677cfb4a58a383612278328869b2fdda0a0b3a1686e87242"
 }
