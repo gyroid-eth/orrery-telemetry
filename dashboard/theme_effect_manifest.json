@@ -13363,14 +13363,16 @@
             "fill"
           ],
           "consumer": false,
-          "id": "e3a41da24604e166",
+          "id": "f64241aa7ef00a32",
           "important": false,
           "line": 2079,
           "property": "fill",
-          "references": [],
+          "references": [
+            "--shade"
+          ],
           "selector": ".node .portrait-shade",
           "tokens": [],
-          "value": "#000"
+          "value": "var(--shade)"
         },
         {
           "channels": [
@@ -13603,28 +13605,32 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "a041e918b22da0a6",
+          "id": "99b77ae300b425fd",
           "important": false,
           "line": 2108,
           "property": "stroke",
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc-glow.ctx-low",
           "tokens": [],
-          "value": "#d87863"
+          "value": "var(--alert)"
         },
         {
           "channels": [
             "stroke"
           ],
           "consumer": false,
-          "id": "16d4230b6e7ea157",
+          "id": "2a5c6d900b360683",
           "important": false,
           "line": 2109,
           "property": "stroke",
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc.ctx-low",
           "tokens": [],
-          "value": "#d87863"
+          "value": "var(--alert)"
         },
         {
           "channels": [
@@ -29346,14 +29352,16 @@
             "fill"
           ],
           "consumer": false,
-          "id": "29464f0657ea4ece",
+          "id": "b82ab14b432d52ed",
           "important": false,
           "line": 2079,
           "property": "fill",
-          "references": [],
+          "references": [
+            "--shade"
+          ],
           "selector": ".node .portrait-shade",
           "tokens": [],
-          "value": "#000"
+          "value": "var(--shade)"
         },
         {
           "channels": [
@@ -29586,28 +29594,32 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "fc42e69164ad3467",
+          "id": "c39a523f8d88b75f",
           "important": false,
           "line": 2108,
           "property": "stroke",
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc-glow.ctx-low",
           "tokens": [],
-          "value": "#d87863"
+          "value": "var(--alert)"
         },
         {
           "channels": [
             "stroke"
           ],
           "consumer": false,
-          "id": "02b93970eed754e4",
+          "id": "222aff68fae5f019",
           "important": false,
           "line": 2109,
           "property": "stroke",
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc.ctx-low",
           "tokens": [],
-          "value": "#d87863"
+          "value": "var(--alert)"
         },
         {
           "channels": [
@@ -47107,9 +47119,11 @@
               "fill"
             ],
             "consumer": false,
-            "id": "e3a41da24604e166",
+            "id": "f64241aa7ef00a32",
             "important": false,
-            "references": [],
+            "references": [
+              "--shade"
+            ],
             "selector": ".node .portrait-shade",
             "tokens": []
           },
@@ -47302,9 +47316,11 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "a041e918b22da0a6",
+            "id": "99b77ae300b425fd",
             "important": false,
-            "references": [],
+            "references": [
+              "--alert"
+            ],
             "selector": ".node .ctx-arc-glow.ctx-low",
             "tokens": []
           },
@@ -47313,9 +47329,11 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "16d4230b6e7ea157",
+            "id": "2a5c6d900b360683",
             "important": false,
-            "references": [],
+            "references": [
+              "--alert"
+            ],
             "selector": ".node .ctx-arc.ctx-low",
             "tokens": []
           },
@@ -60165,9 +60183,11 @@
               "fill"
             ],
             "consumer": false,
-            "id": "29464f0657ea4ece",
+            "id": "b82ab14b432d52ed",
             "important": false,
-            "references": [],
+            "references": [
+              "--shade"
+            ],
             "selector": ".node .portrait-shade",
             "tokens": []
           },
@@ -60360,9 +60380,11 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "fc42e69164ad3467",
+            "id": "c39a523f8d88b75f",
             "important": false,
-            "references": [],
+            "references": [
+              "--alert"
+            ],
             "selector": ".node .ctx-arc-glow.ctx-low",
             "tokens": []
           },
@@ -60371,9 +60393,11 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "02b93970eed754e4",
+            "id": "222aff68fae5f019",
             "important": false,
-            "references": [],
+            "references": [
+              "--alert"
+            ],
             "selector": ".node .ctx-arc.ctx-low",
             "tokens": []
           },
@@ -62991,9 +63015,9 @@
     },
     "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
     "schema_version": 1,
-    "source_digest": "6c8619f1094f5aaeefe24e77bb2fa1db1ba67f87ac07d44816576b9f3b4498cb"
+    "source_digest": "c1d19b2fd05f074d398115c24dc2654fac741ae751cbada6e0e93ef1861e504c"
   },
   "schema_version": 1,
   "source": "dashboard/index.html",
-  "source_digest": "6c8619f1094f5aaeefe24e77bb2fa1db1ba67f87ac07d44816576b9f3b4498cb"
+  "source_digest": "c1d19b2fd05f074d398115c24dc2654fac741ae751cbada6e0e93ef1861e504c"
 }

@@ -46,9 +46,9 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 - wordmark 20px / 600 / 字間 .12em。副題 `TMUX · ORRERY MAIL` は 9px / .2em
 - ラベル・chip: 9〜9.5px、字間 .12〜.22em、大文字
-- 本文: 現在の行 12px、ORD / RX 11.5px（行高 1.5）、入力 13px
+- 本文: 現在の行 12px、ORD / RX 11.5px（行高 1.5）、入力 12px
 - agent 名 17px / 500、統計の数字 18px / 500、NEW AGENT のタイトル 24px / 500、detail の名前 19px
-- 原則: 9px 未満の文字を新しく作らない。現状: modal の節ラベル 8.5px、identity の状態 6.5px、network の役割 6.8px、EXIT / KILL 8px が既にある
+- 原則: 8.5px 未満の文字を新しく作らない。節ラベルの最小は 8.5px（modal の節ラベル、副題）。それより小さい既存の文字は状態の chip と補足に限る: kicker `NEW AGENT` と identity の hint 8px、節の右肩 meta と model card の tone 7.5px、`LAUNCH IDENTITY` と ADVANCED の meta 7px、identity の状態 chip 6.5px、network の役割 6.8px、EXIT / KILL 8px。これらは増やさない
 
 ## 4. 色
 
@@ -62,6 +62,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 | `--hair` / `--hair-2` | ink の 8.5% / 4.5% | 罫線。面の境界はこれだけ |
 | `--amber` / `--amber-glow` | `#f2b65a` / 22% | 注意と選択。唯一の暖色 accent |
 | `--alert` | `#d87863` | 要対応（ASK、残量僅少） |
+| `--shade` | `#000` | portrait に落とす影（両テーマで黒のまま） |
 | `--accent-control` | `var(--amber)` | 操作の現在値（slider の塗り・つまみ・数値）。dark では amber、light では紙の上で立つ teal（旧 `--cyan` の light 値と同じ）に差し替わる |
 | `--ln-local` / `--ln-remote` / `--ln-delegate` | `#5fb3a3` / `#b58be0` / `#83b06a` | spawn の系統。network で parent / child / both を表す |
 
@@ -154,10 +155,10 @@ NEW AGENT、agent detail、edge thread drawer は同じガラス材を共有し�
 - 材質は中立です。白 9% の 1px 枠、角丸 13px、地は白 4.5% から 140px で透明になる grade を `rgba(17,19,25,.66)` に重ね、blur 26px と saturate 1.12、影 `0 30px 90px rgba(0,0,0,.52)`。古い層の amber 枠は上書きで消え、四隅の角は `display:none` にしてあり、出しません
 - backdrop は `rgba(8,9,13,.62)` に blur 10px（NEW AGENT と detail だけ）。NEW AGENT の frame は中央、幅 `min(790px, 100vw - 48px)`、最大高 92vh で内側を scroll。detail は幅 `min(1180px, 100vw - 48px)`、高さ `min(88vh, 900px)`。drawer は右端に固定（上 68px、下 14px、幅 `min(390px, 100vw - 18px)`）で、角丸は左側だけ、右の枠は無し
 - header は padding 17px 19px。kicker `NEW AGENT` 8px、タイトル `LAUNCH AN AGENT` は serif 24px / 500、副題 `IDENTITY · ENGINE · DIRECTORY · TASK` は mono 8.5px。右上の × は 30px 角
-- body は 2 列 grid（間隔 12px 16px、padding 18px 19px）で主要 4 節は全幅。identity / engine / directory は `--hair` の枠と角丸 10px、黒系 30% の地、padding 12px。task は枠なし。節ラベルは 8.5px / .14em で、左に 11×1px の amber の短い線（`▸` ではありません）
+- body は 2 列 grid（間隔 12px 16px、padding 18px 19px）で主要 4 節は全幅。identity / engine / directory は `--hair` の枠と角丸 10px、黒系 30% の地、padding 12px。task も同じ枠。節ラベルは 8.5px / .14em で、左に 11×1px の amber の短い線（`▸` ではありません）
 - identity は任意。AUTO NAME の preview（44px の丸 portrait）と横 scroll の scientist 列（幅 68px、42px の丸 portrait、角丸 8px）。選択は amber 22% の地と 55% の枠、使えないものは opacity .3
 - engine は provider の tab（最小幅 108px）と model の card（最小幅 155px、間隔 7px）、必要な provider には effort の chip。選択肢は catalog から来るので固定で列挙しません
-- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。選択した provider が resources を受け付ける場合だけ task の直下、ADVANCED の外に resources 行を出し、`resources_required` を宣言する provider では必須にします。入力は 13px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
+- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。選択した provider が resources を受け付ける場合だけ task の直下、ADVANCED の外に resources 行を出し、`resources_required` を宣言する provider では必須にします。入力は 12px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
 - 4 節の下に折りたたみの ADVANCED。foot は上に罫線、padding 13px 19px。CANCEL は hairline の枠だけ、SPAWN は透明に amber 40% の枠で、hover / focus で amber に塗る。主操作を常時塗らないのは、塗りを「押せる」合図に取っておくためです
 - 背景クリック、`Esc`、× で閉じます（送信中は閉じない）。現状: 閉じたあとの focus 復帰は未実装です。破壊的操作（KILL / EXIT）は card 上では 2 段階（arm → confirm、5 秒で解除）です。現状: detail にも EXIT があり、こちらは 1 段階で送信します。原則は 2 段階で、detail 側は追いついていません
 
@@ -198,7 +199,7 @@ python3 scripts/dashboard_theme_manifest.py --check
 4. 帯は折りたためるようにし、agent card を押し下げない（§5）
 5. 古い値には時刻を添える。取れない・使えないは文字で言う（fail-closed の文言）
 6. chrome のラベルは簡潔な英語の大文字（`USAGE · LEFT`、`WAITING FOR UPDATE`）。agent が生成した内容は原文の locale を保つ
-7. 9px 未満の文字を作らない
+7. 8.5px 未満の文字を作らない（§3 の既存例外は増やさない）
 8. 何かを削るなら消さずに沈める（opacity）。履歴と系譜は消えないことに価値がある。履歴範囲や dense のように「いま見せない」は別で、それは表示の範囲の話です
 
 ## 11. 変更前の確認

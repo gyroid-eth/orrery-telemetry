@@ -46,9 +46,9 @@ Sizes (dark implementation values):
 
 - wordmark 20px / 600 / .12em tracking; the subtitle `TMUX · ORRERY MAIL` 9px / .2em
 - labels, chips: 9–9.5px, .12–.22em tracking, uppercase
-- body: the current line 12px, ORD / RX 11.5px (line-height 1.5), inputs 13px
+- body: the current line 12px, ORD / RX 11.5px (line-height 1.5), inputs 12px
 - agent name 17px / 500, header statistics 18px / 500, NEW AGENT title 24px / 500, detail name 19px
-- Principle: create nothing below 9px. Current state: modal section labels 8.5px, identity status 6.5px, network roles 6.8px, EXIT / KILL 8px already exist
+- Principle: create nothing below 8.5px. Section labels bottom out at 8.5px (modal section labels, subtitle). The existing text below that is limited to status chips and asides: the `NEW AGENT` kicker and identity hint 8px, section meta and model card tone 7.5px, `LAUNCH IDENTITY` and the ADVANCED meta 7px, identity status chips 6.5px, network roles 6.8px, EXIT / KILL 8px. Do not add to this list
 
 ## 4. Colour
 
@@ -62,6 +62,7 @@ The whole surface is near-monochrome. Hue carries meaning, so its uses are limit
 | `--hair` / `--hair-2` | ink at 8.5% / 4.5% | hairlines; the only surface boundaries |
 | `--amber` / `--amber-glow` | `#f2b65a` / 22% | attention and selection; the one warm accent |
 | `--alert` | `#d87863` | needs a human (ASK, context nearly exhausted) |
+| `--shade` | `#000` | the shade dropped on portraits (stays black in both themes) |
 | `--accent-control` | `var(--amber)` | the current value of a control (slider fill, thumb, number). Amber in dark; light swaps in the teal that stands on paper (the same value the old `--cyan` takes in light) |
 | `--ln-local` / `--ln-remote` / `--ln-delegate` | `#5fb3a3` / `#b58be0` / `#83b06a` | spawn lineage; parent / child / both in NETWORK |
 
@@ -154,10 +155,10 @@ NEW AGENT, agent detail, and the edge thread drawer share one glass material. Wh
 - The material is neutral: a 1px 9% white border, 13px radius, a ground that grades from 4.5% white to transparent over 140px on top of `rgba(17,19,25,.66)`, blur 26px with saturate 1.12, shadow `0 30px 90px rgba(0,0,0,.52)`. The old layer's amber frame is overridden away and its corner marks are `display:none`; neither appears
 - The backdrop is `rgba(8,9,13,.62)` with blur 10px (NEW AGENT and detail only). The NEW AGENT frame is centred, `min(790px, 100vw - 48px)` wide, at most 92vh high, scrolling inside. Detail is `min(1180px, 100vw - 48px)` wide and `min(88vh, 900px)` high. The drawer is fixed to the right edge (top 68px, bottom 14px, width `min(390px, 100vw - 18px)`), rounded on the left only, with no right border
 - Header padding 17px 19px. Kicker `NEW AGENT` 8px, title `LAUNCH AN AGENT` serif 24px / 500, subtitle `IDENTITY · ENGINE · DIRECTORY · TASK` mono 8.5px. The top-right × is 30px square
-- The body is a two-column grid (gaps 12px 16px, padding 18px 19px) with the four main sections full width. identity / engine / directory have a `--hair` border, 10px radius, a 30% near-black ground, padding 12px; task has no frame. Section labels are 8.5px / .14em with a short 11×1px amber line on the left (not `▸`)
+- The body is a two-column grid (gaps 12px 16px, padding 18px 19px) with the four main sections full width. identity / engine / directory have a `--hair` border, 10px radius, a 30% near-black ground, padding 12px; task has the same frame. Section labels are 8.5px / .14em with a short 11×1px amber line on the left (not `▸`)
 - identity is optional: an AUTO NAME preview (44px round portrait) and a horizontally scrolling scientist strip (68px wide, 42px round portrait, 8px radius). Selection is amber at 22% with a 55% border; unavailable entries are at opacity .3
 - engine is provider tabs (minimum 108px) and model cards (minimum 155px, 7px gaps), plus effort chips for providers that need them. The options come from the catalog and are not enumerated here
-- directory is preset pills beside a typeahead input. task is a required textarea (minimum 96px high, line-height 1.55). A resources row appears directly below task, outside ADVANCED, only when the selected provider accepts resources; it is mandatory for providers that declare `resources_required`. Inputs are 13px, padding 8px 11px, 7px radius, ground `rgba(11,13,17,.52)`; focus adds an amber border and a faint glow
+- directory is preset pills beside a typeahead input. task is a required textarea (minimum 96px high, line-height 1.55). A resources row appears directly below task, outside ADVANCED, only when the selected provider accepts resources; it is mandatory for providers that declare `resources_required`. Inputs are 12px, padding 8px 11px, 7px radius, ground `rgba(11,13,17,.52)`; focus adds an amber border and a faint glow
 - Below the four sections, a collapsible ADVANCED. The foot has a rule above and padding 13px 19px. CANCEL is hairline only; SPAWN is transparent with a 40% amber border and fills amber on hover / focus. The primary action is not filled at rest so that the fill can mean "pressable"
 - Closes on backdrop click, `Esc`, and × (not while submitting). Current state: focus is not returned after closing. Destructive actions (KILL / EXIT) on the card are two-step (arm → confirm, released after 5 s). Current state: detail also has an EXIT, and that one submits in a single step. The principle is two steps; the detail side has not caught up
 
@@ -198,7 +199,7 @@ The mechanism is described under [Theme axis bridge in Dashboard](dashboard.en.m
 4. Make bands collapsible and never push agent cards down (§5)
 5. Attach a time to any stale value. Say "unavailable" or "not usable" in words (fail-closed copy)
 6. Chrome labels are short English capitals (`USAGE · LEFT`, `WAITING FOR UPDATE`). Agent-generated content keeps its original locale
-7. Nothing below 9px
+7. Nothing below 8.5px (do not extend the existing exceptions in §3)
 8. To remove something, sink it (opacity) rather than delete it. History and lineage are valuable because they do not disappear. The history range and dense mode are a different thing: they decide what is in view, not what exists
 
 ## 11. Checks before a change

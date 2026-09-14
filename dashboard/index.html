@@ -1985,7 +1985,7 @@
     --mono:'IBM Plex Mono',ui-monospace,monospace;
     --serif:'Fraunces',Georgia,serif;
     --void:var(--bg);--bone:var(--ink);--bone-dim:var(--ink-dim);
-    --amber-deep:#9f7337;--cyan:var(--amber);--alert:#d87863;
+    --amber-deep:#9f7337;--cyan:var(--amber);--alert:#d87863;--shade:#000;
     --line:var(--hair);--line-soft:var(--hair-2);
     --glow-a:0 0 14px var(--amber-glow);
     --glow-c:0 0 10px rgba(236,229,214,.16)}
@@ -2076,7 +2076,7 @@
   .node.run .node-halo{opacity:.34}
   .node.selnode .node-halo{opacity:.24}
   #net.focus .node.hl .node-halo{opacity:.2}
-  .node .portrait-shade{fill:#000;opacity:.08;pointer-events:none;transition:opacity .15s}
+  .node .portrait-shade{fill:var(--shade);opacity:.08;pointer-events:none;transition:opacity .15s}
   .node.run .portrait-shade{opacity:0}
   .node.finished .portrait-shade,.node.gone .portrait-shade{opacity:.54}
   .node.retired .portrait-shade{opacity:.66}
@@ -2105,8 +2105,8 @@
   .node .ctx-track{stroke:rgba(236,229,214,.1);stroke-width:1.3}
   .node .ctx-arc-glow{stroke:var(--amber);stroke-width:4.2;opacity:.16}
   .node .ctx-arc{stroke:var(--amber);stroke-width:1.55}
-  .node .ctx-arc-glow.ctx-low{stroke:#d87863;opacity:.22}
-  .node .ctx-arc.ctx-low{stroke:#d87863}
+  .node .ctx-arc-glow.ctx-low{stroke:var(--alert);opacity:.22}
+  .node .ctx-arc.ctx-low{stroke:var(--alert)}
   .node .motion-ring{
     fill:none;stroke:var(--amber);stroke-width:1.6;stroke-linecap:round;
     stroke-dasharray:30 70;opacity:0;transform-box:fill-box;transform-origin:center}
@@ -13884,9 +13884,11 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "e3a41da24604e166",
+          "id": "f64241aa7ef00a32",
           "important": false,
-          "references": [],
+          "references": [
+            "--shade"
+          ],
           "selector": ".node .portrait-shade",
           "tokens": []
         },
@@ -14079,9 +14081,11 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "a041e918b22da0a6",
+          "id": "99b77ae300b425fd",
           "important": false,
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc-glow.ctx-low",
           "tokens": []
         },
@@ -14090,9 +14094,11 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "16d4230b6e7ea157",
+          "id": "2a5c6d900b360683",
           "important": false,
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc.ctx-low",
           "tokens": []
         },
@@ -26942,9 +26948,11 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "29464f0657ea4ece",
+          "id": "b82ab14b432d52ed",
           "important": false,
-          "references": [],
+          "references": [
+            "--shade"
+          ],
           "selector": ".node .portrait-shade",
           "tokens": []
         },
@@ -27137,9 +27145,11 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "fc42e69164ad3467",
+          "id": "c39a523f8d88b75f",
           "important": false,
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc-glow.ctx-low",
           "tokens": []
         },
@@ -27148,9 +27158,11 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "02b93970eed754e4",
+          "id": "222aff68fae5f019",
           "important": false,
-          "references": [],
+          "references": [
+            "--alert"
+          ],
           "selector": ".node .ctx-arc.ctx-low",
           "tokens": []
         },
@@ -29768,7 +29780,7 @@ OFF = legacy snapshot+comet mode">
   },
   "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
   "schema_version": 1,
-  "source_digest": "6c8619f1094f5aaeefe24e77bb2fa1db1ba67f87ac07d44816576b9f3b4498cb"
+  "source_digest": "c1d19b2fd05f074d398115c24dc2654fac741ae751cbada6e0e93ef1861e504c"
 }
 </script>
 <script>
