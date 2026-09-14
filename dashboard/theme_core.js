@@ -92,10 +92,7 @@
       '--amber-deep':hex(roles.accent.rgb),'--amber-glow':'transparent',
       '--ln-local':hex(roles.local.rgb),'--ln-remote':hex(roles.remote.rgb),
       '--ln-delegate':hex(roles.delegate.rgb),'--alert':hex(roles.alert.rgb),
-      // --cyan is the old layer's name for the accent (dark aliases it to
-      // --amber); light must resolve it the same way or every old-layer
-      // accent (edge drawer names, kv keys, chips) turns teal on paper.
-      '--cyan':hex(roles.accent.rgb),'--void':hex(roles.canvas.rgb),
+      '--cyan':hex(roles.question.rgb),'--void':hex(roles.canvas.rgb),
       '--bone':hex(roles.primary.rgb),'--bone-dim':hex(roles.secondary.rgb),
       '--line':rgba(roles.primary.rgb,.16),'--line-soft':rgba(roles.primary.rgb,.08),
       '--hair':rgba(roles.primary.rgb,.16),'--hair-2':rgba(roles.primary.rgb,.08),
