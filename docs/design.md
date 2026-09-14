@@ -62,6 +62,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 | `--hair` / `--hair-2` | ink の 8.5% / 4.5% | 罫線。面の境界はこれだけ |
 | `--amber` / `--amber-glow` | `#f2b65a` / 22% | 注意と選択。唯一の暖色 accent |
 | `--alert` | `#d87863` | 要対応（ASK、残量僅少） |
+| `--accent-control` | `var(--amber)` | 操作の現在値（slider の塗り・つまみ・数値）。dark では amber、light では紙の上で立つ teal（旧 `--cyan` の light 値と同じ）に差し替わる |
 | `--ln-local` / `--ln-remote` / `--ln-delegate` | `#5fb3a3` / `#b58be0` / `#83b06a` | spawn の系統。network で parent / child / both を表す |
 
 規則:

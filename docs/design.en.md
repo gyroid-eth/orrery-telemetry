@@ -62,6 +62,7 @@ The whole surface is near-monochrome. Hue carries meaning, so its uses are limit
 | `--hair` / `--hair-2` | ink at 8.5% / 4.5% | hairlines; the only surface boundaries |
 | `--amber` / `--amber-glow` | `#f2b65a` / 22% | attention and selection; the one warm accent |
 | `--alert` | `#d87863` | needs a human (ASK, context nearly exhausted) |
+| `--accent-control` | `var(--amber)` | the current value of a control (slider fill, thumb, number). Amber in dark; light swaps in the teal that stands on paper (the same value the old `--cyan` takes in light) |
 | `--ln-local` / `--ln-remote` / `--ln-delegate` | `#5fb3a3` / `#b58be0` / `#83b06a` | spawn lineage; parent / child / both in NETWORK |
 
 Rules:
