@@ -71,6 +71,9 @@ const elements={};
 const SPM=id=>elements[id]||(elements[id]={});
 let status='';
 function setSpawnStat(message){status=message;}
+// provider capability gate (#34): not under test here, so it never blocks
+function spawnProviderRequirementsMet(){return true;}
+function updateSpawnProviderRequirementStatus(){}
 const reason='Native Windows launch catalog / spawn is not supported. Use WSL2, the primary Windows path.';
 async function fetch(){return {ok:true,json:async()=>({unavailable:reason})};}
 (async()=>{
