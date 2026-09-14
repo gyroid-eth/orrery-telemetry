@@ -72,6 +72,7 @@ Rules:
 - Amber goes only where you want eyes right now: the selected tab, focus, a WORKING card, an attention band. More than a tenth of the screen in amber is too much
 - Working / waiting / idle are never told apart by colour alone; motion, shape, and text are used together
 - The exception is the context-remaining gauge. The DECK hairline shifts from ink to amber as context runs down; the NETWORK arc is amber and turns alert below 20%. It never shares a ring with lineage colour
+- The other exception is the header's LEFT (what is left of the account's usage limits): `--ln-local` above 50%, amber at 50% and below, alert at 20% and below. `--ln-local` is a lineage colour, but LEFT is a header instrument, not a ring that stands for an agent, so the two are not confused. See the header in §5
 - UI state never depends on portrait colour. Portraits are grayscale; state lives outside them (ring, LED, chip)
 - Current state: only the NETWORK intervention glyphs draw `!` in literal red and `?` in literal cyan. That is an intended exception so the two meanings stay distinguishable, and it is not extended
 
@@ -79,18 +80,20 @@ Rules:
 
 The information hierarchy is fixed, top to bottom. A new element declares which level it belongs to before it is built.
 
-1. header (wordmark, DECK / NETWORK toggle, RUNNING / STANDBY / AGENTS statistics, MAIL health, search, history range, NEW AGENT, and on NETWORK the SETTINGS entry)
+1. header (wordmark, DECK / NETWORK toggle, crew state (the NEED YOU chip and the `12 WORKING · 15 WAITING` pill), MAIL health, the LEFT pill, search, history range, NEW AGENT, and on NETWORK the SETTINGS entry)
 2. sector heading (a mono capitals line such as `ACTIVE AGENTS [ 27 ]` with a rule fading to the right)
 3. bay (the agent card)
-4. auxiliary bands (history sparkline, usage, …; weaker than agent cards, collapsible)
-5. overlays (NEW AGENT modal, agent detail, edge thread drawer, settings drawer)
+4. auxiliary bands (history sparkline, …; weaker than agent cards, collapsible)
+5. overlays (NEW AGENT modal, agent detail, edge thread drawer, settings drawer, the LEFT popover)
 
 ### Header and grid
 
-- The header is sticky, minimum 58px, padding 9px 22px, 22px between items. Statistics stack "number → label → 2px underline" with 16px between them. The DECK / NETWORK toggle and MAIL are pills (999px radius, hairline; the ground is `--panel` at 74% for the toggle and 62% for MAIL). Search is 226px wide. NEW AGENT is amber at 22% with a 32% amber border, 7px radius, amber text
+- The header is sticky, minimum 58px, padding 9px 22px, 22px between items. The DECK / NETWORK toggle, the crew pill, MAIL, and LEFT are pills (999px radius, hairline; the ground is `--panel` at 74% for the toggle and 62% for the rest). Search is 226px wide. NEW AGENT is amber at 22% with a 32% amber border, 7px radius, amber text
+- Crew state is a tally of the same `act_state` the cards read. The `12 WORKING · 15 WAITING` pill (13px serif numbers, only WORKING's in amber) counts turns in progress and agents sitting at the prompt, free for work. Only while an agent waits on a human (`ask` for approval, `question` for a choice) does an alert-coloured `2 NEED YOU` chip appear to its left (alert at 14% with a 55% border, a 7px dot blinking at 1s, still under reduce). At zero the chip is gone, not dimmed. Clicking narrows the DECK to those agents; clicking again restores it. The registered total is left to the sector heading's `[ 29 ]` and is not counted in the header. An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`
+- The LEFT pill lists the remaining share per provider as "logo → number%". The logo is the same 16px provider asset the agent cards use; the number is 12px mono. Its colour follows the three remaining tiers (§4: `--ln-local` above 50%, amber at 50% and below, alert at 20% and below) and shows the ordinary window with the least remaining, the one that binds next. Which providers appear is chosen in the settings drawer under USAGE (this browser only); a hidden provider leaves both the pill and the popover. Clicking opens a popover (§8): per provider a 20px logo and name, a dial per window (64px, ring 7 wide, an 18px serif number in the centre, the window name and reset time below); named additional limits sit under an `additional limit · name` subheading, collapsed to one line when all are at 100%. A provider that could not be read shows `WAITING FOR UPDATE` with the reason in words; an old value is marked `stale` with its observation time and its dials sink to ink-dim. No 5h / 7d frame is assumed; only the windows the provider returned are drawn
 - main has padding 22px 22px 0, `repeat(auto-fill, minmax(440px, 1fr))`, 10px gaps. At 760px and below it is one column with 13px sides, and the statistics are hidden
 - The sector heading has margin 16px 2px 4px, 9px / .22em, `--ink-dim`, a 7px amber diamond on the left, and a `--hair` rule fading to the right
-- Embedded in the cockpit (`body.embed`) the header drops to 44px and hides the wordmark, statistics, and MAIL. Information the cockpit already shows is not shown twice
+- Embedded in the cockpit (`body.embed`) the header drops to 44px and hides the wordmark, statistics, MAIL, and LEFT. Information the cockpit already shows is not shown twice
 
 ### Anatomy of a bay (agent card)
 
@@ -118,11 +121,13 @@ RX   one line of the most recent mail received
 
 ### Auxiliary bands
 
-Bands that sit above or between agent cards (history, usage, notices) rank below the cards. This part is principle only: the usage band is not implemented yet (proposed in #31). Do not treat its dimensions as implementation values.
+Bands that sit above or between agent cards (history, notices) rank below the cards. This part is principle only: nothing is implemented as a band yet. Do not treat its dimensions as implementation values.
 
 - Keep their height within what does not push the first row of agent cards down, and make them collapsible. Collapsed, the key numbers stay beside the header
 - Never show a stale value as current. Always show the observation time; for a provider that could not be read, say so in words, as in `WAITING FOR UPDATE`
 - Show only the windows the provider actually returned. Do not assume a 5h / 7d frame on the ORRERY side and fill blanks
+
+Usage (#31) was implemented not as a band but as the header's LEFT pill and popover, keeping the three principles above. The pill is the collapsed state; the popover is the expanded one.
 
 ## 6. State and motion
 
@@ -171,7 +176,7 @@ The light palette and the code that applies it ship with telemetry. `dashboard/t
 - Embedded in the cockpit (`orrery`): the host announces the theme by same-origin `postMessage` and the controller applies it. The browser's stored choice is not read
 - Opened on its own: `SETTINGS` at the right end of the NETWORK header (not shown on DECK, whose header is already full and whose concerns the drawer does not touch) opens a drawer whose APPEARANCE row offers `dark` / `light` / `system`. The choice is stored in `localStorage` (`agentdash.colorTheme`); `system` follows the OS `prefers-color-scheme`. When embedded the same control is disabled and says so in words: `SET BY THE COCKPIT`
 
-The settings drawer shares the edge thread drawer's material, placement and size (§8: pinned to the right edge, rounded on the left only, `min(390px, 100vw - 18px)` wide) and its chrome: a bar with padding 11px 14px, an amber title, a chip on the right and a square 26px ×; sections with 14px side padding divided by hairlines, each headed by a 10px amber label with a dim subtitle at the right. Below APPEARANCE it holds the NETWORK sliders (the former Tune panel) and DISPLAY (the murmur switch), so it is the one place for what this browser remembers. The developer console still works: `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` switches without storing; `setPreference('light')` stores.
+The settings drawer shares the edge thread drawer's material, placement and size (§8: pinned to the right edge, rounded on the left only, `min(390px, 100vw - 18px)` wide) and its chrome: a bar with padding 11px 14px, an amber title, a chip on the right and a square 26px ×; sections with 14px side padding divided by hairlines, each headed by a 10px amber label with a dim subtitle at the right. Below APPEARANCE it holds the NETWORK sliders (the former Tune panel), DISPLAY (the murmur switch), and USAGE (one switch per provider answering `/api/quotas`, deciding what the LEFT pill shows), so it is the one place for what this browser remembers. The developer console still works: `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` switches without storing; `setPreference('light')` stores.
 
 Planned: the literal colours left in the old layer will be replaced with tokens; today the cockpit gets by rewriting those literals at runtime when it embeds telemetry.
 

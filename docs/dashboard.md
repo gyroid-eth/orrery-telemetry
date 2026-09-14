@@ -56,15 +56,36 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ### ヘッダのカウンタとカードの状態を分ける
 
-ヘッダの3項目は、個々の作業内容ではなく**数**です。
+ヘッダの数字は、各カードが右上と枠で示している状態の**集計**です。
 
-| カウンタ | 数えているもの |
-| --- | --- |
-| `RUNNING` | agent process が稼働しているカード数 |
-| `STANDBY` | process が稼働していない active agent のカード数 |
-| `AGENTS` | active agent の総数 |
+| 表示 | 数えているもの | カードでの見え方 |
+| --- | --- | --- |
+| `NEED YOU` | 人を待っている agent。承認待ち（`APPROVAL`）と、選択肢を聞いている（`?`） | 赤枠、または `?` |
+| `WORKING` | turn が進行中の agent | amber の LED と経過時間 |
+| `WAITING` | prompt で入力を待っていて、仕事を渡せる agent | `LAST 1M41S` |
 
-したがって、`RUNNING 12` だけを見ても12体すべてが仕事を進めているとは限りません。**全体の数はヘッダ、誰が作業中・待機中・介入待ちかは各カードの右上と枠**で確認します。
+`NEED YOU` は該当する agent がいるときだけ現れ、クリックすると DECK がその agent だけに絞られます（もう一度クリックで戻ります）。process が止まって shell に戻った agent はどの数にも入りません。カードの `○ SHELL` で分かります。active agent の総数は sector 見出しの `ACTIVE AGENTS [ 29 ]` にあります。
+
+**次にどこへ仕事を振るかはヘッダ（WAITING と LEFT）、誰がいま何をしているかは各カード**で確認します。
+
+### 残量（LEFT）
+
+ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。model 別の枠は、その model で動いている session だけが報告します。observer は報告されなくなった枠を reset まで持ち越し、dial に `seen HH:MM`（最後に見えた時刻）を添えます。週次の枠は reset まで減らないので、持ち越した値は下限として読めます。
+
+- 数字は provider が返した通常枠のうち残りが最も少ない window で、色は残りが 50% 以下で amber、20% 以下で alert になります
+- 表示する provider は SETTINGS（NETWORK タブ）の USAGE で選べます。隠した provider は pill と展開表示の両方から消えます。設定はこの browser にだけ残ります
+- provider が返していない枠は表示しません。5h の枠が無いアカウントには 5h を出しません
+- 取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出します。古い値を最新値のように見せず、観測時刻を併記します
+
+取得の仕組みは provider ごとに違います（取得層は [kame447](https://github.com/kame447) さんの貢献です。[#31](https://github.com/gyroid-eth/orrery-telemetry/issues/31)）。
+
+| provider | 取得方法 | 必要な設定 |
+| --- | --- | --- |
+| Codex | `codex app-server` の `account/rateLimits/read` を読みます | なし。`codex` にログイン済みなら表示されます |
+| Claude Code | statusLine に渡される rate limit を observer が保存し、それを読みます。Claude Code が API 応答を受けた後にしか更新されないので、しばらく使っていないと `WAITING FOR UPDATE` になります | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。自前の statusLine がある場合は `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <既存のコマンド>` と包みます。`--exec` は観測だけを行い、payload をそのまま渡して出力を素通しします |
+| Antigravity | read-only の usage を読みます | optional provider の導入と opt-in が必要です（[Antigravity](antigravity.md)） |
+
+API は `GET /api/quotas` で、provider ごとに 60 秒 cache し、失敗時は前回の値を `stale` として返します。
 
 ### 人の介入待ちを見逃さない
 

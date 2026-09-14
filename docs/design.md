@@ -72,6 +72,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 - amber は「いま見てほしい所」にだけ使います。選択中の tab、focus、WORK 中のカード、注意の帯。画面の 1 割を超えたら使いすぎです
 - working / waiting / idle を色だけで区別しません。動き、形、文字を併用します
 - 例外は残量（context remaining）の計器です。DECK の細線は残量が減るにつれ ink → amber に変わり、NETWORK の弧は amber、20% 未満で alert になります。系統色と同じ輪には載せません
+- もう 1 つの例外は header の LEFT（アカウントの利用枠の残り）です。50% 超を `--ln-local`、50% 以下を amber、20% 以下を alert で塗ります。`--ln-local` は系統色ですが、LEFT は agent を表す輪ではなく header の計器なので、systematic に混同されません。§5 の header を参照
 - portrait の色に UI の状態を依存させません。portrait は grayscale で、状態は portrait の外側（ring、LED、chip）に出します
 - 現状: NETWORK の介入グリフだけは `!` を赤、`?` を cyan の literal で描いています。2 つの意味を見分けるための意図した例外で、他に広げません
 
@@ -79,18 +80,20 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 画面の情報階層は上から順に決まっています。新しい要素は、必ずどの階層に入るかを宣言してから作ります。
 
-1. header（wordmark、DECK / NETWORK 切替、RUNNING / STANDBY / AGENTS の統計、MAIL の健全性、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
+1. header（wordmark、DECK / NETWORK 切替、crew の状態（NEED YOU の chip と `12 WORKING · 15 WAITING` の pill）、MAIL の健全性、LEFT の pill、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
 2. sector 見出し（`ACTIVE AGENTS [ 27 ]` のような mono 大文字の行と、右へ消える罫線）
 3. bay（agent card）
-4. 補助の帯（履歴の sparkline、残量など。agent card より弱く、折りたためる）
-5. overlay（NEW AGENT modal、agent detail、edge thread drawer、settings drawer）
+4. 補助の帯（履歴の sparkline など。agent card より弱く、折りたためる）
+5. overlay（NEW AGENT modal、agent detail、edge thread drawer、settings drawer、LEFT の popover）
 
 ### header と grid
 
-- header は sticky、最小 58px、padding 9px 22px、要素間 22px。統計は「数字 → ラベル → 2px の下線」の縦積みで、間隔 16px。DECK / NETWORK の切替と MAIL は pill（角丸 999px、hairline。地は切替が `--panel` 74%、MAIL が 62%）。検索は幅 226px。NEW AGENT は amber 22% の地に amber 32% の枠、角丸 7px、amber の文字
+- header は sticky、最小 58px、padding 9px 22px、要素間 22px。DECK / NETWORK の切替、crew の pill、MAIL、LEFT は pill（角丸 999px、hairline。地は切替が `--panel` 74%、それ以外が 62%）。検索は幅 226px。NEW AGENT は amber 22% の地に amber 32% の枠、角丸 7px、amber の文字
+- crew の状態は card と同じ `act_state` の集計です。`12 WORKING · 15 WAITING` の pill（数字は 13px の serif、WORKING の数字だけ amber）が「turn 進行中」と「prompt で待っていて仕事を渡せる」の数。人を待っている agent（承認待ち `ask`、選択肢を聞いている `question`）がいるときだけ、その左に alert 色の `2 NEED YOU` chip が現れます（alert 14% の地に 55% の枠、7px の点が 1 秒で明滅。reduce では止まる）。0 のときは沈めるのではなく chip ごと無くします。クリックで DECK をその agent だけに絞り、もう一度で戻ります。登録数は sector 見出しの `[ 29 ]` に任せ、header では数えません。process が止まって shell に戻った agent はどの数にも入らず、card の `○ SHELL` で読みます
+- LEFT の pill は provider ごとの残量を「logo → 数字%」で並べます。logo は agent card と同じ 16px の provider asset、数字は 12px の mono。数字の色は残量の 3 段（§4: 50% 超は `--ln-local`、50% 以下は amber、20% 以下は alert）で、provider が返した通常枠のうち残りが最も少ない window の値です。どの provider を出すかは settings drawer の USAGE で切り替えられ（この browser だけ）、隠した provider は pill にも popover にも出ません。クリックで popover（§8）が開き、provider ごとに 20px の logo と名前、window ごとの dial（64px、輪の太さ 7、中央に 18px の serif の数字、下に window 名と reset 時刻）、名前付きの追加枠は `additional limit · 名前` の小見出しの下に分け、すべて 100% なら 1 行に畳みます。取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出し、古い値は `stale` と観測時刻を添えて dial を ink-dim に沈めます。5h / 7d の枠は仮定せず、provider が返した window だけを描きます
 - main は padding 22px 22px 0、`repeat(auto-fill, minmax(440px, 1fr))`、間隔 10px。760px 以下は 1 列で左右 13px、統計を隠す
 - sector 見出しは margin 16px 2px 4px、9px / .22em、`--ink-dim`、左に 7px の amber 菱形、右へ `--hair` の罫線が消えていく
-- cockpit に埋め込まれたとき（`body.embed`）は header が 44px になり、wordmark、統計、MAIL を隠す。cockpit 側が持つ情報を二重に出さない
+- cockpit に埋め込まれたとき（`body.embed`）は header が 44px になり、wordmark、統計、MAIL、LEFT を隠す。cockpit 側が持つ情報を二重に出さない
 
 ### bay（agent card）の解剖
 
@@ -118,11 +121,13 @@ RX   直近に受け取った mail の 1 行
 
 ### 補助の帯
 
-agent card の上や間に入る帯（履歴、残量、通知）は、agent card より弱い階層です。ここは原則だけで、残量の帯はまだ実装されていません（#31 で提案中）。寸法を実装値として扱わないでください。
+agent card の上や間に入る帯（履歴、通知）は、agent card より弱い階層です。ここは原則だけで、帯として実装されたものはまだありません。寸法を実装値として扱わないでください。
 
 - 高さは agent card の 1 段目を押し下げない範囲に収め、折りたためるようにします。折りたたんだ状態でも要点の数字は header の脇に残します
 - 古い値を最新値のように見せません。取得時刻を必ず併記し、取れていない provider は `WAITING FOR UPDATE` のように、いつの値かを文字で言います
 - provider が返した window だけを出します。5h / 7d のような枠を ORRERY 側で仮定して空欄を補完しません
+
+残量（#31）はこの帯ではなく、header の LEFT pill と popover として実装しました。上の 3 つの原則はそのまま守っています。折りたたんだ状態が pill、展開が popover です。
 
 ## 6. 状態と動き
 
@@ -171,7 +176,7 @@ light の palette と適用処理は telemetry に同梱されています。`da
 - cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します。この browser の保存値は読みません
 - 単体で開いたとき: NETWORK 表示の header 右端にある `SETTINGS`（DECK では出しません。header が既に埋まっていて、drawer の中身も graph のものだからです）で開く drawer の APPEARANCE で `dark` / `light` / `system` を選びます。選択は `localStorage`（`agentdash.colorTheme`）に保存され、`system` は OS の `prefers-color-scheme` に追随します。埋め込み時は同じ control を操作不可にし、`SET BY THE COCKPIT` と文字で言います
 
-settings drawer は edge thread drawer と同じ材質・配置・寸法（§8、右端固定、角丸は左だけ、幅 `min(390px, 100vw - 18px)`）で、chrome も揃えています: bar は padding 11px 14px に amber の見出し、右に chip、角丸なしの 26px の ×。節は 14px の左右余白と hairline で区切り、見出しは amber 10px、右端に dim の副題。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）と DISPLAY（murmur の switch）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
+settings drawer は edge thread drawer と同じ材質・配置・寸法（§8、右端固定、角丸は左だけ、幅 `min(390px, 100vw - 18px)`）で、chrome も揃えています: bar は padding 11px 14px に amber の見出し、右に chip、角丸なしの 26px の ×。節は 14px の左右余白と hairline で区切り、見出しは amber 10px、右端に dim の副題。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）、DISPLAY（murmur の switch）、USAGE（`/api/quotas` に答えた provider ごとの switch。LEFT の pill に何を出すかを決める）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
 
 予定: 古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
 

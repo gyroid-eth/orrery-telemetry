@@ -115,7 +115,7 @@ def _forward_output(stream: TextIO, logger: logging.Logger) -> None:
 
 
 def _default_server_path() -> pathlib.Path:
-    """Prefer an installed provider-aware entry point, otherwise use core."""
+    """Prefer the optional provider-aware server, otherwise the core."""
     provider_server = HERE / "provider_server.py"
     return provider_server if provider_server.is_file() else HERE / "server.py"
 

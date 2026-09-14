@@ -268,7 +268,9 @@ case "${1:-status}" in
     open "$URL"
     ;;
   fg)
-    exec "$PYTHON" "$HERE/server.py"
+    SERVER="$HERE/provider_server.py"
+    [[ -f "$SERVER" ]] || SERVER="$HERE/server.py"
+    exec "$PYTHON" "$SERVER"
     ;;
   *)
     echo "usage: agentctl.sh {install|start|stop|uninstall|restart|status|open|fg}"

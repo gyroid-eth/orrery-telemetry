@@ -52,15 +52,36 @@ The next image has grown to 12 cards, and cards such as Warm-Lovelace show `RX`.
 
 ### Separating header counters from card states
 
-The three header items are **counts**, not descriptions of individual work.
+The header numbers are a **tally** of the states each card shows in its top-right corner and border.
 
-| Counter | What it counts |
-| --- | --- |
-| `RUNNING` | Cards whose agent process is running |
-| `STANDBY` | Active-agent cards whose process is not running |
-| `AGENTS` | Total active agents |
+| Item | What it counts | On the card |
+| --- | --- | --- |
+| `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
+| `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
+| `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
 
-Therefore, `RUNNING 12` alone does not mean all 12 agents are progressing. **Read overall counts in the header and each agent's working / waiting / intervention state from the card's top-right and border.**
+`NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
+
+**Decide where the next task goes from the header (WAITING and LEFT); read what each agent is doing from its card.**
+
+### Usage left (LEFT)
+
+The header's `LEFT` is separate from each card's context remaining: it is **what is left of the provider account's usage limits**. It exists to answer "where do I send the next task" when several providers run side by side, and shows each provider's logo with its remaining %. Clicking opens a dial per window the provider returned (5h, 7d, a model-specific cap, …) with the next reset time. Only a session running that model reports its window, so the observer carries a window it stops hearing about until it resets and the dial notes `seen HH:MM`, the time it was last reported — a weekly window cannot fall before it resets, so the carried value reads as a floor.
+
+- The number is the ordinary window with the least remaining; it turns amber at 50% and below and alert at 20% and below
+- Which providers appear is chosen under USAGE in SETTINGS (NETWORK tab). A hidden provider leaves both the pill and the expanded view. The choice stays in this browser only
+- Windows the provider did not return are not shown. An account without a 5h window gets no 5h dial
+- A provider that could not be read shows `WAITING FOR UPDATE` and the reason in words. An old value is never shown as current; the observation time stays beside it
+
+Acquisition differs per provider (the acquisition layer was contributed by [kame447](https://github.com/kame447), [#31](https://github.com/gyroid-eth/orrery-telemetry/issues/31)).
+
+| Provider | How it is read | Setup |
+| --- | --- | --- |
+| Codex | `account/rateLimits/read` over `codex app-server` | None. It appears once `codex` is logged in |
+| Claude Code | An observer stores the rate limits Claude Code passes to its statusLine, and the dashboard reads that snapshot. It only updates after Claude Code receives an API response, so an idle period shows `WAITING FOR UPDATE` | Set `statusLine.command` in `~/.claude/settings.json` to `python3 ~/.agentstack/dashboard/claude_quota_observe.py`. An existing statusLine is never overwritten; if you have your own, wrap it as `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <your command>`, which observes only and passes the payload and the output through |
+| Antigravity | Read-only usage | Install the optional provider and opt in ([Antigravity](antigravity.md)) |
+
+The API is `GET /api/quotas`, cached 60 s per provider; on failure the previous value is returned as `stale`.
 
 ### Do not miss human intervention
 
