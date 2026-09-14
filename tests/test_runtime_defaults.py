@@ -722,6 +722,11 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         mail_port = probe.getsockname()[1]
     project_dir = home / "project"
     project_dir.mkdir(parents=True)
+    codex_child_overlay = home / "codex-child-overlay.toml"
+    codex_child_overlay.write_text(
+        '[mcp_servers.browser]\ndefault_tools_approval_mode = "approve"\n',
+        encoding="utf-8",
+    )
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_HOME": str(install_dir),
@@ -740,6 +745,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
         "AGENTSTACK_CODEX_BIN": str(codex_bin),
+        "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": str(codex_child_overlay),
         "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
@@ -868,15 +874,26 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert f'Environment="AGENTSTACK_SPAWN_ROOTS={project_dir}"' in systemd_unit
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
     assert 'Environment="AGENTSTACK_CODEX_MODELS=gpt-5.6-sol,gpt-5.6-luna"' in systemd_unit
+    assert (
+        f'Environment="AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"'
+        in systemd_unit
+    )
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
     assert "export AGENTSTACK_LANG=ja" in generated_env
     assert "export AGENTSTACK_MURMUR=off" in generated_env
     assert f"export AGENTSTACK_SPAWN_DIRS='~/code:{project_dir}'" in generated_env
     assert f"export AGENTSTACK_SPAWN_ROOTS={project_dir}" in generated_env
+    assert (
+        f"export AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"
+        in generated_env
+    )
     assert manifest["env"]["AGENTSTACK_SPAWN_DIRS"] == f"~/code:{project_dir}"
     assert "export AGENTSTACK_PORTRAITS_DIR='~/faces'" in generated_env
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
+    assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
+        codex_child_overlay
+    )
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
@@ -909,6 +926,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_PORTRAITS_DIR"] = ""
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
+    normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
     assert normalized_env == sample["env"]
     for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]

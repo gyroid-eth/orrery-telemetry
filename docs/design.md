@@ -46,9 +46,9 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 - wordmark 20px / 600 / 字間 .12em。副題 `TMUX · ORRERY MAIL` は 9px / .2em
 - ラベル・chip: 9〜9.5px、字間 .12〜.22em、大文字
-- 本文: 現在の行 12px、ORD / RX 11.5px（行高 1.5）、入力 13px
+- 本文: 現在の行 12px、ORD / RX 11.5px（行高 1.5）、入力 12px
 - agent 名 17px / 500、統計の数字 18px / 500、NEW AGENT のタイトル 24px / 500、detail の名前 19px
-- 原則: 9px 未満の文字を新しく作らない。現状: modal の節ラベル 8.5px、identity の状態 6.5px、network の役割 6.8px、EXIT / KILL 8px が既にある
+- 原則: 8.5px 未満の文字を新しく作らない。節ラベルの最小は 8.5px（modal の節ラベル、副題）。それより小さい既存の文字は状態の chip と補足に限る: kicker `NEW AGENT` と identity の hint 8px、節の右肩 meta と model card の tone 7.5px、`LAUNCH IDENTITY` と ADVANCED の meta 7px、identity の状態 chip 6.5px、network の役割 6.8px、EXIT / KILL 8px。これらは増やさない
 
 ## 4. 色
 
@@ -62,6 +62,8 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 | `--hair` / `--hair-2` | ink の 8.5% / 4.5% | 罫線。面の境界はこれだけ |
 | `--amber` / `--amber-glow` | `#f2b65a` / 22% | 注意と選択。唯一の暖色 accent |
 | `--alert` | `#d87863` | 要対応（ASK、残量僅少） |
+| `--shade` | `#000` | portrait に落とす影（両テーマで黒のまま） |
+| `--accent-control` | `var(--amber)` | 操作の現在値（slider の塗り・つまみ・数値）。dark では amber、light では紙の上で立つ teal（旧 `--cyan` の light 値と同じ）に差し替わる |
 | `--ln-local` / `--ln-remote` / `--ln-delegate` | `#5fb3a3` / `#b58be0` / `#83b06a` | spawn の系統。network で parent / child / both を表す |
 
 規則:
@@ -77,11 +79,11 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 画面の情報階層は上から順に決まっています。新しい要素は、必ずどの階層に入るかを宣言してから作ります。
 
-1. header（wordmark、DECK / NETWORK 切替、RUNNING / STANDBY / AGENTS の統計、MAIL の健全性、検索、履歴範囲、NEW AGENT）
+1. header（wordmark、DECK / NETWORK 切替、RUNNING / STANDBY / AGENTS の統計、MAIL の健全性、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
 2. sector 見出し（`ACTIVE AGENTS [ 27 ]` のような mono 大文字の行と、右へ消える罫線）
 3. bay（agent card）
 4. 補助の帯（履歴の sparkline、残量など。agent card より弱く、折りたためる）
-5. overlay（NEW AGENT modal、agent detail、edge thread drawer、Tune）
+5. overlay（NEW AGENT modal、agent detail、edge thread drawer、settings drawer）
 
 ### header と grid
 
@@ -140,11 +142,11 @@ agent card の上や間に入る帯（履歴、残量、通知）は、agent car
 
 ## 7. NETWORK view
 
-- node は portrait の medallion。基準半径は 13（SVG 単位、Tune の NSIZE と zoom で拡大）。縁は系統色で 1.55、残量の弧は半径 +5、線 1.55、最大 270°、motion ring は半径 +9、線 1.6。残量が取れなければ弧を描かず、portrait が無ければ dot
+- node は portrait の medallion。基準半径は 13（SVG 単位、SETTINGS › NETWORK の NODE SIZE と zoom で拡大）。縁は系統色で 1.55、残量の弧は半径 +5、線 1.55、最大 270°、motion ring は半径 +9、線 1.6。残量が取れなければ弧を描かず、portrait が無ければ dot
 - label は serif（名前 10.5px、running は 11px）と mono（役割 6.8px、件数 9px）。要求名と登録名が違う node は mono 10px に amber の点線下線。301 node 以上では名前・役割・件数・badge・弧を隠す（dense）。多数の node で label が重なるときは、常時表示を増やさず hover / focus で近傍を強調して開示します
 - 辺は `--ink-dim` の細線で opacity .22。spawn の辺は `--ln-delegate` の実線で 1.25 / .4。mail の件数は辺の中点に mono で載せ、文字の下に地の色を焼き込んで可読性を保ちます
 - 背景は 48px の格子と中央の淡い楕円。格子は `--hair-2` で、地より目立ちません
-- Tune、legend、sel-toggle などの浮遊パネルは同じガラス材（`--panel` 90%、hairline、角丸 9px、影 0 16px 42px 黒 18%）。legend の popover だけは大きいので角丸 10px、白 9% の枠、blur 26px、影 0 30px 90px 黒 52% と、少し重い材質です
+- legend、sel-toggle などの浮遊パネルは同じガラス材（`--panel` 90%、hairline、角丸 9px、影 0 16px 42px 黒 18%）。legend の popover だけは大きいので角丸 10px、白 9% の枠、blur 26px、影 0 30px 90px 黒 52% と、少し重い材質です
 
 ## 8. overlay（NEW AGENT modal ほか）
 
@@ -153,10 +155,10 @@ NEW AGENT、agent detail、edge thread drawer は同じガラス材を共有し�
 - 材質は中立です。白 9% の 1px 枠、角丸 13px、地は白 4.5% から 140px で透明になる grade を `rgba(17,19,25,.66)` に重ね、blur 26px と saturate 1.12、影 `0 30px 90px rgba(0,0,0,.52)`。古い層の amber 枠は上書きで消え、四隅の角は `display:none` にしてあり、出しません
 - backdrop は `rgba(8,9,13,.62)` に blur 10px（NEW AGENT と detail だけ）。NEW AGENT の frame は中央、幅 `min(790px, 100vw - 48px)`、最大高 92vh で内側を scroll。detail は幅 `min(1180px, 100vw - 48px)`、高さ `min(88vh, 900px)`。drawer は右端に固定（上 68px、下 14px、幅 `min(390px, 100vw - 18px)`）で、角丸は左側だけ、右の枠は無し
 - header は padding 17px 19px。kicker `NEW AGENT` 8px、タイトル `LAUNCH AN AGENT` は serif 24px / 500、副題 `IDENTITY · ENGINE · DIRECTORY · TASK` は mono 8.5px。右上の × は 30px 角
-- body は 2 列 grid（間隔 12px 16px、padding 18px 19px）で主要 4 節は全幅。identity / engine / directory は `--hair` の枠と角丸 10px、黒系 30% の地、padding 12px。task は枠なし。節ラベルは 8.5px / .14em で、左に 11×1px の amber の短い線（`▸` ではありません）
+- body は 2 列 grid（間隔 12px 16px、padding 18px 19px）で主要 4 節は全幅。identity / engine / directory は `--hair` の枠と角丸 10px、黒系 30% の地、padding 12px。task も同じ枠。節ラベルは 8.5px / .14em で、左に 11×1px の amber の短い線（`▸` ではありません）
 - identity は任意。AUTO NAME の preview（44px の丸 portrait）と横 scroll の scientist 列（幅 68px、42px の丸 portrait、角丸 8px）。選択は amber 22% の地と 55% の枠、使えないものは opacity .3
 - engine は provider の tab（最小幅 108px）と model の card（最小幅 155px、間隔 7px）、必要な provider には effort の chip。選択肢は catalog から来るので固定で列挙しません
-- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。入力は 13px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
+- directory は preset の pill と typeahead の入力を横並び。task は必須の textarea（最小高 96px、行高 1.55）。選択した provider が resources を受け付ける場合だけ task の直下、ADVANCED の外に resources 行を出し、`resources_required` を宣言する provider では必須にします。入力は 12px、padding 8px 11px、角丸 7px、地は `rgba(11,13,17,.52)`。focus で amber の枠と薄い glow
 - 4 節の下に折りたたみの ADVANCED。foot は上に罫線、padding 13px 19px。CANCEL は hairline の枠だけ、SPAWN は透明に amber 40% の枠で、hover / focus で amber に塗る。主操作を常時塗らないのは、塗りを「押せる」合図に取っておくためです
 - 背景クリック、`Esc`、× で閉じます（送信中は閉じない）。現状: 閉じたあとの focus 復帰は未実装です。破壊的操作（KILL / EXIT）は card 上では 2 段階（arm → confirm、5 秒で解除）です。現状: detail にも EXIT があり、こちらは 1 段階で送信します。原則は 2 段階で、detail 側は追いついていません
 
@@ -164,17 +166,14 @@ NEW AGENT、agent detail、edge thread drawer は同じガラス材を共有し�
 
 telemetry には dark と light の 2 つの theme があります。light は warm-paper のクリーム地で、文字、面、罫線、accent がすべて dark とは別の値になります。maintainer が日常に使うのは light です。
 
-light の palette と適用処理は telemetry に同梱されています。`dashboard/theme_core.js` が OKLCH の seed から palette を導出し、`dashboard/theme_controller.js` が `html[data-color-theme="light"]` と token の値を書き込み、`dashboard/theme_light.css` が light 専用の補正を当てます。既定は dark で、いまの切替経路は 2 つです:
+light の palette と適用処理は telemetry に同梱されています。`dashboard/theme_core.js` が OKLCH の seed から palette を導出し、`dashboard/theme_controller.js` が `html[data-color-theme="light"]` と token の値を書き込み、`dashboard/theme_light.css` が light 専用の補正を当てます。既定は dark で、切替経路は 2 つです:
 
-- cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します
-- 単体で開いたとき: 利用者向けの切替 UI はまだありません。開発者 console から次で切り替えられます
+- cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します。この browser の保存値は読みません
+- 単体で開いたとき: NETWORK 表示の header 右端にある `SETTINGS`（DECK では出しません。header が既に埋まっていて、drawer の中身も graph のものだからです）で開く drawer の APPEARANCE で `dark` / `light` / `system` を選びます。選択は `localStorage`（`agentdash.colorTheme`）に保存され、`system` は OS の `prefers-color-scheme` に追随します。埋め込み時は同じ control を操作不可にし、`SET BY THE COCKPIT` と文字で言います
 
-```js
-window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})
-window.AgentStackColorTheme.apply({preference: 'dark', resolved: 'dark'})
-```
+settings drawer は edge thread drawer と同じ材質・配置・寸法（§8、右端固定、角丸は左だけ、幅 `min(390px, 100vw - 18px)`）で、chrome も揃えています: bar は padding 11px 14px に amber の見出し、右に chip、角丸なしの 26px の ×。節は 14px の左右余白と hairline で区切り、見出しは amber 10px、右端に dim の副題。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）と DISPLAY（murmur の switch）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
 
-予定: 単体でも header から dark と light を切り替えられるようにします（設定の保存と、埋め込み時は cockpit 側が勝つこと、を含む）。あわせて、古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
+予定: 古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
 
 theme が成り立つ仕組みは 1 つだけです。色は名前（§4 の token）で書かれていて、theme はその名前の中身を差し替えます。だから §4 と §10 の「色は token で書く。literal な値を書かない」が theme の規則そのもので、守れているかは `grep` で確かめられます。2026-08-10 に light で 14 か所の文字が読めなくなったのは、古い層の literal 色が差し替わらなかったためです。
 
@@ -200,7 +199,7 @@ python3 scripts/dashboard_theme_manifest.py --check
 4. 帯は折りたためるようにし、agent card を押し下げない（§5）
 5. 古い値には時刻を添える。取れない・使えないは文字で言う（fail-closed の文言）
 6. chrome のラベルは簡潔な英語の大文字（`USAGE · LEFT`、`WAITING FOR UPDATE`）。agent が生成した内容は原文の locale を保つ
-7. 9px 未満の文字を作らない
+7. 8.5px 未満の文字を作らない（§3 の既存例外は増やさない）
 8. 何かを削るなら消さずに沈める（opacity）。履歴と系譜は消えないことに価値がある。履歴範囲や dense のように「いま見せない」は別で、それは表示の範囲の話です
 
 ## 11. 変更前の確認

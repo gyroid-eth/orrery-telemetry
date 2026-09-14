@@ -117,6 +117,10 @@ With the optional provider payload installed and the Dashboard restarted,
 `NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
 child path above through `spawn_gemini_preregistered.sh`.
 
+![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
+
+![The same state in the light theme](images/new_agent_capabilities_light.png)
+
 Requirements checked before ORRERY Mail registration, so a launch that cannot
 start does not leave a retained child identity behind:
 
@@ -163,10 +167,13 @@ the parent automatically, so the Dashboard sends no separate task mail for an
 Antigravity child. Launch status, `/api/spawn-status`, and
 `dashboard/logs/spawn.log` record `provider=gemini`.
 
-If the Dashboard page no longer matches what the extension expects, the page is
-served unmodified, the Antigravity tab is omitted, and Antigravity spawn
-requests fail closed; the reason is written to the Dashboard log. Claude and
-Codex are unaffected, including when the extension itself cannot be loaded.
+The core Dashboard modal interprets the provider `capabilities` contract. The
+optional payload only adds the Antigravity catalog item and its `/api/spawn`
+branch; it does not rewrite the page while serving it. If the core page lacks
+the capability marker or resources control, the Antigravity tab is omitted and
+Antigravity spawn requests fail closed; the reason is written to the Dashboard
+log. Claude and Codex are unaffected, including when the extension itself
+cannot be loaded.
 
 ## Dashboard controls
 

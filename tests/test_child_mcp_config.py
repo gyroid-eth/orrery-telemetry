@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
@@ -146,10 +147,16 @@ def test_missing_proxy_or_token_falls_back_instead_of_failing_the_spawn():
         assert path == "", "should print nothing when the token file is missing"
 
 
-def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
-                    runner_executable: bool = True,
-                    token: str | None = "child-owner-token",
-                    with_sandbox_metadata: bool = False) -> str:
+def _run_codex_home_process(
+    tmpdir: pathlib.Path,
+    *,
+    config_text: str | None = None,
+    runner_executable: bool = True,
+    token: str | None = "child-owner-token",
+    with_sandbox_metadata: bool = False,
+    overlay_path: pathlib.Path | None = None,
+    corrupt_emitted_candidate: bool = False,
+) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     if runner_executable:
@@ -170,19 +177,44 @@ def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
     if config_text is not None:
         (source_home / "config.toml").write_text(config_text, encoding="utf-8")
 
+    helper = _extract("write_child_codex_home")
+    if corrupt_emitted_candidate:
+        helper = helper.replace(
+            "candidate_config_text = emit_toml(config)",
+            "candidate_config_text = emit_toml(config) + chr(0x7f)",
+        )
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_codex_home")
+        + helper
         + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
     )
     env = os.environ.copy()
     env["AGENTSTACK_MCP_PROXY"] = str(runner)
     env["CODEX_HOME"] = str(source_home)
-    proc = subprocess.run(
+    if overlay_path is not None:
+        env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = str(overlay_path)
+    else:
+        env.pop("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", None)
+    return subprocess.run(
         ["bash", "-c", script, "bash", str(tmpdir / "runtime"),
          "/workspace/example", "http://127.0.0.1:8765/mcp",
          str(tmpdir / "mail.env"), str(token_file)],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, check=False,
+    )
+
+
+def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
+                    runner_executable: bool = True,
+                    token: str | None = "child-owner-token",
+                    with_sandbox_metadata: bool = False,
+                    overlay_path: pathlib.Path | None = None) -> str:
+    proc = _run_codex_home_process(
+        tmpdir,
+        config_text=config_text,
+        runner_executable=runner_executable,
+        token=token,
+        with_sandbox_metadata=with_sandbox_metadata,
+        overlay_path=overlay_path,
     )
     return proc.stdout.strip()
 
@@ -241,6 +273,237 @@ def test_codex_child_gets_a_home_whose_agent_mail_is_the_proxy():
         assert "[mcp_servers.notion]" in config
         # The token itself is never written into the config.
         assert "child-owner-token" not in config
+
+
+def test_absent_codex_overlay_keeps_the_existing_config_bytes():
+    """The disabled setting must not run the TOML re-emitter."""
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(
+            _run_codex_home(pathlib.Path(tmp), config_text=_BASE_CODEX_CONFIG)
+        )
+        config = (home / "config.toml").read_text(encoding="utf-8")
+        assert config.startswith(
+            'model = "gpt-5.5"\n\n'
+            '[mcp_servers.notion]\n'
+            'url = "https://mcp.notion.com/mcp"\n'
+            'enabled = false\n\n'
+            '[plugins."agentstack-codex-app@test-market"]\n'
+            'enabled = true\n'
+            + "\n\n# Written by spawn_child.sh: this child talks to ORRERY Mail"
+        )
+
+
+def test_codex_overlay_adds_server_approval_and_round_trips_emitter_types():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            'profile = "child"\n'
+            "retry_count = 3\n"
+            "temperature = 0.25\n"
+            "enabled = true\n"
+            'labels = ["one", "two"]\n\n'
+            'mixed_values = [1, { name = "inline" }, ["nested"]]\n'
+            "release_date = 2026-09-14\n"
+            "wake_time = 10:20:30\n"
+            "observed_at = 2026-09-14T10:20:30+09:00\n\n"
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n\n'
+            '[mcp_servers.chrome-devtools.tools.take_screenshot]\n'
+            'approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        home = pathlib.Path(
+            _run_codex_home(
+                tmpdir, config_text=_BASE_CODEX_CONFIG, overlay_path=overlay
+            )
+        )
+        text = (home / "config.toml").read_text(encoding="utf-8")
+        config = tomllib.loads(text)
+        assert config["profile"] == "child"
+        assert config["retry_count"] == 3
+        assert config["temperature"] == 0.25
+        assert config["enabled"] is True
+        assert config["labels"] == ["one", "two"]
+        assert config["mixed_values"] == [
+            1, {"name": "inline"}, ["nested"]
+        ]
+        assert config["release_date"].isoformat() == "2026-09-14"
+        assert config["wake_time"].isoformat() == "10:20:30"
+        assert config["observed_at"].isoformat() == "2026-09-14T10:20:30+09:00"
+        chrome = config["mcp_servers"]["chrome-devtools"]
+        assert chrome["default_tools_approval_mode"] == "approve"
+        assert chrome["tools"]["take_screenshot"]["approval_mode"] == "approve"
+        assert '[mcp_servers."chrome-devtools".tools.take_screenshot]' in text
+
+
+def test_codex_overlay_preserves_inherited_arrays_of_tables():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = _BASE_CODEX_CONFIG + (
+            '\n[[skills.config]]\n'
+            'path = "/workspace/skills/first"\n'
+            'enabled = true\n\n'
+            '[[skills.config]]\n'
+            'path = "/workspace/skills/second"\n'
+            'enabled = false\n'
+        )
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir, config_text=source, overlay_path=overlay
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        config = tomllib.loads(text)
+        assert config["skills"]["config"] == [
+            {"path": "/workspace/skills/first", "enabled": True},
+            {"path": "/workspace/skills/second", "enabled": False},
+        ]
+        assert (
+            config["mcp_servers"]["chrome-devtools"][
+                "default_tools_approval_mode"
+            ]
+            == "approve"
+        )
+        assert text.count("[[skills.config]]") == 2
+
+
+def test_codex_overlay_escapes_del_and_c1_controls_in_strings():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            'control_text = "before\\u007fmiddle\\u0085after"\n'
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir, config_text=_BASE_CODEX_CONFIG, overlay_path=overlay
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        assert "\x7f" not in text
+        assert "\x85" not in text
+        assert "\\u007f" in text
+        assert "\\u0085" in text
+        assert tomllib.loads(text)["control_text"] == "before\x7fmiddle\x85after"
+
+
+def test_failed_emitted_candidate_keeps_the_known_good_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir,
+            config_text=_BASE_CODEX_CONFIG,
+            overlay_path=overlay,
+            corrupt_emitted_candidate=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        config = tomllib.loads(text)
+        assert "chrome-devtools" not in config["mcp_servers"]
+        assert config["mcp_servers"]["notion"]["enabled"] is False
+        assert "continuing without it" in proc.stderr
+
+
+def test_codex_overlay_replaces_inherited_server_args():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = _BASE_CODEX_CONFIG + (
+            '\n[mcp_servers.chrome-devtools]\n'
+            'command = "npx"\n'
+            'args = ["old", "value"]\n'
+        )
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.chrome-devtools]\n'
+            'args = ["--browserUrl", "http://127.0.0.1:<port>"]\n',
+            encoding="utf-8",
+        )
+        home = pathlib.Path(
+            _run_codex_home(tmpdir, config_text=source, overlay_path=overlay)
+        )
+        config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+        chrome = config["mcp_servers"]["chrome-devtools"]
+        assert chrome["command"] == "npx"
+        assert chrome["args"] == ["--browserUrl", "http://127.0.0.1:<port>"]
+
+
+def test_codex_overlay_cannot_modify_any_mail_proxy_table():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers."orrery-mail"]\ncommand = "evil"\n\n'
+            '[mcp_servers.agentstack]\ncommand = "evil"\n\n'
+            '[mcp_servers.mcp_agent_mail]\ncommand = "evil"\n\n'
+            '[mcp_servers.agentstack-mail]\ncommand = "evil"\n\n'
+            '[plugins."agentstack-codex-app@test-market".mcp_servers.agentstack]\n'
+            'enabled = true\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir, config_text=_BASE_CODEX_CONFIG, overlay_path=overlay
+        )
+        assert proc.returncode == 0, proc.stderr
+        home = pathlib.Path(proc.stdout.strip())
+        config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+        servers = config["mcp_servers"]
+        for name in ("orrery-mail", "agentstack"):
+            assert servers[name]["command"].endswith("run-mcp.sh")
+            assert servers[name]["tools"]["send_message"]["approval_mode"] == "approve"
+        assert "mcp_agent_mail" not in servers
+        assert "agentstack-mail" not in servers
+        plugin = config["plugins"]["agentstack-codex-app@test-market"]
+        assert plugin["mcp_servers"]["agentstack"]["enabled"] is False
+        for key in (
+            'mcp_servers."orrery-mail"',
+            "mcp_servers.agentstack",
+            "mcp_servers.mcp_agent_mail",
+            'mcp_servers."agentstack-mail"',
+            'plugins."agentstack-codex-app@test-market".mcp_servers.agentstack',
+        ):
+            assert key in proc.stderr
+
+
+def test_invalid_or_missing_codex_overlay_warns_and_spawn_continues():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        invalid = tmpdir / "invalid.toml"
+        invalid.write_text("[broken\n", encoding="utf-8")
+        for index, overlay in enumerate((invalid, tmpdir / "missing.toml")):
+            case_dir = tmpdir / f"case-{index}"
+            case_dir.mkdir()
+            proc = _run_codex_home_process(
+                case_dir,
+                config_text=_BASE_CODEX_CONFIG,
+                overlay_path=overlay,
+            )
+            assert proc.returncode == 0, proc.stderr
+            config_path = pathlib.Path(proc.stdout.strip()) / "config.toml"
+            text = config_path.read_text(encoding="utf-8")
+            assert "[mcp_servers.notion]" in text
+            assert '[mcp_servers."orrery-mail"]' in text
+            assert "continuing without it" in proc.stderr
+            assert str(overlay) in proc.stderr
 
 
 def test_codex_child_home_shares_login_and_history_but_owns_its_config():

@@ -16,7 +16,9 @@ html[data-color-theme="light"] body.embed>header{
 html[data-color-theme="light"] .mail-health,
 html[data-color-theme="light"] .sesschip,
 html[data-color-theme="light"] .viewtog,
+html[data-color-theme="light"] .seg,
 html[data-color-theme="light"] input[type=search]{background:color-mix(in srgb,var(--panel) 88%,transparent)}
+html[data-color-theme="light"] .seg button[aria-checked="true"]{background:color-mix(in srgb,var(--amber) 12%,transparent)}
 html[data-color-theme="light"] .kv span{color:var(--ink-dim)}
 html[data-color-theme="light"] input[type=search],
 html[data-color-theme="light"] input[type=text],
@@ -50,9 +52,15 @@ html[data-color-theme="light"] .node .ctx-arc-glow{display:none}
 html[data-color-theme="light"] .node .annot-pill,
 html[data-color-theme="light"] .node .provider-seat{fill:var(--panel);stroke:var(--hair)}
 html[data-color-theme="light"] .node .provider-seat-shadow{fill:var(--ink);opacity:.09}
+html[data-color-theme="light"] .node .murmur .mbp,
+html[data-color-theme="light"] .node .murmur .mtail{fill:var(--theme-surface-terminal);stroke:var(--theme-border-control);stroke-opacity:.6}
+html[data-color-theme="light"] .node .murmur .mtx{fill:var(--ink)}
+/* Provider logos are shipped as SVG files painted in bone; a file cannot read tokens, so light darkens them. */
+html[data-color-theme="light"] .idrow .prov-logo,
+html[data-color-theme="light"] .idrow .prov-logo.on,
+html[data-color-theme="light"] .node .provider-logo{filter:brightness(0)}
 html[data-color-theme="light"] .win,
 html[data-color-theme="light"] .netinfo,
-html[data-color-theme="light"] .nctl,
 html[data-color-theme="light"] .sel-toggle,
 html[data-color-theme="light"] .legend,
 html[data-color-theme="light"] #gtip{background:color-mix(in srgb,var(--panel) 94%,transparent);box-shadow:0 16px 38px var(--theme-shadow-low)}
@@ -66,7 +74,8 @@ html[data-color-theme="light"] #term,
 html[data-color-theme="light"] #spawnmd{background:rgb(var(--theme-ink-rgb)/.24)}
 html[data-color-theme="light"] #term .tm-box,
 html[data-color-theme="light"] #spawnmd .spm-frame,
-html[data-color-theme="light"] #edrawer{
+html[data-color-theme="light"] #edrawer,
+html[data-color-theme="light"] #settings{
   background:linear-gradient(180deg,rgb(255 255 255/.28),transparent 140px),var(--panel);
   border-color:var(--hair);box-shadow:0 24px 72px var(--theme-shadow-low);
 }
@@ -92,7 +101,8 @@ html[data-color-theme="light"] #spawnmd select,
 html[data-color-theme="light"] #spawnmd textarea,
 html[data-color-theme="light"] #spawnmd .spm-dir-options,
 html[data-color-theme="light"] #spawnmd .spm-chip,
-html[data-color-theme="light"] #spawnmd .spm-advanced{background:var(--theme-surface-terminal)}
+html[data-color-theme="light"] #spawnmd .spm-advanced,
+html[data-color-theme="light"] #spawnmd .spm-section{background:var(--theme-surface-terminal)}
 html[data-color-theme="light"] #toast,
 html[data-color-theme="light"] #selbar,
 html[data-color-theme="light"] #replayBar,
@@ -138,4 +148,32 @@ html[data-color-theme="light"] .node .motion-ring,
 html[data-color-theme="light"] .node .ctx-arc{filter:none;box-shadow:none}
 html[data-color-theme="light"] ::-webkit-scrollbar-thumb{
   background:rgb(var(--theme-ink-rgb)/.34);border-color:transparent;background-clip:padding-box;
+}
+/* Rows recessed inside a card. The CRT layer writes --bg out by hand for them,
+   but "recessed" is a direction on the surface ladder and the ladder inverts
+   between the themes: deeper in light is --elev, not --bg. Same reading as the
+   cockpit's embedded overrides, so standalone and embedded agree. */
+html[data-color-theme="light"] .live,
+html[data-color-theme="light"] .kv{background:color-mix(in srgb,var(--elev) 48%,transparent)}
+html[data-color-theme="light"] .kv span{color:var(--ink)}
+html[data-color-theme="light"] .nettool,
+html[data-color-theme="light"] #replayBar{background:color-mix(in srgb,var(--panel) 66%,transparent)}
+html[data-color-theme="light"] .sel-toggle,
+html[data-color-theme="light"] .win-all{background:color-mix(in srgb,var(--panel) 80%,transparent)}
+/* Accent as area: on paper the amber sits near the luminance of the page, so an
+   edge alone disappears. Chips and the EXIT control take a faint fill. */
+html[data-color-theme="light"] .chip.att,
+html[data-color-theme="light"] .chip.cat,
+html[data-color-theme="light"] .chip.dv,
+html[data-color-theme="light"] .chip.win{
+  background:rgb(var(--theme-accent-rgb)/.14);
+  border-color:rgb(var(--theme-accent-rgb)/.34);text-shadow:none;
+}
+html[data-color-theme="light"] .chip.imp{
+  background:color-mix(in srgb,var(--alert) 14%,transparent);
+  border-color:color-mix(in srgb,var(--alert) 34%,transparent);text-shadow:none;
+}
+html[data-color-theme="light"] .bay .exitbtn{
+  color:var(--amber);background:rgb(var(--theme-accent-rgb)/.14);
+  border-color:rgb(var(--theme-accent-rgb)/.34);text-shadow:none;
 }

@@ -929,16 +929,31 @@ def _rendered_index() -> str:
     return server._render_dashboard_index(source).decode("utf-8")
 
 
-def test_rendered_dashboard_adds_capability_driven_resource_controls():
-    rendered = _rendered_index()
-    assert 'id="spm-resources-row"' in rendered
-    assert 'id="spm-resources"' in rendered
-    assert "applySpawnProviderCapabilities(provider);" in rendered
-    assert "const providerReady=spawnProviderRequirementsMet();" in rendered
-    assert "resetSpawnProviderCapabilities();" in rendered
-    injected = "".join(new for _label, _old, new in gemini_runtime._UI_PATCHES)
-    assert "gemini" not in injected.lower()
-    assert "antigravity" not in injected.lower()
+def test_core_dashboard_has_capability_driven_resource_controls():
+    source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert 'id="spm-resources-row"' in source
+    assert 'id="spm-resources"' in source
+    assert "applySpawnProviderCapabilities(provider);" in source
+    assert "const providerReady=spawnProviderRequirementsMet();" in source
+    assert "resetSpawnProviderCapabilities();" in source
+    helpers = re.search(
+        r"/\* provider-capabilities:start \*/.*?/\* provider-capabilities:end \*/",
+        source, re.DOTALL)
+    assert helpers, "provider capability helpers missing"
+    assert "gemini" not in helpers.group(0).lower()
+    assert "antigravity" not in helpers.group(0).lower()
+
+
+def test_provider_render_matches_canonical_render():
+    source = (ROOT / "dashboard" / "index.html").read_bytes()
+    assert server._render_dashboard_index(source) == canonical_server._render_dashboard_index(
+        source, server.DASHBOARD_LANG, server.DASHBOARD_MURMUR)
+
+
+def test_resources_row_precedes_advanced_controls():
+    source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert source.index('id="spm-resources-row"') < source.index(
+        '<details class="spm-row full spm-advanced" id="spm-advanced">')
 
 
 def test_rendered_dashboard_keeps_server_language_defaults(monkeypatch):
@@ -952,7 +967,7 @@ _UI_FUNCTIONS = (
     "normalizeSpawnProviders", "spawnModelTone", "renderSpawnProviders",
     "selectSpawnProvider", "renderSpawnModels", "selectSpawnModel",
     "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
-    "updateSpawnButton", "buildSpawnPayload",
+    "updateSpawnButton", "setSpawnDraftStatus", "setSpawnStat", "buildSpawnPayload",
 )
 
 _UI_HARNESS = r"""
@@ -974,12 +989,14 @@ const esc=s=>String(s);
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
 let spmSelectedEffort='',spmProviders=[];
 let spmBusy=false,spmReady=true,spmIdentityState='auto',spmSuggestedName='';
+let spmDraftDir='/repo',spmDraftRestored=false;
 const spmNameStatus=new Map();
 const state=()=>({
   worktree:SPM('spm-worktree').checked,locked:SPM('spm-worktree').disabled,
   resourcesShown:SPM('spm-resources-row').style.display==='grid',
   resources:SPM('spm-resources').value,effort:spmSelectedEffort,
-  launchDisabled:SPM('spm-spawn').disabled,payload:buildSpawnPayload()});
+  launchDisabled:SPM('spm-spawn').disabled,status:SPM('spm-stat').textContent,
+  statusError:SPM('spm-stat').classList.contains('err'),payload:buildSpawnPayload()});
 const out={};
 SPM('spm-parent').value='Parent';SPM('spm-task').value='work';SPM('spm-dir').value='/repo';
 resetSpawnProviderCapabilities();
@@ -1002,6 +1019,13 @@ SPM('spm-worktree').checked=true;
 selectSpawnProvider('gemini');
 selectSpawnProvider('claude');
 out.claudeChoiceRestored=state();
+spmDraftRestored=true;
+setSpawnDraftStatus(true);
+selectSpawnProvider('gemini');
+out.restoredGeminiMissing=state();
+SPM('spm-resources').value='docs/**';SPM('spm-resources').oninput();
+selectSpawnEffort('medium');
+out.restoredGeminiReady=state();
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -1045,10 +1069,16 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
                                                "model": "claude-sonnet-5"}
     assert out["geminiSelected"] | {"payload": None} == {
         "worktree": True, "locked": True, "resourcesShown": True, "resources": "",
-        "effort": "", "launchDisabled": True, "payload": None,
+        "effort": "", "launchDisabled": True,
+        "status": "resources are required for this provider", "statusError": False,
+        "payload": None,
     }
     assert out["geminiResourcesOnly"]["launchDisabled"] is True
+    assert out["geminiResourcesOnly"]["status"] == "select an effort for this provider"
+    assert out["geminiResourcesOnly"]["statusError"] is False
     assert out["geminiReady"]["launchDisabled"] is False
+    assert out["geminiReady"]["status"] == "ready · review the launch manifest"
+    assert out["geminiReady"]["statusError"] is False
     assert out["geminiReady"]["payload"] == {
         **base_payload, "provider": "gemini", "model": "gemini-3.8-flash-high",
         "effort": "medium", "resources": "src/**", "worktree": True,
@@ -1063,35 +1093,36 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
         assert state["payload"] == expected, key
         assert (state["worktree"], state["locked"], state["resourcesShown"],
                 state["resources"], state["launchDisabled"]) == (False, False, False, "", False), key
+        assert state["status"] == "ready · review the launch manifest", key
+        assert state["statusError"] is False, key
     assert out["claudeChoiceRestored"]["worktree"] is True
     assert out["claudeChoiceRestored"]["locked"] is False
     assert out["claudeChoiceRestored"]["payload"]["worktree"] is True
+    assert out["restoredGeminiMissing"]["status"] == (
+        "resources are required for this provider")
+    assert out["restoredGeminiMissing"]["statusError"] is False
+    assert out["restoredGeminiReady"]["status"] == "restored saved task draft · /repo"
+    assert out["restoredGeminiReady"]["statusError"] is False
 
 
 # --------------------------------------------------------------------------- #
 # Render-marker drift and extension failure
 # --------------------------------------------------------------------------- #
-def test_ui_marker_drift_serves_canonical_page_without_partial_injection():
+def test_marker_is_part_of_canonical_page_without_render_injection():
     source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
-    drifted = source.replace("hint.textContent=copy?", "hint.innerText=copy?")
-    assert drifted != source
-    # An early patch target is still present; none of the patches may apply.
-    patched, error = gemini_runtime.apply_ui_patches(drifted)
-    assert error == "dashboard UI patch target missing: effort button refresh"
-    assert patched == drifted
-
-    rendered = server._render_dashboard_index(drifted.encode("utf-8")).decode("utf-8")
-    assert rendered == canonical_server._render_dashboard_index(
-        drifted.encode("utf-8"), server.DASHBOARD_LANG, server.DASHBOARD_MURMUR).decode("utf-8")
-    assert "spm-resources-row" not in rendered
-    assert "provider-capabilities" not in rendered
+    rendered = server._render_dashboard_index(source.encode("utf-8")).decode("utf-8")
+    canonical = canonical_server._render_dashboard_index(
+        source.encode("utf-8"), server.DASHBOARD_LANG, server.DASHBOARD_MURMUR).decode("utf-8")
+    assert rendered == canonical
+    assert "spm-resources-row" in rendered
+    assert "provider-capabilities" in rendered
 
 
 def test_ui_marker_drift_disables_gemini_catalog_and_spawn(monkeypatch, tmp_path):
     source = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
     drifted = tmp_path / "index.html"
-    drifted.write_text(source.replace("button.disabled=spmBusy||!spmReady||!identityReady;",
-                                      "button.disabled=spmBusy;"), encoding="utf-8")
+    drifted.write_text(source.replace("/* provider-capabilities:start */", ""),
+                       encoding="utf-8")
     monkeypatch.setattr(server, "INDEX_HTML", str(drifted))
     ids = [item["id"] for item in server.spawn_names_payload()["providers"]]
     assert ids == ["claude", "codex"]
@@ -1099,7 +1130,7 @@ def test_ui_marker_drift_disables_gemini_catalog_and_spawn(monkeypatch, tmp_path
                               "provider": "gemini", "effort": "high", "resources": "src/**"})
     assert result == {
         "ok": False,
-        "error": "provider gemini unavailable: dashboard UI patch target missing: launch readiness gate",
+        "error": "provider gemini unavailable: dashboard core lacks provider capability controls",
     }
 
 

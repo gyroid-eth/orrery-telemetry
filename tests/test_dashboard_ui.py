@@ -246,4 +246,7 @@ process.stdout.write(JSON.stringify({keys:Object.keys(MURMURS_EN),sample,
     }
     assert data["ascii"] is True
     assert all(sample != "日本語" for sample in data["sample"])
-    assert "if(!INITIAL_ROUTE.murmurEnabled)return;" in html
+    # murmur gate: the runtime flag, seeded from the route and the browser's
+    # stored choice, is what spawnMurmur consults (settings drawer, 2026-09-14)
+    assert "if(!murmurState.on)return;" in html
+    assert "const on=locked?INITIAL_ROUTE.murmurEnabled" in html

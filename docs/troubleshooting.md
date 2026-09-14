@@ -37,6 +37,21 @@ dashboard は `/api/version` の正しい JSON response を「実際に配信中
 
 **token や Authorization ヘッダは含みません**（そのままチャットに貼れるように、意図的に値を出さない作りにしてあり、テストで固定しています）。「何をして」「何を期待して」「何が起きたか」を末尾の欄に書き足してください。エラー文はそのまま貼ってもらうのが最も速いです。
 
+## `MCP tool call requires approval, but approval policy is never`
+
+Codex child が inherited MCP server を呼んだものの、その server または tool に明示的な許可がありません。たとえば次の TOML fragment を絶対 path に保存し、installer を再実行してください。
+
+```toml
+[mcp_servers.chrome-devtools]
+default_tools_approval_mode = "approve"
+```
+
+```bash
+./scripts/install.sh --codex-child-overlay /absolute/path/to/overlay.toml
+```
+
+特定 tool だけなら `[mcp_servers.chrome-devtools.tools.take_screenshot]` の `approval_mode = "approve"` を使います。詳細と接続先の上書き例は [委任と child agent](delegation.md#codex-child-と-mcp-承認) を参照してください。
+
 ## Mail の fixture digest mismatch
 
 `Authorization fixture digest mismatch` や tools fixture の digest mismatch は、Git の `core.autocrlf=true` による checkout 時の CRLF 変換でも発生します。

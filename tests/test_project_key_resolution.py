@@ -333,6 +333,7 @@ def test_codex_child_policy_defaults_are_written_out_explicitly(
     result = _dry_run(tmp_path, "")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "codex child approval: never" in result.stdout
+    assert "codex child config overlay: (disabled)" in result.stdout
     assert "codex network: on" in result.stdout
     assert "codex add dirs: (none beyond" in result.stdout
 
@@ -375,3 +376,58 @@ def test_codex_child_policy_rejects_unknown_values(tmp_path: pathlib.Path) -> No
     relative = _dry_run(tmp_path, "", "--codex-add-dirs", "relative/dir")
     assert relative.returncode == 2
     assert "AGENTSTACK_CODEX_ADD_DIRS entries must be absolute paths or start with ~ (got: relative/dir)" in relative.stderr
+
+
+def test_codex_child_overlay_is_inherited_and_overridden_by_flag(
+    tmp_path: pathlib.Path,
+) -> None:
+    installed_overlay = tmp_path / "installed-overlay.toml"
+    installed_overlay.write_text(
+        '[mcp_servers.browser]\ndefault_tools_approval_mode = "approve"\n',
+        encoding="utf-8",
+    )
+    replacement_overlay = tmp_path / "replacement-overlay.toml"
+    replacement_overlay.write_text('model = "child-model"\n', encoding="utf-8")
+
+    inherited = _dry_run(
+        tmp_path,
+        f"export AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={installed_overlay}\n",
+    )
+    assert inherited.returncode == 0, inherited.stdout + inherited.stderr
+    assert f"codex child config overlay: {installed_overlay}" in inherited.stdout
+
+    overridden = _dry_run(
+        tmp_path,
+        f"export AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={installed_overlay}\n",
+        "--codex-child-overlay",
+        str(replacement_overlay),
+    )
+    assert overridden.returncode == 0, overridden.stdout + overridden.stderr
+    assert f"codex child config overlay: {replacement_overlay}" in overridden.stdout
+
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert '"AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING"' in installer
+
+
+def test_codex_child_overlay_rejects_bad_installer_inputs(
+    tmp_path: pathlib.Path,
+) -> None:
+    missing = tmp_path / "missing.toml"
+    result = _dry_run(
+        tmp_path, "", "--codex-child-overlay", str(missing)
+    )
+    assert result.returncode == 2
+    assert f"--codex-child-overlay file does not exist: {missing}" in result.stderr
+
+    relative = _dry_run(tmp_path, "", "--codex-child-overlay", "overlay.toml")
+    assert relative.returncode == 2
+    assert "--codex-child-overlay must be an absolute path" in relative.stderr
+
+    invalid = tmp_path / "invalid.toml"
+    invalid.write_text("[broken\n", encoding="utf-8")
+    result = _dry_run(
+        tmp_path, "", "--codex-child-overlay", str(invalid)
+    )
+    assert result.returncode == 2
+    assert "--codex-child-overlay is not valid TOML" in result.stderr
+    assert str(invalid) in result.stderr

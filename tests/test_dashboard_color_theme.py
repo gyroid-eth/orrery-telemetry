@@ -48,6 +48,7 @@ process.stdout.write(JSON.stringify({vars:theme.cssVariables,report:core.contras
         "--ln-delegate": "#335b16",
         "--alert": "#a6060e",
         "--cyan": "#005a65",
+        "--accent-control": "#005a65",
         "--void": "#f5efe1",
         "--bone": "#010100",
         "--bone-dim": "#3a3528",
@@ -146,7 +147,7 @@ process.stdout.write(JSON.stringify({normalized,afterWrong,afterOrigin,afterLigh
     assert result["afterWrong"] == {"count": 0}
     assert result["afterOrigin"] == {"count": 0}
     assert result["afterLight"] == {
-        "count": 30,
+        "count": 31,
         "theme": "light",
         "preference": "light",
         "bg": "#f5efe1",

@@ -37,6 +37,21 @@ Paste the output verbatim from `--- copy from here ---` through `--- copy to her
 
 **No tokens or Authorization headers are included.** Values are intentionally omitted and tests lock this behavior so the report can be pasted directly into chat. Add “what you did,” “what you expected,” and “what happened” in the final field. Pasting error text verbatim is fastest.
 
+## `MCP tool call requires approval, but approval policy is never`
+
+A Codex child called an inherited MCP server without an explicit allow rule for that server or tool. For example, save this TOML fragment at an absolute path and rerun the installer:
+
+```toml
+[mcp_servers.chrome-devtools]
+default_tools_approval_mode = "approve"
+```
+
+```bash
+./scripts/install.sh --codex-child-overlay /absolute/path/to/overlay.toml
+```
+
+To allow only one tool, use `approval_mode = "approve"` under `[mcp_servers.chrome-devtools.tools.take_screenshot]`. See [Delegation and child agents](delegation.en.md#codex-children-and-mcp-approvals) for details and an endpoint override example.
+
 ## Windows Mail archives exceed MAX_PATH
 
 A long canonical project path and message subject can make an archive path
