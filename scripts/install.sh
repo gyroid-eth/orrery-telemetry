@@ -35,6 +35,7 @@ SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
 # writable roots). Children run unattended, so the defaults avoid prompts
 # nobody is there to answer.
 CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
+CODEX_CHILD_CONFIG_OVERLAY_SETTING="${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
 CODEX_ADD_DIRS_SETTING="${AGENTSTACK_CODEX_ADD_DIRS:-}"
 # Where the Codex CLI lives. The dashboard runs under launchd / systemd with
@@ -98,6 +99,10 @@ Options:
   --codex-approval MODE  Codex child --ask-for-approval: never, on-request,
                          on-failure, untrusted (default: existing env.sh,
                          else never)
+  --codex-child-overlay PATH
+                         Absolute path to a TOML fragment merged over every
+                         macOS/Linux Codex child's config.toml (default:
+                         existing env.sh, else disabled)
   --codex-network MODE   on or off: sandbox network access for Codex children
                          (default: existing env.sh, else on)
   --codex-bin PATH       Codex CLI executable used by the dashboard and child
@@ -182,6 +187,10 @@ while [[ $# -gt 0 ]]; do
       CODEX_CHILD_APPROVAL_SETTING="$2"
       shift 2
       ;;
+    --codex-child-overlay)
+      CODEX_CHILD_CONFIG_OVERLAY_SETTING="$2"
+      shift 2
+      ;;
     --codex-network)
       CODEX_NETWORK_SETTING="$2"
       shift 2
@@ -231,6 +240,9 @@ if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
 fi
 if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
   CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
+fi
+if [[ -z "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]]; then
+  CODEX_CHILD_CONFIG_OVERLAY_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY "$INSTALL_DIR/env.sh")"
 fi
 if [[ -z "$CODEX_NETWORK_SETTING" ]]; then
   CODEX_NETWORK_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_NETWORK "$INSTALL_DIR/env.sh")"
@@ -398,6 +410,16 @@ case "$CODEX_CHILD_APPROVAL_SETTING" in
     exit 2
     ;;
 esac
+if [[ -n "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]]; then
+  if [[ "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" != /* ]]; then
+    echo "error: --codex-child-overlay must be an absolute path (got: $CODEX_CHILD_CONFIG_OVERLAY_SETTING)" >&2
+    exit 2
+  fi
+  if [[ ! -f "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]]; then
+    echo "error: --codex-child-overlay file does not exist: $CODEX_CHILD_CONFIG_OVERLAY_SETTING" >&2
+    exit 2
+  fi
+fi
 case "$CODEX_NETWORK_SETTING" in
   on|off) ;;
   *)
@@ -765,6 +787,28 @@ run_preflight() {
   preflight_target_writable
   preflight_agent_mail_port
   preflight_finish
+}
+
+validate_codex_child_overlay() {
+  [[ -n "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]] || return 0
+  local error
+  if ! error="$("$PYTHON_BIN" - "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" 2>&1 <<'PY'
+import pathlib
+import sys
+import tomllib
+
+path = pathlib.Path(sys.argv[1])
+try:
+    with path.open("rb") as handle:
+        tomllib.load(handle)
+except Exception as exc:
+    print(exc)
+    raise SystemExit(1)
+PY
+)"; then
+    echo "error: --codex-child-overlay is not valid TOML ($CODEX_CHILD_CONFIG_OVERLAY_SETTING): $error" >&2
+    exit 2
+  fi
 }
 
 probe_agent_mail_database_url() {
@@ -1690,6 +1734,7 @@ values = {
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
+    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -2599,6 +2644,7 @@ render_launchd_plist() {
     "$PYTHON_BIN" - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" <<PY
 import pathlib
 import sys
+import xml.sax.saxutils
 
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(sys.argv[2])
@@ -2641,6 +2687,14 @@ repl = {
 text = src.read_text(encoding="utf-8")
 for key, value in repl.items():
     text = text.replace(key, value)
+overlay_marker = "    <key>AGENTSTACK_CODEX_CHILD_APPROVAL</key>"
+overlay_entry = (
+    "    <key>AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY</key>\n"
+    "    <string>"
+    + xml.sax.saxutils.escape("$CODEX_CHILD_CONFIG_OVERLAY_SETTING")
+    + "</string>\n"
+)
+text = text.replace(overlay_marker, overlay_entry + overlay_marker)
 tmp = dst.with_suffix(dst.suffix + ".tmp")
 tmp.write_text(text, encoding="utf-8")
 tmp.replace(dst)
@@ -2679,6 +2733,7 @@ env = {
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
+    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -3075,10 +3130,12 @@ manifest = {
         "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
         "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
+        "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
         "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
+    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -3152,6 +3209,7 @@ main() {
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
+  say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
   say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
@@ -3159,6 +3217,7 @@ main() {
   if ! run_preflight; then
     exit 1
   fi
+  validate_codex_child_overlay
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."
   elif [[ "$TIER" == "tier2" ]]; then

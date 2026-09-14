@@ -1101,13 +1101,16 @@ write_child_codex_home() {
     [[ -n "$token_file" && -f "$token_file" && -x "$runner" && -d "$source_home" ]] || return 0
 
     local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
-    python3 - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
+    "${AGENTSTACK_PYTHON:-python3}" - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
         "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" \
         "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
+import json
+import math
 import os
 import pathlib
 import re
 import sys
+import tomllib
 
 home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin = sys.argv[1:12]
 home_path = pathlib.Path(home)
@@ -1135,8 +1138,124 @@ def looks_like_agent_mail(name):
 
 
 def toml_string(value):
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return '"' + escaped + '"'
+    return json.dumps(value, ensure_ascii=False)
+
+
+def toml_key(value):
+    return value if re.fullmatch(r"[A-Za-z0-9_]+", value) else toml_string(value)
+
+
+def toml_value(value):
+    if isinstance(value, str):
+        return toml_string(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "-inf" if value < 0 else "inf"
+        return repr(value)
+    if isinstance(value, list) and all(
+        isinstance(item, (str, bool, int, float)) for item in value
+    ):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    raise TypeError("unsupported TOML value: " + type(value).__name__)
+
+
+def emit_toml(config):
+    """Emit the subset used by Codex configs, deterministically."""
+    output = []
+
+    def emit_table(path, table, write_header):
+        scalars = [(key, value) for key, value in table.items()
+                   if not isinstance(value, dict)]
+        children = [(key, value) for key, value in table.items()
+                    if isinstance(value, dict)]
+        if write_header:
+            output.append("[" + ".".join(toml_key(part) for part in path) + "]")
+        for key, value in sorted(scalars):
+            output.append(toml_key(key) + " = " + toml_value(value))
+        for key, value in sorted(children):
+            if output and output[-1] != "":
+                output.append("")
+            emit_table(path + (key,), value, True)
+
+    emit_table((), config, False)
+    return "\n".join(output) + "\n"
+
+
+def deep_merge(base, overlay):
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
+def protected_overlay_path(parts):
+    return ".".join(toml_key(part) for part in parts)
+
+
+def drop_protected_overlay_tables(overlay):
+    servers = overlay.get("mcp_servers")
+    if servers is not None and not isinstance(servers, dict):
+        print(
+            "[spawn_child] warning: ignored protected Codex child config "
+            "overlay key mcp_servers",
+            file=sys.stderr,
+        )
+        del overlay["mcp_servers"]
+    elif isinstance(servers, dict):
+        for name in list(servers):
+            if name == "agentstack" or looks_like_agent_mail(name):
+                print(
+                    "[spawn_child] warning: ignored protected Codex child "
+                    "config overlay key " + protected_overlay_path(("mcp_servers", name)),
+                    file=sys.stderr,
+                )
+                del servers[name]
+    plugins = overlay.get("plugins")
+    if plugins is not None and not isinstance(plugins, dict):
+        print(
+            "[spawn_child] warning: ignored protected Codex child config "
+            "overlay key plugins",
+            file=sys.stderr,
+        )
+        del overlay["plugins"]
+    elif isinstance(plugins, dict):
+        for plugin_id, plugin in plugins.items():
+            if not isinstance(plugin, dict):
+                print(
+                    "[spawn_child] warning: ignored protected Codex child "
+                    "config overlay key " + protected_overlay_path(
+                        ("plugins", plugin_id)
+                    ),
+                    file=sys.stderr,
+                )
+                plugins[plugin_id] = {}
+                continue
+            plugin_servers = plugin.get("mcp_servers")
+            if plugin_servers is not None and not isinstance(plugin_servers, dict):
+                print(
+                    "[spawn_child] warning: ignored protected Codex child "
+                    "config overlay key " + protected_overlay_path(
+                        ("plugins", plugin_id, "mcp_servers")
+                    ),
+                    file=sys.stderr,
+                )
+                del plugin["mcp_servers"]
+            elif isinstance(plugin_servers, dict) and "agentstack" in plugin_servers:
+                print(
+                    "[spawn_child] warning: ignored protected Codex child "
+                    "config overlay key " + protected_overlay_path(
+                        ("plugins", plugin_id, "mcp_servers", "agentstack")
+                    ),
+                    file=sys.stderr,
+                )
+                del plugin_servers["agentstack"]
 
 
 def plugin_name(header):
@@ -1242,7 +1361,27 @@ for name in claimed:
         lines.append("approval_mode = \"approve\"")
 
 target = home_path / "config.toml"
-target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+config_text = "\n".join(lines) + "\n"
+overlay_setting = os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip()
+if overlay_setting:
+    overlay_path = pathlib.Path(overlay_setting)
+    try:
+        overlay = tomllib.loads(overlay_path.read_text(encoding="utf-8"))
+        config = tomllib.loads(config_text)
+        drop_protected_overlay_tables(overlay)
+        deep_merge(config, overlay)
+        config_text = emit_toml(config)
+        # Catch emitter gaps here, while falling back to the known-good config
+        # still preserves the spawn.
+        tomllib.loads(config_text)
+    except Exception as exc:
+        print(
+            "[spawn_child] warning: could not apply Codex child config overlay "
+            + toml_string(overlay_setting) + ": " + str(exc)
+            + "; continuing without it",
+            file=sys.stderr,
+        )
+target.write_text(config_text, encoding="utf-8")
 os.chmod(target, 0o600)
 PY
     printf '%s\n' "$home_dir"

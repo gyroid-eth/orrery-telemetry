@@ -55,6 +55,29 @@ Claude Code にも Codex Desktop にも、最初から subagent の仕組みが�
 
 導入直後は `agentstack-selftest` を実行してください。存在ではなく**機能**を確認します（登録の検証 → 実際の2体の spawn → 相互のメール到達まで）。
 
+## Codex child と MCP 承認
+
+Codex child は無人実行のため既定で `--ask-for-approval never` です。shell command の承認とは別に MCP tool にも承認設定があり、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
+
+server 全体を許可する最小例です。
+
+```toml
+[mcp_servers.chrome-devtools]
+default_tools_approval_mode = "approve"
+```
+
+接続先も変える場合、overlay の array は inherited 値を丸ごと置換します。
+
+```toml
+[mcp_servers.chrome-devtools]
+args = ["--browserUrl", "http://127.0.0.1:<port>"]
+default_tools_approval_mode = "approve"
+```
+
+`default_tools_approval_mode` は Codex の server-wide key です。個別 tool だけを許可する場合は `[mcp_servers.chrome-devtools.tools.take_screenshot]` の `approval_mode = "approve"` で範囲を狭めます。table は再帰的に merge され、scalar と array は overlay 側が置換します。child の認証済み identity を保護するため、ORRERY Mail proxy に相当する `mcp_servers` と `plugins.*.mcp_servers.agentstack` は overlay から変更できず、無視した key が stderr に警告されます。
+
+この overlay は現在 macOS/Linux の `spawn_child.sh` にだけ適用されます。Windows では WSL2 経由なら同じ経路を使いますが、community lane の native Windows launcher は対象外です。
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。

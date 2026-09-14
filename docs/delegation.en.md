@@ -55,6 +55,29 @@ This stack prevents that behavior in three layers.
 
 Run `agentstack-selftest` immediately after installation. It verifies **functionality**, not mere presence (registration validation → spawning two actual agents → mail delivery in both directions).
 
+## Codex children and MCP approvals
+
+Codex children default to `--ask-for-approval never` because they run unattended. MCP tools have an approval setting separate from shell-command approvals, so calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
+
+The minimal server-wide approval is:
+
+```toml
+[mcp_servers.chrome-devtools]
+default_tools_approval_mode = "approve"
+```
+
+When changing the endpoint too, an overlay array replaces the inherited value in full:
+
+```toml
+[mcp_servers.chrome-devtools]
+args = ["--browserUrl", "http://127.0.0.1:<port>"]
+default_tools_approval_mode = "approve"
+```
+
+`default_tools_approval_mode` is Codex's server-wide key. To narrow approval to one tool, set `approval_mode = "approve"` under a table such as `[mcp_servers.chrome-devtools.tools.take_screenshot]`. Tables merge recursively; overlay scalars and arrays replace inherited values. To preserve the child's authenticated identity, the ORRERY Mail proxy entries under `mcp_servers` and `plugins.*.mcp_servers.agentstack` are protected: attempted overlay changes are ignored and named in a stderr warning.
+
+The overlay currently applies only to macOS/Linux `spawn_child.sh`. WSL2 uses that path, but the community-lane native-Windows launcher does not apply it.
+
 ## Choosing between them
 
 There are cases where a built-in subagent is correct: a short search where only the answer matters, or a read-only investigation that should not consume the parent's context. These are jobs that end after one call and that nobody needs to refer to later.
