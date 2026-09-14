@@ -263,6 +263,17 @@ if [[ -z "$CODEX_BIN_SETTING" ]]; then
     CODEX_BIN_SETTING="$(command -v codex 2>/dev/null || true)"
   fi
 fi
+# A Node-installed `codex` is a wrapper that loads its platform package through
+# whichever `node` is first on PATH; under the service's own PATH that is a
+# different Node than the one it was installed under, and the wrapper dies with
+# "Missing optional dependency". Putting the binary's own directory first keeps
+# it with its runtime — the service otherwise cannot read Codex usage at all.
+if [[ -n "$CODEX_BIN_SETTING" ]]; then
+  codex_bin_dir="$(cd "$(dirname "$CODEX_BIN_SETTING")" 2>/dev/null && pwd -P || true)"
+  if [[ -n "$codex_bin_dir" && ":$PATH_VALUE:" != *":$codex_bin_dir:"* ]]; then
+    PATH_VALUE="$codex_bin_dir:$PATH_VALUE"
+  fi
+fi
 # Product defaults are written out explicitly so env.sh, the service definition
 # and install-state.json all say what a child actually gets.
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
