@@ -149,3 +149,31 @@ html[data-color-theme="light"] .node .ctx-arc{filter:none;box-shadow:none}
 html[data-color-theme="light"] ::-webkit-scrollbar-thumb{
   background:rgb(var(--theme-ink-rgb)/.34);border-color:transparent;background-clip:padding-box;
 }
+/* Rows recessed inside a card. The CRT layer writes --bg out by hand for them,
+   but "recessed" is a direction on the surface ladder and the ladder inverts
+   between the themes: deeper in light is --elev, not --bg. Same reading as the
+   cockpit's embedded overrides, so standalone and embedded agree. */
+html[data-color-theme="light"] .live,
+html[data-color-theme="light"] .kv{background:color-mix(in srgb,var(--elev) 48%,transparent)}
+html[data-color-theme="light"] .kv span{color:var(--ink)}
+html[data-color-theme="light"] .nettool,
+html[data-color-theme="light"] #replayBar{background:color-mix(in srgb,var(--panel) 66%,transparent)}
+html[data-color-theme="light"] .sel-toggle,
+html[data-color-theme="light"] .win-all{background:color-mix(in srgb,var(--panel) 80%,transparent)}
+/* Accent as area: on paper the amber sits near the luminance of the page, so an
+   edge alone disappears. Chips and the EXIT control take a faint fill. */
+html[data-color-theme="light"] .chip.att,
+html[data-color-theme="light"] .chip.cat,
+html[data-color-theme="light"] .chip.dv,
+html[data-color-theme="light"] .chip.win{
+  background:rgb(var(--theme-accent-rgb)/.14);
+  border-color:rgb(var(--theme-accent-rgb)/.34);text-shadow:none;
+}
+html[data-color-theme="light"] .chip.imp{
+  background:color-mix(in srgb,var(--alert) 14%,transparent);
+  border-color:color-mix(in srgb,var(--alert) 34%,transparent);text-shadow:none;
+}
+html[data-color-theme="light"] .bay .exitbtn{
+  color:var(--amber);background:rgb(var(--theme-accent-rgb)/.14);
+  border-color:rgb(var(--theme-accent-rgb)/.34);text-shadow:none;
+}
