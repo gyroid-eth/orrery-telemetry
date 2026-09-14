@@ -169,7 +169,7 @@ light の palette と適用処理は telemetry に同梱されています。`da
 - cockpit（`orrery`）に埋め込まれたとき: host が same-origin の `postMessage` で theme を通知し、controller が適用します。この browser の保存値は読みません
 - 単体で開いたとき: header 右端の `SETTINGS` で開く drawer の APPEARANCE で `dark` / `light` / `system` を選びます。選択は `localStorage`（`agentdash.colorTheme`）に保存され、`system` は OS の `prefers-color-scheme` に追随します。埋め込み時は同じ control を操作不可にし、`SET BY THE COCKPIT` と文字で言います
 
-settings drawer は §8 の drawer と同じ材質と配置（右端固定、角丸は左だけ）で、幅は `min(340px, 100vw - 18px)`。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
+settings drawer は edge thread drawer と同じ材質・配置・寸法（§8、右端固定、角丸は左だけ、幅 `min(390px, 100vw - 18px)`）で、chrome も揃えています: bar は padding 11px 14px に amber の見出し、右に chip、角丸なしの 26px の ×。節は 14px の左右余白と hairline で区切り、見出しは amber 10px、右端に dim の副題。APPEARANCE の下に NETWORK の slider（旧 Tune パネル）と DISPLAY（murmur の switch）を置き、この browser が覚える設定の置き場にします。開発者 console からは今までどおり `window.AgentStackColorTheme.apply({preference: 'light', resolved: 'light'})` で切り替えられます（保存はしません。保存するのは `setPreference('light')`）。
 
 予定: 古い層に literal で残っている色を token に置き換えます。cockpit はいま、埋め込み時にその literal を実行時に書き換えて凌いでいます。
 

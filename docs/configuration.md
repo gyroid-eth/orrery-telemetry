@@ -47,7 +47,9 @@ murmur の言語は `?lang=ja` / `?lang=en`、`AGENTSTACK_LANG`、browser の
 `navigator.language` / `navigator.languages` の順で決まります。browser の言語に
 `ja` 系があれば日本語、それ以外は英語です。`?murmur=on` / `?murmur=off` は
 その URL だけ service の既定を上書きし、`AGENTSTACK_MURMUR=off` は service の
-既定として吹き出しを止めます。環境変数を
+既定として吹き出しを止めます。利用者は dashboard の `SETTINGS` › DISPLAY の
+Murmur switch でも on / off を切り替えられ、その選択は browser に保存されます
+（優先順は URL、browser の保存値、service 既定）。環境変数を
 常駐 service に反映するには、設定後に installer を再実行してください。
 
 ## Project key がない場合

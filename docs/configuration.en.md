@@ -43,7 +43,7 @@ Its file mode is `0600`. Service environment is written into the launchd plist /
 
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
 
-The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTACK_LANG`, then browser `navigator.language` / `navigator.languages`. A Japanese `ja` locale selects Japanese; all others select English. `?murmur=on` / `?murmur=off` overrides the service default for that URL only, while `AGENTSTACK_MURMUR=off` disables bubbles as the service default. To apply an environment variable to a resident service, rerun the installer after setting it.
+The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTACK_LANG`, then browser `navigator.language` / `navigator.languages`. A Japanese `ja` locale selects Japanese; all others select English. `?murmur=on` / `?murmur=off` overrides the service default for that URL only, while `AGENTSTACK_MURMUR=off` disables bubbles as the service default. A viewer can also switch murmurs on or off from the dashboard's `SETTINGS` › DISPLAY; that choice is stored in the browser (precedence: URL, then the browser's stored choice, then the service default). To apply an environment variable to a resident service, rerun the installer after setting it.
 
 ## Without a project key
 
