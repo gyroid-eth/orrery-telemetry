@@ -78,7 +78,7 @@ Rules:
 
 The information hierarchy is fixed, top to bottom. A new element declares which level it belongs to before it is built.
 
-1. header (wordmark, DECK / NETWORK toggle, RUNNING / STANDBY / AGENTS statistics, MAIL health, search, history range, NEW AGENT)
+1. header (wordmark, DECK / NETWORK toggle, RUNNING / STANDBY / AGENTS statistics, MAIL health, search, history range, NEW AGENT, and on NETWORK the SETTINGS entry)
 2. sector heading (a mono capitals line such as `ACTIVE AGENTS [ 27 ]` with a rule fading to the right)
 3. bay (the agent card)
 4. auxiliary bands (history sparkline, usage, …; weaker than agent cards, collapsible)
@@ -141,7 +141,7 @@ Bands that sit above or between agent cards (history, usage, notices) rank below
 
 ## 7. NETWORK view
 
-- A node is a portrait medallion. Base radius 13 (SVG units, scaled by Tune's NSIZE and zoom). The edge is lineage colour at 1.55; the context arc sits at radius +5, stroke 1.55, at most 270°; the motion ring at radius +9, stroke 1.6. No arc when context is unknown, a dot when the portrait is missing
+- A node is a portrait medallion. Base radius 13 (SVG units, scaled by NODE SIZE under SETTINGS › NETWORK and by zoom). The edge is lineage colour at 1.55; the context arc sits at radius +5, stroke 1.55, at most 270°; the motion ring at radius +9, stroke 1.6. No arc when context is unknown, a dot when the portrait is missing
 - Labels are serif (name 10.5px, running 11px) and mono (role 6.8px, counts 9px). A node whose registered name differs from the requested one shows mono 10px with a dotted amber underline. Above 300 nodes (dense) names, roles, counts, badges, and arcs are hidden. When many nodes make labels collide, disclose on hover / focus by highlighting the neighbourhood instead of showing more labels all the time
 - Edges are thin `--ink-dim` lines at opacity .22. Spawn edges are solid `--ln-delegate` at 1.25 / .4. Mail counts sit at the edge midpoint in mono with the ground colour burned in behind the glyphs
 - The background is a 48px grid and a faint central ellipse. The grid is `--hair-2` and never louder than the ground

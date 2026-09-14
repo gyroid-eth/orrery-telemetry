@@ -78,7 +78,7 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 
 画面の情報階層は上から順に決まっています。新しい要素は、必ずどの階層に入るかを宣言してから作ります。
 
-1. header（wordmark、DECK / NETWORK 切替、RUNNING / STANDBY / AGENTS の統計、MAIL の健全性、検索、履歴範囲、NEW AGENT）
+1. header（wordmark、DECK / NETWORK 切替、RUNNING / STANDBY / AGENTS の統計、MAIL の健全性、検索、履歴範囲、NEW AGENT、NETWORK では SETTINGS）
 2. sector 見出し（`ACTIVE AGENTS [ 27 ]` のような mono 大文字の行と、右へ消える罫線）
 3. bay（agent card）
 4. 補助の帯（履歴の sparkline、残量など。agent card より弱く、折りたためる）
@@ -141,7 +141,7 @@ agent card の上や間に入る帯（履歴、残量、通知）は、agent car
 
 ## 7. NETWORK view
 
-- node は portrait の medallion。基準半径は 13（SVG 単位、Tune の NSIZE と zoom で拡大）。縁は系統色で 1.55、残量の弧は半径 +5、線 1.55、最大 270°、motion ring は半径 +9、線 1.6。残量が取れなければ弧を描かず、portrait が無ければ dot
+- node は portrait の medallion。基準半径は 13（SVG 単位、SETTINGS › NETWORK の NODE SIZE と zoom で拡大）。縁は系統色で 1.55、残量の弧は半径 +5、線 1.55、最大 270°、motion ring は半径 +9、線 1.6。残量が取れなければ弧を描かず、portrait が無ければ dot
 - label は serif（名前 10.5px、running は 11px）と mono（役割 6.8px、件数 9px）。要求名と登録名が違う node は mono 10px に amber の点線下線。301 node 以上では名前・役割・件数・badge・弧を隠す（dense）。多数の node で label が重なるときは、常時表示を増やさず hover / focus で近傍を強調して開示します
 - 辺は `--ink-dim` の細線で opacity .22。spawn の辺は `--ln-delegate` の実線で 1.25 / .4。mail の件数は辺の中点に mono で載せ、文字の下に地の色を焼き込んで可読性を保ちます
 - 背景は 48px の格子と中央の淡い楕円。格子は `--hair-2` で、地より目立ちません
