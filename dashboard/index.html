@@ -36735,6 +36735,9 @@ const USAGE_REASON={
   account_usage_disabled:'account usage turned off',
   account_usage_failed:'account usage unreachable',
   account_unavailable:'account usage unavailable',
+  account_identity_changed:'account changed · waiting for a fresh read',
+  account_refresh_scheduled:'next account refresh scheduled',
+  previous_observation:'previous observation',
 };
 // A `fallback_<reason>` says which source could not answer, so read the reason
 // behind the prefix rather than listing every combination — an unmapped code
@@ -36798,16 +36801,33 @@ function usageName(provider){
   return USAGE_NAME[provider]||(provider.charAt(0).toUpperCase()+provider.slice(1));
 }
 const USAGE_HM={hour:'2-digit',minute:'2-digit',hour12:false};
+const USAGE_SOURCE={
+  'claude-account-usage':'account',
+  'claude-statusline':'statusLine',
+  'claude-combined':'combined',
+};
+function usageSource(source){
+  const raw=String(source||'');
+  return USAGE_SOURCE[raw]||raw.replace(/^claude-/,'').replace(/-/g,' ');
+}
 function usageClock(ts){
   if(!ts) return '';
   return new Date(ts*1000).toLocaleTimeString([],USAGE_HM);
 }
-function usageReset(ts){
+function usageReset(ts,compact){
   if(!ts) return '';
   const d=new Date(ts*1000), now=new Date();
   const t=d.toLocaleTimeString([],USAGE_HM);
   if(d.toDateString()===now.toDateString()) return t;
-  return d.toLocaleDateString([],{weekday:'short'})+' '+t;
+  // A weekday alone answers "which day" only for the next few days; a weekly
+  // window resets far enough out that "Mon" costs the reader a calendar, so
+  // the date joins it. Under a dial there is room for one or the other, and
+  // the date is the half that does not need counting.
+  const soon=(d-now)<36*60*60*1000;
+  const day=d.toLocaleDateString([],{weekday:'short'});
+  const date=d.toLocaleDateString([],{month:'numeric',day:'numeric'});
+  if(soon) return day+' '+t;
+  return (compact?date:`${day} ${date}`)+' '+t;
 }
 // With one limit the labels are plain ("7d"). With several, every label is
 // prefixed "<limit name> · 7d"; the ordinary limit carries the provider's
@@ -36828,20 +36848,34 @@ function usageGroups(provider,buckets){
 function usageBinding(provider,buckets){
   const {ordinary}=usageGroups(provider,buckets);
   const pool=ordinary.length?ordinary:buckets;
-  return pool.reduce((a,b)=>(!a||b.remaining_percent<a.remaining_percent)?b:a,null);
+  return pool.filter(b=>b.value_status!=='unknown'&&Number.isFinite(b.remaining_percent))
+    .reduce((a,b)=>(!a||b.remaining_percent<a.remaining_percent)?b:a,null);
 }
 function usageDial(b,stale){
-  const p=Math.round(b.remaining_percent), r=25, c=2*Math.PI*r;
-  /* A window Claude Code no longer reports (a model you are not running) is
-     carried with the time it was last seen: it cannot have gone up since. */
+  const state=b.value_status||(stale?'previous':'current');
+  const unknown=state==='unknown'||!Number.isFinite(b.remaining_percent);
   const seen=b.observed_at?usageClock(b.observed_at):'';
-  const cls=stale?'stale':usageTier(p);
-  return `<div class="up-dial ${cls}" title="${esc(b.label)} · ${p}% left${seen?` · seen ${esc(seen)}`:''}">
+  const source=usageSource(b.source);
+  const provenance=[source,seen?`${unknown?'last observed':'seen'} ${seen}`:''].filter(Boolean).join(' · ');
+  // Where a number came from and when is worth a line only when it is not the
+  // plain case. Printing it under every dial turns the exception into chrome.
+  const notable=unknown||state==='previous'||stale;
+  if(unknown){
+    return `<div class="up-dial stale unknown" title="${esc(b.label)} · current value unknown${provenance?` · ${esc(provenance)}`:''}">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><text class="n" x="32" y="32" text-anchor="middle" dominant-baseline="central">—</text></svg>
+      <span class="lab">${esc(b.label)}</span><span class="rs">current value unknown</span>
+      ${provenance?`<span class="rs seen">${esc(provenance)}</span>`:''}</div>`;
+  }
+  const p=Math.round(b.remaining_percent), r=25, c=2*Math.PI*r;
+  const previous=state==='previous'||stale;
+  const cls=previous?'stale':usageTier(p);
+  return `<div class="up-dial ${cls}" title="${esc(b.label)} · ${p}% left${previous?' · previous value':''}${provenance?` · ${esc(provenance)}`:''}">
     <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="t" cx="32" cy="32" r="${r}"/>
     <circle class="f" cx="32" cy="32" r="${r}" stroke-dasharray="${(c*p/100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 32 32)"/>
     <text class="n" x="32" y="32" text-anchor="middle" dominant-baseline="central">${p}</text></svg>
-    <span class="lab">${esc(b.label)}</span><span class="rs">${esc(usageReset(b.resets_at))}</span>
-    ${seen?`<span class="rs seen">seen ${esc(seen)}</span>`:''}</div>`;
+    <span class="lab">${esc(b.label)}</span><span class="rs">${esc(usageReset(b.resets_at,true))}</span>
+    ${previous?'<span class="rs seen">previous value</span>':''}
+    ${notable&&provenance?`<span class="rs seen">${esc(provenance)}</span>`:''}</div>`;
 }
 function renderUsagePill(providers){
   const list=document.getElementById('usage-pill-list');
@@ -36851,17 +36885,21 @@ function renderUsagePill(providers){
   for(const pv of providers){
     if(!pv.buckets||!pv.buckets.length) continue;
     const b=usageBinding(pv.provider,pv.buckets);
-    if(!b) continue;
+    const degraded=pv.degraded===true||pv.status==='degraded';
+    const partial=pv.partial===true||(pv.partial==null&&pv.status==='degraded');
+    if(!b){
+      const last=Math.max(...pv.buckets.map(w=>w.observed_at||0));
+      parts.push(`<span class="up-p stale">${usageLogo(pv.provider)}<b>—</b>${degraded?'<i class="up-flag">!</i>':''}</span>`);
+      tips.push(`${usageName(pv.provider)} current value unknown${last?` · last observed ${usageClock(last)}`:''}${degraded?` · ${partial?'partial':'degraded'}${pv.reason?' · '+usageReason(pv.reason):''}`:''}`);
+      continue;
+    }
     const p=Math.round(b.remaining_percent);
-    const stale=pv.status==='stale';
-    // A degraded provider answered from its lesser source: fewer windows, and
-    // as old as that source is. Closed, the pill would otherwise look the same
-    // as a complete reading.
-    const partial=pv.status==='degraded';
+    const stale=pv.status==='stale'||b.value_status==='previous';
+    const mark=[stale?'PREV':'',degraded?'!':''].filter(Boolean).join(' ');
     const cls=[stale?'stale':usageTier(p),partial?'partial':''].filter(Boolean).join(' ');
-    parts.push(`<span class="up-p${cls?' '+cls:''}">${usageLogo(pv.provider)}<b>${p}%</b>${partial?'<i class="up-flag">!</i>':''}</span>`);
+    parts.push(`<span class="up-p${cls?' '+cls:''}">${usageLogo(pv.provider)}<b>${p}%</b>${mark?`<i class="up-flag">${mark}</i>`:''}</span>`);
     tips.push(`${usageName(pv.provider)} ${b.label} ${p}% left${stale?' (stale)':''}`
-      +(partial?` (partial · observed ${usageClock(pv.observed_at)}${pv.reason?' · '+usageReason(pv.reason):''})`:''));
+      +(degraded?` (${partial?'partial':'degraded'} · observed ${usageClock(b.observed_at||pv.observed_at)}${pv.reason?' · '+usageReason(pv.reason):''})`:''));
   }
   list.innerHTML=parts.join('');
   pill.hidden=!parts.length;
@@ -36883,23 +36921,24 @@ function renderUsagePopover(data){
         <div class="up-wait"><b>WAITING FOR UPDATE</b> · ${esc(why)}${esc(last)}</div></div>`;
     }
     const stale=pv.status==='stale';
+    const degraded=pv.degraded===true||pv.status==='degraded';
+    const partial=pv.partial===true||(pv.partial==null&&pv.status==='degraded');
     const {ordinary,extra}=usageGroups(pv.provider,pv.buckets);
     const bind=usageBinding(pv.provider,pv.buckets);
-    // The kicker carries the newest observation across providers, so a
-    // provider reading from an older source has to date itself here.
-    const note=stale?`stale · observed ${usageClock(pv.observed_at)}`
-      :pv.status==='degraded'?`partial · observed ${usageClock(pv.observed_at)}`
-      :(bind&&bind.resets_at?`next reset ${usageReset(bind.resets_at)}`:'');
+    const axes=[];
+    if(stale) axes.push(`stale · observed ${usageClock(pv.observed_at)}`);
+    if(degraded) axes.push(partial?'partial':'degraded');
+    const note=axes.join(' · ')||(bind&&bind.resets_at?`next reset ${usageReset(bind.resets_at)}`:'');
     let html=`<div class="up-prov"><div class="up-h">${head}<span>${esc(note)}</span></div>`;
-    // `degraded` means a second source answered and it knows fewer windows —
-    // without this line the shorter list would read as the whole account.
-    if(pv.status==='degraded'){
+    if(degraded){
       const why=usageReason(pv.reason);
-      html+=`<div class="up-wait"><b>PARTIAL</b> · some windows are missing${why?' · '+esc(why):''}</div>`;
+      html+=partial
+        ?`<div class="up-wait"><b>PARTIAL</b> · some windows are missing${why?' · '+esc(why):''}</div>`
+        :`<div class="up-wait"><b>DEGRADED</b> · account refresh unavailable · known window list retained${why?' · '+esc(why):''}</div>`;
     }
     if(ordinary.length) html+=`<div class="up-dials">${ordinary.map(b=>usageDial(b,stale)).join('')}</div>`;
     for(const [name,wins] of extra){
-      if(wins.every(w=>w.remaining_percent>=99.5)){
+      if(wins.every(w=>w.value_status!=='unknown'&&Number.isFinite(w.remaining_percent)&&w.remaining_percent>=99.5)){
         html+=`<div class="up-sub">${esc(name)} · untouched · ${wins.map(w=>esc(w.label)).join(' / ')} at 100% left</div>`;
       }else{
         html+=`<div class="up-sub">additional limit · ${esc(name)}</div>

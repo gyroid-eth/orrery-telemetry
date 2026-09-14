@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import threading
 
 import pytest
 
@@ -230,6 +231,7 @@ def test_service_uses_recent_success_as_bounded_stale_value():
     now[0] = 1002.0
     stale = service.read_all()["providers"][0]
     assert stale["status"] == "stale"
+    assert stale["degraded"] is True
     assert stale["buckets"][0]["remaining_percent"] == 75.0
 
     now[0] = 1012.0
@@ -265,11 +267,143 @@ def test_service_marks_pre_reset_value_stale_without_inventing_new_balance():
     assert service.read_all()["providers"][0]["status"] == "ok"
 
     now[0] = 1101.0
-    snapshot = service.read_all()["providers"][0]
+    payload = service.read_all()
+    snapshot = payload["providers"][0]
     assert snapshot["status"] == "stale"
+    assert snapshot["degraded"] is False
+    assert payload["degraded"] is False, "freshness alone is not an acquisition failure"
     assert snapshot["reason"] == "window_reset_pending"
     assert snapshot["buckets"][0]["remaining_percent"] == 75
     assert provider.calls == 1
+
+
+def test_service_leaves_per_window_freshness_to_a_composite_route():
+    now = [1000.0]
+    provider = _Provider("claude", "claude-combined", _ok_snapshot("claude"), ttl_seconds=1)
+    provider.manages_bucket_freshness = True
+    service = QuotaService([provider], stale_seconds=600, clock=lambda: now[0])
+
+    assert service.read_all()["providers"][0]["status"] == "ok"
+    now[0] = 1700
+    still_routed = service.read_all()["providers"][0]
+
+    assert still_routed["status"] == "ok"
+    assert still_routed["buckets"], "the generic 600 s deadline must not erase routed names"
+
+
+def test_service_does_not_reuse_a_composite_routes_snapshot_after_sign_out():
+    now = [1000.0]
+    provider = _Provider("claude", "claude-combined", _ok_snapshot("claude"), ttl_seconds=1)
+    provider.manages_bucket_freshness = True
+    provider.manages_fallback = True
+    service = QuotaService([provider], clock=lambda: now[0])
+    assert service.read_all()["providers"][0]["buckets"]
+
+    provider.result = QuotaSnapshot(
+        provider="claude",
+        source="claude-combined",
+        observed_at=1001,
+        status="unavailable",
+        reason="sign_in_required",
+        degraded=True,
+        partial=True,
+    )
+    now[0] = 1001
+    signed_out = service.read_all()["providers"][0]
+
+    assert signed_out["status"] == "unavailable"
+    assert signed_out["buckets"] == []
+    assert signed_out["last_observed_at"] is None
+
+
+def test_service_does_not_reuse_a_managed_routes_snapshot_after_an_exception():
+    now = [1000.0]
+    provider = _Provider("claude", "claude-combined", _ok_snapshot("claude"), ttl_seconds=1)
+    provider.manages_bucket_freshness = True
+    provider.manages_fallback = True
+    service = QuotaService([provider], clock=lambda: now[0])
+    assert service.read_all()["providers"][0]["buckets"]
+
+    provider.result = RuntimeError("route failed before checking credentials")
+    now[0] = 1001
+    failed = service.read_all()["providers"][0]
+
+    assert failed["status"] == "unavailable"
+    assert failed["reason"] == "provider_read_failed"
+    assert failed["buckets"] == []
+    assert failed["last_observed_at"] is None
+
+
+def test_concurrent_managed_route_waits_for_the_identity_checked_refresh():
+    class _ManagedBlockingProvider:
+        provider_name = "claude"
+        source_name = "claude-combined"
+        ttl_seconds = 1
+        manages_bucket_freshness = True
+        manages_fallback = True
+
+        def __init__(self):
+            self.result = _ok_snapshot("claude")
+            self.calls = 0
+            self.block = False
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def read(self):
+            self.calls += 1
+            if self.block:
+                self.entered.set()
+                if not self.release.wait(timeout=3):
+                    raise RuntimeError("test release timeout")
+            return self.result
+
+    now = [1000.0]
+    provider = _ManagedBlockingProvider()
+    service = QuotaService([provider], clock=lambda: now[0])
+    assert service.read_all()["providers"][0]["buckets"]
+
+    provider.result = QuotaSnapshot(
+        provider="claude",
+        source="claude-combined",
+        observed_at=1002,
+        status="unavailable",
+        reason="sign_in_required",
+        degraded=True,
+        partial=True,
+    )
+    provider.block = True
+    now[0] = 1002
+    results = []
+    second_started = threading.Event()
+    second_done = threading.Event()
+
+    first = threading.Thread(target=lambda: results.append(service.read_all()), daemon=True)
+
+    def second_read():
+        second_started.set()
+        results.append(service.read_all())
+        second_done.set()
+
+    second = threading.Thread(target=second_read, daemon=True)
+    first.start()
+    assert provider.entered.wait(timeout=1)
+    second.start()
+    assert second_started.wait(timeout=1)
+    try:
+        assert not second_done.wait(timeout=0.05), "managed callers must wait for the safe refresh"
+    finally:
+        provider.release.set()
+        first.join(timeout=4)
+        second.join(timeout=4)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert provider.calls == 2, "the waiter must reuse the completed refresh, not launch another"
+    assert len(results) == 2
+    assert all(result["providers"][0]["buckets"] == [] for result in results)
+    assert all(
+        result["providers"][0]["reason"] == "sign_in_required" for result in results
+    )
 
 
 def test_future_observation_is_not_accepted_as_fresh(tmp_path):

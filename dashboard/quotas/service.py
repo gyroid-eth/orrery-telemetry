@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from .base import QuotaSnapshot
@@ -68,7 +68,10 @@ class QuotaService:
         ]
         return {
             "ts": int(now),
-            "degraded": any(snapshot.status != "ok" for snapshot in snapshots),
+            "degraded": any(
+                snapshot.status in {"degraded", "unavailable"} or snapshot.degraded
+                for snapshot in snapshots
+            ),
             "providers": [self._snapshot_payload(snapshot, now) for snapshot in snapshots],
         }
 
@@ -89,7 +92,11 @@ class QuotaService:
     def _read_provider(self, provider: QuotaProvider) -> QuotaSnapshot:
         name = provider.provider_name
         lock = self._provider_locks[name]
-        if not lock.acquire(blocking=False):
+        # A route that owns credential-bound fallback must see the refresh that
+        # is already in flight. Returning its generic prior success here could
+        # resurrect a value while that refresh discovers a sign-out.
+        managed_fallback = bool(getattr(provider, "manages_fallback", False))
+        if not lock.acquire(blocking=managed_fallback):
             return self._stale_or_unavailable(provider, self._clock(), "refresh_in_progress")
         try:
             now = self._clock()
@@ -115,13 +122,17 @@ class QuotaService:
             else:
                 if snapshot.status in {"ok", "degraded"} and snapshot.buckets:
                     self._last_success[name] = snapshot
-                elif snapshot.status == "unavailable":
+                elif snapshot.status == "unavailable" and not getattr(
+                    provider, "manages_fallback", False
+                ):
                     snapshot = self._stale_or_unavailable(
                         provider,
                         now,
                         snapshot.reason or "provider_unavailable",
                         fallback=snapshot,
                     )
+                elif snapshot.status == "unavailable":
+                    self._last_success.pop(name, None)
 
             now = self._clock()
             snapshot = self._bounded_snapshot(provider, snapshot, now)
@@ -133,6 +144,11 @@ class QuotaService:
     def _bounded_snapshot(
         self, provider: QuotaProvider, snapshot: QuotaSnapshot, now: float
     ) -> QuotaSnapshot:
+        # Composite routes can retain each window independently, including an
+        # expired name with no wire-visible value. Applying the generic 600 s
+        # snapshot bound here would erase exactly that per-window state.
+        if getattr(provider, "manages_bucket_freshness", False):
+            return snapshot
         max_age = min(self.stale_seconds, getattr(provider, "max_age_seconds", self.stale_seconds))
         age = now - snapshot.observed_at
         if snapshot.buckets and (age < 0 or age > max_age):
@@ -155,6 +171,19 @@ class QuotaService:
         provider: QuotaProvider,
         now: float,
     ) -> QuotaSnapshot:
+        if getattr(provider, "manages_fallback", False):
+            # The provider did not return a credential-checked snapshot. Its
+            # own previous value is deliberately unavailable to this layer.
+            self._last_success.pop(provider.provider_name, None)
+            return QuotaSnapshot(
+                provider=provider.provider_name,
+                source=provider.source_name,
+                observed_at=int(now),
+                status="unavailable",
+                reason="provider_read_failed",
+                degraded=True,
+                partial=True,
+            )
         return self._stale_or_unavailable(provider, now, "provider_read_failed")
 
     def _stale_or_unavailable(
@@ -170,7 +199,11 @@ class QuotaService:
             if previous is None or fallback.observed_at > previous.observed_at:
                 return fallback
         if previous is not None:
-            return self._bounded_snapshot(provider, previous.with_status("stale", reason), now)
+            retained = replace(
+                previous.with_status("stale", reason),
+                degraded=True,
+            )
+            return self._bounded_snapshot(provider, retained, now)
         return QuotaSnapshot(
             provider=provider.provider_name,
             source=provider.source_name,

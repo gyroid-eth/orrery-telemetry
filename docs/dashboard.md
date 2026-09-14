@@ -70,12 +70,13 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ### 残量（LEFT）
 
-ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。model 別の枠は、アカウントの usage を読む経路でだけ出ます。予備の statusLine 経路に落ちているときは枠が減るので、その旨と理由を `PARTIAL` として出します。
+ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。各 window には取得元と観測時刻が付きます。account の取得に失敗しても前回確認した window の一覧は保持するため、全 window が残っている場合は `DEGRADED`、account の前回値がなく実際に枠が欠ける場合だけ `PARTIAL` と表示します。
 
 - 数字は provider が返した通常枠のうち残りが最も少ない window で、色は残りが 50% 以下で amber、20% 以下で alert になります
 - 表示する provider は SETTINGS（NETWORK タブ）の USAGE で選べます。隠した provider は pill と展開表示の両方から消えます。設定はこの browser にだけ残ります
 - provider が返していない枠は表示しません。5h の枠が無いアカウントには 5h を出しません
-- 取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出します。古い値を最新値のように見せず、観測時刻を併記します
+- 取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出します。古い数値は `previous value`（前回値）として取得元・観測時刻を併記し、現在の上限とは扱いません
+- 前回値は最終成功から30分、またはその window の reset 時刻のうち早い方まで保持します。期限後も window 名と最終観測時刻は残しますが、現在値を `unknown` とし、数値と残量 ring は出しません。reset 到来だけで100%には戻しません
 
 取得の仕組みは provider ごとに違います（取得層は [kame447](https://github.com/kame447) さんの貢献です。[#31](https://github.com/gyroid-eth/orrery-telemetry/issues/31)）。
 
@@ -83,12 +84,12 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 | --- | --- | --- |
 | Codex | `codex app-server` の `account/rateLimits/read` を読みます | なし。`codex` にログイン済みなら表示されます |
 | Claude Code | Claude Code がこのマシンに保存している認証情報で、アカウントの usage を読みます（CLI が読むのと同じもの）。5h・7d に加えて、model 別の週次枠（Fable など）もここから来ます | なし。`claude` にログイン済みなら表示されます。止めたい場合は `AGENTSTACK_CLAUDE_ACCOUNT_QUOTA=off` |
-| Claude Code（予備） | 上が使えないとき（未ログイン、rate limit、off）に、statusLine に渡される rate limit を observer が保存したものを読みます。**この経路では 5h と 7d しか取れません**（Claude Code は model 別の枠を statusLine に渡さないことを実測で確認しています） | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。自前の statusLine がある場合は `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <既存のコマンド>` と包みます。`--exec` は観測だけを行い、payload をそのまま渡して出力を素通しします |
+| Claude Code（ローカル観測） | statusLine に渡される rate limit を observer が保存したものを読み、account 取得の間も5h・7dを更新します。新しい Claude Code が `model_scoped` を渡した場合は、その session で観測できた model 枠も上記の30分/reset期限まで保持します（observer の保存ファイル自体が古くなった後も window 名は残ります）が、account 取得のように全 model 枠が常に揃うとは限りません | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。自前の statusLine がある場合は `python3 ~/.agentstack/dashboard/claude_quota_observe.py --exec <既存のコマンド>` と包みます。`--exec` は観測だけを行い、payload をそのまま渡して出力を素通しします |
 | Antigravity | read-only の usage を読みます | optional provider の導入と opt-in が必要です（[Antigravity](antigravity.md)） |
 
-API は `GET /api/quotas` で、provider ごとに cache します（Claude 120 秒・Codex 120 秒・Antigravity 180 秒。60 秒は provider が指定しない場合の既定値）。失敗時は前回の値を `stale` として返します。cache と 429 後の沈黙は dashboard の process 内だけの状態なので、同じマシンで dashboard を複数 process 動かすと、その数だけ問い合わせが増えます。
+API は `GET /api/quotas` です。Claude route はローカルの statusLine を30秒 cache で確認しますが、外向きの account 取得はそれと分離され、成功時も600秒＋正方向 jitter より短い間隔では行いません（Codex は120秒、Antigravity は180秒、provider が指定しない場合は60秒）。Claude の window は取得元・観測時刻・`current` / `previous` / `unknown` を個別に返し、API の `status`（鮮度）と `degraded` / `partial`（取得経路・完全性）は同時に成立し得る別の軸です。cache と backoff は dashboard process 内だけの状態なので、同じマシンで dashboard を複数 process 動かすと、その数だけ問い合わせが増えます。
 
-残量の取得でマシンの外に出るのは、Claude のアカウント usage を読む認証付き GET が1本だけです（body なし。プロジェクト名・エージェント名・作業内容は送りません）。redirect は追いません（追うと token が転送先に渡るため）。token はローカルの Claude 認証情報から読み、log にも snapshot にも書きません。429 を受けたら最低5分は問い合わせを止め、その間は予備の statusLine 経路に落ちます。Codex と Antigravity はローカルのプロセスに聞くだけです。
+残量の取得でマシンの外に出るのは、Claude のアカウント usage を読む認証付き GET が1本だけです（body なし。プロジェクト名・エージェント名・作業内容は送りません）。redirect は追いません（追うと token が転送先に渡るため）。token はローカルの Claude 認証情報から読み、log にも snapshot にも書きません。429 の再試行は連続回数に応じて600秒、1200秒、2400秒、3600秒（以後3600秒）の待機に正方向 jitter を加え、`Retry-After` の方が長ければそちらを短縮せず使います。この連続回数は credential が変わっても、この dashboard process の中では維持し、認証済みの応答に成功したときだけ指数 backoff を解除します。待機中もローカル観測を読み、同じ credential で最後に成功した account window を上の期限まで併用します。sign-out または credential の変更時は前の snapshot を流用しません。account の取得を off にしている間は認証情報を誰も読まないため sign-out を検知できないので、各回の観測だけで答え、window を読み取りをまたいで持ち越しません。Codex と Antigravity はローカルのプロセスに聞くだけです。
 
 ### 人の介入待ちを見逃さない
 
