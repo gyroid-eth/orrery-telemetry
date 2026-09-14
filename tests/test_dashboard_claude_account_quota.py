@@ -314,3 +314,106 @@ def test_a_rate_limited_account_reports_its_own_reason_when_nothing_was_observed
                              _Stub(_down("claude-statusline", "not_observed")))
 
     assert route.read().reason == "rate_limited"
+
+
+def test_a_server_error_reaches_the_route_as_a_failure_the_observer_can_follow(monkeypatch):
+    """5xx must travel the same path as a timeout: raised, then fallen back on."""
+    monkeypatch.setattr(claude_account, "_OPENER", _Opener(_http_error(503)))
+    provider = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: 1000.0)
+
+    with pytest.raises(RuntimeError):
+        provider.read()
+
+    statusline = _Stub(_ok("claude-statusline"))
+    snapshot = ClaudeQuotaRoute(provider, statusline, clock=lambda: 1000.0).read()
+    assert statusline.reads == 1
+    assert snapshot.status == "degraded"
+    assert snapshot.reason == "fallback_account_usage_failed"
+
+
+def test_an_unreadable_body_is_a_failure_rather_than_an_empty_account(monkeypatch):
+    class _Garbage:
+        def read(self):
+            return b"<html>maintenance</html>"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(claude_account, "_OPENER", _Opener(lambda request: _Garbage()))
+
+    with pytest.raises(RuntimeError):
+        ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: 1000.0).read()
+
+
+def test_the_opener_in_use_is_the_one_that_refuses_redirects():
+    """Wiring, not just the handler: a redirect must not be followed."""
+    import http.server
+    import threading
+
+    hits = {"source": 0, "target": 0}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/target":
+                hits["target"] += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+                return
+            hits["source"] += 1
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/target")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/source",
+            headers={"Authorization": "Bearer secret"})
+        with pytest.raises(urllib.error.HTTPError) as redirect:
+            claude_account._OPENER.open(request, timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert redirect.value.code == 302
+    assert hits == {"source": 1, "target": 0}
+
+
+def test_a_window_the_payload_repeats_is_drawn_once():
+    entry = {"kind": "weekly_scoped", "percent": 10, "resets_at": "2026-09-17T08:06:59Z",
+             "scope": {"model": {"display_name": "Fable"}}}
+    snapshot = parse_account_usage({"limits": [entry, dict(entry)]}, observed_at=1000)
+
+    assert [b.id for b in snapshot.buckets] == ["model-fable"]
+
+
+def test_a_reset_time_is_carried_as_the_epoch_it_names():
+    body = {"five_hour": {"utilization": 10, "resets_at": "2026-09-14T11:00:00Z"}}
+    snapshot = parse_account_usage(body, observed_at=1000)
+
+    assert snapshot.buckets[0].resets_at == 1789383600
+
+
+@pytest.mark.parametrize("value", [True, False, None, "40", float("nan"), float("inf")])
+def test_a_percentage_that_is_not_a_number_is_not_turned_into_a_window(value):
+    snapshot = parse_account_usage({"five_hour": {"utilization": value}}, observed_at=1000)
+
+    assert snapshot.status == "unavailable"
+
+
+@pytest.mark.parametrize(("used", "remaining"), [(-20, 100), (140, 0)])
+def test_a_percentage_outside_the_scale_is_clamped(used, remaining):
+    snapshot = parse_account_usage({"five_hour": {"utilization": used}}, observed_at=1000)
+
+    assert round(snapshot.buckets[0].remaining_percent) == remaining

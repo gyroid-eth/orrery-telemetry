@@ -131,6 +131,7 @@ def parse_account_usage(payload: Mapping[str, Any], *, observed_at: int) -> Quot
         )
 
     seen = {bucket.id for bucket in buckets}
+    repeated: set[tuple] = set()
     limits = payload.get("limits")
     for entry in limits if isinstance(limits, list) else []:
         if not isinstance(entry, Mapping) or entry.get("kind") != "weekly_scoped":
@@ -146,9 +147,15 @@ def parse_account_usage(payload: Mapping[str, Any], *, observed_at: int) -> Quot
         # Two different models can slug to the same id ("A/B" and "A-B"), and
         # dropping one would silently hide a window — possibly the tighter of
         # the two. Prefer the id the API gives the model, and keep every
-        # distinct window even when the names collide.
+        # distinct window even when the names collide. A window the payload
+        # simply repeats is the one case to drop: it would draw twice.
         identity = model.get("id") if isinstance(model, Mapping) else None
         key = identity.strip() if isinstance(identity, str) and identity.strip() else name.strip()
+        resets_at = _epoch_or_none(entry.get("resets_at"))
+        fingerprint = (key, name.strip(), used, resets_at)
+        if fingerprint in repeated:
+            continue
+        repeated.add(fingerprint)
         slug = "".join(ch if ch.isalnum() else "-" for ch in key.lower()).strip("-")
         bucket_id = f"model-{slug or 'model'}"
         if bucket_id in seen:
@@ -164,7 +171,7 @@ def parse_account_usage(payload: Mapping[str, Any], *, observed_at: int) -> Quot
                 scope="account",
                 used_percent=used,
                 window_seconds=7 * 24 * 60 * 60,
-                resets_at=_epoch_or_none(entry.get("resets_at")),
+                resets_at=resets_at,
                 quality="exact",
             )
         )
