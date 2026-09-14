@@ -56,15 +56,28 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ### ヘッダのカウンタとカードの状態を分ける
 
-ヘッダの3項目は、個々の作業内容ではなく**数**です。
+ヘッダの `12 / 29 AGENTS` は、個々の作業内容ではなく**数**です。左が agent process が稼働しているカード数、右が active agent の総数で、下線の長さがその比率です。process が稼働していない active agent（standby）は右から左を引いた数なので、独立した計器にはしていません。
 
-| カウンタ | 数えているもの |
-| --- | --- |
-| `RUNNING` | agent process が稼働しているカード数 |
-| `STANDBY` | process が稼働していない active agent のカード数 |
-| `AGENTS` | active agent の総数 |
+したがって、`12 / 29` の 12 を見ても12体すべてが仕事を進めているとは限りません。**全体の数はヘッダ、誰が作業中・待機中・介入待ちかは各カードの右上と枠**で確認します。
 
-したがって、`RUNNING 12` だけを見ても12体すべてが仕事を進めているとは限りません。**全体の数はヘッダ、誰が作業中・待機中・介入待ちかは各カードの右上と枠**で確認します。
+### 残量（LEFT）
+
+ヘッダの `LEFT` は、各カードの context 残量とは別の、**provider のアカウント全体の利用枠の残り**です。複数の provider を並行して使うときに「次にどこへ振るか」を決めるための数字で、provider の logo と残り % が並びます。クリックすると、provider が返した window（5h、7d、model 別の枠など）ごとの dial と次の reset 時刻が開きます。
+
+- 数字は provider が返した通常枠のうち残りが最も少ない window で、色は残りが 50% 以下で amber、20% 以下で alert になります
+- 表示する provider は SETTINGS（NETWORK タブ）の USAGE で選べます。隠した provider は pill と展開表示の両方から消えます。設定はこの browser にだけ残ります
+- provider が返していない枠は表示しません。5h の枠が無いアカウントには 5h を出しません
+- 取得できていない provider は `WAITING FOR UPDATE` と理由を文字で出します。古い値を最新値のように見せず、観測時刻を併記します
+
+取得の仕組みは provider ごとに違います（取得層は [kame447](https://github.com/kame447) さんの貢献です。[#31](https://github.com/gyroid-eth/orrery-telemetry/issues/31)）。
+
+| provider | 取得方法 | 必要な設定 |
+| --- | --- | --- |
+| Codex | `codex app-server` の `account/rateLimits/read` を読みます | なし。`codex` にログイン済みなら表示されます |
+| Claude Code | statusLine に渡される rate limit を observer が保存し、それを読みます。Claude Code が API 応答を受けた後にしか更新されないので、しばらく使っていないと `WAITING FOR UPDATE` になります | `~/.claude/settings.json` の `statusLine.command` に `python3 ~/.agentstack/dashboard/claude_quota_observe.py` を設定します。既存の statusLine を上書きはしません。既に自前の statusLine がある場合は、その中から同じ script に stdin を渡してください |
+| Antigravity | read-only の usage を読みます | optional provider の導入と opt-in が必要です（[Antigravity](antigravity.md)） |
+
+API は `GET /api/quotas` で、provider ごとに 60 秒 cache し、失敗時は前回の値を `stale` として返します。
 
 ### 人の介入待ちを見逃さない
 
