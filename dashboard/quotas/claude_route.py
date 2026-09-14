@@ -66,6 +66,14 @@ class ClaudeQuotaRoute:
             return replace(account, degraded=True, partial=True)
 
         observed = self._read_statusline()
+
+        if account.reason == "account_usage_disabled":
+            # With the account source off, nothing reads the credentials, so a
+            # sign-out or an account switch cannot be noticed — and the
+            # observer's file carries no account identity of its own. A window
+            # held across reads would then outlive the account it belongs to,
+            # so each read answers with what it just observed.
+            self._clear_identity()
         new_complete_account = account.status == "ok" or (
             account.reason == "no_windows_returned"
             and account.observed_at != self._account_floor

@@ -1055,3 +1055,30 @@ def test_a_percentage_outside_the_scale_is_clamped(used, remaining):
     snapshot = parse_account_usage({"five_hour": {"utilization": used}}, observed_at=1000)
 
     assert round(snapshot.buckets[0].remaining_percent) == remaining
+
+
+def test_with_the_account_source_off_a_window_does_not_outlive_its_account(monkeypatch):
+    """Off, nothing reads the credentials, so a sign-out cannot be noticed.
+
+    The observer's file carries no account identity either, so a window held
+    across reads could belong to an account that is no longer signed in.
+    """
+    monkeypatch.setenv(claude_account.DISABLE_ENV, "off")
+    account = ClaudeAccountQuotaProvider(token_reader=lambda: "token", clock=lambda: 1000.0)
+
+    first = QuotaSnapshot(
+        provider="claude", source="claude-statusline", observed_at=1000, status="ok",
+        buckets=(QuotaBucket.from_used(id="model-fable", label="Fable", scope="account",
+                                       used_percent=70, window_seconds=604800, resets_at=9_000_000),))
+    second = QuotaSnapshot(
+        provider="claude", source="claude-statusline", observed_at=1100, status="ok",
+        buckets=(QuotaBucket.from_used(id="five_hour", label="5h", scope="account",
+                                       used_percent=10, window_seconds=18000, resets_at=9_000_000),))
+
+    observer = _Stub(first)
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: 1000.0)
+    assert [b.id for b in route.read().buckets] == ["model-fable"]
+
+    observer._snapshot = second
+    assert [b.id for b in route.read().buckets] == ["five_hour"], \
+        "a window from the previous read must not survive into the next one"
