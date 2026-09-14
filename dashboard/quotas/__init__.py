@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from .antigravity import AntigravityQuotaProvider
 from .claude import ClaudeQuotaProvider
+from .claude_account import ClaudeAccountQuotaProvider
+from .claude_route import ClaudeQuotaRoute
 from .codex import CodexQuotaProvider
 from .service import QuotaService
 
@@ -11,7 +13,7 @@ from .service import QuotaService
 def build_default_service() -> QuotaService:
     return QuotaService(
         [
-            ClaudeQuotaProvider(),
+            ClaudeQuotaRoute(),
             CodexQuotaProvider(),
             AntigravityQuotaProvider(),
         ],
@@ -22,7 +24,9 @@ def build_default_service() -> QuotaService:
 
 __all__ = [
     "AntigravityQuotaProvider",
+    "ClaudeAccountQuotaProvider",
     "ClaudeQuotaProvider",
+    "ClaudeQuotaRoute",
     "CodexQuotaProvider",
     "QuotaService",
     "build_default_service",
