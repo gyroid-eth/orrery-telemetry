@@ -155,6 +155,7 @@ def _run_codex_home_process(
     token: str | None = "child-owner-token",
     with_sandbox_metadata: bool = False,
     overlay_path: pathlib.Path | None = None,
+    corrupt_emitted_candidate: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -176,9 +177,15 @@ def _run_codex_home_process(
     if config_text is not None:
         (source_home / "config.toml").write_text(config_text, encoding="utf-8")
 
+    helper = _extract("write_child_codex_home")
+    if corrupt_emitted_candidate:
+        helper = helper.replace(
+            "candidate_config_text = emit_toml(config)",
+            "candidate_config_text = emit_toml(config) + chr(0x7f)",
+        )
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_codex_home")
+        + helper
         + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
     )
     env = os.environ.copy()
@@ -296,6 +303,10 @@ def test_codex_overlay_adds_server_approval_and_round_trips_emitter_types():
             "temperature = 0.25\n"
             "enabled = true\n"
             'labels = ["one", "two"]\n\n'
+            'mixed_values = [1, { name = "inline" }, ["nested"]]\n'
+            "release_date = 2026-09-14\n"
+            "wake_time = 10:20:30\n"
+            "observed_at = 2026-09-14T10:20:30+09:00\n\n"
             '[mcp_servers.chrome-devtools]\n'
             'default_tools_approval_mode = "approve"\n\n'
             '[mcp_servers.chrome-devtools.tools.take_screenshot]\n'
@@ -314,10 +325,103 @@ def test_codex_overlay_adds_server_approval_and_round_trips_emitter_types():
         assert config["temperature"] == 0.25
         assert config["enabled"] is True
         assert config["labels"] == ["one", "two"]
+        assert config["mixed_values"] == [
+            1, {"name": "inline"}, ["nested"]
+        ]
+        assert config["release_date"].isoformat() == "2026-09-14"
+        assert config["wake_time"].isoformat() == "10:20:30"
+        assert config["observed_at"].isoformat() == "2026-09-14T10:20:30+09:00"
         chrome = config["mcp_servers"]["chrome-devtools"]
         assert chrome["default_tools_approval_mode"] == "approve"
         assert chrome["tools"]["take_screenshot"]["approval_mode"] == "approve"
         assert '[mcp_servers."chrome-devtools".tools.take_screenshot]' in text
+
+
+def test_codex_overlay_preserves_inherited_arrays_of_tables():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = _BASE_CODEX_CONFIG + (
+            '\n[[skills.config]]\n'
+            'path = "/workspace/skills/first"\n'
+            'enabled = true\n\n'
+            '[[skills.config]]\n'
+            'path = "/workspace/skills/second"\n'
+            'enabled = false\n'
+        )
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir, config_text=source, overlay_path=overlay
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        config = tomllib.loads(text)
+        assert config["skills"]["config"] == [
+            {"path": "/workspace/skills/first", "enabled": True},
+            {"path": "/workspace/skills/second", "enabled": False},
+        ]
+        assert (
+            config["mcp_servers"]["chrome-devtools"][
+                "default_tools_approval_mode"
+            ]
+            == "approve"
+        )
+        assert text.count("[[skills.config]]") == 2
+
+
+def test_codex_overlay_escapes_del_and_c1_controls_in_strings():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            'control_text = "before\\u007fmiddle\\u0085after"\n'
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir, config_text=_BASE_CODEX_CONFIG, overlay_path=overlay
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        assert "\x7f" not in text
+        assert "\x85" not in text
+        assert "\\u007f" in text
+        assert "\\u0085" in text
+        assert tomllib.loads(text)["control_text"] == "before\x7fmiddle\x85after"
+
+
+def test_failed_emitted_candidate_keeps_the_known_good_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.chrome-devtools]\n'
+            'default_tools_approval_mode = "approve"\n',
+            encoding="utf-8",
+        )
+        proc = _run_codex_home_process(
+            tmpdir,
+            config_text=_BASE_CODEX_CONFIG,
+            overlay_path=overlay,
+            corrupt_emitted_candidate=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        text = (pathlib.Path(proc.stdout.strip()) / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        config = tomllib.loads(text)
+        assert "chrome-devtools" not in config["mcp_servers"]
+        assert config["mcp_servers"]["notion"]["enabled"] is False
+        assert "continuing without it" in proc.stderr
 
 
 def test_codex_overlay_replaces_inherited_server_args():

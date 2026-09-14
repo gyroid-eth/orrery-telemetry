@@ -1111,6 +1111,7 @@ import pathlib
 import re
 import sys
 import tomllib
+from datetime import date, datetime, time
 
 home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin = sys.argv[1:12]
 home_path = pathlib.Path(home)
@@ -1138,7 +1139,14 @@ def looks_like_agent_mail(name):
 
 
 def toml_string(value):
-    return json.dumps(value, ensure_ascii=False)
+    encoded = json.dumps(value, ensure_ascii=False)
+    # JSON and TOML escape the C0 controls compatibly, but json.dumps leaves
+    # DEL/C1 controls literal while TOML rejects them in a basic string.
+    return "".join(
+        "\\u" + format(ord(char), "04x")
+        if 0x7F <= ord(char) <= 0x9F else char
+        for char in encoded
+    )
 
 
 def toml_key(value):
@@ -1158,10 +1166,15 @@ def toml_value(value):
         if math.isinf(value):
             return "-inf" if value < 0 else "inf"
         return repr(value)
-    if isinstance(value, list) and all(
-        isinstance(item, (str, bool, int, float)) for item in value
-    ):
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, list):
         return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(
+            toml_key(key) + " = " + toml_value(item)
+            for key, item in sorted(value.items())
+        ) + " }"
     raise TypeError("unsupported TOML value: " + type(value).__name__)
 
 
@@ -1169,21 +1182,34 @@ def emit_toml(config):
     """Emit the subset used by Codex configs, deterministically."""
     output = []
 
-    def emit_table(path, table, write_header):
+    def emit_table(path, table, header_kind):
         scalars = [(key, value) for key, value in table.items()
-                   if not isinstance(value, dict)]
+                   if not isinstance(value, dict)
+                   and not (isinstance(value, list) and value
+                            and all(isinstance(item, dict) for item in value))]
         children = [(key, value) for key, value in table.items()
                     if isinstance(value, dict)]
-        if write_header:
-            output.append("[" + ".".join(toml_key(part) for part in path) + "]")
+        arrays_of_tables = [(key, value) for key, value in table.items()
+                            if isinstance(value, list) and value
+                            and all(isinstance(item, dict) for item in value)]
+        dotted_path = ".".join(toml_key(part) for part in path)
+        if header_kind == "table":
+            output.append("[" + dotted_path + "]")
+        elif header_kind == "array":
+            output.append("[[" + dotted_path + "]]")
         for key, value in sorted(scalars):
             output.append(toml_key(key) + " = " + toml_value(value))
         for key, value in sorted(children):
             if output and output[-1] != "":
                 output.append("")
-            emit_table(path + (key,), value, True)
+            emit_table(path + (key,), value, "table")
+        for key, items in sorted(arrays_of_tables):
+            for item in items:
+                if output and output[-1] != "":
+                    output.append("")
+                emit_table(path + (key,), item, "array")
 
-    emit_table((), config, False)
+    emit_table((), config, None)
     return "\n".join(output) + "\n"
 
 
@@ -1370,10 +1396,11 @@ if overlay_setting:
         config = tomllib.loads(config_text)
         drop_protected_overlay_tables(overlay)
         deep_merge(config, overlay)
-        config_text = emit_toml(config)
+        candidate_config_text = emit_toml(config)
         # Catch emitter gaps here, while falling back to the known-good config
         # still preserves the spawn.
-        tomllib.loads(config_text)
+        tomllib.loads(candidate_config_text)
+        config_text = candidate_config_text
     except Exception as exc:
         print(
             "[spawn_child] warning: could not apply Codex child config overlay "
