@@ -34529,7 +34529,6 @@ function updateSpawnProviderRequirementStatus(){
   const missing=spawnProviderRequirementsMissing();
   const stat=SPM('spm-stat');
   if(!stat||spmBusy||!spmReady||stat.classList.contains('err'))return;
-  if(spmDraftRestored&&stat.textContent.startsWith('restored saved task draft'))return;
   const requirementMessages=new Set([
     'resources are required for this provider',
     'select an effort for this provider'
@@ -34537,12 +34536,13 @@ function updateSpawnProviderRequirementStatus(){
   const ownsStatus=spmProviderRequirementStatus&&
     requirementMessages.has(stat.textContent);
   const normalStatus=!stat.textContent||stat.textContent.startsWith('ready ·');
-  if(missing&&(ownsStatus||normalStatus)){
+  const draftStatus=stat.textContent.startsWith('restored saved task draft');
+  if(missing&&(ownsStatus||normalStatus||draftStatus)){
     setSpawnStat(missing,'');
     spmProviderRequirementStatus=true;
   }else if(!missing&&ownsStatus){
     spmProviderRequirementStatus=false;
-    setSpawnStat('ready · review the launch manifest','');
+    setSpawnDraftStatus(spmDraftRestored);
   }else if(!missing){
     spmProviderRequirementStatus=false;
   }

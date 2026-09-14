@@ -967,7 +967,7 @@ _UI_FUNCTIONS = (
     "normalizeSpawnProviders", "spawnModelTone", "renderSpawnProviders",
     "selectSpawnProvider", "renderSpawnModels", "selectSpawnModel",
     "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
-    "updateSpawnButton", "setSpawnStat", "buildSpawnPayload",
+    "updateSpawnButton", "setSpawnDraftStatus", "setSpawnStat", "buildSpawnPayload",
 )
 
 _UI_HARNESS = r"""
@@ -989,7 +989,7 @@ const esc=s=>String(s);
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
 let spmSelectedEffort='',spmProviders=[];
 let spmBusy=false,spmReady=true,spmIdentityState='auto',spmSuggestedName='';
-let spmDraftRestored=false;
+let spmDraftDir='/repo',spmDraftRestored=false;
 const spmNameStatus=new Map();
 const state=()=>({
   worktree:SPM('spm-worktree').checked,locked:SPM('spm-worktree').disabled,
@@ -1019,6 +1019,13 @@ SPM('spm-worktree').checked=true;
 selectSpawnProvider('gemini');
 selectSpawnProvider('claude');
 out.claudeChoiceRestored=state();
+spmDraftRestored=true;
+setSpawnDraftStatus(true);
+selectSpawnProvider('gemini');
+out.restoredGeminiMissing=state();
+SPM('spm-resources').value='docs/**';SPM('spm-resources').oninput();
+selectSpawnEffort('medium');
+out.restoredGeminiReady=state();
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -1091,6 +1098,11 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     assert out["claudeChoiceRestored"]["worktree"] is True
     assert out["claudeChoiceRestored"]["locked"] is False
     assert out["claudeChoiceRestored"]["payload"]["worktree"] is True
+    assert out["restoredGeminiMissing"]["status"] == (
+        "resources are required for this provider")
+    assert out["restoredGeminiMissing"]["statusError"] is False
+    assert out["restoredGeminiReady"]["status"] == "restored saved task draft · /repo"
+    assert out["restoredGeminiReady"]["statusError"] is False
 
 
 # --------------------------------------------------------------------------- #
