@@ -155,6 +155,16 @@ def test_two_collectors_share_one_process_global_git_cap(
             AssertionError("reservation probes must not construct or share Repo")
         ),
     )
+    # This test is about the concurrency cap, not the deadlines. With the
+    # production 4 s total budget, 32 probes at 0.6 s each through 8 slots
+    # need 2.4 s of sleep alone plus 32 interpreter launches, so on a loaded
+    # 3-core CI runner (xdist) the tail of the batch ran past the deadline and
+    # came back probe_complete=False (four times between 2026-09-04 and
+    # 2026-09-14). The deadline behaviour has its own test below; here the
+    # budgets are lifted so that only the cap is under test. pytest-timeout
+    # (120 s) still bounds a genuine hang.
+    monkeypatch.setattr(app, "_RESERVATION_PROBE_TOTAL_TIMEOUT_SECONDS", 60.0)
+    monkeypatch.setattr(app, "_RESERVATION_PROBE_TIMEOUT_SECONDS", 60.0)
 
     async def run_both() -> list[list[app._ReservationActivityResult]]:
         recent_after = datetime.now(timezone.utc) - timedelta(days=1)
