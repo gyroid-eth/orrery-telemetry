@@ -302,3 +302,50 @@ def test_codex_invalid_duration_does_not_manufacture_window(value):
     )
     assert snapshot.status == "unavailable"
     assert snapshot.buckets == ()
+
+
+def _observe(argv, payload, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_QUOTA_SNAPSHOT", str(tmp_path / "claude-quota.json"))
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    code = claude_quota_observe.main(argv)
+    return code, capsys.readouterr()
+
+
+def test_observer_wrapping_a_status_line_passes_the_payload_through(tmp_path, monkeypatch, capsys):
+    """--exec must observe only: the operator keeps their own status line."""
+    echo = tmp_path / "mine.sh"
+    echo.write_text("#!/bin/sh\ncat > \"$1\"\nprintf 'MY LINE'\n", encoding="utf-8")
+    echo.chmod(0o755)
+    seen = tmp_path / "seen.json"
+    payload = json.dumps({"rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 5}}})
+
+    code, captured = _observe(
+        ["--exec", "/bin/sh", str(echo), str(seen)], payload, tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert captured.out == "MY LINE"
+    assert json.loads(seen.read_text(encoding="utf-8")) == json.loads(payload)
+    snapshot = json.loads((tmp_path / "claude-quota.json").read_text(encoding="utf-8"))
+    assert snapshot["rate_limits"]["five_hour"]["used_percentage"] == 10
+
+
+def test_observer_keeps_the_status_line_when_the_payload_is_unreadable(tmp_path, monkeypatch, capsys):
+    echo = tmp_path / "mine.sh"
+    echo.write_text("#!/bin/sh\nprintf 'MY LINE'\n", encoding="utf-8")
+    echo.chmod(0o755)
+
+    code, captured = _observe(["--exec", "/bin/sh", str(echo)], "not json", tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert captured.out == "MY LINE"
+    assert not (tmp_path / "claude-quota.json").exists()
+
+
+def test_observer_without_exec_still_prints_its_own_line(tmp_path, monkeypatch, capsys):
+    payload = json.dumps({"model": {"display_name": "Opus"},
+                          "rate_limits": {"five_hour": {"used_percentage": 40, "resets_at": 5}}})
+
+    code, captured = _observe([], payload, tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert captured.out.strip() == "[Opus] | 5h 60% left"

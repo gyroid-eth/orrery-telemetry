@@ -4,6 +4,13 @@
 This helper is intentionally opt-in. ORRERY does not overwrite an existing
 Claude statusLine command. Operators who choose this helper receive a compact
 status line while the quota fields are copied into dashboard runtime state.
+
+An operator who already has a status line keeps it by wrapping it::
+
+    claude_quota_observe.py --exec bash ~/.claude/statusline-command.sh
+
+In that form this helper only observes: the payload is forwarded unchanged on
+the wrapped command's stdin and its output is passed through verbatim.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ import json
 import math
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import time
@@ -90,16 +98,44 @@ def _remaining(window: object) -> float | None:
     return max(0.0, min(100.0, 100.0 - used))
 
 
-def main() -> int:
+def _delegate(command: list[str], raw: str) -> int:
+    """Run the operator's own status line with the untouched payload."""
     try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, OSError):
+        result = subprocess.run(command, input=raw, text=True, capture_output=True)
+    except OSError as error:
+        print(f"[statusline unavailable: {error}]")
         return 0
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    return result.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    delegate: list[str] = []
+    if argv and argv[0] == "--exec":
+        delegate = argv[1:]
+        if not delegate:
+            print("--exec needs a command", file=sys.stderr)
+            return 2
+
+    try:
+        raw = sys.stdin.read()
+    except OSError:
+        raw = ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
     if not isinstance(payload, dict):
-        return 0
+        # An unreadable payload must not cost the operator their status line.
+        return _delegate(delegate, raw) if delegate else 0
 
     rate_limits = payload.get("rate_limits")
     _write_snapshot(rate_limits)
+
+    if delegate:
+        return _delegate(delegate, raw)
 
     model = payload.get("model")
     if isinstance(model, dict):
