@@ -1,11 +1,10 @@
 """Claude quota adapter reading the account's own usage endpoint.
 
-The status-line observer only ever sees what Claude Code hands a status line,
-and that payload carries the account windows without the per-model weekly ones
-(measured: a Fable session reports no model window either). This adapter asks
-the same endpoint the CLI asks, with the credentials the CLI already stored on
-this machine, so every window the account has is present without asking the
-operator to configure a status line.
+The status-line observer only ever sees what Claude Code hands a status line.
+That always includes the account windows and newer versions can include model
+windows seen by that session, but it is not a complete account-wide list. This
+adapter asks the same endpoint the CLI asks, with the credentials the CLI
+already stored on this machine, so every window the account has is present.
 
 What leaves the machine: one authenticated GET to Anthropic's usage endpoint,
 no request body, no project or agent data. The token is read from the local
@@ -14,8 +13,10 @@ Claude credentials and is never logged or written to the snapshot.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import random
 import subprocess
 import time
 import urllib.error
@@ -33,10 +34,14 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = "~/.claude/.credentials.json"
 DISABLE_ENV = "AGENTSTACK_CLAUDE_ACCOUNT_QUOTA"
-# The endpoint rate-limits polite callers too. After a 429 stay quiet at least
-# this long, whatever Retry-After said, so a dashboard left open cannot turn
-# into a poller the account is throttled for.
-BACKOFF_SECONDS = 300
+# The dashboard is intended to be this machine's one reader of the account
+# endpoint. A route is checked much more often so local status-line updates are
+# noticed promptly; this interval budgets only outbound account requests.
+FETCH_INTERVAL_SECONDS = 600
+JITTER_SECONDS = 60
+BACKOFF_MAX_SECONDS = 3600
+# Kept as the public name used by the first version and its callers.
+BACKOFF_SECONDS = FETCH_INTERVAL_SECONDS
 
 
 class _AuthRequired(Exception):
@@ -52,7 +57,9 @@ class _RateLimited(Exception):
 class ClaudeAccountQuotaProvider:
     provider_name = "claude"
     source_name = "claude-account-usage"
-    ttl_seconds = 120
+    # An outer service may inspect retained state on the local cadence; the
+    # provider's own `_next_fetch_at` remains the authority for network I/O.
+    ttl_seconds = 30
 
     def __init__(
         self,
@@ -61,34 +68,105 @@ class ClaudeAccountQuotaProvider:
         clock: Callable[[], float] = time.time,
         fetch: Callable[[str, float], Mapping[str, Any]] | None = None,
         token_reader: Callable[[], str | None] | None = None,
+        jitter: Callable[[float], float] | None = None,
+        fetch_interval_seconds: int = FETCH_INTERVAL_SECONDS,
     ) -> None:
         self.timeout = timeout
         self._clock = clock
         self._fetch = fetch or _fetch_usage
         self._token_reader = token_reader or read_access_token
-        self._quiet_until = 0.0
+        self._jitter = jitter or (lambda maximum: random.uniform(0.0, maximum))
+        self.fetch_interval_seconds = max(1, int(fetch_interval_seconds))
+        self._next_fetch_at = 0.0
+        self._last_success: QuotaSnapshot | None = None
+        self._last_reason = ""
+        self._rate_limit_failures = 0
+        self._token_fingerprint: bytes | None = None
+        self._identity_unconfirmed = False
 
     def read(self) -> QuotaSnapshot:
-        """Answer without touching the network when it already cannot help."""
-        now = int(self._clock())
+        """Read at most once per outbound budget while retaining each window."""
+        now_float = self._clock()
+        now = int(now_float)
         if os.environ.get(DISABLE_ENV, "").strip().lower() in {"0", "off", "false", "no"}:
+            self._forget_account(identity_unconfirmed=False)
             return self._unavailable(now, "account_usage_disabled")
-        if self._clock() < self._quiet_until:
-            return self._unavailable(now, "rate_limited")
         token = self._token_reader()
         if not token:
+            self._forget_account(identity_unconfirmed=True)
             return self._unavailable(now, "sign_in_required")
+        fingerprint = hashlib.sha256(token.encode("utf-8")).digest()
+        if self._token_fingerprint is not None and fingerprint != self._token_fingerprint:
+            # A different credential may name a different account. Never carry
+            # the previous account's balances across that boundary.
+            self._forget_account(identity_unconfirmed=True)
+        self._token_fingerprint = fingerprint
+        if self._identity_unconfirmed:
+            self._last_reason = "account_identity_changed"
+        if now_float < self._next_fetch_at:
+            return self._retained_or_unavailable(
+                now,
+                self._last_reason or "account_refresh_scheduled",
+            )
         try:
             payload = self._fetch(token, self.timeout)
         except _AuthRequired:
+            self._forget_account(identity_unconfirmed=True)
+            self._last_reason = "sign_in_required"
+            self._schedule(self.fetch_interval_seconds)
             return self._unavailable(now, "sign_in_required")
         except _RateLimited as exc:
-            self._quiet_until = self._clock() + exc.retry_after
-            return self._unavailable(now, "rate_limited")
+            exponential = min(
+                self.fetch_interval_seconds * (2 ** self._rate_limit_failures),
+                BACKOFF_MAX_SECONDS,
+            )
+            self._rate_limit_failures += 1
+            self._last_reason = (
+                "account_identity_changed" if self._identity_unconfirmed else "rate_limited"
+            )
+            self._schedule(max(exc.retry_after, exponential))
+            return self._retained_or_unavailable(now, self._last_reason)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
+            self._last_reason = (
+                "account_identity_changed"
+                if self._identity_unconfirmed
+                else "account_usage_failed"
+            )
+            self._schedule(self.fetch_interval_seconds)
+            if self._last_success is not None:
+                return self._last_success.with_status("stale", self._last_reason)
             # The token must not reach a log line through an exception message.
             raise RuntimeError(f"claude usage probe failed: {type(exc).__name__}") from None
-        return parse_account_usage(payload, observed_at=now)
+        snapshot = parse_account_usage(payload, observed_at=now)
+        self._identity_unconfirmed = False
+        self._rate_limit_failures = 0
+        self._last_reason = "account_refresh_scheduled"
+        self._schedule(self.fetch_interval_seconds)
+        if snapshot.status == "ok" and snapshot.buckets:
+            self._last_success = snapshot
+        else:
+            # A successful full response that names no windows is not evidence
+            # that the prior account still has them.
+            self._last_success = None
+        return snapshot
+
+    def _schedule(self, seconds: int | float) -> None:
+        jitter = max(0.0, float(self._jitter(JITTER_SECONDS)))
+        self._next_fetch_at = self._clock() + max(0.0, float(seconds)) + jitter
+
+    def _retained_or_unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
+        if self._last_success is not None:
+            return self._last_success.with_status("stale", reason)
+        return self._unavailable(observed_at, reason)
+
+    def _forget_account(self, *, identity_unconfirmed: bool) -> None:
+        self._last_success = None
+        self._last_reason = ""
+        # Identity changes invalidate values, not the machine-wide outbound
+        # budget. A token rotation must not buy an extra request inside 600 s.
+        self._rate_limit_failures = 0
+        self._token_fingerprint = None
+        self._identity_unconfirmed = identity_unconfirmed
 
     def _unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
         return QuotaSnapshot(
@@ -287,8 +365,7 @@ def _fetch_usage(token: str, timeout: float) -> Mapping[str, Any]:
         if exc.code in (401, 403):
             raise _AuthRequired() from None
         if exc.code == 429:
-            raise _RateLimited(max(_retry_after_seconds(exc.headers.get("Retry-After")),
-                                   BACKOFF_SECONDS)) from None
+            raise _RateLimited(_retry_after_seconds(exc.headers.get("Retry-After"))) from None
         raise RuntimeError(f"http_{exc.code}") from None
     data = json.loads(body)
     if not isinstance(data, Mapping):
