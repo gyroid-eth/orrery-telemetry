@@ -406,11 +406,12 @@ If stale top-level environment may have been inherited, relaunch from a new term
 
 ## History cannot be found
 
-`/api/history` searches Claude / Codex transcripts based on agent program, then falls back to the other when absent.
+`/api/history` selects the transcript format from the agent program in ORRERY Mail. If the program is missing, unknown, or unreadable, the provider is unconfirmed and no transcript resolver runs. For Codex CLI, it opens history only when the session index for the current project's numeric agent ID agrees with the session ID in the rollout header. A missing or malformed index, or a project / provider / ID mismatch, is reported as unconfirmed; the reader does not scan by time or cwd, reuse an old cache entry, or fall back to a Claude transcript.
 
 - whether ORRERY Mail program is correct
+- for Codex, whether `runtime/session_index/<agent_id>.json` identifies the current project and agent
 - whether the transcript remains on disk
-- whether session and agent names match
+- whether the index session ID matches the metadata ID at the start of the transcript
 - whether child and parent transcripts were confused
 
 An agent with no transcript may show only its mail timeline.

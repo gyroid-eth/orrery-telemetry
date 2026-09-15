@@ -2338,6 +2338,11 @@ def do_resume(session: str) -> dict:
         return _open_codex_app(session)
     if program.startswith("codex"):
         return _do_resume_codex(session)
+    if not program.startswith("claude"):
+        return {
+            "ok": False,
+            "error": "Agent provider is unconfirmed; transcript resume is unavailable",
+        }
     path = _transcript_path(session)
     if not path:
         return {"ok": False,
@@ -2398,9 +2403,11 @@ def _codex_meta(path: str) -> tuple[str | None, str | None]:
         with open(path, encoding="utf-8", errors="ignore") as f:
             first = f.readline().strip()
         o = json.loads(first)
-        if o.get("type") != "session_meta":
+        if not isinstance(o, dict) or o.get("type") != "session_meta":
             return None, None
-        p = o.get("payload") or {}
+        p = o.get("payload")
+        if not isinstance(p, dict):
+            return None, None
         sid = p.get("id")
         cwd = p.get("cwd")
         if not isinstance(cwd, str) or not os.path.isdir(cwd):
@@ -2462,12 +2469,12 @@ def _do_resume_codex(session: str) -> dict:
       - codex_agent_bootstrap.sh を source（AGENT_NAME export + ORRERY Mail
         再登録 + mail-watcher 起動 + tmux リネーム）
       - launch_codex_workspace.sh と同じ writable scope / sandbox / approval
-    selfref 探索ではなく inception_ts 一致で rollout を引くので子の会話を
-    誤マッチしない（_codex_transcript_path）。"""
+    project-scoped session index と rollout header の ID 一致で path を引き、
+    時刻 / cwd / selfref の推測へ落ちない（_codex_transcript_path）。"""
     path = _codex_transcript_path(session)
     if not path:
         return {"ok": False,
-                "error": f"'{session}' の Codex rollout が見つからず再開できません"}
+                "error": f"'{session}' の Codex rollout 対応付けを確認できず再開できません"}
     sid, cwd = _codex_meta(path)
     if not sid or not re.fullmatch(r"[0-9A-Fa-f-]{8,}", sid):
         return {"ok": False, "error": f"Codex session id 不正: {sid}"}
@@ -2541,85 +2548,87 @@ def _block_text(content) -> list[tuple[str, str]]:
     return rows
 
 
-_CODEX_SESSIONS_DIR = os.path.expanduser("~/.codex/sessions")
+def _codex_indexed_transcript(session: str) -> str | None:
+    """Return a verified Codex binding for ``session``, or fail closed.
 
-
-def _codex_transcript_path(session: str) -> str | None:
-    """Codex (codex-cli) 用 transcript ファイルを探索する。
-
-    Codex は `~/.codex/sessions/YYYY/MM/DD/rollout-DATE-UUID.jsonl` に保存し、
-    ファイル名にエージェント名が入らない。1 行目の session_meta.payload.timestamp
-    を読み、ORRERY Mail の inception_ts と最も近い (90 秒以内) ものを返す。
-
-    結果は 120 秒キャッシュ。
+    A Codex rollout has no agent name, so cwd, timestamps and candidate counts
+    cannot establish ownership. The session index is authoritative only when
+    it agrees with the current project's ORRERY Mail row and with the runtime
+    session id in the rollout header. Claude's legacy index reader deliberately
+    remains separate because its pre-provider records have a different
+    compatibility contract.
     """
-    now = time.time()
-    hit = _TPATH_CACHE.get(("codex", session))
-    if hit and now - hit[0] < 120:
-        return hit[1]
-
-    # The exact binding recorded at registration wins over the nearest-
-    # timestamp guess below, the same way `_transcript_path` prefers it for
-    # Claude. With several rollouts close together the guess picked another
-    # session's transcript for the History view (#27).
-    indexed = _indexed_transcript(session)
-    if indexed:
-        _TPATH_CACHE[("codex", session)] = (now, indexed)
-        return indexed
-
-    if not os.path.isdir(_CODEX_SESSIONS_DIR):
-        _TPATH_CACHE[("codex", session)] = (now, None)
-        return None
-
-    # ORRERY Mail から inception_ts を引く
     project_key = _project_key()
-    if not project_key:
-        _TPATH_CACHE[("codex", session)] = (now, None)
+    if not project_key or not os.path.isfile(DB_PATH):
         return None
-    inception = 0
+
     try:
         with _db() as con:
             con.row_factory = sqlite3.Row
             row = con.execute(
-                "SELECT a.inception_ts FROM agents a "
+                "SELECT a.id, a.program FROM agents a "
                 "JOIN projects p ON a.project_id=p.id "
                 "WHERE a.name=? AND p.human_key=? "
                 "ORDER BY a.last_active_ts DESC LIMIT 1",
                 (session, project_key),
             ).fetchone()
-            if row and row["inception_ts"]:
-                inception = _iso_to_epoch(row["inception_ts"])
     except sqlite3.Error:
-        pass
-    if not inception:
-        _TPATH_CACHE[("codex", session)] = (now, None)
+        return None
+    if not row or not (row["program"] or "").startswith("codex"):
         return None
 
-    best_path: str | None = None
-    best_diff = 90  # 90 秒以内のみ採用
-    for root, _dirs, files in os.walk(_CODEX_SESSIONS_DIR):
-        for fn in files:
-            if not fn.startswith("rollout-") or not fn.endswith(".jsonl"):
-                continue
-            fp = os.path.join(root, fn)
-            try:
-                with open(fp, encoding="utf-8") as fh:
-                    first = fh.readline().strip()
-                    if not first:
-                        continue
-                    o = json.loads(first)
-                    if o.get("type") != "session_meta":
-                        continue
-                    ts_str = (o.get("payload") or {}).get("timestamp") or ""
-                    ts = _iso_to_epoch(ts_str)
-                    diff = abs(ts - inception) if ts else best_diff + 1
-                    if diff < best_diff:
-                        best_diff = diff
-                        best_path = fp
-            except (OSError, ValueError, KeyError):
-                continue
-    _TPATH_CACHE[("codex", session)] = (now, best_path)
-    return best_path
+    agent_id = int(row["id"])
+    index_path = os.path.join(SESSION_INDEX_DIR, f"{agent_id}.json")
+    try:
+        with open(index_path, encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+
+    # New Codex records are explicit. Missing provider remains valid only for
+    # the legacy Claude reader; treating it as Codex would silently migrate an
+    # unproven binding into the strict path.
+    if record.get("schema_version") != 2:
+        return None
+    if record.get("binding_kind") != "self" or record.get("provider") != "codex":
+        return None
+    if type(record.get("agent_id")) is not int or record["agent_id"] != agent_id:
+        return None
+    if record.get("agent_name") != session or record.get("project_key") != project_key:
+        return None
+    if record.get("registered_by") != session:
+        return None
+
+    session_id = record.get("session_id")
+    transcript_path = record.get("transcript_path")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    if not isinstance(transcript_path, str) or not transcript_path.endswith(".jsonl"):
+        return None
+
+    # Follow a child CODEX_HOME sessions symlink, then validate the regular
+    # file's own metadata. A symlinked sessions directory is normal and is not
+    # itself evidence against the binding.
+    real_transcript = os.path.realpath(transcript_path)
+    if not os.path.isfile(real_transcript):
+        return None
+    header_session_id, _cwd = _codex_meta(real_transcript)
+    if header_session_id != session_id:
+        return None
+    return transcript_path
+
+
+def _codex_transcript_path(session: str) -> str | None:
+    """Resolve Codex history only through a verified session-index binding.
+
+    This path intentionally has no cache and no timestamp/cwd scan. Reading
+    the small index on every request makes a newly written, replaced or removed
+    binding visible immediately and prevents a prior guessed path (including a
+    cached ``None``) from becoming authority for the current run.
+    """
+    return _codex_indexed_transcript(session)
 
 
 def _events_from_codex_jsonl(path: str) -> list[dict]:
@@ -2695,15 +2704,23 @@ def history_payload(session: str, limit: int) -> dict:
     # ため、program で先に分岐する（do_resume と同じ理由）。
     if program.startswith("codex"):
         path = _codex_transcript_path(session)
-        is_codex = bool(path)
-        if not path:                      # 念のため Claude 側もフォールバック
-            path = _transcript_path(session)
-    else:
+        if not path:
+            return {
+                "ok": False,
+                "error": "Codex transcript history binding is unconfirmed",
+            }
+        is_codex = True
+    elif program.startswith("claude"):
         path = _transcript_path(session)
         is_codex = False
         if not path:
             path = _codex_transcript_path(session)
             is_codex = bool(path)
+    else:
+        return {
+            "ok": False,
+            "error": "Agent provider is unconfirmed; transcript history is unavailable",
+        }
     if not path:
         return {
             "ok": False,

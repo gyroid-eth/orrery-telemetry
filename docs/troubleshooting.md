@@ -428,11 +428,12 @@ stale な top-level environment を継承した可能性がある場合は、新
 
 ## History が見つからない
 
-`/api/history` は agent program に応じて Claude / Codex transcript を探し、見つからなければ他方へ fallback します。
+`/api/history` は ORRERY Mail の agent program に応じて transcript 形式を選びます。program が無い・不明・読み取れない場合は provider 未確認として、どの transcript resolver にも進みません。Codex CLI は、現在の project の数値 agent ID に対応する session index と rollout 先頭の session ID が一致する場合だけ履歴を開きます。index が無い・壊れている・project / provider / ID が一致しない場合は「未確認」とし、時刻や cwd による探索、過去の cache、Claude transcript への fallback は行いません。
 
 - ORRERY Mail の program が正しいか
+- Codex では `runtime/session_index/<agent_id>.json` が現在の project / agent を指しているか
 - transcript が disk に残っているか
-- session / agent 名が一致しているか
+- index の session ID と transcript 先頭の metadata ID が一致しているか
 - child と parent の transcript を取り違えていないか
 
 transcript が存在しない agent は mail timeline だけが見えることがあります。
