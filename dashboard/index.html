@@ -36851,15 +36851,34 @@ function usageBinding(provider,buckets){
   return pool.filter(b=>b.value_status!=='unknown'&&Number.isFinite(b.remaining_percent))
     .reduce((a,b)=>(!a||b.remaining_percent<a.remaining_percent)?b:a,null);
 }
-function usageDial(b,stale){
-  const state=b.value_status||(stale?'previous':'current');
-  const unknown=state==='unknown'||!Number.isFinite(b.remaining_percent);
+function usageState(b,stale){
+  return b.value_status||(stale?'previous':'current');
+}
+function usageUnknown(b,stale){
+  return usageState(b,stale)==='unknown'||!Number.isFinite(b.remaining_percent);
+}
+// Where a number came from and when is worth a line only when it is not the
+// plain case. Printing it under every dial turns the exception into chrome.
+function usageNotable(b,stale){
+  return usageUnknown(b,stale)||usageState(b,stale)==='previous'||stale;
+}
+function usageProvenance(b,stale){
   const seen=b.observed_at?usageClock(b.observed_at):'';
-  const source=usageSource(b.source);
-  const provenance=[source,seen?`${unknown?'last observed':'seen'} ${seen}`:''].filter(Boolean).join(' · ');
-  // Where a number came from and when is worth a line only when it is not the
-  // plain case. Printing it under every dial turns the exception into chrome.
-  const notable=unknown||state==='previous'||stale;
+  return [usageSource(b.source),
+    seen?`last read ${seen}`:'']
+    .filter(Boolean).join(' · ');
+}
+/* `echo` is what the provider's own header already says. A fact every dial
+   repeats is not per-dial information: three windows read in one account call
+   printed "account · seen 16:30" three times under a header carrying the same
+   time, and "previous value" three times under a header already reading stale
+   (2026-09-15 user report). Only a dial that DIFFERS says anything. */
+function usageDial(b,stale,echo){
+  const state=usageState(b,stale);
+  const unknown=usageUnknown(b,stale);
+  const provenance=usageProvenance(b,stale);
+  const notable=usageNotable(b,stale)&&provenance!==(echo&&echo.provenance);
+  const ownPrevious=!(echo&&echo.previous);
   if(unknown){
     return `<div class="up-dial stale unknown" title="${esc(b.label)} · current value unknown${provenance?` · ${esc(provenance)}`:''}">
       <svg viewBox="0 0 64 64" aria-hidden="true"><text class="n" x="32" y="32" text-anchor="middle" dominant-baseline="central">—</text></svg>
@@ -36874,8 +36893,23 @@ function usageDial(b,stale){
     <circle class="f" cx="32" cy="32" r="${r}" stroke-dasharray="${(c*p/100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 32 32)"/>
     <text class="n" x="32" y="32" text-anchor="middle" dominant-baseline="central">${p}</text></svg>
     <span class="lab">${esc(b.label)}</span><span class="rs">${esc(usageReset(b.resets_at,true))}</span>
-    ${previous?'<span class="rs seen">previous value</span>':''}
+    ${previous&&ownPrevious?'<span class="rs seen">previous value</span>':''}
     ${notable&&provenance?`<span class="rs seen">${esc(provenance)}</span>`:''}</div>`;
+}
+/* What the whole provider block shares, so its header can say it once. */
+function usageEcho(buckets,stale){
+  const all=(buckets||[]).filter(Boolean);
+  if(!all.length) return {provenance:'',previous:false};
+  const provenances=new Set(all.map(b=>usageProvenance(b,stale)));
+  const shared=provenances.size===1?[...provenances][0]:'';
+  const times=new Set(all.map(b=>b.observed_at||0));
+  const sources=new Set(all.map(b=>usageSource(b.source)).filter(Boolean));
+  return {
+    provenance:(shared&&all.some(b=>usageNotable(b,stale)))?shared:'',
+    previous:all.every(b=>usageState(b,stale)==='previous'),
+    when:(times.size===1&&[...times][0])?usageClock([...times][0]):'',
+    source:sources.size===1?[...sources][0]:'',
+  };
 }
 function renderUsagePill(providers){
   const list=document.getElementById('usage-pill-list');
@@ -36890,7 +36924,7 @@ function renderUsagePill(providers){
     if(!b){
       const last=Math.max(...pv.buckets.map(w=>w.observed_at||0));
       parts.push(`<span class="up-p stale">${usageLogo(pv.provider)}<b>—</b>${degraded?'<i class="up-flag">!</i>':''}</span>`);
-      tips.push(`${usageName(pv.provider)} current value unknown${last?` · last observed ${usageClock(last)}`:''}${degraded?` · ${partial?'partial':'degraded'}${pv.reason?' · '+usageReason(pv.reason):''}`:''}`);
+      tips.push(`${usageName(pv.provider)} current value unknown${last?` · last read ${usageClock(last)}`:''}${degraded?` · ${partial?'partial':'degraded'}${pv.reason?' · '+usageReason(pv.reason):''}`:''}`);
       continue;
     }
     const p=Math.round(b.remaining_percent);
@@ -36899,7 +36933,7 @@ function renderUsagePill(providers){
     const cls=[stale?'stale':usageTier(p),partial?'partial':''].filter(Boolean).join(' ');
     parts.push(`<span class="up-p${cls?' '+cls:''}">${usageLogo(pv.provider)}<b>${p}%</b>${mark?`<i class="up-flag">${mark}</i>`:''}</span>`);
     tips.push(`${usageName(pv.provider)} ${b.label} ${p}% left${stale?' (stale)':''}`
-      +(degraded?` (${partial?'partial':'degraded'} · observed ${usageClock(b.observed_at||pv.observed_at)}${pv.reason?' · '+usageReason(pv.reason):''})`:''));
+      +(degraded?` (${partial?'partial':'degraded'} · last read ${usageClock(b.observed_at||pv.observed_at)}${pv.reason?' · '+usageReason(pv.reason):''})`:''));
   }
   list.innerHTML=parts.join('');
   pill.hidden=!parts.length;
@@ -36911,24 +36945,33 @@ function renderUsagePopover(data){
   if(!body||!kick) return;
   const providers=data.providers||[];
   const observed=providers.map(p=>p.last_observed_at||p.observed_at).filter(Boolean);
-  kick.textContent=(observed.length?'observed '+usageClock(Math.max(...observed))+' · ':'')+'numbers are % left';
+  kick.textContent=(observed.length?'last read '+usageClock(Math.max(...observed))+' · ':'')+'numbers are % left';
   body.innerHTML=providers.map(pv=>{
     const head=`<b>${usageLogo(pv.provider)}${esc(usageName(pv.provider))}</b>`;
     if(!pv.buckets||!pv.buckets.length){
       const why=usageReason(pv.reason)||'not observed';
-      const last=pv.last_observed_at?` · last observed ${usageClock(pv.last_observed_at)}`:'';
-      return `<div class="up-prov"><div class="up-h">${head}<span>not observed</span></div>
-        <div class="up-wait"><b>WAITING FOR UPDATE</b> · ${esc(why)}${esc(last)}</div></div>`;
+      const when=pv.last_observed_at?`last read ${usageClock(pv.last_observed_at)}`:'';
+      return `<div class="up-prov"><div class="up-h">${head}<span>${esc(when)}</span></div>
+        <div class="up-wait"><b>WAITING FOR UPDATE</b> · ${esc(why)}</div></div>`;
     }
     const stale=pv.status==='stale';
     const degraded=pv.degraded===true||pv.status==='degraded';
     const partial=pv.partial===true||(pv.partial==null&&pv.status==='degraded');
     const {ordinary,extra}=usageGroups(pv.provider,pv.buckets);
-    const bind=usageBinding(pv.provider,pv.buckets);
+    const echo=usageEcho(pv.buckets,stale);
+    /* One header shape for every provider: what is wrong (if anything), then
+       when it was last read. "last read HH:MM" says the state and the time in
+       one phrase — a reading with a past time IS the previous value, and
+       "stale" needed a glossary. The source is named only when the reading did
+       NOT arrive the usual way, so seeing one named is itself the signal. The
+       next reset is not repeated here: every dial already carries its own. */
     const axes=[];
-    if(stale) axes.push(`stale · observed ${usageClock(pv.observed_at)}`);
     if(degraded) axes.push(partial?'partial':'degraded');
-    const note=axes.join(' · ')||(bind&&bind.resets_at?`next reset ${usageReset(bind.resets_at)}`:'');
+    if(degraded&&echo.source) axes.push(echo.source);
+    const when=echo.when||(pv.observed_at?usageClock(pv.observed_at):'');
+    if(when) axes.push(`last read ${when}`);
+    else if(echo.previous) axes.push('previous values');
+    const note=axes.join(' · ');
     let html=`<div class="up-prov"><div class="up-h">${head}<span>${esc(note)}</span></div>`;
     if(degraded){
       const why=usageReason(pv.reason);
@@ -36936,13 +36979,13 @@ function renderUsagePopover(data){
         ?`<div class="up-wait"><b>PARTIAL</b> · some windows are missing${why?' · '+esc(why):''}</div>`
         :`<div class="up-wait"><b>DEGRADED</b> · account refresh unavailable · known window list retained${why?' · '+esc(why):''}</div>`;
     }
-    if(ordinary.length) html+=`<div class="up-dials">${ordinary.map(b=>usageDial(b,stale)).join('')}</div>`;
+    if(ordinary.length) html+=`<div class="up-dials">${ordinary.map(b=>usageDial(b,stale,echo)).join('')}</div>`;
     for(const [name,wins] of extra){
       if(wins.every(w=>w.value_status!=='unknown'&&Number.isFinite(w.remaining_percent)&&w.remaining_percent>=99.5)){
         html+=`<div class="up-sub">${esc(name)} · untouched · ${wins.map(w=>esc(w.label)).join(' / ')} at 100% left</div>`;
       }else{
         html+=`<div class="up-sub">additional limit · ${esc(name)}</div>
-          <div class="up-dials">${wins.map(b=>usageDial(b,stale)).join('')}</div>`;
+          <div class="up-dials">${wins.map(b=>usageDial(b,stale,echo)).join('')}</div>`;
       }
     }
     return html+'</div>';
