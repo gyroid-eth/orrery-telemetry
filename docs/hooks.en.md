@@ -107,13 +107,15 @@ Both guards use the same checks in the same order. Opening only one leads to the
 - **Parent-child protection:** Even when a parent preregisters a child in PostToolUse, the parent's pane metadata is not rewritten to the child identity.
 - **Guarantee boundary:** PostToolUse runs after the server call, so it cannot roll back a rejected alternate-name row. `check-agent-registered.sh` also allows a channel with an existing `AGENT_NAME` even without a flag. This hook guarantees that it “does not silently accept a mismatch or create new success state”; it does not force every session's subsequent operations to stop.
 
-## Operational helpers (6)
+## Operational helpers (8)
 
 These are not registered directly with events in `settings.template.json`. Their callers and startup conditions are explicit.
 
 | Executable | Caller / startup timing | Primary behavior |
 | --- | --- | --- |
 | [`record-session-index.py`](../hooks/record-session-index.py) | Started **synchronously** by `mark-agent-registered.sh` with the PostToolUse payload | Atomically write the exact mapping among ORRERY Mail ID, Claude `session_id`, transcript, cwd, `project_key`, and `registered_by`. Do not record a call that registered another agent |
+| [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Run by a Codex CLI launcher after ORRERY Mail registration and immediately before the CLI starts | Add a fresh `launch_id` to the server-returned project, numeric agent ID, name, and program, then atomically record the receipt expectation for this launch |
+| [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | Given the official Codex `SessionStart` payload synchronously by the plugin runner | Compare the payload `session_id` with the rollout header ID and atomically index only the current launch with the same `launch_id` |
 | [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | Sourced by reminder, reservation, and cleanup helpers that need identity | Resolve identity in the order env → exact tmux session → session index (when the caller passes `AGENTSTACK_SESSION_ID`) |
 | [`spawn_child.sh`](../hooks/spawn_child.sh) | Explicitly run by `/delegate` or dashboard NEW AGENT when starting a child | Combine identity, token, task mail, reservation, tmux, Claude / Codex, worktree, and readiness into one launch transaction |
 | [`cleanup-child-agent.sh`](../hooks/cleanup-child-agent.sh) | Immediately after the child REPL command started by `spawn_child.sh` ends | Best-effort release of reservations, retirement of remote identity, and removal of managed-list / state / credential / MCP configuration |
@@ -123,6 +125,14 @@ These are not registered directly with events in `settings.template.json`. Their
 ### `record-session-index.py`
 
 From the PostToolUse payload, this helper obtains the numeric ORRERY Mail ID, canonical name, Claude `session_id`, transcript path, and cwd, then writes them to `$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` using a temporary file plus `os.replace`. Each record has `schema_version: 2` and `binding_kind: "self"`. **It does not write a record when the caller registered another agent, such as when a parent registers a child.** The index is read for both dashboard resume and guard identity resolution, so declining to write leaves less room for misuse than filtering only when reading. The dashboard prefers this exact mapping for session resume and falls back to a heuristic only for old sessions. Invalid input and I/O failures are quiet no-ops that do not interfere with registration.
+
+### Codex CLI session binding helpers
+
+`prepare-codex-session-binding.py` records the launcher's authoritative registration at `$AGENTSTACK_RUNTIME_DIR/codex_launches/<agent_id>.json`. Each launch gets a new `launch_id`; the record also carries `binding_expected` and launch kind. Prepare is a startup precondition: when the helper is missing, the lock cannot be created, or metadata cannot be installed atomically, the launcher does not start the new CLI. This prevents an old launch/receipt from appearing successful for a new run. Both the preregistration helper and dashboard NEW AGENT store the numeric ID in a non-secret sidecar separate from the token, and `spawn_child.sh` adopts it into child state. No database name lookup or general parent environment value establishes identity.
+
+The only runtime identity value `record-codex-session-index.py` consumes is `session_id` from SessionStart stdin. It never uses `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, cwd, time, or candidate count. It writes a `provider: codex` receipt only when the payload path resolves to a regular file whose first `session_meta` ID matches, and when the launch metadata's project, numeric ID, name, program, and the launcher's process-scoped `launch_id` all agree. The recorder ships beside the trusted plugin runner and derives the index runtime root from the launch metadata path, so a login shell restoring a parent's `AGENTSTACK_RUNTIME_DIR` cannot redirect the receipt. Built-in subagent events are excluded because they are not separate CLI processes and share the root ID.
+
+The launcher and recorder take the same agent-ID lock. Launch metadata makes a one-way claim on the first `session_id`, and detecting any different ID permanently conflicts that generation. Every callback writes a fresh receipt nonce to launch metadata before the index; an index is valid only with the same nonce. Thus a stale receipt cannot pass even when deletion fails, and a different ID cannot recover through `clear`, retry, or `compact` until a new launch. A delayed callback from an older run likewise cannot overwrite the current receipt after a new launch is recorded. The SessionStart hook itself is fail-open and never stops the CLI, but records `no_transcript`, `id_mismatch`, `write_failed`, and similar reasons in launch metadata / stderr where possible. After an approximately ten-second display grace, DECK shows `? UNBOUND` if the current receipt is still absent, or `— NO HISTORY` only when disabled history is explicit. The reason appears only in the History tab.
 
 ### `resolve-agent-name.sh`
 
@@ -152,7 +162,7 @@ The delivery target is only the tmux session whose name exactly matches the agen
 
 ## Differences for Codex
 
-Codex CLI does not have Claude Code's `SessionStart` / `PreToolUse` / `PostToolUse` hook system, so `mark-agent-registered.sh` does not run. `agent-start-codex` completes identity registration and tmux rename during bootstrap; a reserved child/resume or reregistration stops when the response name does not match. Direct spawn instead reports a warning and adopts the response name, while raw MCP registration is not detected automatically. These are separate follow-ups and do not justify omitting the mail service's `passthrough` setting. The managed `~/.codex/AGENTS.md` instructs reservation reserve / renew / release behavior. The mail watcher and ORRERY Mail registry are shared by Claude and Codex, so notifications and reservation conflicts are mutually visible.
+The official Codex CLI `SessionStart` hook is used for the history receipt above, but it is not equivalent to Claude Code's registration `PostToolUse` or reservation `PreToolUse` guards, and `mark-agent-registered.sh` does not run. `agent-start-codex` completes identity registration, tmux rename, and launch expectation during bootstrap; a reserved child/resume or reregistration stops when the response name does not match. Direct spawn instead reports a warning and adopts the response name, while raw MCP registration is not detected automatically. The managed `~/.codex/AGENTS.md` instructs reservation reserve / renew / release behavior. The mail watcher and ORRERY Mail registry are shared by Claude and Codex, so notifications and reservation conflicts are mutually visible.
 
 Codex Desktop uses a further, separate plugin hook / Bridge lifecycle. See [Codex App integration](codex-app.en.md) for details.
 

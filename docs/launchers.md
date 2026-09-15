@@ -75,11 +75,12 @@ launcher は CLI を起動する前に ORRERY Mail へ identity を登録しま�
 3. ORRERY Mail health を確認
 4. project key、program、model、task metadata で登録
 5. 要求名と返された canonical name を比較。不一致なら top-level は明示して tmux session を返却名へ rename、reserved identity は停止
-6. managed agent list と clipboard を更新
+6. Codex CLI では数値 agent ID を含む今回の launch expectation を記録
+7. managed agent list と clipboard を更新
 
 `AGENTSTACK_PROJECT_KEY` が未設定、または ORRERY Mail が到達不能でも CLI 自体は preselected name で起動します。ただし mail、reservation、project-scoped dashboard 機能は使えません。
 
-Claude Code hook は session 内登録も記録します。Codex は Claude Code の hook system を持たないため、`agentstack-codex-bootstrap` が起動前の登録と tmux rename を担当します。
+Claude Code hook は session 内登録も記録します。Codex CLI は `agentstack-codex-bootstrap` が起動前の登録と tmux rename に加えて fresh `launch_id` を作り、公式 SessionStart hook が runtime の `session_id` と rollout header を確認して receipt を完成させます。receipt が無ければ Codex History は推測へ fallback しません。
 
 ## Registration token
 
@@ -97,7 +98,7 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 に child-owned state を持ちます。
 
-pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。token を transcript、command-line argument、dashboard response に表示しないためです。
+pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を一度だけ取り込み、sidecar も cleanup の対象にします。token を transcript、command-line argument、dashboard response に表示しないためです。
 
 `/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
 
@@ -134,6 +135,8 @@ CLAUDECODE=1
 - `--ask-for-approval ${AGENTSTACK_CODEX_APPROVAL:-on-request}`
 - `AGENTSTACK_VAULT` が存在するときだけ `--add-dir`
 - `OPENAI_API_KEY` を除去し、ChatGPT OAuth を優先
+
+dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
 
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 

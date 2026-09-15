@@ -30,9 +30,23 @@ PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
-HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
+HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$SCRIPT_DIR/../hooks}"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 CODEX_MODEL="${AGENTSTACK_CODEX_MODEL:-codex}"
 RESERVED_IDENTITY="${AGENTSTACK_RESERVED_IDENTITY:-}"
+CODEX_LAUNCH_KIND="${AGENTSTACK_CODEX_LAUNCH_KIND:-startup}"
+case "$CODEX_LAUNCH_KIND" in
+  startup|resume) ;;
+  *) CODEX_LAUNCH_KIND="startup" ;;
+esac
+REQUIRE_FRESH_BINDING=0
+if [[ "$RESERVED_IDENTITY" == "1" || "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+  REQUIRE_FRESH_BINDING=1
+fi
+# These two values are launcher-scoped capabilities, not ambient identity.
+# Always discard inherited copies before creating this launch's pair.
+unset AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID 2>/dev/null || true
+export AGENTSTACK_CODEX_LAUNCH_BINDING="" AGENTSTACK_CODEX_LAUNCH_ID=""
 REQUESTED_AGENT_NAME=""
 if [[ "$RESERVED_IDENTITY" == "1" && -n "${AGENT_NAME:-}" ]]; then
   REQUESTED_AGENT_NAME="$AGENT_NAME"
@@ -105,6 +119,10 @@ finalize_agent_name() {
 }
 
 if [[ -z "$PROJECT_KEY" ]]; then
+  if [[ "$REQUIRE_FRESH_BINDING" == "1" ]]; then
+    echo "⚠️  AGENTSTACK_PROJECT_KEY unset; refusing to start a reserved/resumed Codex session without a fresh history binding expectation." >&2
+    return 1 2>/dev/null || exit 1
+  fi
   echo "⚠️  AGENTSTACK_PROJECT_KEY unset; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
   finalize_agent_name
   if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
@@ -118,6 +136,10 @@ ags_mail_load_token
 
 # 1. health check — degrade gracefully if ORRERY Mail is down.
 if ! ags_mcp_call "health_check" >/dev/null 2>&1; then
+  if [[ "$REQUIRE_FRESH_BINDING" == "1" ]]; then
+    echo "⚠️  ORRERY Mail unreachable at $MCP_URL; refusing to start a reserved/resumed Codex session without a fresh history binding expectation." >&2
+    return 1 2>/dev/null || exit 1
+  fi
   echo "⚠️  ORRERY Mail unreachable at $MCP_URL; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
   finalize_agent_name
   if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
@@ -158,6 +180,40 @@ else
 fi
 
 finalize_agent_name
+if [[ -z "$REGISTERED_AGENT_NAME" && "$REQUIRE_FRESH_BINDING" == "1" ]]; then
+  echo "⚠️  reserved/resumed Codex identity could not be registered; refusing to start without a fresh history binding expectation." >&2
+  return 1 2>/dev/null || exit 1
+fi
+if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
+  if [[ ! "${AGS_REGISTERED_AGENT_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "⚠️  ORRERY Mail registration returned no numeric agent id; refusing to start without a fresh history binding expectation." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  PREPARE_BINDING="$HOOKS_DIR/prepare-codex-session-binding.py"
+  if [[ ! -f "$PREPARE_BINDING" ]]; then
+    echo "⚠️  Codex history binding expectation helper is missing; refusing to start: $PREPARE_BINDING" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  if ! CODEX_LAUNCH_INFO="$(
+    "${AGENTSTACK_PYTHON:-python3}" "$PREPARE_BINDING" \
+      --runtime-dir "$RUNTIME_DIR" \
+      --agent-id "$AGS_REGISTERED_AGENT_ID" \
+      --agent-name "$AGENT_NAME" \
+      --project-key "$PROJECT_KEY" \
+      --program codex \
+      --launch-kind "$CODEX_LAUNCH_KIND" \
+      --history-mode enabled
+  )"; then
+    echo "⚠️  Codex history binding expectation could not be written; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  IFS=$'\t' read -r AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID <<< "$CODEX_LAUNCH_INFO"
+  export AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID
+  if [[ -z "$AGENTSTACK_CODEX_LAUNCH_BINDING" || -z "$AGENTSTACK_CODEX_LAUNCH_ID" ]]; then
+    echo "⚠️  Codex history binding expectation was incomplete; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+fi
 if [[ -n "$REGISTERED_AGENT_NAME" && "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
   echo "✅ ORRERY Mail registered: $AGENT_NAME"
 elif [[ -n "$REGISTERED_AGENT_NAME" ]]; then

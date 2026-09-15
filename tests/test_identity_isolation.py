@@ -42,7 +42,13 @@ def test_top_level_launchers_override_tmux_identity_environment():
     assert '-e $(printf \'%q\' "AGENT_NAME=$SESSION_AGENT_NAME")' in claude
     for name in ("PARENT_AGENT", "CHILD_REGISTRATION_TOKEN"):
         assert f"-e {name}=" in claude, name
-    for name in ("AGENT_NAME", "PARENT_AGENT", "CHILD_REGISTRATION_TOKEN"):
+    for name in (
+        "AGENT_NAME",
+        "PARENT_AGENT",
+        "CHILD_REGISTRATION_TOKEN",
+        "AGENTSTACK_CODEX_LAUNCH_BINDING",
+        "AGENTSTACK_CODEX_LAUNCH_ID",
+    ):
         assert f"-e {name}=" in codex, name
     assert "-e AGENTSTACK_RESERVED_IDENTITY=" in claude
     assert "-e AGENTSTACK_RESERVED_IDENTITY=" in codex
@@ -63,21 +69,27 @@ def test_bootstrap_ignores_unmarked_stale_identity_and_preserves_marked_reserved
         "AGENT_NAME": "Stale-Dirac",
         "PARENT_AGENT": "Stale-Parent",
         "CHILD_REGISTRATION_TOKEN": "stale-owner-token",
+        "AGENTSTACK_CODEX_LAUNCH_BINDING": "/parent/codex_launches/1.json",
+        "AGENTSTACK_CODEX_LAUNCH_ID": "parent-launch-id",
         "TMUX": "",
     }
     command = (
         f'source "{bootstrap}" . >/dev/null 2>&1; '
-        "printf '%s|%s|%s\\n' \"${AGENT_NAME:-}\" "
-        "\"${PARENT_AGENT:-}\" \"${CHILD_REGISTRATION_TOKEN:-}\""
+        "printf '%s|%s|%s|%s|%s\\n' \"${AGENT_NAME:-}\" "
+        "\"${PARENT_AGENT:-}\" \"${CHILD_REGISTRATION_TOKEN:-}\" "
+        "\"${AGENTSTACK_CODEX_LAUNCH_BINDING:-}\" "
+        "\"${AGENTSTACK_CODEX_LAUNCH_ID:-}\""
     )
     top_level = _run_bash(command, common).stdout.strip().split("|")
     assert top_level[0] and top_level[0] != "Stale-Dirac", top_level
-    assert top_level[1:] == ["", ""], top_level
+    assert top_level[1:] == ["", "", "", ""], top_level
 
     reserved_env = dict(common)
     reserved_env["AGENTSTACK_RESERVED_IDENTITY"] = "1"
     reserved = _run_bash(command, reserved_env).stdout.strip().split("|")
-    assert reserved == ["Stale-Dirac", "Stale-Parent", "stale-owner-token"], reserved
+    assert reserved == [
+        "Stale-Dirac", "Stale-Parent", "stale-owner-token", "", ""
+    ], reserved
 
 
 def test_candidate_registration_rejects_ambient_owner_token():
@@ -264,6 +276,55 @@ def test_reserved_child_marker_and_rename_failure_are_explicit():
     assert "tmux rename-session failed: current session" in bootstrap
     assert '"$TMUX_IDENTITY_MATCHED" == "1"' in bootstrap
     assert 'source $(printf \'%q\' "$BOOTSTRAP") $(printf \'%q\' "$DIR") && $CODEX_CMD' in launcher
+    assert "prepare-codex-session-binding.py" in bootstrap
+    assert "AGS_REGISTERED_AGENT_ID" in bootstrap
+
+
+def test_reserved_bootstrap_refuses_to_resume_without_prepare_helper(tmp_path):
+    """A registered resume must not start when no fresh generation can persist."""
+
+    bindir = tmp_path / "bin"
+    libdir = bindir / "lib"
+    libdir.mkdir(parents=True)
+    bootstrap = bindir / "agentstack-codex-bootstrap"
+    bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
+    (libdir / "agentstack-register.sh").write_text(
+        "ags_mail_load_token() { :; }\n"
+        "ags_mcp_call() { return 0; }\n"
+        "ags_start_mail_watcher() { :; }\n"
+        "ags_register_session() {\n"
+        "  AGS_REGISTERED_AGENT_NAME=BoundCodex\n"
+        "  AGS_REGISTERED_AGENT_ID=73\n"
+        "  return 0\n"
+        "}\n"
+        "ags_record_managed_agent() { :; }\n",
+        encoding="utf-8",
+    )
+    missing_hooks = tmp_path / "missing-hooks"
+    script = (
+        f'source "{bootstrap}" . >/dev/null 2>"{tmp_path / "stderr"}"; '
+        "printf '%s\n' $?"
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "AGENTSTACK_PROJECT_KEY": "/project",
+            "AGENTSTACK_HOOKS_DIR": str(missing_hooks),
+            "AGENTSTACK_RESERVED_IDENTITY": "1",
+            "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+            "AGENT_NAME": "BoundCodex",
+            "TMUX": "",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.stdout.strip() == "1"
+    assert "history binding expectation" in (tmp_path / "stderr").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_doctor_and_hook_do_not_print_owner_token_value():

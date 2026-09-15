@@ -22,6 +22,8 @@ AGENT = "IndexedCodex"
 AGENT_ID = 42
 OTHER_AGENT_ID = 99
 SESSION_ID = "01a0a3cb-fc0b-7890-8819-1f9d6b764073"
+LAUNCH_ID = "launch-current"
+RECEIPT_ID = "receipt-current"
 
 
 def _write_rollout(path: Path, session_id: str = SESSION_ID) -> None:
@@ -42,10 +44,13 @@ def _index_record(project_key: str, transcript: Path, **overrides: object) -> di
         "schema_version": 2,
         "binding_kind": "self",
         "provider": "codex",
+        "program": "codex-cli",
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
         "project_key": project_key,
         "registered_by": AGENT,
+        "launch_id": LAUNCH_ID,
+        "receipt_id": RECEIPT_ID,
         "session_id": SESSION_ID,
         "transcript_path": str(transcript),
     }
@@ -98,6 +103,30 @@ def binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
 
     index_dir = tmp_path / "session_index"
     index_dir.mkdir()
+    launch_dir = tmp_path / "codex_launches"
+    launch_dir.mkdir()
+    (launch_dir / f"{AGENT_ID}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "binding_expected": True,
+                "provider": "codex",
+                "program": "codex-cli",
+                "agent_id": AGENT_ID,
+                "agent_name": AGENT,
+                "project_key": project,
+                "launch_id": LAUNCH_ID,
+                "launch_kind": "startup",
+                "history_mode": "enabled",
+                "expected_at": time.time(),
+                "claimed_session_id": SESSION_ID,
+                "binding_conflicted": False,
+                "receipt_id": RECEIPT_ID,
+                "last_reason": None,
+            }
+        ),
+        encoding="utf-8",
+    )
     transcript = tmp_path / "rollout-exact.jsonl"
     other_transcript = tmp_path / "rollout-other-project.jsonl"
     wrong_transcript = tmp_path / "rollout-stale-cache.jsonl"
@@ -108,6 +137,7 @@ def binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(server, "PROJECT_KEY", project)
     monkeypatch.setattr(server, "VAULT", "")
     monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(index_dir))
+    monkeypatch.setattr(server, "CODEX_LAUNCH_DIR", str(launch_dir))
     server._TPATH_CACHE.clear()
     server._TPATH_OWNER.clear()
     yield {
@@ -115,6 +145,7 @@ def binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         "project": project,
         "other_project": other_project,
         "index_dir": index_dir,
+        "launch_dir": launch_dir,
         "transcript": transcript,
         "other_transcript": other_transcript,
         "wrong_transcript": wrong_transcript,

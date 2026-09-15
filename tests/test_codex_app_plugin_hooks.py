@@ -35,6 +35,14 @@ def test_plugin_hooks_do_not_wire_cold_wake():
     assert "resume" not in text
 
 
+def test_hook_runner_keeps_cli_recorder_separate_from_desktop_bridge():
+    runner = (PLUGIN / "scripts" / "run-hook.sh").read_text(encoding="utf-8")
+    assert '$PLUGIN_ROOT/scripts/record-codex-session-index.py' in runner
+    assert "AGENTSTACK_HOOKS_DIR" not in runner
+    assert 'AGENTSTACK_CODEX_LAUNCH_BINDING' not in runner
+    assert 'agentstack_codex_app/hook_entry.py' in runner
+
+
 def test_plugin_manifest_wires_relative_stdio_mcp_server():
     manifest = json.loads(
         (PLUGIN / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -51,7 +59,11 @@ def test_plugin_manifest_wires_relative_stdio_mcp_server():
     }
     assert "PLUGIN_ROOT" not in json.dumps(config)
     assert "PLUGIN_DATA" not in json.dumps(config)
-    for runner in ("run-hook.sh", "run-mcp.sh"):
+    for runner in (
+        "run-hook.sh",
+        "record-codex-session-index.py",
+        "run-mcp.sh",
+    ):
         path = PLUGIN / "scripts" / runner
         assert path.is_file()
         assert path.stat().st_mode & 0o111

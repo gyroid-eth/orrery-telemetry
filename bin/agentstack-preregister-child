@@ -142,6 +142,10 @@ fi
 
 registered="$(ags_extract_agent_name <<<"$register_result")"
 [[ -n "$registered" ]] || die "could not read registered child name"
+registered_id=""
+if declare -F ags_extract_agent_id >/dev/null 2>&1; then
+  registered_id="$(ags_extract_agent_id <<<"$register_result")"
+fi
 if [[ "$registered" != "$agent_name" ]]; then
   printf "%s: ORRERY Mail changed requested identity '%s' to '%s'; the child tmux session must use the server-returned name\n" \
     "$PROG" "$agent_name" "$registered" >&2
@@ -168,6 +172,41 @@ tmp_file="${token_file_out}.$$"
 ( umask 077 && printf '%s' "$effective_token" > "$tmp_file" ) || die "could not write token file"
 mv "$tmp_file" "$token_file_out" || die "could not install token file"
 chmod 600 "$token_file_out" 2>/dev/null || true
+
+# The launcher needs the server-returned numeric id as well as the name. Keep
+# that non-secret registration receipt beside the one-shot token so
+# spawn_child.sh can consume both without querying by name later. A missing
+# sidecar does not strand an already registered child; it starts unbound and
+# the dashboard reports that state instead.
+if [[ "$program" == "codex" && "$registered_id" =~ ^[1-9][0-9]*$ ]]; then
+  binding_file="${token_file_out}.binding.json"
+  if ! python3 - "$binding_file" "$registered_id" "$registered" "$project_key" "$program" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "agent_id": int(sys.argv[2]),
+    "agent_name": sys.argv[3],
+    "project_key": sys.argv[4],
+    "program": sys.argv[5],
+}
+temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
+with open(temporary, "x", encoding="utf-8") as handle:
+    json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(temporary, 0o600)
+os.replace(temporary, path)
+os.chmod(path, 0o600)
+PY
+  then
+    printf '%s: warning: could not persist Codex registration binding; child history will be unconfirmed\n' "$PROG" >&2
+  fi
+fi
 
 ags_store_registration_token "$registered" "$effective_token" || true
 ags_apply_contact_policy "$project_key" "$registered" "$effective_token"

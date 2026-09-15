@@ -33366,6 +33366,10 @@ function bay(a,i){
   if(+a.deliv>0) chips.push(`<span class="chip dv" title="output logs: ${+a.deliv}">¶ ${+a.deliv}</span>`);
   if(a.mail_linked) chips.push(`<span class="chip att" title="tmux session name matches an ORRERY Mail identity">◉ LINKED</span>`);
   if(a.attached) chips.push(`<span class="chip att" title="a terminal client is attached to this tmux session">◉ ATTACHED</span>`);
+  if(a.history_binding==='unconfirmed')
+    chips.push('<span class="chip imp">? UNBOUND</span>');
+  else if(a.history_binding==='disabled')
+    chips.push('<span class="chip">— NO HISTORY</span>');
   // 'agent' は section header(ACTIVE AGENTS) と冗長なので省略
   if(a.category==='finished')
     chips.push(`<span class="chip imp">◢ EXITED</span>`);

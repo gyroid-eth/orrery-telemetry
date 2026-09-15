@@ -41,7 +41,9 @@ DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 # Prevent identity hijack; the bootstrap re-exports the selected name after
 # registering. Clear the explicit reserved-identity marker as well: this is a
 # top-level launcher, never a delegated/resume path.
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID \
+  AGENTSTACK_CODEX_LAUNCH_KIND 2>/dev/null || true
 
 SESSION="codex-pending-$$"
 
@@ -74,9 +76,12 @@ INNER="$(mktemp -t agent-start-codex.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
-unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
+unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY \
+  AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID \
+  AGENTSTACK_CODEX_LAUNCH_KIND 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
+  -e AGENTSTACK_CODEX_LAUNCH_BINDING= -e AGENTSTACK_CODEX_LAUNCH_ID= -e AGENTSTACK_CODEX_LAUNCH_KIND= \
   -e CLAUDECODE=1 \
   "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"

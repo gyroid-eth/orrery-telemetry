@@ -1092,6 +1092,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 "model": _display_model(pane_model) or
                          (m or {}).get("model", ""),
                 "model_raw": pane_model or (m or {}).get("model_raw", ""),
+                "program": program,
                 "provider": _provider_of(
                     pane_model
                     or (m or {}).get("model_raw")
@@ -1132,7 +1133,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             cutoff_sql, cutoff_params = _history_cutoff(history_days)
             cur.execute(
                 f"""
-                SELECT a.name, a.model, a.task_description, a.last_active_ts,
+                SELECT a.name, a.model, a.program, a.task_description, a.last_active_ts,
                        {retired_flag} AS retired
                 FROM agents a
                 JOIN projects p ON a.project_id = p.id
@@ -1152,6 +1153,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                     "running": False, "attached": False, "mail_linked": False,
                     "cmd": "", "live": "",
                     "model": _display_model(r["model"]), "model_raw": r["model"],
+                    "program": r["program"] or "",
                     "provider": _provider_of(r["model"]),
                     "ctx_window": _ctx_window(r["model"]),
                     "ctx_used": None, "act_state": None,
@@ -1188,6 +1190,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
 
     observed_now = time.time()
     for row in rows:
+        if row.get("program") in {"codex", "codex-cli"}:
+            row.update(_codex_history_binding(row["name"], now=observed_now))
         signature = (
             row.get("act_state"),
             row.get("ctx_used"),
@@ -2105,6 +2109,8 @@ def _all_transcripts() -> list[str]:
 
 
 SESSION_INDEX_DIR = os.path.join(RUNTIME_DIR, "session_index")
+CODEX_LAUNCH_DIR = os.path.join(RUNTIME_DIR, "codex_launches")
+CODEX_BINDING_GRACE_SECONDS = 10.0
 
 
 def _agent_id_for_name(name: str) -> int | None:
@@ -2466,7 +2472,7 @@ def _do_resume_codex(session: str) -> dict:
 
     rollout は ~/.codex/sessions/.../rollout-*.jsonl。session_meta.payload の
     id=session_id / cwd=作業ディレクトリ。cx と同じ起動条件を再現する:
-      - codex_agent_bootstrap.sh を source（AGENT_NAME export + ORRERY Mail
+      - installed agentstack-codex-bootstrap を source（AGENT_NAME export + ORRERY Mail
         再登録 + mail-watcher 起動 + tmux リネーム）
       - launch_codex_workspace.sh と同じ writable scope / sandbox / approval
     project-scoped session index と rollout header の ID 一致で path を引き、
@@ -2481,13 +2487,24 @@ def _do_resume_codex(session: str) -> dict:
     if not cwd:
         return {"ok": False,
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
-    bootstrap = os.path.expanduser("~/.codex/bin/codex_agent_bootstrap.sh")
-    # zsh -lic で .zshrc を読ませ codex を PATH 解決。bootstrap が無ければ
-    # source をスキップ（AGENT_NAME export と resume は維持）。
-    src = f'source {shlex.quote(bootstrap)}; ' if os.path.exists(bootstrap) else ''
+    install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
+    bootstrap = os.path.join(install_home, "bin", "agentstack-codex-bootstrap")
+    if not os.path.isfile(bootstrap):
+        return {
+            "ok": False,
+            "error": f"Codex resume bootstrap が見つかりません: {bootstrap}",
+        }
+    # The product bootstrap clears inherited launch pairs, re-registers the
+    # reserved identity and persists a fresh launch generation.  `&&` is the
+    # safety boundary: a bootstrap/prepare failure must not reach Codex exec.
+    src = (
+        f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)} && '
+    )
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
-        f'export AGENT_NAME={session}; '
+        f'export AGENT_NAME={shlex.quote(session)}; '
+        'export AGENTSTACK_RESERVED_IDENTITY=1; '
+        'export AGENTSTACK_CODEX_LAUNCH_KIND=resume; '
         f'{src}'
         f'exec env -u OPENAI_API_KEY codex resume {sid} '
         f'-C {shlex.quote(cwd)} '
@@ -2548,20 +2565,12 @@ def _block_text(content) -> list[tuple[str, str]]:
     return rows
 
 
-def _codex_indexed_transcript(session: str) -> str | None:
-    """Return a verified Codex binding for ``session``, or fail closed.
+def _codex_registration(session: str) -> dict | None:
+    """Return this project's numeric Codex CLI registration for ``session``."""
 
-    A Codex rollout has no agent name, so cwd, timestamps and candidate counts
-    cannot establish ownership. The session index is authoritative only when
-    it agrees with the current project's ORRERY Mail row and with the runtime
-    session id in the rollout header. Claude's legacy index reader deliberately
-    remains separate because its pre-provider records have a different
-    compatibility contract.
-    """
     project_key = _project_key()
     if not project_key or not os.path.isfile(DB_PATH):
         return None
-
     try:
         with _db() as con:
             con.row_factory = sqlite3.Row
@@ -2574,10 +2583,28 @@ def _codex_indexed_transcript(session: str) -> str | None:
             ).fetchone()
     except sqlite3.Error:
         return None
-    if not row or not (row["program"] or "").startswith("codex"):
+    program = (row["program"] or "") if row else ""
+    if not row or program not in {"codex", "codex-cli"}:
         return None
+    return {
+        "agent_id": int(row["id"]),
+        "agent_name": session,
+        "project_key": project_key,
+        "program": program,
+    }
 
-    agent_id = int(row["id"])
+
+def _verified_codex_index(
+    session: str,
+    registration: dict,
+    expected_launch_id: str,
+    expected_session_id: str,
+    expected_receipt_id: str,
+) -> str | None:
+    """Validate one receipt against registration, launch, and rollout header."""
+
+    agent_id = registration["agent_id"]
+    project_key = registration["project_key"]
     index_path = os.path.join(SESSION_INDEX_DIR, f"{agent_id}.json")
     try:
         with open(index_path, encoding="utf-8") as handle:
@@ -2587,12 +2614,11 @@ def _codex_indexed_transcript(session: str) -> str | None:
     if not isinstance(record, dict):
         return None
 
-    # New Codex records are explicit. Missing provider remains valid only for
-    # the legacy Claude reader; treating it as Codex would silently migrate an
-    # unproven binding into the strict path.
     if record.get("schema_version") != 2:
         return None
     if record.get("binding_kind") != "self" or record.get("provider") != "codex":
+        return None
+    if record.get("program") != registration["program"]:
         return None
     if type(record.get("agent_id")) is not int or record["agent_id"] != agent_id:
         return None
@@ -2600,17 +2626,17 @@ def _codex_indexed_transcript(session: str) -> str | None:
         return None
     if record.get("registered_by") != session:
         return None
+    if record.get("launch_id") != expected_launch_id:
+        return None
+    if record.get("receipt_id") != expected_receipt_id:
+        return None
 
     session_id = record.get("session_id")
     transcript_path = record.get("transcript_path")
-    if not isinstance(session_id, str) or not session_id:
+    if session_id != expected_session_id:
         return None
     if not isinstance(transcript_path, str) or not transcript_path.endswith(".jsonl"):
         return None
-
-    # Follow a child CODEX_HOME sessions symlink, then validate the regular
-    # file's own metadata. A symlinked sessions directory is normal and is not
-    # itself evidence against the binding.
     real_transcript = os.path.realpath(transcript_path)
     if not os.path.isfile(real_transcript):
         return None
@@ -2618,6 +2644,151 @@ def _codex_indexed_transcript(session: str) -> str | None:
     if header_session_id != session_id:
         return None
     return transcript_path
+
+
+_CODEX_BINDING_REASONS = {
+    "awaiting_hook": "Waiting for this run's history binding receipt.",
+    "binding_missing": "This launch has no verified registration binding.",
+    "hook_not_observed": "This run did not produce a verified history binding receipt.",
+    "no_transcript": "This run did not provide a usable transcript file.",
+    "id_mismatch": "The runtime session ID did not match the rollout metadata.",
+    "write_failed": "The verified history receipt could not be written.",
+    "unsupported_source": "This runtime lifecycle event could not be bound safely.",
+    "receipt_missing": "This run's verified history receipt is unavailable.",
+    "invalid_binding": "History binding is unconfirmed because this launch's registration binding is invalid.",
+    "disabled": "This session is configured not to save transcript history.",
+}
+
+
+def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
+    """Return visible binding state for the current launch, never a guess."""
+
+    registration = _codex_registration(session)
+    if registration is None:
+        return {
+            "history_binding": "unconfirmed",
+            "history_binding_reason": _CODEX_BINDING_REASONS["invalid_binding"],
+            "history_binding_reason_code": "invalid_binding",
+        }
+    launch_path = os.path.join(CODEX_LAUNCH_DIR, f"{registration['agent_id']}.json")
+    try:
+        with open(launch_path, encoding="utf-8") as handle:
+            launch = json.load(handle)
+    except (OSError, ValueError):
+        launch = None
+    valid_common = (
+        isinstance(launch, dict)
+        and launch.get("schema_version") == 1
+        and launch.get("provider") == "codex"
+        and launch.get("program") == registration["program"]
+        and type(launch.get("agent_id")) is int
+        and launch.get("agent_id") == registration["agent_id"]
+        and launch.get("agent_name") == session
+        and launch.get("project_key") == registration["project_key"]
+        and isinstance(launch.get("launch_id"), str)
+        and bool(launch.get("launch_id"))
+        and launch.get("launch_kind") in {"startup", "resume"}
+        and type(launch.get("binding_conflicted")) is bool
+        and (
+            launch.get("claimed_session_id") is None
+            or (
+                isinstance(launch.get("claimed_session_id"), str)
+                and bool(launch.get("claimed_session_id"))
+            )
+        )
+        and (
+            launch.get("receipt_id") is None
+            or (
+                isinstance(launch.get("receipt_id"), str)
+                and bool(launch.get("receipt_id"))
+            )
+        )
+    )
+    if not valid_common:
+        reason = "binding_missing" if launch is None else "invalid_binding"
+        return {
+            "history_binding": "unconfirmed",
+            "history_binding_reason": _CODEX_BINDING_REASONS[reason],
+            "history_binding_reason_code": reason,
+        }
+    if launch.get("history_mode") == "disabled" and launch.get("binding_expected") is False:
+        return {
+            "history_binding": "disabled",
+            "history_binding_reason": _CODEX_BINDING_REASONS["disabled"],
+            "history_binding_reason_code": "disabled",
+        }
+    if launch.get("history_mode") != "enabled" or launch.get("binding_expected") is not True:
+        return {
+            "history_binding": "unconfirmed",
+            "history_binding_reason": _CODEX_BINDING_REASONS["invalid_binding"],
+            "history_binding_reason_code": "invalid_binding",
+        }
+    if launch.get("binding_conflicted") is True:
+        return {
+            "history_binding": "unconfirmed",
+            "history_binding_reason": _CODEX_BINDING_REASONS["id_mismatch"],
+            "history_binding_reason_code": "id_mismatch",
+        }
+
+    claimed_session_id = launch.get("claimed_session_id")
+    receipt_id = launch.get("receipt_id")
+    transcript = None
+    if isinstance(claimed_session_id, str) and isinstance(receipt_id, str):
+        transcript = _verified_codex_index(
+            session,
+            registration,
+            launch["launch_id"],
+            claimed_session_id,
+            receipt_id,
+        )
+    if transcript:
+        return {
+            "history_binding": "bound",
+            "history_binding_reason": "",
+            "history_binding_reason_code": "bound",
+            "transcript_path": transcript,
+        }
+
+    reason = launch.get("last_reason")
+    if reason not in _CODEX_BINDING_REASONS or reason == "disabled":
+        reason = "receipt_missing" if reason == "bound" else "hook_not_observed"
+    observed_at = time.time() if now is None else float(now)
+    expected_at = launch.get("expected_at")
+    grace_age = (
+        observed_at - float(expected_at)
+        if type(expected_at) in {int, float}
+        else None
+    )
+    if (
+        grace_age is not None
+        and 0.0 <= grace_age < CODEX_BINDING_GRACE_SECONDS
+        and reason == "hook_not_observed"
+    ):
+        return {
+            "history_binding": "pending",
+            "history_binding_reason": _CODEX_BINDING_REASONS["awaiting_hook"],
+            "history_binding_reason_code": "awaiting_hook",
+        }
+    return {
+        "history_binding": "unconfirmed",
+        "history_binding_reason": _CODEX_BINDING_REASONS[reason],
+        "history_binding_reason_code": reason,
+    }
+
+
+def _codex_indexed_transcript(session: str) -> str | None:
+    """Return a receipt verified for the current Codex launch, or fail closed.
+
+    A Codex rollout has no agent name, so cwd, timestamps and candidate counts
+    cannot establish ownership. The session index is authoritative only when
+    it agrees with the current project's ORRERY Mail row and with the runtime
+    session id in the rollout header. Claude's legacy index reader deliberately
+    remains separate because its pre-provider records have a different
+    compatibility contract.
+    """
+    state = _codex_history_binding(session)
+    path = state.get("transcript_path")
+    return path if state.get("history_binding") == "bound" and isinstance(path, str) else None
 
 
 def _codex_transcript_path(session: str) -> str | None:
@@ -2705,10 +2876,10 @@ def history_payload(session: str, limit: int) -> dict:
     if program.startswith("codex"):
         path = _codex_transcript_path(session)
         if not path:
-            return {
-                "ok": False,
-                "error": "Codex transcript history binding is unconfirmed",
-            }
+            if program in {"codex", "codex-cli"}:
+                binding = _codex_history_binding(session)
+                return {"ok": False, "error": binding["history_binding_reason"], **binding}
+            return {"ok": False, "error": "Codex transcript history binding is unconfirmed"}
         is_codex = True
     elif program.startswith("claude"):
         path = _transcript_path(session)
@@ -2756,7 +2927,7 @@ def history_payload(session: str, limit: int) -> dict:
     total = len(events)
     if limit and total > limit:
         events = events[-limit:]
-    return {
+    result = {
         "ok": True,
         "session": session,
         "file": os.path.basename(path),
@@ -2765,6 +2936,9 @@ def history_payload(session: str, limit: int) -> dict:
         "shown": len(events),
         "events": events,
     }
+    if is_codex:
+        result.update(history_binding="bound", history_binding_reason="")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -4759,6 +4933,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if not isinstance(server_token, str):
         server_token = ""
     effective_child_token = server_token.strip() or child_token
+    registered_agent_id = registration.get("id")
     name_substituted = child_name != requested_name
     if name_substituted:
         logging.warning("spawn register normalized requested name %r to %r", requested_name, child_name)
@@ -4799,6 +4974,12 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         }
         result.update(extra)
         return result
+
+    if provider == "codex" and (
+        type(registered_agent_id) is not int or registered_agent_id <= 0
+    ):
+        return retained_registration_error(
+            "register_agent returned no positive numeric id for Codex binding")
 
     # Registration defaults are contact-gated on ORRERY Mail. Match the
     # normal launcher path and open the new child before delivering its task.
@@ -4876,7 +5057,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         nonlocal token_created
         paths = []
         if token_created and token_file:
-            paths.append(token_file)
+            paths.extend([token_file, f"{token_file}.binding.json"])
         if not keep_owner_credential:
             paths.extend([
                 owner_credential,
@@ -4969,6 +5150,25 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)
+        if provider == "codex":
+            binding_file = f"{token_file}.binding.json"
+            binding_fd = os.open(binding_file, open_flags, 0o600)
+            with os.fdopen(binding_fd, "w") as f:
+                json.dump(
+                    {
+                        "agent_id": registered_agent_id,
+                        "agent_name": child_name,
+                        "project_key": project_key,
+                        "program": program,
+                    },
+                    f,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(binding_file, 0o600)
     except Exception as e:  # noqa: BLE001
         remove_spawn_credentials()
         return retained_registration_error(f"spawn token write failed: {e}")

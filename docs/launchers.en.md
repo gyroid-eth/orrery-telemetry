@@ -75,11 +75,12 @@ The launcher registers an identity with ORRERY Mail before starting the CLI.
 3. Check ORRERY Mail health
 4. Register with project key, program, model, and task metadata
 5. Compare the requested name with the returned canonical name. On a mismatch, a top-level launch reports it and renames the tmux session to the returned name; a reserved identity stops
-6. Update the managed agent list and clipboard
+6. For Codex CLI, record this launch expectation with the numeric agent ID
+7. Update the managed agent list and clipboard
 
 If `AGENTSTACK_PROJECT_KEY` is unset or ORRERY Mail is unreachable, the CLI itself still starts with the preselected name. Mail, reservations, and project-scoped dashboard features are unavailable, however.
 
-Claude Code hooks also record registration inside the session. Because Codex does not have Claude Code's hook system, `agentstack-codex-bootstrap` handles registration and tmux renaming before startup.
+Claude Code hooks also record registration inside the session. For Codex CLI, `agentstack-codex-bootstrap` handles registration and tmux renaming and also creates a fresh `launch_id` before startup. The official SessionStart hook completes the receipt only after validating the runtime `session_id` against the rollout header. Without that receipt, Codex History does not fall back to a guess.
 
 ## Registration token
 
@@ -95,7 +96,7 @@ A delegated child additionally has child-owned state at:
 ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 ```
 
-The parent's token is not given to a preregistered child. Dashboard spawn generates a child-specific token and passes it to `spawn_child.sh --pre-registered` through a temporary mode-`0600` token file. This keeps the token out of transcripts, command-line arguments, and dashboard responses.
+The parent's token is not given to a preregistered child. Dashboard spawn generates a child-specific token and passes it to `spawn_child.sh --pre-registered` through a temporary mode-`0600` token file. For Codex, it accompanies that token with a non-secret `.binding.json` sidecar containing the formal registration response's numeric ID, name, project, and program. The launcher adopts both exactly once and cleanup includes the sidecar. This keeps the token out of transcripts, command-line arguments, and dashboard responses.
 
 The default `/delegate` path is `--pre-registered --embed-task --task-file <path>`. The parent writes the complete task to a temporary mode-`0600` file, and the launcher embeds it into the first Claude / Codex prompt together with the child name, parent name, spawn time, project key, and instruction to use `send_message` at completion. There is no registration, reregistration, or `fetch_inbox` startup ritual. This prompt is the only source of truth, so do not send the same child a separate task mail. `--task-file` takes precedence over the positional task argument and is also the boundary that prevents the shell from interpreting backticks or `$()` in the task.
 
@@ -132,6 +133,8 @@ The value is set with `tmux new-session -e` when the session is created, not in 
 - pass `--ask-for-approval ${AGENTSTACK_CODEX_APPROVAL:-on-request}`
 - pass `--add-dir` only when `AGENTSTACK_VAULT` exists
 - remove `OPENAI_API_KEY` and prefer ChatGPT OAuth
+
+Dashboard Codex resume also always sources the same installer-distributed `agentstack-codex-bootstrap`, re-registers the reserved identity, and creates a fresh resume launch before it execs `codex resume`. It does not depend on a personal wrapper under `~/.codex/bin`; a bootstrap or prepare failure prevents resume from starting.
 
 Because an API key in the environment can override OAuth, it is removed only from the Codex subprocess.
 

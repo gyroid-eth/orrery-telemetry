@@ -161,6 +161,7 @@ chmod +x \
   "$DEST/scripts/run-codex-app-bridge.sh" \
   "$DEST/scripts/build-codex-app-marketplace.py" \
   "$DEST/integrations/codex_app/plugin/scripts/run-hook.sh" \
+  "$DEST/integrations/codex_app/plugin/scripts/record-codex-session-index.py" \
   "$DEST/integrations/codex_app/plugin/scripts/run-mcp.sh"
 
 if [[ "$SKIP_INSTALL_CHECK" != true ]]; then

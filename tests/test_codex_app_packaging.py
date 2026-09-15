@@ -420,6 +420,7 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
     )
     assert (cached / "src" / "agentstack_codex_app" / "mcp_server.py").is_file()
     assert (cached / "schemas" / "migrations" / "001_delivery_state.sql").is_file()
+    assert (cached / "scripts" / "record-codex-session-index.py").is_file()
     assert (cached / "scripts" / "run-mcp.sh").is_file()
     mcp = subprocess.run(
         [str(cached / "scripts" / "run-mcp.sh")],
@@ -880,5 +881,15 @@ def test_export_gate_builds_allowlisted_token_free_artifact(tmp_path):
     exported_env = destination / "integrations" / "codex_app" / "env.sh"
     assert exported_env.stat().st_mode & 0o777 == 0o600
     assert "/workspace/example" in exported_env.read_text(encoding="utf-8")
+    exported_recorder = (
+        destination
+        / "integrations"
+        / "codex_app"
+        / "plugin"
+        / "scripts"
+        / "record-codex-session-index.py"
+    )
+    assert exported_recorder.is_file()
+    assert exported_recorder.stat().st_mode & 0o111
     assert not list(destination.rglob("*.sqlite3"))
     assert not list(destination.rglob("__pycache__"))

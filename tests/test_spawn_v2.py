@@ -239,6 +239,7 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
         return {
             "ok": True,
             "data": {
+                "id": 73,
                 "name": "SunnyCurie",
                 "registration_token": "server-child-token",
             } if method == "register_agent" else {},
@@ -271,6 +272,13 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     assert calls[1][1]["registration_token"] == "server-child-token"
     assert calls[2][1]["sender_token"] == "parent-owner-token"
     assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
+    binding_path = pathlib.Path(launched[0][4] + ".binding.json")
+    assert json.loads(binding_path.read_text(encoding="utf-8")) == {
+        "agent_id": 73,
+        "agent_name": "SunnyCurie",
+        "project_key": "/project",
+        "program": "codex-cli",
+    }
     assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", "gpt-5.6-sol", "--effort", "high", "work", str(tmp_path)]
 
 
@@ -459,7 +467,7 @@ def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, 
             return 0
 
     def mcp(method, args, timeout=15):
-        return {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if method == "register_agent" else {}}
+        return {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if method == "register_agent" else {}}
 
     monkeypatch.setattr(server, "SPAWN_SCRIPT", str(launcher))
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
@@ -501,7 +509,7 @@ def test_sync_spawn_is_unchanged_without_the_async_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
-    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
+    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: Proc())
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
     result = server.do_spawn({"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)})
@@ -540,7 +548,7 @@ def _prepare_real_spawn(monkeypatch, tmp_path, script=_CLEANUP_LAUNCHER):
     runtime = tmp_path / "runtime"
 
     def mcp(method, args, timeout=15):
-        data = {"name": "QuietCurie", "registration_token": "child-owner-token"} \
+        data = {"id": 73, "name": "QuietCurie", "registration_token": "child-owner-token"} \
             if method == "register_agent" else {}
         return {"ok": True, "data": data}
 
@@ -682,7 +690,7 @@ def test_canonical_launcher_timeout_keeps_5s_grace_and_removes_credentials(monke
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
-    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
+    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: StuckProc())
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
     monkeypatch.setattr(server.os, "killpg", lambda *a: events.append(("killpg", a)))
@@ -947,7 +955,7 @@ def test_async_pending_deadline_comes_from_the_spec_not_the_payload(monkeypatch,
     monkeypatch.setattr(server, "HERE", str(tmp_path))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
-    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
+    monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: SlowProc())
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 

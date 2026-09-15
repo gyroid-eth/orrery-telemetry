@@ -112,13 +112,15 @@ service が応答しているなら登録は可能なので、既定は**要求�
 - **親子保護:** 親が child を preregister した PostToolUse でも、親 pane metadata を child identity に書き換えません。
 - **保証境界:** PostToolUse は server call 後なので、拒否した別名 row を transaction rollback はしません。また `check-agent-registered.sh` は既存 `AGENT_NAME` を持つ channel を flag なしでも許可します。この hook の保証は「不一致を黙って受理せず、成功 state を新規作成しない」であり、全 session の後続操作を強制停止することではありません。
 
-## 運用 helper（6件）
+## 運用 helper（8件）
 
 以下は `settings.template.json` の event へ直接登録されません。caller と起動条件を明示して運用します。
 
 | 実行ファイル | 呼び出し元 / 起動タイミング | 主な動作 |
 | --- | --- | --- |
 | [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
+| [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Codex CLI launcher が ORRERY Mail 登録後、CLI 起動直前に実行 | server 応答由来の project・数値 agent ID・name・program に fresh `launch_id` を加え、今回の receipt 期待を atomic write |
+| [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | 公式 Codex `SessionStart` payload を plugin runner が同期入力 | payload の `session_id` と rollout header ID を照合し、同じ `launch_id` の current launch だけを Codex session index として atomic write |
 | [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → exact tmux session → session index（caller が `AGENTSTACK_SESSION_ID` を渡した場合）の順で identity を解決 |
 | [`spawn_child.sh`](../hooks/spawn_child.sh) | `/delegate` または dashboard の NEW AGENT が child 起動時に明示実行 | identity、token、task mail、reservation、tmux、Claude / Codex、worktree、readiness を一つの launch transaction にまとめる |
 | [`cleanup-child-agent.sh`](../hooks/cleanup-child-agent.sh) | `spawn_child.sh` が起動した child の REPL command が終了した直後 | reservation release、remote identity retire、managed list / state / credential / MCP config の削除を best-effort 実行 |
@@ -128,6 +130,14 @@ service が応答しているなら登録は可能なので、既定は**要求�
 ### `record-session-index.py`
 
 PostToolUse payload から ORRERY Mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。record は `schema_version: 2` と `binding_kind: "self"` を持ちます。**呼び出し元が別の agent を登録した場合（親による child 登録）は record を書きません** — この index は dashboard の resume と guard の identity 解決の両方に読まれるので、読む側で除外するのではなく、書かない方が誤用の余地が残りません。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
+
+### Codex CLI session binding helper
+
+`prepare-codex-session-binding.py` は launcher が取得した正式な登録情報を `$AGENTSTACK_RUNTIME_DIR/codex_launches/<agent_id>.json` に記録します。`launch_id` は起動ごとに新しく、`binding_expected` と起動種別を含みます。prepare は CLI 起動前の必要条件で、helper が無い、lock を作れない、または metadata を atomically 保存できない場合、launcher は新しい CLI を開始しません。これにより旧 launch / receipt を新 run の成功として残しません。pre-register helper と dashboard NEW AGENT は数値 ID を token とは別の非秘密 sidecar に残し、`spawn_child.sh` が child state へ取り込むため、名前による DB 再検索や親の一般 env を identity 根拠にしません。
+
+`record-codex-session-index.py` が identity に使う runtime 値は SessionStart stdin の `session_id` だけです。`CODEX_THREAD_ID`、`CODEX_SESSION_ID`、cwd、時刻、候補数は使いません。payload path の実体が通常 file で、先頭 `session_meta` ID が一致し、launch metadata の project・数値 ID・name・program と launcher がこの process に渡した `launch_id` がすべて一致したときだけ `provider: codex` の receipt を書きます。recorder は trusted plugin runner と同梱し、index の runtime root は launch metadata path から導出します。login shell が親の `AGENTSTACK_RUNTIME_DIR` を復元しても保存先をすり替えられません。内蔵 subagent event は別 CLI process ではなく root ID を共有するため除外します。
+
+launcher と recorder は同じ agent-ID lock を取ります。launch metadata は最初の `session_id` を一方向に claim し、別 ID を一度でも検出するとその generation を競合状態に固定します。各 callback は fresh receipt nonce を launch metadata に先に書き、index は同じ nonce を持つときだけ有効です。したがって index の削除に失敗しても古い receipt は通らず、新 launch まで別 ID、`clear`、再入力、`compact` で自動復旧しません。新 launch を記録した後に旧 callback が遅着しても current `launch_id` と一致せず、現在の receipt を上書きしません。SessionStart hook 自体は fail-open で CLI を止めませんが、`no_transcript`、`id_mismatch`、`write_failed` 等を launch metadata / stderr に残します。dashboard は約10秒の表示猶予後も current receipt が無ければ DECK に `? UNBOUND`、明示的に履歴保存なしなら `— NO HISTORY` を表示し、理由は History tab だけに出します。
 
 ### `resolve-agent-name.sh`
 
@@ -157,7 +167,7 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ## Codex との違い
 
-Codex CLI には Claude Code の `SessionStart` / `PreToolUse` / `PostToolUse` hook system がなく、`mark-agent-registered.sh` も走りません。`agent-start-codex` は bootstrap で identity 登録と tmux rename を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。一方、direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。これらは別 follow-up であり、mail service の `passthrough` 設定を省略できる根拠にはなりません。managed `~/.codex/AGENTS.md` は reservation の reserve / renew / release を指示します。mail watcher と ORRERY Mail registry は Claude / Codex 共通なので、通知と reservation conflict は相互に見えます。
+Codex CLI の公式 `SessionStart` hook は上記の履歴 receipt に使いますが、Claude Code の registration `PostToolUse` や reservation `PreToolUse` guard と同じものではなく、`mark-agent-registered.sh` も走りません。`agent-start-codex` は bootstrap で identity 登録、tmux rename、launch expectation を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。一方、direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。managed `~/.codex/AGENTS.md` は reservation の reserve / renew / release を指示します。mail watcher と ORRERY Mail registry は Claude / Codex 共通なので、通知と reservation conflict は相互に見えます。
 
 Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います。詳しくは [Codex App 統合](codex-app.md)を参照してください。
 

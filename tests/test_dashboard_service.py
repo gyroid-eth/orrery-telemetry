@@ -177,6 +177,7 @@ def _installer_upgrade_env(
     env = os.environ.copy()
     env.update({
         "HOME": str(home),
+        "CODEX_HOME": str(home / ".codex"),
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),
@@ -902,6 +903,7 @@ exit 0
     env = os.environ.copy()
     env.update({
         "HOME": str(home),
+        "CODEX_HOME": str(home / ".codex"),
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_HOME": str(install_dir),

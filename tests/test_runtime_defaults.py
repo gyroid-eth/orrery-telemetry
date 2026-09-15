@@ -193,6 +193,7 @@ def _expected_owned_dirs(install_dir: pathlib.Path) -> list[str]:
 def _clean_env(home: pathlib.Path) -> dict[str, str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
+    env["CODEX_HOME"] = str(home / ".codex")
     env.pop("AGENTSTACK_RUNTIME_DIR", None)
     env.pop("AGENTSTACK_MANAGED_AGENTS_FILE", None)
     env.pop("AGENTSTACK_MAIL_ENV", None)

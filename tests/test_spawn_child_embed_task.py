@@ -1,6 +1,7 @@
 """Regression coverage for pre-registered embedded task launches."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import stat
@@ -140,6 +141,18 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
     child_name = "EmbedCodex" if codex else "EmbedClaude"
+    if codex:
+        binding = handoff.with_name(handoff.name + ".binding.json")
+        binding.write_text(
+            json.dumps({
+                "agent_id": 73,
+                "agent_name": child_name,
+                "project_key": "/shared/project",
+                "program": "codex",
+            }),
+            encoding="utf-8",
+        )
+        binding.chmod(0o600)
 
     args = [
         "/bin/bash", str(SPAWN),

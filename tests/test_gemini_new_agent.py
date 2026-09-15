@@ -117,7 +117,7 @@ class _Launches:
             self.mcp_calls.append((method, dict(args)))
             if method == "register_agent":
                 self.registrations[args["name"]] = dict(args)
-        data = {"name": args["name"], "registration_token": "server-child-token"} \
+        data = {"id": 73, "name": args["name"], "registration_token": "server-child-token"} \
             if method == "register_agent" else {}
         return {"ok": True, "data": data}
 

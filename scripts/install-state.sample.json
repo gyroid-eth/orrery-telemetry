@@ -117,6 +117,7 @@
     "/home/alice/.agentstack/VERSION",
     "/home/alice/.agentstack/env.sh",
     "/home/alice/.agentstack/install-state.json",
+    "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/record-codex-session-index.py",
     "/home/alice/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh",
     "/home/alice/.agentstack/integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
     "/home/alice/.agentstack/runtime/settings-merge-result.json",

@@ -322,18 +322,18 @@ child_token_file_path() {
 # after both durable files have been atomically installed.
 adopt_child_token_file() {
     local agent_name="$1" project_key="$2" source_file="$3"
-    local consume_source="${4:-false}" token_file state_file
+    local consume_source="${4:-false}" binding_source="${5:-}" token_file state_file
     token_file="$(child_token_file_path "$agent_name")" || return 1
     state_file="$CHILD_STATE_DIR/$agent_name.json"
     python3 - "$agent_name" "$project_key" "$source_file" "$token_file" \
-        "$state_file" "$consume_source" <<'PY'
+        "$state_file" "$consume_source" "$binding_source" <<'PY'
 import json
 import os
 import pathlib
 import stat
 import sys
 
-agent_name, project_key, source, token_file, state_file, consume = sys.argv[1:7]
+agent_name, project_key, source, token_file, state_file, consume, binding_source = sys.argv[1:8]
 source_path = pathlib.Path(source)
 token_path = pathlib.Path(token_file)
 state_path = pathlib.Path(state_file)
@@ -365,12 +365,28 @@ with open(token_tmp, "x", encoding="utf-8") as f:
     f.flush()
     os.fsync(f.fileno())
 os.chmod(token_tmp, 0o600)
+state = {
+    "agent_name": agent_name,
+    "project_key": project_key,
+    "registration_token": registration_token,
+}
+binding_path = pathlib.Path(binding_source) if binding_source else None
+if binding_path is not None:
+    try:
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        binding = None
+    if (
+        isinstance(binding, dict)
+        and type(binding.get("agent_id")) is int
+        and binding["agent_id"] > 0
+        and binding.get("agent_name") == agent_name
+        and binding.get("project_key") == project_key
+        and binding.get("program") in {"codex", "codex-cli"}
+    ):
+        state.update(agent_id=binding["agent_id"], program=binding["program"])
 with open(state_tmp, "x", encoding="utf-8") as f:
-    json.dump({
-        "agent_name": agent_name,
-        "project_key": project_key,
-        "registration_token": registration_token,
-    }, f)
+    json.dump(state, f)
     f.flush()
     os.fsync(f.fileno())
 os.chmod(state_tmp, 0o600)
@@ -385,6 +401,14 @@ if consume == "true" and source_path != token_path:
         token_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
         raise
+    if binding_path is not None:
+        try:
+            binding_path.unlink(missing_ok=True)
+        except OSError:
+            # The non-secret sidecar has already been validated and copied
+            # into child state. Its cleanup must not destroy a successfully
+            # adopted owner token.
+            pass
 print(token_path)
 PY
 }
@@ -421,6 +445,21 @@ os.replace(tmp, token_path)
 os.chmod(token_path, 0o600)
 print(token_path)
 PY
+}
+
+# Start one launch expectation from a registration receipt. Output is
+# "<stable metadata path><TAB><fresh launch id>". This is a startup
+# precondition: if no new generation can be persisted, starting another CLI
+# under the same registered identity could leave the old receipt authoritative.
+prepare_codex_launch_binding() {
+    local registration_file="$1" launch_kind="${2:-startup}"
+    local helper="$HOOKS_DIR/prepare-codex-session-binding.py"
+    [[ -f "$helper" && -f "$registration_file" ]] || return 1
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" \
+        --runtime-dir "$RUNTIME_DIR" \
+        --registration-file "$registration_file" \
+        --launch-kind "$launch_kind" \
+        --history-mode enabled
 }
 
 # --- Child model catalog -------------------------------------------------
@@ -1444,6 +1483,7 @@ PY
 # response is supplied on stdin and the secret remains file-only.
 adopt_registered_token_response() {
     local agent_name="$1" project_key="$2" sent_token_file="$3"
+    local program="${4:-}"
     local token_file state_file
     token_file="$(child_token_file_path "$agent_name")" || return 1
     state_file="$CHILD_STATE_DIR/$agent_name.json"
@@ -1453,7 +1493,7 @@ import os
 import pathlib
 import sys
 
-agent_name, project_key, sent_file, token_file, state_file = sys.argv[1:6]
+agent_name, project_key, sent_file, token_file, state_file, program = sys.argv[1:7]
 response = json.load(sys.stdin)
 
 def candidate_tokens(obj):
@@ -1484,6 +1524,18 @@ if not token:
 if not token:
     raise ValueError("register_agent returned no usable registration token")
 
+agent_id = None
+for obj in objects:
+    if not isinstance(obj, dict):
+        continue
+    value = obj.get("id")
+    if type(value) is int and value > 0:
+        agent_id = value
+        break
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        agent_id = int(value)
+        break
+
 token_path = pathlib.Path(token_file)
 state_path = pathlib.Path(state_file)
 token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1497,12 +1549,15 @@ with open(token_tmp, "x", encoding="utf-8") as handle:
     handle.flush()
     os.fsync(handle.fileno())
 os.chmod(token_tmp, 0o600)
+state = {
+    "agent_name": agent_name,
+    "project_key": project_key,
+    "registration_token": token,
+}
+if program == "codex" and agent_id is not None:
+    state.update(agent_id=agent_id, program="codex")
 with open(state_tmp, "x", encoding="utf-8") as handle:
-    json.dump({
-        "agent_name": agent_name,
-        "project_key": project_key,
-        "registration_token": token,
-    }, handle)
+    json.dump(state, handle)
     handle.flush()
     os.fsync(handle.fileno())
 os.chmod(state_tmp, 0o600)
@@ -1512,7 +1567,7 @@ os.chmod(token_path, 0o600)
 os.chmod(state_path, 0o600)
 pathlib.Path(sent_file).unlink(missing_ok=True)
 print(token_path)
-' "$agent_name" "$project_key" "$sent_token_file" "$token_file" "$state_file"
+' "$agent_name" "$project_key" "$sent_token_file" "$token_file" "$state_file" "$program"
 }
 
 build_embedded_task_prompt() {
@@ -1636,7 +1691,7 @@ PY
         ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
         if ! CHILD_TOKEN_FILE="$(
             adopt_child_token_file "$CHILD_NAME" "$PROJECT_KEY" \
-                "$ONE_SHOT_TOKEN_FILE" true
+                "$ONE_SHOT_TOKEN_FILE" true "${ONE_SHOT_TOKEN_FILE}.binding.json"
         )"; then
             echo "Error: --child-token-file is unreadable, insecure, or empty: $ONE_SHOT_TOKEN_FILE" >&2
             exit 1
@@ -1693,7 +1748,24 @@ PY
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+        if ! CHILD_LAUNCH_INFO="$(
+            prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+        )"; then
+            echo "Error: could not create a fresh Codex history binding expectation" >&2
+            exit 1
+        fi
+        CHILD_LAUNCH_BINDING=""
+        CHILD_LAUNCH_ID=""
+        IFS=$'\t' read -r CHILD_LAUNCH_BINDING CHILD_LAUNCH_ID <<< "$CHILD_LAUNCH_INFO"
+        if [[ -z "$CHILD_LAUNCH_BINDING" || -z "$CHILD_LAUNCH_ID" ]]; then
+            echo "Error: Codex history binding expectation was incomplete" >&2
+            exit 1
+        fi
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
+        TMUX_ENV_ARGS+=(
+            -e "AGENTSTACK_CODEX_LAUNCH_BINDING=$CHILD_LAUNCH_BINDING"
+            -e "AGENTSTACK_CODEX_LAUNCH_ID=$CHILD_LAUNCH_ID"
+        )
         if [[ -n "$CHILD_CODEX_HOME" ]]; then
             echo "[spawn_child/pre-reg] Child CODEX_HOME with authenticated ORRERY Mail: $CHILD_CODEX_HOME" >&2
             TMUX_ENV_ARGS+=(
@@ -2300,7 +2372,7 @@ fi
 if ! CHILD_TOKEN_FILE="$(
     printf '%s' "$REGISTER_RESULT" |
         adopt_registered_token_response "$CHILD_NAME" "$PROJECT_KEY" \
-            "$DIRECT_ONE_SHOT_TOKEN_FILE"
+            "$DIRECT_ONE_SHOT_TOKEN_FILE" "$CHILD_PROGRAM"
 )"; then
     rm -f "$DIRECT_ONE_SHOT_TOKEN_FILE"
     echo "Error: failed to persist the registered child token" >&2
@@ -2509,8 +2581,25 @@ if [[ "$USE_CODEX" == true ]]; then
     CHILD_CODEX_BIN="$(resolve_codex_bin)"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+    if ! CHILD_LAUNCH_INFO="$(
+        prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+    )"; then
+        echo "Error: could not create a fresh Codex history binding expectation" >&2
+        exit 1
+    fi
+    CHILD_LAUNCH_BINDING=""
+    CHILD_LAUNCH_ID=""
+    IFS=$'\t' read -r CHILD_LAUNCH_BINDING CHILD_LAUNCH_ID <<< "$CHILD_LAUNCH_INFO"
+    if [[ -z "$CHILD_LAUNCH_BINDING" || -z "$CHILD_LAUNCH_ID" ]]; then
+        echo "Error: Codex history binding expectation was incomplete" >&2
+        exit 1
+    fi
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")")
+    TMUX_ENV_ARGS+=(
+        -e "AGENTSTACK_CODEX_LAUNCH_BINDING=$CHILD_LAUNCH_BINDING"
+        -e "AGENTSTACK_CODEX_LAUNCH_ID=$CHILD_LAUNCH_ID"
+    )
     if [[ -n "$CHILD_CODEX_HOME" ]]; then
         echo "[spawn_child] Child CODEX_HOME with authenticated ORRERY Mail: $CHILD_CODEX_HOME" >&2
         TMUX_ENV_ARGS+=(

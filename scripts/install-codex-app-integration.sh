@@ -198,6 +198,7 @@ PY
     "$INSTALL_DIR/bin/uninstall-codex-app-integration" \
     "$INSTALL_DIR/bin/doctor-codex-app-integration" \
     "$INSTALL_DIR/plugin/scripts/run-hook.sh" \
+    "$INSTALL_DIR/plugin/scripts/record-codex-session-index.py" \
     "$INSTALL_DIR/plugin/scripts/run-mcp.sh"
 }
 
@@ -278,6 +279,7 @@ build_marketplace() {
     --marketplace-name "$MARKETPLACE_NAME" >/dev/null
   chmod +x \
     "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/run-hook.sh" \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/record-codex-session-index.py" \
     "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/run-mcp.sh"
 }
 
