@@ -4,6 +4,8 @@ from __future__ import annotations
 import pathlib
 import subprocess
 
+from service_teardown import TEST_LABEL_PREFIX
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -130,6 +132,7 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
         "HOME": str(home),
         "CODEX_HOME": str(codex_home),
         "AGENTSTACK_HOME": str(tmp_path / "installed-agentstack"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_TEMPLATE_HOME": str(ROOT),
         "AGENTSTACK_PROJECT_KEY": "/fixture/canonical-project",
     }
