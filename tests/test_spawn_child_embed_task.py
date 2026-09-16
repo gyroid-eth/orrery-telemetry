@@ -244,6 +244,7 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
     assert "existing AgentStack session-binding plugin configuration is preserved" in injected
+    assert "If a required tool is unavailable, ask your parent agent for help (or the operator in standalone mode)." in injected
 
 
 def test_both_codex_launch_paths_append_the_profile_notice() -> None:

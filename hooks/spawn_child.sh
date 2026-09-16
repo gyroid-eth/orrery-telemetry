@@ -1704,7 +1704,7 @@ append_codex_mcp_profile_notice() {
     local prompt="$1"
     printf '%s' "$prompt"
     if [[ "$CODEX_MCP_PROFILE" == "orrery-only" ]]; then
-        printf '\n\nCapability notice: shell/files and authenticated ORRERY Mail remain available. Other inherited MCP servers and plugins are disabled. The existing AgentStack session-binding plugin configuration is preserved.'
+        printf '\n\nCapability notice: shell/files and authenticated ORRERY Mail remain available. Other inherited MCP servers and plugins are disabled. The existing AgentStack session-binding plugin configuration is preserved. If a required tool is unavailable, ask your parent agent for help (or the operator in standalone mode).'
     fi
 }
 
