@@ -17,6 +17,13 @@ from dashboard import server
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CODEX_APP_INSTALLER = ROOT / "scripts" / "install-codex-app-integration.sh"
+CODEX_MARKETPLACE_BUILDER = ROOT / "scripts" / "build-codex-app-marketplace.py"
+HAVE_CODEX_CLI = shutil.which("codex") is not None
+needs_codex_cli = pytest.mark.skipif(
+    not HAVE_CODEX_CLI,
+    reason="requires the Codex CLI to exercise the selected plugin cache",
+)
 AGENT = "BoundCodex"
 AGENT_ID = 73
 SESSION_ID = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
@@ -68,6 +75,77 @@ def _payload(transcript: Path, **overrides: object) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+def _old_cached_plugin(tmp_path: Path) -> dict[str, object]:
+    """Use the real CLI to select the pre-recorder form of the current plugin."""
+
+    home = tmp_path / "plugin-home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    shutil.copytree(ROOT / "integrations" / "codex_app", install_dir)
+    plugin = install_dir / "plugin"
+    runner = plugin / "scripts" / "run-hook.sh"
+    text = runner.read_text(encoding="utf-8")
+    start = text.index("# CLI history binding is deliberately separate")
+    end = text.index("printf '%s' \"$payload\" | exec", start)
+    runner.write_text(text[:start] + text[end:], encoding="utf-8")
+    (plugin / "scripts" / "record-codex-session-index.py").unlink()
+
+    marketplace = install_dir / "marketplace"
+    subprocess.run(
+        [
+            sys.executable,
+            str(CODEX_MARKETPLACE_BUILDER),
+            str(install_dir),
+            str(marketplace),
+            "--marketplace-name",
+            "agentstack-local",
+        ],
+        check=True,
+    )
+    environment = os.environ.copy()
+    environment.update({"HOME": str(home), "CODEX_HOME": str(codex_home)})
+    environment.pop("AGENTSTACK_CODEX_APP_INSTALL_DIR", None)
+    environment.pop("AGENTSTACK_CODEX_APP_RUNTIME_DIR", None)
+    subprocess.run(
+        ["codex", "plugin", "marketplace", "add", str(marketplace), "--json"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    installed = subprocess.run(
+        [
+            "codex",
+            "plugin",
+            "add",
+            "agentstack-codex-app@agentstack-local",
+            "--json",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    cached = Path(json.loads(installed.stdout)["installedPath"])
+    assert not (cached / "scripts" / "record-codex-session-index.py").exists()
+
+    # Reproduce the core install boundary: approved plugin/src are deployed,
+    # while the already-selected marketplace/cache remain on the old runner.
+    for name in ("plugin", "src"):
+        shutil.copytree(
+            ROOT / "integrations" / "codex_app" / name,
+            install_dir / name,
+            dirs_exist_ok=True,
+        )
+    return {
+        "home": home,
+        "environment": environment,
+        "install_dir": install_dir,
+        "cached": cached,
+    }
 
 
 @pytest.fixture()
@@ -462,6 +540,80 @@ def test_preregister_no_arg_spawn_reaches_recorder_and_reader(
         env=recorder_env,
         text=True,
         capture_output=True,
+        check=False,
+    )
+    assert recorded.returncode == 0, recorded.stderr
+    assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+
+
+@needs_codex_cli
+def test_refreshed_cli_cache_runner_reaches_recorder_and_reader(
+    binding_env, tmp_path: Path
+) -> None:
+    plugin_fixture = _old_cached_plugin(tmp_path)
+    cached = plugin_fixture["cached"]
+    assert isinstance(cached, Path)
+    environment = dict(plugin_fixture["environment"])
+    install_dir = plugin_fixture["install_dir"]
+    assert isinstance(install_dir, Path)
+    launch_path, launch_id = _prepare(binding_env)
+    hook_environment = dict(environment)
+    hook_environment.update(
+        {
+            "AGENTSTACK_CODEX_APP_INSTALL_DIR": str(install_dir),
+            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
+            "AGENTSTACK_CODEX_LAUNCH_ID": launch_id,
+            "AGENTSTACK_PYTHON": sys.executable,
+        }
+    )
+    payload = json.dumps(_payload(binding_env["transcript"]))
+    cached_runner = cached / "scripts" / "run-hook.sh"
+
+    before_refresh = subprocess.run(
+        [str(cached_runner)],
+        input=payload,
+        env=hook_environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert before_refresh.returncode == 0, before_refresh.stderr
+    assert not (binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json").exists()
+    assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == (
+        "unconfirmed"
+    )
+
+    refreshed = subprocess.run(
+        [
+            str(CODEX_APP_INSTALLER),
+            "--refresh-plugin-only",
+            "--install-dir",
+            str(install_dir),
+            "--marketplace-name",
+            "agentstack-local",
+            "--python-bin",
+            sys.executable,
+            "--codex-bin",
+            shutil.which("codex") or "codex",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert "Plugin refresh complete" in refreshed.stdout
+    assert (cached / "scripts" / "record-codex-session-index.py").is_file()
+    assert cached_runner.read_bytes() == (
+        ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-hook.sh"
+    ).read_bytes()
+
+    recorded = subprocess.run(
+        [str(cached_runner)],
+        input=payload,
+        env=hook_environment,
+        capture_output=True,
+        text=True,
         check=False,
     )
     assert recorded.returncode == 0, recorded.stderr

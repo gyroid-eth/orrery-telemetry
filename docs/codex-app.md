@@ -100,12 +100,28 @@ launchd の可否はログイン情報から推測せず、`gui/$UID` への boo
 | `--runtime-dir PATH` | private socket、binding、snapshot、delivery DB、log の配置先 |
 | `--no-service` | launchd と supervised background のどちらも起動しない。macOS 以外では必須 |
 | `--no-plugin` | marketplace は構築するが Codex plugin を登録しない |
+| `--refresh-plugin-only` | 配置済み payload から、既存の有効な Codex plugin だけを再導入。Bridge state は変更しない |
 | `--wake-limit COUNT` | root task ごとの cold wake 上限回数 / 時 |
 | `--stale-after SECONDS` | waiting runtime を dormant にする閾値。300〜604800秒 |
 | `--retry-max-attempts N` | ORRERY Mail 登録 retry の最大 call 数 |
 | `--retry-max-age SECONDS` | 登録 retry を保持する最長時間 |
 | `--retry-max-backoff SECONDS` | 登録 retry の backoff 上限 |
 | `--skip-git-check` | review 済み non-git workspace でだけ trust check を明示解除 |
+
+### core 更新後の既存 plugin refresh
+
+core `install.sh` は child MCP proxy と plugin source を配置しますが、optional plugin の marketplace snapshot と Codex cache は更新しません。既に `agentstack-codex-app@agentstack-local` を導入・有効化している環境では、core payload の配置後に、plugin registry を持つ**親 / 共有 CODEX_HOME**を明示して refresh します。
+
+```bash
+CODEX_HOME="$HOME/.codex" \
+./scripts/install-codex-app-integration.sh \
+  --refresh-plugin-only \
+  --install-dir "$HOME/.agentstack/integrations/codex_app"
+```
+
+先に read-only の確認だけを行う場合は `--dry-run` を加えます。refresh は exact plugin が installed + enabled で、既存 local marketplace root が一致するときだけ、配置済み integration から snapshot を再構築して正規の `codex plugin add` を実行します。未導入または disabled なら理由付きで skip し、plugin を自動導入・有効化しません。別 marketplace、registry 読取失敗、または CLI が選んだ cache payload の hooks / runner / recorder 不一致はエラーです。
+
+この経路は env、plist、service、install-state を再構成しません。**full installer の `--no-service` は純粋な plugin refresh の代用ではありません。** refresh 後は新しい Codex process / thread で SessionStart の ID 対応を確認してください。既に起動中の子で SessionStart が再発火することは保証しません。
 
 `--no-service` の install を前面で動かす場合は、生成された runner を実行します。
 

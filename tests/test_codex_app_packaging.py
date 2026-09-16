@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install-codex-app-integration.sh"
 EXPORTER = ROOT / "scripts" / "export-component.sh"
+MARKETPLACE_BUILDER = ROOT / "scripts" / "build-codex-app-marketplace.py"
+PLUGIN_ID = "agentstack-codex-app@agentstack-local"
 PROXY_TOOLS = (
     "bootstrap",
     "fetch_inbox",
@@ -126,6 +128,98 @@ def _plugin_list(home: Path) -> dict:
     return json.loads(result.stdout)
 
 
+def _without_cli_recorder(plugin_root: Path) -> None:
+    """Turn the current fixture into the pre-recorder bundle without changing metadata."""
+
+    runner = plugin_root / "scripts" / "run-hook.sh"
+    text = runner.read_text(encoding="utf-8")
+    start = text.index("# CLI history binding is deliberately separate")
+    end = text.index("printf '%s' \"$payload\" | exec", start)
+    runner.write_text(text[:start] + text[end:], encoding="utf-8")
+    (plugin_root / "scripts" / "record-codex-session-index.py").unlink()
+
+
+def _seed_old_local_plugin(home: Path, install_dir: Path) -> Path:
+    """Install a same-version bundle whose hook runner predates the recorder."""
+
+    shutil.copytree(ROOT / "integrations" / "codex_app", install_dir)
+    _without_cli_recorder(install_dir / "plugin")
+    marketplace = install_dir / "marketplace"
+    subprocess.run(
+        [
+            sys.executable,
+            str(MARKETPLACE_BUILDER),
+            str(install_dir),
+            str(marketplace),
+            "--marketplace-name",
+            "agentstack-local",
+        ],
+        check=True,
+    )
+    environment = _environment(home)
+    subprocess.run(
+        ["codex", "plugin", "marketplace", "add", str(marketplace), "--json"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    installed = subprocess.run(
+        ["codex", "plugin", "add", PLUGIN_ID, "--json"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(json.loads(installed.stdout)["installedPath"])
+
+
+def _deploy_current_plugin_payload(install_dir: Path) -> None:
+    for name in ("plugin", "src"):
+        shutil.copytree(
+            ROOT / "integrations" / "codex_app" / name,
+            install_dir / name,
+            dirs_exist_ok=True,
+        )
+
+
+def _refresh_args(home: Path, install_dir: Path, codex_binary: str) -> list[str]:
+    return [
+        str(INSTALLER),
+        "--refresh-plugin-only",
+        "--install-dir",
+        str(install_dir),
+        "--marketplace-name",
+        "agentstack-local",
+        "--python-bin",
+        sys.executable,
+        "--codex-bin",
+        codex_binary,
+    ]
+
+
+def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
+    command = tmp_path / "fake-bin" / "codex"
+    command.parent.mkdir(parents=True)
+    command.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys\n"
+        "log = pathlib.Path(os.environ['AGENTSTACK_TEST_CODEX_LOG'])\n"
+        "with log.open('a', encoding='utf-8') as handle:\n"
+        "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "if sys.argv[1:] == ['plugin', 'list', '--json']:\n"
+        "    print(os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
+        "    raise SystemExit(0)\n"
+        "if sys.argv[1:] == ['plugin', 'add', 'agentstack-codex-app@agentstack-local', '--json']:\n"
+        "    print(os.environ['AGENTSTACK_TEST_PLUGIN_ADD'])\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    command.chmod(0o755)
+    return command, tmp_path / "codex.log"
+
+
 def _read_generated_env(path: Path) -> dict[str, str]:
     values = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -153,6 +247,258 @@ def test_installer_dry_run_does_not_write_clean_home(tmp_path):
     assert "Dry-run complete: no files were written." in result.stdout
     assert not install_dir.exists()
     assert _plugin_list(home)["installed"] == []
+
+
+@needs_codex_cli
+def test_refresh_plugin_only_replaces_same_version_cache_without_bridge_side_effects(
+    tmp_path: Path,
+) -> None:
+    home = _prepare_home(tmp_path)
+    environment = _environment(home)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    cached = _seed_old_local_plugin(home, install_dir)
+    marketplace_plugin = install_dir / "marketplace" / "plugins" / "agentstack-codex-app"
+    current_plugin = ROOT / "integrations" / "codex_app" / "plugin"
+
+    old_manifest = json.loads(
+        (cached / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    current_manifest = json.loads(
+        (current_plugin / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert old_manifest["version"] == current_manifest["version"] == "0.1.0"
+    assert (cached / "hooks" / "hooks.json").read_bytes() == (
+        current_plugin / "hooks" / "hooks.json"
+    ).read_bytes()
+    assert (cached / "scripts" / "run-hook.sh").read_bytes() != (
+        current_plugin / "scripts" / "run-hook.sh"
+    ).read_bytes()
+    assert not (cached / "scripts" / "record-codex-session-index.py").exists()
+
+    sentinels = {
+        install_dir / "env.sh": b"sentinel env\n",
+        install_dir / "install-state.json": b"sentinel manifest\n",
+        install_dir / "launchd" / "sentinel.plist": b"sentinel plist\n",
+    }
+    for path, value in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value)
+    _deploy_current_plugin_payload(install_dir)
+    assert (install_dir / "plugin" / "scripts" / "run-hook.sh").read_bytes() == (
+        current_plugin / "scripts" / "run-hook.sh"
+    ).read_bytes()
+    assert (marketplace_plugin / "scripts" / "run-hook.sh").read_bytes() != (
+        current_plugin / "scripts" / "run-hook.sh"
+    ).read_bytes()
+
+    config = home / ".codex" / "config.toml"
+    before_dry_run = {
+        "config": config.read_bytes(),
+        "marketplace": (marketplace_plugin / "scripts" / "run-hook.sh").read_bytes(),
+        "cache": (cached / "scripts" / "run-hook.sh").read_bytes(),
+        **{str(path): path.read_bytes() for path in sentinels},
+    }
+    dry_run = subprocess.run(
+        [*_refresh_args(home, install_dir, shutil.which("codex") or "codex"), "--dry-run"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert dry_run.returncode == 0, dry_run.stderr
+    assert "plugin snapshot, config, cache, and Bridge state were not changed" in dry_run.stdout
+    assert config.read_bytes() == before_dry_run["config"]
+    assert (marketplace_plugin / "scripts" / "run-hook.sh").read_bytes() == before_dry_run[
+        "marketplace"
+    ]
+    assert (cached / "scripts" / "run-hook.sh").read_bytes() == before_dry_run["cache"]
+    for path in sentinels:
+        assert path.read_bytes() == before_dry_run[str(path)]
+
+    refreshed = subprocess.run(
+        _refresh_args(home, install_dir, shutil.which("codex") or "codex"),
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert f"Plugin refresh complete: {PLUGIN_ID} -> {cached}" in refreshed.stdout
+    assert "Start a new Codex process/thread" in refreshed.stdout
+    assert (cached / "scripts" / "run-hook.sh").read_bytes() == (
+        current_plugin / "scripts" / "run-hook.sh"
+    ).read_bytes()
+    cached_recorder = cached / "scripts" / "record-codex-session-index.py"
+    assert cached_recorder.read_bytes() == (
+        current_plugin / "scripts" / "record-codex-session-index.py"
+    ).read_bytes()
+    assert cached_recorder.stat().st_mode & 0o111
+    for path, value in sentinels.items():
+        assert path.read_bytes() == value
+
+
+@pytest.mark.parametrize(
+    ("installed", "enabled", "reason"),
+    [(False, False, "not installed"), (True, False, "disabled")],
+)
+def test_refresh_plugin_only_skips_absent_or_disabled_without_writes(
+    tmp_path: Path, installed: bool, enabled: bool, reason: str
+) -> None:
+    home = _prepare_home(tmp_path)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    install_dir.mkdir(parents=True)
+    sentinel = install_dir / "install-state.json"
+    sentinel.write_text("unchanged\n", encoding="utf-8")
+    codex_binary, codex_log = _fake_codex(tmp_path)
+    registry = {"installed": []}
+    if installed:
+        registry["installed"].append(
+            {
+                "pluginId": PLUGIN_ID,
+                "installed": True,
+                "enabled": enabled,
+            }
+        )
+    environment = _environment(home)
+    environment.update(
+        {
+            "AGENTSTACK_TEST_CODEX_LOG": str(codex_log),
+            "AGENTSTACK_TEST_PLUGIN_LIST": json.dumps(registry),
+            "AGENTSTACK_TEST_PLUGIN_ADD": "{}",
+        }
+    )
+
+    result = subprocess.run(
+        _refresh_args(home, install_dir, str(codex_binary)),
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"Plugin refresh skipped: {PLUGIN_ID} is {reason}." in result.stdout
+    assert sentinel.read_text(encoding="utf-8") == "unchanged\n"
+    assert codex_log.read_text(encoding="utf-8").splitlines() == ["plugin list --json"]
+    assert not (install_dir / "marketplace").exists()
+
+
+def test_refresh_plugin_only_rejects_a_different_local_marketplace_root(
+    tmp_path: Path,
+) -> None:
+    home = _prepare_home(tmp_path)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    expected_root = install_dir / "marketplace"
+    wrong_root = tmp_path / "other-marketplace"
+    expected_root.mkdir(parents=True)
+    wrong_root.mkdir()
+    codex_binary, codex_log = _fake_codex(tmp_path)
+    registry = {
+        "installed": [
+            {
+                "pluginId": PLUGIN_ID,
+                "installed": True,
+                "enabled": True,
+                "marketplaceSource": {"sourceType": "local", "source": str(wrong_root)},
+                "source": {
+                    "source": "local",
+                    "path": str(wrong_root / "plugins" / "agentstack-codex-app"),
+                },
+            }
+        ]
+    }
+    environment = _environment(home)
+    environment.update(
+        {
+            "AGENTSTACK_TEST_CODEX_LOG": str(codex_log),
+            "AGENTSTACK_TEST_PLUGIN_LIST": json.dumps(registry),
+            "AGENTSTACK_TEST_PLUGIN_ADD": "{}",
+        }
+    )
+
+    result = subprocess.run(
+        _refresh_args(home, install_dir, str(codex_binary)),
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "configured marketplace root" in result.stderr
+    assert codex_log.read_text(encoding="utf-8").splitlines() == ["plugin list --json"]
+
+
+def test_refresh_plugin_only_rejects_a_cache_payload_mismatch(tmp_path: Path) -> None:
+    home = _prepare_home(tmp_path)
+    install_dir = home / ".agentstack" / "integrations" / "codex_app"
+    shutil.copytree(ROOT / "integrations" / "codex_app", install_dir)
+    marketplace_root = install_dir / "marketplace"
+    subprocess.run(
+        [
+            sys.executable,
+            str(MARKETPLACE_BUILDER),
+            str(install_dir),
+            str(marketplace_root),
+            "--marketplace-name",
+            "agentstack-local",
+        ],
+        check=True,
+    )
+    marketplace_plugin = marketplace_root / "plugins" / "agentstack-codex-app"
+    cached = tmp_path / "stale-cache"
+    shutil.copytree(marketplace_plugin, cached)
+    stale_runner = cached / "scripts" / "run-hook.sh"
+    stale_runner.write_text("#!/bin/sh\n# stale fixture\n", encoding="utf-8")
+    stale_runner.chmod(0o755)
+    version = json.loads(
+        (marketplace_plugin / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )["version"]
+    codex_binary, codex_log = _fake_codex(tmp_path)
+    registry = {
+        "installed": [
+            {
+                "pluginId": PLUGIN_ID,
+                "installed": True,
+                "enabled": True,
+                "marketplaceSource": {
+                    "sourceType": "local",
+                    "source": str(marketplace_root),
+                },
+                "source": {"source": "local", "path": str(marketplace_plugin)},
+            }
+        ]
+    }
+    add_result = {
+        "pluginId": PLUGIN_ID,
+        "name": "agentstack-codex-app",
+        "marketplaceName": "agentstack-local",
+        "version": version,
+        "installedPath": str(cached),
+    }
+    environment = _environment(home)
+    environment.update(
+        {
+            "AGENTSTACK_TEST_CODEX_LOG": str(codex_log),
+            "AGENTSTACK_TEST_PLUGIN_LIST": json.dumps(registry),
+            "AGENTSTACK_TEST_PLUGIN_ADD": json.dumps(add_result),
+        }
+    )
+
+    result = subprocess.run(
+        _refresh_args(home, install_dir, str(codex_binary)),
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "selected scripts/run-hook.sh does not match" in result.stderr
+    assert codex_log.read_text(encoding="utf-8").splitlines() == [
+        "plugin list --json",
+        f"plugin add {PLUGIN_ID} --json",
+    ]
 
 
 def test_installer_skip_git_check_is_explicit_and_persisted(tmp_path):

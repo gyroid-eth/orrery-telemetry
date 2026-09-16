@@ -7,6 +7,7 @@ SOURCE_DIR="$REPO_ROOT/integrations/codex_app"
 DRY_RUN=false
 NO_SERVICE=false
 NO_PLUGIN=false
+REFRESH_PLUGIN_ONLY=false
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$HOME/.agentstack/integrations/codex_app}"
 RUNTIME_DIR="${AGENTSTACK_CODEX_APP_RUNTIME_DIR:-$HOME/.agentstack/runtime/codex-app}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
@@ -38,6 +39,7 @@ Options:
   --dry-run                 Validate and print actions without writing
   --no-service              Render but do not start launchd or background service
   --no-plugin               Build but do not register/install the Codex plugin
+  --refresh-plugin-only     Refresh an existing enabled plugin without changing Bridge state
   --install-dir PATH        Default: ~/.agentstack/integrations/codex_app
   --runtime-dir PATH        Default: ~/.agentstack/runtime/codex-app
   --project-key PATH        Required absolute project key
@@ -64,6 +66,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --no-service) NO_SERVICE=true; shift ;;
     --no-plugin) NO_PLUGIN=true; shift ;;
+    --refresh-plugin-only) REFRESH_PLUGIN_ONLY=true; shift ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
     --project-key) PROJECT_KEY="$2"; shift 2 ;;
@@ -283,6 +286,220 @@ build_marketplace() {
     "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/run-mcp.sh"
 }
 
+inspect_refresh_registry() {
+  local plugin_id="agentstack-codex-app@$MARKETPLACE_NAME"
+  local registry_json registry_state
+  if ! registry_json="$("$CODEX_BIN" plugin list --json)"; then
+    die "could not read the Codex plugin registry"
+  fi
+  if ! registry_state="$(AGENTSTACK_REFRESH_REGISTRY_JSON="$registry_json" \
+    "$PYTHON_BIN" - "$plugin_id" "$MARKETPLACE_ROOT" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"plugin refresh registry check failed: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+plugin_id, expected_root_value = sys.argv[1:]
+try:
+    payload = json.loads(os.environ["AGENTSTACK_REFRESH_REGISTRY_JSON"])
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    fail(f"invalid `codex plugin list --json` output: {exc}")
+installed = payload.get("installed")
+if not isinstance(installed, list):
+    fail("registry output has no installed list")
+matches = [item for item in installed if isinstance(item, dict) and item.get("pluginId") == plugin_id]
+if len(matches) > 1:
+    fail(f"registry contains duplicate entries for {plugin_id}")
+if not matches or matches[0].get("installed") is not True:
+    print("skip\tnot installed")
+    raise SystemExit(0)
+item = matches[0]
+if item.get("enabled") is not True:
+    print("skip\tdisabled")
+    raise SystemExit(0)
+
+marketplace = item.get("marketplaceSource")
+if not isinstance(marketplace, dict) or marketplace.get("sourceType") != "local":
+    fail(f"{plugin_id} is not installed from a local marketplace")
+source = marketplace.get("source")
+if not isinstance(source, str) or not source:
+    fail(f"{plugin_id} has no local marketplace root")
+try:
+    expected_root = pathlib.Path(expected_root_value).expanduser().resolve(strict=True)
+    actual_root = pathlib.Path(source).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve the configured marketplace root: {exc}")
+if actual_root != expected_root:
+    fail(f"configured marketplace root is {actual_root}, expected {expected_root}")
+
+plugin_source = item.get("source")
+expected_source = (expected_root / "plugins" / "agentstack-codex-app").resolve(strict=True)
+if not isinstance(plugin_source, dict) or plugin_source.get("source") != "local":
+    fail(f"{plugin_id} does not have a local plugin source")
+source_path = plugin_source.get("path")
+if not isinstance(source_path, str) or not source_path:
+    fail(f"{plugin_id} has no plugin source path")
+try:
+    actual_source = pathlib.Path(source_path).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve the configured plugin source: {exc}")
+if actual_source != expected_source:
+    fail(f"configured plugin source is {actual_source}, expected {expected_source}")
+print(f"ready\t{expected_root}")
+PY
+  )"; then
+    die "Codex plugin registry does not match the requested refresh target"
+  fi
+  printf '%s\n' "$registry_state"
+}
+
+validate_refresh_payload() {
+  [[ "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute path"
+  [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
+  [[ -x "$PYTHON_BIN" ]] || die "python executable is not runnable: $PYTHON_BIN"
+  [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
+  [[ -f "$SCRIPT_DIR/build-codex-app-marketplace.py" ]] \
+    || die "missing marketplace builder"
+  [[ -d "$INSTALL_DIR/src/agentstack_codex_app" ]] \
+    || die "installed integration source is missing: $INSTALL_DIR/src"
+  [[ -f "$INSTALL_DIR/plugin/.codex-plugin/plugin.json" ]] \
+    || die "installed plugin manifest is missing"
+  [[ -f "$INSTALL_DIR/plugin/hooks/hooks.json" ]] \
+    || die "installed plugin hooks are missing"
+  [[ -x "$INSTALL_DIR/plugin/scripts/run-hook.sh" ]] \
+    || die "installed plugin runner is missing or not executable"
+  [[ -x "$INSTALL_DIR/plugin/scripts/record-codex-session-index.py" ]] \
+    || die "installed Codex session recorder is missing or not executable"
+}
+
+verify_refreshed_plugin() {
+  local install_json="$1"
+  local plugin_id="agentstack-codex-app@$MARKETPLACE_NAME"
+  AGENTSTACK_REFRESH_INSTALL_JSON="$install_json" "$PYTHON_BIN" - \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app" \
+    "$plugin_id" "$MARKETPLACE_NAME" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"plugin refresh verification failed: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+expected_value, plugin_id, marketplace_name = sys.argv[1:]
+try:
+    result = json.loads(os.environ["AGENTSTACK_REFRESH_INSTALL_JSON"])
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    fail(f"invalid `codex plugin add --json` output: {exc}")
+if not isinstance(result, dict):
+    fail("install result is not an object")
+if result.get("pluginId") != plugin_id:
+    fail(f"CLI selected plugin {result.get('pluginId')!r}, expected {plugin_id!r}")
+if result.get("name") != "agentstack-codex-app":
+    fail("CLI selected a different plugin name")
+if result.get("marketplaceName") != marketplace_name:
+    fail("CLI selected a different marketplace")
+installed_value = result.get("installedPath")
+if not isinstance(installed_value, str) or not installed_value:
+    fail("CLI did not report installedPath")
+try:
+    expected = pathlib.Path(expected_value).resolve(strict=True)
+    installed = pathlib.Path(installed_value).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve selected payload: {exc}")
+if not installed.is_dir():
+    fail(f"selected payload is not a directory: {installed}")
+
+def object_at(root: pathlib.Path, relative: str) -> dict:
+    try:
+        value = json.loads((root / relative).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        fail(f"invalid {relative} under {root}: {exc}")
+    if not isinstance(value, dict):
+        fail(f"{relative} under {root} is not an object")
+    return value
+
+
+expected_manifest = object_at(expected, ".codex-plugin/plugin.json")
+installed_manifest = object_at(installed, ".codex-plugin/plugin.json")
+for key in ("name", "version"):
+    if installed_manifest.get(key) != expected_manifest.get(key):
+        fail(f"selected manifest {key} does not match the rebuilt marketplace")
+if result.get("version") != expected_manifest.get("version"):
+    fail("CLI selected version does not match the rebuilt marketplace")
+
+for relative in (
+    "hooks/hooks.json",
+    "scripts/run-hook.sh",
+    "scripts/record-codex-session-index.py",
+):
+    expected_file = expected / relative
+    installed_file = installed / relative
+    try:
+        if expected_file.read_bytes() != installed_file.read_bytes():
+            fail(f"selected {relative} does not match the rebuilt marketplace")
+    except OSError as exc:
+        fail(f"could not read selected {relative}: {exc}")
+
+for relative in ("scripts/run-hook.sh", "scripts/record-codex-session-index.py"):
+    selected_file = installed / relative
+    try:
+        mode = selected_file.stat().st_mode
+    except OSError as exc:
+        fail(f"could not stat selected {relative}: {exc}")
+    if not stat.S_ISREG(mode) or not mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        fail(f"selected {relative} is not an executable regular file")
+print(installed)
+PY
+}
+
+refresh_plugin_only() {
+  local registry_state state reason install_json selected_path
+  [[ "$NO_PLUGIN" != true ]] || die "--refresh-plugin-only cannot be combined with --no-plugin"
+  [[ "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute path"
+  [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
+  [[ -x "$PYTHON_BIN" ]] || die "python executable is not runnable: $PYTHON_BIN"
+  [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
+
+  registry_state="$(inspect_refresh_registry)"
+  state="${registry_state%%$'\t'*}"
+  reason="${registry_state#*$'\t'}"
+  if [[ "$state" == "skip" ]]; then
+    say "Plugin refresh skipped: agentstack-codex-app@$MARKETPLACE_NAME is $reason."
+    return 0
+  fi
+  [[ "$state" == "ready" ]] || die "unexpected plugin registry state"
+  validate_refresh_payload
+
+  plan "rebuild installed marketplace $MARKETPLACE_ROOT"
+  plan "refresh agentstack-codex-app@$MARKETPLACE_NAME through Codex CLI"
+  if [[ "$DRY_RUN" == true ]]; then
+    say "Dry-run complete: plugin snapshot, config, cache, and Bridge state were not changed."
+    return 0
+  fi
+
+  build_marketplace
+  if ! install_json="$("$CODEX_BIN" plugin add \
+    "agentstack-codex-app@$MARKETPLACE_NAME" --json)"; then
+    die "Codex CLI could not refresh agentstack-codex-app@$MARKETPLACE_NAME"
+  fi
+  if ! selected_path="$(verify_refreshed_plugin "$install_json")"; then
+    die "Codex CLI selected a payload that failed refresh verification"
+  fi
+  say "Plugin refresh complete: agentstack-codex-app@$MARKETPLACE_NAME -> $selected_path"
+  say "Start a new Codex process/thread to verify the refreshed lifecycle hook."
+}
+
 render_plist() {
   plan "render launchd plist $PLIST_INSTALLED"
   [[ "$DRY_RUN" == true ]] && return
@@ -456,6 +673,10 @@ PY
 }
 
 main() {
+  if [[ "$REFRESH_PLUGIN_ONLY" == true ]]; then
+    refresh_plugin_only
+    return
+  fi
   say "AgentStack Codex App integration installer"
   say "install dir: $INSTALL_DIR"
   say "runtime dir: $RUNTIME_DIR"

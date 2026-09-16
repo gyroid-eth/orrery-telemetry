@@ -95,12 +95,28 @@ Primary options:
 | `--runtime-dir PATH` | Location for the private socket, bindings, snapshot, delivery database, and logs |
 | `--no-service` | Start neither launchd nor supervised background. Required outside macOS |
 | `--no-plugin` | Build the marketplace without registering the Codex plugin |
+| `--refresh-plugin-only` | Reinstall only an existing enabled Codex plugin from the deployed payload, without changing Bridge state |
 | `--wake-limit COUNT` | Cold-wake limit per root task per hour |
 | `--stale-after SECONDS` | Threshold for changing a waiting runtime to dormant, from 300 to 604800 seconds |
 | `--retry-max-attempts N` | Maximum number of ORRERY Mail registration retry calls |
 | `--retry-max-age SECONDS` | Maximum time registration retries are retained |
 | `--retry-max-backoff SECONDS` | Upper bound for registration retry backoff |
 | `--skip-git-check` | Explicitly disable the trust check only for a reviewed non-Git workspace |
+
+### Refreshing an existing plugin after a core update
+
+Core `install.sh` deploys the child MCP proxy and plugin source, but does not update the optional plugin's marketplace snapshot or Codex cache. When `agentstack-codex-app@agentstack-local` is already installed and enabled, refresh it after deploying the core payload. Explicitly target the **parent/shared CODEX_HOME** that owns the plugin registry.
+
+```bash
+CODEX_HOME="$HOME/.codex" \
+./scripts/install-codex-app-integration.sh \
+  --refresh-plugin-only \
+  --install-dir "$HOME/.agentstack/integrations/codex_app"
+```
+
+Add `--dry-run` to perform only the read-only preflight. Refresh rebuilds the snapshot from the deployed integration and runs the official `codex plugin add` path only when the exact plugin is installed and enabled and its existing local marketplace root matches. An absent or disabled plugin is skipped with a reason; it is never installed or enabled implicitly. A different marketplace, an unreadable registry, or a mismatch in the hooks, runner, or recorder selected in the CLI cache is an error.
+
+This path does not reconfigure env, plist, service, or install-state. **A full installer run with `--no-service` is not a substitute for a pure plugin refresh.** After refresh, verify the SessionStart ID mapping in a new Codex process/thread. It does not promise to refire SessionStart in an already-running child.
 
 To run a `--no-service` installation in the foreground, execute the generated runner.
 

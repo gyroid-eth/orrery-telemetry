@@ -112,6 +112,25 @@ scripts/install-codex-app-integration.sh \
   --agent-mail-url http://127.0.0.1:18765/api/
 ```
 
+Core installation updates the deployed child-proxy/plugin source, but it does
+not opt users into the optional plugin or refresh Codex's existing local cache.
+After a core payload update, refresh an already-installed and enabled plugin
+against the parent/shared Codex home with:
+
+```sh
+CODEX_HOME="$HOME/.codex" \
+scripts/install-codex-app-integration.sh \
+  --refresh-plugin-only \
+  --install-dir "$HOME/.agentstack/integrations/codex_app"
+```
+
+The refresh path rebuilds only the existing marketplace snapshot, uses the
+official `codex plugin add` operation, and verifies the hooks, runner, and
+session recorder in the CLI-selected cache. It skips absent or disabled
+plugins and does not rewrite Bridge env, plist, service, or install-state. A
+full `--no-service` install is not a plugin-only refresh. Start a new Codex
+process/thread for acceptance after refreshing.
+
 After an approved install, diagnose it with:
 
 ```sh
