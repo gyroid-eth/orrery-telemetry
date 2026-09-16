@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+
 from dashboard import server
 
 
@@ -364,6 +367,7 @@ def _fake_codex_launch_env(
             "AGENTSTACK_RUNTIME_DIR": str(runtime),
             "AGENTSTACK_HOOKS_DIR": str(layout["hooks"]),
             "AGENTSTACK_HOME": str(layout["root"]),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
             "AGENTSTACK_REGISTER_LIB": str(fake_register),
             "AGENTSTACK_ENV_FILE": "",
             "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
