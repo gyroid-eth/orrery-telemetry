@@ -78,6 +78,12 @@ default_tools_approval_mode = "approve"
 
 The overlay currently applies only to macOS/Linux `spawn_child.sh`. WSL2 uses that path, but the community-lane native-Windows launcher does not apply it.
 
+### Minimizing MCP for a Codex child
+
+Explicitly use `/delegate "<task>" --codex --codex-mcp orrery-only` to make the child-owned `config.toml` keep only authenticated ORRERY Mail and the AgentStack plugin needed for session binding. Other inherited MCP servers and plugins are set to `enabled = false`. Shell and file operations remain available, but plugin-provided skills and app tools are disabled too, so do not use this profile when the task depends on them.
+
+The default is `inherit`, preserving the user's MCP/plugin configuration exactly as before. This avoids silently removing capabilities from existing child workflows. In one maintainer macOS measurement, the unused but eagerly started `chrome-devtools`, `node_repl`, and Rhino processes accounted for about 208 MB RSS per child. RSS double-counts shared pages and varies by environment, so this is a profile-selection estimate, not a guarantee of physical memory reclaimed.
+
 ## Choosing between them
 
 There are cases where a built-in subagent is correct: a short search where only the answer matters, or a read-only investigation that should not consume the parent's context. These are jobs that end after one call and that nobody needs to refer to later.

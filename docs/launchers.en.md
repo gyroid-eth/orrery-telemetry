@@ -172,11 +172,13 @@ ORRERY Telemetry delegation must be entered with the leading slash as `/delegate
 | Item | Details |
 | --- | --- |
 | Trigger | A request to delegate to a child, launch a subagent, or perform parallel work |
-| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--worktree] [--worktree-base <rev>]` |
+| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>]` |
 | Required prerequisites | The parent's ORRERY Mail identity and canonical project key. Editing tasks require a resource declaration and reservation |
 | Optional prerequisites | `--worktree` requires a Git repository; dashboard annotation requires the dashboard service |
 
 The parent agent does not finish when it hands off the task. It remains responsible for deciding scope and risk, making reservations, monitoring, and verifying the artifact. Use `--codex` for a Codex child, `--model` for an allowed model, and `--dir` to choose the child's working directory.
+
+Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 
 The model generation names in `spawn_child.sh`'s model catalog are canonical. For Claude, an omitted model or `opus` means `claude-opus-5`, and `sonnet` means `claude-sonnet-5`; for Codex, an omitted model or `sol` means `gpt-5.6-sol`. `terra` / `luna` are aliases for the corresponding `gpt-5.6-*` models. Full IDs for older generations remain valid for compatibility, but the warm pool is claimed only for an exact match with the current 200K Opus / Sonnet entries in the catalog.
 

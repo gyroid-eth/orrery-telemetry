@@ -78,6 +78,12 @@ default_tools_approval_mode = "approve"
 
 この overlay は現在 macOS/Linux の `spawn_child.sh` にだけ適用されます。Windows では WSL2 経由なら同じ経路を使いますが、community lane の native Windows launcher は対象外です。
 
+### Codex child の MCP を最小化する
+
+`/delegate "<task>" --codex --codex-mcp orrery-only` を明示すると、child 専用 `config.toml` は認証済み ORRERY Mail と session-binding に必要な AgentStack plugin だけを残し、それ以外の継承 MCP server と plugin を `enabled = false` にします。shell と file 操作は残りますが、plugin が提供する skill / app tool も無効になるため、それらを使う task には指定しません。
+
+既定は `inherit` で、従来どおり利用者の MCP/plugin 設定を継承します。これは既存 child の能力を黙って削らないためです。maintainer の macOS 実測では、未使用でも起動していた `chrome-devtools`、`node_repl`、Rhino の RSS が合計約 208 MB/child でした。RSS は共有 page を重複計上し、環境ごとに異なるため、これは物理解放量の保証ではなく profile 選択の目安です。
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。

@@ -174,11 +174,13 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 | 項目 | 内容 |
 | --- | --- |
 | トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
-| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--worktree] [--worktree-base <rev>]` |
+| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>]` |
 | 必須前提 | 親の ORRERY Mail identity と正本 project key。編集 task では対象 resource 宣言と reservation |
 | 任意前提 | `--worktree` には git repository、dashboard annotation には dashboard service |
 
 親 agent は task を渡して終了せず、scope と risk の決定、reservation、monitoring、成果物の検証に責任を持ちます。`--codex` で Codex child、`--model` で許可済み model、`--dir` で child の cwd を選びます。
+
+Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 
 model の世代名は `spawn_child.sh` の model catalog が正本です。Claude は無指定 / `opus` が `claude-opus-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定 / `sol` が `gpt-5.6-sol` です。`terra` / `luna` は対応する `gpt-5.6-*` alias です。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。
 

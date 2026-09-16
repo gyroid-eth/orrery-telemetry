@@ -10,6 +10,7 @@
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --embed-task --task-file <path> [<workdir>]
 #   spawn_child.sh --pre-registered <name> --codex --embed-task --task-file <path> [<workdir>]
+#   spawn_child.sh --pre-registered <name> --codex --codex-mcp orrery-only "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
 # モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
@@ -210,6 +211,7 @@ open_child_terminal() {
 USE_CODEX=false
 CLAUDE_MODEL=""
 CODEX_EFFORT="xhigh"
+CODEX_MCP_PROFILE="inherit"
 RESOURCES=""
 RESOURCE_TTL=14400
 UNSAFE_NO_RESOURCES=false
@@ -236,6 +238,14 @@ while [[ "${1:-}" == --* ]]; do
             ;;
         --effort)
             CODEX_EFFORT="$2"
+            shift 2
+            ;;
+        --codex-mcp)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --codex-mcp requires inherit or orrery-only" >&2
+                exit 1
+            fi
+            CODEX_MCP_PROFILE="$2"
             shift 2
             ;;
         --resources)
@@ -288,6 +298,18 @@ while [[ "${1:-}" == --* ]]; do
             ;;
     esac
 done
+
+case "$CODEX_MCP_PROFILE" in
+    inherit|orrery-only) ;;
+    *)
+        echo "Error: --codex-mcp must be inherit or orrery-only: $CODEX_MCP_PROFILE" >&2
+        exit 1
+        ;;
+esac
+if [[ "$CODEX_MCP_PROFILE" != "inherit" && "$USE_CODEX" != true ]]; then
+    echo "Error: --codex-mcp is only valid with --codex" >&2
+    exit 1
+fi
 
 # --worktree-base は --worktree とのみ意味を持つ
 if [[ -n "$WORKTREE_BASE_REV" && "$USE_WORKTREE" != true ]]; then
@@ -1217,6 +1239,7 @@ codex_pane_ready() {
 # Prints the directory, or nothing when the proxy or token is unavailable.
 write_child_codex_home() {
     local child_name="$1" token_file="$2"
+    local mcp_profile="${3:-inherit}"
     local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
     local source_home="${CODEX_HOME:-$HOME/.codex}"
     [[ -n "$token_file" && -f "$token_file" && -x "$runner" && -d "$source_home" ]] || return 0
@@ -1224,7 +1247,7 @@ write_child_codex_home() {
     local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
     "${AGENTSTACK_PYTHON:-python3}" - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
         "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" \
-        "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
+        "${AGENTSTACK_PYTHON:-}" "$mcp_profile" <<'PY' || return 0
 import json
 import math
 import os
@@ -1234,7 +1257,7 @@ import sys
 import tomllib
 from datetime import date, datetime, time
 
-home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin = sys.argv[1:12]
+home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin, mcp_profile = sys.argv[1:13]
 home_path = pathlib.Path(home)
 source_path = pathlib.Path(source)
 home_path.mkdir(parents=True, exist_ok=True)
@@ -1529,6 +1552,20 @@ if overlay_setting:
             + "; continuing without it",
             file=sys.stderr,
         )
+if mcp_profile == "orrery-only":
+    config = tomllib.loads(config_text)
+    for name, server in config.get("mcp_servers", {}).items():
+        if name == "agentstack" or looks_like_agent_mail(name):
+            continue
+        if isinstance(server, dict):
+            server["enabled"] = False
+    for plugin_id, plugin in config.get("plugins", {}).items():
+        # This plugin supplies the SessionStart hook that binds Codex history.
+        if plugin_id.startswith("agentstack-codex-app@"):
+            continue
+        if isinstance(plugin, dict):
+            plugin["enabled"] = False
+    config_text = emit_toml(config)
 target.write_text(config_text, encoding="utf-8")
 os.chmod(target, 0o600)
 PY
@@ -1661,6 +1698,14 @@ build_embedded_task_prompt() {
     printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent・fetch_inbox は実行しないでください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら send_message で %s に報告してください:\n\n%s' \
         "$child_name" "$parent_name" "$spawned_at" "$project_key" \
         "$parent_name" "$task_text"
+}
+
+append_codex_mcp_profile_notice() {
+    local prompt="$1"
+    printf '%s' "$prompt"
+    if [[ "$CODEX_MCP_PROFILE" == "orrery-only" ]]; then
+        printf '\n\nCapability notice: shell/files and authenticated ORRERY Mail remain available. Other inherited MCP servers and plugins are disabled. The existing AgentStack session-binding plugin configuration is preserved.'
+    fi
 }
 
 TASK="${1:-}"
@@ -1855,7 +1900,11 @@ PY
         CHILD_CODEX_BIN="$(resolve_codex_bin)"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
-        CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+        CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
+        if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
+            echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
+            exit 1
+        fi
         if ! CHILD_LAUNCH_INFO="$(
             prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
         )"; then
@@ -1892,6 +1941,7 @@ ${TASK}"
         else
             CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
         fi
+        CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
@@ -2697,7 +2747,11 @@ fi
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_CODEX_BIN="$(resolve_codex_bin)"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
-    CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+    CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
+    if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
+        echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
+        exit 1
+    fi
     if ! CHILD_LAUNCH_INFO="$(
         prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
     )"; then
@@ -2728,6 +2782,7 @@ if [[ "$USE_CODEX" == true ]]; then
     fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
     CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+    CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

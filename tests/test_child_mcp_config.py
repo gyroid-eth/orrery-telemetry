@@ -156,6 +156,7 @@ def _run_codex_home_process(
     with_sandbox_metadata: bool = False,
     overlay_path: pathlib.Path | None = None,
     corrupt_emitted_candidate: bool = False,
+    mcp_profile: str = "inherit",
 ) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -186,7 +187,7 @@ def _run_codex_home_process(
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
         + helper
-        + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
+        + '\nwrite_child_codex_home "Red-Euler" "$1" "$2"\n'
     )
     env = os.environ.copy()
     env["AGENTSTACK_MCP_PROXY"] = str(runner)
@@ -198,7 +199,7 @@ def _run_codex_home_process(
     return subprocess.run(
         ["bash", "-c", script, "bash", str(tmpdir / "runtime"),
          "/workspace/example", "http://127.0.0.1:8765/mcp",
-         str(tmpdir / "mail.env"), str(token_file)],
+         str(tmpdir / "mail.env"), str(token_file), mcp_profile],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, check=False,
     )
 
@@ -207,7 +208,8 @@ def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
                     runner_executable: bool = True,
                     token: str | None = "child-owner-token",
                     with_sandbox_metadata: bool = False,
-                    overlay_path: pathlib.Path | None = None) -> str:
+                    overlay_path: pathlib.Path | None = None,
+                    mcp_profile: str = "inherit") -> str:
     proc = _run_codex_home_process(
         tmpdir,
         config_text=config_text,
@@ -215,6 +217,7 @@ def _run_codex_home(tmpdir: pathlib.Path, *, config_text: str | None = None,
         token=token,
         with_sandbox_metadata=with_sandbox_metadata,
         overlay_path=overlay_path,
+        mcp_profile=mcp_profile,
     )
     return proc.stdout.strip()
 
@@ -290,6 +293,55 @@ def test_absent_codex_overlay_keeps_the_existing_config_bytes():
             '[plugins."agentstack-codex-app@test-market"]\n'
             'enabled = true\n'
             + "\n\n# Written by spawn_child.sh: this child talks to ORRERY Mail"
+        )
+
+
+def test_codex_orrery_only_profile_disables_inherited_mcp_and_plugins():
+    """An opt-in lightweight child keeps coordination and drops the MCP fleet."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        source = _BASE_CODEX_CONFIG + (
+            '\n[mcp_servers.node_repl]\n'
+            'command = "node-repl"\n\n'
+            '[mcp_servers.chrome-devtools]\n'
+            'command = "npx"\n'
+            'args = ["chrome-devtools-mcp"]\n\n'
+            '[plugins."github@test-market"]\n'
+            'enabled = true\n\n'
+            '[plugins."documents@test-market"]\n'
+            'enabled = true\n'
+        )
+        overlay = tmpdir / "overlay.toml"
+        overlay.write_text(
+            '[mcp_servers.node_repl]\nenabled = true\n\n'
+            '[mcp_servers.chrome-devtools]\nenabled = true\n\n'
+            '[plugins."github@test-market"]\nenabled = true\n',
+            encoding="utf-8",
+        )
+        home = pathlib.Path(
+            _run_codex_home(
+                tmpdir,
+                config_text=source,
+                overlay_path=overlay,
+                mcp_profile="orrery-only",
+            )
+        )
+        config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+        servers = config["mcp_servers"]
+        assert servers["node_repl"]["enabled"] is False
+        assert servers["chrome-devtools"]["enabled"] is False
+        assert servers["notion"]["enabled"] is False
+        for name in ("agent-mail", "orrery-mail", "agentstack"):
+            assert servers[name].get("enabled", True) is True
+            assert servers[name]["tools"]["send_message"]["approval_mode"] == "approve"
+        plugins = config["plugins"]
+        assert plugins["github@test-market"]["enabled"] is False
+        assert plugins["documents@test-market"]["enabled"] is False
+        assert plugins["agentstack-codex-app@test-market"]["enabled"] is True
+        assert (
+            plugins["agentstack-codex-app@test-market"]
+            ["mcp_servers"]["agentstack"]["enabled"]
+            is False
         )
 
 
@@ -556,6 +608,9 @@ def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
 def test_both_codex_launch_paths_use_the_child_home():
     text = _SPAWN.read_text(encoding="utf-8")
     assert text.count('CHILD_CODEX_HOME="$(write_child_codex_home') == 2
+    assert text.count(
+        'could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE'
+    ) == 2
     assert text.count('-e "CODEX_HOME=$CHILD_CODEX_HOME"') == 2
     # The user's optional workspace launcher intentionally reads this override;
     # without it, that wrapper replaces the child home with ~/.codex again.

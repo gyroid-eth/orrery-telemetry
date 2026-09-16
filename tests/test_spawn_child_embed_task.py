@@ -89,6 +89,40 @@ def _fake_launch_env(
     return env, workdir
 
 
+def _codex_handoff(tmp_path: pathlib.Path, child_name: str) -> pathlib.Path:
+    handoff = tmp_path / "child-token"
+    handoff.write_text("child-owner-token", encoding="utf-8")
+    handoff.chmod(0o600)
+    binding = handoff.with_name(handoff.name + ".binding.json")
+    binding.write_text(
+        json.dumps({
+            "agent_id": 73,
+            "agent_name": child_name,
+            "project_key": "/shared/project",
+            "program": "codex",
+        }),
+        encoding="utf-8",
+    )
+    binding.chmod(0o600)
+    return handoff
+
+
+def _enable_fake_codex_profile(
+    tmp_path: pathlib.Path, env: dict[str, str],
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text("{}\n", encoding="utf-8")
+    (source_home / "config.toml").write_text(
+        '[mcp_servers.chrome-devtools]\ncommand = "npx"\n',
+        encoding="utf-8",
+    )
+    runner = tmp_path / "run-mcp.sh"
+    _executable(runner, "#!/bin/bash\nexit 0\n")
+    env["CODEX_HOME"] = str(source_home)
+    env["AGENTSTACK_MCP_PROXY"] = str(runner)
+
+
 def test_embed_task_requires_pre_registered(tmp_path: pathlib.Path) -> None:
     result = subprocess.run(
         ["/bin/bash", str(SPAWN), "--embed-task", "--unsafe-no-resources", "task"],
@@ -102,6 +136,121 @@ def test_embed_task_requires_pre_registered(tmp_path: pathlib.Path) -> None:
 
     assert result.returncode != 0
     assert "Error: --embed-task requires --pre-registered" in result.stderr
+
+
+def test_codex_mcp_profile_rejects_unknown_value() -> None:
+    result = subprocess.run(
+        [
+            "/bin/bash", str(SPAWN), "--codex", "--codex-mcp", "everything",
+            "--unsafe-no-resources", "task",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PROJECT_KEY": "/shared/project"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "--codex-mcp must be inherit or orrery-only" in result.stderr
+
+
+def test_codex_mcp_profile_rejects_claude_child() -> None:
+    result = subprocess.run(
+        [
+            "/bin/bash", str(SPAWN), "--codex-mcp", "orrery-only",
+            "--unsafe-no-resources", "task",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PROJECT_KEY": "/shared/project"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "--codex-mcp is only valid with --codex" in result.stderr
+
+
+def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
+    tmp_path: pathlib.Path,
+) -> None:
+    env, workdir = _fake_launch_env(tmp_path, codex=True)
+    child_name = "ProfileFailure"
+    handoff = _codex_handoff(tmp_path, child_name)
+    result = subprocess.run(
+        [
+            "/bin/bash", str(SPAWN),
+            "--pre-registered", child_name,
+            "--child-token-file", str(handoff),
+            "--codex", "--codex-mcp", "orrery-only",
+            "task", str(workdir),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "could not create the requested Codex MCP profile" in result.stderr
+    tmux_log = pathlib.Path(env["FAKE_TMUX_LOG"])
+    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("prompt_path", ["embed", "mail", "standalone"])
+def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
+    tmp_path: pathlib.Path, prompt_path: str,
+) -> None:
+    env, workdir = _fake_launch_env(tmp_path, codex=True)
+    _enable_fake_codex_profile(tmp_path, env)
+    child_name = f"Profile-{prompt_path}"
+    handoff = _codex_handoff(tmp_path, child_name)
+    args = [
+        "/bin/bash", str(SPAWN),
+        "--pre-registered", child_name,
+        "--child-token-file", str(handoff),
+        "--codex", "--codex-mcp", "orrery-only",
+    ]
+    if prompt_path == "embed":
+        task_file = tmp_path / "task.md"
+        task_file.write_text("embedded task", encoding="utf-8")
+        args.extend(["--embed-task", "--task-file", str(task_file), str(workdir)])
+    elif prompt_path == "standalone":
+        args.extend(["--standalone", "standalone task", str(workdir)])
+    else:
+        args.extend(["mail task", str(workdir)])
+
+    result = subprocess.run(
+        args,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+    assert "shell/files and authenticated ORRERY Mail remain available" in injected
+    assert "Other inherited MCP servers and plugins are disabled" in injected
+    assert "existing AgentStack session-binding plugin configuration is preserved" in injected
+
+
+def test_both_codex_launch_paths_append_the_profile_notice() -> None:
+    text = SPAWN.read_text(encoding="utf-8")
+    assert text.count(
+        'CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"'
+    ) == 2
 
 
 def test_unreadable_task_file_fails_clearly(tmp_path: pathlib.Path) -> None:
@@ -191,6 +340,7 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert "現在時刻:" in injected
     assert "project_key は /shared/project" in injected
     assert "send_message で ParentAgent に報告してください" in injected
+    assert "Capability notice:" not in injected
     assert "launch prompt is canonical; do not send task mail" in result.stderr
     assert not backtick_marker.exists()
     assert not dollar_marker.exists()
