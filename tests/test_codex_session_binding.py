@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -161,6 +163,436 @@ def _adopt_child_handoff(
         "sidecar": str(sidecar),
     }
     return state_path
+
+
+def _executable(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
+    if layout == "source":
+        root = ROOT
+    else:
+        root = tmp_path / "installed-agentstack"
+        for relative in (
+            "bin/agentstack-preregister-child",
+            "bin/lib/agentstack-register.sh",
+            "bin/lib/agentstack-scientists.sh",
+            "hooks/spawn_child.sh",
+            "hooks/prepare-codex-session-binding.py",
+            "integrations/codex_app/plugin/scripts/record-codex-session-index.py",
+        ):
+            source = ROOT / relative
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    return {
+        "root": root,
+        "preregister": root / "bin" / "agentstack-preregister-child",
+        "register_lib": root / "bin" / "lib" / "agentstack-register.sh",
+        "spawn": root / "hooks" / "spawn_child.sh",
+        "hooks": root / "hooks",
+        "recorder": (
+            root
+            / "integrations"
+            / "codex_app"
+            / "plugin"
+            / "scripts"
+            / "record-codex-session-index.py"
+        ),
+    }
+
+
+def _fake_codex_launch_env(
+    tmp_path: Path, *, runtime: Path, project: Path, layout: dict[str, Path]
+) -> tuple[dict[str, str], Path]:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    tmux_log = tmp_path / "tmux.log"
+    tmux_alive = tmp_path / "tmux.alive"
+    _executable(
+        fake_bin / "tmux",
+        "#!/bin/bash\n"
+        "{ printf 'CALL'; for arg in \"$@\"; do printf '\\034%s' \"$arg\"; done; "
+        "printf '\\035\\n'; } >> \"$FAKE_TMUX_LOG\"\n"
+        "case \"${1:-}\" in\n"
+        "  new-session) : > \"$FAKE_TMUX_ALIVE\" ;;\n"
+        "  capture-pane) printf '\\ngpt-5.6-terra medium · ~/workspace\\n' ;;\n"
+        "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
+        "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
+        "  display-message) printf 'ParentAgent\\n' ;;\n"
+        "esac\n",
+    )
+    _executable(fake_bin / "sleep", "#!/bin/bash\nexit 0\n")
+    _executable(
+        fake_bin / "codex",
+        "#!/bin/bash\n"
+        "if [[ \"${1:-}\" == --help ]]; then\n"
+        "  printf '%s\\n' '  --ask-for-approval <POLICY>'\n"
+        "fi\n",
+    )
+    _executable(fake_bin / "claude", "#!/bin/bash\nexit 0\n")
+
+    fake_register = tmp_path / "fake-register.sh"
+    fake_register.write_text(
+        f'. "{layout["register_lib"]}"\n'
+        "ags_mail_load_token() { :; }\n"
+        "ags_has_scientist_suffix() { return 0; }\n"
+        "ags_generate_registration_token() { printf 'sent-token\\n'; }\n"
+        "ags_mcp_call() {\n"
+        "  if [[ \"$1\" == register_agent ]]; then\n"
+        "    printf '{\"id\":73,\"name\":\"BoundCodex\","
+        "\"registration_token\":\"server-owner-token\"}\\n'\n"
+        "  else\n"
+        "    printf '{}\\n'\n"
+        "  fi\n"
+        "}\n"
+        "ags_mcp_has_error() { return 1; }\n"
+        "ags_extract_agent_name() { "
+        "python3 -c 'import json,sys; print(json.load(sys.stdin)[\"name\"])'; }\n"
+        "ags_extract_agent_id() { "
+        "python3 -c 'import json,sys; print(json.load(sys.stdin)[\"id\"])'; }\n"
+        "ags_extract_registration_token() { "
+        "python3 -c 'import json,sys; print(json.load(sys.stdin)[\"registration_token\"])'; }\n"
+        "ags_apply_contact_policy() { :; }\n"
+        "ags_record_name_substitution() { :; }\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    codex_home = tmp_path / "codex-home"
+    workdir = tmp_path / "workdir"
+    home.mkdir()
+    codex_home.mkdir()
+    workdir.mkdir()
+    env = os.environ.copy()
+    for inherited in (
+        "AGENT_NAME",
+        "CHILD_REGISTRATION_TOKEN",
+        "AGENTSTACK_CODEX_LAUNCH_BINDING",
+        "AGENTSTACK_CODEX_LAUNCH_ID",
+    ):
+        env.pop(inherited, None)
+    env.update(
+        {
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "HOME": str(home),
+            "CODEX_HOME": str(codex_home),
+            "PARENT_AGENT": "ParentAgent",
+            "PROJECT_KEY": str(project),
+            "AGENTSTACK_PROJECT_KEY": str(project),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_HOOKS_DIR": str(layout["hooks"]),
+            "AGENTSTACK_HOME": str(layout["root"]),
+            "AGENTSTACK_REGISTER_LIB": str(fake_register),
+            "AGENTSTACK_ENV_FILE": "",
+            "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+            "AGENTSTACK_MCP_URL": "http://127.0.0.1:9/mcp",
+            "AGENTSTACK_MAIL_ENV": str(tmp_path / "missing-mail-env"),
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
+            "AGENTSTACK_MANAGED_AGENTS_FILE": str(runtime / "managed_agents.txt"),
+            "AGENTSTACK_TERMINAL": "none",
+            "AGENTSTACK_PYTHON": sys.executable,
+            "FAKE_TMUX_LOG": str(tmux_log),
+            "FAKE_TMUX_ALIVE": str(tmux_alive),
+        }
+    )
+    return env, workdir
+
+
+def _tmux_new_session_env(log_path: Path) -> tuple[dict[str, str], list[str]]:
+    calls = []
+    for record in log_path.read_text(encoding="utf-8").split("\x1d\n"):
+        if not record:
+            continue
+        assert record.startswith("CALL\x1c")
+        calls.append(record.removeprefix("CALL\x1c").split("\x1c"))
+    command = next(call for call in calls if call[0] == "new-session")
+    child_env: dict[str, str] = {}
+    for index, argument in enumerate(command[:-1]):
+        if argument == "-e":
+            key, value = command[index + 1].split("=", 1)
+            child_env[key] = value
+    return child_env, command
+
+
+def _run_preregistered_codex_spawn(
+    *,
+    layout: dict[str, Path],
+    env: dict[str, str],
+    workdir: Path,
+    task_file: Path,
+    handoff: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    args = ["/bin/bash", str(layout["spawn"]), "--pre-registered", AGENT]
+    if handoff is not None:
+        args.extend(["--child-token-file", str(handoff)])
+    args.extend(
+        [
+            "--codex",
+            "--model",
+            "gpt-5.6-terra",
+            "--effort",
+            "medium",
+            "--embed-task",
+            "--task-file",
+            str(task_file),
+            str(workdir),
+        ]
+    )
+    return subprocess.run(
+        args,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("layout_name", "restore_token_from_state"),
+    [("source", False), ("installed", False), ("source", True)],
+)
+def test_preregister_no_arg_spawn_reaches_recorder_and_reader(
+    binding_env, tmp_path: Path, layout_name: str, restore_token_from_state: bool
+) -> None:
+    layout = _codex_entrypoint_layout(tmp_path, layout_name)
+    env, workdir = _fake_codex_launch_env(
+        tmp_path,
+        runtime=binding_env["runtime"],
+        project=binding_env["project"],
+        layout=layout,
+    )
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Verify the canonical Codex registration binding.", encoding="utf-8")
+    handoff = tmp_path / "token-BoundCodex"
+    state_path = binding_env["runtime"] / "child-agents" / f"{AGENT}.json"
+    assert not state_path.exists()
+
+    preregister = subprocess.run(
+        [
+            str(layout["preregister"]),
+            "--project-key",
+            str(binding_env["project"]),
+            "--name",
+            AGENT,
+            "--program",
+            "codex",
+            "--model",
+            "gpt-5.6-terra",
+            "--task-description",
+            "fixture child",
+            "--token-file-out",
+            str(handoff),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert preregister.returncode == 0, preregister.stderr
+    assert preregister.stdout.strip() == AGENT
+    sidecar = handoff.with_name(handoff.name + ".binding.json")
+    assert handoff.is_file() and sidecar.is_file()
+    canonical_token = binding_env["runtime"] / f"agent_token_{AGENT}"
+    assert canonical_token.is_file() and state_path.is_file()
+    assert canonical_token.stat().st_mode & 0o777 == 0o600
+    assert state_path.stat().st_mode & 0o777 == 0o600
+
+    # The documented no-arg launch may happen after the caller has discarded
+    # its temporary handoff. Nothing in the fixture copies the sidecar into
+    # child state; preregister itself must have persisted the formal receipt.
+    handoff.unlink()
+    sidecar.unlink()
+    if restore_token_from_state:
+        canonical_token.unlink()
+    spawn = _run_preregistered_codex_spawn(
+        layout=layout,
+        env=env,
+        workdir=workdir,
+        task_file=task_file,
+    )
+    assert spawn.returncode == 0, spawn.stderr
+    assert spawn.stdout.strip() == AGENT
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert canonical_token.is_file()
+    assert state == {
+        "agent_id": AGENT_ID,
+        "agent_name": AGENT,
+        "program": "codex",
+        "project_key": str(binding_env["project"]),
+        "registration_token": "server-owner-token",
+    }
+    assert handoff.exists() is False and sidecar.exists() is False
+
+    child_env, command = _tmux_new_session_env(Path(env["FAKE_TMUX_LOG"]))
+    launch_path = Path(child_env["AGENTSTACK_CODEX_LAUNCH_BINDING"])
+    launch_id = child_env["AGENTSTACK_CODEX_LAUNCH_ID"]
+    assert child_env["AGENTSTACK_CODEX_MODEL"] == "gpt-5.6-terra"
+    assert child_env["AGENTSTACK_CODEX_EFFORT"] == "medium"
+    assert launch_path == binding_env["runtime"] / "codex_launches" / f"{AGENT_ID}.json"
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    assert launch["launch_id"] == launch_id
+    assert launch["agent_id"] == AGENT_ID
+    assert launch["project_key"] == str(binding_env["project"])
+    assert "$AGENTSTACK_CODEX_BIN" in command[-1]
+    combined_output = preregister.stdout + preregister.stderr + spawn.stdout + spawn.stderr
+    assert "server-owner-token" not in combined_output
+    assert "server-owner-token" not in Path(env["FAKE_TMUX_LOG"]).read_text(
+        encoding="utf-8"
+    )
+
+    recorder_env = env.copy()
+    recorder_env.update(
+        {
+            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
+            "AGENTSTACK_CODEX_LAUNCH_ID": launch_id,
+        }
+    )
+    recorded = subprocess.run(
+        [sys.executable, str(layout["recorder"])],
+        input=json.dumps(_payload(binding_env["transcript"])),
+        cwd=ROOT,
+        env=recorder_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert recorded.returncode == 0, recorded.stderr
+    assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    [
+        "missing",
+        "corrupt",
+        "project_mismatch",
+        "name_mismatch",
+        "provider_mismatch",
+        "token_mismatch",
+        "prepare_failure",
+    ],
+)
+def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
+    binding_env, tmp_path: Path, failure_mode: str
+) -> None:
+    layout = _codex_entrypoint_layout(tmp_path, "source")
+    env, workdir = _fake_codex_launch_env(
+        tmp_path,
+        runtime=binding_env["runtime"],
+        project=binding_env["project"],
+        layout=layout,
+    )
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Must not reach Codex.", encoding="utf-8")
+    runtime = binding_env["runtime"]
+    runtime.mkdir(parents=True, exist_ok=True)
+    canonical_token = runtime / f"agent_token_{AGENT}"
+    canonical_token.write_text("server-owner-token", encoding="utf-8")
+    canonical_token.chmod(0o600)
+    state_path = runtime / "child-agents" / f"{AGENT}.json"
+    state_path.parent.mkdir(mode=0o700)
+    state = {
+        "agent_id": AGENT_ID,
+        "agent_name": AGENT,
+        "program": "codex",
+        "project_key": str(binding_env["project"]),
+        "registration_token": "server-owner-token",
+    }
+    if failure_mode == "corrupt":
+        state_path.write_text("{", encoding="utf-8")
+    elif failure_mode != "missing":
+        if failure_mode == "project_mismatch":
+            state["project_key"] = str(tmp_path / "other-project")
+        elif failure_mode == "name_mismatch":
+            state["agent_name"] = "OtherCodex"
+        elif failure_mode == "provider_mismatch":
+            state["program"] = "claude-code"
+        elif failure_mode == "token_mismatch":
+            state["registration_token"] = "older-registration-token"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+    if state_path.exists():
+        state_path.chmod(0o600)
+    if failure_mode == "prepare_failure":
+        empty_hooks = tmp_path / "hooks-without-prepare"
+        empty_hooks.mkdir()
+        env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
+    env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
+    env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"
+
+    result = _run_preregistered_codex_spawn(
+        layout=layout,
+        env=env,
+        workdir=workdir,
+        task_file=task_file,
+    )
+
+    assert result.returncode != 0
+    tmux_log = Path(env["FAKE_TMUX_LOG"])
+    assert not tmux_log.exists() or "\x1cnew-session\x1c" not in tmux_log.read_text(
+        encoding="utf-8"
+    )
+    assert "server-owner-token" not in result.stdout + result.stderr
+    if failure_mode == "prepare_failure":
+        assert "fresh Codex history binding expectation" in result.stderr
+    else:
+        assert "canonical Codex registration metadata is missing" in result.stderr
+        assert "Re-run agentstack-preregister-child" in result.stderr
+        assert "legacy token-only runtime entry" in result.stderr
+
+
+@pytest.mark.parametrize("valid_sidecar", [True, False], ids=["success", "failure"])
+def test_explicit_codex_handoff_is_consumed_only_after_success(
+    binding_env, tmp_path: Path, valid_sidecar: bool
+) -> None:
+    layout = _codex_entrypoint_layout(tmp_path, "source")
+    env, workdir = _fake_codex_launch_env(
+        tmp_path,
+        runtime=binding_env["runtime"],
+        project=binding_env["project"],
+        layout=layout,
+    )
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Exercise the explicit handoff.", encoding="utf-8")
+    handoff = tmp_path / "explicit-token"
+    handoff.write_text("server-owner-token", encoding="utf-8")
+    handoff.chmod(0o600)
+    sidecar = handoff.with_name(handoff.name + ".binding.json")
+    if valid_sidecar:
+        sidecar.write_text(json.dumps(_registration(binding_env["project"])), encoding="utf-8")
+    else:
+        sidecar.write_text("{", encoding="utf-8")
+    sidecar.chmod(0o600)
+
+    result = _run_preregistered_codex_spawn(
+        layout=layout,
+        env=env,
+        workdir=workdir,
+        task_file=task_file,
+        handoff=handoff,
+    )
+
+    canonical_token = binding_env["runtime"] / f"agent_token_{AGENT}"
+    state_path = binding_env["runtime"] / "child-agents" / f"{AGENT}.json"
+    if valid_sidecar:
+        assert result.returncode == 0, result.stderr
+        assert not handoff.exists() and not sidecar.exists()
+        assert canonical_token.is_file() and state_path.is_file()
+    else:
+        assert result.returncode != 0
+        assert handoff.is_file() and sidecar.is_file()
+        assert not canonical_token.exists() and not state_path.exists()
+        tmux_log = Path(env["FAKE_TMUX_LOG"])
+        assert not tmux_log.exists() or "\x1cnew-session\x1c" not in tmux_log.read_text(
+            encoding="utf-8"
+        )
 
 
 def test_metadata_without_hook_becomes_unconfirmed_after_grace(binding_env) -> None:

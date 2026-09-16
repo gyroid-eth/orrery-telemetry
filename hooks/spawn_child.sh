@@ -9,6 +9,7 @@
 #   spawn_child.sh --worktree --resources "path" "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --embed-task --task-file <path> [<workdir>]
+#   spawn_child.sh --pre-registered <name> --codex --embed-task --task-file <path> [<workdir>]
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
 # モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
@@ -444,6 +445,87 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, token_path)
 os.chmod(token_path, 0o600)
 print(token_path)
+PY
+}
+
+# Verify that a Codex token and its formal registration metadata belong to the
+# same preregistration before preparing a launch. The state token is the join
+# key between the two atomic files: a crash or same-name re-registration that
+# leaves one old and one new is rejected rather than silently mixed. When the
+# canonical token file is absent, a complete 0600 state file may restore it.
+validate_codex_child_registration_state() {
+    local agent_name="$1" project_key="$2" token_file="$3" state_file="$4"
+    "${AGENTSTACK_PYTHON:-python3}" - \
+        "$agent_name" "$project_key" "$token_file" "$state_file" <<'PY'
+import hmac
+import json
+import os
+import pathlib
+import re
+import stat
+import sys
+
+agent_name, project_key, token_file, state_file = sys.argv[1:5]
+token_path = pathlib.Path(token_file)
+state_path = pathlib.Path(state_file)
+
+if not re.fullmatch(r"[A-Za-z0-9_.-]+", agent_name):
+    raise ValueError("unsafe child identity")
+
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+
+
+def read_private_regular(path, label, limit):
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{label} is not a regular file")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise PermissionError(f"{label} permissions must be 0600")
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > limit:
+        raise ValueError(f"{label} is too large")
+    return raw.decode("utf-8")
+
+
+state = json.loads(read_private_regular(state_path, "child state", 65536))
+if not isinstance(state, dict):
+    raise ValueError("child state must contain an object")
+if type(state.get("agent_id")) is not int or state["agent_id"] <= 0:
+    raise ValueError("child state has no positive numeric agent_id")
+if state.get("agent_name") != agent_name:
+    raise ValueError("child state belongs to another agent_name")
+if state.get("project_key") != project_key:
+    raise ValueError("child state belongs to another project_key")
+if state.get("program") not in {"codex", "codex-cli"}:
+    raise ValueError("child state is not for Codex CLI")
+state_token = state.get("registration_token")
+if not isinstance(state_token, str) or not state_token or len(state_token) > 4096:
+    raise ValueError("child state has no usable registration token")
+
+if token_path.exists() or token_path.is_symlink():
+    token = read_private_regular(token_path, "canonical token", 4096).strip()
+    if not token or not hmac.compare_digest(token, state_token):
+        raise ValueError("canonical token and child state are from different registrations")
+else:
+    token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(token_path.parent, 0o700)
+    temporary = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+    try:
+        with open(temporary, "x", encoding="utf-8") as handle:
+            handle.write(state_token)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, token_path)
+        os.chmod(token_path, 0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
 PY
 }
 
@@ -1609,7 +1691,7 @@ fi
 # 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths を
 # 済ませてから呼ぶモード。通常は task mail を正本にし、--embed-task 使用時は
 # task mail を送らず起動 prompt を正本にする。
-# Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> "<タスク>" [<作業ディレクトリ>]
+# Usage: spawn_child.sh --pre-registered <CHILD_NAME> [--child-token-file <path>] "<タスク>" [<作業ディレクトリ>]
 if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
     # Both providers share the catalog/normalizers above in every launch path.
@@ -1630,7 +1712,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     fi
 
     if [[ -z "$TASK" ]]; then
-        echo "Usage: spawn_child.sh --pre-registered <CHILD_NAME> --child-token-file <path> \"<task>\" [workdir]" >&2
+        echo "Usage: spawn_child.sh --pre-registered <CHILD_NAME> [--child-token-file <path>] \"<task>\" [workdir]" >&2
         exit 1
     fi
     if [[ ! -d "$WORK_DIR" ]]; then
@@ -1653,6 +1735,8 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     # owner token. Adopt the 0600 one-shot into durable child-owned files and
     # unlink the handoff only after both writes succeed.
     PRE_REGISTERED_TOKEN_CREATED=false
+    PRE_REGISTERED_HANDOFF_TO_CONSUME=""
+    PRE_REGISTERED_BINDING_TO_CONSUME=""
     PRE_REGISTERED_SESSION_STARTED=false
     PRE_REGISTERED_SUCCESS=false
     cleanup_preregister_failure() {
@@ -1689,17 +1773,29 @@ PY
 
     if [[ -n "$CHILD_TOKEN_FILE" ]]; then
         ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
+        CONSUME_ONE_SHOT=true
+        if [[ "$USE_CODEX" == true ]]; then
+            # Keep the source until formal metadata validation, prepare, and
+            # child startup have all succeeded. Failure leaves the one-shot as
+            # the token-safe recovery credential instead of consuming it early.
+            CONSUME_ONE_SHOT=false
+        fi
         if ! CHILD_TOKEN_FILE="$(
             adopt_child_token_file "$CHILD_NAME" "$PROJECT_KEY" \
-                "$ONE_SHOT_TOKEN_FILE" true "${ONE_SHOT_TOKEN_FILE}.binding.json"
+                "$ONE_SHOT_TOKEN_FILE" "$CONSUME_ONE_SHOT" \
+                "${ONE_SHOT_TOKEN_FILE}.binding.json"
         )"; then
             echo "Error: --child-token-file is unreadable, insecure, or empty: $ONE_SHOT_TOKEN_FILE" >&2
             exit 1
         fi
         PRE_REGISTERED_TOKEN_CREATED=true
+        if [[ "$USE_CODEX" == true && "$ONE_SHOT_TOKEN_FILE" != "$CHILD_TOKEN_FILE" ]]; then
+            PRE_REGISTERED_HANDOFF_TO_CONSUME="$ONE_SHOT_TOKEN_FILE"
+            PRE_REGISTERED_BINDING_TO_CONSUME="${ONE_SHOT_TOKEN_FILE}.binding.json"
+        fi
     else
         CHILD_TOKEN_FILE="$(child_token_file_path "$CHILD_NAME")"
-        if [[ ! -s "$CHILD_TOKEN_FILE" ]]; then
+        if [[ "$USE_CODEX" != true && ! -s "$CHILD_TOKEN_FILE" ]]; then
             if ! CHILD_TOKEN_FILE="$(
                 restore_child_token_file_from_state "$CHILD_NAME"
             )"; then
@@ -1708,6 +1804,18 @@ PY
                 echo "  Existing state fallback: $CHILD_STATE_DIR/$CHILD_NAME.json" >&2
                 exit 1
             fi
+        fi
+    fi
+
+    if [[ "$USE_CODEX" == true ]]; then
+        if ! validate_codex_child_registration_state \
+            "$CHILD_NAME" "$PROJECT_KEY" "$CHILD_TOKEN_FILE" \
+            "$CHILD_STATE_DIR/$CHILD_NAME.json"; then
+            echo "Error: canonical Codex registration metadata is missing, invalid, or does not match the child token for $CHILD_NAME" >&2
+            echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+            echo "  For an existing one-shot handoff, pass --child-token-file <path> with its matching .binding.json sidecar." >&2
+            echo "  A legacy token-only runtime entry cannot be promoted to a verified history binding." >&2
+            exit 1
         fi
     fi
 
@@ -2016,6 +2124,15 @@ ${TASK}"
         echo "[spawn_child/pre-reg] cleanup: git -C $WORKTREE_SOURCE worktree remove $WORKTREE_DIR && git -C $WORKTREE_SOURCE branch -D exp/${CHILD_NAME}" >&2
     fi
 
+    if [[ -n "$PRE_REGISTERED_HANDOFF_TO_CONSUME" ]]; then
+        if ! rm -f -- "$PRE_REGISTERED_HANDOFF_TO_CONSUME"; then
+            echo "Error: could not consume the successful child token handoff" >&2
+            exit 1
+        fi
+        if [[ -n "$PRE_REGISTERED_BINDING_TO_CONSUME" ]]; then
+            rm -f -- "$PRE_REGISTERED_BINDING_TO_CONSUME" 2>/dev/null || true
+        fi
+    fi
     PRE_REGISTERED_SUCCESS=true
     echo "$CHILD_NAME"
     exit 0

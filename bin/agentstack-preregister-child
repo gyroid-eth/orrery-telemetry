@@ -173,14 +173,95 @@ tmp_file="${token_file_out}.$$"
 mv "$tmp_file" "$token_file_out" || die "could not install token file"
 chmod 600 "$token_file_out" 2>/dev/null || true
 
+persist_codex_registration_state() {
+  local registered_name="$1" numeric_id="$2" registered_project="$3"
+  local registered_program="$4" source_token="$5" runtime_dir token_key
+  local canonical_token state_file
+  [[ "$registered_name" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "$numeric_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  runtime_dir="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+  token_key="$(printf '%s' "$registered_name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+  [[ -n "$token_key" ]] || return 1
+  canonical_token="$runtime_dir/agent_token_$token_key"
+  state_file="$runtime_dir/child-agents/$registered_name.json"
+  "${AGENTSTACK_PYTHON:-python3}" - "$source_token" "$canonical_token" \
+      "$state_file" "$registered_name" "$numeric_id" "$registered_project" \
+      "$registered_program" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+source, token_file, state_file, name, numeric_id, project, program = sys.argv[1:8]
+source_path = pathlib.Path(source)
+token_path = pathlib.Path(token_file)
+state_path = pathlib.Path(state_file)
+
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(source_path, flags)
+try:
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("token handoff is not a regular file")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise PermissionError("token handoff permissions must be 0600")
+    token = os.read(descriptor, 4097).decode("utf-8").strip()
+finally:
+    os.close(descriptor)
+if not token or len(token) > 4096:
+    raise ValueError("token handoff is empty or too large")
+
+token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.chmod(token_path.parent, 0o700)
+os.chmod(state_path.parent, 0o700)
+token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
+state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
+try:
+    with open(token_tmp, "x", encoding="utf-8") as handle:
+        handle.write(token)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(token_tmp, 0o600)
+    state = {
+        "agent_id": int(numeric_id),
+        "agent_name": name,
+        "program": program,
+        "project_key": project,
+        "registration_token": token,
+    }
+    with open(state_tmp, "x", encoding="utf-8") as handle:
+        json.dump(state, handle, separators=(",", ":"), sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(state_tmp, 0o600)
+    # Readers compare the two copies. A crash between replaces leaves a
+    # mismatch that is rejected rather than combining two registrations.
+    os.replace(token_tmp, token_path)
+    os.replace(state_tmp, state_path)
+    os.chmod(token_path, 0o600)
+    os.chmod(state_path, 0o600)
+finally:
+    token_tmp.unlink(missing_ok=True)
+    state_tmp.unlink(missing_ok=True)
+PY
+}
+
 # The launcher needs the server-returned numeric id as well as the name. Keep
 # that non-secret registration receipt beside the one-shot token so
-# spawn_child.sh can consume both without querying by name later. A missing
-# sidecar does not strand an already registered child; it starts unbound and
-# the dashboard reports that state instead.
-if [[ "$program" == "codex" && "$registered_id" =~ ^[1-9][0-9]*$ ]]; then
+# spawn_child.sh can consume both without querying by name later. Also persist
+# the same formal receipt with the canonical runtime token for the documented
+# no-argument launch path. Codex launchers fail closed when either copy is
+# unavailable; preregistration must therefore not report success without both.
+if [[ "$program" == "codex" || "$program" == "codex-cli" ]]; then
+  [[ "$registered_id" =~ ^[1-9][0-9]*$ ]] \
+    || die "register_agent returned no positive numeric id for Codex child $registered"
   binding_file="${token_file_out}.binding.json"
-  if ! python3 - "$binding_file" "$registered_id" "$registered" "$project_key" "$program" <<'PY'
+  if ! "${AGENTSTACK_PYTHON:-python3}" - "$binding_file" "$registered_id" "$registered" "$project_key" "$program" <<'PY'
 import json
 import os
 import pathlib
@@ -204,11 +285,15 @@ os.replace(temporary, path)
 os.chmod(path, 0o600)
 PY
   then
-    printf '%s: warning: could not persist Codex registration binding; child history will be unconfirmed\n' "$PROG" >&2
+    die "could not persist the one-shot Codex registration binding"
   fi
+  persist_codex_registration_state \
+    "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
+    || die "could not persist canonical Codex registration token and metadata"
+else
+  ags_store_registration_token "$registered" "$effective_token" || true
 fi
 
-ags_store_registration_token "$registered" "$effective_token" || true
 ags_apply_contact_policy "$project_key" "$registered" "$effective_token"
 
 printf '%s\n' "$registered"

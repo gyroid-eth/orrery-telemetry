@@ -98,7 +98,9 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 に child-owned state を持ちます。
 
-pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を一度だけ取り込み、sidecar も cleanup の対象にします。token を transcript、command-line argument、dashboard response に表示しないためです。
+pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を検証し、CLI の起動と fresh launch expectation の作成が成功した後にだけ一時 handoff を消費します。token を transcript、command-line argument、dashboard response に表示しません。
+
+`agentstack-preregister-child` は Codex の正式な登録応答を、一時 handoff だけでなく上記の canonical token と child state にも mode `0600` で保存します。そのため `spawn_child.sh --pre-registered <name> --codex ...` は `--child-token-file` を省略しても、同じ登録に由来する token・数値 ID・name・project・program から fresh expectation を作れます。canonical token が無くても完全な child state からは復元できますが、token-only の旧 state、破損 metadata、project/name/provider の不一致、token と state の世代不一致は推測で補いません。`agentstack-preregister-child` を同じ project で再実行するか、一時 token と対応する `.binding.json` を `--child-token-file` で渡す必要があります。登録済み Codex child は fresh expectation を永続化できなければ CLI 起動前に停止します。
 
 `/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
 
