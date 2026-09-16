@@ -64,7 +64,16 @@ agentstack_resolve_invocation_context() {
         git -C "$work_dir" rev-parse --show-toplevel 2>/dev/null)" || worktree_root=""
     common="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
         git -C "$work_dir" rev-parse --git-common-dir 2>/dev/null)" || common=""
-    if [ -n "$worktree_root" ] && [ -n "$common" ]; then
+    if [ -z "$worktree_root" ] || [ -z "$common" ]; then
+        # Do not reinterpret a broken repository marker as an ordinary non-Git
+        # workspace and then authorize an unrelated explicit namespace.
+        if [ -e "$work_dir/.git" ] || [ -L "$work_dir/.git" ]; then
+            printf 'agentstack: cannot resolve repository metadata for invocation target\n' >&2
+            return 1
+        fi
+        worktree_root=""
+        common=""
+    else
         worktree_root="$(agentstack_physical_dir "$worktree_root")" || return 1
         case "$common" in
             /*) common_abs="$(agentstack_physical_dir "$common")" || return 1 ;;
@@ -75,8 +84,6 @@ agentstack_resolve_invocation_context() {
         else
             repository="$common_abs"
         fi
-    else
-        worktree_root=""
     fi
 
     if [ -n "$explicit_key" ]; then
