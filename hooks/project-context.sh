@@ -40,225 +40,76 @@ for line in raw.splitlines():
 PY
 }
 
-# Repository-aware primitives and an explicit invocation selector. The legacy
-# resolver below stays unchanged until its launcher/registration consumers
-# can be migrated together.
 agentstack_physical_dir() {
-    local directory="${1:-}"
-    [ -n "$directory" ] && [ -d "$directory" ] || return 1
-    (CDPATH= cd -- "$directory" 2>/dev/null && pwd -P)
+    [ -n "${1:-}" ] && [ -d "$1" ] || return 1
+    (CDPATH= cd -- "$1" 2>/dev/null && pwd -P)
 }
 
-# Explicit human keys are normalized as paths only when they are absolute or
-# name an existing directory. In particular, an explicit linked-worktree key
-# is not collapsed to its repository key and a logical key is not a pathname.
-agentstack_normalize_project_key() {
-    local project_key="${1:-}"
-    local physical=""
-    [ -n "$project_key" ] || {
-        printf '\n'
-        return 0
-    }
-    if [ -d "$project_key" ]; then
-        physical="$(agentstack_physical_dir "$project_key")" || return 1
-        printf '%s\n' "$physical"
-        return 0
-    fi
-    case "$project_key" in
-        /*)
-            "${AGENTSTACK_PYTHON:-python3}" - "$project_key" <<'PY'
-import pathlib
-import sys
-
-print(pathlib.Path(sys.argv[1]).resolve())
-PY
-            ;;
-        *) printf '%s\n' "$project_key" ;;
-    esac
-}
-
-# git -C alone does not override inherited GIT_DIR / GIT_WORK_TREE. Unset the
-# repository selectors in the probe process only, never in the caller.
-agentstack_git_worktree_root() {
-    local target="${1:-}"
-    local root=""
-    [ -n "$target" ] && [ -d "$target" ] || return 1
-    root="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
-        git -C "$target" rev-parse --show-toplevel 2>/dev/null)" || return 1
-    agentstack_physical_dir "$root"
-}
-
-# Main and linked worktrees share a common Git directory. Use the main
-# checkout as the human key for the usual .git layout; keep the physical
-# common directory for bare/separate-git-dir layouts. A remote URL is not an
-# identity: two independent clones of the same remote must stay separate.
-agentstack_repository_key() {
-    local target="${1:-}"
-    local common="" common_abs=""
-    [ -n "$target" ] && [ -d "$target" ] || return 1
-    common="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
-        git -C "$target" rev-parse --git-common-dir 2>/dev/null)" || return 1
-    case "$common" in
-        /*) common_abs="$(agentstack_physical_dir "$common")" || return 1 ;;
-        *) common_abs="$(agentstack_physical_dir "$target/$common")" || return 1 ;;
-    esac
-    if [ "$(basename "$common_abs")" = ".git" ]; then
-        dirname "$common_abs"
-    else
-        printf '%s\n' "$common_abs"
-    fi
-}
-
-agentstack_same_repository() {
-    local left="${1:-}"
-    local right="${2:-}"
-    local left_key="" right_key=""
-    left_key="$(agentstack_repository_key "$left" 2>/dev/null)" || return 1
-    right_key="$(agentstack_repository_key "$right" 2>/dev/null)" || return 1
-    [ -n "$left_key" ] && [ "$left_key" = "$right_key" ]
-}
-
-# Internal tri-state probe: 0 = repository (stdout key), 2 = verified non-Git,
-# 1 = inspection failure. Callers must distinguish 2 from all other failures.
-_agentstack_probe_invocation_repository() {
-    local target_dir="$1"
-    local repository="" probe_dir="" parent_dir="" failure=""
-    command -v git >/dev/null 2>&1 || {
-        printf 'agentstack: git is required to resolve invocation context\n' >&2
-        return 1
-    }
-    if repository="$(agentstack_repository_key "$target_dir")"; then
-        printf '%s\n' "$repository"
-        return 0
-    fi
-
-    # Distinguish Git's normal non-repository result from execution/IO errors.
-    # The second probe is read-only; unexpected results fail rather than guess.
-    if failure="$(LC_ALL=C env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
-        git -C "$target_dir" rev-parse --git-common-dir 2>&1)"; then
-        printf 'agentstack: repository identity changed or could not be normalized\n' >&2
-        return 1
-    fi
-    case "$failure" in
-        'fatal: not a git repository'*) ;;
-        *)
-            printf 'agentstack: git could not inspect invocation target\n' >&2
-            return 1
-            ;;
-    esac
-
-    # A failed probe is not proof of a non-Git workspace. In particular, do
-    # not turn a broken/unreadable .git or bare repository into an install
-    # fallback. Only a directory without repository markers may fall back.
-    probe_dir="$target_dir"
-    while :; do
-        if [ -e "$probe_dir/.git" ] || [ -L "$probe_dir/.git" ] ||
-           { [ -e "$probe_dir/HEAD" ] && [ -d "$probe_dir/objects" ]; }; then
-            printf 'agentstack: cannot resolve repository metadata for invocation target\n' >&2
-            return 1
-        fi
-        parent_dir="$(dirname "$probe_dir")"
-        [ "$parent_dir" != "$probe_dir" ] || break
-        probe_dir="$parent_dir"
-    done
-    return 2
-}
-
-# Select only from explicit inputs and the already inspected repository.
-_agentstack_invocation_key_from_repository() {
-    local target_dir="$1"
-    local repository="$2"
-    local explicit_key="${3:-}"
-    local non_git_fallback="${4:-}"
-    if [ -n "$explicit_key" ]; then
-        agentstack_normalize_project_key "$explicit_key"
-    elif [ -n "$repository" ]; then
-        printf '%s\n' "$repository"
-    elif [ -n "$non_git_fallback" ]; then
-        agentstack_normalize_project_key "$non_git_fallback"
-    else
-        printf '%s\n' "$target_dir"
-    fi
-}
-
-# Select a top-level invocation's key, never an inherited session identity.
-# Preserve the key-only API's explicit selection without Git discovery.
-agentstack_resolve_invocation_project_key() {
-    local target="${1:-}"
-    local explicit_key="${2:-}"
-    local non_git_fallback="${3:-}"
-    local target_dir="" repository="" probe_status=0
-    target_dir="$(agentstack_physical_dir "$target")" || {
-        printf 'agentstack: invocation target must be an existing directory\n' >&2
-        return 1
-    }
-    if [ -n "$explicit_key" ]; then
-        agentstack_normalize_project_key "$explicit_key"
-        return $?
-    fi
-    if repository="$(_agentstack_probe_invocation_repository "$target_dir")"; then
-        :
-    else
-        probe_status=$?
-        [ "$probe_status" -eq 2 ] || return 1
-        repository=""
-    fi
-    _agentstack_invocation_key_from_repository "$target_dir" "$repository" "" "$non_git_fallback"
-}
-
-# Read-only top-level workspace context. This is not a delegated ownership
-# validator and must never export or attest AGENTSTACK_PROJECT_CONTEXT.
+# Resolve one top-level invocation from its actual target directory. Ambient /
+# installed project keys and inherited Git selectors are deliberately not
+# consulted. An explicit key changes only the Mail namespace; repository,
+# worktree and protected-root provenance still come from TARGET.
 agentstack_resolve_invocation_context() {
-    if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
-        printf 'usage: resolve-invocation-context TARGET [EXPLICIT_KEY [NON_GIT_FALLBACK]]\n' >&2
-        return 2
-    fi
-    local target="${1:-}"
-    local explicit_key="${2:-}"
-    local non_git_fallback="${3:-}"
-    local work_dir="" repository="" worktree_root="" root_repository=""
-    local project_key="" probe_status=0
+    [ "$#" -ge 1 ] && [ "$#" -le 2 ] || return 2
+    local target="$1" explicit_key="${2:-}"
+    local work_dir="" worktree_root="" common="" common_abs=""
+    local repository="" project_key=""
+
     work_dir="$(agentstack_physical_dir "$target")" || {
         printf 'agentstack: invocation target must be an existing directory\n' >&2
         return 1
     }
-    if repository="$(_agentstack_probe_invocation_repository "$work_dir")"; then
-        worktree_root="$(agentstack_git_worktree_root "$work_dir")" || {
-            printf 'agentstack: invocation context requires an inspectable Git worktree\n' >&2
-            return 1
-        }
-        root_repository="$(agentstack_repository_key "$worktree_root")" || return 1
-        [ "$root_repository" = "$repository" ] || {
-            printf 'agentstack: invocation worktree and repository identity disagree\n' >&2
-            return 1
-        }
+
+    worktree_root="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$work_dir" rev-parse --show-toplevel 2>/dev/null)" || worktree_root=""
+    common="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+        git -C "$work_dir" rev-parse --git-common-dir 2>/dev/null)" || common=""
+    if [ -n "$worktree_root" ] && [ -n "$common" ]; then
+        worktree_root="$(agentstack_physical_dir "$worktree_root")" || return 1
+        case "$common" in
+            /*) common_abs="$(agentstack_physical_dir "$common")" || return 1 ;;
+            *) common_abs="$(agentstack_physical_dir "$work_dir/$common")" || return 1 ;;
+        esac
+        if [ "$(basename "$common_abs")" = ".git" ]; then
+            repository="$(dirname "$common_abs")"
+        else
+            repository="$common_abs"
+        fi
     else
-        probe_status=$?
-        [ "$probe_status" -eq 2 ] || return 1
-        repository=""
+        worktree_root=""
     fi
-    project_key="$(_agentstack_invocation_key_from_repository \
-        "$work_dir" "$repository" "$explicit_key" "$non_git_fallback")" || return 1
-    "${AGENTSTACK_PYTHON:-python3}" - "$project_key" "$repository" "$work_dir" "$worktree_root" <<'PY'
+
+    if [ -n "$explicit_key" ]; then
+        if [ -d "$explicit_key" ]; then
+            project_key="$(agentstack_physical_dir "$explicit_key")" || return 1
+        else
+            project_key="$explicit_key"
+        fi
+    elif [ -n "$repository" ]; then
+        project_key="$repository"
+    else
+        project_key="$work_dir"
+    fi
+
+    "${AGENTSTACK_PYTHON:-python3}" - \
+        "$project_key" "$repository" "$work_dir" "$worktree_root" <<'PY'
 import json
-from pathlib import Path
 import sys
 
 project_key, repository, work_dir, worktree_root = sys.argv[1:]
-if worktree_root and not Path(work_dir).is_relative_to(Path(worktree_root)):
-    print("agentstack: invocation target is outside its Git worktree", file=sys.stderr)
-    raise SystemExit(1)
 print(json.dumps({
     "project_key": project_key,
     "repository_key": repository or None,
     "work_dir": work_dir,
     "worktree_root": worktree_root or None,
     "protected_roots": [worktree_root or work_dir],
-}))
+}, separators=(",", ":")))
 PY
 }
 
 # Priority: live AGENTSTACK_PROJECT_KEY, live PROJECT_KEY, installed env, cwd.
+# Legacy consumers retain this behavior; top-level launchers use the invocation
+# context function above instead.
 agentstack_resolve_project_key() {
     local fallback="${1:-}"
     local env_file="${2:-${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh}"
@@ -309,14 +160,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             shift
             agentstack_resolve_invocation_context "$@"
             ;;
-        resolve-invocation-project-key)
-            shift
-            if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
-                printf 'usage: project-context.sh resolve-invocation-project-key TARGET [EXPLICIT_KEY [NON_GIT_FALLBACK]]\n' >&2
-                exit 2
-            fi
-            agentstack_resolve_invocation_project_key "$1" "${2:-}" "${3:-}"
-            ;;
         resolve-project-key)
             shift
             agentstack_resolve_project_key "${1:-}" "${2:-}" "${3:-1}"
@@ -326,7 +169,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             agentstack_installed_env_value "${1:-}" "${2:-}"
             ;;
         *)
-            printf 'usage: project-context.sh {resolve-invocation-context TARGET [EXPLICIT_KEY [NON_GIT_FALLBACK]]|resolve-invocation-project-key TARGET [EXPLICIT_KEY [NON_GIT_FALLBACK]]|resolve-project-key FALLBACK [ENV_FILE [USE_CWD]]|installed-env-value NAME [ENV_FILE]}\n' >&2
+            printf 'usage: project-context.sh {resolve-invocation-context TARGET [EXPLICIT_KEY]|resolve-project-key FALLBACK [ENV_FILE [USE_CWD]]|installed-env-value NAME [ENV_FILE]}\n' >&2
             exit 2
             ;;
     esac
