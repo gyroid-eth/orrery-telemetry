@@ -97,6 +97,7 @@
     "/home/alice/.agentstack/dashboard/portraits_64",
     "/home/alice/.agentstack/dashboard/portraits_pixel",
     "/home/alice/.agentstack/dashboard/providers",
+    "/home/alice/.agentstack/dashboard/quotas",
     "/home/alice/.agentstack/hooks",
     "/home/alice/.agentstack/integrations",
     "/home/alice/.agentstack/integrations/codex_app",
