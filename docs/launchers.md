@@ -140,6 +140,10 @@ CLAUDECODE=1
 
 dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
 
+launcher が child 専用 `CODEX_HOME` を作っていた場合、dashboard resume は正式な project・agent ID・name と private child state / token、さらに `config.toml` 内の local ORRERY proxy identity を照合してから、同じ `CODEX_HOME` / `CODEX_SHARED_CODEX_DIR` と writable root を復元します。state の無い既存 session は従来どおり既存 / 既定設定を使い、state は正しいのに home が無い旧・`inherit` 互換経路も継続します。後者は「home を作らなかった」と「後から消えた」を現 metadata では区別できないため、resume の detail と backend warning に「子専用設定なし・Mail 接続未確認」を残します。state が無いのに同名 child home だけ残る場合や、proxy identity が違う場合は、名前から推測して採用せず resume を停止します。
+
+`codex-cli 0.154.0` の interactive TUI では、startup / resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。そのため resume 直後は history が未確認でもよく、最初の submit 後に公式 payload と rollout header が fresh resume launch に一致して初めて bound になります。この発火時点は 0.154.0 の実測範囲であり、他 version / mode の一般保証ではありません。
+
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 
 ## Mail watcher と REPL 注入

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import atexit
+import hmac
 import json
 import logging
 import math
@@ -31,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2467,6 +2469,189 @@ def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
     return " ".join(parts)
 
 
+_CODEX_PROGRAMS = {"codex", "codex-cli"}
+_CODEX_CHILD_STATE_MAX_BYTES = 65536
+_CODEX_CHILD_CONFIG_MAX_BYTES = 1024 * 1024
+
+
+def _read_private_regular(path: str, label: str, limit: int) -> bytes:
+    """Read one owner-only regular file without following a final symlink."""
+
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{label} is not a regular file")
+    if info.st_uid != os.getuid():
+        raise ValueError(f"{label} is not owned by the dashboard user")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError(f"{label} permissions must be 0600")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
+            raise ValueError(f"{label} changed while it was opened")
+        if stat.S_IMODE(opened.st_mode) & 0o077:
+            raise ValueError(f"{label} permissions must be 0600")
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > limit:
+        raise ValueError(f"{label} is too large")
+    return raw
+
+
+def _is_agentstack_mail_alias(name: str) -> bool:
+    normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
+    return normalized in {
+        "agentmail", "mcpagentmail", "agentstackmail", "orrerymail", "agentstack",
+    }
+
+
+def _validate_codex_child_proxy_config(
+    config: dict, *, session: str, registration: dict, token_file: str
+) -> None:
+    """Require every configured Mail alias to be this child's local proxy."""
+
+    servers = config.get("mcp_servers")
+    if not isinstance(servers, dict):
+        raise ValueError("child Codex config has no ORRERY proxy")
+    mail_servers = [
+        (name, value)
+        for name, value in servers.items()
+        if isinstance(name, str) and _is_agentstack_mail_alias(name)
+    ]
+    if not mail_servers:
+        raise ValueError("child Codex config has no ORRERY proxy")
+    expected_token = os.path.abspath(token_file)
+    for _name, server in mail_servers:
+        if not isinstance(server, dict):
+            raise ValueError("child Codex Mail alias is not a local proxy")
+        # A direct HTTP/bearer entry is the default-home failure mode R1b must
+        # not mistake for an authenticated child proxy.
+        if (
+            not isinstance(server.get("command"), str)
+            or not server["command"].strip()
+            or "url" in server
+            or "bearer_token_env_var" in server
+        ):
+            raise ValueError("child Codex Mail alias is not a local proxy")
+        env = server.get("env")
+        if not isinstance(env, dict):
+            raise ValueError("child Codex Mail proxy has no identity environment")
+        configured_token = env.get("AGENTSTACK_PROXY_TOKEN_FILE")
+        if not isinstance(configured_token, str) or (
+            os.path.abspath(os.path.expanduser(configured_token)) != expected_token
+        ):
+            raise ValueError("child Codex Mail proxy belongs to another registration")
+        if (
+            env.get("AGENTSTACK_PROXY_AGENT_NAME") != session
+            or env.get("AGENTSTACK_PROJECT_KEY") != registration["project_key"]
+            or not isinstance(env.get("AGENTSTACK_PROXY_PROGRAM"), str)
+            or env["AGENTSTACK_PROXY_PROGRAM"] not in _CODEX_PROGRAMS
+        ):
+            raise ValueError("child Codex Mail proxy belongs to another registration")
+
+
+def _codex_resume_child_home(
+    session: str, registration: dict
+) -> tuple[str | None, str]:
+    """Return a verified child CODEX_HOME and its restore status.
+
+    ``unmanaged`` means neither canonical child artifact exists and preserves
+    the pre-existing default/custom-home behavior. ``absent`` means formal
+    child state exists but no home was ever written (legacy/inherit) or it was
+    later removed; current metadata cannot distinguish those cases.
+    """
+
+    if not _valid(session):
+        raise ValueError("Codex child identity is unsafe")
+    state_dir = os.path.join(RUNTIME_DIR, "child-agents")
+    state_path = os.path.join(state_dir, f"{session}.json")
+    child_home = os.path.join(state_dir, f"{session}.codex-home")
+    try:
+        os.lstat(state_path)
+    except FileNotFoundError:
+        try:
+            os.lstat(child_home)
+        except FileNotFoundError:
+            return None, "unmanaged"
+        except OSError as exc:
+            raise ValueError("canonical Codex child home cannot be inspected") from exc
+        raise ValueError("canonical Codex child home has no matching child state")
+    except OSError as exc:
+        raise ValueError("canonical Codex child state cannot be inspected") from exc
+
+    try:
+        state = json.loads(
+            _read_private_regular(
+                state_path, "Codex child state", _CODEX_CHILD_STATE_MAX_BYTES
+            ).decode("utf-8")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Codex child state is invalid") from exc
+    if not isinstance(state, dict):
+        raise ValueError("Codex child state is invalid")
+    if (
+        type(state.get("agent_id")) is not int
+        or state["agent_id"] <= 0
+        or state["agent_id"] != registration["agent_id"]
+        or state.get("agent_name") != session
+        or registration.get("agent_name") != session
+        or state.get("project_key") != registration["project_key"]
+        or not isinstance(state.get("program"), str)
+        or state["program"] not in _CODEX_PROGRAMS
+        or not isinstance(registration.get("program"), str)
+        or registration["program"] not in _CODEX_PROGRAMS
+    ):
+        raise ValueError("Codex child state belongs to another registration")
+    state_token = state.get("registration_token")
+    if not isinstance(state_token, str) or not state_token or len(state_token) > 4096:
+        raise ValueError("Codex child state has no usable owner credential")
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
+    token_file = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+    try:
+        canonical_token = _read_private_regular(
+            token_file, "canonical Codex child credential", 4096
+        ).decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError("canonical Codex child credential is invalid") from exc
+    if not canonical_token or not hmac.compare_digest(
+        canonical_token.encode("utf-8"), state_token.encode("utf-8")
+    ):
+        raise ValueError("Codex child state and credential are from different registrations")
+
+    try:
+        home_info = os.lstat(child_home)
+    except FileNotFoundError:
+        return None, "absent"
+    except OSError as exc:
+        raise ValueError("canonical Codex child home cannot be inspected") from exc
+    if not stat.S_ISDIR(home_info.st_mode) or home_info.st_uid != os.getuid():
+        raise ValueError("canonical Codex child home is unsafe")
+    config_path = os.path.join(child_home, "config.toml")
+    try:
+        config = tomllib.loads(
+            _read_private_regular(
+                config_path, "Codex child config", _CODEX_CHILD_CONFIG_MAX_BYTES
+            ).decode("utf-8")
+        )
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError("Codex child config is invalid") from exc
+    _validate_codex_child_proxy_config(
+        config,
+        session=session,
+        registration=registration,
+        token_file=token_file,
+    )
+    return child_home, "restored"
+
+
 def _do_resume_codex(session: str) -> dict:
     """Codex agent を `codex resume <sid>` で tmux 再開する。
 
@@ -2487,6 +2672,16 @@ def _do_resume_codex(session: str) -> dict:
     if not cwd:
         return {"ok": False,
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
+    registration = _codex_registration(session)
+    if registration is None:
+        return {"ok": False,
+                "error": "Codex の正式な project/agent 登録を確認できず再開できません"}
+    try:
+        child_home, child_home_status = _codex_resume_child_home(
+            session, registration
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": f"Codex child 設定を確認できません: {exc}"}
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
     bootstrap = os.path.join(install_home, "bin", "agentstack-codex-bootstrap")
     if not os.path.isfile(bootstrap):
@@ -2500,15 +2695,31 @@ def _do_resume_codex(session: str) -> dict:
     src = (
         f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)} && '
     )
+    child_home_env = ""
+    extra_dirs = None
+    if child_home:
+        child_home_env = (
+            f'export CODEX_HOME={shlex.quote(child_home)}; '
+            f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
+        )
+        extra_dirs = [child_home]
+    elif child_home_status == "absent":
+        logging.warning(
+            "Codex resume child home absent; using existing/default config "
+            "with Mail connectivity unconfirmed (agent=%s id=%s)",
+            session,
+            registration["agent_id"],
+        )
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={shlex.quote(session)}; '
         'export AGENTSTACK_RESERVED_IDENTITY=1; '
         'export AGENTSTACK_CODEX_LAUNCH_KIND=resume; '
+        f'{child_home_env}'
         f'{src}'
         f'exec env -u OPENAI_API_KEY codex resume {sid} '
         f'-C {shlex.quote(cwd)} '
-        f'{_codex_child_launch_flags()}'
+        f'{_codex_child_launch_flags(extra_dirs)}'
     )
     launch = _open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
@@ -2516,10 +2727,13 @@ def _do_resume_codex(session: str) -> dict:
         title=session,
     )
     if launch.get("ok"):
+        detail = f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})"
+        if child_home_status == "absent":
+            detail += "。子専用設定なし。既存/既定設定で再開し、Mail 接続は未確認です"
         return {
             "ok": True,
             "action": "resumed",
-            "detail": f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
+            "detail": detail,
             "terminal": launch.get("adapter"),
         }
     return {"ok": False, "error": f"codex resume 起動失敗: {launch.get('error')}"}

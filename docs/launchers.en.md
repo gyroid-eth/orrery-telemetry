@@ -138,6 +138,10 @@ The value is set with `tmux new-session -e` when the session is created, not in 
 
 Dashboard Codex resume also always sources the same installer-distributed `agentstack-codex-bootstrap`, re-registers the reserved identity, and creates a fresh resume launch before it execs `codex resume`. It does not depend on a personal wrapper under `~/.codex/bin`; a bootstrap or prepare failure prevents resume from starting.
 
+When the launcher created a child-specific `CODEX_HOME`, dashboard resume restores the same `CODEX_HOME`, `CODEX_SHARED_CODEX_DIR`, and writable root only after matching the formal project, agent ID and name with private child state / token and the local ORRERY proxy identity in `config.toml`. An existing session with no child state keeps its previous/default configuration. The legacy / `inherit` compatibility path also continues when valid state exists but the home is absent. Current metadata cannot distinguish “never created” from “removed later”, so that path records “no child config; Mail connectivity unconfirmed” in the resume detail and backend warning log. A same-name child home with no state, or a proxy for a different identity, is never adopted by guess and stops the resume.
+
+In the interactive TUI of `codex-cli 0.154.0`, measurement showed the startup / resume `SessionStart` hook firing after the first submitted user message, not while the composer remained idle. History may therefore remain unconfirmed immediately after resume; it becomes bound only after the first submit supplies an official payload whose ID and rollout header match the fresh resume launch. This timing statement is limited to the measured 0.154.0 path and is not a general guarantee for other versions or modes.
+
 Because an API key in the environment can override OAuth, it is removed only from the Codex subprocess.
 
 ## Mail watcher and REPL injection
