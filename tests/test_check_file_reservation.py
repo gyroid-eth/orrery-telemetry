@@ -299,6 +299,10 @@ class ReservationHookTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("FILE RESERVATION REQUIRED", result.stderr)
+        self.assertIn(
+            "reservation tool provided by your connection schema", result.stderr
+        )
+        self.assertNotIn("Acquire one with macro_file_reservation_cycle", result.stderr)
         self.assertEqual(len(server.requests), 2)
         self.assertEqual(
             {request["json"]["params"]["name"] for request in server.requests},
