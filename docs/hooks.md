@@ -15,7 +15,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | Event / matcher | 実行ファイル | 発火タイミング | 主な動作 |
 | --- | --- | --- | --- |
 | `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | startup / resume / `/clear` / compact の直後 | 既知の identity を pane metadata、tmux session、terminal title 用 clipboard、managed agent list へ反映 |
-| `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | ORRERY Mail health と既存 identity を確認し、同名再登録または登録手順と `fetch_inbox` を session context へ出力 |
+| `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | ORRERY Mail health と既存 identity を確認し、embedded task・bound proxy・raw/direct の優先順位に沿う案内を session context へ出力 |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の既存 exact path reservation を renew-only で確認。0件は1回だけ再確認し、なお0件なら exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
 | `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | file reservation の取得・renew 直前 | 同じ agent/path に対する古い release worker の token を無効化し、新しい reservation が直後に消される競合を防止 |
@@ -41,8 +41,8 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 ### `session-start-reminder.sh`
 
 - **発火:** すべての `SessionStart` source。startup だけでなく resume、`/clear`、compact 後にも走ります。
-- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録し、成功後は `fetch_inbox` から始めるよう案内します。
-- **再登録できない場合:** 解決済みの同名を `register_agent` に渡す手順を表示します。別名生成へ分岐しません。child 専用 MCP proxy が認証を注入している場合は、model に token file を読ませません。
+- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
+- **経路の境界:** child proxy の設定 artifact は案内を具体化する hint にだけ使い、model に実際に提供された tool の説明と引数 schema を優先します。bound proxy では helper・再登録・token file 読取を指示せず、障害時も raw/helper へ自動 fallback させません。raw/direct の既存 identity だけ token-safe helper に進み、新規 raw 登録とは分けます。generic な登録失敗を stale token と断定しません。
 
 ### `check-file-reservation.sh`
 
