@@ -10,7 +10,28 @@ set -euo pipefail
 set +x 2>/dev/null || true
 
 PROG="agentstack-reregister"
-die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+emit_diagnostic() {
+  local stage="$1" reason="$2" credential_source="${3:-}"
+  local curl_exit="${AGS_REGISTRATION_DIAG_CURL_EXIT:-}"
+  local http_status="${AGS_REGISTRATION_DIAG_HTTP_STATUS:-}"
+  local rpc_code="${AGS_REGISTRATION_DIAG_RPC_CODE:-}"
+  printf '%s: stage=%s reason=%s' "$PROG" "$stage" "$reason" >&2
+  case "$credential_source" in
+    child-state|inherited|runtime-file)
+      printf ' credential_source=%s' "$credential_source" >&2
+      ;;
+  esac
+  [[ "$curl_exit" =~ ^[0-9]+$ ]] && printf ' curl_exit=%s' "$curl_exit" >&2
+  [[ "$http_status" =~ ^[0-9]+$ ]] && printf ' http_status=%s' "$http_status" >&2
+  [[ "$rpc_code" =~ ^-?[0-9]+$ ]] && printf ' rpc_code=%s' "$rpc_code" >&2
+  printf '\n' >&2
+}
+
+fail_diagnostic() {
+  emit_diagnostic "$@"
+  exit 1
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -26,7 +47,7 @@ load_env_file "${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
 load_env_file "$SCRIPT_DIR/../env.sh"
 
 REGISTER_LIB="${AGENTSTACK_REGISTER_LIB:-$SCRIPT_DIR/lib/agentstack-register.sh}"
-[[ -f "$REGISTER_LIB" ]] || die "missing register library: $REGISTER_LIB"
+[[ -f "$REGISTER_LIB" ]] || fail_diagnostic "local-token" "library-unavailable"
 # shellcheck disable=SC1090
 . "$REGISTER_LIB"
 
@@ -51,7 +72,7 @@ PY
 }
 
 agent_name="${1:-${AGENT_NAME:-}}"
-[[ -n "$agent_name" ]] || die "agent name required"
+[[ -n "$agent_name" ]] || fail_diagnostic "local-token" "input-missing"
 
 program="${2:-${AGENTSTACK_REREGISTER_PROGRAM:-codex}}"
 case "$program" in
@@ -71,25 +92,30 @@ esac
 model="${3:-${AGENTSTACK_REREGISTER_MODEL:-$default_model}}"
 
 project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-[[ -n "$project_key" ]] || die "AGENTSTACK_PROJECT_KEY is required"
+[[ -n "$project_key" ]] || fail_diagnostic "local-token" "input-missing"
 
 ags_mail_load_token
 
 child_state_token="$(load_child_state_token "$agent_name" 2>/dev/null || true)"
 registration_token=""
+credential_source=""
 if [[ -n "${PARENT_AGENT:-}" && -n "$child_state_token" ]]; then
   registration_token="$child_state_token"
+  credential_source="child-state"
 fi
 if [[ -z "$registration_token" ]]; then
   registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+  [[ -n "$registration_token" ]] && credential_source="inherited"
 fi
 if [[ -z "$registration_token" ]]; then
   registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
+  [[ -n "$registration_token" ]] && credential_source="runtime-file"
 fi
 if [[ -z "$registration_token" && -n "$child_state_token" ]]; then
   registration_token="$child_state_token"
+  credential_source="child-state"
 fi
-[[ -n "$registration_token" ]] || die "registration token not available for $agent_name"
+[[ -n "$registration_token" ]] || fail_diagnostic "local-token" "credential-unavailable"
 
 CHILD_REGISTRATION_TOKEN="$registration_token"
 export CHILD_REGISTRATION_TOKEN
@@ -99,7 +125,11 @@ if ags_register_session "$project_key" "$program" "$model" "$prefix" "${PWD:-$pr
 else
   register_status=$?
   if [[ "$register_status" == "2" && "${AGS_AGENT_NAME_SUBSTITUTED:-0}" == "1" ]]; then
-    die "register_agent changed reserved identity '$agent_name' to '${AGS_SERVER_RETURNED_AGENT_NAME:-unknown}'; refusing to continue under a replacement name"
+    emit_diagnostic "identity-check" "identity-changed" "$credential_source"
+    exit 1
   fi
-  die "register_agent failed for $agent_name"
+  diag_stage="${AGS_REGISTRATION_DIAG_STAGE:-register_agent}"
+  diag_reason="${AGS_REGISTRATION_DIAG_REASON:-unknown}"
+  emit_diagnostic "$diag_stage" "$diag_reason" "$credential_source"
+  exit 1
 fi

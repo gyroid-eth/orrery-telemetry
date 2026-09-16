@@ -104,7 +104,7 @@ ags_mcp_call() {{
     printf '%s\\n' "$@" > "$CAPTURE"
     printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"Fresh-Dirac","registration_token":"server-token"}}}}}}'
   else
-    printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
   fi
 }}
 ags_agent_exists() {{ return 1; }}
@@ -131,7 +131,7 @@ ags_mcp_call() {{
   if [[ "$tool" == "register_agent" ]]; then
     printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"FrostyPasteur","registration_token":"stable-owner-token"}}}}}}'
   else
-    printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
   fi
 }}
 ags_generate_registration_token() {{ printf '%s\\n' requested-owner-token; }}
@@ -163,7 +163,7 @@ ags_mcp_call() {{
   if [[ "$1" == "register_agent" ]]; then
     printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"OtherAgent","registration_token":"other-token"}}}}}}'
   else
-    printf '%s\\n' '{{"result":{{"structuredContent":{{}}}}}}'
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
   fi
 }}
 CHILD_REGISTRATION_TOKEN=reserved-owner-token

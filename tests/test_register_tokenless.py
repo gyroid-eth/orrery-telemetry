@@ -81,11 +81,21 @@ with open(log, "a", encoding="utf-8") as fh:
 body = {}
 if tool == "register_agent":
     body = {"name": args.get("name") or "StubAgent", "registration_token": "stub-token"}
+elif tool == "ensure_project":
+    body = {"id": 1, "human_key": args.get("human_key")}
 elif tool == "check_agent_name_available":
     body = {"available": True}
 
-print(json.dumps({"jsonrpc": "2.0", "id": "1",
-                  "result": {"content": [{"type": "text", "text": json.dumps(body)}]}}))
+response = json.dumps({"jsonrpc": "2.0", "id": "1",
+                       "result": {"content": [{"type": "text", "text": json.dumps(body)}]}})
+argv = sys.argv[1:]
+if "--output" in argv:
+    with open(argv[argv.index("--output") + 1], "w", encoding="utf-8") as fh:
+        fh.write(response)
+    write_out = argv[argv.index("--write-out") + 1] if "--write-out" in argv else ""
+    sys.stdout.write(write_out.replace("%{http_code}", "200"))
+else:
+    print(response)
 '''
 
 # agent-start copies the agent name to the clipboard (bin/agent-start:82). Left

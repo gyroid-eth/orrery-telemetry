@@ -286,7 +286,20 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
-Inspect:
+On failure, stderr contains a fixed, secret-free diagnostic. For example,
+`stage=ensure_project reason=transport-failed curl_exit=7` identifies the first
+transport step; `stage=register_agent reason=http-rejected http_status=403`
+identifies an HTTP rejection; and `stage=response-parse reason=invalid-response`
+identifies an unexpected response shape. `rpc-error` and `tool-error` identify
+the JSON-RPC and tool layers respectively. `identity-check
+reason=identity-changed` means a reserved identity was replaced by another name,
+so the helper stopped fail-closed. `credential_source` reports only whether the
+owner credential came from `child-state`, `inherited`, or `runtime-file`; it
+never reports the value.
+
+Do not infer a stale or wrong-owner token from HTTP 401 or 403 alone. Only when
+the diagnostic says `stage=local-token reason=credential-unavailable`, first
+inspect these owner-credential locations:
 
 ```text
 $AGENTSTACK_RUNTIME_DIR/agent_token_<name>
@@ -294,6 +307,8 @@ $AGENTSTACK_RUNTIME_DIR/child-agents/<name>.json
 ```
 
 If the token is missing / stale / owned by another identity, report it to the parent or operator. Do not paste a token into chat, logs, or process arguments.
+Responses and curl stderr discarded before these diagnostics existed cannot be
+reconstructed retroactively from the new output.
 
 ## Hook blocks with `AGENT NOT REGISTERED`
 
