@@ -8,6 +8,32 @@
 
 ---
 
+## 2026.09.16.2
+
+### 認証済みのセッションが、存在しない道具を要求されて止まっていた
+
+ローカルの MCP proxy 経由で起動したエージェントは、接続の時点で認証が済んでいます。ところが起動時の案内文は、接続方式に関係なく「まず `agentstack-reregister` を実行しろ」と書いていました。必要のない helper と token ファイルを探させ、承認を 1 回よぶだけの手順です。
+
+**予約の案内はさらに実害がありました。** 案内文は `macro_file_reservation_cycle` や `renew_file_reservations` を無条件で指定しますが、proxy が見せる schema にその名前はありません（`reserve_files` / `renew_reservations` / `release_reservations` で、呼び手と project は proxy が持つため引数に取りません）。案内どおりに動いたエージェントは、**ファイルを編集する直前に存在しない道具へ手を伸ばし、そこで止まります**。調整は fail-closed に設計してあるので、何も壊れていないのに黙って進まない、という形になります。
+
+起動 prompt・managed の予約節・task 依頼の本文が、**接続方式で分岐する**ようになりました。
+
+| 接続 | inbox | 予約 |
+|---|---|---|
+| proxy 経由 | 自分の inbox を直接読む。helper も token も不要 | `reserve_files` / `renew_reservations` / `release_reservations` |
+| 直接 | 従来どおり | `macro_file_reservation_cycle` / `file_reservation_paths` / `renew_file_reservations` |
+
+**proxy の不調は、直接接続へ切り替える理由にはしません。** それは認証を迂回することになるためです。inbox が task の正本であること、embedded / standalone の案内、登録・credential・予約の実処理は変わっていません。
+
+直接接続の復旧手順にも 1 つ誤りがありました。「通知やセッション名から既存の名前を確定せよ」と書いた直後に、`AGENT_NAME` が空のままコマンドを実行していました。先に設定する、と明記しています。**新しい名前を生成することはありません。**
+
+この版への更新に特別な手順は要りません。
+
+```bash
+git pull
+./scripts/install.sh
+```
+
 ## 2026.09.16.1
 
 ### 更新手順が、installer 自身の出力で止まっていた
