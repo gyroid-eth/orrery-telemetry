@@ -308,7 +308,18 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
 
 を実行します。
 
-確認対象:
+失敗時の stderr は、秘密を含まない定型診断です。たとえば
+`stage=ensure_project reason=transport-failed curl_exit=7` は通信前半、
+`stage=register_agent reason=http-rejected http_status=403` は HTTP 拒否、
+`stage=response-parse reason=invalid-response` は応答形式で止まったことを示します。
+`rpc-error` / `tool-error` はそれぞれ JSON-RPC / tool 層の失敗です。
+`identity-check reason=identity-changed` なら、予約済み identity が別名へ置換されたため
+fail-closed で停止しています。`credential_source` は `child-state` / `inherited` /
+`runtime-file` のどこから owner credential を選んだかだけを示し、値は表示しません。
+
+`http_status=401` や `403` だけで stale / wrong-owner token と断定しないでください。
+`stage=local-token reason=credential-unavailable` の場合に限り、まず次の owner credential
+保存先を確認します。
 
 ```text
 $AGENTSTACK_RUNTIME_DIR/agent_token_<name>
@@ -316,6 +327,7 @@ $AGENTSTACK_RUNTIME_DIR/child-agents/<name>.json
 ```
 
 token が missing / stale / wrong-owner なら親または operator へ報告してください。token を chat、log、process argument に貼らないでください。
+診断追加前に捨てられた過去の response や curl stderr は、この表示から後追いで復元できません。
 
 ## Hook が `AGENT NOT REGISTERED` で block する
 

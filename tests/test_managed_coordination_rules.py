@@ -119,6 +119,90 @@ def test_codex_coordination_routes_are_ordered_and_do_not_force_raw_recovery():
     assert "set `AGENT_NAME` to that exact existing name" in codex
 
 
+def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
+    claude = _read("claude/CLAUDE.md")
+    spawn = _read("hooks/spawn_child.sh")
+    headings = (
+        "### 1. Embedded canonical task",
+        "### 2. Bound ORRERY proxy",
+        "### 3. Raw/direct connection after shell registration",
+        "### 4. Recovering an existing identity over raw/direct MCP",
+        "### 5. Registering a genuinely new raw/direct session",
+        "### Shared boundaries",
+        "### Claude Code hook boundary",
+    )
+    offsets = [claude.index(heading) for heading in headings]
+    assert offsets == sorted(offsets)
+    assert "Use only the first matching route below" in claude
+    assert "standalone launches can also use embedded-task semantics" in claude
+    assert "First calls:" not in claude
+    assert "If you were launched with `agent-start`" not in claude
+    assert "do not fall back from a proxy failure to raw registration" in claude
+    assert "It proves only the local" in claude
+    assert "proxy binding, not ORRERY Mail reachability" in claude
+    assert "A generic `register_agent failed` does not by itself prove" in claude
+    assert "set `AGENT_NAME` to that exact existing name" in claude
+    assert 'program="claude-code"' in claude
+    assert "proxy use alone does not prove that a flag exists" in claude
+    assert "Sessions with a resolved `AGENT_NAME` are separately exempt" in claude
+    assert spawn.count("Follow the child-agent startup procedure in CLAUDE.md") == 2
+    assert "A normal delegated child that was not given a separate" in claude
+    assert "must fetch only its own inbox through the selected connection" in claude
+    assert "whether embedded or standalone, takes" in claude
+    assert "Every successful `Edit`/`Write` releases its reservation" in claude
+    assert "reserving it again first" in claude
+
+
+def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
+    tmp_path: pathlib.Path,
+):
+    home = tmp_path / "home"
+    claude_home = home / ".claude"
+    project = tmp_path / "project"
+    claude_home.mkdir(parents=True)
+    project.mkdir()
+    target = project / "CLAUDE.md"
+    target.write_text("# Personal project instructions\n", encoding="utf-8")
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": str(home),
+        "CLAUDE_HOME": str(claude_home),
+        "AGENTSTACK_HOME": str(tmp_path / "installed-agentstack"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+        "AGENTSTACK_TEMPLATE_HOME": str(ROOT),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_CLAUDE_MD_SCOPE": "project",
+    }
+
+    for _ in range(2):
+        result = subprocess.run(
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-claude-setup")],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "installed managed block into" in result.stdout
+
+    generated = target.read_text(encoding="utf-8")
+    assert generated.count("<!-- >>> claude-agent-stack") == 1
+    assert generated.count("<!-- <<< claude-agent-stack -->") == 1
+    assert generated.count("# Personal project instructions") == 1
+    assert "### 1. Embedded canonical task" in generated
+    assert "### 2. Bound ORRERY proxy" in generated
+    assert "Bound proxy: follow its actual schema and use `reserve_files`" in generated
+    assert "Renew with `renew_reservations`" in generated
+    assert "release with `release_reservations`" in generated
+    assert "Raw/direct MCP: acquire with `macro_file_reservation_cycle`" in generated
+    assert "Renew with `renew_file_reservations`" in generated
+    assert "`release_file_reservations`" in generated
+    assert str(project) in generated
+    assert str(tmp_path / "installed-agentstack") in generated
+    assert "__AGENTSTACK_" not in generated
+
+
 def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
     tmp_path: pathlib.Path,
 ):

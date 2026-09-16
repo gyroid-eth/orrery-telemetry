@@ -237,7 +237,7 @@ block_reservation_write() {
     echo "$(date -u '+%Y-%m-%dT%H:%M:%S') BLOCK agent=$AGENT path=$REL_PATH reason=$reason" >> "$log_file" 2>/dev/null
     echo "FILE RESERVATION REQUIRED: $FILE_PATH" >&2
     echo "$reason" >&2
-    echo "Acquire one with macro_file_reservation_cycle before editing." >&2
+    echo "Acquire one through the reservation tool provided by your connection schema before editing." >&2
     exit 2
 }
 
