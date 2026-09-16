@@ -39,6 +39,22 @@ DECK から RESUME した Codex の子が、起動時に選ばれた専用の設
 
 絞った子には、初回のプロンプトで「持っていないツール」と「必要なら親に相談すること」を伝えます。**測った範囲では、後から設定を有効に戻しても、その会話では呼び出せませんでした**（設定変更後、`/mcp` の実行後、同じ会話を新しいプロセスで再開した後、いずれも呼び出しを確認できていません）。詳細と限界は [docs/delegation.md](docs/delegation.md) にあります。
 
+### 更新手順が、installer 自身の出力で止まっていた
+
+`AGENTSTACK_MAIL_ENV` は installer が `env.sh` に書き出す値で、shell 起動時に読まれます。render のパスは source id と venv / endpoint / state の hash から決まるため、**前回の install が書いた値は次の upgrade の期待値と一致しません**。
+
+その結果、docs に書いてある手順が、稼働中のサービスを引き継ぐ前に停止していました。
+
+```
+error: AGENTSTACK_MAIL_ENV must equal the native service env '…/renders/<id>/service.env'
+```
+
+**回避するには変数を手で外すしかなく、そのことはどこにも書かれていませんでした。**
+
+継承した値が「**`env.sh` から読んだ literal の値と一致し、かつこの install の管理 render 配置にある**」ときだけ、set されていなかったものとして扱うようにしました。値が等しいことは誰が設定したかの証明にならないので、**upgrade をまたいで native path を固定したい場合は `AGENTSTACK_MAIL_SERVICE_ENV` を明示**してください。そちらが優先され、免除の対象になりません。管理 render 配置の外にあるパスは、従来どおり停止します。
+
+値は**読むだけで、source しません**。source すると `env.sh` の中の他のコードが走り、途中で失敗したファイルでも値を返してしまうためです。
+
 ### エージェントの使用量表示
 
 ヘッダーの使用量表示で、同じ観測時刻が複数箇所に重複していたのを 1 箇所にまとめました。provider ごとに違っていた表記も揃えています。
