@@ -146,6 +146,64 @@ def _run_hook(mcp_url: str, tmp_path: Path) -> str:
     return result.stdout
 
 
+def _run_named_hook(
+    mcp_url: str,
+    tmp_path: Path,
+    *,
+    proxy_config: bool,
+    register_status: int = 0,
+) -> str:
+    """Run the real reminder with an isolated identity and fake register lib."""
+    runtime = tmp_path / "runtime"
+    fake_lib = tmp_path / "agentstack-register.sh"
+    fake_lib.write_text(
+        """\
+ags_mail_load_token() {
+    CHILD_REGISTRATION_TOKEN=fixture-owner-token
+    export CHILD_REGISTRATION_TOKEN
+}
+ags_load_registration_token() {
+    printf '%s\\n' fixture-owner-token
+}
+ags_register_session() {
+    if [ "${FAKE_REGISTER_STATUS:-0}" -ne 0 ]; then
+        return "$FAKE_REGISTER_STATUS"
+    fi
+    AGS_REGISTERED_AGENT_ID=41
+    AGS_REGISTERED_AGENT_NAME="$6"
+    return 0
+}
+""",
+        encoding="utf-8",
+    )
+    if proxy_config:
+        config = runtime / "child-agents" / "RouteAgent.codex-home" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("# fixture proxy config\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["/bin/bash", str(HOOK)],
+        input="{}",
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=tmp_path,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": str(tmp_path),
+            "AGENT_NAME": "RouteAgent",
+            "AGENTSTACK_PROJECT_KEY": "/fixture/project",
+            "AGENTSTACK_MCP_URL": mcp_url,
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_HOOKS_DIR": str(REPO_ROOT / "hooks"),
+            "AGENTSTACK_REGISTER_LIB": str(fake_lib),
+            "FAKE_REGISTER_STATUS": str(register_status),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
 def test_a_server_that_only_serves_mcp_is_reported_as_running(
     mail_like_server: http.server.HTTPServer,
     tmp_path: Path,
@@ -283,3 +341,57 @@ def test_a_later_event_carrying_the_reply_is_found(
     host, port = mail_like_server.server_address[:2]
     output = _run_hook(f"http://{host}:{port}/mcp", tmp_path)
     assert "server is running" in output, output
+
+
+def test_bound_proxy_reminder_does_not_prescribe_raw_registration(
+    mail_like_server: http.server.HTTPServer,
+    tmp_path: Path,
+) -> None:
+    host, port = mail_like_server.server_address[:2]
+    output = _run_named_hook(
+        f"http://{host}:{port}/mcp", tmp_path, proxy_config=True
+    )
+    assert "child proxy 設定があります" in output
+    assert "parent の有無を問わず task を開始" in output
+    assert "提供された tool の説明・引数 schema" in output
+    assert "helper / ensure_project / register_agent / token file は不要" in output
+    assert "local binding の確認であって Mail 到達確認とは扱わない" in output
+    assert "raw/helper へ自動 fallback しない" in output
+    assert "schema 自体が raw/direct の場合だけ" in output
+    assert "proxy call の失敗を raw 判定の根拠にしない" in output
+    assert "registration_token" not in output
+    assert "fetch_inbox (agent_name=" not in output
+
+
+def test_raw_registered_reminder_keeps_model_auth_separate(
+    mail_like_server: http.server.HTTPServer,
+    tmp_path: Path,
+) -> None:
+    host, port = mail_like_server.server_address[:2]
+    output = _run_named_hook(
+        f"http://{host}:{port}/mcp", tmp_path, proxy_config=False
+    )
+    assert "shell hook で登録済み" in output
+    assert "raw/direct schema なら shell 登録済みなので再登録は不要" in output
+    assert "model 側 MCP 認証は別" in output
+    assert "registration_token に渡してください" in output
+    assert "ensure_project ->" not in output
+    assert "agentstack-reregister" not in output
+
+
+def test_proxy_hint_does_not_fall_back_when_shell_registration_fails(
+    mail_like_server: http.server.HTTPServer,
+    tmp_path: Path,
+) -> None:
+    host, port = mail_like_server.server_address[:2]
+    output = _run_named_hook(
+        f"http://{host}:{port}/mcp",
+        tmp_path,
+        proxy_config=True,
+        register_status=1,
+    )
+    assert "shell registration did not complete" in output
+    assert "bound proxy schema" in output
+    assert "helper・raw registration・token 読取へ fallback しない" in output
+    assert "ensure_project ->" not in output
+    assert "registration_token" not in output

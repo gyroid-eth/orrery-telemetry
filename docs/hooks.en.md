@@ -15,7 +15,7 @@ After the installer merges `settings.template.json` into `~/.claude/settings.jso
 | Event / matcher | Executable | Trigger timing | Primary behavior |
 | --- | --- | --- | --- |
 | `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | Immediately after startup / resume / `/clear` / compact | Apply a known identity to pane metadata, the tmux session, the terminal-title clipboard, and the managed agent list |
-| `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | Same as above, after the title helper | Check ORRERY Mail health and the existing identity, then output same-name reregistration or registration instructions and `fetch_inbox` into session context |
+| `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | Same as above, after the title helper | Check ORRERY Mail health and the existing identity, then output route-aware guidance for embedded tasks, bound proxies, and raw/direct connections into session context |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Immediately before Claude Code edits a file | Check an existing exact-path reservation inside a protected root with renew-only semantics. Retry zero results once, then block with exit 2 if the result remains zero |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | Immediately before an edit, write, or shell command | Check a session flag to confirm that the current Claude session has called `register_agent`. Block an unregistered session with exit 2 |
 | `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | Immediately before acquiring or renewing a file reservation | Invalidate the token of an older release worker for the same agent/path, preventing a race that would remove the new reservation immediately |
@@ -36,8 +36,8 @@ The installer distributes the endpoint and transport credential selector in the 
 ### `session-start-reminder.sh`
 
 - **Trigger:** Every `SessionStart` source, including startup, resume, `/clear`, and after compaction.
-- **Behavior:** Resolves identity in the order `AGENT_NAME` → pane metadata → exact tmux session and checks ORRERY Mail liveness. When an owner token and project key are available, it reregisters the same identity from the shell and instructs the session to begin with `fetch_inbox` after success.
-- **When reregistration is unavailable:** Displays instructions that pass the resolved same name to `register_agent`; it does not branch into generating another name. When a child-specific MCP proxy injects authentication, it does not make the model read the token file.
+- **Behavior:** Resolves identity in the order `AGENT_NAME` → pane metadata → exact tmux session and checks ORRERY Mail liveness. When an owner token and project key are available, it reregisters the same identity from the shell. It then tells the model to use only the first matching route: an embedded task that explicitly says registration is complete and no ritual is required, the bound proxy shown by the provided tool schema, or raw/direct MCP. An embedded task is not excluded merely because there is no parent. Shell registration and authentication of a raw model-side MCP tool session are separate.
+- **Route boundary:** A child proxy configuration artifact is only a hint that makes the reminder more specific; the descriptions and argument schemas of the tools actually provided to the model remain authoritative. A bound proxy is never told to run the helper, register again, or read a token file, and a proxy failure does not trigger automatic raw/helper fallback. Only an existing identity on confirmed raw/direct MCP uses the token-safe helper, separately from new raw registration. A generic registration failure is not labelled as a stale token.
 
 ### `check-file-reservation.sh`
 

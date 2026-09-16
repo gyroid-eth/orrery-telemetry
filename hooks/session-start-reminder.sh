@@ -2,8 +2,10 @@
 # session-start-reminder.sh
 # SessionStart hook for startup/resume/clear/compact.
 #
-# If an existing identity can be resolved, print a reminder to re-register with
-# the same ORRERY Mail name instead of generating a fresh identity.
+# If an existing identity can be resolved, refresh its shell-side registration
+# and print route-aware guidance. A bound proxy, raw/direct MCP, and an embedded
+# task have different authentication contracts; the reminder must not send all
+# three through the raw recovery helper.
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
@@ -156,11 +158,11 @@ find_register_lib() {
     return 1
 }
 
-# True when this session's ORRERY Mail MCP server is the per-child proxy that
-# spawn_child.sh configured. The proxy injects the token, so the agent must not
-# read it: doing so triggers a Bash approval prompt and pulls the secret into
-# the model's context for no benefit.
-child_uses_mcp_proxy() {
+# True when launch artifacts show that a per-child proxy was configured. This
+# is enough to tailor the reminder, but it does not prove which tool surface
+# the model actually received; the printed guidance still makes the real tool
+# descriptions and argument schema authoritative.
+child_has_mcp_proxy_config() {
     agent_name="$1"
     [ -n "$agent_name" ] || return 1
     # Claude children get --mcp-config; Codex children get their own CODEX_HOME.
@@ -255,27 +257,36 @@ if mail_server_is_answering; then
     if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
         echo "ORRERY Mail server is running. This session is already registered."
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
-        echo "新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。"
-        echo "1. fetch_inbox (agent_name=\"$SHELL_REGISTERED_AGENT\")"
-        if child_uses_mcp_proxy "$SHELL_REGISTERED_AGENT"; then
-            # The local proxy holds this agent's token and authenticates every
-            # call. Telling the agent to read the token anyway costs a Bash
-            # approval prompt for nothing, and puts the secret in its context.
-            echo "この接続はローカル MCP proxy 経由で既に認証済みです。token ファイルを読む必要はありません（読まないでください）。"
+        echo "接続経路は正本の明示契約と、提供された tool の説明・引数 schema で判定し、最初に一致した経路だけを使ってください。"
+        echo "正本 embed-task が登録済み・儀式不要を明示している場合はそれが最優先です。parent の有無を問わず task を開始し、起動儀式として inbox を取得しないでください。"
+        if child_has_mcp_proxy_config "$SHELL_REGISTERED_AGENT"; then
+            # Launch state says a proxy was configured, but the model's actual
+            # tool schema remains the authority. Do not turn this hint into a
+            # raw registration fallback if the proxy reports an error.
+            echo "この identity には child proxy 設定があります。提供 tool が bound proxy schema なら、その schema の引数だけで使ってください。"
+            echo "bound proxy では helper / ensure_project / register_agent / token file は不要です。runtime_status は必要な場合だけ使い、local binding の確認であって Mail 到達確認とは扱わないでください。"
+            echo "proxy が unbound、identity 不一致、transport/auth failure の場合は停止してその状態を報告し、raw/helper へ自動 fallback しないでください。"
+            echo "実際に提供された schema 自体が raw/direct の場合だけ managed raw/direct 経路を使います。proxy call の失敗を raw 判定の根拠にしないでください。"
         else
-            echo "初回の fetch_inbox/whois では、$RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
+            echo "proxy 設定は hook から確認できません。server 名や環境変数だけで raw と決めず、提供された tool schema を確認してください。"
+            echo "raw/direct schema なら shell 登録済みなので再登録は不要です。model 側 MCP 認証は別のため、初回の raw fetch_inbox/whois だけ $RUNTIME_DIR/agent_token_${SHELL_REGISTERED_AGENT} を読み、registration_token に渡してください。"
+            echo "bound proxy schema なら caller identity/project/token を追加せず、その schema の引数だけで使ってください。"
         fi
     elif [ -n "$RESOLVED_AGENT" ]; then
-        echo "ORRERY Mail server is running. Register this session before working."
+        echo "ORRERY Mail server is running, but shell registration did not complete."
         if [ -n "$SHELL_REGISTRATION_ERROR" ]; then
             echo "ERROR: $SHELL_REGISTRATION_ERROR。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
+        elif child_has_mcp_proxy_config "$RESOLVED_AGENT"; then
+            echo "あなたは「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。child proxy 設定があります。"
+            echo "提供 tool が bound proxy schema なら、その接続だけを使ってください。unbound/transport/auth failure は報告し、helper・raw registration・token 読取へ fallback しないでください。"
+            echo "実際に提供された schema 自体が raw/direct の場合だけ managed raw/direct recovery を使い、proxy failure を経路変更の根拠にしないでください。"
         else
-            echo "あなたの名前は「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。新しい名前を生成せず、必ず name=\"${RESOLVED_AGENT}\" で register_agent してください。"
-            echo "1. ensure_project -> 2. register_agent (name=\"$RESOLVED_AGENT\") -> 3. fetch_inbox"
+            echo "あなたは「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。提供 tool schema を確認してください。"
+            echo "confirmed raw/direct で既存 identity の回復が必要な場合だけ、managed instructions の token-safe helper 経路を使ってください。この失敗だけから token が stale と断定せず、盲目的に再試行・別名登録しないでください。"
         fi
     else
-        echo "ORRERY Mail server is running. Register this session before working."
-        echo "1. ensure_project -> 2. register_agent (new AdjectiveScientist name if needed) -> 3. fetch_inbox"
+        echo "ORRERY Mail server is running, but no existing identity was resolved."
+        echo "提供 tool schema を確認してください。bound proxy なら登録せずその schema に従い、confirmed raw/direct の新規未登録 session だけ ensure_project -> register_agent -> fetch_inbox を使ってください。"
     fi
 else
     echo "ORRERY Mail server is not running; skip registration until it is available."
@@ -283,7 +294,7 @@ else
         # Say who this session already is. Otherwise a resumed session waits out
         # the outage believing it is nobody, and registers a second identity for
         # itself as soon as the service returns.
-        echo "あなたは既に「${RESOLVED_AGENT}」です（source: ${RESOLVED_AGENT_SRC}）。復旧後も新しい名前を生成せず、この名前で登録し直してください。"
+        echo "あなたは既に「${RESOLVED_AGENT}」です（source: ${RESOLVED_AGENT_SRC}）。復旧後も新しい名前を生成せず、提供された接続 schema に対応する同じ identity の経路だけを使ってください。"
     fi
     echo "この間、ファイル予約は取得も確認もできません。他のエージェントと同じファイルを編集しても衝突は検出されません。"
 fi

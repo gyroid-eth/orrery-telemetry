@@ -1700,6 +1700,13 @@ build_embedded_task_prompt() {
         "$parent_name" "$task_text"
 }
 
+build_codex_mail_task_prompt() {
+    local child_name="$1"
+    local parent_name="$2"
+    printf 'You are %s. The parent agent is %s. The child name %s is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. Use only the first matching coordination route in the managed instructions. If the provided tool descriptions and argument schema show a bound ORRERY proxy, do not run a helper, register again, or read a token file; call fetch_inbox with only the arguments accepted by that schema to retrieve the canonical task. Only when the actual provided schema is confirmed raw/direct should you follow the managed raw/direct authentication or recovery route before fetching. A proxy failure is not evidence to switch to raw or a helper. Do not infer the task from this prompt; treat the inbox request as authoritative.' \
+        "$child_name" "$parent_name" "$child_name"
+}
+
 append_codex_mcp_profile_notice() {
     local prompt="$1"
     printf '%s' "$prompt"
@@ -1939,7 +1946,7 @@ ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
             CODEX_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
-            CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+            CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
         fi
         CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
         tmux new-session -d -s "$CHILD_NAME" \
@@ -2699,10 +2706,10 @@ ${TASK}
 
 - Parent agent: ${PARENT_NAME}
 - Working directory: ${WORK_DIR}${RESOURCE_NOTE}${WORKTREE_NOTE}
-- **Use \`${PROJECT_KEY}\` as the ORRERY Mail project_key**, not the current working directory. This is especially important in worktree mode. The tmux \$PROJECT_KEY env var has the same value. If you call ensure_project(human_key=cwd) from outside the project root, you will create a different project and will not be able to read this inbox.
+- **\`${PROJECT_KEY}\` is the canonical ORRERY Mail project_key**, not the current working directory. This is especially important in worktree mode. The tmux \$PROJECT_KEY env var has the same value. On confirmed raw/direct MCP, use this value where the actual schema accepts a project key; do not call ensure_project(human_key=cwd). On a bound proxy, do not add caller identity or project fields that its schema does not accept.
 - File reservation TTL: ${RESOURCE_TTL} seconds
-- The parent pre-reserved the resources above under your agent name. Do not call macro_file_reservation_cycle or file_reservation_paths again for the same paths; use the existing reservations.
-- If you are worried about remaining TTL, prefer renew_file_reservations rather than acquiring the same paths again.
+- The parent pre-reserved the resources above under your agent name. Do not acquire the same paths again; use the existing reservations through the tools provided by your connection schema.
+- If you are worried about remaining TTL, renew through the provided schema: bound proxy uses \`renew_reservations\`; raw/direct MCP uses \`renew_file_reservations\`.
 - Split large changes into smaller Edit/Update operations instead of one huge Write.
 - Acquire new reservations only when you need additional unreserved paths.
 - Reply to the parent agent when the task is complete."
@@ -2781,7 +2788,7 @@ if [[ "$USE_CODEX" == true ]]; then
         echo "[spawn_child] No MCP proxy available; Codex child uses the shared ORRERY Mail endpoint" >&2
     fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
-    CODEX_PROMPT="You are ${CHILD_NAME}. The parent agent is ${PARENT_NAME}. The child name ${CHILD_NAME} is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. First, if ${REREGISTER_HELPER:-agentstack-reregister} exists, run PROJECT_KEY=${PROJECT_KEY} ${REREGISTER_HELPER:-agentstack-reregister} ${CHILD_NAME}; when that succeeds, skip register_agent and fetch_inbox for ${CHILD_NAME}. The helper reads the child-owned 0600 token file; never request or print its token. Do not infer the task from this prompt; treat the inbox request as authoritative."
+    CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \

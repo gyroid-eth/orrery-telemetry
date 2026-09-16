@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -90,3 +91,73 @@ def test_delegate_skill_reads_bare_model_words_as_models_not_names():
     assert "A word such as `terra` is a model, not a name." in skill
     assert "The child's name is never taken from the arguments." in skill
     assert "gpt-5.5" not in skill
+
+
+def test_codex_coordination_routes_are_ordered_and_do_not_force_raw_recovery():
+    codex = _read("codex/AGENTS.md")
+    headings = (
+        "### 1. Embedded canonical task",
+        "### 2. Bound ORRERY proxy",
+        "### 3. Raw/direct connection after shell registration",
+        "### 4. Recovering an existing identity over raw/direct MCP",
+        "### 5. Registering a genuinely new raw/direct session",
+        "### Shared boundaries",
+    )
+    offsets = [codex.index(heading) for heading in headings]
+    assert offsets == sorted(offsets)
+    assert "Use only the first matching route below" in codex
+    assert "standalone launches can also use embedded-task semantics" in codex
+    assert "Always try the token-safe helper first" not in codex
+    assert "If you were launched with `agent-start-codex`" not in codex
+    assert "Use MCP fallback" not in codex
+    assert "do not fall back from a proxy failure to raw registration" in codex
+    assert "It proves only the local" in codex
+    assert "proxy binding, not ORRERY Mail reachability" in codex
+    assert "A generic `register_agent failed` does not by itself prove" in codex
+    assert "set `AGENT_NAME` to that exact existing name" in codex
+
+
+def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
+    tmp_path: pathlib.Path,
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    target = codex_home / "AGENTS.md"
+    target.write_text("# Personal instructions\n", encoding="utf-8")
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "AGENTSTACK_HOME": str(tmp_path / "installed-agentstack"),
+        "AGENTSTACK_TEMPLATE_HOME": str(ROOT),
+        "AGENTSTACK_PROJECT_KEY": "/fixture/canonical-project",
+    }
+
+    for _ in range(2):
+        result = subprocess.run(
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-codex-setup")],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "installed managed block into" in result.stdout
+
+    generated = target.read_text(encoding="utf-8")
+    assert generated.count("<!-- >>> claude-agent-stack") == 1
+    assert generated.count("<!-- <<< claude-agent-stack -->") == 1
+    assert generated.count("# Personal instructions") == 1
+    assert "### 1. Embedded canonical task" in generated
+    assert "### 2. Bound ORRERY proxy" in generated
+    assert "Bound proxy: follow its actual schema and use `reserve_files`" in generated
+    assert "Renew with `renew_reservations`" in generated
+    assert "release with `release_reservations`" in generated
+    assert "Raw/direct MCP: acquire with `macro_file_reservation_cycle`" in generated
+    assert "Renew with `renew_file_reservations`" in generated
+    assert "`release_file_reservations`" in generated
+    assert "/fixture/canonical-project" in generated
+    assert str(tmp_path / "installed-agentstack") in generated
+    assert "__AGENTSTACK_" not in generated
