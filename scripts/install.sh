@@ -677,6 +677,62 @@ print(pathlib.Path(sys.argv[1]).expanduser().resolve(strict=False))
 PY
 }
 
+# The literal `export AGENTSTACK_MAIL_ENV=` assignment in the installed env.sh,
+# or nothing. The file is read, never sourced: sourcing runs whatever else is in
+# it, and a file that fails halfway would still leave a value behind that we
+# would then treat as evidence. Anything unreadable, unparsable or absent yields
+# no candidate, so the caller keeps the mismatch error.
+installed_env_mail_env() {
+  local env_file="$INSTALL_DIR/env.sh" value
+  [[ -f "$env_file" ]] || return 0
+  value="$("$PYTHON_BIN" - "$env_file" <<'PY' 2>/dev/null || true
+import pathlib
+import re
+import shlex
+import sys
+
+try:
+    raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+except (OSError, UnicodeError):
+    raise SystemExit(0)
+
+pattern = re.compile(r"^\s*export\s+AGENTSTACK_MAIL_ENV=(.*)$")
+for line in raw.splitlines():
+    match = pattern.match(line)
+    if match is None:
+        continue
+    try:
+        parts = shlex.split(match.group(1), comments=True, posix=True)
+    except ValueError:
+        raise SystemExit(0)
+    if len(parts) == 1:
+        print(parts[0], end="")
+    raise SystemExit(0)
+PY
+)"
+  [[ -n "$value" ]] || return 0
+  normalize_path "$value"
+}
+
+# True when the path sits where this installation keeps its managed renders:
+# <native service root>/renders/<one directory>/service.env. The render id is
+# configurable, so its shape is deliberately not constrained.
+is_managed_render_env_path() {
+  local candidate="$1" root="$2" renders middle
+  [[ -n "$candidate" && -n "$root" ]] || return 1
+  renders="$root/renders"
+  case "$candidate" in
+    "$renders"/*/service.env) ;;
+    *) return 1 ;;
+  esac
+  middle="${candidate#"$renders"/}"
+  middle="${middle%/service.env}"
+  case "$middle" in
+    ""|*/*|.|..) return 1 ;;
+  esac
+  return 0
+}
+
 mcp_endpoint_parts() {
   "$PYTHON_BIN" - "$MCP_URL" <<'PY'
 import sys
@@ -911,7 +967,7 @@ PY
 }
 
 resolve_native_mail_connection() {
-  local expected_db resolved_db database_url explicit_db render_id
+  local expected_db resolved_db database_url explicit_db render_id explicit_mail_env
   expected_db="$(normalize_path "$NATIVE_MAIL_STATE_ROOT/storage.sqlite3")"
   NATIVE_MAIL_STATE_ROOT="$(normalize_path "$NATIVE_MAIL_STATE_ROOT")"
   NATIVE_MAIL_SERVICE_ROOT="$(normalize_path "$NATIVE_MAIL_SERVICE_ROOT")"
@@ -952,8 +1008,32 @@ PY
   fi
   if [[ -n "$MAIL_ENV_EXPLICIT" ]]; then
     [[ -n "${AGENTSTACK_MAIL_ENV:-}" ]] || die "AGENTSTACK_MAIL_ENV was set but empty"
-    [[ "$(normalize_path "$AGENTSTACK_MAIL_ENV")" == "$NATIVE_MAIL_ENV" ]] || \
-      die "AGENTSTACK_MAIL_ENV must equal the native service env '$NATIVE_MAIL_ENV'"
+    explicit_mail_env="$(normalize_path "$AGENTSTACK_MAIL_ENV")"
+    if [[ "$explicit_mail_env" != "$NATIVE_MAIL_ENV" ]]; then
+      # A render path is derived from the source id and a hash of venv, endpoint
+      # and state, so the path written into env.sh by one install does not match
+      # the next one. Shell startup exports that file, so the documented
+      # `git pull && ./scripts/install.sh` failed on this installer's own
+      # output. Forgive that one shape and nothing else:
+      #
+      #   - it has to equal the value read out of the installed env.sh, and
+      #   - it has to sit where this installation keeps its managed renders.
+      #
+      # Equal values cannot prove who set the variable, so an operator who
+      # wants a native path that outlives an upgrade pins
+      # AGENTSTACK_MAIL_SERVICE_ENV; that takes precedence and is never
+      # forgiven here. Any other path keeps the mismatch error.
+      if [[ -z "$NATIVE_MAIL_ENV_EXPLICIT" ]] \
+        && [[ -n "$(installed_env_mail_env)" ]] \
+        && [[ "$explicit_mail_env" == "$(installed_env_mail_env)" ]] \
+        && is_managed_render_env_path "$explicit_mail_env" "$NATIVE_MAIL_SERVICE_ROOT"; then
+        say "ignoring a managed AGENTSTACK_MAIL_ENV inherited from $INSTALL_DIR/env.sh; resolving the current render"
+        MAIL_ENV_EXPLICIT=""
+        unset AGENTSTACK_MAIL_ENV
+      else
+        die "AGENTSTACK_MAIL_ENV must equal the native service env '$NATIVE_MAIL_ENV'"
+      fi
+    fi
   fi
 
   if mcp_endpoint_listening; then

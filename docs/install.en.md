@@ -304,6 +304,12 @@ The installer updates payloads and `VERSION`, reregisters services, and previews
 
 **Keep the ORRERY Mail server running during an in-place upgrade.** The real database path resolved from the running listener takes precedence over filesystem candidate discovery. Stopping ORRERY Mail first falls back to candidate discovery, and the installer stops rather than risk choosing incorrectly in an environment with several databases.
 
+`AGENTSTACK_MAIL_ENV` is a runtime value the installer writes into `env.sh`, which shells read at startup. A render path is derived from the source id and a hash of venv, endpoint and state, so **the value one install writes does not match what the next upgrade expects**. The installer treats an inherited value as unset, and resolves the current render, only when it both **matches the value read out of `env.sh` and sits in this installation's managed render layout** (`<native service root>/renders/<one directory>/service.env`). The waiver prints one line when it applies.
+
+**Equal values cannot prove who set the variable.** To pin a native path across upgrades, set `AGENTSTACK_MAIL_SERVICE_ENV` explicitly: it takes precedence and is never waived. A path outside the managed render layout still stops the installer as before.
+
+If a long-lived shell holds a render from before another shell updated `env.sh`, re-source the installed `env.sh`, or scope the unset to that one command: `env -u AGENTSTACK_MAIL_ENV ./scripts/install.sh`.
+
 If the dashboard port is held by a process under the current ORRERY Telemetry launchd job or supervised-background pidfile, the installer verifies ownership and replaces that dashboard with the new payload. It still stops if an unrelated process holds the same port.
 
 Service environment is written into plist / unit files during installation. Changing only `~/.agentstack/env.sh` does not affect an existing service, so rerun the installer or update the service definition too.

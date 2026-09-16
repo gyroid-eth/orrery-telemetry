@@ -308,6 +308,12 @@ installer は payload と `VERSION` を更新し、service を再登録して、
 
 **in-place upgrade 中も ORRERY Mail server は稼働させたまま**にしてください。稼働 listener から解決した実 DB path は filesystem の候補探索より優先されます。ORRERY Mail を先に止めると候補探索へフォールバックし、複数の DB がある環境では誤選択を避けるため installer が停止します。
 
+`AGENTSTACK_MAIL_ENV` は installer が `env.sh` に書き出す runtime の値で、shell 起動時に読まれます。render のパスは source id と venv / endpoint / state の hash から決まるため、**前回の install が書いた値は次の upgrade の期待値と一致しません**。installer は、継承した値が「**読み取れた `env.sh` の値と一致し、かつこの install の管理 render 配置**（`<native service root>/renders/<1 階層>/service.env`）にある」ときに限り、set されていなかったものとして扱い、現在の render を解決します。この免除は 1 行の通知とともに行われます。
+
+**値が等しいことは、誰がその変数を設定したかの証明にはなりません。** upgrade をまたいで native path を固定したい場合は `AGENTSTACK_MAIL_SERVICE_ENV` を明示してください。そちらが優先され、免除の対象になりません。管理 render 配置の外にあるパスは、従来どおり不一致として停止します。
+
+長く生きた shell が、別の shell で更新された後の古い render を保持している場合は、現在の `env.sh` を読み直すか、その install コマンドに限って `env -u AGENTSTACK_MAIL_ENV ./scripts/install.sh` を使ってください。
+
 dashboard port を現在の ORRERY Telemetry launchd job または supervised-background pidfile 配下のプロセスが保持している場合、installer は所有者を照合してその dashboard を新しい payload で置換します。同じ port を無関係なプロセスが保持している場合は、従来どおり停止します。
 
 service の environment は install 時に plist / unit へ書き込まれます。`~/.agentstack/env.sh` を変更しただけでは既存 service に反映されないため、installer を再実行するか service definition も更新してください。
