@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### macOS の autostart trigger が起動した Mail server を、launchd が直後に kill していました（#46）
+
+launchd は job が終了すると、job と同じ process group に残っているプロセスを終了処理の対象にします。`agentstack-mailctl start` は runner を `nohup` で起動して終了しますが、`nohup` は process group を変えません。そのため trigger 自身が spawn した runner と server は、log に「ORRERY Mail started」と書かれたあと job の終了直後に消え（reboot 直後の Mac での観測では、次の 2 秒刻みの観測までに消失）、5 分後の sweep でも同じことが繰り返されていました。別の process group で既に動いている server（手で `start` したものなど）には及ばないので、そういう server が動いているあいだは気づきません。key の有無だけを変えて、消失と生存を確認しました。
+
+これは #44 とは別の不具合です。#44 は health 待ちが切れたときに controller 自身が runner を kill するもので、#46 は health が通ったあとでも launchd が process group を片付けるものです。上記の Mac では #46 を観測し、#44 は再現しませんでした。それ以前の別の Mac で起きた失敗の原因は、この観測だけでは確定しません。
+
+- installer が書く launchd plist に `AbandonProcessGroup = true` を加えました（systemd 側の `KillMode=process` と同じ目的の設定）。既存の install は `install.sh` の再実行で plist が再生成されます
+
 ### `start` が、起動に時間のかかる Mail server を殺していました（#44）
 
 controller が自分で runner を spawn する経路では、`agentstack-mailctl start` は health を **probe 150 回**待ち、切れると**自分が起動したばかりの runner を kill** していました。probe ごとに Python を起動するため、この窓は計測した Mac で port が閉じたまま約 48 秒です。起動にそれ以上かかる server は listen する直前に殺され、Mail は次の sweep（5 分後）まで存在しません。その間に起動した agent は Mail 不在のまま登録に失敗し、失敗メッセージが指す `agentstack-mail.log` には殺された runner は何も書いていません。遅い runner の fixture でこの kill は再現します。2026-09-16 の reboot 直後に login 時の `start` がこの失敗で終わった事象がありますが、その runner が何秒目で殺されたかは記録が無く、cold start が原因かどうかは未確定です。

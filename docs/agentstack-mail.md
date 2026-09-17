@@ -141,7 +141,14 @@ unit に固めて焼き込んでしまうと、再インストール後も静か
 `StartInterval` と systemd の timer から来ます。systemd の unit は
 `KillMode=process` も設定します。これがないと、既定の control-group
 cleanup が、oneshot controller が終了した瞬間に起動したばかりの server を
-kill してしまいます（WSL2 で確認）。`start` は冪等です——owned PID が
+kill してしまいます（WSL2 で確認）。launchd の plist は同じ目的で
+`AbandonProcessGroup` を true にします。launchd は job が終了すると、job の
+process group に残っているプロセスを終了処理の対象にし、`nohup` は
+process group を変えません。この key が無いと、trigger 自身が spawn した
+runner と server は「ORRERY Mail started」と log に書かれたあと、job の
+終了直後（reboot 直後の Mac での 2026-09-17 の観測では、次の 2 秒刻みの
+観測まで）に消えていました。別の process group で既に動いている server
+（operator が手で `start` したものなど）にはこの終了処理は及びません。`start` は冪等です——owned PID が
 生きていて健全なら "already running" と報告して 0 で exit するため、
 再実行のコストはなく、何もすることがなければ静かなままです。その出力は
 `agentstack-mail-autostart.log`（launchd の `StandardOutPath`、systemd の

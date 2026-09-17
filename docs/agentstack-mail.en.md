@@ -132,7 +132,14 @@ respawn the *controller* in a loop instead of supervising the server. Repetition
 comes from `StartInterval` on launchd and from the timer on systemd. The systemd
 unit also sets `KillMode=process`: without it the default control-group cleanup
 kills the freshly started server the moment the oneshot controller exits (seen
-on WSL2). `start` is
+on WSL2). The launchd plist sets `AbandonProcessGroup` to true for the same
+purpose: when a job exits, the processes still in its process group are
+subject to launchd's cleanup, and `nohup` does not change the group, so
+without the key the runner and server the trigger itself spawned were gone
+right after the job exited — by the next 2 s observation, on a rebooted Mac on
+2026-09-17 — although "ORRERY Mail started" had been logged. A server already
+running in another process group (one an operator started by hand, for
+example) is not affected. `start` is
 idempotent — it reports "already running" and exits 0 when the owned PID is alive
 and healthy — so re-running it costs nothing, and it stays silent when there is
 nothing to do. Its output goes to `agentstack-mail-autostart.log` (launchd
