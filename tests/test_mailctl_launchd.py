@@ -636,3 +636,334 @@ def test_no_test_is_defined_twice() -> None:
         names = re.findall(r"^def (test_[a-z0-9_]+)\(", path.read_text(), re.MULTILINE)
         duplicates = [n for n, c in collections.Counter(names).items() if c > 1]
         assert not duplicates, f"{path.name}: defined more than once: {duplicates}"
+
+
+
+# --- cold boot: a runner that is still starting has not failed ---------------
+#
+# The controller used to allow one fixed window after spawning the runner --
+# 150 probes, each of which spawns a Python interpreter, so about 48 s while
+# the port is closed on the machine this was measured on -- and then kill the
+# runner it had just started. A server whose start takes longer than that is killed
+# seconds before it would listen. These tests drive the nohup path with a
+# runner that opens its port only after a delay. The old controller's kill is
+# reproduced with a runner that has not opened its port when the grace ends,
+# not by racing a delay against the old window: that window's length depends
+# on interpreter start-up time (48 s measured idle, longer under load).
+
+import socket
+import time
+
+SLOW_RUNNER = """#!/bin/sh
+# Every process this runner starts is recorded in the harness's pid ledger so
+# cleanup can signal and confirm them without a process listing: pgrep/pkill
+# are refused in some sandboxes (sysmond unavailable), and a cleanup that
+# treats "cannot list" as "nothing left" leaves runners behind.
+echo $$ >> {ledger}
+python3 -c 'import sys, time; time.sleep(float(sys.argv[1]))' {delay} {marker} &
+echo $! >> {ledger}
+wait $!
+python3 - {port} {database} {health} <<'PY' &
+import http.server
+import json
+import sys
+
+port, database, health = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        if health != "ok":
+            self.send_response(503)
+            self.end_headers()
+            return
+        body = json.dumps({{
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {{"structuredContent": {{
+                "status": "ok",
+                "database_url": "sqlite+aiosqlite:///" + database,
+            }}}},
+        }}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        return
+
+
+http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+PY
+echo $! >> {ledger}
+wait
+"""
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _cold_boot(harness, *, delay: float, health: str = "ok", script: str | None = None):
+    """Point the controller at a closed port and a runner that opens it late.
+
+    No launchd job is loaded, so `start` takes the nohup path -- the one the
+    login-time trigger takes on a machine whose plist runs the controller.
+    The runner records its own pid and its children's in the ledger under
+    the harness tmp_path (see _ledger), which is what _reap keys on.
+    """
+    env, loaded, _serving, _log, _server = harness
+    loaded.unlink()
+    port = _free_port()
+    env = dict(env, AGENTSTACK_MCP_URL=f"http://127.0.0.1:{port}/mcp")
+    runner = Path(env["AGENTSTACK_MAIL_ENV"]).with_name("run-agentstack-mail.sh")
+    runner.write_text(
+        script
+        if script is not None
+        else SLOW_RUNNER.format(
+            delay=delay,
+            port=port,
+            database=env["AGENTSTACK_MAIL_DB"],
+            health=health,
+            marker=_marker(env),
+            ledger=_ledger(env),
+        ),
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+    return env, Path(env["AGENTSTACK_MAIL_RUNTIME_DIR"]) / "agentstack-mail.pid"
+
+
+def _runner_pid(pidfile: Path) -> int:
+    return int(pidfile.read_text(encoding="utf-8").splitlines()[0])
+
+
+def _alive(pid: int) -> bool:
+    """False only when the kernel says there is no such process. Any other
+    failure (EPERM, a sandbox refusing the query) is raised: reading it as
+    "gone" would make cleanup report success over a runner it cannot see."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _marker(env: dict[str, str]) -> str:
+    """The harness tmp tree. Every process the runner starts -- the runner's
+    shell (script path), the delay (explicit argument), the fake server
+    (database path) -- carries it in argv, which is what cleanup keys on."""
+    return str(Path(env["AGENTSTACK_MAIL_ENV"]).parent.parent)
+
+
+def _ledger(env: dict[str, str]) -> str:
+    """Where the runner records the pid of itself and of each process it
+    starts. Cleanup reads this instead of listing processes."""
+    return str(Path(_marker(env)) / "runner-pids")
+
+
+def _ledger_pids(env: dict[str, str]) -> list[int]:
+    ledger = Path(_ledger(env))
+    if not ledger.exists():
+        return []
+    return [int(line) for line in ledger.read_text().split() if line.isdigit()]
+
+
+def _owned_processes(env: dict[str, str]) -> list[int]:
+    """Every recorded process that is still alive. A process listing is not
+    required: kill(pid, 0) answers for a pid we already know."""
+    return [pid for pid in _ledger_pids(env) if _alive(pid)]
+
+
+def _reap(env: dict[str, str]) -> None:
+    """Terminate the runner and everything it started, and confirm they are
+    gone, whichever path the test took to get here (pass, assert, timeout)."""
+    for signal_number in (15, 9):
+        for pid in _owned_processes(env):
+            try:
+                os.kill(pid, signal_number)
+            except ProcessLookupError:
+                pass  # exited between the liveness check and the signal
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if not _owned_processes(env):
+                return
+            time.sleep(0.1)
+    assert not _owned_processes(env), "runner processes survived cleanup"
+
+
+@pytest.fixture()
+def cold_boot(harness):
+    """Yield the harness for a nohup-path test and always reap afterwards."""
+    state: dict[str, dict[str, str]] = {}
+
+    def start(**kwargs):
+        env, pidfile = _cold_boot(harness, **kwargs)
+        state["env"] = env
+        return env, pidfile
+
+    try:
+        yield start
+    finally:
+        if "env" in state:
+            _reap(state["env"])
+
+
+def test_port_grace_is_separate_from_health_grace(cold_boot) -> None:
+    """Health is allowed only 2 s once the port is open -- the shape of a single
+    short window -- while the runner takes 6 s to listen. The port grace is
+    what carries the start across that gap. This is not the reproduction of
+    the old kill (see test_start_leaves_a_still_starting_runner_alive...): the
+    old window's length depends on interpreter start-up time under load, so a
+    delay chosen to exceed it is not reliable evidence either way."""
+    env, pidfile = cold_boot(delay=6)
+    env.update(AGENTSTACK_MAIL_START_GRACE="40", AGENTSTACK_MAIL_HEALTH_GRACE="2")
+    began = time.monotonic()
+    result = _mailctl(env, "start")
+    assert result.returncode == 0, result.stderr
+    assert "ORRERY Mail started" in result.stdout
+    assert "ready after" in result.stdout
+    assert time.monotonic() - began >= 6
+    pid = _runner_pid(pidfile)
+    assert _alive(pid), "the controller killed the runner it had started"
+    status = _mailctl(env, "status")
+    assert status.returncode == 0, status.stderr
+
+
+def test_health_grace_is_a_time_bound_not_a_probe_count(cold_boot) -> None:
+    """A port that opens but never answers health must not hold the controller
+    for probe-count x probe-timeout. HEALTH_GRACE=2 means about 2 s plus the
+    probe that is in flight when the deadline passes."""
+    env, pidfile = cold_boot(delay=0, health="fail")
+    env.update(AGENTSTACK_MAIL_START_GRACE="10", AGENTSTACK_MAIL_HEALTH_GRACE="2")
+    began = time.monotonic()
+    result = _mailctl(env, "start")
+    elapsed = time.monotonic() - began
+    assert result.returncode != 0
+    assert "endpoint port open" in result.stderr, result.stderr
+    assert elapsed < 8, f"health wait ran {elapsed:.1f}s for a 2 s grace"
+    assert pidfile.exists()
+    assert _alive(_runner_pid(pidfile))
+
+
+def test_start_leaves_a_still_starting_runner_alive_when_grace_runs_out(
+    cold_boot,
+) -> None:
+    """The reproduction of the old kill, and the fix. A runner that has not
+    opened its port when the grace runs out is exactly what the old controller
+    killed (after its 150 probes) before removing the pidfile; against the old
+    controller this test fails on `_alive(pid)` and on the missing pidfile.
+    Running out of patience is not evidence of failure: the runner stays, the
+    pidfile stays, and the message says how long it waited and where it got
+    to."""
+    env, pidfile = cold_boot(delay=60)
+    env.update(AGENTSTACK_MAIL_START_GRACE="2", AGENTSTACK_MAIL_HEALTH_GRACE="1")
+    result = _mailctl(env, "start")
+    assert result.returncode != 0
+    # Behaviour first, wording second: against the old controller these two
+    # are what fail (the pidfile is gone and the runner is dead).
+    assert pidfile.exists(), "the pidfile was discarded"
+    pid = _runner_pid(pidfile)
+    assert _alive(pid), "the controller killed the runner it had started"
+    assert "still starting after" in result.stderr, result.stderr
+    assert "endpoint port closed" in result.stderr
+    assert "left running" in result.stderr
+    status = _mailctl(env, "status")
+    assert status.returncode != 0
+    assert "not listening yet" in status.stderr, status.stderr
+
+
+def test_a_later_start_finds_the_runner_instead_of_racing_a_second_one(
+    cold_boot,
+) -> None:
+    """The timer's next run lands while the first runner is still coming up. It
+    must not spawn another runner against the same port, and it must not hold
+    the lifecycle lock for another full grace either: it reports and returns,
+    and once the runner listens a later start says so."""
+    env, pidfile = cold_boot(delay=12)
+    first_env = dict(env, AGENTSTACK_MAIL_START_GRACE="1", AGENTSTACK_MAIL_HEALTH_GRACE="1")
+    first = _mailctl(first_env, "start")
+    assert first.returncode != 0
+    pid = _runner_pid(pidfile)
+    sweep_env = dict(
+        env,
+        AGENTSTACK_MAIL_START_GRACE="30",
+        AGENTSTACK_MAIL_HEALTH_GRACE="5",
+        AGENTSTACK_MAILCTL_SWEEP="1",
+    )
+    began = time.monotonic()
+    sweep = _mailctl(sweep_env, "start")
+    assert sweep.returncode != 0
+    assert "not listening yet" in sweep.stderr, sweep.stderr
+    assert time.monotonic() - began < 5, "the sweep waited a full grace on a foreign start"
+    assert _runner_pid(pidfile) == pid, "a second runner replaced the first"
+    # The runner appends its own pid to the ledger once per start: a second
+    # spawn would show as a second shell pid there. (The delay and the fake
+    # server append theirs too, so count runner shells, not lines.)
+    runner_shells = [pid for pid in _ledger_pids(env) if pid == _runner_pid(pidfile)]
+    assert len(_ledger_pids(env)) <= 3 and runner_shells == [pid], _ledger_pids(env)
+    time.sleep(12)
+    # Diagnose before asserting the outcome: if the runner died in the
+    # meantime the later start legitimately spawns a new one, and a pid
+    # mismatch alone would read as a controller bug.
+    assert _alive(pid), "the first runner died before the later start"
+    later = _mailctl(sweep_env, "start")
+    assert later.returncode == 0, later.stderr
+    assert _runner_pid(pidfile) == pid, "the later start replaced a live runner"
+
+
+def test_start_reports_a_runner_that_exits_before_listening(cold_boot) -> None:
+    """A runner that dies is the one case where giving up is right, and the
+    message must say that it exited rather than that health never came."""
+    env, pidfile = cold_boot(delay=0, script="#!/bin/sh\nexit 7\n")
+    env.update(AGENTSTACK_MAIL_START_GRACE="20", AGENTSTACK_MAIL_HEALTH_GRACE="1")
+    result = _mailctl(env, "start")
+    assert result.returncode != 0
+    assert "exited after" in result.stderr, result.stderr
+    assert not pidfile.exists(), "a dead runner's pidfile was kept"
+
+
+def test_a_non_numeric_grace_is_refused(cold_boot) -> None:
+    env, _pidfile = cold_boot(delay=0)
+    env.update(AGENTSTACK_MAIL_START_GRACE="soon")
+    result = _mailctl(env, "status")
+    assert result.returncode != 0
+    assert "AGENTSTACK_MAIL_START_GRACE" in result.stderr
+
+
+def test_alive_reports_dead_only_for_a_missing_process(monkeypatch) -> None:
+    """The null case for cleanup: an unanswerable query is not a dead runner."""
+
+    def refuse(_pid: int, _sig: int) -> None:
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(os, "kill", refuse)
+    with pytest.raises(PermissionError):
+        _alive(12345)
+
+    def missing(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr(os, "kill", missing)
+    assert _alive(12345) is False
+
+
+def test_reap_does_not_swallow_a_refused_signal(monkeypatch, tmp_path: Path) -> None:
+    env = {"AGENTSTACK_MAIL_ENV": str(tmp_path / "service" / "env")}
+    (tmp_path / "runner-pids").write_text("12345\n", encoding="utf-8")
+    calls: list[tuple[int, int]] = []
+
+    def refuse(pid: int, sig: int) -> None:
+        calls.append((pid, sig))
+        if sig == 0:
+            return
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(os, "kill", refuse)
+    with pytest.raises(PermissionError):
+        _reap(env)
+    assert (12345, 15) in calls

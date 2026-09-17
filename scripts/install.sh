@@ -2213,6 +2213,15 @@ plist = {
     # Not KeepAlive: mailctl exits after handing the server to nohup, so launchd
     # would respawn the *controller* in a loop instead of supervising the server.
     "KeepAlive": False,
+    # The server outlives the trigger, so launchd must not clean it up. When a
+    # job exits, the processes still in its process group are subject to
+    # launchd's cleanup, and `nohup` does not change the group: without this
+    # key the runner and the server this trigger itself spawned were gone
+    # right after the job exited -- by the next 2 s observation -- although
+    # "ORRERY Mail started" had been logged (a rebooted Mac, 2026-09-17). A
+    # server already running in another group is not affected. The systemd
+    # unit's KillMode=process serves the same purpose.
+    "AbandonProcessGroup": True,
     # Re-check periodically instead. `start` is idempotent — it reports "already
     # running" and exits 0 — so this is a cheap liveness sweep that also covers
     # the cases RunAtLoad alone cannot: the runner being killed mid-session, and
