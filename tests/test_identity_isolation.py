@@ -96,6 +96,8 @@ def test_candidate_registration_rejects_ambient_owner_token():
     register_lib = _ROOT / "bin" / "lib" / "agentstack-register.sh"
     with tempfile.TemporaryDirectory() as tmp:
         capture = pathlib.Path(tmp) / "register-args"
+        project = pathlib.Path(tmp) / "project"
+        project.mkdir()
         script = f'''
 source "{register_lib}"
 ags_mcp_call() {{
@@ -113,9 +115,9 @@ ags_store_registration_token() {{ return 0; }}
 ags_apply_contact_policy() {{ return 0; }}
 CHILD_REGISTRATION_TOKEN=stale-owner-token
 export CHILD_REGISTRATION_TOKEN CAPTURE
-ags_register_session /project codex model cx /work Fresh-Dirac candidate >/dev/null
+ags_register_session "$PROJECT" codex model cx "$PROJECT" Fresh-Dirac candidate >/dev/null
 '''
-        _run_bash(script, {"CAPTURE": str(capture)})
+        _run_bash(script, {"CAPTURE": str(capture), "PROJECT": str(project)})
         args = capture.read_text(encoding="utf-8")
         assert "registration_token=fresh-owner-token" in args, args
         assert "stale-owner-token" not in args, args
@@ -138,14 +140,14 @@ ags_generate_registration_token() {{ printf '%s\\n' requested-owner-token; }}
 ags_store_registration_token() {{ printf '%s|%s\\n' "$1" "$2"; }}
 ags_apply_contact_policy() {{ :; }}
 for _ in 1 2; do
-  ags_register_session /project codex model cx /work Frosty-Pasteur candidate >/dev/null
+  ags_register_session "$PROJECT" codex model cx "$PROJECT" Frosty-Pasteur candidate >/dev/null
   printf 'registered=%s token=%s substituted=%s requested=%s returned=%s\\n' \
     "$AGS_REGISTERED_AGENT_NAME" "$AGS_REGISTERED_REGISTRATION_TOKEN" \
     "$AGS_AGENT_NAME_SUBSTITUTED" "$AGS_REQUESTED_AGENT_NAME" \
     "$AGS_SERVER_RETURNED_AGENT_NAME"
 done
 '''
-    result = _run_bash(script)
+    result = _run_bash(script, {"PROJECT": str(_ROOT)})
     assert result.stdout.splitlines() == [
         "registered=FrostyPasteur token=stable-owner-token substituted=1 "
         "requested=Frosty-Pasteur returned=FrostyPasteur",
@@ -160,7 +162,10 @@ def test_reserved_identity_refuses_a_server_substitution():
     script = f'''
 source "{register_lib}"
 ags_mcp_call() {{
-  if [[ "$1" == "register_agent" ]]; then
+  local tool="$1"; shift
+  if [[ "$tool" == "whois" ]]; then
+    printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1,"name":"Reserved-Curie"}}}}}}'
+  elif [[ "$tool" == "register_agent" ]]; then
     printf '%s\\n' '{{"result":{{"structuredContent":{{"name":"OtherAgent","registration_token":"other-token"}}}}}}'
   else
     printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
@@ -169,13 +174,13 @@ ags_mcp_call() {{
 CHILD_REGISTRATION_TOKEN=reserved-owner-token
 export CHILD_REGISTRATION_TOKEN
 set +e
-ags_register_session /project codex model cx /work Reserved-Curie reserved >/dev/null
+ags_register_session "$PROJECT" codex model cx "$PROJECT" Reserved-Curie reserved >/dev/null
 status=$?
 printf 'status=%s registered=%s substituted=%s requested=%s returned=%s\\n' \
   "$status" "$AGS_REGISTERED_AGENT_NAME" "$AGS_AGENT_NAME_SUBSTITUTED" \
   "$AGS_REQUESTED_AGENT_NAME" "$AGS_SERVER_RETURNED_AGENT_NAME"
 '''
-    result = _run_bash(script)
+    result = _run_bash(script, {"PROJECT": str(_ROOT)})
     assert result.stdout.strip() == (
         "status=2 registered= substituted=1 requested=Reserved-Curie "
         "returned=OtherAgent"
