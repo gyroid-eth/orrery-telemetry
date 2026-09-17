@@ -12,6 +12,10 @@ if [[ -f "$AGS_PROJECT_CONTEXT_LIB" ]] && ! declare -F agentstack_validate_proje
   . "$AGS_PROJECT_CONTEXT_LIB"
 fi
 
+# These are private per-call channels. Never let ambient environment select
+# the diagnostic transport or an arbitrary diagnostic output path.
+unset AGS_MCP_DIAG_FILE AGS_MCP_DIAG_STAGE
+
 ags_mail_load_token() {
   local mail_env="${AGENTSTACK_MAIL_ENV:-${MAIL_ENV:-}}"
   if [[ -z "${MCP_AGENT_MAIL_TOKEN:-}" && -n "$mail_env" && -f "$mail_env" ]]; then
@@ -24,6 +28,195 @@ ags_mail_load_token() {
   # command is the `[[ -n "$tok" ]]` test, so "no token" returns 1 and the
   # `set -e` in every caller kills the launcher with no output at all.
   return 0
+}
+
+# Registration diagnostics deliberately carry only fixed labels and numeric
+# transport/protocol facts. They never carry a response body, curl stderr,
+# request arguments, names, endpoints, or credentials.
+ags_registration_diag_reset() {
+  AGS_REGISTRATION_DIAG_STAGE=""
+  AGS_REGISTRATION_DIAG_REASON=""
+  AGS_REGISTRATION_DIAG_CURL_EXIT=""
+  AGS_REGISTRATION_DIAG_HTTP_STATUS=""
+  AGS_REGISTRATION_DIAG_RPC_CODE=""
+}
+
+ags_registration_diag_set() {
+  AGS_REGISTRATION_DIAG_STAGE="$1"
+  AGS_REGISTRATION_DIAG_REASON="$2"
+  AGS_REGISTRATION_DIAG_CURL_EXIT="${3:-}"
+  AGS_REGISTRATION_DIAG_HTTP_STATUS="${4:-}"
+  AGS_REGISTRATION_DIAG_RPC_CODE="${5:-}"
+}
+
+ags_registration_diag_write_file() {
+  local diag_file="$1" stage="$2" reason="$3"
+  local curl_exit="${4:-}" http_status="${5:-}" rpc_code="${6:-}"
+  [[ -n "$diag_file" ]] || return 0
+  case "$stage" in
+    local-token|ensure_project|register_agent|response-parse|identity-check) ;;
+    *) stage="register_agent" ;;
+  esac
+  case "$reason" in
+    credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|unknown) ;;
+    *) reason="unknown" ;;
+  esac
+  [[ "$curl_exit" =~ ^[0-9]+$ ]] || curl_exit=""
+  [[ "$http_status" =~ ^[0-9]+$ ]] || http_status=""
+  [[ "$rpc_code" =~ ^-?[0-9]+$ ]] || rpc_code=""
+  (
+    umask 077
+    {
+      printf 'stage=%s\n' "$stage"
+      printf 'reason=%s\n' "$reason"
+      [[ -n "$curl_exit" ]] && printf 'curl_exit=%s\n' "$curl_exit"
+      [[ -n "$http_status" ]] && printf 'http_status=%s\n' "$http_status"
+      [[ -n "$rpc_code" ]] && printf 'rpc_code=%s\n' "$rpc_code"
+    } > "$diag_file"
+  ) 2>/dev/null || true
+}
+
+ags_registration_diag_load_file() {
+  local diag_file="$1" key value
+  ags_registration_diag_reset
+  [[ -f "$diag_file" ]] || return 0
+  while IFS='=' read -r key value; do
+    case "$key" in
+      stage)
+        case "$value" in
+          local-token|ensure_project|register_agent|response-parse|identity-check) AGS_REGISTRATION_DIAG_STAGE="$value" ;;
+        esac
+        ;;
+      reason)
+        case "$value" in
+          credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|unknown) AGS_REGISTRATION_DIAG_REASON="$value" ;;
+        esac
+        ;;
+      curl_exit)
+        [[ "$value" =~ ^[0-9]+$ ]] && AGS_REGISTRATION_DIAG_CURL_EXIT="$value"
+        ;;
+      http_status)
+        [[ "$value" =~ ^[0-9]+$ ]] && AGS_REGISTRATION_DIAG_HTTP_STATUS="$value"
+        ;;
+      rpc_code)
+        [[ "$value" =~ ^-?[0-9]+$ ]] && AGS_REGISTRATION_DIAG_RPC_CODE="$value"
+        ;;
+    esac
+  done < "$diag_file"
+}
+
+ags_classify_mcp_response() {
+  # Print one fixed classification. Free-form server strings are inspected
+  # only to recognise the legacy "Error calling tool" envelope and are never
+  # returned to the caller.
+  python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("invalid-response")
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    print("invalid-response")
+    raise SystemExit(0)
+
+error = data.get("error")
+if error is not None:
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        print(f"rpc-error:{code}")
+    else:
+        print("rpc-error")
+    raise SystemExit(0)
+
+# Real MCP replies use a JSON-RPC result. A few supported legacy/fake
+# transports return the result object directly, so preserve that normal form.
+if "result" in data or "jsonrpc" in data:
+    result = data.get("result")
+    if not isinstance(result, dict):
+        print("invalid-response")
+        raise SystemExit(0)
+else:
+    result = data
+
+is_error = result.get("isError")
+if is_error is True:
+    print("tool-error")
+    raise SystemExit(0)
+if "isError" in result and not isinstance(is_error, bool):
+    print("invalid-response")
+    raise SystemExit(0)
+
+if "structuredContent" in result and not isinstance(result.get("structuredContent"), dict):
+    print("invalid-response")
+    raise SystemExit(0)
+
+content = result.get("content")
+if content is not None:
+    if not isinstance(content, list):
+        print("invalid-response")
+        raise SystemExit(0)
+    for part in content:
+        if not isinstance(part, dict):
+            print("invalid-response")
+            raise SystemExit(0)
+        text = part.get("text")
+        if isinstance(text, str) and text.startswith("Error calling tool"):
+            print("tool-error")
+            raise SystemExit(0)
+
+print("ok")
+'
+}
+
+ags_mcp_response_has_project() {
+  # ensure_project returns a project descriptor. Accept the response shapes
+  # used by supported MCP transports, but require the descriptor itself to
+  # carry a numeric project id; an empty success envelope is not enough.
+  python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+if "result" in data or "jsonrpc" in data:
+    root = data.get("result")
+else:
+    root = data
+
+def has_project(obj, depth=0):
+    if depth > 4 or not isinstance(obj, dict):
+        return False
+    project_id = obj.get("id")
+    if isinstance(project_id, int) and not isinstance(project_id, bool):
+        return True
+    for key in ("result", "structuredContent"):
+        if has_project(obj.get(key), depth + 1):
+            return True
+    content = obj.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+                continue
+            try:
+                decoded = json.loads(part["text"])
+            except Exception:
+                continue
+            if has_project(decoded, depth + 1):
+                return True
+    return False
+
+raise SystemExit(0 if has_project(root) else 1)
+'
 }
 
 ags_mcp_call() {
@@ -55,13 +248,92 @@ PY
 )"
   local auth=()
   [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $MCP_AGENT_MAIL_TOKEN")
+  if [[ -n "${AGS_MCP_DIAG_FILE:-}" ]]; then
+    local response_file http_status curl_exit diag_stage
+    diag_stage="${AGS_MCP_DIAG_STAGE:-register_agent}"
+    response_file="$(umask 077; mktemp "${TMPDIR:-/tmp}/agentstack-mcp-response.XXXXXX")" || {
+      ags_registration_diag_write_file "$AGS_MCP_DIAG_FILE" "$diag_stage" "unknown"
+      return 1
+    }
+    if http_status="$(printf '%s' "$payload" | curl -sS --max-time 30 -X POST "$mcp_url" \
+      -H "Content-Type: application/json" -H "Accept: application/json" -H "Connection: close" \
+      ${auth[@]+"${auth[@]}"} \
+      --output "$response_file" --write-out '%{http_code}' \
+      --data-binary @- 2>/dev/null)"; then
+      curl_exit=0
+    else
+      curl_exit=$?
+      ags_registration_diag_write_file "$AGS_MCP_DIAG_FILE" "$diag_stage" "transport-failed" "$curl_exit"
+      rm -f "$response_file"
+      return 1
+    fi
+    if [[ ! "$http_status" =~ ^[0-9]+$ || "$http_status" -lt 200 || "$http_status" -ge 300 ]]; then
+      ags_registration_diag_write_file "$AGS_MCP_DIAG_FILE" "$diag_stage" "http-rejected" "" "$http_status"
+      rm -f "$response_file"
+      return 1
+    fi
+    if ! cat "$response_file"; then
+      ags_registration_diag_write_file "$AGS_MCP_DIAG_FILE" "$diag_stage" "invalid-response"
+      rm -f "$response_file"
+      return 1
+    fi
+    rm -f "$response_file"
+    return 0
+  fi
   # `${auth[@]+"${auth[@]}"}` — macOS bash 3.2 treats a plain `"${auth[@]}"` on
   # an empty array as an unbound variable under `set -u`, so a tokenless call
   # would abort here instead of sending no Authorization header.
   printf '%s' "$payload" | curl -sf --max-time 30 -X POST "$mcp_url" \
-    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Connection: close" \
+    -H "Content-Type: application/json" -H "Accept: application/json" -H "Connection: close" \
     ${auth[@]+"${auth[@]}"} \
     --data-binary @- 2>/dev/null
+}
+
+ags_mcp_call_diagnosed() {
+  local stage="$1" tool="$2" diag_file response classification call_status rpc_code
+  shift 2
+  ags_registration_diag_reset
+  AGS_MCP_RESPONSE=""
+  diag_file="$(umask 077; mktemp "${TMPDIR:-/tmp}/agentstack-mcp-diag.XXXXXX")" || {
+    ags_registration_diag_set "$stage" "unknown"
+    return 1
+  }
+  if response="$(AGS_MCP_DIAG_FILE="$diag_file" AGS_MCP_DIAG_STAGE="$stage" ags_mcp_call "$tool" "$@")"; then
+    call_status=0
+  else
+    call_status=$?
+  fi
+  if [[ "$call_status" != "0" ]]; then
+    ags_registration_diag_load_file "$diag_file"
+    if [[ -z "$AGS_REGISTRATION_DIAG_STAGE" || -z "$AGS_REGISTRATION_DIAG_REASON" ]]; then
+      ags_registration_diag_set "$stage" "unknown"
+    fi
+    rm -f "$diag_file"
+    return 1
+  fi
+  rm -f "$diag_file"
+
+  classification="$(printf '%s' "$response" | ags_classify_mcp_response)"
+  case "$classification" in
+    ok)
+      AGS_MCP_RESPONSE="$response"
+      return 0
+      ;;
+    rpc-error:*)
+      rpc_code="${classification#rpc-error:}"
+      ags_registration_diag_set "$stage" "rpc-error" "" "" "$rpc_code"
+      ;;
+    rpc-error)
+      ags_registration_diag_set "$stage" "rpc-error"
+      ;;
+    tool-error)
+      ags_registration_diag_set "$stage" "tool-error"
+      ;;
+    *)
+      ags_registration_diag_set "$stage" "invalid-response"
+      ;;
+  esac
+  return 1
 }
 
 ags_mcp_has_error() {
@@ -486,6 +758,7 @@ ags_register_session() {
   AGS_REQUESTED_AGENT_NAME=""
   AGS_SERVER_RETURNED_AGENT_NAME=""
   AGS_AGENT_NAME_SUBSTITUTED=0
+  ags_registration_diag_reset
 
   local context_json="" registration_token=""
   declare -F agentstack_validate_project_context >/dev/null 2>&1 || {
@@ -527,10 +800,17 @@ ags_register_session() {
   fi
   AGS_REQUESTED_AGENT_NAME="$agent_name"
 
-  ags_mcp_call "ensure_project" "human_key=$project_key" >/dev/null
+  if ! ags_mcp_call_diagnosed "ensure_project" "ensure_project" "human_key=$project_key"; then
+    return 1
+  fi
+  if ! printf '%s' "$AGS_MCP_RESPONSE" | ags_mcp_response_has_project; then
+    ags_registration_diag_set "ensure_project" "invalid-response"
+    return 1
+  fi
 
   # Candidate/top-level registration never adopts an ambient owner token.
-  # Mint a fresh token only for a name Mail positively reports as free.
+  # Mint a fresh token only for a name Mail positively reports as free. An
+  # 'unknown' answer must not mint one: that could claim a live identity.
   if [[ -z "$registration_token" ]] && ags_agent_name_available "$project_key" "$agent_name"; then
     registration_token="$(ags_generate_registration_token)" || return 1
   fi
@@ -545,12 +825,15 @@ ags_register_session() {
   [[ -n "$registration_token" ]] && register_args+=("registration_token=$registration_token")
 
   local result registered registered_token
-  result="$(ags_mcp_call "register_agent" "${register_args[@]}")" || return 1
-  if printf '%s' "$result" | ags_mcp_has_error; then
+  if ! ags_mcp_call_diagnosed "register_agent" "register_agent" "${register_args[@]}"; then
     return 1
   fi
+  result="$AGS_MCP_RESPONSE"
   registered="$(printf '%s' "$result" | ags_extract_agent_name)"
-  [[ -n "$registered" ]] || return 1
+  if [[ -z "$registered" ]]; then
+    ags_registration_diag_set "response-parse" "invalid-response"
+    return 1
+  fi
   AGS_SERVER_RETURNED_AGENT_NAME="$registered"
   if [[ "$registered" != "$agent_name" ]]; then
     AGS_AGENT_NAME_SUBSTITUTED=1
@@ -560,6 +843,7 @@ ags_register_session() {
     # paths may reconcile their not-yet-started tmux session to the read-back,
     # but an existing identity must fail closed.
     if [[ "$requested_mode" == "reserved" ]]; then
+      ags_registration_diag_set "identity-check" "identity-changed"
       return 2
     fi
   fi
