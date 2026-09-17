@@ -45,6 +45,7 @@ classifiers = [
 
 [project.scripts]
 agentstack-mail = "agentstack_mail.cli:main"
+agentstack-enroll = "agentstack_mail.enrollment_cli:main"
 agentstack-mail-migrate = "agentstack_mail.migration:main"
 agentstack-mail-service = "agentstack_mail.service:main"
 agentstack-mail-consumers = "agentstack_mail.consumer:main"

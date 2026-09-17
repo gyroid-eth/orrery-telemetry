@@ -291,6 +291,9 @@ class Settings:
     window_identity_uuid: str
     # Days of inactivity before a window identity expires (default 30)
     window_identity_ttl_days: int
+    # Explicitly configured local-only operator control socket.  Empty keeps
+    # the management plane disabled (notably for embedded/in-process servers).
+    management_socket_path: str
 
 
 def _bool(value: str, *, default: bool) -> bool:
@@ -535,6 +538,9 @@ def get_settings() -> Settings:
         messaging_auto_handshake_on_block=_bool(decouple_config("AGENTSTACK_MAIL_MESSAGING_AUTO_HANDSHAKE_ON_BLOCK", default="true"), default=True),
         window_identity_uuid=decouple_config("AGENTSTACK_MAIL_WINDOW_ID", default="").strip(),
         window_identity_ttl_days=_int(decouple_config("AGENTSTACK_MAIL_WINDOW_TTL_DAYS", default="30"), default=30),
+        management_socket_path=decouple_config(
+            "AGENTSTACK_MAIL_MANAGEMENT_SOCKET", default=""
+        ).strip(),
     )
 
 

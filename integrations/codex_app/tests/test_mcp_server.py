@@ -286,6 +286,25 @@ def test_stdio_server_lists_only_allowlisted_tools_and_rejects_passthrough(tmp_p
     assert "allowlisted" in response["result"]["content"][0]["text"]
 
 
+@pytest.mark.parametrize("management_name", ("inspect_enrollment", "claim_agent", "recover_agent", "agentstack_enroll"))
+def test_operator_enrollment_is_absent_from_proxy_catalog_and_dispatch(tmp_path, management_name):
+    proxy, _ = _proxy(tmp_path)
+    server = StdioMcpServer(proxy)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert management_name not in {tool["name"] for tool in listed["result"]["tools"]}
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": management_name, "arguments": {}},
+        }
+    )
+    assert response["result"]["isError"] is True
+    assert "allowlisted" in response["result"]["content"][0]["text"]
+
+
 def test_only_bootstrap_accepts_caller_supplied_runtime_identity():
     by_name = {tool["name"]: tool for tool in TOOL_DEFINITIONS}
 

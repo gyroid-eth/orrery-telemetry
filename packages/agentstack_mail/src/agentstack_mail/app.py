@@ -62,6 +62,7 @@ from .db import (
     stop_query_tracking,
 )
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
+from .enrollment import EnrollmentControlServer
 from .models import (
     Agent,
     AgentLink,
@@ -819,6 +820,11 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
                 },
             )
         await ensure_schema(settings)
+        enrollment_control: EnrollmentControlServer | None = None
+        management_socket = getattr(settings, "management_socket_path", "").strip()
+        if management_socket:
+            enrollment_control = EnrollmentControlServer(Path(management_socket))
+            await enrollment_control.start()
         try:
             yield
         finally:
@@ -827,6 +833,8 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
             # that the scope cancels directly, so use the matching AnyIO
             # shield and finish aiosqlite worker shutdown before loop close.
             with anyio.CancelScope(shield=True):
+                if enrollment_control is not None:
+                    await enrollment_control.close()
                 await shutdown_commit_queue()
                 await dispose_database_for_shutdown()
                 with suppress(BaseException):

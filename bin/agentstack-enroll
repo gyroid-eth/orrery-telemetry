@@ -1,0 +1,18 @@
+#!/bin/bash
+# Local operator entry point for persistent-agent enrollment.
+
+set -euo pipefail
+
+AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+if [[ -f "$AGENTSTACK_HOME_DIR/env.sh" ]]; then
+  # shellcheck disable=SC1090
+  . "$AGENTSTACK_HOME_DIR/env.sh"
+fi
+
+ENROLL_EXECUTABLE="${AGENTSTACK_MAIL_ENROLL_BIN:-}"
+if [[ -z "$ENROLL_EXECUTABLE" || ! -x "$ENROLL_EXECUTABLE" ]]; then
+  echo "agentstack-enroll: installed Mail enrollment executable is unavailable; run agentstack-doctor" >&2
+  exit 1
+fi
+
+exec "$ENROLL_EXECUTABLE" "$@"

@@ -815,6 +815,7 @@ def _setup_fts(connection: Any) -> None:
         "ALTER TABLE agents ADD COLUMN retired_at DATETIME DEFAULT NULL",
         "ALTER TABLE projects ADD COLUMN archived_at DATETIME DEFAULT NULL",
         "ALTER TABLE agents ADD COLUMN registration_token VARCHAR(64) DEFAULT NULL",
+        "ALTER TABLE agents ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE messages ADD COLUMN topic VARCHAR(64) DEFAULT NULL",
     ]:
         try:

@@ -305,7 +305,45 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
             )
         ).read_text(encoding="utf-8")
         assert "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough" in service_env
+        management_socket_line = next(
+            line for line in service_env.splitlines()
+            if line.startswith("AGENTSTACK_MAIL_MANAGEMENT_SOCKET=")
+        )
+        management_socket = management_socket_line.split("=", 1)[1]
+        assert management_socket.startswith(f"/tmp/orrery-mail-{os.getuid()}/")
         assert "HTTP_BEARER_TOKEN" not in service_env
+
+        connection_profile_path = home / ".agentstack" / "connections" / "local.json"
+        connection_profile = json.loads(connection_profile_path.read_text(encoding="utf-8"))
+        assert connection_profile == {
+            "kind": "orrery-mail-connection-v1",
+            "management_socket": management_socket,
+            "runtime_dir": str(home / ".agentstack" / "runtime"),
+        }
+        assert connection_profile_path.stat().st_mode & 0o777 == 0o600
+
+        pinned_instance = "11111111-2222-4333-8444-555555555555"
+        connection_profile["expected_server_instance_id"] = pinned_instance
+        connection_profile_path.write_text(
+            json.dumps(connection_profile) + "\n", encoding="utf-8"
+        )
+        connection_profile_path.chmod(0o600)
+        reinstalled = subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--assume-yes"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=180,
+        )
+        assert reinstalled.returncode == 0, reinstalled.stdout + reinstalled.stderr
+        assert (
+            json.loads(connection_profile_path.read_text(encoding="utf-8"))[
+                "expected_server_instance_id"
+            ]
+            == pinned_instance
+        )
 
         manifest = json.loads(
             (home / ".agentstack" / "install-state.json").read_text(
@@ -339,6 +377,17 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
 
         mailctl = home / ".agentstack" / "bin" / "agentstack-mailctl"
         assert mailctl.is_file() and os.access(mailctl, os.X_OK)
+        enroll = home / ".agentstack" / "bin" / "agentstack-enroll"
+        assert enroll.is_file() and os.access(enroll, os.X_OK)
+        enroll_help = subprocess.run(
+            [str(enroll), "--help"],
+            env={**env, "AGENTSTACK_HOME": str(home / ".agentstack")},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert enroll_help.returncode == 0, enroll_help.stdout + enroll_help.stderr
+        assert "inspect -> claim" in enroll_help.stdout
 
         def run_mailctl(action: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(
