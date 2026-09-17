@@ -5,8 +5,9 @@ FastMCP validates tool arguments with pydantic and, on failure, logs the whole
 ``fastmcp.tools.tool_manager`` before any code the server owns runs. A caller
 that sends a credential under a name the tool does not accept therefore wrote
 the credential into the server log. These tests pin the two layers that stop
-it, and the ``set_contact_policy`` token acceptance that removes the trigger
-the registration helper used to hit on every run.
+it, and replay the registration helper's own call order (token first, then
+without) against ``set_contact_policy``, whose published schema stays equal to
+the frozen upstream contract.
 """
 
 from __future__ import annotations
@@ -268,16 +269,18 @@ def test_sanitizer_is_installed_once_per_process() -> None:
     assert sum(isinstance(f, boundary.ToolValidationLogSanitizer) for f in logger.filters) == 1
 
 
-def test_set_contact_policy_accepts_the_owner_token_and_rejects_a_wrong_one(
+def test_helper_call_order_against_set_contact_policy_leaks_nothing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capture_tool_manager_log: pytest.LogCaptureFixture,
 ) -> None:
+    """The helper sends the owner token first; that call must fail without
+    echoing the token anywhere, and the token-less retry must still apply."""
     _configure_isolated_runtime(monkeypatch, tmp_path)
     project = str(tmp_path / "project")
     owner = "owner-token-" + CANARY
 
-    async def run() -> tuple[Any, str, Any, str, Any, str]:
+    async def run() -> tuple[Any, str, Any, str]:
         async with Client(app.build_mcp_server()) as client:
             await _register(client, project, "RedStone", owner)
             base = {"project_key": project, "agent_name": "RedStone"}
@@ -287,31 +290,25 @@ def test_set_contact_policy_accepts_the_owner_token_and_rejects_a_wrong_one(
                 raise_on_error=False,
             )
             after_token = _policy(tmp_path, "RedStone")
-            wrong = await client.call_tool(
-                "set_contact_policy",
-                {**base, "policy": "block_all", "registration_token": "誤り-" + CANARY},
-                raise_on_error=False,
-            )
-            after_wrong = _policy(tmp_path, "RedStone")
             without = await client.call_tool(
                 "set_contact_policy",
-                {**base, "policy": "contacts_only"},
+                {**base, "policy": "open"},
                 raise_on_error=False,
             )
             after_without = _policy(tmp_path, "RedStone")
-            return with_token, after_token, wrong, after_wrong, without, after_without
+            return with_token, after_token, without, after_without
 
     try:
-        with_token, after_token, wrong, after_wrong, without, after_without = asyncio.run(run())
+        with_token, after_token, without, after_without = asyncio.run(run())
     finally:
         db.reset_database_state()
 
-    assert with_token.is_error is False, _payload(with_token)
-    assert after_token == "open"
-    assert wrong.is_error is True
-    assert "does not match" in _payload(wrong)
-    assert after_wrong == "open"
+    text = _payload(with_token)
+    assert with_token.is_error is True
+    assert "set_contact_policy" in text and "does not accept 1" in text
+    assert "registration_token" not in text
+    assert CANARY not in text
+    assert after_token != "open"
     assert without.is_error is False, _payload(without)
-    assert after_without == "contacts_only"
-    assert CANARY not in _payload(wrong)
+    assert after_without == "open"
     assert CANARY not in _log_text(capture_tool_manager_log)
