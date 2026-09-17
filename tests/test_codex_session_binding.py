@@ -327,7 +327,7 @@ def _fake_codex_launch_env(
         "    printf '{\"id\":73,\"name\":\"BoundCodex\","
         "\"registration_token\":\"server-owner-token\"}\\n'\n"
         "  else\n"
-        "    printf '{}\\n'\n"
+        "    printf '{\"id\":1}\\n'\n"
         "  fi\n"
         "}\n"
         "ags_mcp_has_error() { return 1; }\n"

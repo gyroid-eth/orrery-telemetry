@@ -2,129 +2,155 @@ This machine runs **ORRERY Telemetry**: Claude Code and Codex agents
 coordinate over ORRERY Mail and share file reservations. Follow these
 rules before doing project work.
 
-## Session Startup
+## Coordination (ORRERY Mail)
 
-First calls:
+Use only the first matching route below. Once a route matches, do not continue
+down the list or add a second registration or authentication ritual.
 
-1. `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`.
-2. If SessionStart says the shell hook already registered your resolved name,
-   do not call `register_agent` again. Otherwise call `register_agent` with the
-   resolved `name` (`$AGENT_NAME`, or the name printed by the SessionStart
-   reminder) and pass `CHILD_REGISTRATION_TOKEN` as `registration_token` when it
-   is available.
-3. Tokens: **if your ORRERY Mail MCP server runs through the local proxy, you
-   never touch a token.** Spawned children are configured that way, and the
-   SessionStart reminder says so ("この接続はローカル MCP proxy 経由で既に認証済み
-   です"). The proxy holds your token and authenticates every call, so do not
-   read `agent_token_<name>` — that only costs an approval prompt and puts the
-   secret in your context.
+| Priority | Connection state | What to do |
+| --- | --- | --- |
+| 1 | The canonical embedded task explicitly says that registration is already complete and that no ritual is required | Start the task immediately. Do not call `ensure_project`, `register_agent`, `agentstack-reregister`, or `fetch_inbox` merely as a startup ritual. Use the connection already provided only when the task actually requires communication. |
+| 2 | The provided tool descriptions and argument schemas show a bound ORRERY proxy | Use those proxy tools exactly as described. Do not run the helper, register again, or read a token file. Do not add caller identity, project, or token fields that the schema does not accept. |
+| 3 | The connection is confirmed raw/direct and SessionStart explicitly says the shell registered the existing identity | Do not register again. Authenticate the model's separate raw MCP tool session using the raw procedure below. |
+| 4 | The connection is confirmed raw/direct and an existing identity needs recovery | Resolve the existing name, then run the token-safe helper once with `program=claude-code`. Never escape a failure by creating an alias or a new token. |
+| 5 | The connection is confirmed raw/direct and this is a genuinely new, unregistered session | Follow the new raw registration procedure below. Do not reuse this route for a known or reserved identity. |
+| 6 | The connection type or identity is unknown | Inspect the actual tool schema and startup notice. Do not infer proxy use from the server name, `PARENT_AGENT`, or launcher state, and do not fall back from a proxy failure to raw registration. |
 
-   Only when the proxy is absent (a top-level session, or an install without
-   it) does the old rule apply: on the first `fetch_inbox`/`whois` call, read
-   `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
-   pass its value as `registration_token`. Later calls in the authenticated MCP
-   session may omit it.
+### 1. Embedded canonical task
 
-The SessionStart hook has already registered you when it prints:
+The explicit launch contract is decisive whether or not `PARENT_AGENT` is set;
+standalone launches can also use embedded-task semantics. When the complete
+canonical task says registration was completed and there is no boot ritual,
+begin that task without an inbox lookup. If it requires a completion message,
+send it through the already provided connection.
 
-```text
-ORRERY Mail server is running. This session is already registered.
-あなたは「<name>」です（既存 identity・source: ...）。shell hook で登録済みです。
-新しい名前を生成せず、register_agent を呼び直さず、fetch_inbox から始めてください。
+### 2. Bound ORRERY proxy
+
+Recognize a bound proxy primarily from the tools the model was actually given.
+In the current proxy contract, `runtime_status` takes no arguments, and
+`fetch_inbox` takes no caller identity or registration-token arguments. The
+real tool schema is authoritative; never invent optional-looking caller fields.
+
+Use `runtime_status` only when a binding check is needed, not on every turn.
+Compare its name and project with the canonical task. It proves only the local
+proxy binding, not ORRERY Mail reachability or server authentication. If an
+ordinary task call is sufficient, make that call directly.
+
+The proxy holds the owner token and authenticates calls. Do not read
+`agent_token_<name>`, run `agentstack-reregister`, or call `ensure_project` /
+`register_agent`. If the proxy is unbound, reports a different identity, or has
+a transport or authentication failure, stop the affected coordination action
+and report that exact condition. Do not switch to raw tools or a helper merely
+because the proxy failed.
+
+### 3. Raw/direct connection after shell registration
+
+The SessionStart hook has already registered the shell identity when it says
+that this session is registered and names the existing identity. That remote
+registration does not authenticate the model's separate raw HTTP MCP session.
+Do not call `register_agent` or the helper again. On the first raw
+`fetch_inbox` or `whois` call, read
+`${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>` and
+pass its value as `registration_token`; later calls in that authenticated MCP
+session may omit it. This token-reading instruction applies only to a confirmed
+raw/direct connection, never to a bound proxy.
+
+### 4. Recovering an existing identity over raw/direct MCP
+
+First resolve the existing name. Prefer `AGENT_NAME`; otherwise use the name
+printed by the SessionStart reminder or the exact tmux session name. Do not run
+the helper or `register_agent` with an empty name. If the name came from the
+reminder or tmux, set `AGENT_NAME` to that exact existing name before running
+the command; do not generate or substitute another name. Then run:
+
+```bash
+AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME" claude-code
 ```
 
-When you see those lines, skip `register_agent` and go straight to
-`fetch_inbox`, passing the persisted owner token on that first MCP call. The
-hook's shell-side HTTP registration does not authenticate the model's separate
-MCP tool session.
+The helper restores the owner token from runtime state without printing it. A
+successful run prints `agentstack-reregister: registered <name>` and exits 0;
+do not call `register_agent` afterward. Authenticate the raw MCP session as in
+route 3.
 
-Details and exceptions for the first calls:
+If the helper is unavailable or fails, report the exact failure and stop that
+recovery. A generic `register_agent failed` does not by itself prove that the
+token is missing or stale. Do not retry blindly, call `ensure_project` /
+`register_agent` as an escape hatch, generate a different name, or invent a
+token. A reserved child identity stays reserved when `PARENT_AGENT` is set,
+when `spawn_child.sh` preassigned the tmux name, or when the canonical task says
+so.
 
-- The shared project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
-  `ensure_project`, `register_agent`, `fetch_inbox`, and reservations. Do not
-  infer a different project from your current directory.
-- On SessionStart, `session-start-reminder.sh` resolves an existing identity
-  before registration (`AGENT_NAME` -> per-pane metadata -> tmux session name)
-  and reminds you to re-register with the same `name`. For cc/cx sessions that
-  do not carry `AGENT_NAME`, the tmux session name is the decisive source across
-  `/clear`, resume, and compact; when the reminder prints a name, do not
-  generate a new one.
-- If you were launched with `agent-start`, you should already have
-  `AGENT_NAME` exported and your tmux session should be named after it. At
-  session start, call `ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`,
-  then call `register_agent` with `program="claude-code"` and
-  `name="$AGENT_NAME"` when `AGENT_NAME` is set. If
-  `printenv CHILD_REGISTRATION_TOKEN` is non-empty, pass that value as
-  `registration_token`; Claude Code is not sandbox-hiding this env in normal
-  launcher sessions. `CHILD_REGISTRATION_TOKEN` is not only for child agents:
-  it is the re-authentication token for continuing an existing identity. A
-  top-level session with no `PARENT_AGENT` still needs it if the tmux/session
-  name resolves to an existing identity. If `CHILD_REGISTRATION_TOKEN` is empty,
-  do not invent a new token; try the helper below before reporting failure.
-- ORRERY Mail is token-strict for existing names. `register_agent` and
-  read-only tools such as `fetch_inbox` or `whois` require the original
-  registration token unless this MCP session has already authenticated as that
-  agent. Reading only is not token-free.
-- Stack registration helpers set your own `contact_policy` to `open` by default
-  after token-backed registration. Set `AGENTSTACK_CONTACT_POLICY=auto`,
-  `contacts_only`, `block_all`, or an empty value to override that behavior.
-- If a token error such as `requires registration_token` occurs, try manual
-  recovery before reporting failure:
+### 5. Registering a genuinely new raw/direct session
 
-  ```bash
-  __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME" claude-code
-  ```
+Only after confirming both raw/direct transport and the absence of an existing
+or reserved identity, call
+`ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
+`register_agent(project_key="__AGENTSTACK_PROJECT_KEY__", program="claude-code",
+...)`, and finally authenticate the first inbox call with the returned owner
+token. If a name is supplied, use the canonical one; otherwise allow the server
+to generate it. Never use this route to work around an identity conflict.
 
-  Success prints `agentstack-reregister: registered <name>` and exits 0. If it
-  succeeds, skip `register_agent` and call `fetch_inbox`.
-- Top-level sessions store their runtime token at
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>`.
-  Delegated children also use
-  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json`.
-  `agentstack-reregister` reads both locations. It is acceptable for stack
-  helpers to use these token files. Do not read ORRERY Mail's `storage.sqlite3`
-  directly; the DB is outside the recovery boundary and ad hoc DB reads risk
-  stale paths, token leakage, and identity splits.
-- If `CHILD_REGISTRATION_TOKEN` is present but re-registration still fails,
-  suspect a wrong token, including a parent token accidentally mixed into a
-  pre-registered child. Retry with `agentstack-reregister`; if it cannot restore
-  the correct token from runtime state, report the mismatch instead of creating
-  a new alias.
-- If registration still fails with a name-conflict or token-mismatch error in a
-  child/reserved session, do not register under another name; report the
-  missing or stale `CHILD_REGISTRATION_TOKEN` and update/restart agent-mail.
-- Embedded-task exception: when the launch prompt explicitly says registration
-  was completed by the parent, names `--embed-task` semantics, and includes the
-  complete canonical task, do not call `ensure_project`, `register_agent`,
-  `agentstack-reregister`, or `fetch_inbox`. Start that embedded task immediately
-  and report completion to `PARENT_AGENT` with `send_message`. There is no task
-  mail in this mode.
-- Otherwise, always call
-  `fetch_inbox(project_key="__AGENTSTACK_PROJECT_KEY__", agent_name="$AGENT_NAME")`
-  after registration. If `PARENT_AGENT` is set, treat the inbox request as the
-  canonical task and report completion to that parent with `send_message`.
-- If `PARENT_AGENT` is not set and registration or inbox access is truly
-  unrecoverable, there is no parent to report to. Leave a short operator-facing
-  note and continue the user task without inbox coordination; do not stall or
-  create a new alias.
+### Shared boundaries
+
+- The shared raw/direct project key is `__AGENTSTACK_PROJECT_KEY__`. Use it for
+  raw registration and reservations; do not add it to a bound-proxy call whose
+  schema does not accept it or infer another key from the current directory.
+- A normal delegated child that was not given a separate, complete canonical
+  task at launch must fetch only its own inbox through the selected connection
+  route and treat that inbox request as the canonical task. A complete
+  canonical task supplied at launch, whether embedded or standalone, takes
+  priority and does not require an initial inbox fetch.
+- A top-level raw session token may live at
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>`;
+  delegated child state may live under
+  `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/`.
+  Stack helpers may read these files. The model must not read a proxy token, and
+  nobody should read ORRERY Mail's `storage.sqlite3` directly.
+- Registration helpers set the agent's `contact_policy` to `open` by default
+  after token-backed registration. `AGENTSTACK_CONTACT_POLICY=auto`,
+  `contacts_only`, `block_all`, or an empty value overrides that behavior.
+- An identity mismatch is fail-closed: stop and report both expected and actual
+  non-secret identity details. Do not accept the returned name or register an
+  alias. An empty inbox after successful authentication is normal.
+- If coordination is unrecoverable and there is no parent, leave a concise
+  operator-facing note and continue only the user work that does not require
+  coordination. Do not manufacture another transport or identity.
+
+### Claude Code hook boundary
+
+The Claude `PreToolUse` registration hook and `PostToolUse` registration flag
+remain separate from connection authentication. A successful model-side
+`register_agent` response is what the post hook records. The shell helper does
+not create that flag, and proxy use alone does not prove that a flag exists.
+Sessions with a resolved `AGENT_NAME` are separately exempt from the missing-
+flag check, but identity-conflict and transport checks still apply. Follow the
+exact hook response; do not turn a hook failure into a different registration
+route.
 
 ## File Reservations
 
-Before editing files under the project, reserve the specific paths you plan to
-touch with `file_reservation_paths` or `macro_file_reservation_cycle` using
-`project_key="__AGENTSTACK_PROJECT_KEY__"` and your agent name. The
-`PreToolUse` hook blocks an unreserved `Edit`/`Write` under a protected root.
+Before editing files under the project, use the same connection route selected
+above to reserve the specific paths you plan to touch. The Claude `PreToolUse`
+hook blocks an unreserved `Edit`/`Write` under a protected root.
 
-- **`ttl_seconds` must be at least 600.** Generating the edit takes tens of
-  seconds; a 60–120 s reservation can expire before the tool runs, and the
-  hook cannot extend a reservation that no longer exists.
-- **Every successful `Edit`/`Write` releases its reservation** (the
+- Bound proxy: follow its actual schema and use `reserve_files`. Do not add
+  caller identity, project, or token fields that the schema does not accept.
+  Renew with `renew_reservations` and release with `release_reservations`.
+- Raw/direct MCP: acquire with `macro_file_reservation_cycle` (or
+  `file_reservation_paths`), passing
+  `project_key="__AGENTSTACK_PROJECT_KEY__"`, your agent name, and the paths
+  (project-relative). Renew with `renew_file_reservations` and release with
+  `release_file_reservations`.
+- On either route, **`ttl_seconds` must be at least 600.** Generating the edit
+  takes tens of seconds; a 60–120 s reservation can expire before the tool runs,
+  and the hook cannot extend a reservation that no longer exists.
+- **Every successful `Edit`/`Write` releases its reservation** (the Claude
   `PostToolUse` hook releases it after a grace period, 90 s by default).
   Editing the same file again means reserving it again first — a second edit
   on a reservation you took once is the most common way to get blocked.
 - Reserve several paths in one call when a change spans files. Renew long
-  edits with `renew_file_reservations`; release what you reserved but did not
-  edit with `release_file_reservations`.
+  edits through the tool for the selected route, and release what you reserved
+  but did not edit.
 - If a path is already reserved by another agent, coordinate over ORRERY Mail
   instead of waiting or editing around it.
 
