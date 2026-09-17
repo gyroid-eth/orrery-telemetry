@@ -63,6 +63,7 @@
     "AGENTSTACK_MURMUR": "",
     "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_PORTRAITS_DIR": "",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "/home/alice/.agentstack/profiles",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
     "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
@@ -131,7 +132,9 @@
   "purge_paths": [
     "/home/alice/.agentstack/mail-service",
     "/home/alice/.agentstack/mail",
-    "/home/alice/.agentstack/runtime"
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/profiles",
+    "/home/alice/.agentstack/connections"
   ],
   "repo_root": "/home/alice/src/claude-agent-stack",
   "retained_paths": [
@@ -139,7 +142,9 @@
     "/home/alice/.agentstack/mail",
     "/home/alice/.agentstack/mail/storage.sqlite3",
     "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
-    "/home/alice/.agentstack/runtime"
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/profiles",
+    "/home/alice/.agentstack/connections"
   ],
   "safe_merge_performed": true,
   "schema_version": 1,

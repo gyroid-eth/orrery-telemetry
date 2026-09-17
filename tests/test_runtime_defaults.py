@@ -820,6 +820,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert str(install_dir / "runtime") in manifest["retained_paths"]
     assert str(install_dir / "runtime") in manifest["purge_paths"]
+    assert str(install_dir / "profiles") in manifest["retained_paths"]
+    assert str(install_dir / "profiles") in manifest["purge_paths"]
+    assert str(install_dir / "connections") in manifest["retained_paths"]
+    assert str(install_dir / "connections") in manifest["purge_paths"]
     assert str(legacy_path) not in manifest["owned_files"]
     expected_payload_files = {
         str(install_dir / relative)
@@ -869,6 +873,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         f'Environment="AGENTSTACK_DASHBOARD_LOG={install_dir}/runtime/dashboard.log"'
         in systemd_unit
     )
+    assert (
+        f'Environment="AGENTSTACK_PERSISTENT_PROFILES_DIR={install_dir}/profiles"'
+        in systemd_unit
+    )
     assert 'Environment="AGENTSTACK_LANG=ja"' in systemd_unit
     assert 'Environment="AGENTSTACK_MURMUR=off"' in systemd_unit
     assert f'Environment="AGENTSTACK_SPAWN_DIRS=~/code:{project_dir}"' in systemd_unit
@@ -880,6 +888,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         in systemd_unit
     )
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
+    assert f"export AGENTSTACK_PERSISTENT_PROFILES_DIR={install_dir}/profiles" in generated_env
     assert "export AGENTSTACK_LANG=ja" in generated_env
     assert "export AGENTSTACK_MURMUR=off" in generated_env
     assert f"export AGENTSTACK_SPAWN_DIRS='~/code:{project_dir}'" in generated_env
@@ -977,9 +986,13 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "mail/storage.sqlite3",
         "mail-service",
         "mail-service/runtime",
+        "profiles",
+        "connections",
+        "connections/local.json",
     } <= remaining
     assert all(
-        path.split("/", 1)[0] in {"runtime", "mail", "mail-service"}
+        path.split("/", 1)[0]
+        in {"runtime", "mail", "mail-service", "profiles", "connections"}
         for path in remaining
     )
     assert not (install_dir / "VERSION").exists()

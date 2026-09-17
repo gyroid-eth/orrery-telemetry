@@ -13,7 +13,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from service_teardown import stop_dashboard
+from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -299,11 +299,12 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         assert alias_health["database_url"] == health["database_url"]
         assert destination_db.is_file()
 
-        service_env = next(
+        service_env_path = next(
             (home / ".agentstack" / "mail-service" / "renders").glob(
                 "*/service.env"
             )
-        ).read_text(encoding="utf-8")
+        )
+        service_env = service_env_path.read_text(encoding="utf-8")
         assert "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE=passthrough" in service_env
         management_socket_line = next(
             line for line in service_env.splitlines()
@@ -319,6 +320,9 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
             "kind": "orrery-mail-connection-v1",
             "management_socket": management_socket,
             "runtime_dir": str(home / ".agentstack" / "runtime"),
+            "mcp_url": mail_url,
+            "mail_env": str(service_env_path),
+            "http_bearer_mode": "disabled",
         }
         assert connection_profile_path.stat().st_mode & 0o777 == 0o600
 
@@ -353,6 +357,9 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         assert manifest["agent_mail"]["provider"] == "agentstack"
         assert manifest["env"]["AGENTSTACK_MAIL_DB"] == str(destination_db)
         assert manifest["env"]["AGENTSTACK_MAIL_HTTP_BEARER_MODE"] == "disabled"
+        assert manifest["env"]["AGENTSTACK_PERSISTENT_PROFILES_DIR"] == str(
+            home / ".agentstack" / "profiles"
+        )
         assert any(
             item.get("role") == "ORRERY Mail" for item in manifest["services"]
         )
@@ -374,6 +381,8 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         ).read_text(encoding="utf-8")
         assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE" in dashboard_plist_template
         assert "__MAIL_HTTP_BEARER_MODE__" in dashboard_plist_template
+        assert "AGENTSTACK_PERSISTENT_PROFILES_DIR" in dashboard_plist_template
+        assert "__PERSISTENT_PROFILES_DIR__" in dashboard_plist_template
 
         mailctl = home / ".agentstack" / "bin" / "agentstack-mailctl"
         assert mailctl.is_file() and os.access(mailctl, os.X_OK)
@@ -381,13 +390,38 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         assert enroll.is_file() and os.access(enroll, os.X_OK)
         enroll_help = subprocess.run(
             [str(enroll), "--help"],
-            env={**env, "AGENTSTACK_HOME": str(home / ".agentstack")},
+            env={
+                **env,
+                "AGENTSTACK_HOME": str(home / ".agentstack"),
+                "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+            },
             text=True,
             capture_output=True,
             check=False,
         )
         assert enroll_help.returncode == 0, enroll_help.stdout + enroll_help.stderr
         assert "inspect -> claim" in enroll_help.stdout
+        persistent = home / ".agentstack" / "bin" / "agentstack-persistent"
+        persistent_deliver = (
+            home / ".agentstack" / "bin" / "agentstack-persistent-deliver"
+        )
+        assert persistent.is_file() and os.access(persistent, os.X_OK)
+        assert persistent_deliver.is_file() and os.access(persistent_deliver, os.X_OK)
+        assert (home / ".agentstack" / "profiles").stat().st_mode & 0o777 == 0o700
+        persistent_help = subprocess.run(
+            [str(persistent), "--help"],
+            env={
+                **env,
+                "AGENTSTACK_HOME": str(home / ".agentstack"),
+                "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert persistent_help.returncode == 0
+        assert "agentstack-enroll inspect" in persistent_help.stdout
+        assert "agentstack-persistent run --profile" in persistent_help.stdout
 
         def run_mailctl(action: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(

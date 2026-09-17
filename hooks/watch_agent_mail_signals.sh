@@ -51,12 +51,22 @@ STATE_FILE="${STATE_DIR}/notify-state.json"
 LEASE_DIR="${STATE_DIR}/notify-locks"
 SCAN_INTERVAL=30      # periodic scan で取りこぼし救済
 RETRY_COOLDOWN=30     # 同一 (agent, msg) の再試行間隔
-LEASE_TTL=120         # lease 失効時間（古い lease は強制取り直し）
 # 2026-05-22 JollyTesla hang 根治: tmux 呼び出しは server stall 時に同期ブロック
 # し、単一スレッドの本体ループ全体を凍結させる (本日 game2 で2回 hang)。全 tmux
 # 呼び出しを run_to で時間制限し、配送本体は background worker に切り離す。
 TMUX_TIMEOUT="${TMUX_TIMEOUT:-5}"   # tmux 1 コールの上限秒
 MAX_WORKERS="${MAX_WORKERS:-12}"    # 同時 delivery worker 上限 (server stall 時の暴走防止)
+HEADLESS_REPLY_TIMEOUT="${AGENTSTACK_HEADLESS_REPLY_TIMEOUT:-300}"
+case "$HEADLESS_REPLY_TIMEOUT" in
+    ''|*[!0-9]*) HEADLESS_REPLY_TIMEOUT=300 ;;
+esac
+if (( HEADLESS_REPLY_TIMEOUT < 1 || HEADLESS_REPLY_TIMEOUT > 300 )); then
+    HEADLESS_REPLY_TIMEOUT=300
+fi
+# A worker retains its lease throughout the bridge wait. The lease must never
+# expire first or the periodic scan can start a duplicate bot delivery.
+LEASE_TTL=$((HEADLESS_REPLY_TIMEOUT + 30))
+PERSISTENT_DELIVER="${AGENTSTACK_PERSISTENT_DELIVER:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/agentstack-persistent-deliver}"
 mkdir -p "$STATE_DIR" "$LEASE_DIR"
 
 log() { echo "[mail-watcher $(date '+%H:%M:%S')] $*"; }
@@ -172,28 +182,73 @@ acquire_delivery_lease() {
     local agent="$1"
     local msg_key="$2"
     local lease_path="${LEASE_DIR}/${agent}-${msg_key}.lock"
-    local now
-    now=$(date +%s)
+    local guard_path="${lease_path}.guard"
+    python3 - "$lease_path" "$guard_path" "$LEASE_TTL" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import secrets
+import shutil
+import sys
+import time
 
-    if mkdir "$lease_path" 2>/dev/null; then
-        printf '%s\n' "$now" > "$lease_path/ts"
-        return 0
-    fi
-
-    local ts="0"
-    [[ -f "$lease_path/ts" ]] && ts=$(<"$lease_path/ts")
-    if (( now - ts > LEASE_TTL )); then
-        rm -rf "$lease_path" 2>/dev/null || true
-        if mkdir "$lease_path" 2>/dev/null; then
-            printf '%s\n' "$now" > "$lease_path/ts"
-            return 0
-        fi
-    fi
-    return 1
+lease = Path(sys.argv[1])
+guard_path = Path(sys.argv[2])
+ttl = int(sys.argv[3])
+now = int(time.time())
+owner = f"{os.getpid()}-{secrets.token_hex(16)}"
+guard = open(guard_path, "a+", encoding="utf-8")
+os.chmod(guard_path, 0o600)
+fcntl.flock(guard, fcntl.LOCK_EX)
+try:
+    if lease.exists():
+        try:
+            timestamp = int((lease / "ts").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            timestamp = 0
+        if now - timestamp <= ttl:
+            raise SystemExit(1)
+        shutil.rmtree(lease)
+    lease.mkdir(mode=0o700)
+    (lease / "ts").write_text(f"{now}\n", encoding="utf-8")
+    (lease / "owner").write_text(f"{owner}\n", encoding="utf-8")
+    os.chmod(lease / "ts", 0o600)
+    os.chmod(lease / "owner", 0o600)
+finally:
+    fcntl.flock(guard, fcntl.LOCK_UN)
+    guard.close()
+print(owner)
+PY
 }
 
 release_delivery_lease() {
-    rm -rf "${LEASE_DIR}/$1-$2.lock" 2>/dev/null || true
+    local lease_path="${LEASE_DIR}/$1-$2.lock"
+    local guard_path="${lease_path}.guard"
+    local owner="$3"
+    python3 - "$lease_path" "$guard_path" "$owner" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import shutil
+import sys
+
+lease = Path(sys.argv[1])
+guard_path = Path(sys.argv[2])
+owner = sys.argv[3]
+guard = open(guard_path, "a+", encoding="utf-8")
+os.chmod(guard_path, 0o600)
+fcntl.flock(guard, fcntl.LOCK_EX)
+try:
+    try:
+        current = (lease / "owner").read_text(encoding="utf-8").strip()
+    except OSError:
+        current = ""
+    if current == owner and lease.is_dir():
+        shutil.rmtree(lease)
+finally:
+    fcntl.flock(guard, fcntl.LOCK_UN)
+    guard.close()
+PY
 }
 
 is_pid_running() {
@@ -322,21 +377,25 @@ handle_signal_file() {
         return 0
     fi
 
-    acquire_delivery_lease "$agent_name" "$msg_key" || return 0
-
-    log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
-
     # 配送 (tmux 操作) は background worker に切り離す。tmux が server stall で
     # ブロックしても本体ループは即座に次の signal へ進めるため、健全な pane への
     # 配送が止まらない (= hang しない)。worker は run_to で各 tmux 呼び出しを時間
     # 制限し、state 記録 + lease 解放 + signal 削除まで自己完結する。
     # server stall 時の worker 暴走を防ぐため同時数を MAX_WORKERS で制限する。
-    # worker は run_to により有限時間で必ず終了するので、この待ちは有界 (最悪
-    # TMUX_TIMEOUT 程度) であり恒久 deadlock しない。
+    # headless worker は返信 deadline まで生きるため、この待ちは
+    # HEADLESS_REPLY_TIMEOUT 近くになり得る。待ち時間で lease の有効期間を消費
+    # しないよう、空き枠を得て state を再確認してから lease を取得する。
     while [ "$(jobs -p 2>/dev/null | wc -l | tr -d ' ')" -ge "$MAX_WORKERS" ]; do
         sleep 0.1
     done
-    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" &
+    # 枠待ちの間に別配送経路が成功していれば二重配送しない。
+    state_should_attempt "$agent_name" "$msg_key" || return 0
+    local lease_owner
+    lease_owner=$(acquire_delivery_lease "$agent_name" "$msg_key") || return 0
+
+    log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
+
+    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" "$lease_owner" &
 }
 
 # deliver_worker: 1 signal の配送を完結させる background ジョブ。すべての tmux
@@ -352,11 +411,43 @@ deliver_worker() {
     local signal_file="$1" agent_name="$2" msg_key="$3"
     local from="$4" subject="$5" importance="$6" per_msg_file="$7"
     local body_snippet="${8:-}" body_truncated="${9:-0}"
+    local lease_owner="${10:-}"
     local session_name="$agent_name"
+
+    # A persistent headless profile has no REPL pane to inject. Its wrapper
+    # publishes a mode-0600 runtime manifest and execs a bridge that owns the
+    # referenced Unix socket. The delivery helper returns success only after
+    # that bridge confirms notification -> bot handoff -> Mail reply. Once a
+    # headless manifest claims this identity, failure is retained for retry;
+    # falling through to tmux could wake an unrelated same-name pane.
+    local headless_rc=10
+    if [[ -x "$PERSISTENT_DELIVER" ]]; then
+        if "$PERSISTENT_DELIVER" \
+            --runtime-dir "$STATE_DIR" \
+            --agent-name "$agent_name" \
+            --signal-file "$signal_file" \
+            --timeout "$HEADLESS_REPLY_TIMEOUT"; then
+            state_mark_result "$agent_name" "$msg_key" "success" "persistent-headless-replied"
+            release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+            log "  Headless bridge replied for '$agent_name'"
+            if (( per_msg_file == 1 )); then
+                rm -f "$signal_file" 2>/dev/null || true
+                rmdir "$(dirname "$signal_file")" 2>/dev/null || true
+            fi
+            return 0
+        else
+            headless_rc=$?
+        fi
+        if [[ "$headless_rc" -ne 10 ]]; then
+            state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
+            release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+            return 0
+        fi
+    fi
 
     if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then
         state_mark_result "$agent_name" "$msg_key" "session_not_found" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
 
@@ -372,13 +463,13 @@ deliver_worker() {
     if [ "$rc" -ne 0 ]; then
         # capture が時間内に返らない = server stall。inject せず後で再試行。
         state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     if echo "$last_lines" | grep -qE '(\$ ?$|% ?$)' && \
        ! echo "$last_lines" | grep -qE '(❯|Claude|claude|ctx:|Sonnet|Opus|Haiku|›)'; then
         state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
 
@@ -393,7 +484,7 @@ deliver_worker() {
 
     if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" -l "$prompt" 2>/dev/null; then
         state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     sleep 0.2
@@ -404,12 +495,12 @@ deliver_worker() {
     # （捨て子 Claude で実測確認）。
     if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" C-m 2>/dev/null; then
         state_mark_result "$agent_name" "$msg_key" "submit_failed" "watcher"
-        release_delivery_lease "$agent_name" "$msg_key"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
 
     state_mark_result "$agent_name" "$msg_key" "success" "watcher"
-    release_delivery_lease "$agent_name" "$msg_key"
+    release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
     log "  Injected notification into '$agent_name' (session: $session_name)"
     # Per-message files are watcher-owned (each represents one delivery); unlink
     # them on success so identical msg_ids never re-fire. Legacy single-file

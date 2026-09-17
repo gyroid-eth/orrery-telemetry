@@ -294,6 +294,7 @@ DASHBOARD_DIR="$INSTALL_DIR/dashboard"
 BIN_DIR="$INSTALL_DIR/bin"
 RUNTIME_DIR="$INSTALL_DIR/runtime"
 CONNECTIONS_DIR="$INSTALL_DIR/connections"
+PERSISTENT_PROFILES_DIR="$INSTALL_DIR/profiles"
 BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
@@ -1337,7 +1338,10 @@ detect_service_kind() {
 
 create_layout() {
   plan "create install layout under $INSTALL_DIR"
-  run mkdir -p "$HOOKS_DIR" "$SKILLS_DIR" "$DASHBOARD_DIR" "$BIN_DIR" "$RUNTIME_DIR" "$BACKUPS_DIR" "$CONNECTIONS_DIR"
+  run mkdir -p "$HOOKS_DIR" "$SKILLS_DIR" "$DASHBOARD_DIR" "$BIN_DIR" "$RUNTIME_DIR" "$BACKUPS_DIR" "$CONNECTIONS_DIR" "$PERSISTENT_PROFILES_DIR"
+  if [[ "$DRY_RUN" != true ]]; then
+    chmod 700 "$PERSISTENT_PROFILES_DIR"
+  fi
 }
 
 migrate_legacy_annotations() {
@@ -1535,6 +1539,8 @@ install_payload() {
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
     cp "$REPO_ROOT/bin/agentstack-enroll" "$BIN_DIR/agentstack-enroll"
+    cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent"
+    cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
@@ -1545,6 +1551,7 @@ install_payload() {
       "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
+      "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
       "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
@@ -1853,6 +1860,7 @@ values = {
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
     "AGENTSTACK_MAIL_ENROLL_BIN": "$NATIVE_MAIL_VENV/bin/agentstack-enroll",
     "AGENTSTACK_MAIL_MANAGEMENT_SOCKET": "$NATIVE_MAIL_MANAGEMENT_SOCKET",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
     "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
@@ -1975,7 +1983,8 @@ write_enrollment_connection_profile() {
     return
   fi
   umask 077
-  "$PYTHON_BIN" - "$profile" "$NATIVE_MAIL_MANAGEMENT_SOCKET" "$RUNTIME_DIR" <<'PY'
+  "$PYTHON_BIN" - "$profile" "$NATIVE_MAIL_MANAGEMENT_SOCKET" "$RUNTIME_DIR" \
+    "$MCP_URL" "$MAIL_ENV" "$MAIL_HTTP_BEARER_MODE" <<'PY'
 import json
 import os
 import pathlib
@@ -1987,6 +1996,9 @@ profile = {
     "kind": "orrery-mail-connection-v1",
     "management_socket": sys.argv[2],
     "runtime_dir": sys.argv[3],
+    "mcp_url": sys.argv[4],
+    "mail_env": sys.argv[5],
+    "http_bearer_mode": sys.argv[6],
 }
 if target.exists():
     existing = json.loads(target.read_text(encoding="utf-8"))
@@ -2837,6 +2849,7 @@ repl = {
     "__CODEX_MODELS__": "$CODEX_MODELS_SETTING",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
+    "__PERSISTENT_PROFILES_DIR__": "$PERSISTENT_PROFILES_DIR",
     "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
     "__DASHBOARD_LOG_MAX_BYTES__": "$DASHBOARD_LOG_MAX_BYTES",
     "__DASHBOARD_LOG_BACKUPS__": "$DASHBOARD_LOG_BACKUPS",
@@ -2904,6 +2917,7 @@ env = {
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
     "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
@@ -3307,6 +3321,7 @@ manifest = {
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
         "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+        "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
         "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
         "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
         "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
@@ -3335,11 +3350,15 @@ manifest = {
         "$MAIL_DB",
         "$MAIL_ENV",
         "$RUNTIME_DIR",
+        "$PERSISTENT_PROFILES_DIR",
+        "$CONNECTIONS_DIR",
     ],
     "purge_paths": [
         "$MAIL_DIR",
         "$MAIL_HOME",
         "$RUNTIME_DIR",
+        "$PERSISTENT_PROFILES_DIR",
+        "$CONNECTIONS_DIR",
     ],
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",

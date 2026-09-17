@@ -83,6 +83,12 @@ token. A reserved child identity stays reserved when `PARENT_AGENT` is set,
 when `spawn_child.sh` preassigned the tmux name, or when the canonical task says
 so.
 
+If the exact helper result is `reason=credential-unavailable`, stop and ask the
+local operator to follow `docs/persistent-agents.md#credential-unavailable`.
+Enrollment is an explicit operator procedure; the model must not run
+`agentstack-enroll` on the operator's behalf. A generic registration failure is
+not enough to select this procedure.
+
 ### 5. Registering a genuinely new raw/direct session
 
 Only after confirming both raw/direct transport and the absence of an existing
