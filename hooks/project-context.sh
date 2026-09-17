@@ -65,6 +65,8 @@ agentstack_resolve_invocation_context() {
     common="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
         git -C "$work_dir" rev-parse --git-common-dir 2>/dev/null)" || common=""
     if [ -z "$worktree_root" ] || [ -z "$common" ]; then
+        # Do not reinterpret a broken repository marker as an ordinary non-Git
+        # workspace and then authorize an unrelated explicit namespace.
         if [ -e "$work_dir/.git" ] || [ -L "$work_dir/.git" ]; then
             printf 'agentstack: cannot resolve repository metadata for invocation target\n' >&2
             return 1
@@ -216,6 +218,9 @@ agentstack_resolve_project_key() {
     printf '%s\n' "$fallback"
 }
 
+# A live project selection must not inherit roots from an older installed
+# project. Only sessions relying on the installed project key inherit the
+# installed protected-root set.
 agentstack_resolve_protected_roots() {
     local resolved_project_key="$1"
     local live_project_key="${2:-}"
