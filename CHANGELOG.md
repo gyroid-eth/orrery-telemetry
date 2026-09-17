@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.09.17
 
 ### macOS の autostart trigger が起動した Mail server を、launchd が直後に kill していました（#46）
 
