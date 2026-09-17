@@ -8005,11 +8005,29 @@ def build_mcp_server() -> FastMCP:
         project_key: str,
         agent_name: str,
         policy: str,
+        registration_token: Optional[str] = None,
         format: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Set contact policy for an agent: open | auto | contacts_only | block_all."""
+        """Set contact policy for an agent: open | auto | contacts_only | block_all.
+
+        ``registration_token`` is optional. Registration helpers send the
+        owner token with this call; when it is supplied it must match the
+        agent's stored token, and a mismatch leaves the policy unchanged.
+        Omitting it keeps the loopback-trusted behaviour unchanged (#49).
+        """
         project = await _get_project_by_identifier(project_key)
         agent = await _get_agent(project, agent_name)
+        if registration_token is not None:
+            supplied = registration_token.strip()
+            if not supplied:
+                raise ValueError("registration_token must be a non-empty string")
+            existing = getattr(agent, "registration_token", None)
+            # Compare bytes: str compare_digest raises TypeError on non-ASCII
+            # input, and the contract here is a fixed error, not an exception.
+            if existing and not hmac.compare_digest(
+                str(existing).encode("utf-8"), supplied.encode("utf-8")
+            ):
+                raise ValueError("registration_token does not match the existing token for this agent")
         pol = (policy or "auto").lower()
         if pol not in {"open", "auto", "contacts_only", "block_all"}:
             pol = "auto"
