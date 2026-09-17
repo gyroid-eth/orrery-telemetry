@@ -844,14 +844,28 @@ codex_approval_flags() {
         printf '%s\n' "--ask-for-approval $policy"
         return 0
     fi
-    help_text="$("$codex_bin" --help 2>/dev/null || true)"
+    local status=0
+    help_text="$("$codex_bin" --help 2>/dev/null)" || status=$?
+    if [[ "$status" -ne 0 || -z "$help_text" ]]; then
+        # The binary is on the path but could not answer. That says nothing
+        # about which flags it takes, so it must not be read as "neither flag":
+        # a child launched without the flag runs under Codex's own on-request
+        # default, and the approvals the operator's policy had turned off
+        # come back -- the opposite of an unattended child. Pin the policy the same way a
+        # missing binary does (2026-09-17: an npm wrapper crashing on a missing
+        # optional dependency answered --help with an error, and the child
+        # spawned from that shell asked for approval of its pytest runs).
+        echo "Warning: $codex_bin --help failed (status $status, $(printf '%s' "$help_text" | wc -c | tr -d ' ') bytes); pinning --ask-for-approval $policy" >&2
+        printf '%s\n' "--ask-for-approval $policy"
+        return 0
+    fi
     if printf '%s' "$help_text" | grep -q -- "--ask-for-approval"; then
         printf '%s\n' "--ask-for-approval $policy"
     elif printf '%s' "$help_text" | grep -q -- "--full-auto"; then
         printf '%s\n' "--full-auto"
     fi
-    # Neither flag: emit nothing and let codex use its own defaults rather than
-    # passing an argument this build will reject.
+    # Help answered and names neither flag: emit nothing and let codex use its
+    # own defaults rather than passing an argument this build will reject.
 }
 
 # Writable roots for a Codex child, ':'-separated, handed to the child through

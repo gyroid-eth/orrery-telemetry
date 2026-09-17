@@ -161,6 +161,57 @@ def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
     assert _flags_with_env(None, {}) == "--ask-for-approval never"
 
 
+def _broken_codex_stub(tmpdir: pathlib.Path, *, exit_code: int, stderr: str = "") -> None:
+    """A codex that is present but cannot answer --help: an npm wrapper whose
+    platform package is missing, a binary for another architecture, ..."""
+    stub = tmpdir / "codex"
+    stub.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' {stderr!r} >&2\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+
+def _flags_with_broken_codex(*, exit_code: int, env: dict[str, str] | None = None):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        _broken_codex_stub(
+            tmpdir,
+            exit_code=exit_code,
+            stderr="Error: Missing optional dependency @openai/codex-darwin-arm64",
+        )
+        script = _codex_lookup() + _extract("codex_approval_flags") + "\ncodex_approval_flags\n"
+        return _run_bash(
+            script, {"HOME": tmp, "PATH": f"{tmpdir}:/usr/bin:/bin", **(env or {})}
+        )
+
+
+def test_a_codex_that_cannot_answer_help_still_pins_the_policy():
+    """A failed probe is not evidence about the flags. The wrapper on the
+    spawner's path crashed on a missing optional dependency (2026-09-17); the
+    launcher read the empty help as "neither flag", passed nothing, and the
+    child ran under Codex's on-request default, asking for approvals the
+    operator's policy had turned off."""
+    result = _flags_with_broken_codex(exit_code=1)
+    assert result.stdout.strip() == "--ask-for-approval never"
+    assert "pinning --ask-for-approval never" in result.stderr
+    # The operator's policy still wins over the product default.
+    result = _flags_with_broken_codex(
+        exit_code=1, env={"AGENTSTACK_CODEX_CHILD_APPROVAL": "on-request"}
+    )
+    assert result.stdout.strip() == "--ask-for-approval on-request"
+
+
+def test_an_empty_help_answer_is_a_failed_probe_not_an_unknown_build():
+    # Exit 0 with nothing printed is what a wrapper that swallowed its child's
+    # failure looks like. Only a help text that names neither flag means an
+    # unknown build (test_approval_flags_follow_the_installed_cli).
+    result = _flags_with_broken_codex(exit_code=0)
+    assert result.stdout.strip() == "--ask-for-approval never"
+
+
 def test_explicit_codex_bin_is_probed_instead_of_path():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
