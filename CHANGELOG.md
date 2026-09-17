@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.09.17.1
 
 ### tool 引数の validation error が、引数の値ごと server log に出ていました（#49）
 
