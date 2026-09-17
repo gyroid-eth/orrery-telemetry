@@ -34,6 +34,14 @@ BRIDGE_CONTRACT = "orrery-mail-notification-reply-v1"
 DOCS = "docs/persistent-agents.md"
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 SENSITIVE_ENV = re.compile(r"(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY)", re.I)
+CLAUDE_MAIL_NAMES = frozenset(
+    {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail", "agentstack"}
+)
+CLAUDE_MANAGED_FILES = (
+    Path("/Library/Application Support/ClaudeCode/managed-mcp.json"),
+    Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+)
+CLAUDE_EXTRA_SETTINGS_FLAGS = frozenset({"--settings", "--setting-sources", "--safe-mode"})
 ALLOWED_PROFILE_KEYS = {
     "kind",
     "name",
@@ -334,37 +342,377 @@ def _proxy_env(
     return runner, environment
 
 
-def _mail_names_from_claude_config() -> set[str]:
-    names = {"orrery-mail", "agentstack"}
-    path = Path(os.environ.get("AGENTSTACK_CLAUDE_JSON", str(Path.home() / ".claude.json")))
+def _read_claude_json(path: Path, reason: str, *, required: bool = False) -> dict[str, Any] | None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        settings = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return names
-    scopes: list[Any] = [settings.get("mcpServers")] if isinstance(settings, dict) else []
-    projects = settings.get("projects") if isinstance(settings, dict) else None
-    if isinstance(projects, dict):
-        scopes.extend(value.get("mcpServers") for value in projects.values() if isinstance(value, dict))
-    for scope in scopes:
-        if not isinstance(scope, dict):
-            continue
-        for name in scope:
-            normalized = str(name).replace("-", "").replace("_", "").lower()
-            if normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"}:
-                names.add(str(name))
-    return names
-
-
-def _write_claude_proxy(state_dir: Path, runner: Path, proxy_env: dict[str, str]) -> Path:
-    server = {"command": str(runner), "args": [], "env": proxy_env}
-    path = state_dir / "proxy" / "claude-mcp.json"
-    _atomic_json(path, {"mcpServers": {name: server for name in sorted(_mail_names_from_claude_config())}})
-    return path
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        if required:
+            raise PersistentError(reason) from None
+        return None
+    except OSError as exc:
+        raise PersistentError(reason) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise PersistentError(reason)
+        chunks: list[bytes] = []
+        length = 0
+        while length <= 8_388_608:
+            chunk = os.read(descriptor, min(65_536, 8_388_609 - length))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if len(raw) > 8_388_608:
+        raise PersistentError(reason)
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PersistentError(reason) from exc
+    if not isinstance(value, dict):
+        raise PersistentError(reason)
+    return value
 
 
 def _looks_like_mail(name: str) -> bool:
     normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
-    return normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail", "agentstack"}
+    return normalized in CLAUDE_MAIL_NAMES
+
+
+def _same_mail_url(value: str, expected: str) -> bool:
+    try:
+        candidate = urlsplit(value)
+        target = urlsplit(expected)
+        if candidate.scheme not in {"http", "https"} or target.scheme not in {"http", "https"}:
+            return False
+        candidate_host = candidate.hostname
+        target_host = target.hostname
+        if candidate_host not in {"127.0.0.1", "localhost", "::1"} or target_host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            return False
+        candidate_port = candidate.port or (443 if candidate.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+    except ValueError:
+        return False
+    return (
+        candidate.scheme == target.scheme
+        and candidate_port == target_port
+        and candidate.path.rstrip("/") == target.path.rstrip("/")
+    )
+
+
+def _server_points_to_mail(server: dict[str, Any], expected_url: str) -> bool:
+    strings: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+
+    collect(server)
+    if any(_same_mail_url(value, expected_url) for value in strings):
+        return True
+    command_parts: list[str] = []
+    command = server.get("command")
+    if isinstance(command, str):
+        command_parts.append(command)
+    args = server.get("args")
+    if isinstance(args, list):
+        command_parts.extend(value for value in args if isinstance(value, str))
+    normalized = re.sub(r"[^a-z0-9]", "", " ".join(command_parts).lower())
+    return any(marker in normalized for marker in ("mcpagentmail", "orrerymail", "agentstackmail"))
+
+
+def _mail_aliases(
+    servers: Any, connection: dict[str, Any], reason: str, *, plugin: bool = False
+) -> set[str]:
+    if servers is None:
+        return set()
+    if not isinstance(servers, dict):
+        raise PersistentError(reason)
+    aliases: set[str] = set()
+    for raw_name, server in servers.items():
+        if not isinstance(raw_name, str) or not isinstance(server, dict):
+            raise PersistentError(reason)
+        matches = _looks_like_mail(raw_name) or _server_points_to_mail(
+            server, connection["mcp_url"]
+        )
+        if not matches:
+            continue
+        if plugin:
+            raise PersistentError("claude-plugin-mail-conflict")
+        if SAFE_NAME.fullmatch(raw_name) is None:
+            raise PersistentError("claude-mcp-name-unsupported")
+        aliases.add(raw_name)
+    return aliases
+
+
+def _claude_config_paths(environment: dict[str, str]) -> tuple[Path, Path]:
+    configured = environment.get("CLAUDE_CONFIG_DIR")
+    if configured:
+        root = Path(configured)
+        user_json = root / ".claude.json"
+    else:
+        home = environment.get("HOME")
+        if not home:
+            raise PersistentError("claude-config-root-unsupported")
+        home_path = Path(home)
+        root = home_path / ".claude"
+        user_json = home_path / ".claude.json"
+    if "\x00" in str(root) or not root.is_absolute():
+        raise PersistentError("claude-config-root-unsupported")
+    return root, user_json
+
+
+def _option_values(command: Sequence[str], option: str) -> list[str]:
+    values: list[str] = []
+    index = 1
+    while index < len(command):
+        item = command[index]
+        if item == option:
+            if index + 1 >= len(command):
+                raise PersistentError("claude-command-unsupported")
+            values.append(command[index + 1])
+            index += 2
+            continue
+        if item.startswith(option + "="):
+            value = item[len(option) + 1 :]
+            if not value:
+                raise PersistentError("claude-command-unsupported")
+            values.append(value)
+        index += 1
+    return values
+
+
+def _claude_command_plugins(command: Sequence[str], workdir: Path) -> tuple[set[str], set[Path]]:
+    for item in command[1:]:
+        if any(item == flag or item.startswith(flag + "=") for flag in CLAUDE_EXTRA_SETTINGS_FLAGS):
+            raise PersistentError("claude-settings-flag-unsupported")
+    selected: set[str] = set()
+    for selector in _option_values(command, "--channels"):
+        if not selector.startswith("plugin:") or len(selector) == len("plugin:"):
+            raise PersistentError("claude-channel-selector-unsupported")
+        selected.add(selector[len("plugin:") :])
+    if not selected:
+        raise PersistentError("claude-channel-selector-unsupported")
+    for selector in _option_values(command, "--dangerously-load-development-channels"):
+        if not selector.startswith("plugin:") or len(selector) == len("plugin:"):
+            raise PersistentError("claude-channel-selector-unsupported")
+        selected.add(selector[len("plugin:") :])
+    plugin_dirs: set[Path] = set()
+    for raw in _option_values(command, "--plugin-dir"):
+        path = Path(raw)
+        if not path.is_absolute():
+            path = workdir / path
+        try:
+            plugin_dirs.add(path.resolve(strict=True))
+        except OSError as exc:
+            raise PersistentError("claude-plugin-directory-unavailable") from exc
+    return selected, plugin_dirs
+
+
+def _reject_managed_claude_config(paths: Sequence[Path] = CLAUDE_MANAGED_FILES) -> None:
+    if any(os.path.lexists(path) for path in paths):
+        raise PersistentError("claude-managed-configuration-unsupported")
+
+
+def _reject_ancestor_claude_config(workdir: Path, user_settings: Path) -> None:
+    for ancestor in workdir.parents:
+        for relative in (
+            Path(".mcp.json"),
+            Path(".claude/settings.json"),
+            Path(".claude/settings.local.json"),
+        ):
+            candidate = ancestor / relative
+            if candidate == user_settings:
+                continue
+            if os.path.lexists(candidate):
+                raise PersistentError("claude-project-root-unsupported")
+
+
+def _enabled_claude_plugins(paths: Sequence[Path]) -> set[str]:
+    enabled: dict[str, bool] = {}
+    for path in paths:
+        value = _read_claude_json(path, "claude-settings-unreadable")
+        if value is None or "enabledPlugins" not in value:
+            continue
+        plugins = value["enabledPlugins"]
+        if not isinstance(plugins, dict):
+            raise PersistentError("claude-settings-unreadable")
+        for plugin_id, state in plugins.items():
+            if not isinstance(plugin_id, str) or type(state) is not bool:
+                raise PersistentError("claude-settings-unreadable")
+            enabled[plugin_id] = state
+    return {plugin_id for plugin_id, state in enabled.items() if state}
+
+
+def _plugin_server_maps(root: Path) -> list[dict[str, Any]]:
+    if not root.is_dir():
+        raise PersistentError("claude-plugin-unavailable")
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest = _read_claude_json(
+        manifest_path, "claude-plugin-definition-unreadable", required=True
+    )
+    assert manifest is not None
+    sources: list[dict[str, Any]] = []
+    root_mcp = _read_claude_json(root / ".mcp.json", "claude-plugin-definition-unreadable")
+    if root_mcp is not None:
+        servers = root_mcp.get("mcpServers")
+        if not isinstance(servers, dict):
+            raise PersistentError("claude-plugin-definition-unreadable")
+        sources.append(servers)
+    declared = manifest.get("mcpServers")
+    if declared is None:
+        return sources
+    if isinstance(declared, dict):
+        sources.append(declared)
+        return sources
+    references = [declared] if isinstance(declared, str) else declared
+    if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
+        raise PersistentError("claude-plugin-definition-unreadable")
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise PersistentError("claude-plugin-unavailable") from exc
+    for reference in references:
+        if reference.startswith("${CLAUDE_PLUGIN_ROOT}/"):
+            reference = reference[len("${CLAUDE_PLUGIN_ROOT}/") :]
+        reference_path = Path(reference)
+        if not reference or "$" in reference or reference_path.is_absolute():
+            raise PersistentError("claude-plugin-definition-unreadable")
+        try:
+            resolved = (resolved_root / reference_path).resolve(strict=True)
+            resolved.relative_to(resolved_root)
+        except (OSError, ValueError) as exc:
+            raise PersistentError("claude-plugin-definition-unreadable") from exc
+        value = _read_claude_json(
+            resolved, "claude-plugin-definition-unreadable", required=True
+        )
+        assert value is not None
+        servers = value.get("mcpServers", value)
+        if not isinstance(servers, dict):
+            raise PersistentError("claude-plugin-definition-unreadable")
+        sources.append(servers)
+    return sources
+
+
+def _inspect_claude_plugin(root: Path, connection: dict[str, Any]) -> None:
+    for servers in _plugin_server_maps(root):
+        _mail_aliases(
+            servers, connection, "claude-plugin-definition-unreadable", plugin=True
+        )
+
+
+def _installed_claude_plugin_roots(config_root: Path, plugin_ids: set[str]) -> set[Path]:
+    if not plugin_ids:
+        return set()
+    inventory = _read_claude_json(
+        config_root / "plugins" / "installed_plugins.json",
+        "claude-plugin-inventory-unreadable",
+        required=True,
+    )
+    assert inventory is not None
+    plugins = inventory.get("plugins")
+    if not isinstance(plugins, dict):
+        raise PersistentError("claude-plugin-inventory-unreadable")
+    roots: set[Path] = set()
+    for plugin_id in plugin_ids:
+        entries = plugins.get(plugin_id)
+        if not isinstance(entries, list) or not entries:
+            raise PersistentError("claude-plugin-unavailable")
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("installPath"), str):
+                raise PersistentError("claude-plugin-inventory-unreadable")
+            path = Path(entry["installPath"])
+            if not path.is_absolute():
+                raise PersistentError("claude-plugin-inventory-unreadable")
+            try:
+                roots.add(path.resolve(strict=True))
+            except OSError as exc:
+                raise PersistentError("claude-plugin-unavailable") from exc
+    return roots
+
+
+def _claude_overlay_names(
+    command: Sequence[str],
+    workdir: Path,
+    environment: dict[str, str],
+    connection: dict[str, Any],
+) -> set[str]:
+    try:
+        resolved_workdir = workdir.resolve(strict=True)
+    except OSError as exc:
+        raise PersistentError("working-directory-unavailable") from exc
+    if resolved_workdir != workdir:
+        raise PersistentError("claude-project-root-unsupported")
+    selected_plugins, explicit_plugin_dirs = _claude_command_plugins(command, workdir)
+    _reject_managed_claude_config()
+    config_root, user_json_path = _claude_config_paths(environment)
+    _reject_ancestor_claude_config(workdir, config_root / "settings.json")
+    user_json = _read_claude_json(user_json_path, "claude-config-unreadable") or {}
+    aliases = _mail_aliases(
+        user_json.get("mcpServers"), connection, "claude-config-unreadable"
+    )
+    projects = user_json.get("projects")
+    if projects is not None:
+        if not isinstance(projects, dict):
+            raise PersistentError("claude-config-unreadable")
+        local = projects.get(str(workdir))
+        if local is not None:
+            if not isinstance(local, dict):
+                raise PersistentError("claude-config-unreadable")
+            aliases.update(
+                _mail_aliases(
+                    local.get("mcpServers"), connection, "claude-config-unreadable"
+                )
+            )
+    project_mcp = _read_claude_json(
+        workdir / ".mcp.json", "claude-project-config-unreadable"
+    )
+    if project_mcp is not None:
+        aliases.update(
+            _mail_aliases(
+                project_mcp.get("mcpServers"),
+                connection,
+                "claude-project-config-unreadable",
+            )
+        )
+    enabled_plugins = _enabled_claude_plugins(
+        (
+            config_root / "settings.json",
+            workdir / ".claude" / "settings.json",
+            workdir / ".claude" / "settings.local.json",
+        )
+    )
+    plugin_roots = _installed_claude_plugin_roots(
+        config_root, enabled_plugins | selected_plugins
+    )
+    for root in plugin_roots | explicit_plugin_dirs:
+        _inspect_claude_plugin(root, connection)
+    return aliases or {"orrery-mail"}
+
+
+def _write_claude_proxy(
+    state_dir: Path, runner: Path, proxy_env: dict[str, str], names: set[str]
+) -> Path:
+    server = {"command": str(runner), "args": [], "env": proxy_env}
+    path = state_dir / "proxy" / "claude-mcp.json"
+    _atomic_json(path, {"mcpServers": {name: server for name in sorted(names)}})
+    return path
 
 
 def _toml_string(value: str) -> str:
@@ -694,17 +1042,25 @@ def _run(profile_path: Path) -> NoReturn:
     )
     command = list(profile["command"])
     if profile["provider"] == "claude":
-        mcp_config = _write_claude_proxy(state_dir, runner, proxy_env)
-        environment["AGENTSTACK_PERSISTENT_MCP_CONFIG"] = str(mcp_config)
         if profile["interaction"] == "interactive":
             if any(
                 item == "--mcp-config"
                 or item.startswith("--mcp-config=")
                 or item == "--strict-mcp-config"
+                or item.startswith("--strict-mcp-config=")
                 for item in command
             ):
                 raise PersistentError("profile-controls-mcp-config")
-            command.extend(["--mcp-config", str(mcp_config), "--strict-mcp-config"])
+            mail_names = _claude_overlay_names(
+                command, Path(profile["working_directory"]), environment, connection
+            )
+        else:
+            mail_names = {"orrery-mail", "agentstack"}
+        mcp_config = _write_claude_proxy(state_dir, runner, proxy_env, mail_names)
+        environment["AGENTSTACK_PERSISTENT_MCP_CONFIG"] = str(mcp_config)
+        environment["AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES"] = ",".join(sorted(mail_names))
+        if profile["interaction"] == "interactive":
+            command.extend(["--mcp-config", str(mcp_config)])
     else:
         codex_home = _write_codex_home(profile, state_dir, runner, proxy_env)
         environment["CODEX_HOME"] = str(codex_home)
