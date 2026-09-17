@@ -8,6 +8,18 @@
 
 ---
 
+## Unreleased
+
+### `start` が、起動に時間のかかる Mail server を殺していました（#44）
+
+controller が自分で runner を spawn する経路では、`agentstack-mailctl start` は health を **probe 150 回**待ち、切れると**自分が起動したばかりの runner を kill** していました。probe ごとに Python を起動するため、この窓は計測した Mac で port が閉じたまま約 48 秒です。起動にそれ以上かかる server は listen する直前に殺され、Mail は次の sweep（5 分後）まで存在しません。その間に起動した agent は Mail 不在のまま登録に失敗し、失敗メッセージが指す `agentstack-mail.log` には殺された runner は何も書いていません。遅い runner の fixture でこの kill は再現します。2026-09-16 の reboot 直後に login 時の `start` がこの失敗で終わった事象がありますが、その runner が何秒目で殺されたかは記録が無く、cold start が原因かどうかは未確定です。
+
+- 待ちを 2 段に分け、どちらも**壁時計の期限**にしました（probe 回数は時間の上限にならない）。port が開くまで `AGENTSTACK_MAIL_START_GRACE`（既定 180 秒）、開いてから health が返るまで `AGENTSTACK_MAIL_HEALTH_GRACE`（既定 30 秒）。0 は probe 1 回
+- grace を使い切っても**生きている runner は kill しません**。pidfile を残し、次の `start`（timer または operator）が同じ runner を見つけます。その `start` は port が閉じていれば待たずに報告して lock を手放し、port が開いていれば health grace だけ待ちます
+- 失敗メッセージに**経過秒と port の状態**を出し、「起動中か stuck」と言います。runner が exit した場合はそう言います
+- `status` も「port が閉じていて起動中か stuck」と「port は開いているが health が失敗」を区別します
+- launchd が server を直接 supervise する経路は、controller が runner を kill しないので対象外です（health の待ちは同じ期限を使います）
+
 ## 2026.09.16.3
 
 ### Claude 側の案内にも、同じ分岐を入れました
