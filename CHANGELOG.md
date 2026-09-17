@@ -28,6 +28,13 @@ controller が自分で runner を spawn する経路では、`agentstack-mailct
 - `status` も「port が閉じていて起動中か stuck」と「port は開いているが health が失敗」を区別します
 - launchd が server を直接 supervise する経路は、controller が runner を kill しないので対象外です（health の待ちは同じ期限を使います）
 
+### spawner 側の `codex` が `--help` に答えられないと、child の承認ポリシーが落ちていました（#45）
+
+`spawn_child.sh` は `codex --help` の出力を見て `--ask-for-approval` か `--full-auto` を選び、どちらも無ければ何も付けません。help が**取れなかった**場合（npm wrapper が platform package の欠落で落ちる、別 shell で古い node が先に解決される、など）も同じ「何も付けない」に落ちていました。child 自身は login shell で正常に起動するので、設定（`AGENTSTACK_CODEX_CHILD_APPROVAL=never`）だけが抜けた child ができ、policy で切ったはずの承認要求が戻ってきます。
+
+- `--help` が非 0 で終わるか出力が空なら probe 失敗として扱い、binary が無い場合と同じく `--ask-for-approval <policy>` を固定します。stderr に警告を出します
+- help が正常に返り、どちらのフラグも無い場合だけ、従来どおり何も付けません
+
 ## 2026.09.16.3
 
 ### Claude 側の案内にも、同じ分岐を入れました
