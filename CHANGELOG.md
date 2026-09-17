@@ -8,6 +8,19 @@
 
 ---
 
+## 2026.09.17.1
+
+### tool 引数の validation error が、引数の値ごと server log に出ていました（#49）
+
+FastMCP は tool の引数を pydantic で検証し、失敗すると ValidationError の全文（`input_value='…'` を含む）を `fastmcp.tools.tool_manager` の logger に記録します。これは ORRERY Mail 側の引数の伏せ字処理より前の層です。登録 helper（`agentstack-reregister` と SessionStart hook）は `set_contact_policy` を **まず `registration_token` 付きで**呼び、この tool がその引数を受けなかったため、毎回この経路で失敗し、owner token が server log に書かれうる状態でした。helper は token なしで再試行して exit 0 で終わるので、気づきません。隔離 fixture で canary token が log に出ることを確認しました。稼働中の 1 台では同じ失敗が記録されている一方で値の形は出ておらず、その差の原因は未確定です。
+
+- tool 呼び出しの境界（middleware）で、tool が受けない引数があれば **件数だけ**を挙げて拒否し、名前も値も出しません（名前は呼び手が自由に置ける文字列です）。残った ValidationError も、公開 schema で確認できた tool 名と field 名、件数、error type だけを持つ error に置き換えて client に返します
+- `fastmcp.tools.tool_manager` の logger に filter を入れ、ValidationError を伴う記録を「固定の placeholder・件数・error type」だけに書き換え、例外本体を落とします（logger の側では schema を参照できないので、tool 名も field 名も繰り返しません）。他の tool error の診断は変えていません
+- `set_contact_policy` の schema は変えていません（公開 tool の schema は upstream の捕捉 fixture と一致させる契約があります）。helper の token 付きの最初の呼び出しは引き続き失敗しますが、その error と log に値は含まれず、helper はこれまでどおり token なしで再試行して成功します
+- 回帰テスト: canary を値・引数名・dict の key のそれぞれに置き、未知の引数・型不正・入れ子で client 応答と server log の両方に現れないこと、helper と同じ順（token 付き → token なし）の `set_contact_policy` 呼び出しで token が漏れず policy が更新されること
+
+過去の log に値が残っているかは、この修正では判定も削除もしません。
+
 ## 2026.09.17
 
 ### macOS の autostart trigger が起動した Mail server を、launchd が直後に kill していました（#46）
