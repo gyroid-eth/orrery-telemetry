@@ -54,7 +54,7 @@ profile 自体に token を書きません。credential は connection profile �
 
 ```bash
 export BOT_ID=123
-export BOT_NAME=ProOpus
+export BOT_NAME=ChannelsBot
 export PROJECT_KEY=/absolute/project/path
 export CONNECTION="$HOME/.agentstack/connections/local.json"
 ```
@@ -145,7 +145,7 @@ interactive Claude Channels の例です。
 ```json
 {
   "kind": "orrery-persistent-agent-v1",
-  "name": "ProOpus",
+  "name": "ChannelsBot",
   "agent_id": 123,
   "project_key": "/absolute/project/path",
   "connection": "../connections/local.json",
@@ -153,7 +153,7 @@ interactive Claude Channels の例です。
   "parentless": true,
   "lifecycle": "persistent",
   "interaction": "interactive",
-  "state_dir": "../persistent/ProOpus",
+  "state_dir": "../persistent/ChannelsBot",
   "working_directory": "/absolute/project/path",
   "command": [
     "/absolute/path/to/claude",
@@ -168,7 +168,7 @@ interactive Claude Channels の例です。
 
 ```bash
 chmod 700 "$HOME/.agentstack/profiles"
-chmod 600 "$HOME/.agentstack/profiles/ProOpus.json"
+chmod 600 "$HOME/.agentstack/profiles/ChannelsBot.json"
 ```
 
 軸の意味は独立しています。
@@ -188,15 +188,21 @@ chmod 600 "$HOME/.agentstack/profiles/ProOpus.json"
 
 ```bash
 "$HOME/.agentstack/bin/agentstack-persistent" inspect \
-  --profile "$HOME/.agentstack/profiles/ProOpus.json"
+  --profile "$HOME/.agentstack/profiles/ChannelsBot.json"
 
 exec "$HOME/.agentstack/bin/agentstack-persistent" run \
-  --profile "$HOME/.agentstack/profiles/ProOpus.json"
+  --profile "$HOME/.agentstack/profiles/ChannelsBot.json"
 ```
 
 `inspect` は profile、connection、Mail UUID、数値 row、name、credential generation / fingerprint を照合します。`run` も同じ検証を繰り返し、profile ごとの instance lock を取ってから起動します。同じ profile の二重起動は拒否されます。
 
 launcher は enrollment を自動実行しません。未登録、local credential 不在、authority / row 不一致なら docs path と固定 reason を表示して停止します。
+
+interactive REPL が起動したら、operator は次を確認します。
+
+1. `/mcp` で、wrapper が生成した各 Mail alias（既存 alias がなければ通常 `orrery-mail`）と期待する channel plugin が connected であること。既存 alias が複数なら、複数の bound 接続が正常です。
+2. 実際に使う bound namespace の `runtime_status` を呼び、返る name と project が profile と一致すること。これは local proxy binding の確認であり、Mail server の認証 / 到達性や Telegram の受信 / 返信を証明しません。
+3. `/mcp` の表示名だけでは raw / proxy の区別や二重起動抑止を証明できません。詳細に command が表示される場合は、secret 値を開かず、生成された bound proxy runner を指すことを確認します。
 
 ## interactive と headless
 
@@ -262,7 +268,7 @@ bridge は wrapper が渡す owner-private Unix socket を listen し、次の�
 要求の最小例:
 
 ```json
-{"version":1,"contract":"orrery-mail-notification-reply-v1","type":"mail-notification","agent_name":"ProSol","message":{"id":42}}
+{"version":1,"contract":"orrery-mail-notification-reply-v1","type":"mail-notification","agent_name":"HeadlessBot","message":{"id":42}}
 ```
 
 bot が matching message への Mail reply を完了した後の応答:
@@ -285,24 +291,24 @@ dashboard の `surface` は表示媒体（tmux 等）のままです。API は p
 
 ```bash
 exec "$HOME/.agentstack/bin/agentstack-persistent" run \
-  --profile "$HOME/.agentstack/profiles/ProOpus.json"
+  --profile "$HOME/.agentstack/profiles/ChannelsBot.json"
 ```
 
 起動 service / tmux script はこの command を最後に `exec` してください。interactive surface を保つため、さらに子 process として隠さないでください。
 
 再起動後に `local-credential-unavailable` または `stage=local-token reason=credential-unavailable` が出たときだけ、bot を停止した状態で operator が `$HOME/.agentstack/bin/agentstack-enroll inspect` からやり直し、状態が `server-token` + local missing なら `recover` を選びます。モデル自身に実行させません。単なる registration failure、HTTP 401 / 403、Mail 停止を credential 紛失と推定しないでください。
 
-## 別 Mail と Air へ適用する
+## 別 Mail と別の機体へ適用する
 
-各機体は、その機体の local Mail と connection profile を使います。Air では Air の terminal で:
+各機体は、その機体の local Mail と connection profile を使います。別の機体の terminal で:
 
-1. Air の connection profileを指定して `inspect`
-2. Air Mail の `server_instance_id` を確認して pin
-3. Air の project に属する Air 側の数値 agent ID を選択
-4. 状態に応じて Air 上で `claim` または `recover`
-5. Air 用 persistent profile を作って起動
+1. その機体の connection profileを指定して `inspect`
+2. その機体の Mail の `server_instance_id` を確認して pin
+3. その機体の project に属する数値 agent ID を選択
+4. 状態に応じてその機体上で `claim` または `recover`
+5. その機体用の persistent profile を作って起動
 
-Mac の token、pending file、receipt を Air へコピーしません。Mac の数値 ID が Air でも同じとは限りません。hostname、port、URL、socket path が同じでも Mail instance UUID が違えば別 authority です。
+最初の機体の token、pending file、receipt を別の機体へコピーしません。最初の機体の数値 ID が別の機体でも同じとは限りません。hostname、port、URL、socket path が同じでも Mail instance UUID が違えば別 authority です。
 
 ## 停止条件
 

@@ -121,7 +121,7 @@ helper は owner token を runtime state から読み、同名 identity を復�
 
 同じ identity を restart 後も使う bot は `agentstack-persistent` profile で起動できます。profile は provider、parentless、persistent lifecycle、interactive / headless を別 field にし、保存済み credential と Mail authority、数値 row を照合してからだけ command を `exec` します。自動 enrollment や alias 作成は行いません。interactive Claude は通常の `--channels plugin:...` を保持し、有限な実効 config を検査して standalone Mail alias だけを同名 bound overlay へ置き換えます。plugin / managed / 祖先 project の未対応 config は推測せず起動前に拒否します。
 
-新しい bot、既存 bot の移行、credential recovery、Claude Channels の PTY、headless bridge、別 Mail / Air の手順は [常駐 agent の enrollment と起動](persistent-agents.md) を正本とします。
+新しい bot、既存 bot の移行、credential recovery、Claude Channels の PTY、headless bridge、別 Mail / 別の機体の手順は [常駐 agent の enrollment と起動](persistent-agents.md) を正本とします。
 
 ## `CLAUDECODE` guard
 

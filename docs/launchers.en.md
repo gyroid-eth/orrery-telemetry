@@ -119,7 +119,7 @@ The helper reads the owner token from runtime state and restores the identity wi
 
 A bot that reuses the same identity after restart can run through an `agentstack-persistent` profile. The profile keeps provider, parentless status, persistent lifecycle, and interactive/headless mode in separate fields. It `exec`s the command only after matching the saved credential, Mail authority, and numeric row. It never enrolls automatically or creates an alias. Interactive Claude preserves the normal `--channels plugin:...` selector, inspects a finite set of effective configuration sources, and replaces only standalone Mail aliases with same-named bound overlays. Unsupported plugin, managed, or ancestor-project configuration is rejected before startup rather than guessed.
 
-[Persistent-agent enrollment and startup](persistent-agents.en.md) is the operational source of truth for new bots, migration of existing bots, credential recovery, Claude Channels PTY preservation, headless bridges, and a second Mail instance or Air.
+[Persistent-agent enrollment and startup](persistent-agents.en.md) is the operational source of truth for new bots, migration of existing bots, credential recovery, Claude Channels PTY preservation, headless bridges, and a second Mail instance or machine.
 
 ## `CLAUDECODE` guard
 
