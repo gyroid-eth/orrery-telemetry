@@ -8,6 +8,7 @@ resource from becoming reachable by accident.
 
 from __future__ import annotations
 
+import logging
 import signal
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -15,6 +16,9 @@ from typing import Any
 
 import uvicorn
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from pydantic import ValidationError
 
 from .contract import COMPATIBILITY_TOOLS
 from .tool_descriptions import COMPACT_TOOL_DESCRIPTIONS
@@ -53,11 +57,150 @@ class _AgentStackUvicornServer(uvicorn.Server):
                 ]
 
 
+
+# ---------------------------------------------------------------------------
+# Tool argument boundary (#49)
+#
+# FastMCP validates tool arguments with a pydantic TypeAdapter and, on failure,
+# logs the whole ValidationError (``input_value='...'`` included) through
+# ``fastmcp.tools.tool_manager`` before the error reaches anything we own. A
+# caller that sends a credential under an argument name the tool does not
+# accept therefore writes that credential into the server log. Two layers stop
+# that without weakening validation:
+#
+# 1. ``ToolArgumentBoundary`` (middleware) rejects unknown arguments before
+#    FastMCP validation runs, reporting only how many there were, and re-raises
+#    any remaining ValidationError as a ToolError that names the tool and the
+#    fields only when they were verified against the published schema.
+# 2. ``ToolValidationLogSanitizer`` (logging filter on the tool-manager logger)
+#    rewrites the record FastMCP still emits for a ValidationError to a fixed
+#    placeholder, a count and the error types; the logger cannot verify the
+#    tool key or field names, so it repeats neither.
+#
+# The filter only touches records whose exception is a pydantic
+# ValidationError; other tool errors keep their diagnostics.
+# ---------------------------------------------------------------------------
+
+TOOL_MANAGER_LOGGER = "fastmcp.tools.tool_manager"
+
+
+def validation_error_summary(
+    tool_name: str | None,
+    exc: ValidationError,
+    known_fields: frozenset[str] | set[str] | None = None,
+) -> str:
+    """Describe a ValidationError without any caller-supplied text.
+
+    ``loc`` components can be caller-supplied dictionary keys, and the tool
+    name FastMCP puts in its message is the requested key, so both are only
+    reported when the caller of this function has verified them against the
+    published schema. Everything else collapses to fixed placeholders.
+    """
+    try:
+        errors = exc.errors(include_input=False, include_url=False, include_context=False)
+    except TypeError:  # pragma: no cover - older pydantic signature
+        errors = [
+            {k: v for k, v in e.items() if k not in {"input", "url", "ctx"}}
+            for e in exc.errors()
+        ]
+    types = sorted({str(e.get("type", "")) for e in errors if e.get("type")})
+    paths: set[str] = set()
+    if known_fields:
+        for e in errors:
+            loc = tuple(e.get("loc", ()))
+            if loc and str(loc[0]) in known_fields:
+                paths.add(str(loc[0]) + (".<...>" if len(loc) > 1 else ""))
+            else:
+                paths.add("<argument>")
+    label = repr(tool_name) if tool_name is not None else "<tool>"
+    text = f"Tool {label} rejected its arguments: {len(errors)} validation error(s)"
+    if paths:
+        text += f" at {', '.join(sorted(paths))}"
+    if types:
+        text += f" ({', '.join(types)})"
+    return text
+
+
+class ToolValidationLogSanitizer(logging.Filter):
+    """Strip argument values from FastMCP's tool validation exception records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc_info = record.exc_info
+        exc = exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) > 1 else None
+        if not isinstance(exc, ValidationError):
+            return True
+        # The tool key in FastMCP's message is caller-supplied and the logger
+        # has no schema to verify it against, so it is not repeated here.
+        record.msg = validation_error_summary(None, exc)
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        return True
+
+
+def install_tool_validation_log_sanitizer() -> ToolValidationLogSanitizer:
+    logger = logging.getLogger(TOOL_MANAGER_LOGGER)
+    for existing in logger.filters:
+        if isinstance(existing, ToolValidationLogSanitizer):
+            return existing
+    sanitizer = ToolValidationLogSanitizer()
+    logger.addFilter(sanitizer)
+    return sanitizer
+
+
+class ToolArgumentBoundary(Middleware):
+    """Reject unknown tool arguments and never echo caller-supplied text."""
+
+    def __init__(self, server: FastMCP) -> None:
+        self._server = server
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, Any],
+    ) -> Any:
+        message = context.message
+        tool_name = str(getattr(message, "name", ""))
+        arguments = getattr(message, "arguments", None) or {}
+        schema = await self._parameter_schema(tool_name)
+        known_fields: frozenset[str] = frozenset()
+        verified_name: str | None = None
+        if schema is not None:
+            verified_name = tool_name
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                known_fields = frozenset(str(key) for key in properties)
+                if not schema.get("additionalProperties", False):
+                    unknown = len(set(arguments) - known_fields)
+                    if unknown:
+                        # Names are caller-supplied: report the count only.
+                        raise ToolError(
+                            f"Tool {tool_name!r} does not accept {unknown} of the supplied argument(s); "
+                            "check the published schema"
+                        )
+        try:
+            return await call_next(context)
+        except ValidationError as exc:
+            raise ToolError(validation_error_summary(verified_name, exc, known_fields)) from None
+
+    async def _parameter_schema(self, tool_name: str) -> dict[str, Any] | None:
+        manager = getattr(self._server, "_tool_manager", None)
+        if manager is None:
+            return None
+        try:
+            tool = await manager.get_tool(tool_name)
+        except Exception:
+            return None
+        schema = getattr(tool, "parameters", None)
+        return schema if isinstance(schema, dict) else None
+
 class CompatibilityFastMCP(FastMCP):
     """FastMCP server that can publish only the frozen compatibility tools."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        install_tool_validation_log_sanitizer()
+        self.add_middleware(ToolArgumentBoundary(self))
         self._agentstack_declared_tools: set[str] = set()
         self._agentstack_published_tools: set[str] = set()
         self._agentstack_declared_resources: set[str] = set()

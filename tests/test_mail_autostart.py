@@ -169,6 +169,14 @@ def test_launchd_unit_is_one_shot_and_calls_mailctl():
         "mailctl exits after handing the server to nohup; KeepAlive would respawn "
         "the controller in a loop instead of supervising the server"
     )
+    assert plist.get("AbandonProcessGroup") is True, (
+        "processes left in the job's process group are subject to launchd's "
+        "cleanup when the job exits, and nohup does not change the group: "
+        "without this key the runner and server the trigger itself spawned "
+        "were gone right after the job exited although 'ORRERY Mail started' "
+        "had been logged (observed on a rebooted Mac, 2026-09-17). The systemd "
+        "unit's KillMode=process serves the same purpose."
+    )
     interval = plist.get("StartInterval")
     assert isinstance(interval, int) and 60 <= interval <= 900, (
         f"StartInterval={interval!r} is not a liveness sweep; a year-long "

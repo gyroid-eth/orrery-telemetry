@@ -8,6 +8,46 @@
 
 ---
 
+## 2026.09.17.1
+
+### tool 引数の validation error が、引数の値ごと server log に出ていました（#49）
+
+FastMCP は tool の引数を pydantic で検証し、失敗すると ValidationError の全文（`input_value='…'` を含む）を `fastmcp.tools.tool_manager` の logger に記録します。これは ORRERY Mail 側の引数の伏せ字処理より前の層です。登録 helper（`agentstack-reregister` と SessionStart hook）は `set_contact_policy` を **まず `registration_token` 付きで**呼び、この tool がその引数を受けなかったため、毎回この経路で失敗し、owner token が server log に書かれうる状態でした。helper は token なしで再試行して exit 0 で終わるので、気づきません。隔離 fixture で canary token が log に出ることを確認しました。稼働中の 1 台では同じ失敗が記録されている一方で値の形は出ておらず、その差の原因は未確定です。
+
+- tool 呼び出しの境界（middleware）で、tool が受けない引数があれば **件数だけ**を挙げて拒否し、名前も値も出しません（名前は呼び手が自由に置ける文字列です）。残った ValidationError も、公開 schema で確認できた tool 名と field 名、件数、error type だけを持つ error に置き換えて client に返します
+- `fastmcp.tools.tool_manager` の logger に filter を入れ、ValidationError を伴う記録を「固定の placeholder・件数・error type」だけに書き換え、例外本体を落とします（logger の側では schema を参照できないので、tool 名も field 名も繰り返しません）。他の tool error の診断は変えていません
+- `set_contact_policy` の schema は変えていません（公開 tool の schema は upstream の捕捉 fixture と一致させる契約があります）。helper の token 付きの最初の呼び出しは引き続き失敗しますが、その error と log に値は含まれず、helper はこれまでどおり token なしで再試行して成功します
+- 回帰テスト: canary を値・引数名・dict の key のそれぞれに置き、未知の引数・型不正・入れ子で client 応答と server log の両方に現れないこと、helper と同じ順（token 付き → token なし）の `set_contact_policy` 呼び出しで token が漏れず policy が更新されること
+
+過去の log に値が残っているかは、この修正では判定も削除もしません。
+
+## 2026.09.17
+
+### macOS の autostart trigger が起動した Mail server を、launchd が直後に kill していました（#46）
+
+launchd は job が終了すると、job と同じ process group に残っているプロセスを終了処理の対象にします。`agentstack-mailctl start` は runner を `nohup` で起動して終了しますが、`nohup` は process group を変えません。そのため trigger 自身が spawn した runner と server は、log に「ORRERY Mail started」と書かれたあと job の終了直後に消え（reboot 直後の Mac での観測では、次の 2 秒刻みの観測までに消失）、5 分後の sweep でも同じことが繰り返されていました。別の process group で既に動いている server（手で `start` したものなど）には及ばないので、そういう server が動いているあいだは気づきません。key の有無だけを変えて、消失と生存を確認しました。
+
+これは #44 とは別の不具合です。#44 は health 待ちが切れたときに controller 自身が runner を kill するもので、#46 は health が通ったあとでも launchd が process group を片付けるものです。上記の Mac では #46 を観測し、#44 は再現しませんでした。それ以前の別の Mac で起きた失敗の原因は、この観測だけでは確定しません。
+
+- installer が書く launchd plist に `AbandonProcessGroup = true` を加えました（systemd 側の `KillMode=process` と同じ目的の設定）。既存の install は `install.sh` の再実行で plist が再生成されます
+
+### `start` が、起動に時間のかかる Mail server を殺していました（#44）
+
+controller が自分で runner を spawn する経路では、`agentstack-mailctl start` は health を **probe 150 回**待ち、切れると**自分が起動したばかりの runner を kill** していました。probe ごとに Python を起動するため、この窓は計測した Mac で port が閉じたまま約 48 秒です。起動にそれ以上かかる server は listen する直前に殺され、Mail は次の sweep（5 分後）まで存在しません。その間に起動した agent は Mail 不在のまま登録に失敗し、失敗メッセージが指す `agentstack-mail.log` には殺された runner は何も書いていません。遅い runner の fixture でこの kill は再現します。2026-09-16 の reboot 直後に login 時の `start` がこの失敗で終わった事象がありますが、その runner が何秒目で殺されたかは記録が無く、cold start が原因かどうかは未確定です。
+
+- 待ちを 2 段に分け、どちらも**壁時計の期限**にしました（probe 回数は時間の上限にならない）。port が開くまで `AGENTSTACK_MAIL_START_GRACE`（既定 180 秒）、開いてから health が返るまで `AGENTSTACK_MAIL_HEALTH_GRACE`（既定 30 秒）。0 は probe 1 回
+- grace を使い切っても**生きている runner は kill しません**。pidfile を残し、次の `start`（timer または operator）が同じ runner を見つけます。その `start` は port が閉じていれば待たずに報告して lock を手放し、port が開いていれば health grace だけ待ちます
+- 失敗メッセージに**経過秒と port の状態**を出し、「起動中か stuck」と言います。runner が exit した場合はそう言います
+- `status` も「port が閉じていて起動中か stuck」と「port は開いているが health が失敗」を区別します
+- launchd が server を直接 supervise する経路は、controller が runner を kill しないので対象外です（health の待ちは同じ期限を使います）
+
+### spawner 側の `codex` が `--help` に答えられないと、child の承認ポリシーが落ちていました（#45）
+
+`spawn_child.sh` は `codex --help` の出力を見て `--ask-for-approval` か `--full-auto` を選び、どちらも無ければ何も付けません。help が**取れなかった**場合（npm wrapper が platform package の欠落で落ちる、別 shell で古い node が先に解決される、など）も同じ「何も付けない」に落ちていました。child 自身は login shell で正常に起動するので、設定（`AGENTSTACK_CODEX_CHILD_APPROVAL=never`）だけが抜けた child ができ、policy で切ったはずの承認要求が戻ってきます。
+
+- `--help` が非 0 で終わるか出力が空なら probe 失敗として扱い、binary が無い場合と同じく `--ask-for-approval <policy>` を固定します。stderr に警告を出します
+- help が正常に返り、どちらのフラグも無い場合だけ、従来どおり何も付けません
+
 ## 2026.09.16.3
 
 ### Claude 側の案内にも、同じ分岐を入れました
