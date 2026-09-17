@@ -115,6 +115,14 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
 
 helper は owner token を runtime state から読み、同名 identity を復元します。同名登録に失敗しても別名を作らないでください。別名は inbox、thread、reservation、監査履歴を分断します。
 
+`agentstack-reregister` は既存 token を使う helper であり、token を新規発行しません。launcher を一度も通らない parentless bot、`server-null` row の初回 claim、または exact `stage=local-token reason=credential-unavailable` からの明示 recovery は、モデルではなく operator が [常駐 agent の enrollment と起動](persistent-agents.md) に従って行います。通常の再起動では enrollment を繰り返しません。
+
+## 常駐 parentless agent
+
+同じ identity を restart 後も使う bot は `agentstack-persistent` profile で起動できます。profile は provider、parentless、persistent lifecycle、interactive / headless を別 field にし、保存済み credential と Mail authority、数値 row を照合してからだけ command を `exec` します。自動 enrollment や alias 作成は行いません。interactive Claude は通常の `--channels plugin:...` を保持し、有限な実効 config を検査して standalone Mail alias だけを同名 bound overlay へ置き換えます。plugin / managed / 祖先 project の未対応 config は推測せず起動前に拒否します。
+
+新しい bot、既存 bot の移行、credential recovery、Claude Channels の PTY、headless bridge、別 Mail / Air の手順は [常駐 agent の enrollment と起動](persistent-agents.md) を正本とします。
+
 ## `CLAUDECODE` guard
 
 launcher と child spawner は tmux session ごとの environment に:
@@ -227,6 +235,7 @@ repository にある11件の hook / helper の発火タイミング、caller、b
 ## 関連文書
 
 - [Hooks と運用 helper](hooks.md)
+- [常駐 agent の enrollment と起動](persistent-agents.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
