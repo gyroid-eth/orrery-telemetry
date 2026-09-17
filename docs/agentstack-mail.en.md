@@ -132,12 +132,55 @@ respawn the *controller* in a loop instead of supervising the server. Repetition
 comes from `StartInterval` on launchd and from the timer on systemd. The systemd
 unit also sets `KillMode=process`: without it the default control-group cleanup
 kills the freshly started server the moment the oneshot controller exits (seen
-on WSL2). `start` is
+on WSL2). The launchd plist sets `AbandonProcessGroup` to true for the same
+purpose: when a job exits, the processes still in its process group are
+subject to launchd's cleanup, and `nohup` does not change the group, so
+without the key the runner and server the trigger itself spawned were gone
+right after the job exited — by the next 2 s observation, on a rebooted Mac on
+2026-09-17 — although "ORRERY Mail started" had been logged. A server already
+running in another process group (one an operator started by hand, for
+example) is not affected. `start` is
 idempotent — it reports "already running" and exits 0 when the owned PID is alive
 and healthy — so re-running it costs nothing, and it stays silent when there is
 nothing to do. Its output goes to `agentstack-mail-autostart.log` (launchd
 `StandardOutPath`, systemd `StandardOutput=append:`), separate from the server's
 own log.
+
+**A server that is still starting has not failed.** On the path where the
+controller spawns the runner itself (`nohup`), `start` waits up to
+`AGENTSTACK_MAIL_START_GRACE` seconds (default 180) for the port to open, then
+up to `AGENTSTACK_MAIL_HEALTH_GRACE` seconds (default 30) for health to answer.
+Both are wall-clock deadlines. The deadline is checked between probes, so a
+wait can overrun by the probe that is in flight when it passes (a probe spawns
+Python and then applies a 1 s socket timeout; nothing bounds the whole probe).
+0 means a single probe. They are read from the environment the
+controller runs in (an operator's shell, or `env.sh`, which the installer
+regenerates).
+
+There used to be a single window of **150 probes** — about 48 s with the port
+closed on the Mac it was measured on, since each probe spawns a Python
+interpreter — after which the controller **killed the runner it had just
+started**. A server that takes longer than that to start is killed seconds
+before it would listen; a fixture
+with a slow runner reproduces the kill. On 2026-09-16 the login-time `start`
+after a reboot on the maintainer's Mac ended with this failure and the second
+run five minutes later succeeded (that second run took 47 s from runner start
+to startup complete). How far the first runner had got when it was killed was
+not recorded, so the cold start is the likely cause, not a confirmed one.
+
+Now a runner that is still alive when the grace runs out is left running with
+its pidfile in place, and the message says how long the controller waited and
+where it got to (`still starting after 180s (endpoint port closed); runner pid
+N left running (starting or stuck)`). A live pid does not prove a healthy
+start, so the message says "starting or stuck". The next `start` — the timer's
+or the operator's — finds that runner; if the port is still closed it reports
+so **without waiting** and releases the lifecycle lock (a sweep that held the
+lock for a full grace would refuse an operator's `stop` with "another lifecycle
+action is active"), and if the port is open it waits the health grace only.
+Only a runner that has exited loses its pidfile, and the message says that it
+exited. Where launchd supervises the server directly the controller never
+killed the runner, so that path is unchanged apart from sharing the same
+health deadline.
 
 `agentstack-mailctl stop` is honoured. It records the intent in
 `runtime/agentstack-mail.stopped`, and the sweep leaves a deliberately stopped

@@ -33,6 +33,19 @@ RUNTIME_DIR="${AGENTSTACK_MAIL_RUNTIME_DIR:-$MAIL_SERVICE_ROOT/runtime}"
 # undo the operator's stop at the next sweep. Measured: stop → "ORRERY Mail
 # stopped" → next sweep → "ORRERY Mail started (pid ...)".
 STOPPED_MARKER="${AGENTSTACK_MAIL_STOPPED_MARKER:-$RUNTIME_DIR/agentstack-mail.stopped}"
+# A server that is still starting has not failed. The controller used to allow
+# one fixed window (150 probes; each spawns Python, so about 48 s while the
+# port is closed on the machine this was measured on) and then killed the
+# runner it had just started. A server whose start takes longer than that --
+# a cold boot is the usual case; one measured 47 s five minutes after a
+# reboot -- is killed seconds before it would listen, and Mail is absent
+# until the timer's next run. START_GRACE bounds how long a
+# runner may take to open its port; HEALTH_GRACE how long an open port may take
+# to answer health. Both are read from the environment the controller runs in
+# (an operator's shell, or env.sh, which the installer regenerates). 0 means a
+# single probe.
+START_GRACE="${AGENTSTACK_MAIL_START_GRACE:-180}"
+HEALTH_GRACE="${AGENTSTACK_MAIL_HEALTH_GRACE:-30}"
 # Set by the autostart unit. A sweep must never override intent, and must stay
 # quiet when there is nothing to do (it runs ~105k times a year).
 SWEEP="${AGENTSTACK_MAILCTL_SWEEP:-0}"
@@ -58,6 +71,10 @@ validate_config() {
     die "AGENTSTACK_MCP_URL must be an HTTP(S) URL"
   command -v "$PYTHON_BIN" >/dev/null 2>&1 || \
     die "configured Python is unavailable: $PYTHON_BIN"
+  [[ "$START_GRACE" =~ ^[0-9]+$ ]] || \
+    die "AGENTSTACK_MAIL_START_GRACE must be a whole number of seconds"
+  [[ "$HEALTH_GRACE" =~ ^[0-9]+$ ]] || \
+    die "AGENTSTACK_MAIL_HEALTH_GRACE must be a whole number of seconds"
 }
 
 # --- launchd-supervised installs -------------------------------------------
@@ -361,14 +378,57 @@ write_pid() {
   mv "$temporary" "$PIDFILE"
 }
 
+# Both waits are deadlines, not probe counts. A count of probes is not a time
+# bound: each probe spawns an interpreter and can then take up to its own
+# timeout, so "150 probes" measured 48 s against a closed port and would be
+# minutes against a slow one. The clock is
+# bash's SECONDS (seconds since this controller started). The deadline is
+# checked between probes, so a wait can overrun its grace by the probe that is
+# in flight when it passes -- a probe spawns an interpreter and then applies a
+# 1 s socket timeout, and nothing bounds the whole of it. A grace of 0 means
+# one probe.
+#
+# wait_for_health [pid]: 0 once health answers, 1 at the deadline, 2 if a pid
+# was given and that process exited first.
 wait_for_health() {
-  local attempts=0
-  while [[ "$attempts" -lt 150 ]]; do
+  local pid="${1:-}"
+  local deadline=$((SECONDS + HEALTH_GRACE))
+  while :; do
     health_ok && return 0
+    if [[ -n "$pid" ]] && ! pid_running "$pid"; then
+      return 2
+    fi
+    [[ "$SECONDS" -lt "$deadline" ]] || return 1
     sleep 0.2
-    attempts=$((attempts + 1))
   done
-  return 1
+}
+
+# Wait for a runner this controller just started. Returns 0 once health
+# answers, 2 if the runner exited first, 1 if the grace ran out with the runner
+# still alive. WAIT_ELAPSED (seconds) and WAIT_PORT (open|closed) are left for
+# the caller's message: a failure that says only "not healthy" gave no way to
+# tell a slow start from a broken one, and that is the operator's question at
+# that moment.
+WAIT_ELAPSED=0
+WAIT_PORT=closed
+wait_for_runner() {
+  local pid="$1" started deadline
+  started="$SECONDS"
+  deadline=$((started + START_GRACE))
+  WAIT_PORT=closed
+  while :; do
+    WAIT_ELAPSED=$((SECONDS - started))
+    pid_running "$pid" || return 2
+    if endpoint_port_open; then
+      WAIT_PORT=open
+      wait_for_health "$pid"
+      local health=$?
+      WAIT_ELAPSED=$((SECONDS - started))
+      return "$health"
+    fi
+    [[ "$SECONDS" -lt "$deadline" ]] || return 1
+    sleep 0.5
+  done
 }
 
 wait_for_stop() {
@@ -450,7 +510,28 @@ start_service() {
   if pid_running "$pid"; then
     pid_is_managed_runner "$pid" || \
       die "pidfile points to a process other than the rendered runner (pid $pid)"
-    health_ok || die "managed runner pid $pid is alive but ORRERY Mail health is failing"
+    if ! health_ok; then
+      # A start that ran out of grace leaves its runner alive on purpose, and
+      # this is the start (the timer's or the operator's) that finds it. Do not
+      # spawn a second runner against the same port, and do not sit on the
+      # lifecycle lock for another START_GRACE either: that would refuse an
+      # operator's stop as "another lifecycle action is active" for minutes.
+      # Report where the runner is and let the next start look again.
+      if ! endpoint_port_open; then
+        die "managed runner pid $pid is alive but not listening yet (endpoint port closed); still starting or stuck -- the next start re-checks it"
+      fi
+      wait_for_health "$pid"
+      case $? in
+        0) ;;
+        2)
+          rm -f "$PIDFILE"
+          die "managed runner pid $pid exited without answering health; inspect $LOGFILE"
+          ;;
+        *)
+          die "managed runner pid $pid is alive but health is failing (endpoint port open) after ${HEALTH_GRACE}s"
+          ;;
+      esac
+    fi
     [[ "$SWEEP" == "1" ]] || say "ORRERY Mail already running (pid $pid, endpoint $MCP_URL)"
     return
   fi
@@ -500,15 +581,23 @@ start_service() {
   nohup /bin/bash "$MAIL_RUNNER" </dev/null >> "$LOGFILE" 2>&1 &
   pid=$!
   write_pid "$pid"
-  if ! wait_for_health; then
-    if pid_running "$pid" && pid_is_managed_runner "$pid"; then
-      kill -TERM "$pid" 2>/dev/null || true
-      wait_for_stop "$pid" || true
-    fi
-    rm -f "$PIDFILE"
-    die "ORRERY Mail did not become healthy; inspect $LOGFILE"
-  fi
-  say "ORRERY Mail started (pid $pid, endpoint $MCP_URL)"
+  wait_for_runner "$pid"
+  case $? in
+    0)
+      say "ORRERY Mail started (pid $pid, endpoint $MCP_URL, ready after ${WAIT_ELAPSED}s)"
+      ;;
+    2)
+      rm -f "$PIDFILE"
+      die "ORRERY Mail runner (pid $pid) exited after ${WAIT_ELAPSED}s before the endpoint answered; inspect $LOGFILE"
+      ;;
+    *)
+      # Still alive: still starting, or stuck -- a live pid does not tell
+      # which. Killing it here is what turned a slow start into an outage.
+      # Keep the pidfile so the next start (the timer's, or the operator's)
+      # finds this runner instead of racing a second one against it.
+      die "ORRERY Mail is still starting after ${WAIT_ELAPSED}s (endpoint port $WAIT_PORT); runner pid $pid left running (starting or stuck), the next start re-checks it"
+      ;;
+  esac
 }
 
 stop_service() {
@@ -590,7 +679,12 @@ status_service() {
   if pid_running "$pid"; then
     pid_is_managed_runner "$pid" || \
       die "pidfile points to a foreign process (pid $pid)"
-    health_ok || die "managed runner pid $pid is alive but health is failing"
+    if ! health_ok; then
+      if endpoint_port_open; then
+        die "managed runner pid $pid is alive but health is failing (endpoint port open)"
+      fi
+      die "managed runner pid $pid is alive but not listening yet (endpoint port closed); a start is in progress or stuck"
+    fi
     say "ORRERY Mail running (pid $pid, endpoint $MCP_URL)"
     return 0
   fi
