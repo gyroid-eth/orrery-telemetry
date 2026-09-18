@@ -225,6 +225,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_MURMUR"] == "__MURMUR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_DIRS"] == "__SPAWN_DIRS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_ROOTS"] == "__SPAWN_ROOTS__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_WORKTREE_ROOT"] == "__WORKTREE_ROOT__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_CHILD_APPROVAL"] == "__CODEX_CHILD_APPROVAL__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_NETWORK"] == "__CODEX_NETWORK__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_ADD_DIRS"] == "__CODEX_ADD_DIRS__"
