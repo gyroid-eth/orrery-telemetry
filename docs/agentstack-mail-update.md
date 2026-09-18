@@ -103,16 +103,19 @@ installer が管理する範囲に第二の supervisor はありません。旧�
      if [ -s "$err" ]; then echo "lsof failed:" >&2; cat "$err" >&2; rm -f "$err"; return 1; fi
      rm -f "$err"
      [ $rc -ne 0 ] || { echo "port $1 is occupied:" >&2; echo "$out" >&2; return 1; }
+     [ $rc -eq 1 ] && [ -z "$out" ] || { echo "lsof exited with status $rc without an error message; not treating port $1 as free" >&2; return 1; }
    }
    listener_pid() {  # prints the pid listening on TCP port $1; fails when there is none or lsof failed
-     local out err rc
+     local out err rc pid
      command -v lsof >/dev/null 2>&1 || { echo "lsof is not installed" >&2; return 1; }
      err=$(mktemp) || return 1
      out=$(lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>"$err"); rc=$?
      if [ -s "$err" ]; then echo "lsof failed:" >&2; cat "$err" >&2; rm -f "$err"; return 1; fi
      rm -f "$err"
      [ $rc -eq 0 ] || { echo "nothing is listening on port $1" >&2; return 1; }
-     printf '%s\n' "$out" | awk 'NR>1{print $2; exit}'
+     pid=$(printf '%s\n' "$out" | awk 'NR>1{print $2; exit}')
+     [ -n "$pid" ] || { echo "lsof reported a listener on port $1 but no pid could be read" >&2; return 1; }
+     printf '%s\n' "$pid"
    }
    step_0() {
      local assignments
