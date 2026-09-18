@@ -45,11 +45,26 @@ async def _setup_database(
     token: str | None = None,
 ) -> tuple[Path, int]:
     tmp_path.mkdir(parents=True, exist_ok=True)
-    database = tmp_path / "mail.sqlite3"
-    monkeypatch.setenv("AGENTSTACK_MAIL_DATABASE_URL", f"sqlite+aiosqlite:///{database}")
+    state_root = tmp_path / "mail-state"
+    state_root.mkdir()
+    database = state_root / "storage.sqlite3"
+    archive = state_root / "archive"
+    signals = state_root / "signals"
+    management_socket = state_root / "management.sock"
+    database_url = f"sqlite+aiosqlite:///{database}"
+    monkeypatch.setenv("AGENTSTACK_MAIL_ENV_FILE", str(state_root / "missing.env"))
+    monkeypatch.setenv("AGENTSTACK_MAIL_DATABASE_URL", database_url)
+    monkeypatch.setenv("AGENTSTACK_MAIL_STORAGE_ROOT", str(archive))
+    monkeypatch.setenv("AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR", str(signals))
+    monkeypatch.setenv("AGENTSTACK_MAIL_MANAGEMENT_SOCKET", str(management_socket))
     db.reset_database_state()
     get_settings.cache_clear()
-    await db.ensure_schema(get_settings())
+    settings = get_settings()
+    assert settings.database.url == database_url
+    assert Path(settings.storage.root) == archive
+    assert Path(settings.notifications.signals_dir) == signals
+    assert settings.management_socket_path == str(management_socket)
+    await db.ensure_schema(settings)
     async with db.get_session() as session:
         async with session.begin():
             project = Project(slug=f"fixture-{uuid.uuid4().hex}", human_key=str(tmp_path / "project"))
