@@ -78,6 +78,7 @@
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_SPAWN_DIRS": "",
     "AGENTSTACK_SPAWN_ROOTS": "",
+    "AGENTSTACK_WORKTREE_ROOT": "/home/alice/.agentstack/worktrees",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "",
     "AGENTSTACK_CODEX_NETWORK": "on",

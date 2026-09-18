@@ -201,7 +201,7 @@ The model generation names in `spawn_child.sh`'s model catalog are canonical. Fo
 5. Read the ORRERY Mail completion report and `monitor_child_agent.sh`, then verify the artifact yourself
 6. Release the reservation before reporting the parent's result
 
-A worktree child's cwd changes to `/tmp/cc-worktrees/<name>`, but its ORRERY Mail project does not change. The task must identify `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` as canonical. `--worktree-base <rev>` fixes the baseline for multiple children.
+A worktree child's cwd changes to `${AGENTSTACK_WORKTREE_ROOT:-$AGENTSTACK_HOME/worktrees}/<name>` (normally `~/.agentstack/worktrees/<name>`), but its ORRERY Mail project does not change. The task must identify `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` as canonical. `--worktree-base <rev>` fixes the baseline for multiple children. Existing `/tmp/cc-worktrees` entries are not migrated; only new spawns use the persistent root.
 
 The monitor's dangerous-command detection is passive by default. When enabled with `AGENTSTACK_MONITOR_DANGER_CHECK=1`, a match causes a soft stop. Repeated stasis with unchanged output escalates through soft stop, `C-c`, process-group freeze, then session kill regardless of that setting. See the skill text for the exit codes.
 

@@ -383,6 +383,7 @@ warn_managed_block "Codex AGENTS.md" "$CODEX_HOME/AGENTS.md" \
   "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->"
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-$INSTALL_DIR/worktrees}"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 CLAUDE_SCOPE="${AGENTSTACK_CLAUDE_MD_SCOPE:-project}"
 case "$CLAUDE_SCOPE" in
@@ -412,6 +413,69 @@ case "$CLAUDE_SCOPE" in
     echo "warn: invalid AGENTSTACK_CLAUDE_MD_SCOPE=$CLAUDE_SCOPE; cannot check CLAUDE.md"
     ;;
 esac
+
+report_orphan_worktrees() {
+  local root="$WORKTREE_ROOT" registered_names worktree name orphan_count=0
+  if [[ "$root" == "~" ]]; then
+    root="$HOME"
+  elif [[ "$root" == "~/"* ]]; then
+    root="$HOME/${root#\~/}"
+  fi
+  if [[ ! -d "$root" ]]; then
+    echo "ok: worktree root has no entries ($root)"
+    return 0
+  fi
+  if [[ ! -x "$PYTHON_BIN" || ! -f "$MAIL_DB_PATH" || -z "$PROJECT_KEY" ]] || \
+     ! command -v tmux >/dev/null 2>&1
+  then
+    echo "warn: cannot classify worktrees under $root; Python, tmux, Mail DB, and project key are required" >&2
+    return 0
+  fi
+  if ! registered_names="$("$PYTHON_BIN" - "$MAIL_DB_PATH" "$PROJECT_KEY" <<'PY' 2>/dev/null
+import pathlib
+import sqlite3
+import sys
+
+database, project_key = sys.argv[1:]
+uri = pathlib.Path(database).resolve().as_uri() + "?mode=ro"
+with sqlite3.connect(uri, uri=True) as connection:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(agents)")
+    }
+    retired_filter = " AND a.retired_at IS NULL" if "retired_at" in columns else ""
+    rows = connection.execute(
+        "SELECT a.name FROM agents AS a "
+        "JOIN projects AS p ON p.id = a.project_id "
+        "WHERE p.human_key = ?" + retired_filter,
+        (project_key,),
+    )
+    for (name,) in rows:
+        if isinstance(name, str):
+            print(name)
+PY
+)"; then
+    echo "warn: cannot read registered agents; worktrees under $root were not classified" >&2
+    return 0
+  fi
+
+  for worktree in "$root"/*; do
+    [[ -d "$worktree" ]] || continue
+    name="${worktree##*/}"
+    if tmux has-session -t "=$name" >/dev/null 2>&1 || \
+       printf '%s\n' "$registered_names" | grep -Fqx -- "$name"
+    then
+      continue
+    fi
+    echo "warn: orphaned worktree is neither live nor registered: $worktree" >&2
+    echo "      inspect it, then remove it manually from its source repository; doctor will not delete it" >&2
+    orphan_count=$((orphan_count + 1))
+  done
+  if [[ "$orphan_count" -eq 0 ]]; then
+    echo "ok: no orphaned worktrees under $root"
+  fi
+}
+
+report_orphan_worktrees
 
 SCIENTISTS_LIB="$INSTALL_DIR/bin/lib/agentstack-scientists.sh"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}"

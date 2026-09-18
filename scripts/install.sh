@@ -30,6 +30,9 @@ MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
 # NEW AGENT launch-directory presets. Resolved below: explicit > installed env.sh > empty.
 SPAWN_DIRS_SETTING="${AGENTSTACK_SPAWN_DIRS:-}"
 SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
+# New worktrees live below the install root by default. An explicit environment
+# override is persisted for shell launches and the dashboard service alike.
+WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-}"
 # Codex child launch policy. Same lifecycle as the presets above: explicit >
 # installed env.sh > product default (approval `never`, network on, no extra
 # writable roots). Children run unattended, so the defaults avoid prompts
@@ -238,6 +241,10 @@ fi
 if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
   SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "$WORKTREE_ROOT_SETTING" ]]; then
+  WORKTREE_ROOT_SETTING="$(agentstack_installed_env_value AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/env.sh")"
+fi
+WORKTREE_ROOT_SETTING="${WORKTREE_ROOT_SETTING:-$INSTALL_DIR/worktrees}"
 if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
   CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
 fi
@@ -419,6 +426,7 @@ validate_spawn_paths() {
 }
 validate_spawn_paths AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING"
 validate_spawn_paths AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING"
+validate_spawn_paths AGENTSTACK_WORKTREE_ROOT "$WORKTREE_ROOT_SETTING"
 validate_spawn_paths AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING"
 validate_spawn_paths AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING"
 validate_spawn_paths AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING"
@@ -2014,6 +2022,7 @@ values = {
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+    "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -3065,6 +3074,7 @@ repl = {
     "__MURMUR__": "$MURMUR_SETTING",
     "__SPAWN_DIRS__": "$SPAWN_DIRS_SETTING",
     "__SPAWN_ROOTS__": "$SPAWN_ROOTS_SETTING",
+    "__WORKTREE_ROOT__": "$WORKTREE_ROOT_SETTING",
     "__CODEX_CHILD_APPROVAL__": "$CODEX_CHILD_APPROVAL_SETTING",
     "__CODEX_NETWORK__": "$CODEX_NETWORK_SETTING",
     "__CODEX_ADD_DIRS__": "$CODEX_ADD_DIRS_SETTING",
@@ -3131,6 +3141,7 @@ env = {
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+    "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -3533,6 +3544,7 @@ manifest = {
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
         "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
         "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+        "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -3626,6 +3638,7 @@ main() {
   say "project key: $PROJECT_KEY"
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
+  say "worktree root: $WORKTREE_ROOT_SETTING"
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"

@@ -2567,6 +2567,17 @@ def _codex_meta(path: str) -> tuple[str | None, str | None]:
         return None, None
 
 
+def _worktree_root() -> str:
+    """Return the persistent root used by spawn_child.sh for new worktrees."""
+    install_root = os.environ.get("AGENTSTACK_HOME") or os.path.expanduser(
+        "~/.agentstack"
+    )
+    configured = os.environ.get("AGENTSTACK_WORKTREE_ROOT") or os.path.join(
+        install_root, "worktrees"
+    )
+    return os.path.abspath(os.path.expanduser(configured))
+
+
 def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     """Writable roots for a Codex agent launched by the product.
 
@@ -2578,7 +2589,7 @@ def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     raw += os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     raw += os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
     raw += [os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
-            "/tmp/cc-worktrees", os.path.expanduser("~/.claude"),
+            _worktree_root(), os.path.expanduser("~/.claude"),
             os.path.expanduser("~/.codex")]
     raw += list(extra or [])
     raw += os.environ.get("AGENTSTACK_CODEX_ADD_DIRS", "").split(":")
@@ -5411,7 +5422,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             body_lines += [
                 f"- 分離 worktree モードで起動 (branch: exp/{child_name})",
                 f"- worktree base: {worktree_base or 'HEAD'}",
-                f"- worktree dir: /tmp/cc-worktrees/{child_name}",
+                f"- worktree dir: {os.path.join(_worktree_root(), child_name)}",
             ]
         body_lines += [
             "- 完了したら親に reply してください。",

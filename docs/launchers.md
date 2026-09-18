@@ -203,7 +203,7 @@ model の世代名は `spawn_child.sh` の model catalog が正本です。Claud
 5. ORRERY Mail の完了報告と `monitor_child_agent.sh` を読み、自分で成果物を検証する
 6. reservation を release してから親の結果として報告する
 
-worktree child の cwd は `/tmp/cc-worktrees/<name>` に変わりますが、ORRERY Mail project は変わりません。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。
+worktree child の cwd は `${AGENTSTACK_WORKTREE_ROOT:-$AGENTSTACK_HOME/worktrees}/<name>`（通常は `~/.agentstack/worktrees/<name>`）に変わりますが、ORRERY Mail project は変わりません。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。旧 `/tmp/cc-worktrees` は移行せず、新規 spawn だけが永続 root を使います。
 
 monitor の danger command 検知は既定では passive です。`AGENTSTACK_MONITOR_DANGER_CHECK=1` で有効にすると一致時に soft stop します。出力が変わらない stasis の反復時は設定にかかわらず soft stop、`C-c`、process group freeze、session kill の順に段階化します。exit code の意味は skill 本文を参照してください。
 

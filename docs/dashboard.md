@@ -334,11 +334,11 @@ Codex では `--codex --model <model> --effort <effort>` を渡します。non-g
 `worktree: true` では child ごとに:
 
 ```text
-/tmp/cc-worktrees/<child-name>
+${AGENTSTACK_WORKTREE_ROOT:-$AGENTSTACK_HOME/worktrees}/<child-name>
 branch: exp/<child-name>
 ```
 
-を使います。`worktree_base` を省略すると `HEAD` です。task message には元 project key、branch、base、directory を明記し、worktree path を ORRERY Mail project key と誤認しないようにします。
+を使います（通常の install root は `~/.agentstack`）。`AGENTSTACK_WORKTREE_ROOT` は installer 実行時に環境変数で上書きできます。`worktree_base` を省略すると `HEAD` です。task message には元 project key、branch、base、directory を明記し、worktree path を ORRERY Mail project key と誤認しないようにします。
 
 ## Embed mode
 

@@ -33,12 +33,12 @@
 #
 # 分離モード:
 #   --worktree            子を独立した git worktree (別ブランチ・別ディレクトリ) で動かす
-#                          - worktree dir: /tmp/cc-worktrees/<AGENT_NAME>
+#                          - worktree dir: ${AGENTSTACK_WORKTREE_ROOT:-<install-root>/worktrees}/<AGENT_NAME>
 #                          - branch:       exp/<AGENT_NAME>
 #                          - 子の tmux cwd は worktree dir
 #                          - 元 source は WORK_DIR (引数 $2 / pre-registered モードは $3)
 #                          - クリーンアップ: 子の作業完了後、親側から
-#                              git -C <source> worktree remove /tmp/cc-worktrees/<NAME>
+#                              git -C <source> worktree remove <worktree-dir>
 #                              git -C <source> branch -D exp/<NAME>
 #   --worktree-base REV   --worktree と併用。worktree の起点 commit/branch/tag を明示指定。
 #                          未指定時は spawn 実行時の HEAD (時間差で drift する可能性あり)。
@@ -48,6 +48,7 @@
 # 環境変数:
 #   PARENT_AGENT  - 親エージェント名（省略時: tmuxセッション名）
 #   PROJECT_KEY   - ORRERY Mail のプロジェクトキー（省略時: デフォルト）
+#   AGENTSTACK_WORKTREE_ROOT - worktree の永続 root（既定: install root/worktrees）
 #
 # 終了コード:
 #   0  - 成功
@@ -221,7 +222,12 @@ STANDALONE=false
 EMBED_TASK=false
 TASK_FILE=""
 USE_WORKTREE=false
-WORKTREE_BASE="/tmp/cc-worktrees"
+WORKTREE_BASE="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
+if [[ "$WORKTREE_BASE" == "~" ]]; then
+    WORKTREE_BASE="$HOME"
+elif [[ "$WORKTREE_BASE" == "~/"* ]]; then
+    WORKTREE_BASE="$HOME/${WORKTREE_BASE#\~/}"
+fi
 WORKTREE_BASE_REV=""   # --worktree-base で指定された起点 rev (空=HEAD)
 WORKTREE_BASE_RESOLVED="" # rev-parse 後の commit hash (記録用)
 WORKTREE_DIR=""        # 後で maybe_create_worktree がセット
@@ -691,6 +697,11 @@ maybe_create_worktree() {
 
     if ! git -C "$source_dir" rev-parse --git-dir > /dev/null 2>&1; then
         echo "Error: --worktree requires source_dir to be a git repository: $source_dir" >&2
+        return 1
+    fi
+
+    if [[ "$WORKTREE_BASE" != /* ]]; then
+        echo "Error: AGENTSTACK_WORKTREE_ROOT must be an absolute path: $WORKTREE_BASE" >&2
         return 1
     fi
 
