@@ -184,52 +184,109 @@ def _wait_for(path: Path, process: subprocess.Popen[bytes], timeout: float = 10)
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def _register_claude_fixture_plugin(
+    config_root: Path,
+    plugin_id: str,
+    plugin_root: Path,
+    *,
+    plugins_root: Path | None = None,
+    marketplace_entry: dict[str, object] | None = None,
+) -> Path:
+    plugin_name, marketplace_name = plugin_id.rsplit("@", 1)
+    plugins_root = plugins_root or config_root / "plugins"
+    plugins_root.mkdir(parents=True, exist_ok=True)
+    inventory_path = plugins_root / "installed_plugins.json"
+    if inventory_path.exists():
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    else:
+        inventory = {"version": 2, "plugins": {}}
+    inventory["plugins"][plugin_id] = [
+        {
+            "scope": "user",
+            "installPath": str(plugin_root),
+            "version": "0.0.1",
+        }
+    ]
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    marketplace_root = plugins_root / "marketplaces" / marketplace_name
+    (marketplace_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    registry_path = plugins_root / "known_marketplaces.json"
+    registry = (
+        json.loads(registry_path.read_text(encoding="utf-8"))
+        if registry_path.exists()
+        else {}
+    )
+    registry[marketplace_name] = {
+        "source": {"source": "directory", "path": str(marketplace_root)},
+        "installLocation": str(marketplace_root),
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    catalog_path = marketplace_root / ".claude-plugin" / "marketplace.json"
+    catalog = (
+        json.loads(catalog_path.read_text(encoding="utf-8"))
+        if catalog_path.exists()
+        else {"name": marketplace_name, "plugins": []}
+    )
+    catalog["plugins"] = [
+        entry for entry in catalog["plugins"] if entry.get("name") != plugin_name
+    ]
+    entry: dict[str, object] = {
+        "name": plugin_name,
+        "source": f"./plugins/{plugin_name}",
+    }
+    if marketplace_entry is not None:
+        entry.update(marketplace_entry)
+    catalog["plugins"].append(entry)
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    return catalog_path
+
+
 def _install_claude_fixture_plugin(
     tmp_path: Path,
     profile: Path,
     *,
     plugin_id: str = "dummy-channel@fixture",
     root_mcp: dict[str, object] | None = None,
-    manifest_mcp: dict[str, object] | str | None = None,
+    manifest_mcp: dict[str, object] | str | list[str] | None = None,
     config_root: Path | None = None,
+    plugins_root: Path | None = None,
+    marketplace_entry: dict[str, object] | None = None,
+    write_manifest: bool = True,
 ) -> tuple[Path, Path]:
     config_root = config_root or tmp_path / "claude-config"
+    plugins_root = plugins_root or config_root / "plugins"
     plugin_root = tmp_path / "claude-plugin"
-    (config_root / "plugins").mkdir(parents=True, exist_ok=True)
-    (plugin_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
-    manifest: dict[str, object] = {
-        "name": "dummy-channel",
-        "version": "0.0.1",
-        "channels": [{"server": "dummy"}],
-    }
-    if manifest_mcp is not None:
-        manifest["mcpServers"] = manifest_mcp
-    (plugin_root / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
+    plugin_name = plugin_id.rsplit("@", 1)[0]
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    if write_manifest:
+        (plugin_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        manifest: dict[str, object] = {
+            "name": plugin_name,
+            "version": "0.0.1",
+            "channels": [{"server": "dummy"}],
+        }
+        if manifest_mcp is not None:
+            manifest["mcpServers"] = manifest_mcp
+        (plugin_root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
     if root_mcp is not None:
         (plugin_root / ".mcp.json").write_text(
             json.dumps({"mcpServers": root_mcp}), encoding="utf-8"
         )
-    (config_root / "plugins" / "installed_plugins.json").write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "plugins": {
-                    plugin_id: [
-                        {
-                            "scope": "user",
-                            "installPath": str(plugin_root),
-                            "version": "0.0.1",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
+    _register_claude_fixture_plugin(
+        config_root,
+        plugin_id,
+        plugin_root,
+        plugins_root=plugins_root,
+        marketplace_entry=marketplace_entry,
     )
     value = json.loads(profile.read_text(encoding="utf-8"))
     value["environment"]["CLAUDE_CONFIG_DIR"] = str(config_root)
+    if plugins_root != config_root / "plugins":
+        value["environment"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] = str(plugins_root)
     profile.write_text(json.dumps(value) + "\n", encoding="utf-8")
     profile.chmod(0o600)
     return config_root, plugin_root
@@ -248,17 +305,346 @@ def _add_mail_fixture_plugin(
         json.dumps({"mcpServers": {"agent-mail": {"command": "raw"}}}),
         encoding="utf-8",
     )
-    inventory_path = config_root / "plugins" / "installed_plugins.json"
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    inventory["plugins"][plugin_id] = [
-        {
-            "scope": "user",
-            "installPath": str(plugin_root),
-            "version": "0.0.1",
-        }
-    ]
-    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    _register_claude_fixture_plugin(config_root, plugin_id, plugin_root)
     return plugin_id
+
+
+def _claude_plugin_case(
+    tmp_path: Path,
+    *,
+    root_mcp: dict[str, object] | None = None,
+    manifest_mcp: dict[str, object] | str | list[str] | None = None,
+    marketplace_entry: dict[str, object] | None = None,
+    write_manifest: bool = True,
+    plugins_root: Path | None = None,
+) -> tuple[Path, dict[str, str], Path, Path, Path]:
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, plugin_root = _install_claude_fixture_plugin(
+        tmp_path,
+        profile,
+        root_mcp=root_mcp,
+        manifest_mcp=manifest_mcp,
+        marketplace_entry=marketplace_entry,
+        write_manifest=write_manifest,
+        plugins_root=plugins_root,
+    )
+    return profile, env, marker, config_root, plugin_root
+
+
+def _run_persistent_profile(profile: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def test_claude_marketplace_uses_effective_plugin_cache_root(tmp_path: Path):
+    effective_root = tmp_path / "effective-plugin-cache"
+    profile, env, marker, config_root, _plugin_root = _claude_plugin_case(
+        tmp_path, plugins_root=effective_root
+    )
+    default_root = config_root / "plugins"
+    default_root.mkdir(parents=True)
+    (default_root / "installed_plugins.json").write_text(
+        "{ignored-default-plugin-cache-canary", encoding="utf-8"
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+def test_claude_strict_false_manifestless_lsp_only_plugin_executes(tmp_path: Path):
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(
+        tmp_path,
+        write_manifest=False,
+        marketplace_entry={
+            "strict": False,
+            "lspServers": {
+                "swift": {
+                    "command": "sourcekit-lsp",
+                    "extensionToLanguage": {".swift": "swift"},
+                }
+            },
+        },
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("source", ("inline", "reference", "root"))
+def test_claude_strict_false_mail_from_each_mcp_source_blocks_exec(
+    tmp_path: Path, source: str
+):
+    raw = {"shared-server": {"url": "http://127.0.0.1:18765/mcp"}}
+    marketplace_entry: dict[str, object] = {"strict": False}
+    root_mcp = None
+    if source == "inline":
+        marketplace_entry["mcpServers"] = raw
+    elif source == "reference":
+        marketplace_entry["mcpServers"] = "marketplace-mcp.json"
+    else:
+        marketplace_entry["lspServers"] = {}
+        root_mcp = raw
+    profile, env, marker, _config_root, plugin_root = _claude_plugin_case(
+        tmp_path,
+        write_manifest=False,
+        root_mcp=root_mcp,
+        marketplace_entry=marketplace_entry,
+    )
+    if source == "reference":
+        (plugin_root / "marketplace-mcp.json").write_text(
+            json.dumps({"mcpServers": raw}), encoding="utf-8"
+        )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["reason"] == "claude-plugin-mail-conflict"
+    assert not marker.exists()
+
+
+def test_claude_strict_false_manifest_component_conflict_fails_closed(
+    tmp_path: Path,
+):
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(
+        tmp_path, marketplace_entry={"strict": False}
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-plugin-definition-unreadable"
+    assert error["path"].endswith("/.claude-plugin/plugin.json")
+    assert not marker.exists()
+
+
+def test_claude_strict_true_marketplace_only_mail_blocks_exec(tmp_path: Path):
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(
+        tmp_path,
+        marketplace_entry={
+            "mcpServers": {
+                "marketplace-mail": {"url": "http://127.0.0.1:18765/mcp"}
+            }
+        },
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["reason"] == "claude-plugin-mail-conflict"
+    assert not marker.exists()
+
+
+def test_claude_marketplace_reference_resolves_from_installed_plugin_root(
+    tmp_path: Path,
+):
+    profile, env, marker, config_root, plugin_root = _claude_plugin_case(
+        tmp_path,
+        write_manifest=False,
+        marketplace_entry={"strict": False, "mcpServers": "entry-mcp.json"},
+    )
+    (plugin_root / "entry-mcp.json").write_text(
+        json.dumps({"mcpServers": {"benign": {"command": "benign"}}}),
+        encoding="utf-8",
+    )
+    marketplace_root = config_root / "plugins" / "marketplaces" / "fixture"
+    (marketplace_root / "entry-mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "agent-mail": {"url": "http://127.0.0.1:18765/mcp"}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("root_mail", "marketplace_mail", "expected_code"),
+    ((False, False, 0), (False, True, 2), (True, False, 2)),
+)
+def test_claude_same_named_cross_source_servers_are_all_inspected(
+    tmp_path: Path,
+    root_mail: bool,
+    marketplace_mail: bool,
+    expected_code: int,
+):
+    def server(is_mail: bool) -> dict[str, str]:
+        if is_mail:
+            return {"url": "http://127.0.0.1:18765/mcp"}
+        return {"command": "benign"}
+
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(
+        tmp_path,
+        root_mcp={"shared-server": server(root_mail)},
+        marketplace_entry={
+            "mcpServers": {"shared-server": server(marketplace_mail)}
+        },
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == expected_code, result.stderr
+    if expected_code == 0:
+        assert marker.exists()
+    else:
+        assert json.loads(result.stderr)["reason"] == "claude-plugin-mail-conflict"
+        assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-registry",
+        "install-location",
+        "install-path",
+        "catalog-name",
+        "duplicate-entry",
+        "strict-type",
+        "mcp-shape",
+    ),
+)
+def test_claude_broken_marketplace_identity_or_definition_fails_secret_free(
+    tmp_path: Path, mutation: str
+):
+    profile, env, marker, config_root, _plugin_root = _claude_plugin_case(tmp_path)
+    plugins_root = config_root / "plugins"
+    registry_path = plugins_root / "known_marketplaces.json"
+    catalog_path = (
+        plugins_root
+        / "marketplaces"
+        / "fixture"
+        / ".claude-plugin"
+        / "marketplace.json"
+    )
+    if mutation == "missing-registry":
+        registry_path.unlink()
+    elif mutation == "install-location":
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["fixture"]["installLocation"] = str(
+            tmp_path / "SECRET-MARKETPLACE-CANARY"
+        )
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    elif mutation == "install-path":
+        inventory_path = plugins_root / "installed_plugins.json"
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        inventory["plugins"]["dummy-channel@fixture"][0]["installPath"] = str(
+            tmp_path / "SECRET-MARKETPLACE-CANARY"
+        )
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    else:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        if mutation == "catalog-name":
+            catalog["name"] = "wrong-marketplace"
+        elif mutation == "duplicate-entry":
+            catalog["plugins"].append(dict(catalog["plugins"][0]))
+        elif mutation == "strict-type":
+            catalog["plugins"][0]["strict"] = "false"
+        else:
+            catalog["plugins"][0]["mcpServers"] = 7
+        catalog["description"] = "SECRET-MARKETPLACE-CANARY"
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    if mutation == "mcp-shape":
+        expected_reason = "claude-plugin-definition-unreadable"
+    elif mutation == "install-path":
+        expected_reason = "claude-plugin-unavailable"
+    else:
+        expected_reason = "claude-plugin-marketplace-unreadable"
+    assert error["reason"] == expected_reason
+    assert "SECRET-MARKETPLACE-CANARY" not in result.stderr
+    assert not marker.exists()
+
+
+def test_claude_invalid_plugin_cache_environment_is_not_echoed(tmp_path: Path):
+    configured = tmp_path / "SECRET-PLUGIN-CACHE-CANARY"
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(tmp_path)
+    value = json.loads(profile.read_text(encoding="utf-8"))
+    value["environment"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] = str(configured)
+    profile.write_text(json.dumps(value) + "\n", encoding="utf-8")
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error == {
+        "ok": False,
+        "reason": "claude-plugin-inventory-unreadable",
+        "docs": "docs/persistent-agents.md",
+    }
+    assert "SECRET-PLUGIN-CACHE-CANARY" not in result.stderr
+    assert not marker.exists()
+
+
+def test_claude_duplicate_json_member_in_catalog_fails_secret_free(tmp_path: Path):
+    profile, env, marker, config_root, _plugin_root = _claude_plugin_case(tmp_path)
+    catalog_path = (
+        config_root
+        / "plugins"
+        / "marketplaces"
+        / "fixture"
+        / ".claude-plugin"
+        / "marketplace.json"
+    )
+    catalog_path.write_text(
+        '{"name":"fixture","name":"SECRET-DUPLICATE-CANARY","plugins":[]}',
+        encoding="utf-8",
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-plugin-marketplace-unreadable"
+    assert error["path"] == str(catalog_path)
+    assert "SECRET-DUPLICATE-CANARY" not in result.stderr
+    assert not marker.exists()
+
+
+def test_claude_marketplace_reference_escape_fails_before_exec(tmp_path: Path):
+    profile, env, marker, _config_root, _plugin_root = _claude_plugin_case(
+        tmp_path,
+        write_manifest=False,
+        marketplace_entry={"strict": False, "mcpServers": "../outside.json"},
+    )
+    (tmp_path / "outside.json").write_text(
+        json.dumps({"mcpServers": {"benign": {"command": "benign"}}}),
+        encoding="utf-8",
+    )
+
+    result = _run_persistent_profile(profile, env)
+
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["reason"] == "claude-plugin-definition-unreadable"
+    assert not marker.exists()
 
 
 def test_interactive_profile_exec_preserves_pty_stdin_and_channels_arguments(tmp_path: Path):
@@ -467,16 +853,9 @@ def test_claude_explicit_development_plugin_mail_conflict_blocks_exec(tmp_path: 
         json.dumps({"mcpServers": {"orrery-mail": {"command": "raw"}}}),
         encoding="utf-8",
     )
-    inventory_path = config_root / "plugins" / "installed_plugins.json"
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    inventory["plugins"][development_plugin_id] = [
-        {
-            "scope": "user",
-            "installPath": str(development_plugin),
-            "version": "0.0.1",
-        }
-    ]
-    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    _register_claude_fixture_plugin(
+        config_root, development_plugin_id, development_plugin
+    )
 
     result = subprocess.run(
         [str(LAUNCHER), "run", "--profile", str(profile)],
@@ -557,12 +936,7 @@ def test_claude_enabled_plugin_from_each_settings_scope_is_inspected(
         ),
         encoding="utf-8",
     )
-    inventory_path = config_root / "plugins" / "installed_plugins.json"
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    inventory["plugins"][mail_plugin_id] = [
-        {"scope": "user", "installPath": str(mail_plugin), "version": "0.0.1"}
-    ]
-    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    _register_claude_fixture_plugin(config_root, mail_plugin_id, mail_plugin)
     if settings_relative.startswith("config/"):
         settings_path = config_root / "settings.json"
     else:
@@ -652,12 +1026,7 @@ def test_claude_default_home_enabled_mail_plugin_is_still_inspected(tmp_path: Pa
         json.dumps({"mcpServers": {"agent-mail": {"command": "raw"}}}),
         encoding="utf-8",
     )
-    inventory_path = config_root / "plugins" / "installed_plugins.json"
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    inventory["plugins"][mail_plugin_id] = [
-        {"scope": "user", "installPath": str(mail_plugin), "version": "0.0.1"}
-    ]
-    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    _register_claude_fixture_plugin(config_root, mail_plugin_id, mail_plugin)
     (config_root / "settings.json").write_text(
         json.dumps({"enabledPlugins": {mail_plugin_id: True}}), encoding="utf-8"
     )

@@ -45,6 +45,22 @@ CLAUDE_EXTRA_SETTINGS_FLAGS = frozenset({"--settings", "--setting-sources", "--s
 CLAUDE_GIT_DISCOVERY_ENV = frozenset(
     {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
 )
+CLAUDE_PLUGIN_COMPONENT_FIELDS = frozenset(
+    {
+        "skills",
+        "commands",
+        "agents",
+        "workflows",
+        "hooks",
+        "mcpServers",
+        "outputStyles",
+        "lspServers",
+        "experimental",
+        "userConfig",
+        "channels",
+        "dependencies",
+    }
+)
 ALLOWED_PROFILE_KEYS = {
     "kind",
     "name",
@@ -69,6 +85,10 @@ class PersistentError(RuntimeError):
     def __init__(self, reason: str, *, path: Path | None = None) -> None:
         super().__init__(reason)
         self.path = path
+
+
+class _DuplicateJsonMember(ValueError):
+    pass
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -376,9 +396,18 @@ def _read_claude_json(path: Path, reason: str, *, required: bool = False) -> dic
         os.close(descriptor)
     if len(raw) > 8_388_608:
         raise PersistentError(reason, path=path)
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise _DuplicateJsonMember
+            value[key] = item
+        return value
+
     try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember) as exc:
         raise PersistentError(reason, path=path) from exc
     if not isinstance(value, dict):
         raise PersistentError(reason, path=path)
@@ -707,91 +736,284 @@ def _enabled_claude_plugins(paths: Sequence[Path]) -> set[str]:
     return {plugin_id for plugin_id, state in enabled.items() if state}
 
 
-def _plugin_server_maps(root: Path) -> list[dict[str, Any]]:
-    if not root.is_dir():
-        raise PersistentError("claude-plugin-unavailable")
-    manifest_path = root / ".claude-plugin" / "plugin.json"
-    manifest = _read_claude_json(
-        manifest_path, "claude-plugin-definition-unreadable", required=True
-    )
-    assert manifest is not None
-    sources: list[dict[str, Any]] = []
-    root_mcp = _read_claude_json(root / ".mcp.json", "claude-plugin-definition-unreadable")
-    if root_mcp is not None:
-        servers = root_mcp.get("mcpServers")
-        if not isinstance(servers, dict):
-            raise PersistentError("claude-plugin-definition-unreadable")
-        sources.append(servers)
-    declared = manifest.get("mcpServers")
-    if declared is None:
-        return sources
-    if isinstance(declared, dict):
-        sources.append(declared)
-        return sources
-    references = [declared] if isinstance(declared, str) else declared
-    if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
-        raise PersistentError("claude-plugin-definition-unreadable")
+def _owned_claude_directory(
+    path: Path,
+    reason: str,
+    *,
+    diagnostic_path: Path | None = None,
+    hide_path: bool = False,
+) -> Path:
+    reported_path = None if hide_path else diagnostic_path or path
     try:
-        resolved_root = root.resolve(strict=True)
+        info = path.lstat()
     except OSError as exc:
-        raise PersistentError("claude-plugin-unavailable") from exc
-    for reference in references:
+        raise PersistentError(reason, path=reported_path) from exc
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o022
+    ):
+        raise PersistentError(reason, path=reported_path)
+    try:
+        return path.resolve(strict=True)
+    except OSError as exc:
+        raise PersistentError(reason, path=reported_path) from exc
+
+
+def _plugin_root_server_maps(root: Path) -> list[tuple[dict[str, Any], Path]]:
+    path = root / ".mcp.json"
+    value = _read_claude_json(path, "claude-plugin-definition-unreadable")
+    if value is None:
+        return []
+    servers = value.get("mcpServers")
+    if not isinstance(servers, dict):
+        raise PersistentError("claude-plugin-definition-unreadable", path=path)
+    return [(servers, path)]
+
+
+def _declared_plugin_server_maps(
+    root: Path, declared: Any, source_path: Path
+) -> list[tuple[dict[str, Any], Path]]:
+    if isinstance(declared, dict):
+        return [(declared, source_path)]
+    references = [declared] if isinstance(declared, str) else declared
+    if not isinstance(references, list) or any(
+        not isinstance(item, str) for item in references
+    ):
+        raise PersistentError("claude-plugin-definition-unreadable", path=source_path)
+    sources: list[tuple[dict[str, Any], Path]] = []
+    for raw_reference in references:
+        reference = raw_reference
         if reference.startswith("${CLAUDE_PLUGIN_ROOT}/"):
             reference = reference[len("${CLAUDE_PLUGIN_ROOT}/") :]
+        if not reference or "$" in reference or "\x00" in reference:
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            )
         reference_path = Path(reference)
-        if not reference or "$" in reference or reference_path.is_absolute():
-            raise PersistentError("claude-plugin-definition-unreadable")
+        if reference_path.is_absolute():
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            )
         try:
-            resolved = (resolved_root / reference_path).resolve(strict=True)
-            resolved.relative_to(resolved_root)
+            resolved = (root / reference_path).resolve(strict=True)
+            resolved.relative_to(root)
         except (OSError, ValueError) as exc:
-            raise PersistentError("claude-plugin-definition-unreadable") from exc
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            ) from exc
         value = _read_claude_json(
             resolved, "claude-plugin-definition-unreadable", required=True
         )
         assert value is not None
         servers = value.get("mcpServers", value)
         if not isinstance(servers, dict):
-            raise PersistentError("claude-plugin-definition-unreadable")
-        sources.append(servers)
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=resolved
+            )
+        sources.append((servers, resolved))
     return sources
 
 
-def _inspect_claude_plugin(root: Path, connection: dict[str, Any]) -> None:
-    for servers in _plugin_server_maps(root):
+def _manifest_plugin_server_maps(
+    root: Path, *, required: bool
+) -> tuple[dict[str, Any] | None, list[tuple[dict[str, Any], Path]]]:
+    path = root / ".claude-plugin" / "plugin.json"
+    manifest = _read_claude_json(
+        path, "claude-plugin-definition-unreadable", required=required
+    )
+    if manifest is None or "mcpServers" not in manifest:
+        return manifest, []
+    return manifest, _declared_plugin_server_maps(
+        root, manifest["mcpServers"], path
+    )
+
+
+def _inspect_plugin_server_maps(
+    sources: Sequence[tuple[dict[str, Any], Path]], connection: dict[str, Any]
+) -> None:
+    for servers, source_path in sources:
         _mail_aliases(
-            servers, connection, "claude-plugin-definition-unreadable", plugin=True
+            servers,
+            connection,
+            "claude-plugin-definition-unreadable",
+            plugin=True,
+            source_path=source_path,
         )
 
 
-def _installed_claude_plugin_roots(config_root: Path, plugin_ids: set[str]) -> set[Path]:
+def _inspect_explicit_claude_plugin(
+    raw_root: Path, connection: dict[str, Any]
+) -> None:
+    root = _owned_claude_directory(raw_root, "claude-plugin-unavailable")
+    _manifest, manifest_sources = _manifest_plugin_server_maps(root, required=True)
+    _inspect_plugin_server_maps(
+        [*_plugin_root_server_maps(root), *manifest_sources], connection
+    )
+
+
+def _claude_plugins_root(config_root: Path, environment: dict[str, str]) -> Path:
+    configured = environment.get("CLAUDE_CODE_PLUGIN_CACHE_DIR")
+    if configured:
+        if "\x00" in configured:
+            raise PersistentError("claude-plugin-inventory-unreadable")
+        path = Path(configured)
+        if not path.is_absolute():
+            raise PersistentError("claude-plugin-inventory-unreadable")
+    else:
+        path = config_root / "plugins"
+    return _owned_claude_directory(
+        path,
+        "claude-plugin-inventory-unreadable",
+        hide_path=bool(configured),
+    )
+
+
+def _plugin_id_parts(plugin_id: str, source_path: Path) -> tuple[str, str]:
+    plugin_name, separator, marketplace_name = plugin_id.rpartition("@")
+    if (
+        not separator
+        or SAFE_NAME.fullmatch(plugin_name) is None
+        or SAFE_NAME.fullmatch(marketplace_name) is None
+    ):
+        raise PersistentError("claude-plugin-inventory-unreadable", path=source_path)
+    return plugin_name, marketplace_name
+
+
+def _marketplace_plugin_entry(
+    registry: dict[str, Any],
+    plugin_name: str,
+    marketplace_name: str,
+    registry_path: Path,
+) -> tuple[dict[str, Any], Path]:
+    marketplace = registry.get(marketplace_name)
+    if not isinstance(marketplace, dict) or not isinstance(
+        marketplace.get("installLocation"), str
+    ):
+        raise PersistentError("claude-plugin-marketplace-unreadable", path=registry_path)
+    raw_location = marketplace["installLocation"]
+    if "\x00" in raw_location or not Path(raw_location).is_absolute():
+        raise PersistentError("claude-plugin-marketplace-unreadable", path=registry_path)
+    location = _owned_claude_directory(
+        Path(raw_location),
+        "claude-plugin-marketplace-unreadable",
+        diagnostic_path=registry_path,
+    )
+    catalog_path = location / ".claude-plugin" / "marketplace.json"
+    catalog = _read_claude_json(
+        catalog_path, "claude-plugin-marketplace-unreadable", required=True
+    )
+    assert catalog is not None
+    entries = catalog.get("plugins")
+    if catalog.get("name") != marketplace_name or not isinstance(entries, list):
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    if any(
+        not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+        for entry in entries
+    ):
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    matches = [entry for entry in entries if entry["name"] == plugin_name]
+    if len(matches) != 1:
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    strict = matches[0].get("strict", True)
+    if type(strict) is not bool:
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    return matches[0], catalog_path
+
+
+def _installed_claude_plugins(
+    config_root: Path, environment: dict[str, str], plugin_ids: set[str]
+) -> list[tuple[Path, dict[str, Any], Path]]:
     if not plugin_ids:
-        return set()
+        return []
+    plugins_root = _claude_plugins_root(config_root, environment)
+    inventory_path = plugins_root / "installed_plugins.json"
     inventory = _read_claude_json(
-        config_root / "plugins" / "installed_plugins.json",
+        inventory_path,
         "claude-plugin-inventory-unreadable",
         required=True,
     )
     assert inventory is not None
     plugins = inventory.get("plugins")
     if not isinstance(plugins, dict):
-        raise PersistentError("claude-plugin-inventory-unreadable")
-    roots: set[Path] = set()
-    for plugin_id in plugin_ids:
+        raise PersistentError(
+            "claude-plugin-inventory-unreadable", path=inventory_path
+        )
+    registry_path = plugins_root / "known_marketplaces.json"
+    registry = _read_claude_json(
+        registry_path,
+        "claude-plugin-marketplace-unreadable",
+        required=True,
+    )
+    assert registry is not None
+    resolved: list[tuple[Path, dict[str, Any], Path]] = []
+    for plugin_id in sorted(plugin_ids):
+        plugin_name, marketplace_name = _plugin_id_parts(plugin_id, inventory_path)
         entries = plugins.get(plugin_id)
         if not isinstance(entries, list) or not entries:
-            raise PersistentError("claude-plugin-unavailable")
+            raise PersistentError("claude-plugin-unavailable", path=inventory_path)
+        marketplace_entry, catalog_path = _marketplace_plugin_entry(
+            registry,
+            plugin_name,
+            marketplace_name,
+            registry_path,
+        )
         for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("installPath"), str):
-                raise PersistentError("claude-plugin-inventory-unreadable")
-            path = Path(entry["installPath"])
-            if not path.is_absolute():
-                raise PersistentError("claude-plugin-inventory-unreadable")
-            try:
-                roots.add(path.resolve(strict=True))
-            except OSError as exc:
-                raise PersistentError("claude-plugin-unavailable") from exc
-    return roots
+            if not isinstance(entry, dict) or not isinstance(
+                entry.get("installPath"), str
+            ):
+                raise PersistentError(
+                    "claude-plugin-inventory-unreadable", path=inventory_path
+                )
+            raw_path = entry["installPath"]
+            if "\x00" in raw_path or not Path(raw_path).is_absolute():
+                raise PersistentError(
+                    "claude-plugin-inventory-unreadable", path=inventory_path
+                )
+            root = _owned_claude_directory(
+                Path(raw_path),
+                "claude-plugin-unavailable",
+                diagnostic_path=inventory_path,
+            )
+            resolved.append((root, marketplace_entry, catalog_path))
+    return resolved
+
+
+def _inspect_installed_claude_plugin(
+    root: Path,
+    marketplace_entry: dict[str, Any],
+    catalog_path: Path,
+    connection: dict[str, Any],
+) -> None:
+    strict = marketplace_entry.get("strict", True)
+    root_sources = _plugin_root_server_maps(root)
+    manifest, manifest_sources = _manifest_plugin_server_maps(
+        root, required=strict
+    )
+    if not strict and manifest is not None and any(
+        field in manifest for field in CLAUDE_PLUGIN_COMPONENT_FIELDS
+    ):
+        raise PersistentError(
+            "claude-plugin-definition-unreadable",
+            path=root / ".claude-plugin" / "plugin.json",
+        )
+    marketplace_sources: list[tuple[dict[str, Any], Path]] = []
+    if "mcpServers" in marketplace_entry:
+        marketplace_sources = _declared_plugin_server_maps(
+            root, marketplace_entry["mcpServers"], catalog_path
+        )
+    sources = [*root_sources, *marketplace_sources]
+    if strict:
+        sources.extend(manifest_sources)
+    _inspect_plugin_server_maps(sources, connection)
 
 
 def _claude_overlay_names(
@@ -856,11 +1078,15 @@ def _claude_overlay_names(
     if repository_local_settings is not None:
         settings_paths.append(repository_local_settings)
     enabled_plugins = _enabled_claude_plugins(settings_paths)
-    plugin_roots = _installed_claude_plugin_roots(
-        config_root, enabled_plugins | selected_plugins
+    installed_plugins = _installed_claude_plugins(
+        config_root, environment, enabled_plugins | selected_plugins
     )
-    for root in plugin_roots | explicit_plugin_dirs:
-        _inspect_claude_plugin(root, connection)
+    for root, marketplace_entry, catalog_path in installed_plugins:
+        _inspect_installed_claude_plugin(
+            root, marketplace_entry, catalog_path, connection
+        )
+    for root in explicit_plugin_dirs:
+        _inspect_explicit_claude_plugin(root, connection)
     return aliases or {"orrery-mail"}
 
 

@@ -219,9 +219,13 @@ strict を外しても raw Mail を再露出しないため、wrapper は Claude
 | user | 実効 `CLAUDE_CONFIG_DIR/.claude.json`、未指定時は実効 `HOME/.claude.json` の top-level `mcpServers` |
 | local project | 同じ user JSON の `projects[project root].mcpServers`。Git 内では `git rev-parse --show-toplevel`、Git 外では `working_directory` の exact key を使う |
 | project | profile の `working_directory` から filesystem root までの各 `.mcp.json`。Mail alias は同名 bound overlay へ入れ、無関係な定義は変更しない |
-| enabled plugin | 実効 user `settings.json`、同 working directory の `.claude/settings.json` / `settings.local.json`、Git repository の実効 root local `settings.local.json` の `enabledPlugins` を順に適用する。通常 checkout と separate gitdir は現在の checkout root、linked worktree は main checkout の root local を最後に適用する。型が正しい root、`.git`、`.claude`、解決した git metadata の owner が異なる場合だけ、Claude と同じく working directory の legacy local へ戻る。symlink / 型不明 / 検査不能は source を見落とさないよう拒否する。user config の `settings.local.json`、shared / local の中間祖先は Claude が読まないため source に含めない。実効 `plugins/installed_plugins.json` の各 `installPath` について root `.mcp.json` と manifest 内の inline / referenced `mcpServers` を検査 |
+| enabled plugin | 実効 user `settings.json`、同 working directory の `.claude/settings.json` / `settings.local.json`、Git repository の実効 root local `settings.local.json` の `enabledPlugins` を順に適用する。通常 checkout と separate gitdir は現在の checkout root、linked worktree は main checkout の root local を最後に適用する。型が正しい root、`.git`、`.claude`、解決した git metadata の owner が異なる場合だけ、Claude と同じく working directory の legacy local へ戻る。symlink / 型不明 / 検査不能は source を見落とさないよう拒否する。user config の `settings.local.json`、shared / local の中間祖先は Claude が読まないため source に含めない。installed plugin は実効 plugins root の inventory、marketplace registry、catalog と exact ID を照合して検査する |
 | selected plugin | `--channels plugin:...` と、caller が明示した `--dangerously-load-development-channels plugin:...` で選んだ installed plugin を enabled 状態とは別に検査。wrapper 自身は development selector を追加しない |
 | explicit plugin | profile の各 `--plugin-dir` を検査 |
+
+実効 plugins root は、profile environment に絶対 `CLAUDE_CODE_PLUGIN_CACHE_DIR` があればその directory、なければ実効 config root の `plugins/` です。plugins root と解決した `installPath` / `installLocation` は local user 所有かつ group / world 書込不可でなければ停止します。wrapper は `installed_plugins.json` の exact `name@marketplace` と `installPath`、`known_marketplaces.json` の exact marketplace と絶対 `installLocation`、その location の catalog にある exact plugin entry を順に照合し、cache directory 名から identity を推定しません。marketplace の `mcpServers` 参照も catalog directory ではなく inventory の `installPath` を基準に解決します。
+
+marketplace entry が `strict: false` なら manifest が無い plugin を許容し、entry の MCP 定義を検査します。現行 CLI の source precedence が変わっても Mail を見落とさない安全側の superset として、存在する root `.mcp.json` も検査します。manifest が component field を宣言していれば conflict として停止します。`strict: true` または省略なら manifest を必須とし、manifest、存在する root `.mcp.json`、marketplace entry をすべて検査します（root `.mcp.json` 自体は任意です）。source 間で同じ server 名があっても各定義を独立検査するため、benign 同士は許容し、一方でも Mail なら停止します。
 
 standalone source で Mail alias または同じ local Mail endpoint / 既知 runner を見つけると、その**同じ名前**だけを bound proxy へ向けた overlay に入れます。対応する名前は ASCII の大小を無視して `-` / `_` を除いた `orrerymail`、`agentmail`、`mcpagentmail`、`agentstackmail`、`agentstack` です。検出が0件のときだけ `orrery-mail` を1本生成します。たとえば既存が `agent-mail` だけなら `orrery-mail` を追加せず、生成名と案内は `agent-mail` です。実際の生成名は `AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES` に comma-separated で渡されます。
 
@@ -232,7 +236,7 @@ plugin 由来の同名置換は Claude の standalone precedence では抑止で
 - `working_directory` が symlink、Git discovery を変更する environment がある、または Git project root / separate gitdir / linked worktree の main checkout root を安全に確定できない: `claude-project-root-unsupported`。`.git` marker が無い通常の non-Git directory は対応する
 - macOS の `/Library/Application Support/ClaudeCode/managed-mcp.json` または `managed-settings.json` が存在する: `claude-managed-configuration-unsupported`。v1 は内容にかかわらず非対応で、1つの Mail 定義だけを書き換えても解除されない
 - profile command が `--settings`、`--setting-sources`、`--safe-mode`、caller-owned `--mcp-config` / `--strict-mcp-config` を持つ
-- 設定、plugin inventory、選択済み / enabled plugin、manifest 参照を読めない、または解釈できない
+- 設定、plugin inventory / marketplace registry / catalog、選択済み / enabled plugin、manifest / marketplace 参照を読めない、または解釈できない
 
 managed 設定は operator が管理者へ相談し、製品に reviewed managed support が入るまで起動しません。任意名の shell wrapper の内部接続までは判定できないため、alias 境界外で literal endpoint / 既知 runner にも一致しない定義は保証外です。設定本文、URL query、token を診断へ出さず、固定 reason と、該当する場合は原因 file の absolute `path` だけを返します。
 
@@ -324,7 +328,7 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 - `claude-project-root-unsupported`: stderr の `path` を確認し、`working_directory` の symlink、Git root、または worktree main checkout の解決を直す
 - `claude-managed-configuration-unsupported`: managed file が存在する v1 構成は停止し、管理者と reviewed support を検討する
 - `claude-plugin-mail-conflict`: plugin を operator が明示的に無効化するか `--plugin-dir` を外し、失う機能を確認する
-- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: stderr に `path` があればその file を直す。無い場合も hidden source を推測せず、固定 reason が示す config / plugin / command category を直す
+- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-marketplace-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: stderr に `path` があればその file を直す。無い場合も hidden source を推測せず、固定 reason が示す config / plugin / command category を直す
 
 secret file を手で直すこと、token 省略互換で所有を証明すること、alias で衝突を避けることは復旧ではありません。
 
