@@ -681,7 +681,10 @@ def test_reader_recovers_legacy_cleaned_child_home_receipt(
     assert state["transcript_path"] == str(rollout.resolve())
 
 
-@pytest.mark.parametrize("failure", ["outside-child-home", "wrong-session-id"])
+@pytest.mark.parametrize(
+    "failure",
+    ["outside-child-home", "outside-source-home", "wrong-session-id"],
+)
 def test_reader_does_not_broaden_legacy_receipt_recovery(
     binding_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -691,7 +694,16 @@ def test_reader_does_not_broaden_legacy_receipt_recovery(
     source_home = tmp_path / "source-codex-home"
     rollout = source_home / "sessions" / "2026" / "09" / "18" / "rollout.jsonl"
     rollout.parent.mkdir(parents=True)
-    _rollout(rollout, "another-session" if failure == "wrong-session-id" else SESSION_ID)
+    if failure == "outside-source-home":
+        outside = tmp_path / "outside-source-home" / "rollout.jsonl"
+        outside.parent.mkdir(parents=True)
+        _rollout(outside)
+        rollout.symlink_to(outside)
+    else:
+        _rollout(
+            rollout,
+            "another-session" if failure == "wrong-session-id" else SESSION_ID,
+        )
     if failure == "outside-child-home":
         stale = binding_env["runtime"] / "other" / "2026" / "09" / "18" / "rollout.jsonl"
     else:
@@ -1215,6 +1227,18 @@ def test_conflict_is_unconfirmed_even_if_the_stale_index_cannot_be_deleted(
 def test_null_transcript_is_unconfirmed_not_disabled(binding_env) -> None:
     launch_path, launch_id = _prepare(binding_env)
     assert _record(binding_env, launch_path, launch_id, transcript_path=None) == "no_transcript"
+    state = server._codex_history_binding(AGENT, now=200.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "no_transcript"
+
+
+def test_missing_transcript_is_unconfirmed_as_no_transcript(binding_env) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    missing = binding_env["transcript"].with_name("missing.jsonl")
+
+    assert record_mod.record_payload(
+        _payload(missing), launch_path=launch_path, launch_id=launch_id
+    ) == "no_transcript"
     state = server._codex_history_binding(AGENT, now=200.0)
     assert state["history_binding"] == "unconfirmed"
     assert state["history_binding_reason_code"] == "no_transcript"

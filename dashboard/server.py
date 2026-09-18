@@ -3019,7 +3019,13 @@ def _verified_codex_index(
         source_home = os.path.expanduser(
             os.environ.get("CODEX_HOME") or "~/.codex"
         )
-        recovered = os.path.realpath(os.path.join(source_home, "sessions", relative))
+        source_sessions = os.path.realpath(os.path.join(source_home, "sessions"))
+        recovered = os.path.realpath(os.path.join(source_sessions, relative))
+        try:
+            if os.path.commonpath([recovered, source_sessions]) != source_sessions:
+                return None
+        except ValueError:
+            return None
         if not os.path.isfile(recovered):
             return None
         real_transcript = recovered
