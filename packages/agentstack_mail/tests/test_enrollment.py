@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, ParamSpec
 
 import pytest
 from fastmcp import Client
@@ -22,6 +23,19 @@ from agentstack_mail.models import Agent, EnrollmentAudit, EnrollmentRequest, Pr
 
 
 CANARY = "enrollment-secret-canary-000000000000"
+P = ParamSpec("P")
+
+
+def _sync_async_test(
+    test: Callable[P, Awaitable[None]],
+) -> Callable[P, None]:
+    """Run one async fixture without depending on a pytest async plugin."""
+
+    @functools.wraps(test)
+    def run(*args: P.args, **kwargs: P.kwargs) -> None:
+        asyncio.run(test(*args, **kwargs))
+
+    return run
 
 
 async def _setup_database(
@@ -139,7 +153,7 @@ def _mutation(
     }
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_new_identity_must_use_existing_creation_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -160,7 +174,7 @@ async def test_fixture_new_identity_must_use_existing_creation_route(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_server_null_claim_migrates_and_restart_keeps_id_and_credential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -207,7 +221,7 @@ async def test_fixture_server_null_claim_migrates_and_restart_keeps_id_and_crede
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_server_token_local_loss_recover_then_inspect_normal_credential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -246,7 +260,7 @@ async def test_fixture_server_token_local_loss_recover_then_inspect_normal_crede
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_disconnect_retry_uses_same_request_and_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -273,7 +287,7 @@ async def test_fixture_disconnect_retry_uses_same_request_and_receipt(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_cas_conflict_wrong_authority_and_wrong_id_leave_credential_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,7 +337,7 @@ async def test_fixture_cas_conflict_wrong_authority_and_wrong_id_leave_credentia
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_active_save_failure_resumes_from_pending_without_new_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -358,7 +372,7 @@ async def test_fixture_active_save_failure_resumes_from_pending_without_new_toke
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_committed_request_status_failure_keeps_pending_for_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -407,7 +421,7 @@ async def test_fixture_committed_request_status_failure_keeps_pending_for_retry(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_uncommitted_request_status_failure_keeps_pending_for_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -449,7 +463,7 @@ async def test_fixture_uncommitted_request_status_failure_keeps_pending_for_retr
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_interruption_after_pending_save_retries_same_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -497,7 +511,7 @@ async def test_fixture_interruption_after_pending_save_retries_same_request(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 @pytest.mark.parametrize(
     ("trigger_name", "trigger_sql"),
     (
@@ -562,7 +576,7 @@ async def test_fixture_db_exception_rolls_back_without_secret_leak_and_same_requ
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_db_failure_keeps_pending_for_same_request_cli_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -596,7 +610,7 @@ async def test_fixture_db_failure_keeps_pending_for_same_request_cli_retry(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_unpinned_connection_requires_explicit_inspect_pin_before_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -628,7 +642,7 @@ async def test_fixture_unpinned_connection_requires_explicit_inspect_pin_before_
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_pinned_connection_rejects_socket_swap_to_another_mail_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -662,7 +676,7 @@ async def test_fixture_pinned_connection_rejects_socket_swap_to_another_mail_ins
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_stale_accepted_receipt_cannot_restore_superseded_credential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -710,7 +724,7 @@ async def test_fixture_stale_accepted_receipt_cannot_restore_superseded_credenti
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_parallel_cli_activation_serializes_and_keeps_current_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -734,7 +748,7 @@ async def test_fixture_parallel_cli_activation_serializes_and_keeps_current_toke
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_active_identity_metadata_blocks_other_authority_same_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -784,7 +798,7 @@ async def test_fixture_active_identity_metadata_blocks_other_authority_same_name
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_token_only_loss_with_same_identity_sidecar_can_recover(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -825,7 +839,7 @@ async def test_fixture_token_only_loss_with_same_identity_sidecar_can_recover(
         await db.dispose_database_for_shutdown()
 
 
-@pytest.mark.asyncio
+@_sync_async_test
 async def test_fixture_secret_canary_absent_from_result_audit_and_public_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -841,6 +855,11 @@ async def test_fixture_secret_canary_absent_from_result_audit_and_public_catalog
             audits = (await session.execute(select(EnrollmentAudit))).scalars().all()
             assert CANARY not in repr([row.model_dump() for row in audits])
         assert CANARY not in caplog.text
+        # The in-process public-catalog fixture must not inherit the developer's
+        # live management socket. It exercises MCP dispatch, while the isolated
+        # control socket above exercises enrollment.
+        monkeypatch.delenv("AGENTSTACK_MAIL_MANAGEMENT_SOCKET", raising=False)
+        get_settings.cache_clear()
         mcp = build_mcp_server()
         published = mcp.published_tool_names
         assert not {"inspect_enrollment", "claim_agent", "recover_agent", "agentstack_enroll"} & published
