@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### docs: ORRERY Mail の更新手順を installer の配置に合わせました
+
+`docs/agentstack-mail-update.md`（英語版も）は 8 月の手作業配置（`cutover-maintenance/` と pointer file）を前提にしていました。現在の配置では `install.sh` が「健康な listener があれば再利用、無ければ candidate を用意して起動」の二択で、更新は「`agentstack-mailctl stop` → installer」です。候補の事前 build、scratch port での offline 検証、autostart unit の退避、切替後の確認、`AGENTSTACK_MAIL_CANDIDATE_ID` による rollback を、実機で通した手順として書き直しました。dashboard の `/api/version` は Mail の切替の証拠にならないことも明記しています。
+
 ## 2026.09.17.1
 
 ### tool 引数の validation error が、引数の値ごと server log に出ていました（#49）
