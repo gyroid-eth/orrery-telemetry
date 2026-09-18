@@ -836,8 +836,8 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
         env=env,
         text=True,
         capture_output=True,
-        check=True,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
 
     python_lines = [
         line for line in result.stdout.splitlines() if line.startswith("python: ")
