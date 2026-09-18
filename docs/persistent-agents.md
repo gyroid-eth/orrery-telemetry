@@ -217,9 +217,9 @@ strict を外しても raw Mail を再露出しないため、wrapper は Claude
 | source | 検査と動作 |
 | --- | --- |
 | user | 実効 `CLAUDE_CONFIG_DIR/.claude.json`、未指定時は実効 `HOME/.claude.json` の top-level `mcpServers` |
-| local project | 同じ user JSON の `projects[working_directory].mcpServers`。exact key だけを使う |
-| project | profile の `working_directory` 直下の `.mcp.json` |
-| enabled plugin | 実効 user `settings.json`、同 working directory の `.claude/settings.json` / `settings.local.json` の `enabledPlugins` を順に適用し、実効 `plugins/installed_plugins.json` の各 `installPath` について root `.mcp.json` と manifest 内の inline / referenced `mcpServers` を検査 |
+| local project | 同じ user JSON の `projects[project root].mcpServers`。Git 内では `git rev-parse --show-toplevel`、Git 外では `working_directory` の exact key を使う |
+| project | profile の `working_directory` から filesystem root までの各 `.mcp.json`。Mail alias は同名 bound overlay へ入れ、無関係な定義は変更しない |
+| enabled plugin | 実効 user `settings.json`、同 working directory の `.claude/settings.json` / `settings.local.json`、Git repository の実効 root local `settings.local.json` の `enabledPlugins` を順に適用する。通常 checkout と separate gitdir は現在の checkout root、linked worktree は main checkout の root local を最後に適用する。型が正しい root、`.git`、`.claude`、解決した git metadata の owner が異なる場合だけ、Claude と同じく working directory の legacy local へ戻る。symlink / 型不明 / 検査不能は source を見落とさないよう拒否する。user config の `settings.local.json`、shared / local の中間祖先は Claude が読まないため source に含めない。実効 `plugins/installed_plugins.json` の各 `installPath` について root `.mcp.json` と manifest 内の inline / referenced `mcpServers` を検査 |
 | selected plugin | `--channels plugin:...` と、caller が明示した `--dangerously-load-development-channels plugin:...` で選んだ installed plugin を enabled 状態とは別に検査。wrapper 自身は development selector を追加しない |
 | explicit plugin | profile の各 `--plugin-dir` を検査 |
 
@@ -229,12 +229,12 @@ plugin 由来の同名置換は Claude の standalone precedence では抑止で
 
 次は有限契約の外なので、見落としたまま起動せず pre-exec で停止します。
 
-- `working_directory` が symlink、またはその上位 directory に `.mcp.json`、`.claude/settings.json`、`.claude/settings.local.json` がある（実効 user config と一致する `settings.json` だけは除く）: `claude-project-root-unsupported`。profile を Claude の実際の project root へ向け直す
+- `working_directory` が symlink、Git discovery を変更する environment がある、または Git project root / separate gitdir / linked worktree の main checkout root を安全に確定できない: `claude-project-root-unsupported`。`.git` marker が無い通常の non-Git directory は対応する
 - macOS の `/Library/Application Support/ClaudeCode/managed-mcp.json` または `managed-settings.json` が存在する: `claude-managed-configuration-unsupported`。v1 は内容にかかわらず非対応で、1つの Mail 定義だけを書き換えても解除されない
 - profile command が `--settings`、`--setting-sources`、`--safe-mode`、caller-owned `--mcp-config` / `--strict-mcp-config` を持つ
 - 設定、plugin inventory、選択済み / enabled plugin、manifest 参照を読めない、または解釈できない
 
-managed 設定は operator が管理者へ相談し、製品に reviewed managed support が入るまで起動しません。任意名の shell wrapper の内部接続までは判定できないため、alias 境界外で literal endpoint / 既知 runner にも一致しない定義は保証外です。設定本文、URL query、token を診断へ出さず、固定 reason だけを返します。
+managed 設定は operator が管理者へ相談し、製品に reviewed managed support が入るまで起動しません。任意名の shell wrapper の内部接続までは判定できないため、alias 境界外で literal endpoint / 既知 runner にも一致しない定義は保証外です。設定本文、URL query、token を診断へ出さず、固定 reason と、該当する場合は原因 file の absolute `path` だけを返します。
 
 Codex の `interactive` profile も本物の `codex` を `exec` します。wrapper は起動ごとに fresh session-binding expectation を作ります。SessionStart が公式 session ID / receipt を claim するまで idle が unbound でも正常です。`launch_kind=startup` は wrapper process の起動を表し、bridge 内の会話 resume とは別です。旧 Codex UI session の移行機能ではありません。
 
@@ -321,10 +321,10 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 - `identity-conflict` / `local-identity-conflict`: local file を別 identity の証明に流用しない
 - `agent-retired`: 正規の新規作成または retirement 運用へ戻る
 - `profile-already-running`: 既存 instance を停止または利用する
-- `claude-project-root-unsupported`: `working_directory` を実際の Claude project root へ直し、symlink / 祖先設定を残さない
+- `claude-project-root-unsupported`: stderr の `path` を確認し、`working_directory` の symlink、Git root、または worktree main checkout の解決を直す
 - `claude-managed-configuration-unsupported`: managed file が存在する v1 構成は停止し、管理者と reviewed support を検討する
 - `claude-plugin-mail-conflict`: plugin を operator が明示的に無効化するか `--plugin-dir` を外し、失う機能を確認する
-- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: 設定源を推測せず、表示された分類の config / plugin / command を修正する
+- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: stderr に `path` があればその file を直す。無い場合も hidden source を推測せず、固定 reason が示す config / plugin / command category を直す
 
 secret file を手で直すこと、token 省略互換で所有を証明すること、alias で衝突を避けることは復旧ではありません。
 

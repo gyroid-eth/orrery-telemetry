@@ -217,9 +217,9 @@ To keep raw Mail from being exposed after strict mode is removed, the wrapper ex
 | Source | Inspection and action |
 | --- | --- |
 | User | Top-level `mcpServers` in effective `CLAUDE_CONFIG_DIR/.claude.json`, or effective `HOME/.claude.json` when the former is unset |
-| Local project | `projects[working_directory].mcpServers` in the same user JSON; only the exact key is used |
-| Project | `.mcp.json` directly inside the profile's `working_directory` |
-| Enabled plugin | Apply `enabledPlugins` in effective user `settings.json`, then the working directory's `.claude/settings.json` and `settings.local.json`; for each effective `installPath` in `plugins/installed_plugins.json`, inspect root `.mcp.json` and inline/referenced `mcpServers` in the manifest |
+| Local project | `projects[project root].mcpServers` in the same user JSON; use the exact `git rev-parse --show-toplevel` key inside Git and the exact `working_directory` key outside Git |
+| Project | Every `.mcp.json` from the profile's `working_directory` through the filesystem root; put Mail aliases in same-named bound overlays and leave unrelated definitions unchanged |
+| Enabled plugin | Apply `enabledPlugins` from effective user `settings.json`, then the working directory's `.claude/settings.json` and legacy `settings.local.json`, then the Git repository's effective root-local `settings.local.json`. A normal checkout or separate gitdir uses the current checkout root; a linked worktree uses the main checkout root. The wrapper follows Claude's working-directory legacy-local fallback only when otherwise valid root, `.git`, `.claude`, or resolved Git metadata has a different owner. A symlink, unknown type, or inspection failure is rejected so it cannot hide a source. Claude does not read user-config `settings.local.json` or intermediate shared/local ancestors, so they are not sources. For each effective `installPath` in `plugins/installed_plugins.json`, inspect root `.mcp.json` and inline/referenced `mcpServers` in the manifest |
 | Selected plugin | Inspect installed plugins selected by `--channels plugin:...` and by a caller-supplied `--dangerously-load-development-channels plugin:...`, even when absent from the enabled map; the wrapper itself never adds a development selector |
 | Explicit plugin | Inspect every profile `--plugin-dir` |
 
@@ -229,12 +229,12 @@ Claude's standalone precedence cannot suppress a same-named server supplied by a
 
 The following are outside the finite contract and stop before `exec` instead of being overlooked:
 
-- `working_directory` is a symlink, or an ancestor contains `.mcp.json`, `.claude/settings.json`, or `.claude/settings.local.json` (except the `settings.json` that is exactly the effective user config): `claude-project-root-unsupported`; point the profile at Claude's actual project root
+- `working_directory` is a symlink, Git-discovery-changing environment is present, or the Git project root / separate gitdir / linked-worktree main-checkout root cannot be resolved safely: `claude-project-root-unsupported`. An ordinary non-Git directory with no `.git` marker is supported
 - macOS `/Library/Application Support/ClaudeCode/managed-mcp.json` or `managed-settings.json` exists: `claude-managed-configuration-unsupported`; v1 rejects either file regardless of its contents, so changing only one Mail entry does not bypass the refusal
 - the profile command contains `--settings`, `--setting-sources`, `--safe-mode`, or caller-owned `--mcp-config` / `--strict-mcp-config`
 - a configuration, plugin inventory, selected/enabled plugin, or manifest reference cannot be read or interpreted
 
-For managed configuration, the operator consults the administrator and startup remains blocked until reviewed managed support is added to the product. An arbitrarily renamed shell wrapper whose internal connection is not visible as a literal endpoint or known runner remains outside the guarantee. Diagnostics return fixed reasons without config bodies, URL queries, or tokens.
+For managed configuration, the operator consults the administrator and startup remains blocked until reviewed managed support is added to the product. An arbitrarily renamed shell wrapper whose internal connection is not visible as a literal endpoint or known runner remains outside the guarantee. Diagnostics return fixed reasons and, when applicable, only the absolute `path` of the responsible file; they do not return config bodies, URL queries, or tokens.
 
 An interactive Codex profile similarly `exec`s the real `codex`. The wrapper creates a fresh session-binding expectation on every run. It is normal for an idle composer to remain unbound until SessionStart claims the official session ID and receipt. `launch_kind=startup` describes wrapper process startup; it does not override a conversation resume inside a bridge. This does not migrate an old Codex UI session.
 
@@ -321,10 +321,10 @@ Stop instead of creating an alias or recovering automatically when you see:
 - `identity-conflict` / `local-identity-conflict`: do not reuse a local file as proof for another identity
 - `agent-retired`: return to the normal creation or retirement workflow
 - `profile-already-running`: use or stop the existing instance
-- `claude-project-root-unsupported`: point `working_directory` at the actual Claude project root and leave no symlink/ancestor settings outside the finite contract
+- `claude-project-root-unsupported`: use stderr's `path` to correct a `working_directory` symlink, Git-root resolution, or worktree main-checkout resolution
 - `claude-managed-configuration-unsupported`: v1 stops while a managed file exists; consult the administrator about reviewed product support
 - `claude-plugin-mail-conflict`: explicitly disable the plugin or remove `--plugin-dir`, after accounting for the features that will be lost
-- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: do not guess the hidden source; repair the config, plugin, or command category named by the fixed reason
+- `claude-config-unreadable` / `claude-project-config-unreadable` / `claude-settings-unreadable` / `claude-plugin-inventory-unreadable` / `claude-plugin-definition-unreadable` / `claude-plugin-unavailable` / `claude-settings-flag-unsupported`: repair stderr's `path` when present; otherwise do not guess the hidden source, and repair the config, plugin, or command category named by the fixed reason
 
 Hand-editing secret files, using token-omission compatibility as ownership proof, or avoiding a collision with an alias is not recovery.
 

@@ -29,6 +29,54 @@ def _write_executable(path: Path, body: str) -> Path:
     return path
 
 
+def _init_git_repository(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-q", str(path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _init_linked_worktree(repository: Path, linked: Path) -> None:
+    _init_git_repository(repository)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture.invalid@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            str(linked),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _fixture(
     tmp_path: Path,
     *,
@@ -185,6 +233,32 @@ def _install_claude_fixture_plugin(
     profile.write_text(json.dumps(value) + "\n", encoding="utf-8")
     profile.chmod(0o600)
     return config_root, plugin_root
+
+
+def _add_mail_fixture_plugin(
+    tmp_path: Path, config_root: Path, plugin_id: str = "mail-plugin@fixture"
+) -> str:
+    plugin_root = tmp_path / "mail-plugin"
+    (plugin_root / ".claude-plugin").mkdir(parents=True)
+    (plugin_root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "mail-plugin", "version": "0.0.1"}),
+        encoding="utf-8",
+    )
+    (plugin_root / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"agent-mail": {"command": "raw"}}}),
+        encoding="utf-8",
+    )
+    inventory_path = config_root / "plugins" / "installed_plugins.json"
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    inventory["plugins"][plugin_id] = [
+        {
+            "scope": "user",
+            "installPath": str(plugin_root),
+            "version": "0.0.1",
+        }
+    ]
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    return plugin_id
 
 
 def test_interactive_profile_exec_preserves_pty_stdin_and_channels_arguments(tmp_path: Path):
@@ -510,7 +584,7 @@ def test_claude_enabled_plugin_from_each_settings_scope_is_inspected(
     assert not marker.exists()
 
 
-def test_claude_default_home_user_settings_is_not_misclassified_as_ancestor(
+def test_claude_default_home_user_config_is_not_misclassified_as_project_settings(
     tmp_path: Path,
 ):
     marker = tmp_path / "command-ran"
@@ -530,6 +604,9 @@ def test_claude_default_home_user_settings_is_not_misclassified_as_ancestor(
         tmp_path, profile, config_root=home / ".claude"
     )
     (config_root / "settings.json").write_text("{}\n", encoding="utf-8")
+    (config_root / "settings.local.json").write_text(
+        "{ignored-user-local-canary", encoding="utf-8"
+    )
     profile_value = json.loads(profile.read_text(encoding="utf-8"))
     profile_value["working_directory"] = str(workdir)
     profile_value["environment"] = {"HOME": str(home)}
@@ -602,6 +679,354 @@ def test_claude_default_home_enabled_mail_plugin_is_still_inspected(tmp_path: Pa
     assert not marker.exists()
 
 
+def test_claude_git_root_local_settings_override_legacy_workdir_local(
+    tmp_path: Path,
+):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, _plugin_root = _install_claude_fixture_plugin(tmp_path, profile)
+    mail_plugin_id = _add_mail_fixture_plugin(tmp_path, config_root)
+    repository = tmp_path / "repository"
+    _init_git_repository(repository)
+    workdir = repository / "nested" / "work"
+    workdir.mkdir(parents=True)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+    (workdir / ".claude").mkdir()
+    (workdir / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: True}}), encoding="utf-8"
+    )
+    (repository / ".claude").mkdir()
+    (repository / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: False}}), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+def test_claude_separate_git_dir_uses_checkout_root_local_settings(tmp_path: Path):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, _plugin_root = _install_claude_fixture_plugin(tmp_path, profile)
+    mail_plugin_id = _add_mail_fixture_plugin(tmp_path, config_root)
+    repository = tmp_path / "separate-repository"
+    external_git_dir = tmp_path / "external-git-dir"
+    subprocess.run(
+        [
+            "git",
+            "init",
+            "-q",
+            f"--separate-git-dir={external_git_dir}",
+            str(repository),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    workdir = repository / "nested" / "work"
+    workdir.mkdir(parents=True)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+    (workdir / ".claude").mkdir()
+    (workdir / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: True}}), encoding="utf-8"
+    )
+    (repository / ".claude").mkdir()
+    (repository / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: False}}), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+def test_claude_linked_worktree_uses_main_checkout_local_settings(tmp_path: Path):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, _plugin_root = _install_claude_fixture_plugin(tmp_path, profile)
+    mail_plugin_id = _add_mail_fixture_plugin(tmp_path, config_root)
+    repository = tmp_path / "main-repository"
+    linked = tmp_path / "linked-worktree"
+    _init_linked_worktree(repository, linked)
+    workdir = linked / "nested" / "work"
+    workdir.mkdir(parents=True)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+    (workdir / ".claude").mkdir()
+    (workdir / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: True}}), encoding="utf-8"
+    )
+    (linked / ".claude").mkdir()
+    (linked / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: True}}), encoding="utf-8"
+    )
+    (repository / ".claude").mkdir()
+    (repository / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: False}}), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+def test_claude_git_root_local_mcp_entry_is_overlaid(tmp_path: Path):
+    record = tmp_path / "git-local-overlay.json"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude",
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "config = json.load(open(os.environ['AGENTSTACK_PERSISTENT_MCP_CONFIG']))\n"
+        f"open({str(record)!r}, 'w').write(json.dumps(config))\n",
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, _plugin_root = _install_claude_fixture_plugin(tmp_path, profile)
+    repository = tmp_path / "repository"
+    _init_git_repository(repository)
+    workdir = repository / "nested" / "work"
+    workdir.mkdir(parents=True)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+    (config_root / ".claude.json").write_text(
+        json.dumps(
+            {
+                "projects": {
+                    str(repository): {
+                        "mcpServers": {
+                            "mcp-agent-mail": {
+                                "url": "http://127.0.0.1:18765/mcp"
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(record.read_text(encoding="utf-8"))
+    assert set(value["mcpServers"]) == {"mcp-agent-mail"}
+
+
+def test_claude_missing_git_fails_closed_before_exec(tmp_path: Path):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    _install_claude_fixture_plugin(tmp_path, profile)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    _init_git_repository(Path(profile_value["working_directory"]))
+    profile_value["environment"] = {"PATH": str(tmp_path / "no-git")}
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-project-root-unsupported"
+    assert error["path"] == profile_value["working_directory"]
+    assert not marker.exists()
+
+
+def test_claude_non_git_workdir_is_an_explicit_supported_scope(tmp_path: Path):
+    namespace = runpy.run_path(str(LAUNCHER))
+    workdir = tmp_path / "plain-workdir"
+    workdir.mkdir()
+    project_root, root_local = namespace["_claude_project_scope"](
+        workdir, dict(os.environ)
+    )
+    assert project_root == workdir
+    assert root_local is None
+
+
+@pytest.mark.parametrize("exit_code", (1, 128, 137))
+def test_claude_git_discovery_abnormal_exit_fails_closed(
+    tmp_path: Path, exit_code: int
+):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    _install_claude_fixture_plugin(tmp_path, profile)
+    workdir = tmp_path / "broken-repository" / "work"
+    workdir.mkdir(parents=True)
+    (workdir.parent / ".git").mkdir()
+    fake_bin = tmp_path / "fake-bin"
+    _write_executable(fake_bin / "git", f"#!/bin/sh\nexit {exit_code}\n")
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile_value["environment"] = {"PATH": str(fake_bin)}
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-project-root-unsupported"
+    assert error["path"] == str(workdir)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("legacy_enabled", "root_enabled"), ((True, False), (False, True))
+)
+def test_claude_unknown_root_local_type_fails_closed_without_hiding_mail(
+    tmp_path: Path, legacy_enabled: bool, root_enabled: bool
+):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    config_root, _plugin_root = _install_claude_fixture_plugin(tmp_path, profile)
+    mail_plugin_id = _add_mail_fixture_plugin(tmp_path, config_root)
+    repository = tmp_path / "repository"
+    _init_git_repository(repository)
+    workdir = repository / "nested" / "work"
+    workdir.mkdir(parents=True)
+    profile_value = json.loads(profile.read_text(encoding="utf-8"))
+    profile_value["working_directory"] = str(workdir)
+    profile.write_text(json.dumps(profile_value) + "\n", encoding="utf-8")
+    profile.chmod(0o600)
+    (workdir / ".claude").mkdir()
+    (workdir / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: legacy_enabled}}),
+        encoding="utf-8",
+    )
+    redirected = tmp_path / "redirected-claude"
+    redirected.mkdir()
+    (redirected / "settings.local.json").write_text(
+        json.dumps({"enabledPlugins": {mail_plugin_id: root_enabled}}),
+        encoding="utf-8",
+    )
+    (repository / ".claude").symlink_to(redirected, target_is_directory=True)
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 2
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-project-root-unsupported"
+    assert error["path"] == str(repository / ".claude")
+    assert not marker.exists()
+
+
+def test_claude_root_local_owner_mismatch_selects_legacy_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    namespace = runpy.run_path(str(LAUNCHER))
+    repository = tmp_path / "repository"
+    git_dir = repository / ".git"
+    claude_dir = repository / ".claude"
+    git_dir.mkdir(parents=True)
+    claude_dir.mkdir()
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+    selected = namespace["_claude_root_local_settings"](
+        repository, repository, git_dir, git_dir, {"HOME": str(tmp_path / "home")}
+    )
+    assert selected is None
+
+
 def test_claude_explicit_plugin_directory_mail_conflict_blocks_exec(tmp_path: Path):
     marker = tmp_path / "command-ran"
     fake_claude = _write_executable(
@@ -642,10 +1067,11 @@ def test_claude_explicit_plugin_directory_mail_conflict_blocks_exec(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    "relative",
-    (".mcp.json", ".claude/settings.json", ".claude/settings.local.json"),
+    "relative", (".claude/settings.json", ".claude/settings.local.json")
 )
-def test_claude_ancestor_project_config_blocks_exec(tmp_path: Path, relative: str):
+def test_claude_non_effective_ancestor_settings_do_not_block_exec(
+    tmp_path: Path, relative: str
+):
     marker = tmp_path / "command-ran"
     fake_claude = _write_executable(
         tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
@@ -659,7 +1085,76 @@ def test_claude_ancestor_project_config_blocks_exec(tmp_path: Path, relative: st
     _install_claude_fixture_plugin(tmp_path, profile)
     ancestor_config = tmp_path / relative
     ancestor_config.parent.mkdir(parents=True, exist_ok=True)
-    ancestor_config.write_text("{}\n", encoding="utf-8")
+    ancestor_config.write_text("{ignored-ancestor-canary", encoding="utf-8")
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+def test_claude_ancestor_project_mcp_mail_alias_is_overlaid(tmp_path: Path):
+    record = tmp_path / "ancestor-overlay.json"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude",
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "config = json.load(open(os.environ['AGENTSTACK_PERSISTENT_MCP_CONFIG']))\n"
+        f"open({str(record)!r}, 'w').write(json.dumps(config))\n",
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    _install_claude_fixture_plugin(tmp_path, profile)
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "agent-mail": {"url": "http://127.0.0.1:18765/mcp"},
+                    "unrelated": {"command": "unrelated"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(LAUNCHER), "run", "--profile", str(profile)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(record.read_text(encoding="utf-8"))
+    assert set(value["mcpServers"]) == {"agent-mail"}
+
+
+def test_claude_malformed_ancestor_project_mcp_reports_path_without_content(
+    tmp_path: Path,
+):
+    marker = tmp_path / "command-ran"
+    fake_claude = _write_executable(
+        tmp_path / "bin" / "claude", f"#!/bin/sh\ntouch {str(marker)!r}\n"
+    )
+    profile, _runtime, _state, env = _fixture(
+        tmp_path,
+        interaction="interactive",
+        provider="claude",
+        command=[str(fake_claude), "--channels", "plugin:dummy-channel@fixture"],
+    )
+    _install_claude_fixture_plugin(tmp_path, profile)
+    ancestor_config = tmp_path / ".mcp.json"
+    canary = "SECRET-ANCESTOR-CONFIG-CANARY"
+    ancestor_config.write_text("{" + canary, encoding="utf-8")
+
     result = subprocess.run(
         [str(LAUNCHER), "run", "--profile", str(profile)],
         env=env,
@@ -668,7 +1163,10 @@ def test_claude_ancestor_project_config_blocks_exec(tmp_path: Path, relative: st
         timeout=15,
     )
     assert result.returncode == 2
-    assert json.loads(result.stderr)["reason"] == "claude-project-root-unsupported"
+    error = json.loads(result.stderr)
+    assert error["reason"] == "claude-project-config-unreadable"
+    assert error["path"] == str(ancestor_config)
+    assert canary not in result.stderr
     assert not marker.exists()
 
 

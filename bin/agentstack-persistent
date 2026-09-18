@@ -42,6 +42,9 @@ CLAUDE_MANAGED_FILES = (
     Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
 )
 CLAUDE_EXTRA_SETTINGS_FLAGS = frozenset({"--settings", "--setting-sources", "--safe-mode"})
+CLAUDE_GIT_DISCOVERY_ENV = frozenset(
+    {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+)
 ALLOWED_PROFILE_KEYS = {
     "kind",
     "name",
@@ -63,7 +66,9 @@ ALLOWED_PROFILE_KEYS = {
 
 
 class PersistentError(RuntimeError):
-    pass
+    def __init__(self, reason: str, *, path: Path | None = None) -> None:
+        super().__init__(reason)
+        self.path = path
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -350,14 +355,14 @@ def _read_claude_json(path: Path, reason: str, *, required: bool = False) -> dic
         descriptor = os.open(path, flags)
     except FileNotFoundError:
         if required:
-            raise PersistentError(reason) from None
+            raise PersistentError(reason, path=path) from None
         return None
     except OSError as exc:
-        raise PersistentError(reason) from exc
+        raise PersistentError(reason, path=path) from exc
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            raise PersistentError(reason)
+            raise PersistentError(reason, path=path)
         chunks: list[bytes] = []
         length = 0
         while length <= 8_388_608:
@@ -370,13 +375,13 @@ def _read_claude_json(path: Path, reason: str, *, required: bool = False) -> dic
     finally:
         os.close(descriptor)
     if len(raw) > 8_388_608:
-        raise PersistentError(reason)
+        raise PersistentError(reason, path=path)
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PersistentError(reason) from exc
+        raise PersistentError(reason, path=path) from exc
     if not isinstance(value, dict):
-        raise PersistentError(reason)
+        raise PersistentError(reason, path=path)
     return value
 
 
@@ -438,16 +443,21 @@ def _server_points_to_mail(server: dict[str, Any], expected_url: str) -> bool:
 
 
 def _mail_aliases(
-    servers: Any, connection: dict[str, Any], reason: str, *, plugin: bool = False
+    servers: Any,
+    connection: dict[str, Any],
+    reason: str,
+    *,
+    plugin: bool = False,
+    source_path: Path | None = None,
 ) -> set[str]:
     if servers is None:
         return set()
     if not isinstance(servers, dict):
-        raise PersistentError(reason)
+        raise PersistentError(reason, path=source_path)
     aliases: set[str] = set()
     for raw_name, server in servers.items():
         if not isinstance(raw_name, str) or not isinstance(server, dict):
-            raise PersistentError(reason)
+            raise PersistentError(reason, path=source_path)
         matches = _looks_like_mail(raw_name) or _server_points_to_mail(
             server, connection["mcp_url"]
         )
@@ -526,36 +536,173 @@ def _claude_command_plugins(command: Sequence[str], workdir: Path) -> tuple[set[
 
 
 def _reject_managed_claude_config(paths: Sequence[Path] = CLAUDE_MANAGED_FILES) -> None:
-    if any(os.path.lexists(path) for path in paths):
-        raise PersistentError("claude-managed-configuration-unsupported")
+    for path in paths:
+        if os.path.lexists(path):
+            raise PersistentError("claude-managed-configuration-unsupported", path=path)
 
 
-def _reject_ancestor_claude_config(workdir: Path, user_settings: Path) -> None:
-    for ancestor in workdir.parents:
-        for relative in (
-            Path(".mcp.json"),
-            Path(".claude/settings.json"),
-            Path(".claude/settings.local.json"),
-        ):
-            candidate = ancestor / relative
-            if candidate == user_settings:
-                continue
-            if os.path.lexists(candidate):
-                raise PersistentError("claude-project-root-unsupported")
+def _claude_project_scope(
+    workdir: Path, environment: dict[str, str]
+) -> tuple[Path, Path | None]:
+    if any(environment.get(name) for name in CLAUDE_GIT_DISCOVERY_ENV):
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    git_marker = next(
+        (
+            directory / ".git"
+            for directory in (workdir, *workdir.parents)
+            if os.path.lexists(directory / ".git")
+        ),
+        None,
+    )
+    if git_marker is None:
+        return workdir, None
+    git = shutil.which("git", path=environment.get("PATH"))
+    if git is None:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    try:
+        result = subprocess.run(
+            [
+                git,
+                "-C",
+                str(workdir),
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+                "--git-dir",
+                "--git-common-dir",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+    if result.returncode != 0:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    lines = result.stdout.splitlines()
+    if len(lines) != 3:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    try:
+        project_root = Path(lines[0]).resolve(strict=True)
+        git_dir = Path(lines[1]).resolve(strict=True)
+        common_dir = Path(lines[2]).resolve(strict=True)
+        workdir.relative_to(project_root)
+    except (OSError, ValueError) as exc:
+        raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+    if git_marker != project_root / ".git":
+        raise PersistentError("claude-project-root-unsupported", path=git_marker)
+    main_root = project_root
+    if git_dir != common_dir:
+        try:
+            listing = subprocess.run(
+                [git, "-C", str(workdir), "worktree", "list", "--porcelain", "-z"],
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+        if listing.returncode != 0:
+            raise PersistentError("claude-project-root-unsupported", path=workdir)
+        roots = [
+            field.removeprefix("worktree ")
+            for field in listing.stdout.split("\0")
+            if field.startswith("worktree ")
+        ]
+        try:
+            resolved_roots = [Path(root).resolve(strict=True) for root in roots]
+        except OSError as exc:
+            raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+        if not resolved_roots or project_root not in resolved_roots:
+            raise PersistentError("claude-project-root-unsupported", path=workdir)
+        main_root = resolved_roots[0]
+    root_local = _claude_root_local_settings(
+        project_root, main_root, git_dir, common_dir, environment
+    )
+    return project_root, root_local
+
+
+def _claude_root_local_settings(
+    project_root: Path,
+    main_root: Path,
+    git_dir: Path,
+    common_dir: Path,
+    environment: dict[str, str],
+) -> Path | None:
+    home = environment.get("HOME")
+    if home:
+        try:
+            resolved_home = Path(home).resolve(strict=True)
+        except OSError:
+            resolved_home = None
+        if resolved_home in {project_root, main_root}:
+            return None
+    claude_dir = main_root / ".claude"
+    try:
+        claude_info = claude_dir.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PersistentError(
+            "claude-project-root-unsupported", path=claude_dir
+        ) from exc
+    uid = os.getuid()
+    directory_paths = {project_root, main_root, git_dir, common_dir}
+    entry_paths = {project_root / ".git", main_root / ".git"}
+    try:
+        for path in directory_paths:
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise PersistentError(
+                    "claude-project-root-unsupported", path=path
+                )
+            if info.st_uid != uid:
+                return None
+        for path in entry_paths:
+            info = path.lstat()
+            if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                raise PersistentError(
+                    "claude-project-root-unsupported", path=path
+                )
+            if info.st_uid != uid:
+                return None
+    except OSError as exc:
+        raise PersistentError(
+            "claude-project-root-unsupported", path=path
+        ) from exc
+    if not stat.S_ISDIR(claude_info.st_mode):
+        raise PersistentError("claude-project-root-unsupported", path=claude_dir)
+    if claude_info.st_uid != uid:
+        return None
+    return claude_dir / "settings.local.json"
+
+
+def _claude_project_mcp_paths(workdir: Path) -> tuple[Path, ...]:
+    return tuple(directory / ".mcp.json" for directory in (workdir, *workdir.parents))
 
 
 def _enabled_claude_plugins(paths: Sequence[Path]) -> set[str]:
     enabled: dict[str, bool] = {}
+    seen: set[Path] = set()
     for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
         value = _read_claude_json(path, "claude-settings-unreadable")
         if value is None or "enabledPlugins" not in value:
             continue
         plugins = value["enabledPlugins"]
         if not isinstance(plugins, dict):
-            raise PersistentError("claude-settings-unreadable")
+            raise PersistentError("claude-settings-unreadable", path=path)
         for plugin_id, state in plugins.items():
             if not isinstance(plugin_id, str) or type(state) is not bool:
-                raise PersistentError("claude-settings-unreadable")
+                raise PersistentError("claude-settings-unreadable", path=path)
             enabled[plugin_id] = state
     return {plugin_id for plugin_id, state in enabled.items() if state}
 
@@ -658,46 +805,57 @@ def _claude_overlay_names(
     except OSError as exc:
         raise PersistentError("working-directory-unavailable") from exc
     if resolved_workdir != workdir:
-        raise PersistentError("claude-project-root-unsupported")
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
     selected_plugins, explicit_plugin_dirs = _claude_command_plugins(command, workdir)
     _reject_managed_claude_config()
     config_root, user_json_path = _claude_config_paths(environment)
-    _reject_ancestor_claude_config(workdir, config_root / "settings.json")
+    project_root, repository_local_settings = _claude_project_scope(
+        workdir, environment
+    )
     user_json = _read_claude_json(user_json_path, "claude-config-unreadable") or {}
     aliases = _mail_aliases(
-        user_json.get("mcpServers"), connection, "claude-config-unreadable"
+        user_json.get("mcpServers"),
+        connection,
+        "claude-config-unreadable",
+        source_path=user_json_path,
     )
     projects = user_json.get("projects")
     if projects is not None:
         if not isinstance(projects, dict):
-            raise PersistentError("claude-config-unreadable")
-        local = projects.get(str(workdir))
+            raise PersistentError("claude-config-unreadable", path=user_json_path)
+        local = projects.get(str(project_root))
         if local is not None:
             if not isinstance(local, dict):
-                raise PersistentError("claude-config-unreadable")
+                raise PersistentError("claude-config-unreadable", path=user_json_path)
             aliases.update(
                 _mail_aliases(
-                    local.get("mcpServers"), connection, "claude-config-unreadable"
+                    local.get("mcpServers"),
+                    connection,
+                    "claude-config-unreadable",
+                    source_path=user_json_path,
                 )
             )
-    project_mcp = _read_claude_json(
-        workdir / ".mcp.json", "claude-project-config-unreadable"
-    )
-    if project_mcp is not None:
-        aliases.update(
-            _mail_aliases(
-                project_mcp.get("mcpServers"),
-                connection,
-                "claude-project-config-unreadable",
+    for project_mcp_path in _claude_project_mcp_paths(workdir):
+        project_mcp = _read_claude_json(
+            project_mcp_path, "claude-project-config-unreadable"
+        )
+        if project_mcp is not None:
+            aliases.update(
+                _mail_aliases(
+                    project_mcp.get("mcpServers"),
+                    connection,
+                    "claude-project-config-unreadable",
+                    source_path=project_mcp_path,
+                )
             )
-        )
-    enabled_plugins = _enabled_claude_plugins(
-        (
-            config_root / "settings.json",
-            workdir / ".claude" / "settings.json",
-            workdir / ".claude" / "settings.local.json",
-        )
-    )
+    settings_paths = [
+        config_root / "settings.json",
+        workdir / ".claude" / "settings.json",
+        workdir / ".claude" / "settings.local.json",
+    ]
+    if repository_local_settings is not None:
+        settings_paths.append(repository_local_settings)
+    enabled_plugins = _enabled_claude_plugins(settings_paths)
     plugin_roots = _installed_claude_plugin_roots(
         config_root, enabled_plugins | selected_plugins
     )
@@ -1101,12 +1259,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             return
         _run(profile_path)
     except PersistentError as exc:
+        error = {"ok": False, "reason": str(exc), "docs": DOCS}
+        if exc.path is not None:
+            error["path"] = str(exc.path)
         print(
-            json.dumps(
-                {"ok": False, "reason": str(exc), "docs": DOCS},
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
+            json.dumps(error, sort_keys=True, separators=(",", ":")),
             file=sys.stderr,
         )
         raise SystemExit(2) from None
