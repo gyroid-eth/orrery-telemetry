@@ -243,6 +243,10 @@ def record_payload(
         transcript_path = Path(transcript).expanduser()
         if _header_session_id(transcript_path) != session_id:
             return reject("id_mismatch", session_id)
+        try:
+            real_transcript_path = transcript_path.resolve(strict=True)
+        except OSError:
+            return reject("id_mismatch", session_id)
 
         # Commit a fresh nonce into launch authority before writing its receipt.
         # If the receipt write fails, an old index cannot validate against it.
@@ -270,7 +274,10 @@ def record_payload(
             "receipt_id": transitioned["receipt_id"],
             "launch_kind": launch["launch_kind"],
             "session_id": session_id,
-            "transcript_path": str(transcript_path),
+            # A child-specific CODEX_HOME links sessions to the shared Codex
+            # home, then normal cleanup removes that child home.  Persist the
+            # regular file instead of the disposable symlink route.
+            "transcript_path": str(real_transcript_path),
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
