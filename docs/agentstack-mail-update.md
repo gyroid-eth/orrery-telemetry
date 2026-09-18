@@ -2,131 +2,183 @@
 
 > English version: [agentstack-mail-update.en.md](agentstack-mail-update.en.md)
 
-third-party server からの一度限りの authority handoff は過去の出来事であり、その
-runbook は公開されていません。この文書が扱うのは、それ以降のすべての deployment
-です。つまり、すでに production traffic を捌いている machine へ `agentstack_mail`
-の新しい build を出荷することです。
+この文書は、すでに traffic を捌いている machine へ `agentstack_mail` の新しい
+build を出荷する手順です。同梱 service が唯一の provider になって以降
+`scripts/install.sh` が管理している配置を前提にしています。それ以前に
+`cutover-maintenance/` の下で手作業していた配置は過去のもので、installer が
+書くものはどれもそれを参照しません。
+
+## installer がすること・しないこと
+
+`install.sh` は毎回 hooks・skills・dashboard・`bin/`・`env.sh`・autostart unit を
+更新します。ORRERY Mail については次のどちらか一方だけを行います。
+
+- **設定された endpoint に健康な listener が応答している** → その listener が
+  使っている render を採用して `env.sh` に記録し、service には**触りません**。
+  通常の再実行はすべてこちらで、つまり再実行だけでは Mail の build は決して
+  切り替わりません。dashboard の `/api/version` は package の版であって、Mail の
+  port の裏にある build ではありません。
+- **何も応答していない** → checkout の正確な commit で candidate を用意し、新しい
+  service env を render し、`agentstack-mailctl` で起動し、`env.sh` と autostart
+  unit を新しい render に向け、配信される database が共有のものであることを
+  確かめます。
+
+したがって更新とは「古い service を止めてから installer を走らせる」ことです。
+
+## 配置
+
+すべて install dir（既定 `~/.agentstack`）の下です。
+
+| Path | 意味 |
+| --- | --- |
+| `mail-service/candidates/<commit>/venv` | 不変の candidate。正確な commit ごとに 1 つの venv で、`packages/agentstack_mail` から `uv` で build する。作成後に install も編集もしない |
+| `mail-service/renders/<commit>-<hash>/service.env`, `run-agentstack-mail.sh` | deployment ごとに 1 つの render。hash は venv・endpoint・state root から決まるので、新しい deployment は必ず新しい directory になる |
+| `mail-service/runtime/agentstack-mail.pid` | 2 行。runner の pid と runner の path |
+| `mail-service/runtime/agentstack-mail.log` | 稼働中 build の server log |
+| `mail/storage.sqlite3`, `mail/archive`, `mail/signals` | 共有 state。どの candidate にも属さず、deployment をまたいで固定 |
+| `env.sh` → `AGENTSTACK_MAIL_ENV` | controller と autostart unit がどの render を起動するか |
+
+autostart unit（launchd では `org.agentstack.mail` が 300 秒ごと、systemd では
+同じ label の `.timer`）は `agentstack-mailctl start` を実行し、それは `env.sh`
+を読みます。自前の candidate を持つ第二の supervisor はありません。
 
 ## 原則
 
-- **Candidate は immutable。** 稼働中の job が使う venv へ install・upgrade・edit
-  してはいけません。commit を正確な名前で示した新しい venv
-  （`final-candidate-<sha>/venv`）を build し、検証してから launchd をそちらへ
-  切り替えます。前の candidate は disk 上に手を付けずに残す——それが rollback
-  そのものです。
-- **deployment ごとに render は 1 つ。** ある deployment の plist、env file、
-  ownership manifest は 1 つの render directory にまとめて置き、`start` の後は
-  一切編集しません。新しい deployment には新しい render directory が要ります。
-- **database は shared state であり、candidate の一部ではない。**
-  `--state-root` は deployment をまたいで固定です。`ensure_schema` が schema を
-  変えてしまう build には専用の migration plan が要り、ここでは扱いません。
-- **切り替える前に検証する。切り替えた後ではない。** production に影響してよい
-  step は stop/start の対だけです。それより前はすべて scratch port と scratch
-  database に対して実行します。
+- **candidate は不変。** 新しい build は新しい `candidates/<commit>` directory。
+  前のものは disk に手つかずで残り、それが rollback です。
+- **database は共有 state。** 起動時に schema を変える build には専用の
+  migration plan が要り、ここでは扱いません。始める前に
+  `packages/agentstack_mail/src` の tree diff に DDL が無いことを見ます。
+- **切り替える前に検証する。後ではない。** 停止より前のことはすべて scratch
+  port と database の scratch copy に対して行います。
+- **どの build が応答しているかは port に聞く。** `launchctl print` でも自分の
+  メモでも package の版でもなく。
 
 ## 手順
 
-定義: `MAINT=~/.agentstack/cutover-maintenance`、`SHA` = deploy する正確な
-commit、`NEW=$MAINT/final-candidate-$SHA`。
+`REPO` は deploy する正確な commit の汚れのない checkout、`SHA` はその commit、
+`INSTALL` は install dir です。
 
-1. **正確な commit から candidate を build する。**
+1. **その commit で test suite を gate する**（dev venv、`CONTRIBUTING.md`
+   参照）: `PYTHONPATH=. .venv/bin/python -m pytest -q` が汚れのない単発の run で
+   green、かつ package 自身の suite `packages/agentstack_mail/tests` も green。
 
-   ```bash
-   git -C <repo> rev-parse HEAD          # must equal $SHA; a dirty tree disqualifies
-   python3 -m venv "$NEW/venv"
-   "$NEW/venv/bin/pip" install <repo>/packages/agentstack_mail
-   ```
-
-2. **その commit で test suite を gate する**（dev venv。`CONTRIBUTING.md`
-   参照）: `PYTHONPATH=. .venv/bin/python -m pytest -q` が、汚れのない単発の
-   run で green であること。
-
-3. **candidate を offline で検証する。** 稼働中の env file を copy し、port
-   だけを変え、database は scratch copy を指すようにして、candidate を
-   foreground で走らせます。production が必要とするものを probe します——
-   最低限、canonical path と**各 alias**（`/api/`、`/mcp`）への `health_check`
-   `tools/call`、それに代表的な read を 1 つ（`whois`）。
-
-4. **新しい deployment を render する**（新しい directory、稼働中の env 値）:
+2. **candidate を先に build する。** outage に `pip install` を含めないためです。
+   installer が行うのと同じ操作で、installer はこの path に完全な candidate が
+   あればそれを再利用します。
 
    ```bash
-   "$NEW/venv/bin/agentstack-mail-service" render \
-     --output-dir "$MAINT/deploy-$SHA-$(date +%Y%m%d%H%M)/render" \
-     --service-executable "$NEW/venv/bin/agentstack-mail-service" \
-     --server-executable  "$NEW/venv/bin/agentstack-mail" \
-     --env-file  <live env file copied into the new render dir> \
-     --state-root ~/.agentstack/mail \
-     --label org.orrery.mail
+   PY=$(sed -n 's/^export AGENTSTACK_PYTHON=//p' "$INSTALL/env.sh" | tr -d "'\"")
+   V="$INSTALL/mail-service/candidates/$SHA/venv"
+   git -C "$REPO" status --porcelain -- packages/agentstack_mail   # 空であること
+   uv venv --python "$PY" "$V"
+   uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail"
+   ls "$V/bin/agentstack-mail" "$V/bin/agentstack-mail-service" "$V/bin/agentstack-mail-migrate"
    ```
 
-   `AGENTSTACK_MAIL_LEGACY_LAUNCHD_*` の key は残してください。`service_start`
-   の同一 port に対する production guard がまだそれらを要求します。
-
-5. **切り替える。** ここが outage window です（分ではなく秒単位）:
+3. **candidate を offline で検証する。** 稼働中の `service.env` を copy し、port を
+   変え、database・archive・signals を scratch path に向けて、candidate を
+   foreground で走らせ、production が必要とするものを probe します。canonical
+   path **と各 alias**（`/mcp`、`/api`）への `health_check` `tools/call`、代表的な
+   read を 1 つ（`whois`）。変更が引数の扱いや logging に触れるなら、tool が
+   拒否すべき request も送り、その拒否が応答にも scratch log にも呼び手由来の
+   値を含まないことを確かめます。
 
    ```bash
-   "$NEW/venv/bin/agentstack-mail-service" stop  --ownership-manifest <OLD render>/org.orrery.mail.ownership.json
-   "$NEW/venv/bin/agentstack-mail-service" start --ownership-manifest <NEW render>/org.orrery.mail.ownership.json
+   S=$(mktemp -d); mkdir -p "$S/state/archive" "$S/state/signals"
+   cp "$INSTALL/mail/storage.sqlite3" "$S/state/"
+   LIVE=$(sed -n 's/^export AGENTSTACK_MAIL_ENV=//p' "$INSTALL/env.sh")
+   sed -e 's#^AGENTSTACK_MAIL_HTTP_PORT=.*#AGENTSTACK_MAIL_HTTP_PORT=18799#' \
+       -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
+       -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
+       -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
+       "$LIVE" > "$S/service.env"
+   AGENTSTACK_MAIL_ENV_FILE="$S/service.env" "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
+   # ... http://127.0.0.1:18799/mcp と /api を probe してから kill %1
    ```
 
-6. **mail を再起動させる仕組みを新しい deployment へ向ける。** login を越えて
-   service を稼働させ続ける machine には、たいてい supervisor がいます——ここ
-   では、endpoint が応答しないときに 5 分おきに mail を起動する launchd job
-   です。それが自分自身の candidate と manifest を持っている場合、
-   `stop`/`start` だけでは deployment が終わっていません。次に何らかの理由で
-   mail が静かになったとき、その supervisor は*古い* build を呼び戻し、
-   endpoint が再び応答するために rollback は誰にも気づかれません。
-
-   これは仮定の話ではありません。`72b76aa` の 2026-08-25 の deployment は、まさに
-   このパスによって 2026-08-26 14:37 に undo され、2 日後に無関係な bug report
-   が来るまで誰も気づきませんでした。
-
-   supervisor の target は、deployment が更新する 1 か所にまとめておきます——
-   script に焼き込んだ path ではなく、supervisor が読む pointer file にします:
+4. **autostart unit をどかす。** unit は `env.sh` が指すものを起動し、この窓の
+   間それはまだ古い render です。あなたの停止と installer の起動の間に unit が
+   発火すると古い build が戻り、installer はそれを採用してしまいます。
 
    ```bash
-   cat > ~/.agentstack/mail/runtime/current-deployment.env <<EOF
-   ORRERY_MAIL_SERVICE=$NEW/venv/bin/agentstack-mail-service
-   ORRERY_MAIL_MANIFEST=$MAINT/deploy-.../render/org.orrery.mail.ownership.json
-   EOF
+   launchctl bootout "gui/$(id -u)/org.agentstack.mail"      # macOS
+   systemctl --user stop org.agentstack.mail.timer              # systemd
    ```
 
-   そのうえで、立ち去る前に supervisor が新しい path を解決していることを
-   確認します。
+   installer は run の最後で unit を登録し直します。
 
-7. **production を確かめてから完了と言う。** `launchctl print` の state が
-   goal ではありません。step 3 の probe を実際の port に対して繰り返し、
-   配信されている database file が production のものであることを確認します
-   （`health_check` が `database_url` を報告します）。probe、`$SHA`、両方の
-   render path を deployment note に記録します。
+5. **止めて、install する。** ここが outage window です。candidate を先に build
+   した状態で、1 台で測った値は停止から ready まで 12 秒でした。
+
+   ```bash
+   "$INSTALL/bin/agentstack-mailctl" stop
+   cd "$REPO" && bash scripts/install.sh --scoped     # あなたの install が使う flag を添えて
+   ```
+
+   installer の出力に期待する行: `no native listener found`、
+   `reuse immutable ORRERY Mail candidate venv .../candidates/$SHA/venv`、
+   `render namespaced ORRERY Mail service env .../renders/$SHA-<hash>/service.env`、
+   `ORRERY Mail started (pid ..., ready after Ns)`、
+   `ORRERY Mail will restart at login`。前の `env.sh` を source 済みの shell で
+   構いません。installer は自分が書いた管理下の render path を認識し、新しい
+   render を解決します。それ**以外**の `AGENTSTACK_MAIL_ENV` の値は意図的に run
+   を止めます。
+
+6. **production を確かめてから完了と言う。**
+
+   ```bash
+   pid=$(lsof -nP -iTCP:8765 -sTCP:LISTEN | awk 'NR>1{print $2}')
+   ps -o command= -p "$pid"                      # .../candidates/$SHA/venv/bin/python
+   sed -n 's/^export AGENTSTACK_MAIL_ENV=//p' "$INSTALL/env.sh"   # .../renders/$SHA-<hash>/service.env
+   launchctl list | grep org.agentstack.mail     # unit が再登録されている
+   "$INSTALL/bin/agentstack-mailctl" status
+   "$INSTALL/bin/agentstack-selftest"
+   ```
+
+   手順 3 の probe を実際の port に対して繰り返します。`health_check` は
+   `database_url` を報告し、それは共有 database でなければなりません。`$SHA`、
+   新旧の render path、測った outage を deployment note に記録します。
 
 ## Rollback
 
-前の render の ownership manifest で再び `start` します（その candidate venv
-は一度も触られていません）。Rollback は引数を入れ替えて step 5 を繰り返す
-だけです——update によって古い render も古い candidate も削除されないのは
-そのためです。supervisor も同様に元へ戻します（step 6）。さもないと次の
-restart で rollback が取り消されます。
+前の candidate と render は disk に残っています。service を止め、前の commit を
+candidate として pin して installer をもう一度走らせます。
+
+```bash
+"$INSTALL/bin/agentstack-mailctl" stop
+cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID=<前の commit> bash scripts/install.sh --scoped
+```
+
+installer は `candidates/<前の commit>/venv` をそのまま再利用し、それ用の service
+env を新しく render して起動し、`env.sh` と autostart unit を戻します。installer が
+管理する他のもの（hooks・dashboard・`bin/`）は走らせた checkout から来るので、
+Mail だけでなく install 全体を戻したいなら対応する commit を checkout してから
+走らせます。手順 6 のコマンドで確認します。unit は `env.sh` に従うので、別に
+更新する pointer はありません。
 
 ## 実際にどの build が動いているかを確認する
 
 自分が行った deployment と、その port が応答している build は別の主張です。
-自分のメモではなく port に聞きます:
+port に聞きます。
 
 ```bash
 pid=$(lsof -nP -iTCP:<port> -sTCP:LISTEN | awk 'NR>1{print $2}')
 ps -o command= -p "$pid"          # which candidate's python is this
 ```
 
-launchd が報告する pid は wrapper であって server ではない点に注意してください。
-server はその子であり、file descriptor を保持して request に答えているのはその
-子です。wrapper を測って「修正が反映された」と結論づけるのは、ここですでに
-一度起きた間違いです。
+`agentstack-mail.pid` の pid は runner であって server ではありません。server は
+その子で、descriptor を持って request に答えているのはその子です。runner を
+測って「修正が反映された」と結論づけるのは、ここですでに一度起きた間違い
+です。dashboard の `/api/version` を読むのも同じ間違いで、それは package の版
+であり、Mail を切り替えたかどうかに関わらず再実行のたびに変わります。
 
-## cutover receipt との関係
+## 経緯
 
-cutover receipt は 2026-08 の cutover を行った candidate を pin しています。
-より新しい candidate を deploy しても、その履歴は書き換わりません——receipt は
-出来事を記述するのであって、現在稼働中の build を記述するものではありません。
-receipt を orphan にしてしまうのは、pin された candidate をその場で編集する
-ことであり、この手順はそれを禁じています。
+同梱 service より前の deployment は `cutover-maintenance/` の下で
+`agentstack-mail-service render/stop/start` を手で走らせ、pointer file を読む
+supervisor を置いていました。その supervisor が一度（2026-08-26）古い build を
+静かに戻したため、現在の配置は supervisor をちょうど 1 つにし、それが `env.sh`
+を読む形になっています。`cutover-maintenance/` の下の cutover receipt は 2026-08
+の cutover を行った candidate を pin しています。receipt は出来事を記述するので
+あって現在稼働中の build を記述するものではなく、この手順はそれを編集しません。
