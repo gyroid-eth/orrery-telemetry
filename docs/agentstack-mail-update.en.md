@@ -10,10 +10,26 @@ nothing the installer writes reads it, but a machine that once used it may
 still carry its units and pointer file, so the pre-flight below checks for
 them instead of assuming they are gone.
 
-The forward procedure (steps 1 to 7) was run once on a live machine while
-shipping the 2026.09.17.1 build, with the results quoted where they appear.
-The rollback section is read from the installer's source and has **not** been
-executed; it is marked as such.
+**Scope.** The commands assume the default layout: install dir `~/.agentstack`,
+no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. On
+a custom install, every `install.sh` and `agentstack-mailctl` call below must
+receive the same `--install-dir` and the same overrides the original install
+used (`AGENTSTACK_MAIL_SERVICE_ROOT`, `AGENTSTACK_MAIL_STATE_ROOT`,
+`AGENTSTACK_MCP_URL`, `AGENTSTACK_LABEL_PREFIX`); the values this document
+reads from `env.sh` are shell variables for your checks, they are not passed
+to the installer for you. Note that `env.sh` records the service root as
+`AGENTSTACK_MAIL_DIR`, while the installer's input for it is
+`AGENTSTACK_MAIL_SERVICE_ROOT`.
+
+**What has been executed.** The switch itself (hold the unit, stop, install,
+verify: steps 5 to 7) was performed once on a live machine on 2026-09-18 with
+the previous draft of this procedure; the 12 s outage is from that run. The
+pre-flight (step 0) and the offline verification (step 3) were then re-run
+exactly as written here against the installed service, and the stop
+conditions of steps 2 and 3 were exercised in a harmless bash control with
+stubbed `uv` and `lsof`. Steps 4 to 7 as written here follow that live run
+but have not been re-executed as a whole. The rollback section is read from
+the installer's source and has not been executed.
 
 ## What the installer does, and does not do
 
@@ -29,10 +45,10 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
   is why a re-run alone never switches the Mail build. The dashboard's
   `/api/version` reports the package version, not the build behind the port.
 - **Nothing answers.** The installer provisions a candidate for the checkout's
-  exact commit (reusing a complete one if present), renders a service env,
-  starts the service through `agentstack-mailctl`, points `env.sh` and the
-  autostart unit at the render, and checks that the served database is the
-  shared one.
+  exact commit (an absent candidate is built; an existing but incomplete one
+  stops the run), renders a service env, starts the service through
+  `agentstack-mailctl`, points `env.sh` and the autostart unit at the render,
+  and checks that the served database is the shared one.
 
 An update is therefore "stop the old service, then run the installer", with
 the autostart unit held back so it cannot restart the old build in between.
@@ -73,24 +89,42 @@ supervisor; the pre-flight checks for leftovers of the older layout.
 
 ## Procedure
 
-Read the installed values once, letting a shell unquote them the way the
-installer itself does (`env.sh` is written with `shlex.quote`, so a `sed` of
-the right-hand side keeps the quotes):
+Each step is a shell function: define it, then call it as
+`step_N || echo "step N failed"` and stop at the first failure. A function
+returns non-zero at the first check that fails and runs nothing after it;
+this is why the steps are not one long block. Run them in `bash`; the
+pre-flight has also been checked under `zsh`.
 
-```bash
-INSTALL=~/.agentstack                      # or your --install-dir
-eval "$(
-  set +u; . "$INSTALL/env.sh" >/dev/null 2>&1
-  for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR \
-           AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX; do
-    eval "v=\${$k:-}"; printf '%s=%q\n' "$k" "$v"
-  done
-)"
-PY=$AGENTSTACK_PYTHON; SVC=$AGENTSTACK_MAIL_DIR; STATE=$AGENTSTACK_MAIL_STATE_ROOT
-OLD_ENV=$AGENTSTACK_MAIL_ENV; LABEL="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}.mail"
-PORT=$("$PY" -c 'import sys,urllib.parse;print(urllib.parse.urlparse(sys.argv[1]).port)' "$AGENTSTACK_MCP_URL")
-REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HEAD)
-```
+0. **Pre-flight: read the installed values.** `env.sh` is written with
+   `shlex.quote`, so the right-hand sides are unquoted by a shell, in a
+   subshell so nothing leaks. Every required value must be present.
+
+   ```bash
+   INSTALL=~/.agentstack
+   REPO=<clean checkout at the commit to deploy>
+   step_0() {
+     [ -f "$INSTALL/env.sh" ] || { echo "no env.sh under $INSTALL" >&2; return 1; }
+     eval "$(
+       set +u; . "$INSTALL/env.sh" || exit 1
+       for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR \
+                AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX; do
+         eval "v=\${$k:-}"; printf '%s=%q\n' "$k" "$v"
+       done
+     )" || { echo "could not read $INSTALL/env.sh" >&2; return 1; }
+     PY=$AGENTSTACK_PYTHON; SVC=$AGENTSTACK_MAIL_DIR; STATE=$AGENTSTACK_MAIL_STATE_ROOT
+     OLD_ENV=$AGENTSTACK_MAIL_ENV; LABEL="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}.mail"
+     for v in "$PY" "$AGENTSTACK_MCP_URL" "$SVC" "$STATE" "$OLD_ENV"; do
+       [ -n "$v" ] || { echo "a required value is empty in env.sh" >&2; return 1; }
+     done
+     [ -x "$PY" ] || { echo "AGENTSTACK_PYTHON is not executable: $PY" >&2; return 1; }
+     [ -f "$OLD_ENV" ] || { echo "current render env is missing: $OLD_ENV" >&2; return 1; }
+     PORT=$("$PY" -c 'import sys,urllib.parse;print(urllib.parse.urlparse(sys.argv[1]).port or "")' "$AGENTSTACK_MCP_URL")
+     [ -n "$PORT" ] || { echo "no port in AGENTSTACK_MCP_URL" >&2; return 1; }
+     SHA=$(git -C "$REPO" rev-parse HEAD) || return 1
+     echo "python=$PY service_root=$SVC state_root=$STATE port=$PORT label=$LABEL sha=$SHA"
+   }
+   step_0 || echo "step 0 failed"
+   ```
 
 1. **Gate on the test suite at that commit** (dev venv, see
    `CONTRIBUTING.md`): `PYTHONPATH=. .venv/bin/python -m pytest -q` green in a
@@ -98,19 +132,21 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
 
 2. **Build the candidate ahead of time**, unless it already exists and is
    complete. This keeps `pip install` out of the outage; the installer reuses
-   a complete candidate at this path and refuses an incomplete one.
+   a complete candidate at this path and stops on an incomplete one.
 
    ```bash
-   V="$SVC/candidates/$SHA/venv"
-   if [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]; then
-     echo "candidate complete; not touching it"
-   elif [ -e "$V" ]; then
-     echo "candidate exists but is incomplete; stop and investigate" >&2; false
-   else
-     [ -z "$(git -C "$REPO" status --porcelain -- packages/agentstack_mail)" ] || { echo "dirty package" >&2; false; }
-     uv venv --python "$PY" "$V"
-     uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail"
-   fi
+   step_2() {
+     V="$SVC/candidates/$SHA/venv"
+     if [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]; then
+       echo "candidate complete; not touching it"; return 0
+     fi
+     [ ! -e "$V" ] || { echo "candidate exists but is incomplete: $V" >&2; return 1; }
+     [ -z "$(git -C "$REPO" status --porcelain -- packages/agentstack_mail)" ] || { echo "packages/agentstack_mail is dirty" >&2; return 1; }
+     uv venv --python "$PY" "$V" || return 1
+     uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail" || return 1
+     [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]
+   }
+   step_2 || echo "step 2 failed"
    ```
 
 3. **Verify the candidate offline, in an isolated environment.** The server
@@ -123,30 +159,7 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
    snapshot contains credentials, so keep it private and delete it after.
 
    ```bash
-   S=$(mktemp -d); chmod 700 "$S"; mkdir -p "$S/state/archive" "$S/state/signals"
-   "$PY" - "$STATE/storage.sqlite3" "$S/state/storage.sqlite3" <<'PY'
-   import sqlite3, sys
-   src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True); dst = sqlite3.connect(sys.argv[2])
-   src.backup(dst); dst.close(); src.close()
-   PY
-   SPORT=18799; [ -z "$(lsof -nP -iTCP:$SPORT -sTCP:LISTEN)" ] || { echo "scratch port busy" >&2; false; }
-   sed -e "s#^AGENTSTACK_MAIL_HTTP_PORT=.*#AGENTSTACK_MAIL_HTTP_PORT=$SPORT#" \
-       -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
-       -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
-       -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
-       "$OLD_ENV" > "$S/service.env"
-   grep -E '^AGENTSTACK_MAIL_HTTP_HOST=' "$S/service.env"     # must be a loopback address
-   env -i HOME="$HOME" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$S/service.env" \
-     "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
-   SPID=$!
-   ```
-
-   Probe with the helper below. `PROBE_URL` is the scratch endpoint on each
-   published path (`/mcp` and `/api` by default; read
-   `AGENTSTACK_MAIL_HTTP_PATH` and `_PATH_ALIASES` from the render to be sure).
-
-   ```bash
-   probe() {  # probe <url> <tool> '<json arguments>'  → prints the result text
+   probe() {  # probe <url> <tool> '<json arguments>'  → prints the JSON-RPC response
      "$PY" - "$1" "$2" "$3" <<'PY'
    import json, sys, urllib.request
    url, tool, args = sys.argv[1:]
@@ -157,29 +170,69 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
    print(urllib.request.urlopen(req, timeout=15).read().decode())
    PY
    }
-   probe "http://127.0.0.1:$SPORT/mcp" health_check '{}'   # database_url must name $S/state/storage.sqlite3
-   probe "http://127.0.0.1:$SPORT/api" health_check '{}'   # same answer on the alias
-   probe "http://127.0.0.1:$SPORT/api" whois '{"project_key": "<a project key from the live database>", "agent_name": "<an agent in it>"}'
-   probe "http://127.0.0.1:$SPORT/api" health_check '{"nonce": "canary-value"}'   # isError true, text names a count, no "canary-value"
-   grep -c canary-value "$S/server.log"                    # 0
-   kill "$SPID"; wait "$SPID" 2>/dev/null; rm -rf "$S"
+   step_3() {
+     local S SPORT=18799 SPID rc=1 r
+     [ -x "$V/bin/agentstack-mail" ] || { echo "candidate server binary is missing: $V (run step 2)" >&2; return 1; }
+     [ -z "$(lsof -nP -iTCP:$SPORT -sTCP:LISTEN)" ] || { echo "scratch port $SPORT is busy" >&2; return 1; }
+     S=$(mktemp -d) || return 1
+     chmod 700 "$S"; mkdir -p "$S/state/archive" "$S/state/signals"
+     "$PY" - "$STATE/storage.sqlite3" "$S/state/storage.sqlite3" <<'PY' || { rm -rf "$S"; return 1; }
+   import sqlite3, sys
+   src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True); dst = sqlite3.connect(sys.argv[2])
+   src.backup(dst); dst.close(); src.close()
+   PY
+     sed -e "s#^AGENTSTACK_MAIL_HTTP_PORT=.*#AGENTSTACK_MAIL_HTTP_PORT=$SPORT#" \
+         -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
+         -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
+         -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
+         "$OLD_ENV" > "$S/service.env"
+     grep -qE '^AGENTSTACK_MAIL_HTTP_HOST=(127\.0\.0\.1|localhost|::1)$' "$S/service.env" || { echo "scratch env is not loopback" >&2; rm -rf "$S"; return 1; }
+     env -i HOME="$HOME" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$S/service.env" \
+       "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
+     SPID=$!
+     for _ in $(seq 1 100); do
+       kill -0 "$SPID" 2>/dev/null || { echo "scratch server exited early; see $S/server.log" >&2; return 1; }
+       curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$SPORT/api" && break; sleep 0.2
+     done
+     if r=$(probe "http://127.0.0.1:$SPORT/mcp" health_check '{}') && [ "${r#*$S/state/storage.sqlite3}" != "$r" ] \
+        && r=$(probe "http://127.0.0.1:$SPORT/api" health_check '{}') && [ "${r#*$S/state/storage.sqlite3}" != "$r" ] \
+        && r=$(probe "http://127.0.0.1:$SPORT/api" whois '{"project_key": "<a project key from the live database>", "agent_name": "<an agent in it>"}') && [ "${r#*\"<an agent in it>\"}" != "$r" ] \
+        && r=$(probe "http://127.0.0.1:$SPORT/api" health_check '{"nonce": "canary-value"}') && [ "${r#*canary-value}" = "$r" ] && [ "${r#*isError\":true}" != "$r" ] \
+        && [ "$(grep -c canary-value "$S/server.log")" = 0 ]; then
+       echo "candidate verified on scratch port $SPORT"; rc=0
+     else
+       echo "candidate failed offline verification; log kept at $S/server.log" >&2
+     fi
+     kill "$SPID" 2>/dev/null; wait "$SPID" 2>/dev/null
+     [ $rc -eq 0 ] && rm -rf "$S"
+     return $rc
+   }
+   step_3 || echo "step 3 failed"
    ```
 
    Success is all of: both paths answer `health_check` with the scratch
-   `database_url`; the read returns the record; a rejected call names no
-   caller-supplied value in the response or the scratch log. Anything else
-   means the candidate is not ready and the procedure stops here.
+   `database_url`; the read returns the record; the rejected call reports an
+   error that names no caller-supplied value, and the scratch log has none.
+   Anything else means the candidate is not ready and the procedure stops.
 
 4. **Record the current deployment and dry-run the installer** while
-   everything is still running. The dry run must say it would reuse the
-   existing service; if it says anything else, the live state is not what you
-   think and the switch must wait.
+   everything is still running. The dry run must exit 0 and say it would
+   reuse the existing service; if it says anything else, the live state is
+   not what you think and the switch must wait.
 
    ```bash
-   pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
-   ps -o command= -p "$pid"                                  # OLD candidate python: keep this line
-   echo "$OLD_ENV"                                           # OLD render: keep this line
-   ( cd "$REPO" && bash scripts/install.sh --scoped --dry-run ) | grep -E "ORRERY Mail"
+   step_4() {
+     local pid log
+     pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
+     [ -n "$pid" ] || { echo "nothing is listening on $PORT" >&2; return 1; }
+     echo "OLD candidate: $(ps -o command= -p "$pid")"          # keep this line
+     echo "OLD render:    $OLD_ENV"                              # keep this line
+     log=$(mktemp) || return 1
+     ( cd "$REPO" && bash scripts/install.sh --scoped --dry-run ) > "$log" 2>&1 || { echo "dry run failed; see $log" >&2; return 1; }
+     grep -q "would reuse existing ORRERY Mail service" "$log" || { echo "dry run did not plan to reuse the running service; see $log" >&2; return 1; }
+     rm -f "$log"
+   }
+   step_4 || echo "step 4 failed"
    ```
 
 5. **Hold the autostart unit.** It starts whatever `env.sh` names, and until
@@ -190,20 +243,26 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
    macOS:
 
    ```bash
-   launchctl bootout "gui/$(id -u)/$LABEL"
-   launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && echo "still loaded" >&2
+   step_5() {
+     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+     ! launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || { echo "$LABEL is still loaded" >&2; return 1; }
+     ! grep -lE 'agentstack-mail-service|cutover-maintenance|current-deployment\.env' ~/Library/LaunchAgents/*.plist 2>/dev/null | grep . || { echo "older-layout units above must be disabled first" >&2; return 1; }
+     ! crontab -l 2>/dev/null | grep -E 'agentstack-mail-service|cutover-maintenance|current-deployment\.env' || { echo "older-layout cron entries above must be disabled first" >&2; return 1; }
+   }
+   step_5 || echo "step 5 failed"
    ```
 
    systemd:
 
    ```bash
-   systemctl --user stop "$LABEL.timer"
-   systemctl --user is-active "$LABEL.timer" && echo "still active" >&2
+   step_5() {
+     systemctl --user stop "$LABEL.timer"
+     ! systemctl --user is-active --quiet "$LABEL.timer" || { echo "$LABEL.timer is still active" >&2; return 1; }
+     ! systemctl --user list-units --all --no-legend 2>/dev/null | grep -E 'agentstack-mail-service|cutover-maintenance' || { echo "older-layout units above must be disabled first" >&2; return 1; }
+     ! crontab -l 2>/dev/null | grep -E 'agentstack-mail-service|cutover-maintenance|current-deployment\.env' || { echo "older-layout cron entries above must be disabled first" >&2; return 1; }
+   }
+   step_5 || echo "step 5 failed"
    ```
-
-   Also look for leftovers of the older layout before continuing: any other
-   user unit or cron entry that names `agentstack-mail-service`,
-   `cutover-maintenance` or `current-deployment.env` must be disabled first.
 
 6. **Stop, then install.** This is the outage window. Measured once with the
    candidate pre-built: 12 s from stop to "ready". `agentstack-mailctl stop`
@@ -211,9 +270,18 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
    longer answers; it refuses to stop a process it did not start.
 
    ```bash
-   "$INSTALL/bin/agentstack-mailctl" stop
-   lsof -nP -iTCP:$PORT -sTCP:LISTEN                         # must print nothing
-   ( cd "$REPO" && bash scripts/install.sh --scoped )        # plus the flags your install uses
+   step_6() {
+     local log
+     "$INSTALL/bin/agentstack-mailctl" stop || return 1
+     [ -z "$(lsof -nP -iTCP:$PORT -sTCP:LISTEN)" ] || { echo "port $PORT is still occupied" >&2; return 1; }
+     log=$(mktemp) || return 1
+     ( cd "$REPO" && bash scripts/install.sh --scoped ) 2>&1 | tee "$log"
+     [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "installer failed; see $log" >&2; return 1; }
+     ! grep -q "existing ORRERY Mail listener detected" "$log" || { echo "the old build came back during the window and was adopted: not deployed" >&2; return 1; }
+     grep -q "candidate venv $SVC/candidates/$SHA/venv" "$log" || { echo "installer did not use candidate $SHA" >&2; return 1; }
+     rm -f "$log"
+   }
+   step_6 || echo "step 6 failed"
    ```
 
    Expected lines in the installer output, in this order:
@@ -231,19 +299,26 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
    the installed `env.sh`, sits under the service root's `renders/`, and
    `AGENTSTACK_MAIL_SERVICE_ENV` is not set. Any other value stops the run.
 
-7. **Prove production, then say done.** Every line must hold; if one does
+7. **Prove production, then say done.** Every check must hold; if one does
    not, the deployment is not complete.
 
    ```bash
-   pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
-   ps -o command= -p "$pid"                                  # .../candidates/$SHA/venv/bin/python
-   ( set +u; . "$INSTALL/env.sh"; echo "$AGENTSTACK_MAIL_ENV" ) # .../renders/$SHA-<id>/service.env
-   sed -n 2p "$SVC/runtime/agentstack-mail.pid"              # runner inside the same render
-   launchctl list | grep "$LABEL"                            # macOS: unit registered again
-   systemctl --user is-active "$LABEL.timer"                 # systemd
-   "$INSTALL/bin/agentstack-mailctl" status
-   "$INSTALL/bin/agentstack-selftest"
-   probe "$AGENTSTACK_MCP_URL" health_check '{}'             # database_url = $STATE/storage.sqlite3
+   step_7() {
+     local pid new_env r
+     pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
+     [ -n "$pid" ] || { echo "nothing is listening on $PORT" >&2; return 1; }
+     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
+     new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
+     [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
+     sed -n 2p "$SVC/runtime/agentstack-mail.pid" | grep -q "$(dirname "$new_env")/" || { echo "pidfile runner is not inside the new render" >&2; return 1; }
+     if [ "$(uname)" = Darwin ]; then launchctl list | grep -q "$LABEL" || { echo "$LABEL is not registered" >&2; return 1; }
+     else systemctl --user is-active --quiet "$LABEL.timer" || { echo "$LABEL.timer is not active" >&2; return 1; }; fi
+     "$INSTALL/bin/agentstack-mailctl" status || return 1
+     "$INSTALL/bin/agentstack-selftest" || return 1
+     r=$(probe "$AGENTSTACK_MCP_URL" health_check '{}') && [ "${r#*$STATE/storage.sqlite3}" != "$r" ] || { echo "live health_check does not report the shared database" >&2; return 1; }
+     echo "deployed $SHA; old render was $OLD_ENV, new render is $new_env"
+   }
+   step_7 || echo "step 7 failed"
    ```
 
    Repeat the step-3 probes against the real endpoint, including the rejected
@@ -253,27 +328,32 @@ REPO=<clean checkout at the commit to deploy>; SHA=$(git -C "$REPO" rev-parse HE
 
 ## Rollback
 
-**Read from the installer's source; not yet executed.** Treat it as a plan to
+**Read from the installer's source; not executed.** Treat it as a plan to
 verify on a scratch install before relying on it.
 
 The previous candidate and render are still on disk. Rolling back is the
 forward procedure with the previous commit, with two differences. First,
-`AGENTSTACK_MAIL_CANDIDATE_ID` only names the candidate directory: if that
-directory were missing or incomplete, the installer would build the *current*
-checkout's package into it under the old name. So verify the old candidate is
-complete before stopping anything, and pin it explicitly with
-`AGENTSTACK_MAIL_SERVICE_VENV`, which makes the installer fail instead of
+`AGENTSTACK_MAIL_CANDIDATE_ID` only names the candidate directory: an absent
+directory would be built from the *current* checkout's package under the old
+name (an existing but incomplete one stops the installer). So verify the old
+candidate is complete before stopping anything, and pin it explicitly with
+`AGENTSTACK_MAIL_SERVICE_VENV`, which makes the installer stop instead of
 building. Second, everything else the installer manages still comes from the
 checkout you run it from.
 
 ```bash
-OLD_SHA=<previous commit>; OLD_V="$SVC/candidates/$OLD_SHA/venv"
-ls "$OLD_V/bin/agentstack-mail" "$OLD_V/bin/agentstack-mail-service" "$OLD_V/bin/agentstack-mail-migrate"   # all three, or stop here
-# step 5: hold the autostart unit exactly as above
-"$INSTALL/bin/agentstack-mailctl" stop
-lsof -nP -iTCP:$PORT -sTCP:LISTEN                                     # nothing
-( cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID="$OLD_SHA" AGENTSTACK_MAIL_SERVICE_VENV="$OLD_V" bash scripts/install.sh --scoped )
-# step 7 with $OLD_SHA in place of $SHA
+rollback() {
+  local OLD_SHA=$1 OLD_V
+  OLD_V="$SVC/candidates/$OLD_SHA/venv"
+  [ -x "$OLD_V/bin/agentstack-mail" ] && [ -x "$OLD_V/bin/agentstack-mail-service" ] && [ -x "$OLD_V/bin/agentstack-mail-migrate" ] \
+    || { echo "old candidate is not complete: $OLD_V" >&2; return 1; }
+  step_5 || return 1
+  "$INSTALL/bin/agentstack-mailctl" stop || return 1
+  [ -z "$(lsof -nP -iTCP:$PORT -sTCP:LISTEN)" ] || { echo "port $PORT is still occupied" >&2; return 1; }
+  ( cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID="$OLD_SHA" AGENTSTACK_MAIL_SERVICE_VENV="$OLD_V" bash scripts/install.sh --scoped ) || return 1
+  SHA=$OLD_SHA step_7
+}
+rollback <previous commit> || echo "rollback failed"
 ```
 
 The unit follows `env.sh`, so there is no separate pointer to update.
