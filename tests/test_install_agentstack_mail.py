@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import signal
 import socket
 import subprocess
@@ -30,6 +31,20 @@ def _write_command(directory: pathlib.Path, name: str, body: str) -> None:
     command = directory / name
     command.write_text(body, encoding="utf-8")
     command.chmod(0o755)
+
+
+def _generated_env(home: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in (home / ".agentstack" / "env.sh").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if not line.startswith("export ") or "=" not in line:
+            continue
+        key, raw = line.removeprefix("export ").split("=", 1)
+        parsed = shlex.split(raw, comments=True, posix=True)
+        assert len(parsed) == 1, (key, raw)
+        values[key] = parsed[0]
+    return values
 
 
 def _fake_linux_bin(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -313,6 +328,22 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         management_socket = management_socket_line.split("=", 1)[1]
         assert management_socket.startswith(f"/tmp/orrery-mail-{os.getuid()}/")
         assert "HTTP_BEARER_TOKEN" not in service_env
+        generated_env = _generated_env(home)
+        assert generated_env["AGENTSTACK_MAIL_ENROLL_BIN"] == str(
+            candidate_bin.parent / "bin" / "agentstack-enroll"
+        )
+        deployment_path = service_env_path.with_name("deployment.json")
+        deployment = json.loads(deployment_path.read_text(encoding="utf-8"))
+        assert deployment == {
+            "kind": "orrery-mail-deployment-v1",
+            "source_id": deployment["source_id"],
+            "candidate_venv": str(candidate_bin.parent),
+            "enroll_bin": str(candidate_bin.parent / "bin" / "agentstack-enroll"),
+            "service_env": str(service_env_path),
+            "state_root": str(destination_state.resolve()),
+            "mcp_url": mail_url,
+        }
+        assert deployment_path.stat().st_mode & 0o777 == 0o600
 
         connection_profile_path = home / ".agentstack" / "connections" / "local.json"
         connection_profile = json.loads(connection_profile_path.read_text(encoding="utf-8"))
@@ -355,8 +386,17 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
             )
         )
         assert manifest["agent_mail"]["provider"] == "agentstack"
+        assert manifest["agent_mail"]["candidate_venv"] == str(candidate_bin.parent)
+        assert manifest["agent_mail"]["service_env"] == str(service_env_path)
+        assert manifest["agent_mail"]["deployment_metadata"] == str(deployment_path)
+        assert manifest["agent_mail"]["enroll_bin"] == generated_env[
+            "AGENTSTACK_MAIL_ENROLL_BIN"
+        ]
         assert manifest["env"]["AGENTSTACK_MAIL_DB"] == str(destination_db)
         assert manifest["env"]["AGENTSTACK_MAIL_HTTP_BEARER_MODE"] == "disabled"
+        assert manifest["env"]["AGENTSTACK_MAIL_ENROLL_BIN"] == generated_env[
+            "AGENTSTACK_MAIL_ENROLL_BIN"
+        ]
         assert manifest["env"]["AGENTSTACK_PERSISTENT_PROFILES_DIR"] == str(
             home / ".agentstack" / "profiles"
         )
@@ -509,6 +549,181 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
     finally:
         _stop_mail(home, destination_state, mail_port)
         stop_dashboard(home, label_prefix="")
+
+
+def test_reinstall_adopts_the_running_candidate_enroll_cli_and_wrapper_inspects(
+    tmp_path,
+):
+    """A source update must not publish a CLI from an unbuilt candidate.
+
+    The first install starts a real isolated Mail server from an old managed
+    candidate. The second install has a different source id and no candidate at
+    all. It must preserve the listener, recover the old candidate through the
+    immutable render association, publish that candidate's enroll CLI, and let
+    the installed persistent wrapper use it without an operator override.
+    """
+
+    actual_venv = pathlib.Path(sys.executable).parent.parent.resolve()
+    actual_bin = actual_venv / "bin"
+    for name in (
+        "agentstack-mail",
+        "agentstack-mail-service",
+        "agentstack-mail-migrate",
+    ):
+        assert (actual_bin / name).is_file(), name
+
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_bin = _fake_linux_bin(tmp_path)
+    env = _base_env(tmp_path, home, fake_bin)
+    service_root = home / ".agentstack" / "mail-service"
+    old_source = "fixture-old-source"
+    new_source = "fixture-new-source"
+    old_venv = service_root / "candidates" / old_source / "venv"
+    old_bin = old_venv / "bin"
+    old_bin.mkdir(parents=True)
+    for name in (
+        "agentstack-mail",
+        "agentstack-mail-service",
+        "agentstack-mail-migrate",
+    ):
+        (old_bin / name).symlink_to(actual_bin / name)
+
+    project = pathlib.Path(env["AGENTSTACK_PROJECT_KEY"])
+    inspect_payload = {
+        "ok": True,
+        "agent_id": 41,
+        "project_key": str(project),
+        "name": "PersistentFixture",
+        "credential_state": "server-token",
+        "connection_pinned": True,
+        "local_credential_state": "present",
+        "server_instance_id": "mail-instance-fixture",
+        "credential_generation": 3,
+        "credential_fingerprint": "0123456789abcdef",
+    }
+    _write_command(
+        old_bin,
+        "agentstack-enroll",
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "if len(sys.argv) < 2 or sys.argv[1] != 'inspect':\n"
+        "    raise SystemExit(2)\n"
+        f"print(json.dumps({inspect_payload!r}))\n",
+    )
+
+    state_root = tmp_path / "mail-state"
+    mail_port = _free_port()
+    dashboard_port = _free_port()
+    mail_url = f"http://127.0.0.1:{mail_port}/mcp"
+    env.update(
+        {
+            "AGENTSTACK_MAIL_STATE_ROOT": str(state_root),
+            "AGENTSTACK_MAIL_SERVICE_ROOT": str(service_root),
+            "AGENTSTACK_MAIL_CANDIDATE_ID": old_source,
+            "AGENTSTACK_MCP_URL": mail_url,
+            "AGENTSTACK_PORT": str(dashboard_port),
+            "AGENTSTACK_LABEL_PREFIX": (
+                f"{TEST_LABEL_PREFIX}.native-mail-reuse-{mail_port}"
+            ),
+        }
+    )
+
+    try:
+        first = subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--assume-yes"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=180,
+        )
+        assert first.returncode == 0, first.stdout + first.stderr
+        _wait_health(mail_url)
+        pidfile = service_root / "runtime" / "agentstack-mail.pid"
+        first_pid = int(pidfile.read_text(encoding="utf-8").split()[0])
+
+        second_env = dict(env)
+        second_env["AGENTSTACK_MAIL_CANDIDATE_ID"] = new_source
+        second = subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--assume-yes"],
+            cwd=ROOT,
+            env=second_env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=180,
+        )
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert "adopted the running ORRERY Mail deployment" in second.stdout
+        assert int(pidfile.read_text(encoding="utf-8").split()[0]) == first_pid
+        assert not (service_root / "candidates" / new_source).exists()
+
+        generated = _generated_env(home)
+        assert generated["AGENTSTACK_MAIL_ENROLL_BIN"] == str(
+            old_bin / "agentstack-enroll"
+        )
+        assert pathlib.Path(generated["AGENTSTACK_MAIL_ENV"]).is_file()
+
+        connection_path = home / ".agentstack" / "connections" / "local.json"
+        connection = json.loads(connection_path.read_text(encoding="utf-8"))
+        connection["expected_server_instance_id"] = "mail-instance-fixture"
+        connection_path.write_text(json.dumps(connection) + "\n", encoding="utf-8")
+        connection_path.chmod(0o600)
+        workdir = tmp_path / "persistent-work"
+        workdir.mkdir()
+        claude = tmp_path / "claude"
+        claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        claude.chmod(0o755)
+        profile_path = home / ".agentstack" / "profiles" / "fixture.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "kind": "orrery-persistent-agent-v1",
+                    "name": "PersistentFixture",
+                    "agent_id": 41,
+                    "project_key": str(project),
+                    "connection": str(connection_path),
+                    "provider": "claude",
+                    "parentless": True,
+                    "lifecycle": "persistent",
+                    "interaction": "interactive",
+                    "state_dir": str(tmp_path / "persistent-state"),
+                    "working_directory": str(workdir),
+                    "command": [
+                        str(claude),
+                        "--channels",
+                        "plugin:telegram@claude-plugins-official",
+                    ],
+                    "environment": {},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile_path.chmod(0o600)
+
+        wrapper_env = {**second_env, **generated}
+        wrapper_env.pop("AGENTSTACK_ENROLL_BIN", None)
+        inspected = subprocess.run(
+            [
+                str(home / ".agentstack" / "bin" / "agentstack-persistent"),
+                "inspect",
+                "--profile",
+                str(profile_path),
+            ],
+            env=wrapper_env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        assert inspected.returncode == 0, inspected.stdout + inspected.stderr
+        assert json.loads(inspected.stdout)["ready"] is True
+    finally:
+        _stop_mail(home, state_root, mail_port)
+        stop_dashboard(home, label_prefix=env["AGENTSTACK_LABEL_PREFIX"])
 
 
 def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
