@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）
+
+Codex child の履歴 receipt は child 専用 `CODEX_HOME` 経由の rollout path を記録していました。正常終了時の cleanup がその home と `sessions` symlink を削除するため、共有 Codex home に rollout の実体が残っていても dashboard は履歴との対応を確認できず、resume の手前で拒否していました。recorder は symlink を解決した実体 path を記録するようにしました。既存 receipt は、消えた path が同じ child の runtime 内 `codex-home/sessions` 配下にある場合だけ共有 Codex home の同じ相対 path へ引き直し、receipt と rollout header の session id が一致するときだけ採用します。
+
 ## 2026.09.18
 
 ### launcher を通らずに起動した常駐 bot が、local credential を持てませんでした（#56）

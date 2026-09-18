@@ -2995,7 +2995,41 @@ def _verified_codex_index(
         return None
     real_transcript = os.path.realpath(transcript_path)
     if not os.path.isfile(real_transcript):
-        return None
+        # Receipts written before #58 kept the child CODEX_HOME route.  Normal
+        # cleanup removes that directory but leaves the shared rollout intact.
+        # Recover only this exact legacy layout; an arbitrary missing receipt
+        # path must never turn into a scan of the user's Codex history.
+        if not os.path.isabs(transcript_path) or not _valid(session):
+            return None
+        recorded_path = os.path.abspath(os.path.expanduser(transcript_path))
+        child_sessions = os.path.abspath(
+            os.path.join(
+                RUNTIME_DIR,
+                "child-agents",
+                f"{session}.codex-home",
+                "sessions",
+            )
+        )
+        try:
+            if os.path.commonpath([recorded_path, child_sessions]) != child_sessions:
+                return None
+            relative = os.path.relpath(recorded_path, child_sessions)
+        except ValueError:
+            return None
+        source_home = os.path.expanduser(
+            os.environ.get("CODEX_HOME") or "~/.codex"
+        )
+        source_sessions = os.path.realpath(os.path.join(source_home, "sessions"))
+        recovered = os.path.realpath(os.path.join(source_sessions, relative))
+        try:
+            if os.path.commonpath([recovered, source_sessions]) != source_sessions:
+                return None
+        except ValueError:
+            return None
+        if not os.path.isfile(recovered):
+            return None
+        real_transcript = recovered
+        transcript_path = recovered
     header_session_id, _cwd = _codex_meta(real_transcript)
     if header_session_id != session_id:
         return None
