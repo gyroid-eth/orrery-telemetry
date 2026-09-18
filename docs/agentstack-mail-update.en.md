@@ -11,13 +11,12 @@ still carry its units and pointer file, so the pre-flight below checks for
 them instead of assuming they are gone.
 
 **Scope.** The commands assume the default layout: install dir `~/.agentstack`,
-no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. On
-a custom install, every `install.sh` and `agentstack-mailctl` call below must
-receive the same `--install-dir` and the same overrides the original install
-used (`AGENTSTACK_MAIL_SERVICE_ROOT`, `AGENTSTACK_MAIL_STATE_ROOT`,
-`AGENTSTACK_MCP_URL`, `AGENTSTACK_LABEL_PREFIX`); the values this document
-reads from `env.sh` are shell variables for your checks, they are not passed
-to the installer for you. Note that `env.sh` records the service root as
+no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. A
+custom install is out of scope: the values this document reads from `env.sh`
+are shell variables for your checks and are not passed on to the installer,
+which would need its own `--install-dir` and overrides on every call, while
+`agentstack-mailctl` locates `env.sh` through `AGENTSTACK_HOME`. None of that
+has been exercised here. Note that `env.sh` records the service root as
 `AGENTSTACK_MAIL_DIR`, while the installer's input for it is
 `AGENTSTACK_MAIL_SERVICE_ROOT`.
 
@@ -27,7 +26,7 @@ the previous draft of this procedure; the 12 s outage is from that run. The
 pre-flight (step 0) and the offline verification (step 3) were then re-run
 exactly as written here against the installed service, and the stop
 conditions of steps 2 and 3 were exercised in a harmless bash control with
-stubbed `uv` and `lsof`. Steps 4 to 7 as written here follow that live run
+stubbed `uv`, `git` and `lsof`, including a stale value left in the parent shell, a failing `git`, and a missing or failing `lsof`. Steps 4 to 7 as written here follow that live run
 but have not been re-executed as a whole. The rollback section is read from
 the installer's source and has not been executed.
 
@@ -102,20 +101,42 @@ pre-flight has also been checked under `zsh`.
    ```bash
    INSTALL=~/.agentstack
    REPO=<clean checkout at the commit to deploy>
+   port_free() {  # 0 only when lsof ran and found no listener on TCP port $1
+     local out err rc
+     command -v lsof >/dev/null 2>&1 || { echo "lsof is not installed" >&2; return 1; }
+     err=$(mktemp) || return 1
+     out=$(lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>"$err"); rc=$?
+     if [ -s "$err" ]; then echo "lsof failed:" >&2; cat "$err" >&2; rm -f "$err"; return 1; fi
+     rm -f "$err"
+     [ $rc -ne 0 ] || { echo "port $1 is occupied:" >&2; echo "$out" >&2; return 1; }
+   }
+   listener_pid() {  # prints the pid listening on TCP port $1; fails when there is none or lsof failed
+     local out err rc
+     command -v lsof >/dev/null 2>&1 || { echo "lsof is not installed" >&2; return 1; }
+     err=$(mktemp) || return 1
+     out=$(lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>"$err"); rc=$?
+     if [ -s "$err" ]; then echo "lsof failed:" >&2; cat "$err" >&2; rm -f "$err"; return 1; fi
+     rm -f "$err"
+     [ $rc -eq 0 ] || { echo "nothing is listening on port $1" >&2; return 1; }
+     printf '%s\n' "$out" | awk 'NR>1{print $2; exit}'
+   }
    step_0() {
+     local assignments
      [ -f "$INSTALL/env.sh" ] || { echo "no env.sh under $INSTALL" >&2; return 1; }
-     eval "$(
-       set +u; . "$INSTALL/env.sh" || exit 1
-       for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR \
-                AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX; do
+     assignments=$(
+       set +u
+       unset AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX
+       . "$INSTALL/env.sh" >/dev/null || exit 1
+       for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV; do
+         eval "v=\${$k:-}"; [ -n "$v" ] || { echo "env.sh does not define $k" >&2; exit 1; }
+       done
+       for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX; do
          eval "v=\${$k:-}"; printf '%s=%q\n' "$k" "$v"
        done
-     )" || { echo "could not read $INSTALL/env.sh" >&2; return 1; }
+     ) || { echo "could not read the required values from $INSTALL/env.sh" >&2; return 1; }
+     eval "$assignments"
      PY=$AGENTSTACK_PYTHON; SVC=$AGENTSTACK_MAIL_DIR; STATE=$AGENTSTACK_MAIL_STATE_ROOT
      OLD_ENV=$AGENTSTACK_MAIL_ENV; LABEL="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}.mail"
-     for v in "$PY" "$AGENTSTACK_MCP_URL" "$SVC" "$STATE" "$OLD_ENV"; do
-       [ -n "$v" ] || { echo "a required value is empty in env.sh" >&2; return 1; }
-     done
      [ -x "$PY" ] || { echo "AGENTSTACK_PYTHON is not executable: $PY" >&2; return 1; }
      [ -f "$OLD_ENV" ] || { echo "current render env is missing: $OLD_ENV" >&2; return 1; }
      PORT=$("$PY" -c 'import sys,urllib.parse;print(urllib.parse.urlparse(sys.argv[1]).port or "")' "$AGENTSTACK_MCP_URL")
@@ -136,12 +157,14 @@ pre-flight has also been checked under `zsh`.
 
    ```bash
    step_2() {
+     local status
      V="$SVC/candidates/$SHA/venv"
      if [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]; then
        echo "candidate complete; not touching it"; return 0
      fi
      [ ! -e "$V" ] || { echo "candidate exists but is incomplete: $V" >&2; return 1; }
-     [ -z "$(git -C "$REPO" status --porcelain -- packages/agentstack_mail)" ] || { echo "packages/agentstack_mail is dirty" >&2; return 1; }
+     status=$(git -C "$REPO" status --porcelain -- packages/agentstack_mail) || { echo "git status failed in $REPO" >&2; return 1; }
+     [ -z "$status" ] || { echo "packages/agentstack_mail is dirty" >&2; return 1; }
      uv venv --python "$PY" "$V" || return 1
      uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail" || return 1
      [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]
@@ -173,7 +196,7 @@ pre-flight has also been checked under `zsh`.
    step_3() {
      local S SPORT=18799 SPID rc=1 r
      [ -x "$V/bin/agentstack-mail" ] || { echo "candidate server binary is missing: $V (run step 2)" >&2; return 1; }
-     [ -z "$(lsof -nP -iTCP:$SPORT -sTCP:LISTEN)" ] || { echo "scratch port $SPORT is busy" >&2; return 1; }
+     port_free "$SPORT" || return 1
      S=$(mktemp -d) || return 1
      chmod 700 "$S"; mkdir -p "$S/state/archive" "$S/state/signals"
      "$PY" - "$STATE/storage.sqlite3" "$S/state/storage.sqlite3" <<'PY' || { rm -rf "$S"; return 1; }
@@ -223,8 +246,7 @@ pre-flight has also been checked under `zsh`.
    ```bash
    step_4() {
      local pid log
-     pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
-     [ -n "$pid" ] || { echo "nothing is listening on $PORT" >&2; return 1; }
+     pid=$(listener_pid "$PORT") || return 1
      echo "OLD candidate: $(ps -o command= -p "$pid")"          # keep this line
      echo "OLD render:    $OLD_ENV"                              # keep this line
      log=$(mktemp) || return 1
@@ -273,7 +295,7 @@ pre-flight has also been checked under `zsh`.
    step_6() {
      local log
      "$INSTALL/bin/agentstack-mailctl" stop || return 1
-     [ -z "$(lsof -nP -iTCP:$PORT -sTCP:LISTEN)" ] || { echo "port $PORT is still occupied" >&2; return 1; }
+     port_free "$PORT" || return 1
      log=$(mktemp) || return 1
      ( cd "$REPO" && bash scripts/install.sh --scoped ) 2>&1 | tee "$log"
      [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "installer failed; see $log" >&2; return 1; }
@@ -305,8 +327,7 @@ pre-flight has also been checked under `zsh`.
    ```bash
    step_7() {
      local pid new_env r
-     pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
-     [ -n "$pid" ] || { echo "nothing is listening on $PORT" >&2; return 1; }
+     pid=$(listener_pid "$PORT") || return 1
      ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
      new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
      [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
@@ -349,7 +370,7 @@ rollback() {
     || { echo "old candidate is not complete: $OLD_V" >&2; return 1; }
   step_5 || return 1
   "$INSTALL/bin/agentstack-mailctl" stop || return 1
-  [ -z "$(lsof -nP -iTCP:$PORT -sTCP:LISTEN)" ] || { echo "port $PORT is still occupied" >&2; return 1; }
+  port_free "$PORT" || return 1
   ( cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID="$OLD_SHA" AGENTSTACK_MAIL_SERVICE_VENV="$OLD_V" bash scripts/install.sh --scoped ) || return 1
   SHA=$OLD_SHA step_7
 }
