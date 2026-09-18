@@ -136,6 +136,17 @@ def test_delegated_child_uses_worktree_stream_input_and_preregistered_identity()
     assert "AGS_GEMINI_PROXY_RUNNER" not in text
 
 
+def test_gemini_children_share_the_persistent_worktree_default() -> None:
+    expected = (
+        '${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}'
+        '/worktrees}'
+    )
+    for path in (_CHILD, _PREREG_CHILD):
+        text = path.read_text(encoding="utf-8")
+        assert f'WORKTREE_ROOT="{expected}"' in text
+        assert "AGENTSTACK_WORKTREE_ROOT:-/tmp/cc-worktrees" not in text
+
+
 def test_both_child_routes_hide_owner_token_path_from_workspace_mcp_config() -> None:
     for path in (_CHILD, _PREREG_CHILD):
         text = path.read_text(encoding="utf-8")

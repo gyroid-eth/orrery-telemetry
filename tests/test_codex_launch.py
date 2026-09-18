@@ -248,16 +248,21 @@ def test_child_add_dirs_cover_project_presets_roots_and_operator_extras():
         typeahead_root = root / "roots"
         extra = root / "extra"
         worktree_root = root / "durable-worktrees"
+        legacy_worktree_root = root / "legacy-worktrees"
         child_home = root / "child.codex-home"
-        for d in (project, preset, typeahead_root, extra, worktree_root, child_home,
+        for d in (project, preset, typeahead_root, extra, worktree_root,
+                  legacy_worktree_root, child_home,
                   root / ".claude", root / ".codex", root / ".agentstack"):
             d.mkdir()
+        add_dirs = _extract("codex_child_add_dirs").replace(
+            "/tmp/cc-worktrees", str(legacy_worktree_root)
+        )
         script = (
             f"HOME={shlex.quote(tmp)}\n"
             f"PROJECT_KEY={shlex.quote(str(project))}\n"
             f"WORKTREE_BASE={shlex.quote(str(worktree_root))}\n"
             f"AGENTSTACK_HOME_DIR={shlex.quote(str(root / '.agentstack'))}\n"
-            + _extract("codex_child_add_dirs")
+            + add_dirs
             + f"\ncodex_child_add_dirs {shlex.quote(str(child_home))}\n"
         )
         env = {
@@ -271,6 +276,7 @@ def test_child_add_dirs_cover_project_presets_roots_and_operator_extras():
     real = lambda p: os.path.realpath(str(p))  # noqa: E731
     assert got == [real(project), real(preset), real(typeahead_root),
                    real(root / ".agentstack"), real(worktree_root),
+                   real(legacy_worktree_root),
                    real(root / ".claude"),
                    real(root / ".codex"), real(child_home), real(extra)]
     # Missing entries are dropped, and the project appears once even though

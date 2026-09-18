@@ -2582,15 +2582,20 @@ def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     """Writable roots for a Codex agent launched by the product.
 
     Mirrors codex_child_add_dirs in hooks/spawn_child.sh: project, NEW AGENT
-    presets and typeahead roots, install dir, worktree base, ~/.claude,
-    ~/.codex, then AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped
-    and duplicates collapse on realpath (macOS /tmp -> /private/tmp)."""
+    presets and typeahead roots, install dir, worktree base, the pre-#57
+    /tmp/cc-worktrees compatibility root, ~/.claude, ~/.codex, then
+    AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped and duplicates
+    collapse on realpath (macOS /tmp -> /private/tmp)."""
     raw: list[str] = [PROJECT_KEY or VAULT]
     raw += os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     raw += os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
-    raw += [os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
-            _worktree_root(), os.path.expanduser("~/.claude"),
-            os.path.expanduser("~/.codex")]
+    raw += [
+        os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
+        _worktree_root(),
+        "/tmp/cc-worktrees",  # #57 migration compatibility; remove later.
+        os.path.expanduser("~/.claude"),
+        os.path.expanduser("~/.codex"),
+    ]
     raw += list(extra or [])
     raw += os.environ.get("AGENTSTACK_CODEX_ADD_DIRS", "").split(":")
     seen: list[str] = []

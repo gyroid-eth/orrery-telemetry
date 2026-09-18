@@ -886,16 +886,18 @@ codex_approval_flags() {
 #
 # Order and membership mirror what an unattended child actually touches: the
 # project, every NEW AGENT launch preset and typeahead root, the install dir
-# (runtime state, spool, tokens), the worktree base, the user's Claude and
-# Codex homes, the child's own CODEX_HOME, then anything the operator added
-# with AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped so codex does
-# not refuse to start on a path that is not there yet.
+# (runtime state, spool, tokens), the worktree base, the pre-#57 worktree root
+# (remove after that migration window), the user's Claude and Codex homes, the
+# child's own CODEX_HOME, then anything the operator added with
+# AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped so codex does not
+# refuse to start on a path that is not there yet.
 codex_child_add_dirs() {
     local child_codex_home="$1" raw entry expanded resolved
     local -a candidates=() seen=()
     raw="${AGENTSTACK_PROJECT_KEY:-$PROJECT_KEY}"
     raw="$raw:${AGENTSTACK_SPAWN_DIRS:-}:${AGENTSTACK_SPAWN_ROOTS:-}"
     raw="$raw:${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}:$WORKTREE_BASE"
+    raw="$raw:/tmp/cc-worktrees" # #57 migration compatibility; remove later.
     raw="$raw:$HOME/.claude:$HOME/.codex:$child_codex_home"
     raw="$raw:${AGENTSTACK_CODEX_ADD_DIRS:-}"
     IFS=':' read -r -a candidates <<< "$raw"

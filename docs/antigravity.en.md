@@ -198,14 +198,16 @@ inside the delegated worktree was auto-denied until `read_file` was explicitly
 allowed by the user. The stderr message stated that headless mode could not
 prompt for the required permission.
 
-Use the narrowest rule that covers the **resolved** delegated-worktree root. In
-the measured default macOS environment, `/tmp` resolved through
-`/private/tmp`, so the scoped rule was:
+Use the narrowest rule that covers the **resolved** delegated-worktree root.
+New installs default to `~/.agentstack/worktrees`; replace the example user
+home with the actual resolved path. Keep the legacy `/private/tmp` rule only
+while a pre-#57 worktree remains there:
 
 ```json
 {
   "permissions": {
     "allow": [
+      "read_file(/path/to/home/.agentstack/worktrees)",
       "read_file(/private/tmp/cc-worktrees)"
     ]
   }
@@ -214,7 +216,8 @@ the measured default macOS environment, `/tmp` resolved through
 
 Merge such a rule with the user's existing settings; do not replace existing
 permission entries. If `AGENTSTACK_WORKTREE_ROOT` is customized, scope the rule
-to that resolved root instead.
+to that resolved root instead. Remove the legacy rule after its old worktrees
+are gone; ORRERY does not migrate or delete them.
 
 ORRERY does not add `read_file(*)`, does not enable
 `--dangerously-skip-permissions`, and does not otherwise broaden user-owned
