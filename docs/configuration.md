@@ -111,7 +111,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_PORT` | `8770` | dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | service label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | terminal integration |
-| `AGENTSTACK_PYTHON` | `python3` の解決結果 | service 用 Python |
+| `AGENTSTACK_PYTHON` | `python3` の解決結果 | installer が version 検証した service / installed persistent launcher 用 Python。persistent launcher は ambient `PATH` の `python3` へ fallback しない |
 | `AGENTSTACK_PATH` | Homebrew と system path | service に渡す `PATH` |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | launcher / hook / dashboard / Bridge の MCP endpoint |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |

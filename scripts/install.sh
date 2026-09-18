@@ -1303,6 +1303,8 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
+    die "missing scripts/lib/agentstack-persistent-launcher.sh"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
   [[ -f "$NATIVE_MAIL_PACKAGE_SOURCE/pyproject.toml" ]] || \
     die "missing ORRERY Mail package: $NATIVE_MAIL_PACKAGE_SOURCE"
@@ -1655,7 +1657,13 @@ install_payload() {
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
     cp "$REPO_ROOT/bin/agentstack-enroll" "$BIN_DIR/agentstack-enroll"
-    cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent"
+    # Keep the Python implementation beside the public launcher so its
+    # __file__-relative defaults (agentstack-enroll, install root and hooks)
+    # retain the same layout. The bash entry point loads env.sh and execs the
+    # interpreter selected and version-checked by this installer; ambient PATH
+    # never selects an older python3.
+    cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent.py"
+    cp "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" "$BIN_DIR/agentstack-persistent"
     cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"

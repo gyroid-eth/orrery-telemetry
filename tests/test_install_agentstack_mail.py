@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import pty
+import select
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -442,19 +445,38 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         assert enroll_help.returncode == 0, enroll_help.stdout + enroll_help.stderr
         assert "inspect -> claim" in enroll_help.stdout
         persistent = home / ".agentstack" / "bin" / "agentstack-persistent"
+        persistent_implementation = persistent.with_suffix(".py")
         persistent_deliver = (
             home / ".agentstack" / "bin" / "agentstack-persistent-deliver"
         )
         assert persistent.is_file() and os.access(persistent, os.X_OK)
+        assert persistent.read_text(encoding="utf-8").startswith("#!/bin/bash\n")
+        assert persistent_implementation.is_file()
+        assert "import tomllib" in persistent_implementation.read_text(
+            encoding="utf-8"
+        )
         assert persistent_deliver.is_file() and os.access(persistent_deliver, os.X_OK)
         assert (home / ".agentstack" / "profiles").stat().st_mode & 0o777 == 0o700
+        ambient_bin = tmp_path / "ambient-old-python"
+        ambient_bin.mkdir()
+        ambient_marker = tmp_path / "ambient-python-ran"
+        _write_command(
+            ambient_bin,
+            "python3",
+            "#!/bin/sh\n"
+            f"touch {shlex.quote(str(ambient_marker))}\n"
+            "exit 91\n",
+        )
+        persistent_env = {
+            **env,
+            "AGENTSTACK_HOME": str(home / ".agentstack"),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+            "PATH": f"{ambient_bin}:/usr/bin:/bin",
+        }
+        persistent_env.pop("AGENTSTACK_PYTHON", None)
         persistent_help = subprocess.run(
             [str(persistent), "--help"],
-            env={
-                **env,
-                "AGENTSTACK_HOME": str(home / ".agentstack"),
-                "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
-            },
+            env=persistent_env,
             text=True,
             capture_output=True,
             check=False,
@@ -462,6 +484,7 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         assert persistent_help.returncode == 0
         assert "agentstack-enroll inspect" in persistent_help.stdout
         assert "agentstack-persistent run --profile" in persistent_help.stdout
+        assert not ambient_marker.exists()
 
         def run_mailctl(action: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(
@@ -724,6 +747,194 @@ def test_reinstall_adopts_the_running_candidate_enroll_cli_and_wrapper_inspects(
     finally:
         _stop_mail(home, state_root, mail_port)
         stop_dashboard(home, label_prefix=env["AGENTSTACK_LABEL_PREFIX"])
+
+
+def _copy_persistent_launcher(stack: pathlib.Path) -> pathlib.Path:
+    bin_dir = stack / "bin"
+    bin_dir.mkdir(parents=True)
+    launcher = bin_dir / "agentstack-persistent"
+    shutil.copy2(
+        ROOT / "scripts" / "lib" / "agentstack-persistent-launcher.sh",
+        launcher,
+    )
+    launcher.chmod(0o755)
+    return launcher
+
+
+def test_persistent_launcher_preserves_pty_stdin_argv_and_exit_status(tmp_path):
+    stack = tmp_path / "stack"
+    launcher = _copy_persistent_launcher(stack)
+    implementation = launcher.with_suffix(".py")
+    implementation.write_text(
+        "import json, os, sys\n"
+        "value = {\n"
+        "    'argv': sys.argv[1:],\n"
+        "    'stdin': sys.stdin.readline().rstrip('\\r\\n'),\n"
+        "    'stdin_isatty': os.isatty(0),\n"
+        "    'stdout_isatty': os.isatty(1),\n"
+        "}\n"
+        "print(json.dumps(value), flush=True)\n"
+        "raise SystemExit(23)\n",
+        encoding="utf-8",
+    )
+    selected_dir = tmp_path / "selected python"
+    selected_dir.mkdir()
+    selected_python = selected_dir / "python with spaces"
+    selected_python.symlink_to(pathlib.Path(sys.executable).resolve())
+    (stack / "env.sh").write_text(
+        f"export AGENTSTACK_PYTHON={shlex.quote(str(selected_python))}\n",
+        encoding="utf-8",
+    )
+    ambient_bin = tmp_path / "ambient"
+    ambient_bin.mkdir()
+    ambient_marker = tmp_path / "ambient-ran"
+    _write_command(
+        ambient_bin,
+        "python3",
+        "#!/bin/sh\n"
+        f"touch {shlex.quote(str(ambient_marker))}\n"
+        "exit 91\n",
+    )
+    env = {
+        "HOME": str(tmp_path),
+        "AGENTSTACK_HOME": str(stack),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+        # This inherited value is intentionally wrong. The installed env is
+        # authoritative and must replace it before the exec.
+        "AGENTSTACK_PYTHON": str(ambient_bin / "python3"),
+        "PATH": f"{ambient_bin}:/usr/bin:/bin",
+    }
+
+    master, slave = pty.openpty()
+    os.set_blocking(master, False)
+    process = subprocess.Popen(
+        [str(launcher), "alpha", "two words"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=env,
+        close_fds=True,
+    )
+    os.close(slave)
+    chunks: list[bytes] = []
+    try:
+        os.write(master, b"payload over pty\n")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            readable, _, _ = select.select([master], [], [], 0.1)
+            if readable:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+            if process.poll() is not None:
+                while True:
+                    try:
+                        data = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    chunks.append(data)
+                break
+        returncode = process.wait(timeout=2)
+    finally:
+        os.close(master)
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+    output = b"".join(chunks).decode("utf-8", errors="replace")
+    payload = next(
+        json.loads(line.rstrip("\r"))
+        for line in output.splitlines()
+        if line.lstrip().startswith("{")
+    )
+    assert returncode == 23
+    assert payload == {
+        "argv": ["alpha", "two words"],
+        "stdin": "payload over pty",
+        "stdin_isatty": True,
+        "stdout_isatty": True,
+    }
+    assert not ambient_marker.exists()
+
+
+def test_persistent_launcher_fails_closed_when_installed_python_is_unavailable(
+    tmp_path,
+):
+    for case, env_body, expected in (
+        (
+            "missing-assignment",
+            "export UNRELATED=value\n",
+            "installed Python is unavailable; re-run install.sh",
+        ),
+        (
+            "missing-executable",
+            "export AGENTSTACK_PYTHON=/definitely/missing/python\n",
+            "installed Python is unavailable; re-run install.sh",
+        ),
+        (
+            "relative-executable",
+            "export AGENTSTACK_PYTHON=python3\n",
+            "installed Python path is not absolute; re-run install.sh",
+        ),
+        (
+            "env-load-failure",
+            "false\n",
+            "could not load installed environment",
+        ),
+    ):
+        stack = tmp_path / case
+        launcher = _copy_persistent_launcher(stack)
+        launcher.with_suffix(".py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+        (stack / "env.sh").write_text(env_body, encoding="utf-8")
+        run_cwd = None
+        run_path = "/usr/bin:/bin"
+        execution_markers: list[pathlib.Path] = []
+        if case == "relative-executable":
+            run_cwd = tmp_path / f"{case}-cwd"
+            run_cwd.mkdir()
+            local_marker = tmp_path / f"{case}-local-ran"
+            _write_command(
+                run_cwd,
+                "python3",
+                "#!/bin/sh\n"
+                f"touch {shlex.quote(str(local_marker))}\n"
+                "exit 41\n",
+            )
+            ambient_bin = tmp_path / f"{case}-ambient"
+            ambient_bin.mkdir()
+            ambient_marker = tmp_path / f"{case}-ambient-ran"
+            _write_command(
+                ambient_bin,
+                "python3",
+                "#!/bin/sh\n"
+                f"touch {shlex.quote(str(ambient_marker))}\n"
+                "exit 42\n",
+            )
+            run_path = f"{ambient_bin}:/usr/bin:/bin"
+            execution_markers = [local_marker, ambient_marker]
+        result = subprocess.run(
+            [str(launcher), "inspect"],
+            env={
+                "HOME": str(tmp_path),
+                "AGENTSTACK_HOME": str(stack),
+                "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+                # A valid inherited value must not mask missing/broken env.
+                "AGENTSTACK_PYTHON": sys.executable,
+                "PATH": run_path,
+            },
+            cwd=run_cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 1, (case, result.stdout, result.stderr)
+        assert expected in result.stderr, (case, result.stderr)
+        assert not any(marker.exists() for marker in execution_markers), case
 
 
 def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
