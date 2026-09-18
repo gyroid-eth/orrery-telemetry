@@ -5,157 +5,271 @@
 この文書は、すでに traffic を捌いている machine へ `agentstack_mail` の新しい
 build を出荷する手順です。同梱 service が唯一の provider になって以降
 `scripts/install.sh` が管理している配置を前提にしています。それ以前に
-`cutover-maintenance/` の下で手作業していた配置は過去のもので、installer が
-書くものはどれもそれを参照しません。
+`cutover-maintenance/` の下で手作業していた配置は過去のものです。installer が
+書くものはそれを読みませんが、かつてそれを使った machine には unit や pointer
+file が残っていることがあるので、下の事前確認は「消えているはず」と仮定せず
+探します。
+
+前進手順（手順 1〜7）は 2026.09.17.1 の build を出荷するときに稼働中の machine で
+1 回実行し、その結果を該当箇所に引用しています。Rollback 節は installer の
+source から読んだもので、**未実行**です。その旨を明記しています。
 
 ## installer がすること・しないこと
 
 `install.sh` は毎回 hooks・skills・dashboard・`bin/`・`env.sh`・autostart unit を
-更新します。ORRERY Mail については次のどちらか一方だけを行います。
+更新します。ORRERY Mail については次のどちらか一方の経路を取ります。
 
-- **設定された endpoint に健康な listener が応答している** → その listener が
-  使っている render を採用して `env.sh` に記録し、service には**触りません**。
-  通常の再実行はすべてこちらで、つまり再実行だけでは Mail の build は決して
-  切り替わりません。dashboard の `/api/version` は package の版であって、Mail の
-  port の裏にある build ではありません。
-- **何も応答していない** → checkout の正確な commit で candidate を用意し、新しい
-  service env を render し、`agentstack-mailctl` で起動し、`env.sh` と autostart
-  unit を新しい render に向け、配信される database が共有のものであることを
-  確かめます。
+- **設定された endpoint に何かが応答している。** installer はそれに
+  `health_check` を送ります。答えに `database_url` があり、それが期待する state
+  database に解決されれば listener を採用します。その render を `env.sh` に記録し、
+  service には**触りません**。port が占有されているのに ORRERY Mail として答え
+  ない、あるいは別の database を配信している場合は error で止まります。この
+  採用経路が通常の再実行のすべてで、だから再実行だけでは Mail の build は決して
+  切り替わりません。dashboard の `/api/version` は package の版であって、port の
+  裏にある build ではありません。
+- **何も応答していない。** installer は checkout の正確な commit で candidate を
+  用意し（完全なものがあれば再利用）、service env を render し、
+  `agentstack-mailctl` で起動し、`env.sh` と autostart unit をその render に向け、
+  配信される database が共有のものであることを確かめます。
 
-したがって更新とは「古い service を止めてから installer を走らせる」ことです。
+したがって更新とは「古い service を止めてから installer を走らせる」ことで、
+その間に autostart unit が古い build を起こさないよう unit を押さえておきます。
 
 ## 配置
 
-すべて install dir（既定 `~/.agentstack`）の下です。
+これらは installed の `env.sh` から解決します。仮定で決めないでください。state
+root の既定は install dir と独立に `~/.agentstack/mail` で、endpoint・label
+prefix・各 root はどれも設定可能です。
 
-| Path | 意味 |
+| `env.sh` の変数 | 意味 |
 | --- | --- |
-| `mail-service/candidates/<commit>/venv` | 不変の candidate。正確な commit ごとに 1 つの venv で、`packages/agentstack_mail` から `uv` で build する。作成後に install も編集もしない |
-| `mail-service/renders/<commit>-<hash>/service.env`, `run-agentstack-mail.sh` | deployment ごとに 1 つの render。hash は venv・endpoint・state root から決まるので、新しい deployment は必ず新しい directory になる |
-| `mail-service/runtime/agentstack-mail.pid` | 2 行。runner の pid と runner の path |
-| `mail-service/runtime/agentstack-mail.log` | 稼働中 build の server log |
-| `mail/storage.sqlite3`, `mail/archive`, `mail/signals` | 共有 state。どの candidate にも属さず、deployment をまたいで固定 |
-| `env.sh` → `AGENTSTACK_MAIL_ENV` | controller と autostart unit がどの render を起動するか |
+| `AGENTSTACK_MAIL_DIR`（service root） | `candidates/<commit>/venv`: 不変の candidate。正確な commit ごとに 1 つの venv で、`packages/agentstack_mail` から `uv` で build する。`renders/<commit>-<id>/service.env` と `run-agentstack-mail.sh`: (commit, venv, endpoint, state root) の組ごとに 1 つの render。id はちょうどその入力の hash なので、同じ入力は同じ directory を指し、installer は既存の render を書き換えることを拒否する。`runtime/agentstack-mail.pid`（2 行: runner の pid と runner の path）と `runtime/agentstack-mail.log` |
+| `AGENTSTACK_MAIL_STATE_ROOT`（state root） | `storage.sqlite3`（WAL mode）、`archive/`、`signals/`。共有 state で、どの candidate にも属さず、deployment をまたいで固定 |
+| `AGENTSTACK_MAIL_ENV` | controller と autostart unit が起動する render |
+| `AGENTSTACK_MCP_URL` | endpoint。その port を見る |
+| `AGENTSTACK_PYTHON` | candidate を build する interpreter |
 
-autostart unit（launchd では `org.agentstack.mail` が 300 秒ごと、systemd では
-同じ label の `.timer`）は `agentstack-mailctl start` を実行し、それは `env.sh`
-を読みます。自前の candidate を持つ第二の supervisor はありません。
+autostart unit は `<label prefix>.mail`（`AGENTSTACK_LABEL_PREFIX` 未設定なら
+`org.agentstack.mail`）です。macOS では 300 秒ごとの launchd job、systemd では同名
+の `.timer` で、`agentstack-mailctl start` を実行し、それは `env.sh` を読みます。
+installer が管理する範囲に第二の supervisor はありません。旧配置の残骸は事前
+確認で探します。
 
 ## 原則
 
 - **candidate は不変。** 新しい build は新しい `candidates/<commit>` directory。
-  前のものは disk に手つかずで残り、それが rollback です。
+  既存の candidate に `uv venv` や `pip install` を再実行しない。前のものは disk に
+  手つかずで残り、それが rollback です。
 - **database は共有 state。** 起動時に schema を変える build には専用の
   migration plan が要り、ここでは扱いません。始める前に
   `packages/agentstack_mail/src` の tree diff に DDL が無いことを見ます。
-- **切り替える前に検証する。後ではない。** 停止より前のことはすべて scratch
-  port と database の scratch copy に対して行います。
-- **どの build が応答しているかは port に聞く。** `launchctl print` でも自分の
-  メモでも package の版でもなく。
+- **切り替える前に検証する。後ではない。** 停止より前のことはすべて、隔離した
+  process 環境で、scratch port と database の一貫した snapshot に対して行います。
+- **どの build が応答しているかは port に聞く。** `launchctl print` でも pidfile
+  でも自分のメモでも package の版でもなく。
 
 ## 手順
 
-`REPO` は deploy する正確な commit の汚れのない checkout、`SHA` はその commit、
-`INSTALL` は install dir です。
+installed の値を一度読みます。`env.sh` は `shlex.quote` で書かれているので、
+右辺を `sed` で抜くと quote が残ります。installer 自身と同じく shell に unquote
+させます。
+
+```bash
+INSTALL=~/.agentstack                      # あるいはあなたの --install-dir
+eval "$(
+  set +u; . "$INSTALL/env.sh" >/dev/null 2>&1
+  for k in AGENTSTACK_PYTHON AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR \
+           AGENTSTACK_MAIL_STATE_ROOT AGENTSTACK_MAIL_ENV AGENTSTACK_LABEL_PREFIX; do
+    eval "v=\${$k:-}"; printf '%s=%q\n' "$k" "$v"
+  done
+)"
+PY=$AGENTSTACK_PYTHON; SVC=$AGENTSTACK_MAIL_DIR; STATE=$AGENTSTACK_MAIL_STATE_ROOT
+OLD_ENV=$AGENTSTACK_MAIL_ENV; LABEL="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}.mail"
+PORT=$("$PY" -c 'import sys,urllib.parse;print(urllib.parse.urlparse(sys.argv[1]).port)' "$AGENTSTACK_MCP_URL")
+REPO=<deploy する commit の汚れのない checkout>; SHA=$(git -C "$REPO" rev-parse HEAD)
+```
 
 1. **その commit で test suite を gate する**（dev venv、`CONTRIBUTING.md`
    参照）: `PYTHONPATH=. .venv/bin/python -m pytest -q` が汚れのない単発の run で
-   green、かつ package 自身の suite `packages/agentstack_mail/tests` も green。
+   green、かつ `packages/agentstack_mail/tests` も green。
 
-2. **candidate を先に build する。** outage に `pip install` を含めないためです。
-   installer が行うのと同じ操作で、installer はこの path に完全な candidate が
-   あればそれを再利用します。
+2. **candidate を先に build する。** ただし既に完全なものがあれば触りません。
+   これで outage に `pip install` が入りません。installer はこの path に完全な
+   candidate があれば再利用し、不完全なものは拒否します。
 
    ```bash
-   PY=$(sed -n 's/^export AGENTSTACK_PYTHON=//p' "$INSTALL/env.sh" | tr -d "'\"")
-   V="$INSTALL/mail-service/candidates/$SHA/venv"
-   git -C "$REPO" status --porcelain -- packages/agentstack_mail   # 空であること
-   uv venv --python "$PY" "$V"
-   uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail"
-   ls "$V/bin/agentstack-mail" "$V/bin/agentstack-mail-service" "$V/bin/agentstack-mail-migrate"
+   V="$SVC/candidates/$SHA/venv"
+   if [ -x "$V/bin/agentstack-mail" ] && [ -x "$V/bin/agentstack-mail-service" ] && [ -x "$V/bin/agentstack-mail-migrate" ]; then
+     echo "candidate complete; not touching it"
+   elif [ -e "$V" ]; then
+     echo "candidate exists but is incomplete; stop and investigate" >&2; false
+   else
+     [ -z "$(git -C "$REPO" status --porcelain -- packages/agentstack_mail)" ] || { echo "dirty package" >&2; false; }
+     uv venv --python "$PY" "$V"
+     uv pip install --python "$V/bin/python" "$REPO/packages/agentstack_mail"
+   fi
    ```
 
-3. **candidate を offline で検証する。** 稼働中の `service.env` を copy し、port を
-   変え、database・archive・signals を scratch path に向けて、candidate を
-   foreground で走らせ、production が必要とするものを probe します。canonical
-   path **と各 alias**（`/mcp`、`/api`）への `health_check` `tools/call`、代表的な
-   read を 1 つ（`whois`）。変更が引数の扱いや logging に触れるなら、tool が
-   拒否すべき request も送り、その拒否が応答にも scratch log にも呼び手由来の
-   値を含まないことを確かめます。
+3. **candidate を隔離した環境で offline 検証する。** server は python-decouple で
+   設定を読み、これは env file より process 環境を優先します。`env.sh` を
+   source 済みの shell（あるいは `AGENTSTACK_MAIL_*` が 1 つでも入った環境）から
+   起動すると scratch server が live の database を向きます。空の環境で起動
+   します。database の snapshot は `cp` ではなく SQLite の backup API で取ります。
+   live file は WAL mode で、main file だけの copy は commit 済みの page を欠く
+   ことがあります。snapshot は credential を含むので private に保ち、終わったら
+   削除します。
 
    ```bash
-   S=$(mktemp -d); mkdir -p "$S/state/archive" "$S/state/signals"
-   cp "$INSTALL/mail/storage.sqlite3" "$S/state/"
-   LIVE=$(sed -n 's/^export AGENTSTACK_MAIL_ENV=//p' "$INSTALL/env.sh")
-   sed -e 's#^AGENTSTACK_MAIL_HTTP_PORT=.*#AGENTSTACK_MAIL_HTTP_PORT=18799#' \
+   S=$(mktemp -d); chmod 700 "$S"; mkdir -p "$S/state/archive" "$S/state/signals"
+   "$PY" - "$STATE/storage.sqlite3" "$S/state/storage.sqlite3" <<'PY'
+   import sqlite3, sys
+   src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True); dst = sqlite3.connect(sys.argv[2])
+   src.backup(dst); dst.close(); src.close()
+   PY
+   SPORT=18799; [ -z "$(lsof -nP -iTCP:$SPORT -sTCP:LISTEN)" ] || { echo "scratch port busy" >&2; false; }
+   sed -e "s#^AGENTSTACK_MAIL_HTTP_PORT=.*#AGENTSTACK_MAIL_HTTP_PORT=$SPORT#" \
        -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
        -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
        -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
-       "$LIVE" > "$S/service.env"
-   AGENTSTACK_MAIL_ENV_FILE="$S/service.env" "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
-   # ... http://127.0.0.1:18799/mcp と /api を probe してから kill %1
+       "$OLD_ENV" > "$S/service.env"
+   grep -E '^AGENTSTACK_MAIL_HTTP_HOST=' "$S/service.env"     # loopback address であること
+   env -i HOME="$HOME" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$S/service.env" \
+     "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
+   SPID=$!
    ```
 
-4. **autostart unit をどかす。** unit は `env.sh` が指すものを起動し、この窓の
-   間それはまだ古い render です。あなたの停止と installer の起動の間に unit が
-   発火すると古い build が戻り、installer はそれを採用してしまいます。
+   probe は下の helper で行います。公開されている各 path（既定は `/mcp` と
+   `/api`。確実には render の `AGENTSTACK_MAIL_HTTP_PATH` と `_PATH_ALIASES` を
+   読む）に対して scratch endpoint を叩きます。
 
    ```bash
-   launchctl bootout "gui/$(id -u)/org.agentstack.mail"      # macOS
-   systemctl --user stop org.agentstack.mail.timer              # systemd
+   probe() {  # probe <url> <tool> '<json arguments>'  → 結果の text を出力
+     "$PY" - "$1" "$2" "$3" <<'PY'
+   import json, sys, urllib.request
+   url, tool, args = sys.argv[1:]
+   body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": tool, "arguments": json.loads(args)}}
+   req = urllib.request.Request(url, data=json.dumps(body).encode(),
+         headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+   print(urllib.request.urlopen(req, timeout=15).read().decode())
+   PY
+   }
+   probe "http://127.0.0.1:$SPORT/mcp" health_check '{}'   # database_url が $S/state/storage.sqlite3 を指すこと
+   probe "http://127.0.0.1:$SPORT/api" health_check '{}'   # alias でも同じ答え
+   probe "http://127.0.0.1:$SPORT/api" whois '{"project_key": "<live database にある project key>", "agent_name": "<そこにいる agent>"}'
+   probe "http://127.0.0.1:$SPORT/api" health_check '{"nonce": "canary-value"}'   # isError true、text は件数だけで "canary-value" を含まない
+   grep -c canary-value "$S/server.log"                    # 0
+   kill "$SPID"; wait "$SPID" 2>/dev/null; rm -rf "$S"
    ```
 
-   installer は run の最後で unit を登録し直します。
+   成功とは次のすべてです。両 path が scratch の `database_url` で `health_check`
+   に答える。read が record を返す。拒否された呼び出しが、応答にも scratch log
+   にも呼び手由来の値を含まない。1 つでも外れたら candidate は準備できておらず、
+   手順はここで止まります。
 
-5. **止めて、install する。** ここが outage window です。candidate を先に build
-   した状態で、1 台で測った値は停止から ready まで 12 秒でした。
+4. **現在の deployment を記録し、installer を dry-run する。** すべて動いている
+   うちに行います。dry run は既存の service を再利用すると言わなければなりません。
+   それ以外を言うなら live の状態はあなたの認識と違い、切替は待ちです。
+
+   ```bash
+   pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
+   ps -o command= -p "$pid"                                  # 旧 candidate の python。この行を控える
+   echo "$OLD_ENV"                                           # 旧 render。この行を控える
+   ( cd "$REPO" && bash scripts/install.sh --scoped --dry-run ) | grep -E "ORRERY Mail"
+   ```
+
+5. **autostart unit を押さえる。** unit は `env.sh` が指すものを起動し、installer が
+   `env.sh` を書き換えるまでそれは古い render です。あなたの停止と installer の
+   起動の間に発火すると古い build が戻り、installer はそれを採用します。
+
+   macOS:
+
+   ```bash
+   launchctl bootout "gui/$(id -u)/$LABEL"
+   launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && echo "still loaded" >&2
+   ```
+
+   systemd:
+
+   ```bash
+   systemctl --user stop "$LABEL.timer"
+   systemctl --user is-active "$LABEL.timer" && echo "still active" >&2
+   ```
+
+   続ける前に旧配置の残骸も探します。`agentstack-mail-service`、
+   `cutover-maintenance`、`current-deployment.env` を名指しする他の user unit や
+   cron entry があれば、先に無効化します。
+
+6. **止めて、install する。** ここが outage window です。candidate を先に build した
+   状態で 1 回測った値は、停止から ready まで 12 秒でした。`agentstack-mailctl stop`
+   は自分が記録した managed runner に signal を送り、endpoint が答えなくなるまで
+   待ちます。自分が起動していない process は止めません。
 
    ```bash
    "$INSTALL/bin/agentstack-mailctl" stop
-   cd "$REPO" && bash scripts/install.sh --scoped     # あなたの install が使う flag を添えて
+   lsof -nP -iTCP:$PORT -sTCP:LISTEN                         # 何も出ないこと
+   ( cd "$REPO" && bash scripts/install.sh --scoped )        # あなたの install が使う flag を添えて
    ```
 
-   installer の出力に期待する行: `no native listener found`、
+   installer の出力に、この順で期待する行:
+   `no native listener found`、
    `reuse immutable ORRERY Mail candidate venv .../candidates/$SHA/venv`、
-   `render namespaced ORRERY Mail service env .../renders/$SHA-<hash>/service.env`、
+   `render namespaced ORRERY Mail service env .../renders/$SHA-<id>/service.env`、
    `ORRERY Mail started (pid ..., ready after Ns)`、
-   `ORRERY Mail will restart at login`。前の `env.sh` を source 済みの shell で
-   構いません。installer は自分が書いた管理下の render path を認識し、新しい
-   render を解決します。それ**以外**の `AGENTSTACK_MAIL_ENV` の値は意図的に run
-   を止めます。
+   `ORRERY Mail will restart at login`。代わりに
+   `existing ORRERY Mail listener detected` が出たら、窓の間に何かが古い build を
+   起動して installer がそれを採用したということで、deployment は**起きていません**。
+   何が起動したかを突き止め、もう一度止めて、この手順をやり直します。
 
-6. **production を確かめてから完了と言う。**
+   前の `env.sh` を source 済みの shell で構いません。installer が inherited の
+   `AGENTSTACK_MAIL_ENV` を許すのは、installed の `env.sh` の値と等しく、service
+   root の `renders/` の下にあり、`AGENTSTACK_MAIL_SERVICE_ENV` が未設定のときだけ
+   です。それ以外の値は run を止めます。
+
+7. **production を確かめてから完了と言う。** すべての行が成り立たなければなり
+   ません。1 つでも外れたら deployment は完了していません。
 
    ```bash
-   pid=$(lsof -nP -iTCP:8765 -sTCP:LISTEN | awk 'NR>1{print $2}')
-   ps -o command= -p "$pid"                      # .../candidates/$SHA/venv/bin/python
-   sed -n 's/^export AGENTSTACK_MAIL_ENV=//p' "$INSTALL/env.sh"   # .../renders/$SHA-<hash>/service.env
-   launchctl list | grep org.agentstack.mail     # unit が再登録されている
+   pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN | awk 'NR>1{print $2}')
+   ps -o command= -p "$pid"                                  # .../candidates/$SHA/venv/bin/python
+   ( set +u; . "$INSTALL/env.sh"; echo "$AGENTSTACK_MAIL_ENV" ) # .../renders/$SHA-<id>/service.env
+   sed -n 2p "$SVC/runtime/agentstack-mail.pid"              # 同じ render の runner
+   launchctl list | grep "$LABEL"                            # macOS: unit が再登録されている
+   systemctl --user is-active "$LABEL.timer"                 # systemd
    "$INSTALL/bin/agentstack-mailctl" status
    "$INSTALL/bin/agentstack-selftest"
+   probe "$AGENTSTACK_MCP_URL" health_check '{}'             # database_url = $STATE/storage.sqlite3
    ```
 
-   手順 3 の probe を実際の port に対して繰り返します。`health_check` は
-   `database_url` を報告し、それは共有 database でなければなりません。`$SHA`、
-   新旧の render path、測った outage を deployment note に記録します。
+   手順 3 の probe を実際の endpoint に対して繰り返します。変更が引数の扱いや
+   logging に触れたなら、拒否される呼び出しも含めます。`$SHA`、新旧の render
+   path、outage、probe の結果を deployment note に記録します。
 
 ## Rollback
 
-前の candidate と render は disk に残っています。service を止め、前の commit を
-candidate として pin して installer をもう一度走らせます。
+**installer の source から読んだ手順で、未実行です。** 頼る前に scratch な install
+で検証する plan として扱ってください。
+
+前の candidate と render は disk に残っています。rollback は前の commit で前進
+手順を繰り返すことですが、違いが 2 つあります。第一に、
+`AGENTSTACK_MAIL_CANDIDATE_ID` は candidate directory の名前を決めるだけです。
+その directory が無いか不完全なら、installer は*現在の* checkout の package を
+旧い名前の下に build してしまいます。だから止める前に旧 candidate が完全である
+ことを確かめ、`AGENTSTACK_MAIL_SERVICE_VENV` で明示的に pin します。こうすると
+installer は build する代わりに失敗します。第二に、installer が管理する他の
+ものは走らせた checkout から来ます。
 
 ```bash
+OLD_SHA=<前の commit>; OLD_V="$SVC/candidates/$OLD_SHA/venv"
+ls "$OLD_V/bin/agentstack-mail" "$OLD_V/bin/agentstack-mail-service" "$OLD_V/bin/agentstack-mail-migrate"   # 3 つ全部。無ければここで止める
+# 手順 5: autostart unit を上と同じように押さえる
 "$INSTALL/bin/agentstack-mailctl" stop
-cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID=<前の commit> bash scripts/install.sh --scoped
+lsof -nP -iTCP:$PORT -sTCP:LISTEN                                     # 何も出ない
+( cd "$REPO" && AGENTSTACK_MAIL_CANDIDATE_ID="$OLD_SHA" AGENTSTACK_MAIL_SERVICE_VENV="$OLD_V" bash scripts/install.sh --scoped )
+# 手順 7 を $SHA の代わりに $OLD_SHA で
 ```
 
-installer は `candidates/<前の commit>/venv` をそのまま再利用し、それ用の service
-env を新しく render して起動し、`env.sh` と autostart unit を戻します。installer が
-管理する他のもの（hooks・dashboard・`bin/`）は走らせた checkout から来るので、
-Mail だけでなく install 全体を戻したいなら対応する commit を checkout してから
-走らせます。手順 6 のコマンドで確認します。unit は `env.sh` に従うので、別に
-更新する pointer はありません。
+unit は `env.sh` に従うので、別に更新する pointer はありません。
 
 ## 実際にどの build が動いているかを確認する
 
@@ -178,7 +292,7 @@ ps -o command= -p "$pid"          # which candidate's python is this
 同梱 service より前の deployment は `cutover-maintenance/` の下で
 `agentstack-mail-service render/stop/start` を手で走らせ、pointer file を読む
 supervisor を置いていました。その supervisor が一度（2026-08-26）古い build を
-静かに戻したため、現在の配置は supervisor をちょうど 1 つにし、それが `env.sh`
-を読む形になっています。`cutover-maintenance/` の下の cutover receipt は 2026-08
+静かに戻したため、installer の配置は `env.sh` を読む supervisor 1 つになり、
+手順 5 は残骸を探します。`cutover-maintenance/` の下の cutover receipt は 2026-08
 の cutover を行った candidate を pin しています。receipt は出来事を記述するので
 あって現在稼働中の build を記述するものではなく、この手順はそれを編集しません。
