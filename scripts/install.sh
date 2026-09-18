@@ -352,6 +352,9 @@ AGENT_MAIL_WATCHER_KIND=""
 AGENT_MAIL_WATCHER_PATH=""
 NATIVE_MAIL_EXISTING=false
 PROVISION_NATIVE_MAIL=false
+NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=true
+NATIVE_MAIL_ENROLL_AVAILABLE=true
+NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true
 NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
 NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-service}"
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
@@ -1207,7 +1210,8 @@ PY
 # listener; the same defect already made the documented manual start command fail
 # for updating users, before any autostart existed.)
 adopt_running_native_mail_render() {
-  local pid runner dir candidate="" requested_venv resolved_venv
+  local pid runner dir candidate="" requested_env requested_venv resolved_venv deployment_metadata
+  requested_env="$NATIVE_MAIL_ENV"
   requested_venv="$NATIVE_MAIL_VENV"
   # The pidfile agentstack-mailctl writes is TWO lines: the pid, then the runner
   # it started (bin/agentstack-mailctl write_pid). Read it exactly the way the
@@ -1241,24 +1245,63 @@ adopt_running_native_mail_render() {
     candidate="$(installed_env_mail_env)"
     [[ -n "$candidate" && -f "$candidate" ]] || candidate=""
   fi
-  [[ -n "$candidate" ]] || \
-    die "the running ORRERY Mail deployment has no identifiable service env; stop it and re-run the installer"
+  if [[ -z "$candidate" ]]; then
+    if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
+      die "cannot verify explicit AGENTSTACK_MAIL_SERVICE_VENV against the running ORRERY Mail deployment because its service env is not identifiable; stop Mail before switching candidates"
+    fi
+    if [[ -n "$NATIVE_MAIL_ENV_EXPLICIT" ]]; then
+      die "cannot verify explicit AGENTSTACK_MAIL_SERVICE_ENV against the running ORRERY Mail deployment because its service env is not identifiable; stop Mail before switching renders"
+    fi
+    NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=false
+    NATIVE_MAIL_ENROLL_AVAILABLE=false
+    NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=false
+    NATIVE_MAIL_ENV=""
+    NATIVE_MAIL_RUNNER=""
+    NATIVE_MAIL_DEPLOYMENT=""
+    NATIVE_MAIL_VENV=""
+    NATIVE_MAIL_ENROLL_BIN=""
+    NATIVE_MAIL_MANAGEMENT_SOCKET=""
+    MAIL_ENV=""
+    AGENT_MAIL_RUNNER=""
+    AGENT_MAIL_SERVICE_KIND=""
+    AGENT_MAIL_SERVICE_PATH=""
+    warn "reusing the healthy ORRERY Mail listener without changing it, but its deployment is not identifiable"
+    warn "enrollment is unavailable until Mail is stopped and install.sh provisions a managed deployment"
+    warn "this install did not update or register ORRERY Mail autostart; any existing trigger was left untouched and restart after login is not guaranteed"
+    return 0
+  fi
   candidate="$(normalize_path "$candidate")"
+  if [[ -n "$NATIVE_MAIL_ENV_EXPLICIT" ]]; then
+    requested_env="$(normalize_path "$requested_env")"
+    if [[ "$requested_env" != "$candidate" ]]; then
+      die "AGENTSTACK_MAIL_SERVICE_ENV '$requested_env' does not match the running ORRERY Mail deployment '$candidate'; stop Mail before switching renders"
+    fi
+  fi
+  deployment_metadata="$(dirname "$candidate")/deployment.json"
   resolved_venv="$(resolve_native_mail_candidate_for_render "$candidate")" || \
     die "the running ORRERY Mail service env has no trusted candidate association: $candidate"
   resolved_venv="$(normalize_path "$resolved_venv")"
   if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" && "$requested_venv" != "$resolved_venv" ]]; then
     die "AGENTSTACK_MAIL_SERVICE_VENV '$requested_venv' does not match the running ORRERY Mail deployment '$resolved_venv'; stop Mail before switching candidates"
   fi
-  [[ -x "$resolved_venv/bin/agentstack-enroll" ]] || \
-    die "the running ORRERY Mail deployment has no enrollment CLI: $resolved_venv/bin/agentstack-enroll; stop Mail and re-run the installer to provision a current candidate"
+  native_mail_service_binaries_ready "$resolved_venv" || \
+    die "the running ORRERY Mail deployment candidate is incomplete: $resolved_venv; stop Mail and re-run the installer to provision a current candidate"
   NATIVE_MAIL_ENV="$candidate"
   NATIVE_MAIL_RUNNER="$(dirname "$candidate")/run-agentstack-mail.sh"
   NATIVE_MAIL_DEPLOYMENT="$(dirname "$candidate")/deployment.json"
   [[ -f "$NATIVE_MAIL_DEPLOYMENT" ]] || NATIVE_MAIL_DEPLOYMENT=""
   NATIVE_MAIL_VENV="$resolved_venv"
-  NATIVE_MAIL_ENROLL_BIN="$resolved_venv/bin/agentstack-enroll"
   MAIL_ENV="$NATIVE_MAIL_ENV"
+  if [[ -x "$resolved_venv/bin/agentstack-enroll" ]]; then
+    NATIVE_MAIL_ENROLL_BIN="$resolved_venv/bin/agentstack-enroll"
+  elif [[ -e "$deployment_metadata" || -L "$deployment_metadata" ]]; then
+    die "the running ORRERY Mail deployment has no enrollment CLI: $resolved_venv/bin/agentstack-enroll; stop Mail and re-run the installer to provision a current candidate"
+  else
+    NATIVE_MAIL_ENROLL_AVAILABLE=false
+    NATIVE_MAIL_ENROLL_BIN=""
+    NATIVE_MAIL_MANAGEMENT_SOCKET=""
+    warn "the trusted legacy ORRERY Mail deployment has no enrollment CLI; existing Mail and autostart remain usable, but persistent-agent enrollment is unavailable until Mail is reprovisioned"
+  fi
   say "adopted the running ORRERY Mail deployment: $NATIVE_MAIL_ENV ($NATIVE_MAIL_VENV)"
 } # end adopt_running_native_mail_render
 
@@ -2016,11 +2059,16 @@ stop_new_agent_mail() {
   rm -f "$AGENT_MAIL_PIDFILE"
 }
 
+native_mail_service_binaries_ready() {
+  local venv="${1:-$NATIVE_MAIL_VENV}"
+  [[ -x "$venv/bin/agentstack-mail" && \
+     -x "$venv/bin/agentstack-mail-service" && \
+     -x "$venv/bin/agentstack-mail-migrate" ]]
+}
+
 native_mail_binaries_ready() {
-  [[ -x "$NATIVE_MAIL_VENV/bin/agentstack-mail" && \
-     -x "$NATIVE_MAIL_VENV/bin/agentstack-enroll" && \
-     -x "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" && \
-     -x "$NATIVE_MAIL_VENV/bin/agentstack-mail-migrate" ]]
+  native_mail_service_binaries_ready "$NATIVE_MAIL_VENV" && \
+    [[ -x "$NATIVE_MAIL_VENV/bin/agentstack-enroll" ]]
 }
 
 ensure_native_mail_candidate() {
@@ -2102,6 +2150,10 @@ PY
 
 write_enrollment_connection_profile() {
   local profile="$CONNECTIONS_DIR/local.json"
+  if [[ "$NATIVE_MAIL_ENROLL_AVAILABLE" != true ]]; then
+    plan "leave local operator enrollment connection profile unchanged (enrollment unavailable)"
+    return
+  fi
   plan "write local operator enrollment connection profile $profile"
   if [[ "$DRY_RUN" == true ]]; then
     return
@@ -2651,6 +2703,10 @@ legacy_mail_plist_looks_like_mail() {
 
 enable_mail_autostart() {
   local kind=""
+  if [[ "${NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL:-true}" != true ]]; then
+    warn "ORRERY Mail autostart was not updated because the running deployment is not identifiable; existing trigger files and registrations were left untouched"
+    return 0
+  fi
   case "$(uname -s)" in
     Darwin) command -v launchctl >/dev/null 2>&1 && kind="launchd" ;;
     Linux)  command -v systemctl >/dev/null 2>&1 && kind="systemd-user" ;;
@@ -3325,7 +3381,8 @@ write_manifest() {
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
     "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" \
     "${AGENT_MAIL_WATCHER_KIND:-}" "${AGENT_MAIL_WATCHER_PATH:-}" \
-    "$MAIL_WATCHER_LABEL" <<PY
+    "$MAIL_WATCHER_LABEL" "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" \
+    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" <<PY
 import json
 import os
 import pathlib
@@ -3345,6 +3402,9 @@ mail_autostart_service_path = sys.argv[10]
 mail_watcher_kind = sys.argv[11]
 mail_watcher_path = sys.argv[12]
 mail_watcher_label = sys.argv[13]
+mail_deployment_identified = sys.argv[14] == "true"
+mail_enrollment_available = sys.argv[15] == "true"
+mail_autostart_managed = sys.argv[16] == "true"
 install_dir = pathlib.Path("$INSTALL_DIR")
 claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
@@ -3514,13 +3574,15 @@ manifest = {
     ],
     "settings_backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
     "retained_paths": [
-        "$MAIL_DIR",
-        "$MAIL_HOME",
-        "$MAIL_DB",
-        "$MAIL_ENV",
-        "$RUNTIME_DIR",
-        "$PERSISTENT_PROFILES_DIR",
-        "$CONNECTIONS_DIR",
+        path for path in (
+            "$MAIL_DIR",
+            "$MAIL_HOME",
+            "$MAIL_DB",
+            "$MAIL_ENV",
+            "$RUNTIME_DIR",
+            "$PERSISTENT_PROFILES_DIR",
+            "$CONNECTIONS_DIR",
+        ) if path
     ],
     "purge_paths": [
         "$MAIL_DIR",
@@ -3542,6 +3604,9 @@ manifest["agent_mail"]["candidate_venv"] = "$NATIVE_MAIL_VENV"
 manifest["agent_mail"]["service_env"] = "$NATIVE_MAIL_ENV"
 manifest["agent_mail"]["deployment_metadata"] = "$NATIVE_MAIL_DEPLOYMENT"
 manifest["agent_mail"]["enroll_bin"] = "$NATIVE_MAIL_ENROLL_BIN"
+manifest["agent_mail"]["deployment_identified"] = mail_deployment_identified
+manifest["agent_mail"]["enrollment_available"] = mail_enrollment_available
+manifest["agent_mail"]["autostart_managed_by_this_install"] = mail_autostart_managed
 manifest["env"].update({
     "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
     "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",

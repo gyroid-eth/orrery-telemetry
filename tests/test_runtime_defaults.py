@@ -904,10 +904,18 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
+    fixture_enroll = (
+        pathlib.Path(sys.executable).parent.parent.resolve()
+        / "bin"
+        / "agentstack-enroll"
+    )
+    assert manifest["env"]["AGENTSTACK_MAIL_ENROLL_BIN"] == str(fixture_enroll)
+    assert manifest["agent_mail"]["enroll_bin"] == str(fixture_enroll)
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
     assert set(sample["env"]) == set(manifest["env"])
+    assert set(sample["agent_mail"]) == set(manifest["agent_mail"])
     assert set(sample["agent_mail"]["requested_name_honoring"]) == set(
         manifest["agent_mail"]["requested_name_honoring"]
     )
@@ -937,6 +945,12 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
+    # This isolated fixture pins the repository's development venv. The public
+    # sample depicts the normal immutable candidate selected by an unpinned
+    # install, so normalize only this deployment-derived executable path.
+    normalized_env["AGENTSTACK_MAIL_ENROLL_BIN"] = sample["env"][
+        "AGENTSTACK_MAIL_ENROLL_BIN"
+    ]
     assert normalized_env == sample["env"]
     for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
