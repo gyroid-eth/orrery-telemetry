@@ -1215,13 +1215,15 @@ def _instrumented_watcher_functions() -> tuple[str, str]:
     }
     delivery = functions["deliver_worker"]
     success = '    state_mark_result "$agent_name" "$msg_key" "success" "watcher"'
-    release = '    release_delivery_lease "$agent_name" "$msg_key"'
+    release = (
+        '    release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"'
+    )
     unlink = '        rm -f "$signal_file" 2>/dev/null || true'
     assert delivery.count(success) == 1
-    assert delivery.count(unlink) == 1
     success_at = delivery.index(success)
     release_at = delivery.index(release, success_at)
-    assert success_at < release_at < delivery.index(unlink)
+    unlink_at = delivery.index(unlink, release_at)
+    assert success_at < release_at < unlink_at
     delivery = delivery.replace(
         success,
         '    crash_if "after_external_injection"\n'
@@ -1236,10 +1238,11 @@ def _instrumented_watcher_functions() -> tuple[str, str]:
         + '\n    crash_if "after_lease_release"'
         + delivery[release_at + len(release) :]
     )
-    delivery = delivery.replace(
-        unlink,
-        '        crash_if "before_unlink"\n' + unlink,
-        1,
+    unlink_at = delivery.index(unlink, delivery.index(release, delivery.index(success)))
+    delivery = (
+        delivery[:unlink_at]
+        + '        crash_if "before_unlink"\n'
+        + delivery[unlink_at:]
     )
     functions["deliver_worker"] = delivery
     return "\n".join(functions.values()), source
@@ -1247,9 +1250,10 @@ def _instrumented_watcher_functions() -> tuple[str, str]:
 
 def _watcher_shell(functions: str, *, deliver: bool) -> str:
     action = (
-        'acquire_delivery_lease "$TEST_AGENT" "$TEST_MSG_KEY"\n'
+        'lease_owner=$(acquire_delivery_lease "$TEST_AGENT" "$TEST_MSG_KEY")\n'
         'deliver_worker "$TEST_SIGNAL" "$TEST_AGENT" "$TEST_MSG_KEY" '
-        '"GreenCastle" "D12 completion delivery" "high" "1"\n'
+        '"GreenCastle" "D12 completion delivery" "high" "1" "" "0" '
+        '"$lease_owner"\n'
         if deliver
         else 'state_should_attempt "$TEST_AGENT" "$TEST_MSG_KEY"\n'
     )
@@ -1257,8 +1261,10 @@ def _watcher_shell(functions: str, *, deliver: bool) -> str:
 STATE_FILE="$TEST_STATE_FILE"
 LEASE_DIR="$TEST_LEASE_DIR"
 RETRY_COOLDOWN=30
-LEASE_TTL=120
+HEADLESS_REPLY_TIMEOUT=300
+LEASE_TTL=$((HEADLESS_REPLY_TIMEOUT + 30))
 TMUX_TIMEOUT=1
+PERSISTENT_DELIVER=/nonexistent/agentstack-persistent-deliver
 mkdir -p "$LEASE_DIR"
 log() {{ :; }}
 crash_if() {{
@@ -1414,7 +1420,7 @@ def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
         _assert_injection_commands(commands, expected_count=1)
 
         if crash_point == "after_external_injection":
-            # Model lease expiry without waiting 120 seconds.  With no success
+            # Model lease expiry without waiting through the reply deadline. With no success
             # state, the exact watcher functions accept the same signal again,
             # demonstrating the documented at-least-once/duplicate window.
             (lease_path / "ts").write_text("0\n", encoding="utf-8")
@@ -1509,21 +1515,25 @@ def test_d12_selected_parity_source_order_exposes_external_application_seam() ->
         )
         == 1
     )
-    assert (
-        len(
-            re.findall(
-                r"^LEASE_TTL=120(?:\s+#.*)?$",
-                source,
-                re.MULTILINE,
-            )
-        )
-        == 1
+    reply_timeout = source.index(
+        'HEADLESS_REPLY_TIMEOUT="${AGENTSTACK_HEADLESS_REPLY_TIMEOUT:-300}"'
     )
+    lease_ttl = source.index("LEASE_TTL=$((HEADLESS_REPLY_TIMEOUT + 30))")
+    assert reply_timeout < lease_ttl
     handler = _extract_shell_function(source, "handle_signal_file")
-    should_attempt = handler.index('state_should_attempt "$agent_name" "$msg_key"')
+    should_attempts = [
+        match.start()
+        for match in re.finditer(
+            re.escape('state_should_attempt "$agent_name" "$msg_key"'), handler
+        )
+    ]
+    assert len(should_attempts) == 2
+    worker_wait = handler.index(
+        'while [ "$(jobs -p 2>/dev/null | wc -l | tr -d \' \')" -ge "$MAX_WORKERS" ]'
+    )
     acquire = handler.index('acquire_delivery_lease "$agent_name" "$msg_key"')
     worker = handler.index('deliver_worker "$signal_file" "$agent_name" "$msg_key"')
-    assert should_attempt < acquire < worker
+    assert should_attempts[0] < worker_wait < should_attempts[1] < acquire < worker
     delivery = _extract_shell_function(source, "deliver_worker")
     submit = delivery.index('tmux send-keys -t "$session_name" C-m')
     success = delivery.index(

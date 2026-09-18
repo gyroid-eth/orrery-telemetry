@@ -76,6 +76,8 @@
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>
     <string>__RUNTIME_DIR__</string>
+    <key>AGENTSTACK_PERSISTENT_PROFILES_DIR</key>
+    <string>__PERSISTENT_PROFILES_DIR__</string>
     <key>AGENTSTACK_DASHBOARD_LOG</key>
     <string>__DASHBOARD_LOG__</string>
     <key>AGENTSTACK_DASHBOARD_LOG_MAX_BYTES</key>

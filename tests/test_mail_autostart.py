@@ -18,6 +18,8 @@ Runnable two ways (no third-party dependency required):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import plistlib
@@ -309,7 +311,124 @@ def _call_installer_function(body: str, tmp: pathlib.Path) -> subprocess.Complet
                           text=True, timeout=120)
 
 
-def test_an_existing_service_env_is_adopted_from_the_running_runner():
+def _managed_running_render(
+    tmp: pathlib.Path, *, enroll: bool = True, known: bool = True,
+    deployment_metadata: bool = False,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, str, str]:
+    tmp = tmp.resolve()
+    service_root = tmp / "mail-service"
+    state_root = tmp / "mail-state"
+    source_id = "old-source"
+    venv = service_root / "candidates" / source_id / "venv"
+    (venv / "bin").mkdir(parents=True)
+    for executable in (
+        "agentstack-mail",
+        "agentstack-mail-service",
+        "agentstack-mail-migrate",
+    ):
+        _write_command(venv / "bin", executable, "#!/bin/sh\nexit 0\n")
+    if enroll:
+        _write_command(venv / "bin", "agentstack-enroll", "#!/bin/sh\nexit 0\n")
+    mcp_url = "http://127.0.0.1:18765/mcp"
+    payload = "\0".join((source_id, str(venv), mcp_url, str(state_root))).encode()
+    render_id = hashlib.sha256(payload).hexdigest()[:20]
+    if known:
+        live = service_root / "renders" / f"{source_id}-{render_id}"
+    else:
+        live = service_root / "renders" / "unknown"
+    live.mkdir(parents=True)
+    (live / "service.env").write_text("# live\n", encoding="utf-8")
+    if deployment_metadata:
+        deployment = {
+            "kind": "orrery-mail-deployment-v1",
+            "service_env": str((live / "service.env").resolve()),
+            "state_root": str(state_root.resolve()),
+            "mcp_url": mcp_url,
+            "candidate_venv": str(venv.resolve()),
+            "source_id": source_id,
+            "enroll_bin": str(venv.resolve() / "bin" / "agentstack-enroll"),
+        }
+        metadata = live / "deployment.json"
+        metadata.write_text(json.dumps(deployment), encoding="utf-8")
+        metadata.chmod(0o600)
+    runner = live / "run-agentstack-mail.sh"
+    runner.write_text("#!/bin/bash\nsleep 30\n", encoding="utf-8")
+    runner.chmod(0o755)
+    return service_root, state_root, venv, mcp_url, str(runner)
+
+
+def _adopt_running_render(
+    tmp: pathlib.Path, *, enroll: bool = True, known: bool = True,
+    explicit_venv: pathlib.Path | None = None,
+    explicit_env_matches: bool | None = None,
+    deployment_metadata: bool = False,
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+    service_root, state_root, venv, mcp_url, raw_runner = _managed_running_render(
+        tmp, enroll=enroll, known=known,
+        deployment_metadata=deployment_metadata,
+    )
+    runner = pathlib.Path(raw_runner)
+    proc = subprocess.Popen(["/bin/bash", str(runner)])
+    try:
+        pidfile = service_root / "runtime" / "agentstack-mail.pid"
+        pidfile.parent.mkdir(parents=True)
+        stale = service_root / "renders" / "planned" / "service.env"
+        requested_venv = explicit_venv or service_root / "candidates" / "new-source" / "venv"
+        explicit = "x" if explicit_venv is not None else ""
+        if explicit_env_matches is None:
+            requested_env = stale
+            explicit_env = ""
+        elif explicit_env_matches:
+            requested_env = runner.parent / "service.env"
+            explicit_env = "x"
+        else:
+            requested_env = service_root / "renders" / "operator-selected" / "service.env"
+            explicit_env = "x"
+        result = _call_installer_function(
+            f"PIDFILE='{pidfile}'\n"
+            f"MAIL_RUNNER='{runner}'\n"
+            f"eval \"$(sed -n '/^write_pid()/,/^}}$/p' {MAILCTL})\"\n"
+            f"write_pid {proc.pid}\n"
+            f"PYTHON_BIN='{sys.executable}'\n"
+            f"NATIVE_MAIL_PIDFILE='{pidfile}'\n"
+            f"NATIVE_MAIL_SERVICE_ROOT='{service_root}'\n"
+            f"NATIVE_MAIL_STATE_ROOT='{state_root}'\n"
+            f"NATIVE_MAIL_ENV='{requested_env}'\n"
+            f"NATIVE_MAIL_RUNNER='{stale.parent}/run-agentstack-mail.sh'\n"
+            f"NATIVE_MAIL_VENV='{requested_venv}'\n"
+            f"NATIVE_MAIL_VENV_EXPLICIT='{explicit}'\n"
+            f"NATIVE_MAIL_ENV_EXPLICIT='{explicit_env}'\n"
+            "NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=true\n"
+            "NATIVE_MAIL_ENROLL_AVAILABLE=true\n"
+            "NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true\n"
+            "NATIVE_MAIL_MANAGEMENT_SOCKET=/tmp/test-mail-management.sock\n"
+            f"MCP_URL='{mcp_url}'\n"
+            f"MAIL_ENV='{requested_env}'\n"
+            f"INSTALL_DIR='{tmp}/agentstack'\n"
+            "say() { :; }\n"
+            "warn() { printf 'warning: %s\\n' \"$*\" >&2; }\n"
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }\n"
+            f"eval \"$(sed -n '/^normalize_path()/,/^}}$/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^installed_env_mail_env()/,/^}}$/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^resolve_native_mail_candidate_for_render()/,"
+            f"/^}} # end resolve_native_mail_candidate_for_render/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^native_mail_service_binaries_ready()/,"
+            f"/^}}$/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^adopt_running_native_mail_render()/,"
+            f"/^}} # end adopt_running_native_mail_render/p' {INSTALLER})\"\n"
+            "adopt_running_native_mail_render\n"
+            'printf "%s\\n%s\\n%s\\n" "$MAIL_ENV" "$NATIVE_MAIL_VENV" '
+            '"$NATIVE_MAIL_ENROLL_BIN"\n',
+            tmp,
+        )
+        pidfile_lines = pidfile.read_text(encoding="utf-8").splitlines()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    return result, pidfile_lines
+
+
+def test_an_existing_service_env_and_enroll_cli_are_adopted_from_the_running_runner():
     """env.sh must describe the service that is running, not one this run planned.
 
     Reported by review (PeachEinstein, 2026-08-16) from an isolated full install
@@ -325,45 +444,75 @@ def test_an_existing_service_env_is_adopted_from_the_running_runner():
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
-        live = tmp / "renders" / "live"
-        live.mkdir(parents=True)
-        (live / "service.env").write_text("# live\n", encoding="utf-8")
-        runner = live / "run-agentstack-mail.sh"
-        runner.write_text("#!/bin/bash\nsleep 30\n", encoding="utf-8")
-        runner.chmod(0o755)
-        proc = subprocess.Popen(["/bin/bash", str(runner)])
-        try:
-            pidfile = tmp / "mail.pid"
-            stale = tmp / "renders" / "planned" / "service.env"
-            r = _call_installer_function(
-                f"PIDFILE=\'{pidfile}\'\n"
-                f"MAIL_RUNNER=\'{runner}\'\n"
-                f"eval \"$(sed -n '/^write_pid()/,/^}}$/p' {MAILCTL})\"\n"
-                f"write_pid {proc.pid}\n"
-                f"NATIVE_MAIL_PIDFILE=\'{pidfile}\'\n"
-                f"NATIVE_MAIL_ENV=\'{stale}\'\n"
-                f"NATIVE_MAIL_RUNNER={stale.parent}/run-agentstack-mail.sh\n"
-                f"MAIL_ENV=\'{stale}\'\n"
-                f"INSTALL_DIR={tmp}/agentstack\n"
-                "say() { :; }\n"
-                f"eval \"$(sed -n '/^adopt_running_native_mail_render()/,"
-                f"/^}} # end adopt_running_native_mail_render/p' {INSTALLER})\"\n"
-                "adopt_running_native_mail_render\n"
-                'printf "%s\\n" "$MAIL_ENV"\n',
-                tmp,
-            )
-            pidfile_lines = pidfile.read_text(encoding="utf-8").splitlines()
-        finally:
-            proc.terminate()
-            proc.wait(timeout=10)
+        r, pidfile_lines = _adopt_running_render(tmp)
     assert r.returncode == 0, r.stdout + r.stderr
     assert len(pidfile_lines) == 2, (
         f"the controller's pidfile format changed: {pidfile_lines}"
     )
-    adopted = r.stdout.strip().splitlines()[-1]
-    assert adopted == str(live / "service.env"), (
-        f"the running service env was not adopted; env.sh would record {adopted}"
+    adopted_env, adopted_venv, adopted_enroll = r.stdout.strip().splitlines()[-3:]
+    assert pathlib.Path(adopted_env).parent.name.startswith("old-source-")
+    assert pathlib.Path(adopted_venv).parts[-3:] == (
+        "candidates", "old-source", "venv",
     )
+    assert adopted_enroll == str(pathlib.Path(adopted_venv) / "bin" / "agentstack-enroll")
+
+
+def test_metadata_backed_deployment_without_enroll_cli_stops_without_switching_it():
+    with tempfile.TemporaryDirectory() as td:
+        result, _ = _adopt_running_render(
+            pathlib.Path(td), enroll=False, deployment_metadata=True
+        )
+    assert result.returncode != 0
+    assert "running ORRERY Mail deployment has no enrollment CLI" in result.stderr
+    assert "stop Mail and re-run" in result.stderr
+
+
+def test_trusted_legacy_deployment_without_enroll_cli_keeps_mail_but_disables_enrollment():
+    with tempfile.TemporaryDirectory() as td:
+        result, _ = _adopt_running_render(pathlib.Path(td), enroll=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    adopted_env, adopted_venv = result.stdout.strip().splitlines()[-2:]
+    assert adopted_env.endswith("/service.env")
+    assert adopted_venv.endswith("/candidates/old-source/venv")
+    assert "trusted legacy ORRERY Mail deployment has no enrollment CLI" in result.stderr
+
+
+def test_an_existing_deployment_without_trusted_metadata_stops_explicitly():
+    with tempfile.TemporaryDirectory() as td:
+        result, _ = _adopt_running_render(pathlib.Path(td), known=False)
+    assert result.returncode != 0
+    assert "deployment metadata rejected: legacy-render-association" in result.stderr
+    assert "no trusted candidate association" in result.stderr
+
+
+def test_explicit_service_venv_cannot_disagree_with_the_running_deployment():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        explicit = tmp / "operator-selected" / "venv"
+        result, _ = _adopt_running_render(tmp, explicit_venv=explicit)
+    assert result.returncode != 0
+    assert "does not match the running ORRERY Mail deployment" in result.stderr
+
+
+def test_matching_explicit_service_env_is_adopted():
+    with tempfile.TemporaryDirectory() as td:
+        result, _ = _adopt_running_render(
+            pathlib.Path(td), explicit_env_matches=True
+        )
+    assert result.returncode == 0, result.stdout + result.stderr
+    adopted_env = result.stdout.strip().splitlines()[-3]
+    assert adopted_env.endswith("/service.env")
+    assert "old-source-" in adopted_env
+
+
+def test_explicit_service_env_cannot_disagree_with_the_running_deployment():
+    with tempfile.TemporaryDirectory() as td:
+        result, _ = _adopt_running_render(
+            pathlib.Path(td), explicit_env_matches=False
+        )
+    assert result.returncode != 0
+    assert "AGENTSTACK_MAIL_SERVICE_ENV" in result.stderr
+    assert "does not match the running ORRERY Mail deployment" in result.stderr
 
 
 def test_no_trigger_is_registered_when_the_service_env_is_missing():

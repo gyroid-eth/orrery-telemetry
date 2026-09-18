@@ -113,6 +113,14 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
 
 The helper reads the owner token from runtime state and restores the identity with the same name. Do not create a different name when same-name registration fails. A different name separates the inbox, thread, reservations, and audit history.
 
+`agentstack-reregister` consumes an existing token; it does not issue one. For a parentless bot that never passed through a launcher, an initial claim of a `server-null` row, or explicit recovery after the exact `stage=local-token reason=credential-unavailable` diagnostic, an operator—not the model—follows [Persistent-agent enrollment and startup](persistent-agents.en.md). Ordinary restarts do not repeat enrollment.
+
+## Persistent parentless agents
+
+A bot that reuses the same identity after restart can run through an `agentstack-persistent` profile. The profile keeps provider, parentless status, persistent lifecycle, and interactive/headless mode in separate fields. It `exec`s the command only after matching the saved credential, Mail authority, and numeric row. It never enrolls automatically or creates an alias. Interactive Claude preserves the normal `--channels plugin:...` selector, inspects a finite set of effective configuration sources including `.mcp.json` files from the working directory through the filesystem root, current checkout-local settings for normal/separate-gitdir repositories, main-checkout local settings for linked worktrees, and installed plugins resolved through the effective inventory / marketplace registry / catalog, and replaces only standalone Mail aliases with same-named bound overlays. Unsupported plugin or managed configuration and unreadable effective sources are rejected before startup rather than guessed.
+
+[Persistent-agent enrollment and startup](persistent-agents.en.md) is the operational source of truth for new bots, migration of existing bots, credential recovery, Claude Channels PTY preservation, headless bridges, and a second Mail instance or machine.
+
 ## `CLAUDECODE` guard
 
 The launcher and child spawner set the following in each tmux session's environment:
@@ -225,6 +233,7 @@ See [Hooks and operational helpers](hooks.en.md) for the trigger timing, caller,
 ## Related documentation
 
 - [Hooks and operational helpers](hooks.en.md)
+- [Persistent-agent enrollment and startup](persistent-agents.en.md)
 - [Codex App integration](codex-app.en.md)
 - [Dashboard](dashboard.en.md)
 - [Configuration](configuration.en.md)

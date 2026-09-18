@@ -72,7 +72,64 @@ class Agent(SQLModel, table=True):
     attachments_policy: str = Field(default="auto", max_length=16)
     contact_policy: str = Field(default="auto", max_length=16)  # open | auto | contacts_only | block_all
     registration_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    # Monotonic compare-and-swap generation for operator enrollment.  Legacy
+    # rows start at zero; the first claim/recovery advances them to one.
+    credential_generation: int = Field(default=0)
     retired_at: Optional[datetime] = Field(default=None)
+
+
+class MailInstance(SQLModel, table=True):
+    """Stable identity of one ORRERY Mail database, independent of its URL."""
+
+    __tablename__ = "mail_instances"
+
+    id: int = Field(default=1, primary_key=True)
+    instance_id: str = Field(index=True, unique=True, max_length=64)
+    created_at: datetime = Field(default_factory=_utcnow_naive)
+
+
+class EnrollmentRequest(SQLModel, table=True):
+    """Non-secret idempotency record for one operator enrollment request."""
+
+    __tablename__ = "enrollment_requests"
+
+    request_id: str = Field(primary_key=True, max_length=64)
+    server_instance_id: str = Field(max_length=64)
+    expected_server_instance_id: str = Field(max_length=64)
+    project_key: str = Field(max_length=2048)
+    agent_id: int = Field(index=True)
+    expected_name: Optional[str] = Field(default=None, max_length=128)
+    operation: str = Field(max_length=16)
+    expected_generation: int
+    new_fingerprint: str = Field(max_length=64)
+    result: str = Field(max_length=16)
+    reason: str = Field(max_length=64)
+    old_generation: int
+    new_generation: int
+    old_fingerprint: Optional[str] = Field(default=None, max_length=64)
+    created_at: datetime = Field(default_factory=_utcnow_naive)
+
+
+class EnrollmentAudit(SQLModel, table=True):
+    """Local audit record written in the same transaction as a credential CAS."""
+
+    __tablename__ = "enrollment_audits"
+    __table_args__ = (Index("idx_enrollment_audits_request", "request_id"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    occurred_at: datetime = Field(default_factory=_utcnow_naive, index=True)
+    request_id: str = Field(max_length=64)
+    peer_uid: int
+    server_instance_id: str = Field(max_length=64)
+    project_key: str = Field(max_length=2048)
+    agent_id: int
+    operation: str = Field(max_length=16)
+    old_generation: int
+    new_generation: int
+    old_fingerprint: Optional[str] = Field(default=None, max_length=64)
+    new_fingerprint: Optional[str] = Field(default=None, max_length=64)
+    reason: str = Field(max_length=64)
+    result: str = Field(max_length=16)
 
 
 class MessageRecipient(SQLModel, table=True):

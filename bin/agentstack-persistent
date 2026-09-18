@@ -1,0 +1,1509 @@
+#!/usr/bin/env python3
+"""Validate and exec one enrolled persistent AgentStack profile.
+
+The operator enrolls the numeric Mail row separately.  This launcher never
+creates or rotates credentials: it verifies the pinned authority, row, name,
+and local credential through ``agentstack-enroll inspect`` before preparing a
+bound proxy and replacing itself with the profile command.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+import tomllib
+import uuid
+from datetime import date, datetime
+from typing import Any, NoReturn, Sequence
+from urllib.parse import urlsplit
+
+
+PROFILE_KIND = "orrery-persistent-agent-v1"
+BRIDGE_CONTRACT = "orrery-mail-notification-reply-v1"
+DOCS = "docs/persistent-agents.md"
+SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+SENSITIVE_ENV = re.compile(r"(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY)", re.I)
+CLAUDE_MAIL_NAMES = frozenset(
+    {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail", "agentstack"}
+)
+CLAUDE_MANAGED_FILES = (
+    Path("/Library/Application Support/ClaudeCode/managed-mcp.json"),
+    Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+)
+CLAUDE_EXTRA_SETTINGS_FLAGS = frozenset({"--settings", "--setting-sources", "--safe-mode"})
+CLAUDE_GIT_DISCOVERY_ENV = frozenset(
+    {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
+)
+CLAUDE_PLUGIN_COMPONENT_FIELDS = frozenset(
+    {
+        "skills",
+        "commands",
+        "agents",
+        "workflows",
+        "hooks",
+        "mcpServers",
+        "outputStyles",
+        "lspServers",
+        "experimental",
+        "userConfig",
+        "channels",
+        "dependencies",
+    }
+)
+ALLOWED_PROFILE_KEYS = {
+    "kind",
+    "name",
+    "agent_id",
+    "project_key",
+    "connection",
+    "provider",
+    "parentless",
+    "lifecycle",
+    "interaction",
+    "state_dir",
+    "working_directory",
+    "command",
+    "environment",
+    "source_home",
+    "bridge_contract",
+    "description",
+}
+
+
+class PersistentError(RuntimeError):
+    def __init__(self, reason: str, *, path: Path | None = None) -> None:
+        super().__init__(reason)
+        self.path = path
+
+
+class _DuplicateJsonMember(ValueError):
+    pass
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agentstack-persistent",
+        description=(
+            "Verify an operator-enrolled persistent identity, prepare its bound "
+            "proxy, and exec its interactive CLI or headless bridge."
+        ),
+        epilog=(
+            "First use agentstack-enroll inspect, then claim/recover and verify its "
+            "receipt. Start with: agentstack-persistent run --profile PROFILE. "
+            f"See {DOCS}."
+        ),
+    )
+    commands = parser.add_subparsers(dest="operation", required=True)
+    for operation, help_text in (
+        ("inspect", "validate the profile and enrolled row without starting it"),
+        ("run", "validate, take the instance lock, and exec the configured process"),
+    ):
+        command = commands.add_parser(operation, help=help_text)
+        command.add_argument("--profile", required=True, help="0600 persistent profile JSON path")
+    return parser
+
+
+def _expand_path(raw: str, *, base: Path | None = None) -> Path:
+    path = Path(os.path.expandvars(raw)).expanduser()
+    if not path.is_absolute() and base is not None:
+        path = base / path
+    return path.absolute()
+
+
+def _read_owned_regular(path: Path, reason: str, *, limit: int = 1_048_576) -> str:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise PersistentError(reason) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise PersistentError(reason)
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise PersistentError(reason)
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > limit:
+        raise PersistentError(reason)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PersistentError(reason) from exc
+
+
+def _read_private_json(path: Path, reason: str) -> dict[str, Any]:
+    try:
+        value = json.loads(_read_owned_regular(path, reason))
+    except json.JSONDecodeError as exc:
+        raise PersistentError(reason) from exc
+    if not isinstance(value, dict):
+        raise PersistentError(reason)
+    return value
+
+
+def _profile(path: Path) -> dict[str, Any]:
+    raw = _read_private_json(path, "profile-invalid")
+    if raw.get("kind") != PROFILE_KIND or set(raw) - ALLOWED_PROFILE_KEYS:
+        raise PersistentError("profile-invalid")
+    name = raw.get("name")
+    if not isinstance(name, str) or SAFE_NAME.fullmatch(name) is None:
+        raise PersistentError("profile-invalid")
+    if type(raw.get("agent_id")) is not int or raw["agent_id"] < 1:
+        raise PersistentError("profile-invalid")
+    if not isinstance(raw.get("project_key"), str) or not raw["project_key"]:
+        raise PersistentError("profile-invalid")
+    provider = raw.get("provider")
+    if not isinstance(provider, str) or provider not in {"claude", "codex"}:
+        raise PersistentError("profile-invalid")
+    if raw.get("parentless") is not True or raw.get("lifecycle") != "persistent":
+        raise PersistentError("profile-invalid")
+    interaction = raw.get("interaction")
+    if not isinstance(interaction, str) or interaction not in {"interactive", "headless"}:
+        raise PersistentError("profile-invalid")
+    for key in ("connection", "state_dir", "working_directory"):
+        if not isinstance(raw.get(key), str) or not raw[key]:
+            raise PersistentError("profile-invalid")
+        raw[key] = str(_expand_path(raw[key], base=path.parent))
+    command = raw.get("command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(item, str) or not item or "\x00" in item for item in command)
+    ):
+        raise PersistentError("profile-invalid")
+    executable_name = Path(command[0]).name
+    if raw["interaction"] == "interactive":
+        expected_executable = "claude" if raw["provider"] == "claude" else "codex"
+        if executable_name != expected_executable:
+            raise PersistentError("interactive-provider-command-mismatch")
+        if raw["provider"] == "claude" and "--channels" not in command:
+            raise PersistentError("interactive-claude-channels-required")
+    elif executable_name in {"claude", "codex"}:
+        raise PersistentError("headless-bridge-command-required")
+    environment = raw.get("environment", {})
+    if not isinstance(environment, dict):
+        raise PersistentError("profile-invalid")
+    forbidden = {
+        "AGENT_NAME",
+        "PARENT_AGENT",
+        "CHILD_REGISTRATION_TOKEN",
+        "AGENTSTACK_RESERVED_IDENTITY",
+        "AGENTSTACK_PROXY_AGENT_NAME",
+        "AGENTSTACK_PROXY_TOKEN_FILE",
+    }
+    for key, value in environment.items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or key in forbidden
+            or SENSITIVE_ENV.search(key)
+        ):
+            raise PersistentError("profile-environment-invalid")
+    if raw["interaction"] == "headless":
+        if raw.get("bridge_contract") != BRIDGE_CONTRACT:
+            raise PersistentError("headless-bridge-contract-required")
+    elif "bridge_contract" in raw:
+        raise PersistentError("profile-invalid")
+    if "source_home" in raw:
+        if raw["provider"] != "codex" or not isinstance(raw["source_home"], str):
+            raise PersistentError("profile-invalid")
+        raw["source_home"] = str(_expand_path(raw["source_home"], base=path.parent))
+    return raw
+
+
+def _connection(profile: dict[str, Any]) -> tuple[Path, dict[str, Any], Path]:
+    path = Path(profile["connection"])
+    value = _read_private_json(path, "connection-profile-invalid")
+    if value.get("kind") != "orrery-mail-connection-v1":
+        raise PersistentError("connection-profile-invalid")
+    pinned = value.get("expected_server_instance_id")
+    runtime = value.get("runtime_dir")
+    if not isinstance(pinned, str) or not pinned:
+        raise PersistentError("connection-not-pinned")
+    if not isinstance(runtime, str) or not runtime:
+        raise PersistentError("connection-profile-invalid")
+    mcp_url = value.get("mcp_url")
+    if not isinstance(mcp_url, str) or not mcp_url:
+        raise PersistentError("connection-profile-invalid")
+    parsed_url = urlsplit(mcp_url)
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or parsed_url.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+    ):
+        raise PersistentError("connection-not-local")
+    mail_env = value.get("mail_env")
+    if not isinstance(mail_env, str) or not mail_env:
+        raise PersistentError("connection-profile-invalid")
+    value["mail_env"] = str(_expand_path(mail_env, base=path.parent))
+    bearer_mode = value.get("http_bearer_mode", "auto")
+    if not isinstance(bearer_mode, str) or bearer_mode not in {
+        "auto",
+        "disabled",
+        "required",
+    }:
+        raise PersistentError("connection-profile-invalid")
+    return path, value, _expand_path(runtime, base=path.parent)
+
+
+def _enroll_inspect(profile: dict[str, Any], connection_path: Path) -> dict[str, Any]:
+    sibling = Path(__file__).resolve().with_name("agentstack-enroll")
+    executable = Path(
+        os.environ.get("AGENTSTACK_ENROLL_BIN")
+        or os.environ.get("AGENTSTACK_MAIL_ENROLL_BIN")
+        or str(sibling)
+    ).expanduser()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise PersistentError("enroll-cli-unavailable")
+    command = [
+        str(executable),
+        "inspect",
+        "--agent-id",
+        str(profile["agent_id"]),
+        "--project-key",
+        profile["project_key"],
+        "--connection",
+        str(connection_path),
+        "--name",
+        profile["name"],
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PersistentError("enrollment-inspect-failed") from exc
+    if result.returncode != 0:
+        raise PersistentError("enrollment-inspect-failed")
+    try:
+        inspected = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PersistentError("enrollment-inspect-failed") from exc
+    required = {
+        "ok": True,
+        "agent_id": profile["agent_id"],
+        "project_key": profile["project_key"],
+        "name": profile["name"],
+        "credential_state": "server-token",
+        "connection_pinned": True,
+    }
+    if not isinstance(inspected, dict) or any(inspected.get(k) != v for k, v in required.items()):
+        raise PersistentError("enrolled-identity-mismatch")
+    local_state = inspected.get("local_credential_state")
+    if not isinstance(local_state, str) or local_state not in {
+        "present",
+        "present-legacy-verified",
+    }:
+        raise PersistentError("local-credential-unavailable")
+    if not isinstance(inspected.get("server_instance_id"), str):
+        raise PersistentError("enrolled-identity-mismatch")
+    return inspected
+
+
+def _mkdir_private(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = path.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise PersistentError("state-directory-unsafe")
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    _mkdir_private(path.parent)
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.pending")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _proxy_env(
+    profile: dict[str, Any], connection: dict[str, Any], runtime_dir: Path, token_file: Path
+) -> tuple[Path, dict[str, str]]:
+    home = Path(os.environ.get("AGENTSTACK_HOME", str(Path(__file__).resolve().parent.parent)))
+    runner = Path(
+        os.environ.get(
+            "AGENTSTACK_MCP_PROXY",
+            str(home / "integrations/codex_app/plugin/scripts/run-mcp.sh"),
+        )
+    ).expanduser()
+    if not runner.is_file() or not os.access(runner, os.X_OK):
+        raise PersistentError("proxy-configuration-incomplete")
+    environment = {
+        "AGENTSTACK_PROXY_AGENT_NAME": profile["name"],
+        "AGENTSTACK_PROXY_TOKEN_FILE": str(token_file),
+        "AGENTSTACK_PROXY_PROGRAM": "claude-code" if profile["provider"] == "claude" else "codex",
+        "AGENTSTACK_PROJECT_KEY": profile["project_key"],
+        "AGENTSTACK_MCP_URL": connection["mcp_url"],
+        "AGENTSTACK_MAIL_ENV": connection["mail_env"],
+        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": connection.get("http_bearer_mode", "auto"),
+        "AGENTSTACK_RUNTIME_DIR": str(runtime_dir),
+    }
+    if os.environ.get("AGENTSTACK_PYTHON"):
+        environment["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
+    return runner, environment
+
+
+def _read_claude_json(path: Path, reason: str, *, required: bool = False) -> dict[str, Any] | None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        if required:
+            raise PersistentError(reason, path=path) from None
+        return None
+    except OSError as exc:
+        raise PersistentError(reason, path=path) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise PersistentError(reason, path=path)
+        chunks: list[bytes] = []
+        length = 0
+        while length <= 8_388_608:
+            chunk = os.read(descriptor, min(65_536, 8_388_609 - length))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if len(raw) > 8_388_608:
+        raise PersistentError(reason, path=path)
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise _DuplicateJsonMember
+            value[key] = item
+        return value
+
+    try:
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember) as exc:
+        raise PersistentError(reason, path=path) from exc
+    if not isinstance(value, dict):
+        raise PersistentError(reason, path=path)
+    return value
+
+
+def _looks_like_mail(name: str) -> bool:
+    normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
+    return normalized in CLAUDE_MAIL_NAMES
+
+
+def _same_mail_url(value: str, expected: str) -> bool:
+    try:
+        candidate = urlsplit(value)
+        target = urlsplit(expected)
+        if candidate.scheme not in {"http", "https"} or target.scheme not in {"http", "https"}:
+            return False
+        candidate_host = candidate.hostname
+        target_host = target.hostname
+        if candidate_host not in {"127.0.0.1", "localhost", "::1"} or target_host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            return False
+        candidate_port = candidate.port or (443 if candidate.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+    except ValueError:
+        return False
+    return (
+        candidate.scheme == target.scheme
+        and candidate_port == target_port
+        and candidate.path.rstrip("/") == target.path.rstrip("/")
+    )
+
+
+def _server_points_to_mail(server: dict[str, Any], expected_url: str) -> bool:
+    strings: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+
+    collect(server)
+    if any(_same_mail_url(value, expected_url) for value in strings):
+        return True
+    command_parts: list[str] = []
+    command = server.get("command")
+    if isinstance(command, str):
+        command_parts.append(command)
+    args = server.get("args")
+    if isinstance(args, list):
+        command_parts.extend(value for value in args if isinstance(value, str))
+    normalized = re.sub(r"[^a-z0-9]", "", " ".join(command_parts).lower())
+    return any(marker in normalized for marker in ("mcpagentmail", "orrerymail", "agentstackmail"))
+
+
+def _mail_aliases(
+    servers: Any,
+    connection: dict[str, Any],
+    reason: str,
+    *,
+    plugin: bool = False,
+    source_path: Path | None = None,
+) -> set[str]:
+    if servers is None:
+        return set()
+    if not isinstance(servers, dict):
+        raise PersistentError(reason, path=source_path)
+    aliases: set[str] = set()
+    for raw_name, server in servers.items():
+        if not isinstance(raw_name, str) or not isinstance(server, dict):
+            raise PersistentError(reason, path=source_path)
+        matches = _looks_like_mail(raw_name) or _server_points_to_mail(
+            server, connection["mcp_url"]
+        )
+        if not matches:
+            continue
+        if plugin:
+            raise PersistentError("claude-plugin-mail-conflict")
+        if SAFE_NAME.fullmatch(raw_name) is None:
+            raise PersistentError("claude-mcp-name-unsupported")
+        aliases.add(raw_name)
+    return aliases
+
+
+def _claude_config_paths(environment: dict[str, str]) -> tuple[Path, Path]:
+    configured = environment.get("CLAUDE_CONFIG_DIR")
+    if configured:
+        root = Path(configured)
+        user_json = root / ".claude.json"
+    else:
+        home = environment.get("HOME")
+        if not home:
+            raise PersistentError("claude-config-root-unsupported")
+        home_path = Path(home)
+        root = home_path / ".claude"
+        user_json = home_path / ".claude.json"
+    if "\x00" in str(root) or not root.is_absolute():
+        raise PersistentError("claude-config-root-unsupported")
+    return root, user_json
+
+
+def _option_values(command: Sequence[str], option: str) -> list[str]:
+    values: list[str] = []
+    index = 1
+    while index < len(command):
+        item = command[index]
+        if item == option:
+            if index + 1 >= len(command):
+                raise PersistentError("claude-command-unsupported")
+            values.append(command[index + 1])
+            index += 2
+            continue
+        if item.startswith(option + "="):
+            value = item[len(option) + 1 :]
+            if not value:
+                raise PersistentError("claude-command-unsupported")
+            values.append(value)
+        index += 1
+    return values
+
+
+def _claude_command_plugins(command: Sequence[str], workdir: Path) -> tuple[set[str], set[Path]]:
+    for item in command[1:]:
+        if any(item == flag or item.startswith(flag + "=") for flag in CLAUDE_EXTRA_SETTINGS_FLAGS):
+            raise PersistentError("claude-settings-flag-unsupported")
+    selected: set[str] = set()
+    for selector in _option_values(command, "--channels"):
+        if not selector.startswith("plugin:") or len(selector) == len("plugin:"):
+            raise PersistentError("claude-channel-selector-unsupported")
+        selected.add(selector[len("plugin:") :])
+    if not selected:
+        raise PersistentError("claude-channel-selector-unsupported")
+    for selector in _option_values(command, "--dangerously-load-development-channels"):
+        if not selector.startswith("plugin:") or len(selector) == len("plugin:"):
+            raise PersistentError("claude-channel-selector-unsupported")
+        selected.add(selector[len("plugin:") :])
+    plugin_dirs: set[Path] = set()
+    for raw in _option_values(command, "--plugin-dir"):
+        path = Path(raw)
+        if not path.is_absolute():
+            path = workdir / path
+        try:
+            plugin_dirs.add(path.resolve(strict=True))
+        except OSError as exc:
+            raise PersistentError("claude-plugin-directory-unavailable") from exc
+    return selected, plugin_dirs
+
+
+def _reject_managed_claude_config(paths: Sequence[Path] = CLAUDE_MANAGED_FILES) -> None:
+    for path in paths:
+        if os.path.lexists(path):
+            raise PersistentError("claude-managed-configuration-unsupported", path=path)
+
+
+def _claude_project_scope(
+    workdir: Path, environment: dict[str, str]
+) -> tuple[Path, Path | None]:
+    if any(environment.get(name) for name in CLAUDE_GIT_DISCOVERY_ENV):
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    git_marker = next(
+        (
+            directory / ".git"
+            for directory in (workdir, *workdir.parents)
+            if os.path.lexists(directory / ".git")
+        ),
+        None,
+    )
+    if git_marker is None:
+        return workdir, None
+    git = shutil.which("git", path=environment.get("PATH"))
+    if git is None:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    try:
+        result = subprocess.run(
+            [
+                git,
+                "-C",
+                str(workdir),
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+                "--git-dir",
+                "--git-common-dir",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+    if result.returncode != 0:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    lines = result.stdout.splitlines()
+    if len(lines) != 3:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    try:
+        project_root = Path(lines[0]).resolve(strict=True)
+        git_dir = Path(lines[1]).resolve(strict=True)
+        common_dir = Path(lines[2]).resolve(strict=True)
+        workdir.relative_to(project_root)
+    except (OSError, ValueError) as exc:
+        raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+    if git_marker != project_root / ".git":
+        raise PersistentError("claude-project-root-unsupported", path=git_marker)
+    main_root = project_root
+    if git_dir != common_dir:
+        try:
+            listing = subprocess.run(
+                [git, "-C", str(workdir), "worktree", "list", "--porcelain", "-z"],
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+        if listing.returncode != 0:
+            raise PersistentError("claude-project-root-unsupported", path=workdir)
+        roots = [
+            field.removeprefix("worktree ")
+            for field in listing.stdout.split("\0")
+            if field.startswith("worktree ")
+        ]
+        try:
+            resolved_roots = [Path(root).resolve(strict=True) for root in roots]
+        except OSError as exc:
+            raise PersistentError("claude-project-root-unsupported", path=workdir) from exc
+        if not resolved_roots or project_root not in resolved_roots:
+            raise PersistentError("claude-project-root-unsupported", path=workdir)
+        main_root = resolved_roots[0]
+    root_local = _claude_root_local_settings(
+        project_root, main_root, git_dir, common_dir, environment
+    )
+    return project_root, root_local
+
+
+def _claude_root_local_settings(
+    project_root: Path,
+    main_root: Path,
+    git_dir: Path,
+    common_dir: Path,
+    environment: dict[str, str],
+) -> Path | None:
+    home = environment.get("HOME")
+    if home:
+        try:
+            resolved_home = Path(home).resolve(strict=True)
+        except OSError:
+            resolved_home = None
+        if resolved_home in {project_root, main_root}:
+            return None
+    claude_dir = main_root / ".claude"
+    try:
+        claude_info = claude_dir.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PersistentError(
+            "claude-project-root-unsupported", path=claude_dir
+        ) from exc
+    uid = os.getuid()
+    directory_paths = {project_root, main_root, git_dir, common_dir}
+    entry_paths = {project_root / ".git", main_root / ".git"}
+    try:
+        for path in directory_paths:
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise PersistentError(
+                    "claude-project-root-unsupported", path=path
+                )
+            if info.st_uid != uid:
+                return None
+        for path in entry_paths:
+            info = path.lstat()
+            if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                raise PersistentError(
+                    "claude-project-root-unsupported", path=path
+                )
+            if info.st_uid != uid:
+                return None
+    except OSError as exc:
+        raise PersistentError(
+            "claude-project-root-unsupported", path=path
+        ) from exc
+    if not stat.S_ISDIR(claude_info.st_mode):
+        raise PersistentError("claude-project-root-unsupported", path=claude_dir)
+    if claude_info.st_uid != uid:
+        return None
+    return claude_dir / "settings.local.json"
+
+
+def _claude_project_mcp_paths(workdir: Path) -> tuple[Path, ...]:
+    return tuple(directory / ".mcp.json" for directory in (workdir, *workdir.parents))
+
+
+def _enabled_claude_plugins(paths: Sequence[Path]) -> set[str]:
+    enabled: dict[str, bool] = {}
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        value = _read_claude_json(path, "claude-settings-unreadable")
+        if value is None or "enabledPlugins" not in value:
+            continue
+        plugins = value["enabledPlugins"]
+        if not isinstance(plugins, dict):
+            raise PersistentError("claude-settings-unreadable", path=path)
+        for plugin_id, state in plugins.items():
+            if not isinstance(plugin_id, str) or type(state) is not bool:
+                raise PersistentError("claude-settings-unreadable", path=path)
+            enabled[plugin_id] = state
+    return {plugin_id for plugin_id, state in enabled.items() if state}
+
+
+def _owned_claude_directory(
+    path: Path,
+    reason: str,
+    *,
+    diagnostic_path: Path | None = None,
+    hide_path: bool = False,
+) -> Path:
+    reported_path = None if hide_path else diagnostic_path or path
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise PersistentError(reason, path=reported_path) from exc
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o022
+    ):
+        raise PersistentError(reason, path=reported_path)
+    try:
+        return path.resolve(strict=True)
+    except OSError as exc:
+        raise PersistentError(reason, path=reported_path) from exc
+
+
+def _plugin_root_server_maps(root: Path) -> list[tuple[dict[str, Any], Path]]:
+    path = root / ".mcp.json"
+    value = _read_claude_json(path, "claude-plugin-definition-unreadable")
+    if value is None:
+        return []
+    servers = value.get("mcpServers")
+    if not isinstance(servers, dict):
+        raise PersistentError("claude-plugin-definition-unreadable", path=path)
+    return [(servers, path)]
+
+
+def _declared_plugin_server_maps(
+    root: Path, declared: Any, source_path: Path
+) -> list[tuple[dict[str, Any], Path]]:
+    if isinstance(declared, dict):
+        return [(declared, source_path)]
+    references = [declared] if isinstance(declared, str) else declared
+    if not isinstance(references, list) or any(
+        not isinstance(item, str) for item in references
+    ):
+        raise PersistentError("claude-plugin-definition-unreadable", path=source_path)
+    sources: list[tuple[dict[str, Any], Path]] = []
+    for raw_reference in references:
+        reference = raw_reference
+        if reference.startswith("${CLAUDE_PLUGIN_ROOT}/"):
+            reference = reference[len("${CLAUDE_PLUGIN_ROOT}/") :]
+        if not reference or "$" in reference or "\x00" in reference:
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            )
+        reference_path = Path(reference)
+        if reference_path.is_absolute():
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            )
+        try:
+            resolved = (root / reference_path).resolve(strict=True)
+            resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=source_path
+            ) from exc
+        value = _read_claude_json(
+            resolved, "claude-plugin-definition-unreadable", required=True
+        )
+        assert value is not None
+        servers = value.get("mcpServers", value)
+        if not isinstance(servers, dict):
+            raise PersistentError(
+                "claude-plugin-definition-unreadable", path=resolved
+            )
+        sources.append((servers, resolved))
+    return sources
+
+
+def _manifest_plugin_server_maps(
+    root: Path, *, required: bool
+) -> tuple[dict[str, Any] | None, list[tuple[dict[str, Any], Path]]]:
+    path = root / ".claude-plugin" / "plugin.json"
+    manifest = _read_claude_json(
+        path, "claude-plugin-definition-unreadable", required=required
+    )
+    if manifest is None or "mcpServers" not in manifest:
+        return manifest, []
+    return manifest, _declared_plugin_server_maps(
+        root, manifest["mcpServers"], path
+    )
+
+
+def _inspect_plugin_server_maps(
+    sources: Sequence[tuple[dict[str, Any], Path]], connection: dict[str, Any]
+) -> None:
+    for servers, source_path in sources:
+        _mail_aliases(
+            servers,
+            connection,
+            "claude-plugin-definition-unreadable",
+            plugin=True,
+            source_path=source_path,
+        )
+
+
+def _inspect_explicit_claude_plugin(
+    raw_root: Path, connection: dict[str, Any]
+) -> None:
+    root = _owned_claude_directory(raw_root, "claude-plugin-unavailable")
+    _manifest, manifest_sources = _manifest_plugin_server_maps(root, required=True)
+    _inspect_plugin_server_maps(
+        [*_plugin_root_server_maps(root), *manifest_sources], connection
+    )
+
+
+def _claude_plugins_root(config_root: Path, environment: dict[str, str]) -> Path:
+    configured = environment.get("CLAUDE_CODE_PLUGIN_CACHE_DIR")
+    if configured:
+        if "\x00" in configured:
+            raise PersistentError("claude-plugin-inventory-unreadable")
+        path = Path(configured)
+        if not path.is_absolute():
+            raise PersistentError("claude-plugin-inventory-unreadable")
+    else:
+        path = config_root / "plugins"
+    return _owned_claude_directory(
+        path,
+        "claude-plugin-inventory-unreadable",
+        hide_path=bool(configured),
+    )
+
+
+def _plugin_id_parts(plugin_id: str, source_path: Path) -> tuple[str, str]:
+    plugin_name, separator, marketplace_name = plugin_id.rpartition("@")
+    if (
+        not separator
+        or SAFE_NAME.fullmatch(plugin_name) is None
+        or SAFE_NAME.fullmatch(marketplace_name) is None
+    ):
+        raise PersistentError("claude-plugin-inventory-unreadable", path=source_path)
+    return plugin_name, marketplace_name
+
+
+def _marketplace_plugin_entry(
+    registry: dict[str, Any],
+    plugin_name: str,
+    marketplace_name: str,
+    registry_path: Path,
+) -> tuple[dict[str, Any], Path]:
+    marketplace = registry.get(marketplace_name)
+    if not isinstance(marketplace, dict) or not isinstance(
+        marketplace.get("installLocation"), str
+    ):
+        raise PersistentError("claude-plugin-marketplace-unreadable", path=registry_path)
+    raw_location = marketplace["installLocation"]
+    if "\x00" in raw_location or not Path(raw_location).is_absolute():
+        raise PersistentError("claude-plugin-marketplace-unreadable", path=registry_path)
+    location = _owned_claude_directory(
+        Path(raw_location),
+        "claude-plugin-marketplace-unreadable",
+        diagnostic_path=registry_path,
+    )
+    catalog_path = location / ".claude-plugin" / "marketplace.json"
+    catalog = _read_claude_json(
+        catalog_path, "claude-plugin-marketplace-unreadable", required=True
+    )
+    assert catalog is not None
+    entries = catalog.get("plugins")
+    if catalog.get("name") != marketplace_name or not isinstance(entries, list):
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    if any(
+        not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+        for entry in entries
+    ):
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    matches = [entry for entry in entries if entry["name"] == plugin_name]
+    if len(matches) != 1:
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    strict = matches[0].get("strict", True)
+    if type(strict) is not bool:
+        raise PersistentError(
+            "claude-plugin-marketplace-unreadable", path=catalog_path
+        )
+    return matches[0], catalog_path
+
+
+def _installed_claude_plugins(
+    config_root: Path, environment: dict[str, str], plugin_ids: set[str]
+) -> list[tuple[Path, dict[str, Any], Path]]:
+    if not plugin_ids:
+        return []
+    plugins_root = _claude_plugins_root(config_root, environment)
+    inventory_path = plugins_root / "installed_plugins.json"
+    inventory = _read_claude_json(
+        inventory_path,
+        "claude-plugin-inventory-unreadable",
+        required=True,
+    )
+    assert inventory is not None
+    plugins = inventory.get("plugins")
+    if not isinstance(plugins, dict):
+        raise PersistentError(
+            "claude-plugin-inventory-unreadable", path=inventory_path
+        )
+    registry_path = plugins_root / "known_marketplaces.json"
+    registry = _read_claude_json(
+        registry_path,
+        "claude-plugin-marketplace-unreadable",
+        required=True,
+    )
+    assert registry is not None
+    resolved: list[tuple[Path, dict[str, Any], Path]] = []
+    for plugin_id in sorted(plugin_ids):
+        plugin_name, marketplace_name = _plugin_id_parts(plugin_id, inventory_path)
+        entries = plugins.get(plugin_id)
+        if not isinstance(entries, list) or not entries:
+            raise PersistentError("claude-plugin-unavailable", path=inventory_path)
+        marketplace_entry, catalog_path = _marketplace_plugin_entry(
+            registry,
+            plugin_name,
+            marketplace_name,
+            registry_path,
+        )
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(
+                entry.get("installPath"), str
+            ):
+                raise PersistentError(
+                    "claude-plugin-inventory-unreadable", path=inventory_path
+                )
+            raw_path = entry["installPath"]
+            if "\x00" in raw_path or not Path(raw_path).is_absolute():
+                raise PersistentError(
+                    "claude-plugin-inventory-unreadable", path=inventory_path
+                )
+            root = _owned_claude_directory(
+                Path(raw_path),
+                "claude-plugin-unavailable",
+                diagnostic_path=inventory_path,
+            )
+            resolved.append((root, marketplace_entry, catalog_path))
+    return resolved
+
+
+def _inspect_installed_claude_plugin(
+    root: Path,
+    marketplace_entry: dict[str, Any],
+    catalog_path: Path,
+    connection: dict[str, Any],
+) -> None:
+    strict = marketplace_entry.get("strict", True)
+    root_sources = _plugin_root_server_maps(root)
+    manifest, manifest_sources = _manifest_plugin_server_maps(
+        root, required=strict
+    )
+    if not strict and manifest is not None and any(
+        field in manifest for field in CLAUDE_PLUGIN_COMPONENT_FIELDS
+    ):
+        raise PersistentError(
+            "claude-plugin-definition-unreadable",
+            path=root / ".claude-plugin" / "plugin.json",
+        )
+    marketplace_sources: list[tuple[dict[str, Any], Path]] = []
+    if "mcpServers" in marketplace_entry:
+        marketplace_sources = _declared_plugin_server_maps(
+            root, marketplace_entry["mcpServers"], catalog_path
+        )
+    sources = [*root_sources, *marketplace_sources]
+    if strict:
+        sources.extend(manifest_sources)
+    _inspect_plugin_server_maps(sources, connection)
+
+
+def _claude_overlay_names(
+    command: Sequence[str],
+    workdir: Path,
+    environment: dict[str, str],
+    connection: dict[str, Any],
+) -> set[str]:
+    try:
+        resolved_workdir = workdir.resolve(strict=True)
+    except OSError as exc:
+        raise PersistentError("working-directory-unavailable") from exc
+    if resolved_workdir != workdir:
+        raise PersistentError("claude-project-root-unsupported", path=workdir)
+    selected_plugins, explicit_plugin_dirs = _claude_command_plugins(command, workdir)
+    _reject_managed_claude_config()
+    config_root, user_json_path = _claude_config_paths(environment)
+    project_root, repository_local_settings = _claude_project_scope(
+        workdir, environment
+    )
+    user_json = _read_claude_json(user_json_path, "claude-config-unreadable") or {}
+    aliases = _mail_aliases(
+        user_json.get("mcpServers"),
+        connection,
+        "claude-config-unreadable",
+        source_path=user_json_path,
+    )
+    projects = user_json.get("projects")
+    if projects is not None:
+        if not isinstance(projects, dict):
+            raise PersistentError("claude-config-unreadable", path=user_json_path)
+        local = projects.get(str(project_root))
+        if local is not None:
+            if not isinstance(local, dict):
+                raise PersistentError("claude-config-unreadable", path=user_json_path)
+            aliases.update(
+                _mail_aliases(
+                    local.get("mcpServers"),
+                    connection,
+                    "claude-config-unreadable",
+                    source_path=user_json_path,
+                )
+            )
+    for project_mcp_path in _claude_project_mcp_paths(workdir):
+        project_mcp = _read_claude_json(
+            project_mcp_path, "claude-project-config-unreadable"
+        )
+        if project_mcp is not None:
+            aliases.update(
+                _mail_aliases(
+                    project_mcp.get("mcpServers"),
+                    connection,
+                    "claude-project-config-unreadable",
+                    source_path=project_mcp_path,
+                )
+            )
+    settings_paths = [
+        config_root / "settings.json",
+        workdir / ".claude" / "settings.json",
+        workdir / ".claude" / "settings.local.json",
+    ]
+    if repository_local_settings is not None:
+        settings_paths.append(repository_local_settings)
+    enabled_plugins = _enabled_claude_plugins(settings_paths)
+    installed_plugins = _installed_claude_plugins(
+        config_root, environment, enabled_plugins | selected_plugins
+    )
+    for root, marketplace_entry, catalog_path in installed_plugins:
+        _inspect_installed_claude_plugin(
+            root, marketplace_entry, catalog_path, connection
+        )
+    for root in explicit_plugin_dirs:
+        _inspect_explicit_claude_plugin(root, connection)
+    return aliases or {"orrery-mail"}
+
+
+def _write_claude_proxy(
+    state_dir: Path, runner: Path, proxy_env: dict[str, str], names: set[str]
+) -> Path:
+    server = {"command": str(runner), "args": [], "env": proxy_env}
+    path = state_dir / "proxy" / "claude-mcp.json"
+    _atomic_json(path, {"mcpServers": {name: server for name in sorted(names)}})
+    return path
+
+
+def _toml_string(value: str) -> str:
+    encoded = json.dumps(value, ensure_ascii=False)
+    return "".join(
+        "\\u" + format(ord(char), "04x") if 0x7F <= ord(char) <= 0x9F else char
+        for char in encoded
+    )
+
+
+def _toml_key(value: str) -> str:
+    return value if re.fullmatch(r"[A-Za-z0-9_]+", value) else _toml_string(value)
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, str):
+        return _toml_string(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "-inf" if value < 0 else "inf"
+        return repr(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(
+            _toml_key(key) + " = " + _toml_value(item) for key, item in sorted(value.items())
+        ) + " }"
+    raise PersistentError("codex-config-unsupported")
+
+
+def _emit_toml(config: dict[str, Any]) -> str:
+    output: list[str] = []
+
+    def emit_table(path: tuple[str, ...], table: dict[str, Any], header: str | None) -> None:
+        scalars = [
+            (key, value)
+            for key, value in table.items()
+            if not isinstance(value, dict)
+            and not (isinstance(value, list) and value and all(isinstance(i, dict) for i in value))
+        ]
+        children = [(key, value) for key, value in table.items() if isinstance(value, dict)]
+        arrays = [
+            (key, value)
+            for key, value in table.items()
+            if isinstance(value, list) and value and all(isinstance(i, dict) for i in value)
+        ]
+        dotted = ".".join(_toml_key(part) for part in path)
+        if header == "table":
+            output.append(f"[{dotted}]")
+        elif header == "array":
+            output.append(f"[[{dotted}]]")
+        for key, value in sorted(scalars):
+            output.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        for key, value in sorted(children):
+            if output and output[-1] != "":
+                output.append("")
+            emit_table(path + (key,), value, "table")
+        for key, values in sorted(arrays):
+            for value in values:
+                if output and output[-1] != "":
+                    output.append("")
+                emit_table(path + (key,), value, "array")
+
+    emit_table((), config, None)
+    return "\n".join(output) + "\n"
+
+
+def _write_codex_home(
+    profile: dict[str, Any], state_dir: Path, runner: Path, proxy_env: dict[str, str]
+) -> Path:
+    source = Path(
+        profile.get("source_home")
+        or os.environ.get("CODEX_HOME")
+        or str(Path.home() / ".codex")
+    ).expanduser()
+    if not source.is_dir():
+        raise PersistentError("codex-source-home-unavailable")
+    target = state_dir / "codex-home"
+    _mkdir_private(target)
+    if source.resolve() == target.resolve():
+        raise PersistentError("codex-source-home-invalid")
+    for entry in source.iterdir():
+        if entry.name in {"config.toml", ".git", ".agents", ".codex"}:
+            continue
+        link = target / entry.name
+        if not link.exists() and not link.is_symlink():
+            link.symlink_to(entry)
+    source_config = source / "config.toml"
+    try:
+        config = tomllib.loads(source_config.read_text(encoding="utf-8")) if source_config.exists() else {}
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise PersistentError("codex-config-invalid") from exc
+    servers = config.setdefault("mcp_servers", {})
+    if not isinstance(servers, dict):
+        raise PersistentError("codex-config-invalid")
+    for name in list(servers):
+        if _looks_like_mail(str(name)):
+            del servers[name]
+    plugins = config.get("plugins", {})
+    if isinstance(plugins, dict):
+        for plugin_id, plugin in plugins.items():
+            if str(plugin_id).startswith("agentstack-codex-app@") and isinstance(plugin, dict):
+                plugin.setdefault("mcp_servers", {})["agentstack"] = {"enabled": False}
+    tools = {
+        name: {"approval_mode": "approve"}
+        for name in (
+            "bootstrap",
+            "runtime_status",
+            "fetch_inbox",
+            "whois",
+            "send_message",
+            "acknowledge_message",
+            "reserve_files",
+            "renew_reservations",
+            "release_reservations",
+        )
+    }
+    codex_proxy_env = dict(proxy_env)
+    codex_proxy_env["AGENTSTACK_CODEX_APP_RUNTIME_DIR"] = str(target / "proxy-runtime")
+    for name in ("orrery-mail", "agentstack"):
+        servers[name] = {
+            "command": str(runner),
+            "args": [],
+            "env": codex_proxy_env,
+            "tools": tools,
+        }
+    payload = _emit_toml(config).encode()
+    config_path = target / "config.toml"
+    temporary = target / f".config.toml.{uuid.uuid4().hex}.pending"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tomllib.loads(payload.decode())
+        os.replace(temporary, config_path)
+        config_path.chmod(0o600)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    return target
+
+
+def _prepare_codex_binding(
+    profile: dict[str, Any], runtime_dir: Path
+) -> tuple[Path, str]:
+    default_hooks = Path(__file__).resolve().parent.parent / "hooks"
+    hooks_dir = Path(os.environ.get("AGENTSTACK_HOOKS_DIR", str(default_hooks))).expanduser()
+    helper = hooks_dir / "prepare-codex-session-binding.py"
+    if not helper.is_file():
+        raise PersistentError("codex-binding-helper-unavailable")
+    python = os.environ.get("AGENTSTACK_PYTHON") or sys.executable
+    command = [
+        python,
+        str(helper),
+        "--runtime-dir",
+        str(runtime_dir),
+        "--agent-id",
+        str(profile["agent_id"]),
+        "--agent-name",
+        profile["name"],
+        "--project-key",
+        profile["project_key"],
+        "--program",
+        "codex",
+        "--launch-kind",
+        "startup",
+        "--history-mode",
+        "enabled",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PersistentError("codex-binding-prepare-failed") from exc
+    parts = result.stdout.strip().split("\t")
+    if result.returncode != 0 or len(parts) != 2:
+        raise PersistentError("codex-binding-prepare-failed")
+    binding = Path(parts[0]).expanduser().resolve(strict=False)
+    expected = (runtime_dir / "codex_launches" / f"{profile['agent_id']}.json").resolve(
+        strict=False
+    )
+    launch_id = parts[1]
+    if binding != expected or re.fullmatch(r"[0-9a-f]{32}", launch_id) is None:
+        raise PersistentError("codex-binding-prepare-failed")
+    return binding, launch_id
+
+
+def _instance_lock(state_dir: Path) -> int:
+    path = state_dir / "instance.lock"
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(descriptor, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(descriptor)
+        raise PersistentError("profile-already-running") from exc
+    os.set_inheritable(descriptor, True)
+    return descriptor
+
+
+def _wake_socket(name: str, profile_path: Path) -> Path:
+    root = Path("/tmp") / f"orrery-persistent-{os.getuid()}"
+    _mkdir_private(root)
+    digest = hashlib.sha256(f"{profile_path}\0{name}".encode()).hexdigest()[:24]
+    return root / f"{digest}.sock"
+
+
+def _runtime_manifest(
+    runtime_dir: Path,
+    profile_path: Path,
+    profile: dict[str, Any],
+    inspected: dict[str, Any],
+    wake_socket: Path | None,
+) -> Path:
+    path = runtime_dir / "persistent" / f"{profile['name']}.json"
+    value: dict[str, Any] = {
+        "kind": "orrery-persistent-runtime-v1",
+        "pid": os.getpid(),
+        "profile_path": str(profile_path),
+        "name": profile["name"],
+        "agent_id": profile["agent_id"],
+        "project_key": profile["project_key"],
+        "server_instance_id": inspected["server_instance_id"],
+        "provider": profile["provider"],
+        "parentless": True,
+        "lifecycle": "persistent",
+        "interaction": profile["interaction"],
+        "started_at": int(time.time()),
+    }
+    if wake_socket is not None:
+        value["wake_socket"] = str(wake_socket)
+        value["bridge_contract"] = BRIDGE_CONTRACT
+    _atomic_json(path, value)
+    return path
+
+
+def _validated(
+    profile_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], Path, dict[str, Any], Path, Path]:
+    profile = _profile(profile_path)
+    connection_path, connection_value, runtime_dir = _connection(profile)
+    inspected = _enroll_inspect(profile, connection_path)
+    if inspected["server_instance_id"] != connection_value["expected_server_instance_id"]:
+        raise PersistentError("enrolled-authority-mismatch")
+    generation = inspected.get("credential_generation")
+    fingerprint = inspected.get("credential_fingerprint")
+    if (
+        type(generation) is not int
+        or generation < 0
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{16}", fingerprint) is None
+    ):
+        raise PersistentError("enrolled-credential-mismatch")
+    state_dir = Path(profile["state_dir"])
+    workdir = Path(profile["working_directory"])
+    if not workdir.is_dir():
+        raise PersistentError("working-directory-unavailable")
+    _mkdir_private(state_dir)
+    return profile, inspected, connection_path, connection_value, runtime_dir, state_dir
+
+
+def _inspect_output(profile: dict[str, Any], inspected: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "kind": PROFILE_KIND,
+        "name": profile["name"],
+        "agent_id": profile["agent_id"],
+        "project_key": profile["project_key"],
+        "server_instance_id": inspected["server_instance_id"],
+        "credential_generation": inspected.get("credential_generation"),
+        "provider": profile["provider"],
+        "parentless": True,
+        "lifecycle": "persistent",
+        "interaction": profile["interaction"],
+        "ready": True,
+    }
+
+
+def _run(profile_path: Path) -> NoReturn:
+    profile, inspected, _connection_path, connection, runtime_dir, state_dir = _validated(
+        profile_path
+    )
+    _instance_lock(state_dir)
+    token_file = runtime_dir / f"agent_token_{profile['name']}"
+    runner, proxy_env = _proxy_env(profile, connection, runtime_dir, token_file)
+    environment = dict(os.environ)
+    for key in (
+        "PARENT_AGENT",
+        "CHILD_REGISTRATION_TOKEN",
+        "AGENTSTACK_RESERVED_IDENTITY",
+        "AGENTSTACK_CODEX_LAUNCH_BINDING",
+        "AGENTSTACK_CODEX_LAUNCH_ID",
+        "AGENTSTACK_PROXY_AGENT_NAME",
+        "AGENTSTACK_PROXY_TOKEN_FILE",
+        "AGENTSTACK_PROXY_PROGRAM",
+        "AGENTSTACK_CODEX_APP_RUNTIME_DIR",
+    ):
+        environment.pop(key, None)
+    environment.update(profile.get("environment", {}))
+    environment.update(
+        {
+            "AGENT_NAME": profile["name"],
+            "AGENTSTACK_PROJECT_KEY": profile["project_key"],
+            "AGENTSTACK_RUNTIME_DIR": str(runtime_dir),
+            "AGENTSTACK_MCP_URL": connection["mcp_url"],
+            "AGENTSTACK_MAIL_ENV": connection["mail_env"],
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": connection.get(
+                "http_bearer_mode", "auto"
+            ),
+            "AGENTSTACK_PERSISTENT_PROFILE": str(profile_path),
+            "AGENTSTACK_PERSISTENT_STATE_DIR": str(state_dir),
+            "AGENTSTACK_PERSISTENT_INTERACTION": profile["interaction"],
+            "AGENTSTACK_PERSISTENT_LIFECYCLE": "persistent",
+            "AGENTSTACK_PERSISTENT_PARENTLESS": "1",
+        }
+    )
+    command = list(profile["command"])
+    if profile["provider"] == "claude":
+        if profile["interaction"] == "interactive":
+            if any(
+                item == "--mcp-config"
+                or item.startswith("--mcp-config=")
+                or item == "--strict-mcp-config"
+                or item.startswith("--strict-mcp-config=")
+                for item in command
+            ):
+                raise PersistentError("profile-controls-mcp-config")
+            mail_names = _claude_overlay_names(
+                command, Path(profile["working_directory"]), environment, connection
+            )
+        else:
+            mail_names = {"orrery-mail", "agentstack"}
+        mcp_config = _write_claude_proxy(state_dir, runner, proxy_env, mail_names)
+        environment["AGENTSTACK_PERSISTENT_MCP_CONFIG"] = str(mcp_config)
+        environment["AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES"] = ",".join(sorted(mail_names))
+        if profile["interaction"] == "interactive":
+            command.extend(["--mcp-config", str(mcp_config)])
+    else:
+        codex_home = _write_codex_home(profile, state_dir, runner, proxy_env)
+        environment["CODEX_HOME"] = str(codex_home)
+        environment["CODEX_SHARED_CODEX_DIR"] = str(codex_home)
+        binding, launch_id = _prepare_codex_binding(profile, runtime_dir)
+        environment["AGENTSTACK_CODEX_LAUNCH_BINDING"] = str(binding)
+        environment["AGENTSTACK_CODEX_LAUNCH_ID"] = launch_id
+    wake_socket = None
+    if profile["interaction"] == "headless":
+        wake_socket = _wake_socket(profile["name"], profile_path)
+        try:
+            if wake_socket.is_socket() or wake_socket.is_symlink():
+                wake_socket.unlink()
+        except OSError as exc:
+            raise PersistentError("headless-wake-socket-unsafe") from exc
+        environment["AGENTSTACK_PERSISTENT_WAKE_SOCKET"] = str(wake_socket)
+        environment["AGENTSTACK_PERSISTENT_BRIDGE_CONTRACT"] = BRIDGE_CONTRACT
+    manifest = _runtime_manifest(runtime_dir, profile_path, profile, inspected, wake_socket)
+    environment["AGENTSTACK_PERSISTENT_RUNTIME_MANIFEST"] = str(manifest)
+    executable = command[0]
+    resolved = executable if os.path.isabs(executable) else shutil.which(executable, path=environment.get("PATH"))
+    if not resolved or not Path(resolved).is_file() or not os.access(resolved, os.X_OK):
+        raise PersistentError("profile-command-unavailable")
+    os.chdir(profile["working_directory"])
+    os.execvpe(str(resolved), command, environment)
+    raise AssertionError("unreachable")
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
+    profile_path = _expand_path(args.profile)
+    try:
+        if args.operation == "inspect":
+            profile, inspected, _connection_path, _connection_value, _runtime_dir, _state_dir = (
+                _validated(profile_path)
+            )
+            print(json.dumps(_inspect_output(profile, inspected), sort_keys=True, separators=(",", ":")))
+            return
+        _run(profile_path)
+    except PersistentError as exc:
+        error = {"ok": False, "reason": str(exc), "docs": DOCS}
+        if exc.path is not None:
+            error["path"] = str(exc.path)
+        print(
+            json.dumps(error, sort_keys=True, separators=(",", ":")),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+    except OSError:
+        print(
+            json.dumps(
+                {"ok": False, "reason": "persistent-launch-failed", "docs": DOCS},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+
+
+if __name__ == "__main__":
+    main()

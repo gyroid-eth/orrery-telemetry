@@ -327,7 +327,20 @@ $AGENTSTACK_RUNTIME_DIR/child-agents/<name>.json
 ```
 
 token が missing / stale / wrong-owner なら親または operator へ報告してください。token を chat、log、process argument に貼らないでください。
+launcher を一度も通らない常駐 bot で local token が元から無い、または失われた場合は、operator が [常駐 agent の enrollment と起動](persistent-agents.md) の `inspect` から始めます。モデルに `claim` / `recover` を実行させず、通常の登録失敗を credential 不在と推定しないでください。
 診断追加前に捨てられた過去の response や curl stderr は、この表示から後追いで復元できません。
+
+## 常駐 Claude Channels が config 検査で停止する
+
+`agentstack-persistent run` は通常の `--channels plugin:...` と interactive PTY を残しつつ raw Mail を同名 bound overlay で抑止するため、実効 Claude config を起動前に fail-closed で検査します。
+
+- `claude-project-root-unsupported`: profile の `working_directory` が symlink、または祖先に `.mcp.json` / `.claude/settings*.json` があります（実効 user config と一致する `settings.json` だけは除外）。subdirectory ではなく実際の Claude project root を指定します
+- `claude-managed-configuration-unsupported`: macOS の managed MCP / settings file が存在します。v1 は存在自体を拒否するため、管理者へ相談し、1定義だけの書換で回避しません
+- `claude-plugin-mail-conflict`: plugin の Mail server は standalone overlay で置換できません。operator が plugin を disable するか `--plugin-dir` を外し、失われる channel / 機能を確認します
+- `claude-settings-flag-unsupported`: profile から `--settings` / `--setting-sources` / `--safe-mode` を外し、[常駐 agent の有限 source 契約](persistent-agents.md#interactive)へ設定を移します
+- `claude-config-unreadable`、`claude-project-config-unreadable`、`claude-settings-unreadable`、`claude-plugin-inventory-unreadable`、`claude-plugin-definition-unreadable`、`claude-plugin-unavailable`: 対応する実効 config / inventory / plugin を修復します。別 source を推測して起動しません
+
+wrapper は plugin や managed file を自動編集せず、設定本文、URL query、token を error に表示しません。生成された bound namespace は `AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES` にあり、既存 alias が `agent-mail` だけなら案内も `agent-mail` です。詳細な source 表と境界は [常駐 agent の enrollment と起動](persistent-agents.md#interactive) が正本です。
 
 ## Hook が `AGENT NOT REGISTERED` で block する
 
@@ -486,6 +499,7 @@ manifest がない状態で推測削除は行いません。settings や mail da
 
 - [インストール](install.md)
 - [Launcher と identity](launchers.md)
+- [常駐 agent の enrollment と起動](persistent-agents.md)
 - [Hooks と運用 helper](hooks.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)

@@ -307,8 +307,21 @@ $AGENTSTACK_RUNTIME_DIR/child-agents/<name>.json
 ```
 
 If the token is missing / stale / owned by another identity, report it to the parent or operator. Do not paste a token into chat, logs, or process arguments.
+When a persistent bot never passed through a launcher and therefore never had a local token, or that token was lost, an operator starts with `inspect` in [Persistent-agent enrollment and startup](persistent-agents.en.md). Do not have the model run `claim` / `recover`, and do not infer a missing credential from a generic registration failure.
 Responses and curl stderr discarded before these diagnostics existed cannot be
 reconstructed retroactively from the new output.
+
+## Persistent Claude Channels stops during config inspection
+
+`agentstack-persistent run` preserves the normal `--channels plugin:...` selector and interactive PTY while suppressing raw Mail with a same-named bound overlay. It therefore inspects the effective Claude configuration fail-closed before startup.
+
+- `claude-project-root-unsupported`: the profile `working_directory` is a symlink or an ancestor contains `.mcp.json` / `.claude/settings*.json` (except the `settings.json` that exactly matches the effective user config); point the profile at Claude's actual project root rather than a subdirectory
+- `claude-managed-configuration-unsupported`: a managed MCP/settings file exists on macOS; v1 rejects its presence, so consult the administrator rather than changing one definition as a bypass
+- `claude-plugin-mail-conflict`: a plugin Mail server cannot be replaced by the standalone overlay; the operator can disable the plugin or remove `--plugin-dir` after accounting for the channels/features that will be lost
+- `claude-settings-flag-unsupported`: remove `--settings`, `--setting-sources`, or `--safe-mode` from the profile and place the configuration within the [finite persistent-agent source contract](persistent-agents.en.md#interactive)
+- `claude-config-unreadable`, `claude-project-config-unreadable`, `claude-settings-unreadable`, `claude-plugin-inventory-unreadable`, `claude-plugin-definition-unreadable`, or `claude-plugin-unavailable`: repair the named effective config, inventory, or plugin; the wrapper does not guess another source and continue
+
+The wrapper never rewrites plugins or managed files, and errors do not include config bodies, URL queries, or tokens. `AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES` contains the emitted bound namespaces; if the only existing alias is `agent-mail`, guidance also names `agent-mail`. The source table and precise boundary in [Persistent-agent enrollment and startup](persistent-agents.en.md#interactive) are authoritative.
 
 ## Hook blocks with `AGENT NOT REGISTERED`
 
@@ -467,6 +480,7 @@ Without a manifest, it does not guess what to delete, preventing accidental remo
 
 - [Installation](install.en.md)
 - [Launchers and identity](launchers.en.md)
+- [Persistent-agent enrollment and startup](persistent-agents.en.md)
 - [Hooks and operational helpers](hooks.en.md)
 - [Codex App integration](codex-app.en.md)
 - [Dashboard](dashboard.en.md)
