@@ -93,6 +93,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_STATE_ROOT` | `~/.agentstack/mail` | Canonical database / archive / signals root |
 | `AGENTSTACK_MAIL_SERVICE_ROOT` | `$AGENTSTACK_HOME/mail-service` | Candidates, immutable renders, runtime logs / pidfiles |
 | `AGENTSTACK_MAIL_SERVICE_VENV` | derived from candidate ID | Path used to explicitly reuse a verified candidate virtual environment |
+| `AGENTSTACK_MAIL_ENROLL_BIN` | derived from the adopted Mail deployment | Matching `agentstack-enroll` saved by the installer in `env.sh`; normally not set by hand |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not use the legacy HTTP bearer |
 | `AGENTSTACK_PROJECT_KEY` | existing `env.sh` on reinstall; required initially | Human project key. `--project-key` has highest priority |
 | `AGENTSTACK_PROTECTED_ROOTS` | live project key, then existing `env.sh`, then resolved project key | Roots protected by the reservation hook |
@@ -103,11 +104,15 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_PORT` | `8770` | Dashboard port |
 | `AGENTSTACK_LABEL_PREFIX` | `org.agentstack` | Service-label prefix |
 | `AGENTSTACK_TERMINAL` | `auto` | Terminal integration: `ghostty / iterm / terminal / wt / none`. `wt` is Windows Terminal on WSL2 (`auto` picks it when `wt.exe` is reachable inside WSL2) |
-| `AGENTSTACK_PYTHON` | resolved `python3` | Python for services |
+| `AGENTSTACK_PYTHON` | resolved `python3` | Installer-version-checked Python for services and the installed persistent launcher. The persistent launcher does not fall back to `python3` from ambient `PATH` |
 | `AGENTSTACK_PATH` | Homebrew and system paths | `PATH` passed to services |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | MCP endpoint for launchers / hooks / dashboard / Bridge |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | Settings merge target |
 | `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | Where `agentstack-claude-setup` writes managed blocks: `project / global / both` |
+
+When a healthy ORRERY Mail listener already exists, the installer adopts the deployment metadata recorded with its immutable render without updating or restarting the server. A managed render created before that metadata existed is adopted only when its render ID maps uniquely and deterministically to a candidate directory. The generated `AGENTSTACK_MAIL_ENV` and `AGENTSTACK_MAIL_ENROLL_BIN` in `env.sh` therefore identify the same deployment. If a known legacy render has no enrollment CLI, Mail and its existing autostart remain usable while enrollment is recorded as unavailable.
+
+When a healthy listener uses the expected database but its service environment cannot be identified, an ordinary unpinned reinstall reuses the listener unchanged. In this degraded state deployment and enrollment paths are empty, and the installer updates neither the enrollment connection profile nor Mail autostart. Existing triggers are not deleted or stopped, but the installer cannot guarantee restart at the next login. Installation instead stops explicitly, without switching the listener, when an explicit `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` cannot be matched to the running deployment, known metadata is invalid, or metadata promises an enrollment CLI that is missing.
 
 The installer's project-key precedence is `--project-key` / process `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → existing `env.sh` at the install destination. If none exist on first install, it does not guess that the repository checkout is the project; it stops with exit 2 before making changes. `AGENTSTACK_PROJECT_KEY` is recommended for persistent configuration.
 
@@ -152,8 +157,11 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | unset | Absolute path to a TOML fragment overlaid on every macOS/Linux Codex child's `config.toml`, persisted by installer `--codex-child-overlay <path>` |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child sandbox network (`-c sandbox_workspace_write.network_access=true`). Disable with `--codex-network off` |
 | `AGENTSTACK_CODEX_ADD_DIRS` | unset | Additional writable roots for Codex children (`:`-separated), persisted by `--codex-add-dirs` |
+| `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | Persistent root for new isolated worktrees; override and persist it by setting the variable when running the installer |
 
-The product assembles Codex child startup flags. It does not consult user launchers under `~/.codex/bin/`, because doing so can silently substitute that launcher's default `on-request` and drop the network flag and additional roots. Since children run unattended, the defaults are approval `never` and network on. Writable roots are the project, `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`, install directory, worktree base, `~/.claude`, `~/.codex`, child-specific `CODEX_HOME`, and `AGENTSTACK_CODEX_ADD_DIRS`; nonexistent directories are silently omitted. Dashboard Codex resume uses the same values. These belong to dashboard service environment, so a shell `export` does not reach them. Pass them to the installer. The config overlay currently applies only to macOS/Linux (including Windows through WSL2) via `spawn_child.sh`; the native-Windows launcher does not apply it.
+The product assembles Codex child startup flags. It does not consult user launchers under `~/.codex/bin/`, because doing so can silently substitute that launcher's default `on-request` and drop the network flag and additional roots. Since children run unattended, the defaults are approval `never` and network on. Writable roots are the project, `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`, install directory, `AGENTSTACK_WORKTREE_ROOT`, `~/.claude`, `~/.codex`, child-specific `CODEX_HOME`, and `AGENTSTACK_CODEX_ADD_DIRS`; nonexistent directories are silently omitted. Dashboard Codex resume uses the same values. These belong to dashboard service environment, so a shell `export` does not reach them. Pass them to the installer. The config overlay currently applies only to macOS/Linux (including Windows through WSL2) via `spawn_child.sh`; the native-Windows launcher does not apply it.
+
+To move the worktree root, run the installer with an environment value such as `AGENTSTACK_WORKTREE_ROOT=/srv/agent-worktrees ./scripts/install.sh ...`. Relative paths are rejected. The launcher continues to reject paths containing `Syncthing` or `Obsidian`. The old `/tmp/cc-worktrees` default is neither moved nor deleted; only new spawns use the persistent root. `agentstack-doctor` reports directories under the current root that are neither live nor actively registered, but leaves removal to the operator.
 
 `AGENTSTACK_TERMINAL=auto` selects an available OS terminal and opens the child window in the background. This is the intentional default. It shows users immediately after installation, before they have the dashboard / ORRERY, that a child started; a headless default makes a healthy spawn look as if nothing happened. Set `AGENTSTACK_TERMINAL=none` explicitly only for an environment routinely monitored through the dashboard or a headless host.
 

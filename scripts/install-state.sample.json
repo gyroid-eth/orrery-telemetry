@@ -1,6 +1,11 @@
 {
   "agent_mail": {
+    "autostart_managed_by_this_install": true,
     "candidate_venv": "/home/alice/.agentstack/mail-service/candidates/868ba0ac97553adb45d31abd6dde8b5ee3291b3c/venv",
+    "deployment_identified": true,
+    "deployment_metadata": "/home/alice/.agentstack/mail-service/renders/<render>/deployment.json",
+    "enroll_bin": "/home/alice/.agentstack/mail-service/candidates/868ba0ac97553adb45d31abd6dde8b5ee3291b3c/venv/bin/agentstack-enroll",
+    "enrollment_available": true,
     "provider": "agentstack",
     "requested_name_honoring": {
       "detail": "ORRERY Mail service env requires passthrough",
@@ -10,6 +15,7 @@
       "status": "honored",
       "warning": ""
     },
+    "service_env": "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
     "state_root": "/home/alice/.agentstack/mail"
   },
   "backups": [
@@ -55,6 +61,7 @@
     "AGENTSTACK_MAIL_DB": "/home/alice/.agentstack/mail/storage.sqlite3",
     "AGENTSTACK_MAIL_DIR": "/home/alice/.agentstack/mail-service",
     "AGENTSTACK_MAIL_ENV": "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
+    "AGENTSTACK_MAIL_ENROLL_BIN": "/home/alice/.agentstack/mail-service/candidates/868ba0ac97553adb45d31abd6dde8b5ee3291b3c/venv/bin/agentstack-enroll",
     "AGENTSTACK_MAIL_HOME": "/home/alice/.agentstack/mail",
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
     "AGENTSTACK_MAIL_LAUNCHD_LABEL": "",
@@ -63,6 +70,7 @@
     "AGENTSTACK_MURMUR": "",
     "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_PORTRAITS_DIR": "",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "/home/alice/.agentstack/profiles",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
     "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
@@ -70,6 +78,7 @@
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_SPAWN_DIRS": "",
     "AGENTSTACK_SPAWN_ROOTS": "",
+    "AGENTSTACK_WORKTREE_ROOT": "/home/alice/.agentstack/worktrees",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "",
     "AGENTSTACK_CODEX_NETWORK": "on",
@@ -131,7 +140,9 @@
   "purge_paths": [
     "/home/alice/.agentstack/mail-service",
     "/home/alice/.agentstack/mail",
-    "/home/alice/.agentstack/runtime"
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/profiles",
+    "/home/alice/.agentstack/connections"
   ],
   "repo_root": "/home/alice/src/claude-agent-stack",
   "retained_paths": [
@@ -139,7 +150,9 @@
     "/home/alice/.agentstack/mail",
     "/home/alice/.agentstack/mail/storage.sqlite3",
     "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
-    "/home/alice/.agentstack/runtime"
+    "/home/alice/.agentstack/runtime",
+    "/home/alice/.agentstack/profiles",
+    "/home/alice/.agentstack/connections"
   ],
   "safe_merge_performed": true,
   "schema_version": 1,

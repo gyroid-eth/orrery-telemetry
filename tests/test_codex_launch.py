@@ -10,6 +10,7 @@ Runnable two ways (no third-party dependency required):
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import shlex
@@ -53,6 +54,15 @@ def _model_catalog() -> str:
     start = text.index("# --- Child model catalog")
     end = text.index("# --- Claude モデル名の正規化 ---", start)
     return text[start:end]
+
+
+def _worktree_base_assignment() -> str:
+    """Return the launcher's real WORKTREE_BASE assignment."""
+    return next(
+        line
+        for line in _SPAWN.read_text(encoding="utf-8").splitlines()
+        if line.startswith("WORKTREE_BASE=")
+    )
 
 
 def _run_bash(script: str, env: dict[str, str] | None = None,
@@ -161,6 +171,57 @@ def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
     assert _flags_with_env(None, {}) == "--ask-for-approval never"
 
 
+def _broken_codex_stub(tmpdir: pathlib.Path, *, exit_code: int, stderr: str = "") -> None:
+    """A codex that is present but cannot answer --help: an npm wrapper whose
+    platform package is missing, a binary for another architecture, ..."""
+    stub = tmpdir / "codex"
+    stub.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' {stderr!r} >&2\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+
+def _flags_with_broken_codex(*, exit_code: int, env: dict[str, str] | None = None):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        _broken_codex_stub(
+            tmpdir,
+            exit_code=exit_code,
+            stderr="Error: Missing optional dependency @openai/codex-darwin-arm64",
+        )
+        script = _codex_lookup() + _extract("codex_approval_flags") + "\ncodex_approval_flags\n"
+        return _run_bash(
+            script, {"HOME": tmp, "PATH": f"{tmpdir}:/usr/bin:/bin", **(env or {})}
+        )
+
+
+def test_a_codex_that_cannot_answer_help_still_pins_the_policy():
+    """A failed probe is not evidence about the flags. The wrapper on the
+    spawner's path crashed on a missing optional dependency (2026-09-17); the
+    launcher read the empty help as "neither flag", passed nothing, and the
+    child ran under Codex's on-request default, asking for approvals the
+    operator's policy had turned off."""
+    result = _flags_with_broken_codex(exit_code=1)
+    assert result.stdout.strip() == "--ask-for-approval never"
+    assert "pinning --ask-for-approval never" in result.stderr
+    # The operator's policy still wins over the product default.
+    result = _flags_with_broken_codex(
+        exit_code=1, env={"AGENTSTACK_CODEX_CHILD_APPROVAL": "on-request"}
+    )
+    assert result.stdout.strip() == "--ask-for-approval on-request"
+
+
+def test_an_empty_help_answer_is_a_failed_probe_not_an_unknown_build():
+    # Exit 0 with nothing printed is what a wrapper that swallowed its child's
+    # failure looks like. Only a help text that names neither flag means an
+    # unknown build (test_approval_flags_follow_the_installed_cli).
+    result = _flags_with_broken_codex(exit_code=0)
+    assert result.stdout.strip() == "--ask-for-approval never"
+
+
 def test_explicit_codex_bin_is_probed_instead_of_path():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
@@ -186,16 +247,22 @@ def test_child_add_dirs_cover_project_presets_roots_and_operator_extras():
         preset = root / "code"
         typeahead_root = root / "roots"
         extra = root / "extra"
+        worktree_root = root / "durable-worktrees"
+        legacy_worktree_root = root / "legacy-worktrees"
         child_home = root / "child.codex-home"
-        for d in (project, preset, typeahead_root, extra, child_home,
+        for d in (project, preset, typeahead_root, extra, worktree_root,
+                  legacy_worktree_root, child_home,
                   root / ".claude", root / ".codex", root / ".agentstack"):
             d.mkdir()
+        add_dirs = _extract("codex_child_add_dirs").replace(
+            "/tmp/cc-worktrees", str(legacy_worktree_root)
+        )
         script = (
             f"HOME={shlex.quote(tmp)}\n"
             f"PROJECT_KEY={shlex.quote(str(project))}\n"
-            "WORKTREE_BASE=/nonexistent/cc-worktrees\n"
+            f"WORKTREE_BASE={shlex.quote(str(worktree_root))}\n"
             f"AGENTSTACK_HOME_DIR={shlex.quote(str(root / '.agentstack'))}\n"
-            + _extract("codex_child_add_dirs")
+            + add_dirs
             + f"\ncodex_child_add_dirs {shlex.quote(str(child_home))}\n"
         )
         env = {
@@ -208,11 +275,129 @@ def test_child_add_dirs_cover_project_presets_roots_and_operator_extras():
     got = out.split(":")
     real = lambda p: os.path.realpath(str(p))  # noqa: E731
     assert got == [real(project), real(preset), real(typeahead_root),
-                   real(root / ".agentstack"), real(root / ".claude"),
+                   real(root / ".agentstack"), real(worktree_root),
+                   real(legacy_worktree_root),
+                   real(root / ".claude"),
                    real(root / ".codex"), real(child_home), real(extra)]
     # Missing entries are dropped, and the project appears once even though
     # it is also listed as a preset.
     assert "/does/not/exist" not in out
+
+
+def test_default_worktree_is_created_below_install_root(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "fixture@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.name", "Fixture"], check=True
+    )
+    (source / "tracked.txt").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "fixture"], check=True)
+
+    install_root = tmp_path / "install"
+    child = "PersistentRoot-" + hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:12]
+    script = "\n".join(
+        (
+            "set -e",
+            f"HOME={shlex.quote(str(tmp_path / 'home'))}",
+            f"AGENTSTACK_HOME_DIR={shlex.quote(str(install_root))}",
+            _worktree_base_assignment(),
+            "USE_WORKTREE=true",
+            "WORKTREE_BASE_REV=",
+            "WORKTREE_BASE_RESOLVED=",
+            "WORKTREE_DIR=",
+            "WORKTREE_SOURCE=",
+            _extract("maybe_create_worktree"),
+            f"maybe_create_worktree {shlex.quote(child)} {shlex.quote(str(source))}",
+            'printf "%s\\n" "$WORKTREE_DIR"',
+        )
+    )
+    result = _run_bash(script)
+    assert result.returncode == 0, result.stderr
+    worktree = pathlib.Path(result.stdout.strip())
+    try:
+        assert worktree == install_root / "worktrees" / child
+        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "fixture\n"
+    finally:
+        subprocess.run(
+            ["git", "-C", str(source), "worktree", "remove", "--force", str(worktree)],
+            check=False,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(source), "branch", "-D", f"exp/{child}"],
+            check=False,
+            capture_output=True,
+        )
+
+
+def test_worktree_root_override_is_used_and_synced_roots_stay_rejected(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "fixture@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.name", "Fixture"], check=True
+    )
+    (source / "tracked.txt").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "fixture"], check=True)
+
+    child = "CustomRoot-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
+    custom_root = tmp_path / "durable-worktrees"
+    script = "\n".join(
+        (
+            "set -e",
+            f"HOME={shlex.quote(str(tmp_path / 'home'))}",
+            f"AGENTSTACK_HOME_DIR={shlex.quote(str(tmp_path / 'install'))}",
+            _worktree_base_assignment(),
+            "USE_WORKTREE=true",
+            "WORKTREE_BASE_REV=",
+            "WORKTREE_BASE_RESOLVED=",
+            "WORKTREE_DIR=",
+            "WORKTREE_SOURCE=",
+            _extract("maybe_create_worktree"),
+            f"maybe_create_worktree {shlex.quote(child)} {shlex.quote(str(source))}",
+            'printf "%s\\n" "$WORKTREE_DIR"',
+        )
+    )
+    result = _run_bash(script, {"AGENTSTACK_WORKTREE_ROOT": str(custom_root)})
+    assert result.returncode == 0, result.stderr
+    worktree = pathlib.Path(result.stdout.strip())
+    try:
+        assert worktree == custom_root / child
+    finally:
+        subprocess.run(
+            ["git", "-C", str(source), "worktree", "remove", "--force", str(worktree)],
+            check=False,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(source), "branch", "-D", f"exp/{child}"],
+            check=False,
+            capture_output=True,
+        )
+
+    rejected = _run_bash(
+        script,
+        {"AGENTSTACK_WORKTREE_ROOT": str(tmp_path / "Obsidian" / "worktrees")},
+    )
+    assert rejected.returncode != 0
+    assert "outside synced/vault folders" in rejected.stderr
+
+    relative = _run_bash(script, {"AGENTSTACK_WORKTREE_ROOT": "relative-worktrees"})
+    assert relative.returncode != 0
+    assert "must be an absolute path" in relative.stderr
 
 
 def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():

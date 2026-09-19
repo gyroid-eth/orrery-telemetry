@@ -33,12 +33,12 @@
 #
 # 分離モード:
 #   --worktree            子を独立した git worktree (別ブランチ・別ディレクトリ) で動かす
-#                          - worktree dir: /tmp/cc-worktrees/<AGENT_NAME>
+#                          - worktree dir: ${AGENTSTACK_WORKTREE_ROOT:-<install-root>/worktrees}/<AGENT_NAME>
 #                          - branch:       exp/<AGENT_NAME>
 #                          - 子の tmux cwd は worktree dir
 #                          - 元 source は WORK_DIR (引数 $2 / pre-registered モードは $3)
 #                          - クリーンアップ: 子の作業完了後、親側から
-#                              git -C <source> worktree remove /tmp/cc-worktrees/<NAME>
+#                              git -C <source> worktree remove <worktree-dir>
 #                              git -C <source> branch -D exp/<NAME>
 #   --worktree-base REV   --worktree と併用。worktree の起点 commit/branch/tag を明示指定。
 #                          未指定時は spawn 実行時の HEAD (時間差で drift する可能性あり)。
@@ -48,6 +48,7 @@
 # 環境変数:
 #   PARENT_AGENT  - 親エージェント名（省略時: tmuxセッション名）
 #   PROJECT_KEY   - ORRERY Mail のプロジェクトキー（省略時: デフォルト）
+#   AGENTSTACK_WORKTREE_ROOT - worktree の永続 root（既定: install root/worktrees）
 #
 # 終了コード:
 #   0  - 成功
@@ -221,7 +222,12 @@ STANDALONE=false
 EMBED_TASK=false
 TASK_FILE=""
 USE_WORKTREE=false
-WORKTREE_BASE="/tmp/cc-worktrees"
+WORKTREE_BASE="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
+if [[ "$WORKTREE_BASE" == "~" ]]; then
+    WORKTREE_BASE="$HOME"
+elif [[ "$WORKTREE_BASE" == "~/"* ]]; then
+    WORKTREE_BASE="$HOME/${WORKTREE_BASE#\~/}"
+fi
 WORKTREE_BASE_REV=""   # --worktree-base で指定された起点 rev (空=HEAD)
 WORKTREE_BASE_RESOLVED="" # rev-parse 後の commit hash (記録用)
 WORKTREE_DIR=""        # 後で maybe_create_worktree がセット
@@ -694,6 +700,11 @@ maybe_create_worktree() {
         return 1
     fi
 
+    if [[ "$WORKTREE_BASE" != /* ]]; then
+        echo "Error: AGENTSTACK_WORKTREE_ROOT must be an absolute path: $WORKTREE_BASE" >&2
+        return 1
+    fi
+
     local worktree_dir="${WORKTREE_BASE}/${child_name}"
     local branch_name="exp/${child_name}"
 
@@ -844,14 +855,28 @@ codex_approval_flags() {
         printf '%s\n' "--ask-for-approval $policy"
         return 0
     fi
-    help_text="$("$codex_bin" --help 2>/dev/null || true)"
+    local status=0
+    help_text="$("$codex_bin" --help 2>/dev/null)" || status=$?
+    if [[ "$status" -ne 0 || -z "$help_text" ]]; then
+        # The binary is on the path but could not answer. That says nothing
+        # about which flags it takes, so it must not be read as "neither flag":
+        # a child launched without the flag runs under Codex's own on-request
+        # default, and the approvals the operator's policy had turned off
+        # come back -- the opposite of an unattended child. Pin the policy the same way a
+        # missing binary does (2026-09-17: an npm wrapper crashing on a missing
+        # optional dependency answered --help with an error, and the child
+        # spawned from that shell asked for approval of its pytest runs).
+        echo "Warning: $codex_bin --help failed (status $status, $(printf '%s' "$help_text" | wc -c | tr -d ' ') bytes); pinning --ask-for-approval $policy" >&2
+        printf '%s\n' "--ask-for-approval $policy"
+        return 0
+    fi
     if printf '%s' "$help_text" | grep -q -- "--ask-for-approval"; then
         printf '%s\n' "--ask-for-approval $policy"
     elif printf '%s' "$help_text" | grep -q -- "--full-auto"; then
         printf '%s\n' "--full-auto"
     fi
-    # Neither flag: emit nothing and let codex use its own defaults rather than
-    # passing an argument this build will reject.
+    # Help answered and names neither flag: emit nothing and let codex use its
+    # own defaults rather than passing an argument this build will reject.
 }
 
 # Writable roots for a Codex child, ':'-separated, handed to the child through
@@ -861,16 +886,18 @@ codex_approval_flags() {
 #
 # Order and membership mirror what an unattended child actually touches: the
 # project, every NEW AGENT launch preset and typeahead root, the install dir
-# (runtime state, spool, tokens), the worktree base, the user's Claude and
-# Codex homes, the child's own CODEX_HOME, then anything the operator added
-# with AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped so codex does
-# not refuse to start on a path that is not there yet.
+# (runtime state, spool, tokens), the worktree base, the pre-#57 worktree root
+# (remove after that migration window), the user's Claude and Codex homes, the
+# child's own CODEX_HOME, then anything the operator added with
+# AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped so codex does not
+# refuse to start on a path that is not there yet.
 codex_child_add_dirs() {
     local child_codex_home="$1" raw entry expanded resolved
     local -a candidates=() seen=()
     raw="${AGENTSTACK_PROJECT_KEY:-$PROJECT_KEY}"
     raw="$raw:${AGENTSTACK_SPAWN_DIRS:-}:${AGENTSTACK_SPAWN_ROOTS:-}"
     raw="$raw:${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}:$WORKTREE_BASE"
+    raw="$raw:/tmp/cc-worktrees" # #57 migration compatibility; remove later.
     raw="$raw:$HOME/.claude:$HOME/.codex:$child_codex_home"
     raw="$raw:${AGENTSTACK_CODEX_ADD_DIRS:-}"
     IFS=':' read -r -a candidates <<< "$raw"

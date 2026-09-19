@@ -1108,6 +1108,8 @@ REQUIRED_RUNTIME_MODULES = {
     "contract.py",
     "cutover_client.py",
     "db.py",
+    "enrollment.py",
+    "enrollment_cli.py",
     "evidence.py",
     "guard.py",
     "llm.py",

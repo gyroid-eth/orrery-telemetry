@@ -723,6 +723,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         mail_port = probe.getsockname()[1]
     project_dir = home / "project"
     project_dir.mkdir(parents=True)
+    worktree_root = home / "durable-worktrees"
     codex_child_overlay = home / "codex-child-overlay.toml"
     codex_child_overlay.write_text(
         '[mcp_servers.browser]\ndefault_tools_approval_mode = "approve"\n',
@@ -742,6 +743,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_MURMUR": "off",
         "AGENTSTACK_SPAWN_DIRS": f"~/code:{project_dir}",
         "AGENTSTACK_SPAWN_ROOTS": str(project_dir),
+        "AGENTSTACK_WORKTREE_ROOT": str(worktree_root),
         "AGENTSTACK_PORTRAITS_DIR": "~/faces",
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
@@ -820,6 +822,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert str(install_dir / "runtime") in manifest["retained_paths"]
     assert str(install_dir / "runtime") in manifest["purge_paths"]
+    assert str(install_dir / "profiles") in manifest["retained_paths"]
+    assert str(install_dir / "profiles") in manifest["purge_paths"]
+    assert str(install_dir / "connections") in manifest["retained_paths"]
+    assert str(install_dir / "connections") in manifest["purge_paths"]
     assert str(legacy_path) not in manifest["owned_files"]
     expected_payload_files = {
         str(install_dir / relative)
@@ -869,10 +875,15 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         f'Environment="AGENTSTACK_DASHBOARD_LOG={install_dir}/runtime/dashboard.log"'
         in systemd_unit
     )
+    assert (
+        f'Environment="AGENTSTACK_PERSISTENT_PROFILES_DIR={install_dir}/profiles"'
+        in systemd_unit
+    )
     assert 'Environment="AGENTSTACK_LANG=ja"' in systemd_unit
     assert 'Environment="AGENTSTACK_MURMUR=off"' in systemd_unit
     assert f'Environment="AGENTSTACK_SPAWN_DIRS=~/code:{project_dir}"' in systemd_unit
     assert f'Environment="AGENTSTACK_SPAWN_ROOTS={project_dir}"' in systemd_unit
+    assert f'Environment="AGENTSTACK_WORKTREE_ROOT={worktree_root}"' in systemd_unit
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
     assert 'Environment="AGENTSTACK_CODEX_MODELS=gpt-5.6-sol,gpt-5.6-luna"' in systemd_unit
     assert (
@@ -880,25 +891,36 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         in systemd_unit
     )
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
+    assert f"export AGENTSTACK_PERSISTENT_PROFILES_DIR={install_dir}/profiles" in generated_env
     assert "export AGENTSTACK_LANG=ja" in generated_env
     assert "export AGENTSTACK_MURMUR=off" in generated_env
     assert f"export AGENTSTACK_SPAWN_DIRS='~/code:{project_dir}'" in generated_env
     assert f"export AGENTSTACK_SPAWN_ROOTS={project_dir}" in generated_env
+    assert f"export AGENTSTACK_WORKTREE_ROOT={worktree_root}" in generated_env
     assert (
         f"export AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"
         in generated_env
     )
     assert manifest["env"]["AGENTSTACK_SPAWN_DIRS"] == f"~/code:{project_dir}"
+    assert manifest["env"]["AGENTSTACK_WORKTREE_ROOT"] == str(worktree_root)
     assert "export AGENTSTACK_PORTRAITS_DIR='~/faces'" in generated_env
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
+    fixture_enroll = (
+        pathlib.Path(sys.executable).parent.parent.resolve()
+        / "bin"
+        / "agentstack-enroll"
+    )
+    assert manifest["env"]["AGENTSTACK_MAIL_ENROLL_BIN"] == str(fixture_enroll)
+    assert manifest["agent_mail"]["enroll_bin"] == str(fixture_enroll)
 
     sample = json.loads(INSTALL_STATE_SAMPLE.read_text(encoding="utf-8"))
     assert set(sample) == set(manifest)
     assert set(sample["env"]) == set(manifest["env"])
+    assert set(sample["agent_mail"]) == set(manifest["agent_mail"])
     assert set(sample["agent_mail"]["requested_name_honoring"]) == set(
         manifest["agent_mail"]["requested_name_honoring"]
     )
@@ -924,10 +946,19 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_MURMUR"] = ""
     normalized_env["AGENTSTACK_SPAWN_DIRS"] = ""
     normalized_env["AGENTSTACK_SPAWN_ROOTS"] = ""
+    normalized_env["AGENTSTACK_WORKTREE_ROOT"] = sample["env"][
+        "AGENTSTACK_WORKTREE_ROOT"
+    ]
     normalized_env["AGENTSTACK_PORTRAITS_DIR"] = ""
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
+    # This isolated fixture pins the repository's development venv. The public
+    # sample depicts the normal immutable candidate selected by an unpinned
+    # install, so normalize only this deployment-derived executable path.
+    normalized_env["AGENTSTACK_MAIL_ENROLL_BIN"] = sample["env"][
+        "AGENTSTACK_MAIL_ENROLL_BIN"
+    ]
     assert normalized_env == sample["env"]
     for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
@@ -977,9 +1008,13 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "mail/storage.sqlite3",
         "mail-service",
         "mail-service/runtime",
+        "profiles",
+        "connections",
+        "connections/local.json",
     } <= remaining
     assert all(
-        path.split("/", 1)[0] in {"runtime", "mail", "mail-service"}
+        path.split("/", 1)[0]
+        in {"runtime", "mail", "mail-service", "profiles", "connections"}
         for path in remaining
     )
     assert not (install_dir / "VERSION").exists()

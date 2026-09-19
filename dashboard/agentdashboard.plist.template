@@ -58,6 +58,8 @@
     <string>__SPAWN_DIRS__</string>
     <key>AGENTSTACK_SPAWN_ROOTS</key>
     <string>__SPAWN_ROOTS__</string>
+    <key>AGENTSTACK_WORKTREE_ROOT</key>
+    <string>__WORKTREE_ROOT__</string>
     <key>AGENTSTACK_CODEX_CHILD_APPROVAL</key>
     <string>__CODEX_CHILD_APPROVAL__</string>
     <key>AGENTSTACK_CODEX_NETWORK</key>
@@ -76,6 +78,8 @@
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>
     <string>__RUNTIME_DIR__</string>
+    <key>AGENTSTACK_PERSISTENT_PROFILES_DIR</key>
+    <string>__PERSISTENT_PROFILES_DIR__</string>
     <key>AGENTSTACK_DASHBOARD_LOG</key>
     <string>__DASHBOARD_LOG__</string>
     <key>AGENTSTACK_DASHBOARD_LOG_MAX_BYTES</key>

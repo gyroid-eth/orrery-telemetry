@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import pathlib
 import re
 import secrets
 import signal
@@ -167,6 +168,9 @@ LABEL_PREFIX = _env_text("AGENTSTACK_LABEL_PREFIX", "org.agentstack")
 TERMINAL_SETTING = _env_text("AGENTSTACK_TERMINAL", "auto").lower()
 HOOKS_DIR = _env_path("AGENTSTACK_HOOKS_DIR", "~/.agentstack/hooks")
 RUNTIME_DIR = _env_path("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")
+PERSISTENT_PROFILES_DIR = _env_path(
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR", "~/.agentstack/profiles"
+)
 MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.agentstack/mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
@@ -983,6 +987,131 @@ def classify(name: str, cmd: str, title: str, in_mail: bool,
 HISTORY_DAYS_DEFAULT = 30.0
 
 
+def _owned_private_json(path: pathlib.Path, *, limit: int = 1_048_576) -> dict:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise ValueError("unsafe private JSON")
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > limit:
+        raise ValueError("private JSON too large")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("private JSON object required")
+    return value
+
+
+def _persistent_profiles() -> dict[str, dict]:
+    """Return only non-secret, independently typed persistent profile fields.
+
+    ``surface`` describes the display/runtime carrier (tmux, Codex App) and is
+    intentionally not part of this result.  Existing rows therefore keep
+    their current surface while receiving ``interaction=unknown`` below.
+    Invalid, non-owned, or group/world-readable profiles are ignored rather
+    than weakening the whole dashboard response.
+    """
+    project_key = _project_key()
+    if not project_key:
+        return {}
+    try:
+        with _db() as connection:
+            instance_row = connection.execute(
+                "SELECT instance_id FROM mail_instances WHERE id = 1"
+            ).fetchone()
+            agent_rows = connection.execute(
+                """
+                SELECT a.id, a.name
+                  FROM agents a
+                  JOIN projects p ON p.id = a.project_id
+                 WHERE p.human_key = ?
+                """,
+                (project_key,),
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        return {}
+    if (
+        instance_row is None
+        or not isinstance(instance_row[0], str)
+        or not instance_row[0]
+    ):
+        return {}
+    server_instance_id = instance_row[0]
+    valid_agents = {
+        (row[0], row[1])
+        for row in agent_rows
+        if type(row[0]) is int and isinstance(row[1], str)
+    }
+
+    root = pathlib.Path(PERSISTENT_PROFILES_DIR)
+    try:
+        entries = list(root.glob("*.json"))
+    except OSError:
+        return {}
+    profiles: dict[str, dict] = {}
+    for path in entries:
+        try:
+            value = _owned_private_json(path)
+        except (OSError, ValueError):
+            continue
+        if value.get("kind") != "orrery-persistent-agent-v1":
+            continue
+        name = value.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            continue
+        agent_id = value.get("agent_id")
+        if (
+            type(agent_id) is not int
+            or (agent_id, name) not in valid_agents
+            or value.get("project_key") != project_key
+        ):
+            continue
+        provider = value.get("provider")
+        interaction = value.get("interaction")
+        if (
+            not isinstance(provider, str)
+            or provider not in {"claude", "codex"}
+            or value.get("parentless") is not True
+            or value.get("lifecycle") != "persistent"
+            or not isinstance(interaction, str)
+            or interaction not in {"interactive", "headless"}
+        ):
+            continue
+        connection_value = value.get("connection")
+        if not isinstance(connection_value, str) or not connection_value:
+            continue
+        connection_path = pathlib.Path(
+            os.path.expandvars(connection_value)
+        ).expanduser()
+        if not connection_path.is_absolute():
+            connection_path = path.parent / connection_path
+        try:
+            authority = _owned_private_json(connection_path.absolute())
+        except (OSError, ValueError):
+            continue
+        if (
+            authority.get("kind") != "orrery-mail-connection-v1"
+            or authority.get("expected_server_instance_id") != server_instance_id
+        ):
+            continue
+        profiles[name] = {
+            "profile_provider": provider,
+            "parentless": True,
+            "lifecycle": "persistent",
+            "interaction": interaction,
+        }
+    return profiles
+
+
 def _parse_history_days(raw: str | None) -> float | None:
     """`?days=` of /api/agents → days as float, None for the whole history.
 
@@ -1024,6 +1153,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
     retired_names = _retired_names(_project_key())
     substitutions = _name_substitutions()
+    persistent_profiles = _persistent_profiles()
     rows = []
     for name, s in sessions.items():
         m = mail_agents.get(name)
@@ -1192,6 +1322,13 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
 
     observed_now = time.time()
     for row in rows:
+        profile = persistent_profiles.get(row["name"])
+        row.update(
+            profile_provider=(profile or {}).get("profile_provider", ""),
+            parentless=(profile or {}).get("parentless"),
+            lifecycle=(profile or {}).get("lifecycle", "unknown"),
+            interaction=(profile or {}).get("interaction", "unknown"),
+        )
         if row.get("program") in {"codex", "codex-cli"}:
             row.update(_codex_history_binding(row["name"], now=observed_now))
         signature = (
@@ -1742,6 +1879,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
     didx = _deliverables_index()  # {agent: [...]}（60秒キャッシュ）
     annots = _annotations()       # {agent: {role, emoji, group}}（mtime キャッシュ）
     substitutions = _name_substitutions()  # {registered: requested}
+    persistent_profiles = _persistent_profiles()
     fn = [
         {**n, "rel": _rel(n["last_active"], mx) if n["last_active"] else "—",
          "deliv": len(didx.get(n["name"], [])),
@@ -1749,6 +1887,10 @@ def graph_payload(days: float, show_all: bool) -> dict:
          # 要求した名前が通らず別名で登録された場合のみ非空。肖像が出ない
          # 理由をここで名指しする（顔の不在から察させない）。
          "requested_name": substitutions.get(n["name"], ""),
+         "profile_provider": persistent_profiles.get(n["name"], {}).get("profile_provider", ""),
+         "parentless": persistent_profiles.get(n["name"], {}).get("parentless"),
+         "lifecycle": persistent_profiles.get(n["name"], {}).get("lifecycle", "unknown"),
+         "interaction": persistent_profiles.get(n["name"], {}).get("interaction", "unknown"),
          **(lv := live(n["name"], n.get("program"))),
          # 窓: running はペイン直読み(権威)、不在はモデル文字列で補完
          "ctx_window": lv.get("ctx_window") or _ctx_window(n.get("model")),
@@ -2425,19 +2567,35 @@ def _codex_meta(path: str) -> tuple[str | None, str | None]:
         return None, None
 
 
+def _worktree_root() -> str:
+    """Return the persistent root used by spawn_child.sh for new worktrees."""
+    install_root = os.environ.get("AGENTSTACK_HOME") or os.path.expanduser(
+        "~/.agentstack"
+    )
+    configured = os.environ.get("AGENTSTACK_WORKTREE_ROOT") or os.path.join(
+        install_root, "worktrees"
+    )
+    return os.path.abspath(os.path.expanduser(configured))
+
+
 def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     """Writable roots for a Codex agent launched by the product.
 
     Mirrors codex_child_add_dirs in hooks/spawn_child.sh: project, NEW AGENT
-    presets and typeahead roots, install dir, worktree base, ~/.claude,
-    ~/.codex, then AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped
-    and duplicates collapse on realpath (macOS /tmp -> /private/tmp)."""
+    presets and typeahead roots, install dir, worktree base, the pre-#57
+    /tmp/cc-worktrees compatibility root, ~/.claude, ~/.codex, then
+    AGENTSTACK_CODEX_ADD_DIRS. Missing directories are dropped and duplicates
+    collapse on realpath (macOS /tmp -> /private/tmp)."""
     raw: list[str] = [PROJECT_KEY or VAULT]
     raw += os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     raw += os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
-    raw += [os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
-            "/tmp/cc-worktrees", os.path.expanduser("~/.claude"),
-            os.path.expanduser("~/.codex")]
+    raw += [
+        os.environ.get("AGENTSTACK_HOME") or os.path.expanduser("~/.agentstack"),
+        _worktree_root(),
+        "/tmp/cc-worktrees",  # #57 migration compatibility; remove later.
+        os.path.expanduser("~/.claude"),
+        os.path.expanduser("~/.codex"),
+    ]
     raw += list(extra or [])
     raw += os.environ.get("AGENTSTACK_CODEX_ADD_DIRS", "").split(":")
     seen: list[str] = []
@@ -2853,7 +3011,41 @@ def _verified_codex_index(
         return None
     real_transcript = os.path.realpath(transcript_path)
     if not os.path.isfile(real_transcript):
-        return None
+        # Receipts written before #58 kept the child CODEX_HOME route.  Normal
+        # cleanup removes that directory but leaves the shared rollout intact.
+        # Recover only this exact legacy layout; an arbitrary missing receipt
+        # path must never turn into a scan of the user's Codex history.
+        if not os.path.isabs(transcript_path) or not _valid(session):
+            return None
+        recorded_path = os.path.abspath(os.path.expanduser(transcript_path))
+        child_sessions = os.path.abspath(
+            os.path.join(
+                RUNTIME_DIR,
+                "child-agents",
+                f"{session}.codex-home",
+                "sessions",
+            )
+        )
+        try:
+            if os.path.commonpath([recorded_path, child_sessions]) != child_sessions:
+                return None
+            relative = os.path.relpath(recorded_path, child_sessions)
+        except ValueError:
+            return None
+        source_home = os.path.expanduser(
+            os.environ.get("CODEX_HOME") or "~/.codex"
+        )
+        source_sessions = os.path.realpath(os.path.join(source_home, "sessions"))
+        recovered = os.path.realpath(os.path.join(source_sessions, relative))
+        try:
+            if os.path.commonpath([recovered, source_sessions]) != source_sessions:
+                return None
+        except ValueError:
+            return None
+        if not os.path.isfile(recovered):
+            return None
+        real_transcript = recovered
+        transcript_path = recovered
     header_session_id, _cwd = _codex_meta(real_transcript)
     if header_session_id != session_id:
         return None
@@ -5235,7 +5427,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             body_lines += [
                 f"- 分離 worktree モードで起動 (branch: exp/{child_name})",
                 f"- worktree base: {worktree_base or 'HEAD'}",
-                f"- worktree dir: /tmp/cc-worktrees/{child_name}",
+                f"- worktree dir: {os.path.join(_worktree_root(), child_name)}",
             ]
         body_lines += [
             "- 完了したら親に reply してください。",

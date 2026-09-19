@@ -152,11 +152,12 @@ def _run_named_hook(
     *,
     proxy_config: bool,
     register_status: int = 0,
+    credential_available: bool = True,
 ) -> str:
     """Run the real reminder with an isolated identity and fake register lib."""
     runtime = tmp_path / "runtime"
     fake_lib = tmp_path / "agentstack-register.sh"
-    fake_lib.write_text(
+    token_functions = (
         """\
 ags_mail_load_token() {
     CHILD_REGISTRATION_TOKEN=fixture-owner-token
@@ -165,6 +166,16 @@ ags_mail_load_token() {
 ags_load_registration_token() {
     printf '%s\\n' fixture-owner-token
 }
+"""
+        if credential_available
+        else """\
+ags_mail_load_token() { :; }
+ags_load_registration_token() { return 1; }
+"""
+    )
+    fake_lib.write_text(
+        token_functions
+        + """\
 ags_register_session() {
     if [ "${FAKE_REGISTER_STATUS:-0}" -ne 0 ]; then
         return "$FAKE_REGISTER_STATUS"
@@ -395,3 +406,23 @@ def test_proxy_hint_does_not_fall_back_when_shell_registration_fails(
     assert "helper・raw registration・token 読取へ fallback しない" in output
     assert "ensure_project ->" not in output
     assert "registration_token" not in output
+    assert "persistent-agents.md#credential-unavailable" not in output
+
+
+def test_exact_missing_credential_routes_to_operator_docs_without_model_enroll(
+    mail_like_server: http.server.HTTPServer,
+    tmp_path: Path,
+) -> None:
+    host, port = mail_like_server.server_address[:2]
+    output = _run_named_hook(
+        f"http://{host}:{port}/mcp",
+        tmp_path,
+        proxy_config=False,
+        credential_available=False,
+    )
+    assert "shell registration did not complete" in output
+    assert "local credential がありません" in output
+    assert "operatorに docs/persistent-agents.md#credential-unavailable" in output
+    assert "このsessionからenrollを実行せず停止" in output
+    assert "agentstack-enroll" not in output
+    assert "ensure_project ->" not in output

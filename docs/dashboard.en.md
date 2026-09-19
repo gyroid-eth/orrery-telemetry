@@ -311,11 +311,11 @@ Every POST requires a JSON body. Browsers must be same-origin; CLI requests are 
 With `worktree: true`, each child uses:
 
 ```text
-/tmp/cc-worktrees/<child-name>
+${AGENTSTACK_WORKTREE_ROOT:-$AGENTSTACK_HOME/worktrees}/<child-name>
 branch: exp/<child-name>
 ```
 
-Omitted `worktree_base` means `HEAD`. The task message names the original project key, branch, base, and directory so the worktree path is not mistaken for the ORRERY Mail project key.
+The normal install root is `~/.agentstack`; set `AGENTSTACK_WORKTREE_ROOT` when running the installer to override it. Omitted `worktree_base` means `HEAD`. The task message names the original project key, branch, base, and directory so the worktree path is not mistaken for the ORRERY Mail project key.
 
 ## Embed mode
 

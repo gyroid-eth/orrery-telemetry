@@ -141,11 +141,51 @@ unit に固めて焼き込んでしまうと、再インストール後も静か
 `StartInterval` と systemd の timer から来ます。systemd の unit は
 `KillMode=process` も設定します。これがないと、既定の control-group
 cleanup が、oneshot controller が終了した瞬間に起動したばかりの server を
-kill してしまいます（WSL2 で確認）。`start` は冪等です——owned PID が
+kill してしまいます（WSL2 で確認）。launchd の plist は同じ目的で
+`AbandonProcessGroup` を true にします。launchd は job が終了すると、job の
+process group に残っているプロセスを終了処理の対象にし、`nohup` は
+process group を変えません。この key が無いと、trigger 自身が spawn した
+runner と server は「ORRERY Mail started」と log に書かれたあと、job の
+終了直後（reboot 直後の Mac での 2026-09-17 の観測では、次の 2 秒刻みの
+観測まで）に消えていました。別の process group で既に動いている server
+（operator が手で `start` したものなど）にはこの終了処理は及びません。`start` は冪等です——owned PID が
 生きていて健全なら "already running" と報告して 0 で exit するため、
 再実行のコストはなく、何もすることがなければ静かなままです。その出力は
 `agentstack-mail-autostart.log`（launchd の `StandardOutPath`、systemd の
 `StandardOutput=append:`）に書かれ、server 自体の log とは分かれています。
+
+**起動中の server は失敗ではありません。** controller が自分で runner を
+spawn する経路（`nohup`）では、`start` は port が開くまで
+`AGENTSTACK_MAIL_START_GRACE` 秒（既定 180）、開いてから health が返る
+まで `AGENTSTACK_MAIL_HEALTH_GRACE` 秒（既定 30）待ちます。どちらも壁時計
+の期限で、期限は probe と probe の間で判定するため、期限を過ぎた時点で
+進行中だった probe が終わるまでは超過しえます（probe は Python を起動
+してから 1 秒の socket timeout を使い、probe 全体の上限はありません）。
+0 は probe 1 回だけを意味します。値は controller が動く環境（operator の
+shell、または installer が再生成する `env.sh`）から読みます。
+
+以前は probe **150 回**という 1 つの窓しかなく（probe ごとに Python を
+起動するため、計測した Mac では port が閉じたまま約 48 秒）、切れると
+controller は**自分が起動したばかりの runner を kill** していました。
+起動にそれ以上かかる server は、listen する直前に殺されます。遅い runner を使った fixture で
+この kill は再現します。2026-09-16 に maintainer の Mac で reboot 直後の
+login 時 `start` がこの失敗文で終わり、5 分後の 2 回目で立ち上がった
+（その 2 回目は runner 開始から startup complete まで 47 秒）事象が
+ありますが、1 回目の runner が何秒目で殺されたかは記録が無く、cold start
+が原因かどうかは確定していません。
+
+今は grace を使い切っても生きている runner は kill せず pidfile を残し、
+メッセージに経過秒と port の状態（`still starting after 180s (endpoint
+port closed); runner pid N left running (starting or stuck)`）を出します。
+pid が生きていることは正常な起動中の証明ではないので、「起動中か stuck」
+と言います。次の `start`（timer または operator）は同じ runner を見つけ、
+port がまだ閉じていれば **待たずに**そう報告して lock を手放します
+（sweep が lifecycle lock を長く握ると、operator の `stop` が
+「another lifecycle action is active」で拒否されるため）。port が開いて
+いれば health grace だけ待ちます。runner が exit した場合だけ pidfile を
+消し、そう報告します。launchd が server を直接 supervise する経路では
+controller は runner を kill しないので、この変更の対象外です（health の
+待ちは同じ deadline を使います）。
 
 `agentstack-mailctl stop` は尊重されます。その意図を
 `runtime/agentstack-mail.stopped` に記録し、sweep は明示的な `start` や

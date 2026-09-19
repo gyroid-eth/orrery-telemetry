@@ -194,7 +194,7 @@ Use `--worktree` when the child should edit in an isolated git worktree instead 
 
 Behavior:
 
-- The child runs in a temporary worktree directory.
+- The child runs in a persistent worktree directory below `${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME:-$HOME/.agentstack}/worktrees}`.
 - The child uses a new branch such as `exp/<child-name>`.
 - The parent decides later whether to merge, cherry-pick, or discard the result.
 - The worktree is outside the normal project directory, so the child must be told to use `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY` for ORRERY Mail project identity.
@@ -209,7 +209,7 @@ Use `--worktree-base <rev>` when spawning several children that must share the s
 After verification, clean up from the source repository:
 
 ```bash
-git worktree remove /tmp/cc-worktrees/<child-name>
+git worktree remove "${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME:-$HOME/.agentstack}/worktrees}/<child-name>"
 git branch -d exp/<child-name>
 ```
 
