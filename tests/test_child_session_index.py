@@ -39,7 +39,7 @@ class _Mail(http.server.BaseHTTPRequestHandler):
             result = {"structuredContent": {"status": "ok"}}
         elif name == "whois":
             args = params.get("arguments") or {}
-            if args.get("agent_name") == CHILD and args.get("registration_token") == "tok-child":
+            if args.get("agent_name") == CHILD and "registration_token" not in args:
                 result = {"structuredContent": {"id": AGENT_ID, "name": CHILD}}
             else:
                 result = None
