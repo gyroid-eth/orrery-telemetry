@@ -115,6 +115,14 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
 
 helper は owner token を runtime state から読み、同名 identity を復元します。同名登録に失敗しても別名を作らないでください。別名は inbox、thread、reservation、監査履歴を分断します。
 
+`agentstack-reregister` は既存 token を使う helper であり、token を新規発行しません。launcher を一度も通らない parentless bot、`server-null` row の初回 claim、または exact `stage=local-token reason=credential-unavailable` からの明示 recovery は、モデルではなく operator が [常駐 agent の enrollment と起動](persistent-agents.md) に従って行います。通常の再起動では enrollment を繰り返しません。
+
+## 常駐 parentless agent
+
+同じ identity を restart 後も使う bot は `agentstack-persistent` profile で起動できます。profile は provider、parentless、persistent lifecycle、interactive / headless を別 field にし、保存済み credential と Mail authority、数値 row を照合してからだけ command を `exec` します。自動 enrollment や alias 作成は行いません。interactive Claude は通常の `--channels plugin:...` を保持し、working directory から filesystem root までの `.mcp.json`、通常 / separate gitdir の checkout root local、linked worktree の main-checkout local、実効 inventory / marketplace registry / catalog から解決した installed plugin を含む有限な実効 config を検査して、standalone Mail alias だけを同名 bound overlay へ置き換えます。plugin / managed の非対応 config や読めない実効 source は推測せず起動前に拒否します。
+
+新しい bot、既存 bot の移行、credential recovery、Claude Channels の PTY、headless bridge、別 Mail / 別の機体の手順は [常駐 agent の enrollment と起動](persistent-agents.md) を正本とします。
+
 ## `CLAUDECODE` guard
 
 launcher と child spawner は tmux session ごとの environment に:
@@ -195,7 +203,7 @@ model の世代名は `spawn_child.sh` の model catalog が正本です。Claud
 5. ORRERY Mail の完了報告と `monitor_child_agent.sh` を読み、自分で成果物を検証する
 6. reservation を release してから親の結果として報告する
 
-worktree child の cwd は `/tmp/cc-worktrees/<name>` に変わりますが、ORRERY Mail project は変わりません。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。
+worktree child の cwd は `${AGENTSTACK_WORKTREE_ROOT:-$AGENTSTACK_HOME/worktrees}/<name>`（通常は `~/.agentstack/worktrees/<name>`）に変わりますが、ORRERY Mail project は変わりません。task には必ず `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY` を正本として明記します。`--worktree-base <rev>` を使うと複数 child の baseline を固定できます。旧 `/tmp/cc-worktrees` は移行せず、新規 spawn だけが永続 root を使います。
 
 monitor の danger command 検知は既定では passive です。`AGENTSTACK_MONITOR_DANGER_CHECK=1` で有効にすると一致時に soft stop します。出力が変わらない stasis の反復時は設定にかかわらず soft stop、`C-c`、process group freeze、session kill の順に段階化します。exit code の意味は skill 本文を参照してください。
 
@@ -227,6 +235,7 @@ repository にある11件の hook / helper の発火タイミング、caller、b
 ## 関連文書
 
 - [Hooks と運用 helper](hooks.md)
+- [常駐 agent の enrollment と起動](persistent-agents.md)
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)

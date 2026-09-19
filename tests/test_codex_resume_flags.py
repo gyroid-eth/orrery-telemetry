@@ -166,18 +166,29 @@ def test_resume_honours_installer_settings_and_extra_roots(policy_env, monkeypat
     tmp_path, project = policy_env
     preset = tmp_path / "code"
     extra = tmp_path / "extra"
+    worktree_root = tmp_path / "durable-worktrees"
     preset.mkdir()
     extra.mkdir()
+    worktree_root.mkdir()
     monkeypatch.setenv("AGENTSTACK_CODEX_CHILD_APPROVAL", "on-failure")
     monkeypatch.setenv("AGENTSTACK_CODEX_NETWORK", "off")
     monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", f"{preset}:/does/not/exist")
     monkeypatch.setenv("AGENTSTACK_CODEX_ADD_DIRS", str(extra))
+    monkeypatch.setenv("AGENTSTACK_WORKTREE_ROOT", str(worktree_root))
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(
+        server.os.path,
+        "isdir",
+        lambda path: path == "/tmp/cc-worktrees" or real_isdir(path),
+    )
     flags = server._codex_child_launch_flags()
     assert "--ask-for-approval on-failure" in flags
     assert "network_access" not in flags
     dirs = server._codex_child_add_dirs()
     assert dirs[0] == os.path.realpath(str(project))
     assert os.path.realpath(str(preset)) in dirs
+    assert os.path.realpath(str(worktree_root)) in dirs
+    assert os.path.realpath("/tmp/cc-worktrees") in dirs
     assert dirs[-1] == os.path.realpath(str(extra))
     assert "/does/not/exist" not in dirs
     assert len(dirs) == len(set(dirs))

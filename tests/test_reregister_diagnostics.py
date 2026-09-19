@@ -313,7 +313,10 @@ def test_missing_owner_credential_fails_locally_without_transport(tmp_path: path
     completed, calls = _run_wrapper(tmp_path, credential_source=None)
     assert completed.returncode != 0
     assert completed.stdout == ""
-    assert completed.stderr == "agentstack-reregister: stage=local-token reason=credential-unavailable\n"
+    assert completed.stderr == (
+        "agentstack-reregister: stage=local-token reason=credential-unavailable "
+        "docs=docs/persistent-agents.md#credential-unavailable operator_action=required\n"
+    )
     assert calls == []
     _assert_no_secrets(completed)
 

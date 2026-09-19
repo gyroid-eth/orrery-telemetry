@@ -550,6 +550,185 @@ def test_preregister_no_arg_spawn_reaches_recorder_and_reader(
     assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
 
 
+def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
+    binding_env, tmp_path: Path
+) -> None:
+    """A normal child exit must not make its verified rollout disappear."""
+
+    layout = _codex_entrypoint_layout(tmp_path, "source")
+    env, workdir = _fake_codex_launch_env(
+        tmp_path,
+        runtime=binding_env["runtime"],
+        project=binding_env["project"],
+        layout=layout,
+    )
+    source_home = Path(env["CODEX_HOME"])
+    shared_sessions = source_home / "sessions"
+    rollout = shared_sessions / "2026" / "09" / "18" / "rollout-fixture.jsonl"
+    rollout.parent.mkdir(parents=True)
+    _rollout(rollout)
+    proxy = tmp_path / "fixture-mcp-proxy"
+    _executable(proxy, "#!/bin/bash\nexit 0\n")
+    env["AGENTSTACK_MCP_PROXY"] = str(proxy)
+
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Exit normally after binding history.", encoding="utf-8")
+    handoff = tmp_path / "token-BoundCodex"
+    preregister = subprocess.run(
+        [
+            str(layout["preregister"]),
+            "--project-key",
+            str(binding_env["project"]),
+            "--name",
+            AGENT,
+            "--program",
+            "codex",
+            "--model",
+            "gpt-5.6-terra",
+            "--task-description",
+            "cleanup receipt fixture",
+            "--token-file-out",
+            str(handoff),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert preregister.returncode == 0, preregister.stderr
+    spawned = _run_preregistered_codex_spawn(
+        layout=layout,
+        env=env,
+        workdir=workdir,
+        task_file=task_file,
+        handoff=handoff,
+    )
+    assert spawned.returncode == 0, spawned.stderr
+
+    child_env, _command = _tmux_new_session_env(Path(env["FAKE_TMUX_LOG"]))
+    child_home = Path(child_env["CODEX_HOME"])
+    child_rollout = child_home / "sessions" / rollout.relative_to(shared_sessions)
+    assert child_rollout.resolve() == rollout.resolve()
+    recorder_env = env | {
+        "AGENTSTACK_CODEX_LAUNCH_BINDING": child_env[
+            "AGENTSTACK_CODEX_LAUNCH_BINDING"
+        ],
+        "AGENTSTACK_CODEX_LAUNCH_ID": child_env["AGENTSTACK_CODEX_LAUNCH_ID"],
+    }
+    recorded = subprocess.run(
+        [sys.executable, str(layout["recorder"])],
+        input=json.dumps(_payload(child_rollout)),
+        cwd=ROOT,
+        env=recorder_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert recorded.returncode == 0, recorded.stderr
+    assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+    receipt = json.loads(
+        (
+            binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["transcript_path"] == str(rollout.resolve())
+
+    cleaned = subprocess.run(
+        ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert cleaned.returncode == 0, cleaned.stderr
+    assert not child_home.exists()
+    assert rollout.is_file()
+    assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+
+
+def test_reader_recovers_legacy_cleaned_child_home_receipt(
+    binding_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    launch_path, launch_id = _prepare(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    source_home = tmp_path / "source-codex-home"
+    rollout = source_home / "sessions" / "2026" / "09" / "18" / "rollout.jsonl"
+    rollout.parent.mkdir(parents=True)
+    _rollout(rollout)
+    stale = (
+        binding_env["runtime"]
+        / "child-agents"
+        / f"{AGENT}.codex-home"
+        / "sessions"
+        / "2026"
+        / "09"
+        / "18"
+        / "rollout.jsonl"
+    )
+    receipt_path = binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["transcript_path"] = str(stale)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    state = server._codex_history_binding(AGENT, now=200.0)
+
+    assert state["history_binding"] == "bound"
+    assert state["transcript_path"] == str(rollout.resolve())
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["outside-child-home", "outside-source-home", "wrong-session-id"],
+)
+def test_reader_does_not_broaden_legacy_receipt_recovery(
+    binding_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    launch_path, launch_id = _prepare(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    source_home = tmp_path / "source-codex-home"
+    rollout = source_home / "sessions" / "2026" / "09" / "18" / "rollout.jsonl"
+    rollout.parent.mkdir(parents=True)
+    if failure == "outside-source-home":
+        outside = tmp_path / "outside-source-home" / "rollout.jsonl"
+        outside.parent.mkdir(parents=True)
+        _rollout(outside)
+        rollout.symlink_to(outside)
+    else:
+        _rollout(
+            rollout,
+            "another-session" if failure == "wrong-session-id" else SESSION_ID,
+        )
+    if failure == "outside-child-home":
+        stale = binding_env["runtime"] / "other" / "2026" / "09" / "18" / "rollout.jsonl"
+    else:
+        stale = (
+            binding_env["runtime"]
+            / "child-agents"
+            / f"{AGENT}.codex-home"
+            / "sessions"
+            / "2026"
+            / "09"
+            / "18"
+            / "rollout.jsonl"
+        )
+    receipt_path = binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["transcript_path"] = str(stale)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    state = server._codex_history_binding(AGENT, now=200.0)
+
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "receipt_missing"
+
+
 @needs_codex_cli
 def test_refreshed_cli_cache_runner_reaches_recorder_and_reader(
     binding_env, tmp_path: Path
@@ -1048,6 +1227,18 @@ def test_conflict_is_unconfirmed_even_if_the_stale_index_cannot_be_deleted(
 def test_null_transcript_is_unconfirmed_not_disabled(binding_env) -> None:
     launch_path, launch_id = _prepare(binding_env)
     assert _record(binding_env, launch_path, launch_id, transcript_path=None) == "no_transcript"
+    state = server._codex_history_binding(AGENT, now=200.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "no_transcript"
+
+
+def test_missing_transcript_is_unconfirmed_as_no_transcript(binding_env) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    missing = binding_env["transcript"].with_name("missing.jsonl")
+
+    assert record_mod.record_payload(
+        _payload(missing), launch_path=launch_path, launch_id=launch_id
+    ) == "no_transcript"
     state = server._codex_history_binding(AGENT, now=200.0)
     assert state["history_binding"] == "unconfirmed"
     assert state["history_binding_reason_code"] == "no_transcript"

@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Deliver one Mail wake to a running persistent headless bridge.
+
+Exit 10 means no headless runtime owns the name, so the ordinary interactive
+tmux delivery path may be considered.  Exit 20 means a headless runtime does
+own it but did not confirm the bot reply; callers must retain the Mail signal
+for retry and must not fall back to tmux injection.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import stat
+import sys
+import time
+from typing import Any, Sequence
+
+
+SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+CONTRACT = "orrery-mail-notification-reply-v1"
+NO_HEADLESS_RUNTIME = 10
+HEADLESS_DELIVERY_FAILED = 20
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentstack-persistent-deliver")
+    parser.add_argument("--runtime-dir", required=True)
+    parser.add_argument("--agent-name", required=True)
+    parser.add_argument("--signal-file", required=True)
+    parser.add_argument("--timeout", type=float, default=30.0)
+    return parser
+
+
+def _private_json(path: Path, *, limit: int) -> dict[str, Any]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError("unsafe file")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("unsafe permissions")
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > limit:
+        raise ValueError("file too large")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("object required")
+    return value
+
+
+def _signal_json(path: Path) -> dict[str, Any]:
+    raw = path.read_bytes()
+    if len(raw) > 1_048_576:
+        raise ValueError("signal too large")
+    value = json.loads(raw)
+    if not isinstance(value, dict) or not isinstance(value.get("message"), dict):
+        raise ValueError("signal invalid")
+    return value
+
+
+def _running(pid: Any) -> bool:
+    if type(pid) is not int or pid < 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise socket.timeout("persistent delivery deadline expired")
+    return remaining
+
+
+def _connect(path: Path, deadline: float) -> socket.socket:
+    info = path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError("wake socket unsafe")
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(_remaining(deadline))
+    client.connect(str(path))
+    return client
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
+    if SAFE_NAME.fullmatch(args.agent_name) is None or args.timeout <= 0 or args.timeout > 300:
+        raise SystemExit(HEADLESS_DELIVERY_FAILED)
+    runtime_dir = Path(args.runtime_dir).expanduser().absolute()
+    manifest_path = runtime_dir / "persistent" / f"{args.agent_name}.json"
+    if not manifest_path.exists():
+        raise SystemExit(NO_HEADLESS_RUNTIME)
+    try:
+        manifest = _private_json(manifest_path, limit=65536)
+    except (OSError, ValueError, json.JSONDecodeError):
+        raise SystemExit(HEADLESS_DELIVERY_FAILED) from None
+    if manifest.get("interaction") != "headless":
+        raise SystemExit(NO_HEADLESS_RUNTIME)
+    expected = {
+        "kind": "orrery-persistent-runtime-v1",
+        "name": args.agent_name,
+        "lifecycle": "persistent",
+        "parentless": True,
+        "bridge_contract": CONTRACT,
+    }
+    if any(manifest.get(key) != value for key, value in expected.items()) or not _running(manifest.get("pid")):
+        raise SystemExit(HEADLESS_DELIVERY_FAILED)
+    wake_socket = manifest.get("wake_socket")
+    if not isinstance(wake_socket, str) or not wake_socket:
+        raise SystemExit(HEADLESS_DELIVERY_FAILED)
+    try:
+        signal = _signal_json(Path(args.signal_file))
+        message = signal["message"]
+        message_id = message.get("id")
+        if not isinstance(message_id, (int, str)) or isinstance(message_id, bool):
+            raise ValueError("message id invalid")
+        request = {
+            "version": 1,
+            "contract": CONTRACT,
+            "type": "mail-notification",
+            "agent_name": args.agent_name,
+            "message": message,
+        }
+        payload = (json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        if len(payload) > 1_048_576:
+            raise ValueError("request too large")
+        deadline = time.monotonic() + args.timeout
+        with _connect(Path(wake_socket), deadline) as client:
+            client.settimeout(_remaining(deadline))
+            client.sendall(payload)
+            chunks = bytearray()
+            while not chunks.endswith(b"\n"):
+                client.settimeout(_remaining(deadline))
+                part = client.recv(4096)
+                if not part:
+                    raise ConnectionError("bridge closed")
+                chunks.extend(part)
+                if len(chunks) > 65536:
+                    raise ValueError("response too large")
+        response = json.loads(chunks)
+        if not isinstance(response, dict):
+            raise ValueError("response invalid")
+        if (
+            response.get("version") != 1
+            or response.get("contract") != CONTRACT
+            or response.get("status") != "replied"
+            or response.get("message_id") != message_id
+        ):
+            raise ValueError("reply not confirmed")
+    except (OSError, ValueError, json.JSONDecodeError, socket.timeout):
+        raise SystemExit(HEADLESS_DELIVERY_FAILED) from None
+
+
+if __name__ == "__main__":
+    main()

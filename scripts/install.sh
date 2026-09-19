@@ -30,6 +30,9 @@ MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
 # NEW AGENT launch-directory presets. Resolved below: explicit > installed env.sh > empty.
 SPAWN_DIRS_SETTING="${AGENTSTACK_SPAWN_DIRS:-}"
 SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
+# New worktrees live below the install root by default. An explicit environment
+# override is persisted for shell launches and the dashboard service alike.
+WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-}"
 # Codex child launch policy. Same lifecycle as the presets above: explicit >
 # installed env.sh > product default (approval `never`, network on, no extra
 # writable roots). Children run unattended, so the defaults avoid prompts
@@ -238,6 +241,10 @@ fi
 if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
   SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "$WORKTREE_ROOT_SETTING" ]]; then
+  WORKTREE_ROOT_SETTING="$(agentstack_installed_env_value AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/env.sh")"
+fi
+WORKTREE_ROOT_SETTING="${WORKTREE_ROOT_SETTING:-$INSTALL_DIR/worktrees}"
 if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
   CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
 fi
@@ -293,6 +300,8 @@ SKILLS_DIR="$INSTALL_DIR/skills"
 DASHBOARD_DIR="$INSTALL_DIR/dashboard"
 BIN_DIR="$INSTALL_DIR/bin"
 RUNTIME_DIR="$INSTALL_DIR/runtime"
+CONNECTIONS_DIR="$INSTALL_DIR/connections"
+PERSISTENT_PROFILES_DIR="$INSTALL_DIR/profiles"
 BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
@@ -350,6 +359,9 @@ AGENT_MAIL_WATCHER_KIND=""
 AGENT_MAIL_WATCHER_PATH=""
 NATIVE_MAIL_EXISTING=false
 PROVISION_NATIVE_MAIL=false
+NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=true
+NATIVE_MAIL_ENROLL_AVAILABLE=true
+NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true
 NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
 NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-service}"
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
@@ -360,11 +372,14 @@ if [[ -z "$NATIVE_MAIL_SOURCE_ID" ]]; then
 fi
 NATIVE_MAIL_VENV_EXPLICIT="${AGENTSTACK_MAIL_SERVICE_VENV+x}"
 NATIVE_MAIL_VENV="${AGENTSTACK_MAIL_SERVICE_VENV:-$NATIVE_MAIL_SERVICE_ROOT/candidates/$NATIVE_MAIL_SOURCE_ID/venv}"
+NATIVE_MAIL_ENROLL_BIN="$NATIVE_MAIL_VENV/bin/agentstack-enroll"
 NATIVE_MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_SERVICE_ENV+x}"
 NATIVE_MAIL_ENV="${AGENTSTACK_MAIL_SERVICE_ENV:-$NATIVE_MAIL_SERVICE_ROOT/renders/pending/service.env}"
 NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
+NATIVE_MAIL_DEPLOYMENT="$(dirname "$NATIVE_MAIL_ENV")/deployment.json"
 NATIVE_MAIL_PIDFILE="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.pid"
 NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
+NATIVE_MAIL_MANAGEMENT_SOCKET="${AGENTSTACK_MAIL_MANAGEMENT_SOCKET:-}"
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected ORRERY Mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
 PREFLIGHT_ERRORS=()
@@ -411,6 +426,7 @@ validate_spawn_paths() {
 }
 validate_spawn_paths AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING"
 validate_spawn_paths AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING"
+validate_spawn_paths AGENTSTACK_WORKTREE_ROOT "$WORKTREE_ROOT_SETTING"
 validate_spawn_paths AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING"
 validate_spawn_paths AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING"
 validate_spawn_paths AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING"
@@ -733,6 +749,116 @@ is_managed_render_env_path() {
   return 0
 }
 
+native_mail_render_id() {
+  "$PYTHON_BIN" - "$1" "$2" "$3" "$4" <<'PY'
+import hashlib
+import sys
+
+payload = "\0".join(sys.argv[1:]).encode()
+print(hashlib.sha256(payload).hexdigest()[:20])
+PY
+}
+
+# Resolve the immutable candidate associated with one service render. New
+# renders carry an owner-private deployment.json. Renders created before that
+# metadata existed remain recoverable because their directory name is a hash of
+# the source id, candidate venv, endpoint and state root. We deliberately do
+# not inspect or split the running process command: argv is not deployment
+# metadata and can point through wrappers, interpreters or mutable symlinks.
+resolve_native_mail_candidate_for_render() {
+  "$PYTHON_BIN" - "$1" "$NATIVE_MAIL_SERVICE_ROOT" \
+    "$NATIVE_MAIL_STATE_ROOT" "$MCP_URL" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import sys
+
+raw_env, raw_service_root, raw_state_root, mcp_url = sys.argv[1:]
+service_env = pathlib.Path(raw_env).expanduser().resolve(strict=False)
+service_root = pathlib.Path(raw_service_root).expanduser().resolve(strict=False)
+state_root = pathlib.Path(raw_state_root).expanduser().resolve(strict=False)
+deployment = service_env.parent / "deployment.json"
+
+
+def fail(reason: str) -> None:
+    print(f"deployment metadata rejected: {reason}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def render_path(source_id: str, venv: pathlib.Path) -> pathlib.Path:
+    payload = "\0".join(
+        (source_id, str(venv), mcp_url, str(state_root))
+    ).encode()
+    render_id = hashlib.sha256(payload).hexdigest()[:20]
+    return service_root / "renders" / f"{source_id}-{render_id}" / "service.env"
+
+
+def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            fail("deployment-duplicate-key")
+        value[key] = item
+    return value
+
+
+if deployment.exists() or deployment.is_symlink():
+    try:
+        info = deployment.lstat()
+    except OSError:
+        fail("deployment-unreadable")
+    if not stat.S_ISREG(info.st_mode) or deployment.is_symlink():
+        fail("deployment-not-regular")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        fail("deployment-permissions")
+    try:
+        value = json.loads(
+            deployment.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        fail("deployment-unreadable")
+    if not isinstance(value, dict) or value.get("kind") != "orrery-mail-deployment-v1":
+        fail("deployment-kind")
+    expected = {
+        "service_env": str(service_env),
+        "state_root": str(state_root),
+        "mcp_url": mcp_url,
+    }
+    if any(value.get(key) != item for key, item in expected.items()):
+        fail("deployment-mismatch")
+    raw_venv = value.get("candidate_venv")
+    source_id = value.get("source_id")
+    if not isinstance(raw_venv, str) or not pathlib.Path(raw_venv).is_absolute():
+        fail("candidate-venv")
+    if not isinstance(source_id, str) or not source_id:
+        fail("source-id")
+    candidate = pathlib.Path(raw_venv).resolve(strict=False)
+    raw_enroll = value.get("enroll_bin")
+    if raw_enroll != str(candidate / "bin" / "agentstack-enroll"):
+        fail("enroll-bin")
+    print(candidate)
+    raise SystemExit(0)
+
+# Backward-compatible association for immutable managed renders written before
+# deployment.json was introduced. Exact recomputation is the evidence: a mere
+# candidate directory name, manifest from a later install, or running argv is
+# not enough.
+matches: list[pathlib.Path] = []
+candidates = service_root / "candidates"
+if candidates.is_dir():
+    for candidate in candidates.iterdir():
+        venv = (candidate / "venv").resolve(strict=False)
+        if render_path(candidate.name, venv).resolve(strict=False) == service_env:
+            matches.append(venv)
+if len(matches) != 1:
+    fail("legacy-render-association")
+print(matches[0])
+PY
+} # end resolve_native_mail_candidate_for_render
+
 mcp_endpoint_parts() {
   "$PYTHON_BIN" - "$MCP_URL" <<'PY'
 import sys
@@ -973,22 +1099,30 @@ resolve_native_mail_connection() {
   NATIVE_MAIL_SERVICE_ROOT="$(normalize_path "$NATIVE_MAIL_SERVICE_ROOT")"
   NATIVE_MAIL_PACKAGE_SOURCE="$(normalize_path "$NATIVE_MAIL_PACKAGE_SOURCE")"
   NATIVE_MAIL_VENV="$(normalize_path "$NATIVE_MAIL_VENV")"
+  NATIVE_MAIL_ENROLL_BIN="$NATIVE_MAIL_VENV/bin/agentstack-enroll"
+  if [[ -n "$NATIVE_MAIL_MANAGEMENT_SOCKET" ]]; then
+    NATIVE_MAIL_MANAGEMENT_SOCKET="$(normalize_path "$NATIVE_MAIL_MANAGEMENT_SOCKET")"
+  else
+    NATIVE_MAIL_MANAGEMENT_SOCKET="$($PYTHON_BIN - "$NATIVE_MAIL_STATE_ROOT" <<'PY'
+import hashlib
+import os
+import sys
+
+suffix = hashlib.sha256(sys.argv[1].encode()).hexdigest()[:20]
+print(f"/tmp/orrery-mail-{os.getuid()}/{suffix}.sock")
+PY
+)"
+  fi
   if [[ -n "$NATIVE_MAIL_ENV_EXPLICIT" ]]; then
     NATIVE_MAIL_ENV="$(normalize_path "$NATIVE_MAIL_ENV")"
   else
-    render_id="$("$PYTHON_BIN" - \
+    render_id="$(native_mail_render_id \
       "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" "$MCP_URL" \
-      "$NATIVE_MAIL_STATE_ROOT" <<'PY'
-import hashlib
-import sys
-
-payload = "\0".join(sys.argv[1:]).encode()
-print(hashlib.sha256(payload).hexdigest()[:20])
-PY
-)"
+      "$NATIVE_MAIL_STATE_ROOT")"
     NATIVE_MAIL_ENV="$NATIVE_MAIL_SERVICE_ROOT/renders/$NATIVE_MAIL_SOURCE_ID-$render_id/service.env"
   fi
   NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
+  NATIVE_MAIL_DEPLOYMENT="$(dirname "$NATIVE_MAIL_ENV")/deployment.json"
   NATIVE_MAIL_PIDFILE="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.pid"
   NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
   MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT"
@@ -1084,7 +1218,9 @@ PY
 # listener; the same defect already made the documented manual start command fail
 # for updating users, before any autostart existed.)
 adopt_running_native_mail_render() {
-  local pid runner dir candidate=""
+  local pid runner dir candidate="" requested_env requested_venv resolved_venv deployment_metadata
+  requested_env="$NATIVE_MAIL_ENV"
+  requested_venv="$NATIVE_MAIL_VENV"
   # The pidfile agentstack-mailctl writes is TWO lines: the pid, then the runner
   # it started (bin/agentstack-mailctl write_pid). Read it exactly the way the
   # controller reads it — a plain `cat` yields "PID\nRUNNER", which fails the
@@ -1112,22 +1248,69 @@ adopt_running_native_mail_render() {
     fi
   fi
   if [[ -z "$candidate" && -f "$INSTALL_DIR/env.sh" ]]; then
-    # write_env_file emits `export KEY=<shlex.quote(value)>`, so a raw sed of the
-    # right-hand side hands back the quotes as part of the path and the -f test
-    # rejects a file that exists. Let a shell do the unquoting, in a subshell so
-    # sourcing cannot leak into this one.
-    candidate="$(
-      set +u
-      . "$INSTALL_DIR/env.sh" >/dev/null 2>&1 || exit 0
-      printf '%s' "${AGENTSTACK_MAIL_ENV:-}"
-    )"
+    # Parse only the literal generated assignment. Sourcing a prior env file
+    # executes arbitrary shell and can leave partial values behind on failure.
+    candidate="$(installed_env_mail_env)"
     [[ -n "$candidate" && -f "$candidate" ]] || candidate=""
   fi
-  [[ -n "$candidate" ]] || return 0
+  if [[ -z "$candidate" ]]; then
+    if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
+      die "cannot verify explicit AGENTSTACK_MAIL_SERVICE_VENV against the running ORRERY Mail deployment because its service env is not identifiable; stop Mail before switching candidates"
+    fi
+    if [[ -n "$NATIVE_MAIL_ENV_EXPLICIT" ]]; then
+      die "cannot verify explicit AGENTSTACK_MAIL_SERVICE_ENV against the running ORRERY Mail deployment because its service env is not identifiable; stop Mail before switching renders"
+    fi
+    NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=false
+    NATIVE_MAIL_ENROLL_AVAILABLE=false
+    NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=false
+    NATIVE_MAIL_ENV=""
+    NATIVE_MAIL_RUNNER=""
+    NATIVE_MAIL_DEPLOYMENT=""
+    NATIVE_MAIL_VENV=""
+    NATIVE_MAIL_ENROLL_BIN=""
+    NATIVE_MAIL_MANAGEMENT_SOCKET=""
+    MAIL_ENV=""
+    AGENT_MAIL_RUNNER=""
+    AGENT_MAIL_SERVICE_KIND=""
+    AGENT_MAIL_SERVICE_PATH=""
+    warn "reusing the healthy ORRERY Mail listener without changing it, but its deployment is not identifiable"
+    warn "enrollment is unavailable until Mail is stopped and install.sh provisions a managed deployment"
+    warn "this install did not update or register ORRERY Mail autostart; any existing trigger was left untouched and restart after login is not guaranteed"
+    return 0
+  fi
+  candidate="$(normalize_path "$candidate")"
+  if [[ -n "$NATIVE_MAIL_ENV_EXPLICIT" ]]; then
+    requested_env="$(normalize_path "$requested_env")"
+    if [[ "$requested_env" != "$candidate" ]]; then
+      die "AGENTSTACK_MAIL_SERVICE_ENV '$requested_env' does not match the running ORRERY Mail deployment '$candidate'; stop Mail before switching renders"
+    fi
+  fi
+  deployment_metadata="$(dirname "$candidate")/deployment.json"
+  resolved_venv="$(resolve_native_mail_candidate_for_render "$candidate")" || \
+    die "the running ORRERY Mail service env has no trusted candidate association: $candidate"
+  resolved_venv="$(normalize_path "$resolved_venv")"
+  if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" && "$requested_venv" != "$resolved_venv" ]]; then
+    die "AGENTSTACK_MAIL_SERVICE_VENV '$requested_venv' does not match the running ORRERY Mail deployment '$resolved_venv'; stop Mail before switching candidates"
+  fi
+  native_mail_service_binaries_ready "$resolved_venv" || \
+    die "the running ORRERY Mail deployment candidate is incomplete: $resolved_venv; stop Mail and re-run the installer to provision a current candidate"
   NATIVE_MAIL_ENV="$candidate"
   NATIVE_MAIL_RUNNER="$(dirname "$candidate")/run-agentstack-mail.sh"
+  NATIVE_MAIL_DEPLOYMENT="$(dirname "$candidate")/deployment.json"
+  [[ -f "$NATIVE_MAIL_DEPLOYMENT" ]] || NATIVE_MAIL_DEPLOYMENT=""
+  NATIVE_MAIL_VENV="$resolved_venv"
   MAIL_ENV="$NATIVE_MAIL_ENV"
-  say "adopted the running ORRERY Mail service env: $NATIVE_MAIL_ENV"
+  if [[ -x "$resolved_venv/bin/agentstack-enroll" ]]; then
+    NATIVE_MAIL_ENROLL_BIN="$resolved_venv/bin/agentstack-enroll"
+  elif [[ -e "$deployment_metadata" || -L "$deployment_metadata" ]]; then
+    die "the running ORRERY Mail deployment has no enrollment CLI: $resolved_venv/bin/agentstack-enroll; stop Mail and re-run the installer to provision a current candidate"
+  else
+    NATIVE_MAIL_ENROLL_AVAILABLE=false
+    NATIVE_MAIL_ENROLL_BIN=""
+    NATIVE_MAIL_MANAGEMENT_SOCKET=""
+    warn "the trusted legacy ORRERY Mail deployment has no enrollment CLI; existing Mail and autostart remain usable, but persistent-agent enrollment is unavailable until Mail is reprovisioned"
+  fi
+  say "adopted the running ORRERY Mail deployment: $NATIVE_MAIL_ENV ($NATIVE_MAIL_VENV)"
 } # end adopt_running_native_mail_render
 
 check_dependencies() {
@@ -1171,6 +1354,8 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
+    die "missing scripts/lib/agentstack-persistent-launcher.sh"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
   [[ -f "$NATIVE_MAIL_PACKAGE_SOURCE/pyproject.toml" ]] || \
     die "missing ORRERY Mail package: $NATIVE_MAIL_PACKAGE_SOURCE"
@@ -1322,7 +1507,10 @@ detect_service_kind() {
 
 create_layout() {
   plan "create install layout under $INSTALL_DIR"
-  run mkdir -p "$HOOKS_DIR" "$SKILLS_DIR" "$DASHBOARD_DIR" "$BIN_DIR" "$RUNTIME_DIR" "$BACKUPS_DIR"
+  run mkdir -p "$HOOKS_DIR" "$SKILLS_DIR" "$DASHBOARD_DIR" "$BIN_DIR" "$RUNTIME_DIR" "$BACKUPS_DIR" "$CONNECTIONS_DIR" "$PERSISTENT_PROFILES_DIR"
+  if [[ "$DRY_RUN" != true ]]; then
+    chmod 700 "$PERSISTENT_PROFILES_DIR"
+  fi
 }
 
 migrate_legacy_annotations() {
@@ -1519,6 +1707,15 @@ install_payload() {
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
+    cp "$REPO_ROOT/bin/agentstack-enroll" "$BIN_DIR/agentstack-enroll"
+    # Keep the Python implementation beside the public launcher so its
+    # __file__-relative defaults (agentstack-enroll, install root and hooks)
+    # retain the same layout. The bash entry point loads env.sh and execs the
+    # interpreter selected and version-checked by this installer; ambient PATH
+    # never selects an older python3.
+    cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent.py"
+    cp "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" "$BIN_DIR/agentstack-persistent"
+    cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
@@ -1528,7 +1725,8 @@ install_payload() {
     chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
       "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agentstack-merge-claude-mcp" \
-      "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" \
+      "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
+      "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
       "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
@@ -1824,6 +2022,7 @@ values = {
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+    "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -1835,6 +2034,9 @@ values = {
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+    "AGENTSTACK_MAIL_ENROLL_BIN": "$NATIVE_MAIL_ENROLL_BIN",
+    "AGENTSTACK_MAIL_MANAGEMENT_SOCKET": "$NATIVE_MAIL_MANAGEMENT_SOCKET",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
     "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
@@ -1866,10 +2068,16 @@ stop_new_agent_mail() {
   rm -f "$AGENT_MAIL_PIDFILE"
 }
 
+native_mail_service_binaries_ready() {
+  local venv="${1:-$NATIVE_MAIL_VENV}"
+  [[ -x "$venv/bin/agentstack-mail" && \
+     -x "$venv/bin/agentstack-mail-service" && \
+     -x "$venv/bin/agentstack-mail-migrate" ]]
+}
+
 native_mail_binaries_ready() {
-  [[ -x "$NATIVE_MAIL_VENV/bin/agentstack-mail" && \
-     -x "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" && \
-     -x "$NATIVE_MAIL_VENV/bin/agentstack-mail-migrate" ]]
+  native_mail_service_binaries_ready "$NATIVE_MAIL_VENV" && \
+    [[ -x "$NATIVE_MAIL_VENV/bin/agentstack-enroll" ]]
 }
 
 ensure_native_mail_candidate() {
@@ -1922,12 +2130,12 @@ write_native_mail_env() {
   mkdir -p "$(dirname "$NATIVE_MAIL_ENV")" "$NATIVE_MAIL_SERVICE_ROOT/runtime"
   umask 077
   "$PYTHON_BIN" - "$NATIVE_MAIL_ENV" "$host" "$port" "$path" \
-    "$NATIVE_MAIL_STATE_ROOT" <<'PY'
+    "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_MANAGEMENT_SOCKET" <<'PY'
 import pathlib
 import sys
 
 target = pathlib.Path(sys.argv[1])
-host, port, path, raw_root = sys.argv[2:]
+host, port, path, raw_root, management_socket = sys.argv[2:]
 root = pathlib.Path(raw_root)
 values = {
     "AGENTSTACK_MAIL_HTTP_HOST": host,
@@ -1939,11 +2147,70 @@ values = {
     "AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED": "true",
     "AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR": str(root / "signals"),
     "AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE": "passthrough",
+    "AGENTSTACK_MAIL_MANAGEMENT_SOCKET": management_socket,
 }
 payload = "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
 if target.exists() and target.read_text(encoding="utf-8") != payload:
     raise SystemExit(f"refusing to rewrite immutable service env: {target}")
 target.write_text(payload, encoding="utf-8")
+target.chmod(0o600)
+PY
+}
+
+write_enrollment_connection_profile() {
+  local profile="$CONNECTIONS_DIR/local.json"
+  if [[ "$NATIVE_MAIL_ENROLL_AVAILABLE" != true ]]; then
+    plan "leave local operator enrollment connection profile unchanged (enrollment unavailable)"
+    return
+  fi
+  plan "write local operator enrollment connection profile $profile"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  umask 077
+  "$PYTHON_BIN" - "$profile" "$NATIVE_MAIL_MANAGEMENT_SOCKET" "$RUNTIME_DIR" \
+    "$MCP_URL" "$MAIL_ENV" "$MAIL_HTTP_BEARER_MODE" <<'PY'
+import json
+import os
+import pathlib
+import sys
+import uuid
+
+target = pathlib.Path(sys.argv[1])
+profile = {
+    "kind": "orrery-mail-connection-v1",
+    "management_socket": sys.argv[2],
+    "runtime_dir": sys.argv[3],
+    "mcp_url": sys.argv[4],
+    "mail_env": sys.argv[5],
+    "http_bearer_mode": sys.argv[6],
+}
+if target.exists():
+    existing = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(existing, dict) or existing.get("kind") != profile["kind"]:
+        raise SystemExit(f"refusing to replace invalid enrollment connection profile: {target}")
+    pinned = existing.get("expected_server_instance_id")
+    if pinned is not None:
+        if not isinstance(pinned, str) or not pinned:
+            raise SystemExit(f"refusing to replace invalid enrollment authority pin: {target}")
+        profile["expected_server_instance_id"] = pinned
+payload = (
+    json.dumps(
+        profile,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n"
+).encode()
+target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+target.parent.chmod(0o700)
+temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.pending")
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "wb") as handle:
+    handle.write(payload)
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, target)
 target.chmod(0o600)
 PY
 }
@@ -1986,12 +2253,25 @@ render_native_mail_runner() {
   "$PYTHON_BIN" - "$NATIVE_MAIL_RUNNER" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail" "$NATIVE_MAIL_ENV" \
-    "$NATIVE_MAIL_STATE_ROOT" <<'PY'
+    "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" \
+    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" <<'PY'
+import json
 import pathlib
 import shlex
 import sys
 
-runner, service, server, env_file, state_root = sys.argv[1:]
+(
+    runner,
+    service,
+    server,
+    env_file,
+    state_root,
+    source_id,
+    candidate_venv,
+    mcp_url,
+    enroll_bin,
+    deployment_file,
+) = sys.argv[1:]
 command = [
     service, "foreground",
     "--server-executable", server,
@@ -2025,6 +2305,29 @@ if target.exists() and target.read_text(encoding="utf-8") != payload:
     raise SystemExit(f"refusing to rewrite immutable service runner: {target}")
 target.write_text(payload, encoding="utf-8")
 target.chmod(0o700)
+
+deployment = {
+    "kind": "orrery-mail-deployment-v1",
+    "source_id": source_id,
+    "candidate_venv": candidate_venv,
+    "enroll_bin": enroll_bin,
+    "service_env": env_file,
+    "state_root": state_root,
+    "mcp_url": mcp_url,
+}
+deployment_payload = json.dumps(
+    deployment, sort_keys=True, separators=(",", ":")
+) + "\n"
+deployment_target = pathlib.Path(deployment_file)
+if (
+    deployment_target.exists()
+    and deployment_target.read_text(encoding="utf-8") != deployment_payload
+):
+    raise SystemExit(
+        f"refusing to rewrite immutable deployment metadata: {deployment_target}"
+    )
+deployment_target.write_text(deployment_payload, encoding="utf-8")
+deployment_target.chmod(0o600)
 PY
 }
 
@@ -2409,6 +2712,10 @@ legacy_mail_plist_looks_like_mail() {
 
 enable_mail_autostart() {
   local kind=""
+  if [[ "${NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL:-true}" != true ]]; then
+    warn "ORRERY Mail autostart was not updated because the running deployment is not identifiable; existing trigger files and registrations were left untouched"
+    return 0
+  fi
   case "$(uname -s)" in
     Darwin) command -v launchctl >/dev/null 2>&1 && kind="launchd" ;;
     Linux)  command -v systemctl >/dev/null 2>&1 && kind="systemd-user" ;;
@@ -2767,6 +3074,7 @@ repl = {
     "__MURMUR__": "$MURMUR_SETTING",
     "__SPAWN_DIRS__": "$SPAWN_DIRS_SETTING",
     "__SPAWN_ROOTS__": "$SPAWN_ROOTS_SETTING",
+    "__WORKTREE_ROOT__": "$WORKTREE_ROOT_SETTING",
     "__CODEX_CHILD_APPROVAL__": "$CODEX_CHILD_APPROVAL_SETTING",
     "__CODEX_NETWORK__": "$CODEX_NETWORK_SETTING",
     "__CODEX_ADD_DIRS__": "$CODEX_ADD_DIRS_SETTING",
@@ -2776,6 +3084,7 @@ repl = {
     "__CODEX_MODELS__": "$CODEX_MODELS_SETTING",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
+    "__PERSISTENT_PROFILES_DIR__": "$PERSISTENT_PROFILES_DIR",
     "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
     "__DASHBOARD_LOG_MAX_BYTES__": "$DASHBOARD_LOG_MAX_BYTES",
     "__DASHBOARD_LOG_BACKUPS__": "$DASHBOARD_LOG_BACKUPS",
@@ -2832,6 +3141,7 @@ env = {
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+    "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -2843,6 +3153,7 @@ env = {
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
     "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
@@ -3081,7 +3392,8 @@ write_manifest() {
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
     "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" \
     "${AGENT_MAIL_WATCHER_KIND:-}" "${AGENT_MAIL_WATCHER_PATH:-}" \
-    "$MAIL_WATCHER_LABEL" <<PY
+    "$MAIL_WATCHER_LABEL" "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" \
+    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" <<PY
 import json
 import os
 import pathlib
@@ -3101,6 +3413,9 @@ mail_autostart_service_path = sys.argv[10]
 mail_watcher_kind = sys.argv[11]
 mail_watcher_path = sys.argv[12]
 mail_watcher_label = sys.argv[13]
+mail_deployment_identified = sys.argv[14] == "true"
+mail_enrollment_available = sys.argv[15] == "true"
+mail_autostart_managed = sys.argv[16] == "true"
 install_dir = pathlib.Path("$INSTALL_DIR")
 claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
 owned_files = []
@@ -3127,7 +3442,7 @@ if mail_autostart_service_path:
     owned_files.append(mail_autostart_service_path)
 if mail_watcher_path:
     owned_files.append(mail_watcher_path)
-for raw in ("$NATIVE_MAIL_ENV", "$NATIVE_MAIL_RUNNER"):
+for raw in ("$NATIVE_MAIL_ENV", "$NATIVE_MAIL_RUNNER", "$NATIVE_MAIL_DEPLOYMENT"):
     path = pathlib.Path(raw)
     if path.is_file() or path.is_symlink():
         owned_files.append(str(path))
@@ -3229,6 +3544,7 @@ manifest = {
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
         "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
         "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
+        "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -3246,6 +3562,7 @@ manifest = {
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
         "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
+        "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
         "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
         "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
         "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
@@ -3269,16 +3586,22 @@ manifest = {
     ],
     "settings_backups": [settings_merge.get("backup")] if settings_merge and settings_merge.get("backup") else [],
     "retained_paths": [
-        "$MAIL_DIR",
-        "$MAIL_HOME",
-        "$MAIL_DB",
-        "$MAIL_ENV",
-        "$RUNTIME_DIR",
+        path for path in (
+            "$MAIL_DIR",
+            "$MAIL_HOME",
+            "$MAIL_DB",
+            "$MAIL_ENV",
+            "$RUNTIME_DIR",
+            "$PERSISTENT_PROFILES_DIR",
+            "$CONNECTIONS_DIR",
+        ) if path
     ],
     "purge_paths": [
         "$MAIL_DIR",
         "$MAIL_HOME",
         "$RUNTIME_DIR",
+        "$PERSISTENT_PROFILES_DIR",
+        "$CONNECTIONS_DIR",
     ],
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
@@ -3290,10 +3613,17 @@ manifest = {
 manifest["agent_mail"]["provider"] = "agentstack"
 manifest["agent_mail"]["state_root"] = "$NATIVE_MAIL_STATE_ROOT"
 manifest["agent_mail"]["candidate_venv"] = "$NATIVE_MAIL_VENV"
+manifest["agent_mail"]["service_env"] = "$NATIVE_MAIL_ENV"
+manifest["agent_mail"]["deployment_metadata"] = "$NATIVE_MAIL_DEPLOYMENT"
+manifest["agent_mail"]["enroll_bin"] = "$NATIVE_MAIL_ENROLL_BIN"
+manifest["agent_mail"]["deployment_identified"] = mail_deployment_identified
+manifest["agent_mail"]["enrollment_available"] = mail_enrollment_available
+manifest["agent_mail"]["autostart_managed_by_this_install"] = mail_autostart_managed
 manifest["env"].update({
     "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
     "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
+    "AGENTSTACK_MAIL_ENROLL_BIN": "$NATIVE_MAIL_ENROLL_BIN",
 })
 out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
@@ -3308,6 +3638,7 @@ main() {
   say "project key: $PROJECT_KEY"
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
+  say "worktree root: $WORKTREE_ROOT_SETTING"
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
@@ -3348,6 +3679,7 @@ main() {
   render_installed_templates
   ensure_native_agentstack_mail
   say "ORRERY Mail requested-name handling: honored (passthrough)"
+  write_enrollment_connection_profile
   write_env_file
   # After write_env_file: the unit runs `agentstack-mailctl start`, which reads
   # env.sh. Registering it earlier would fire RunAtLoad against a config that

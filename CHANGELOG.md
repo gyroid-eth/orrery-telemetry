@@ -8,6 +8,36 @@
 
 ---
 
+## Unreleased
+
+### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）
+
+Codex child の履歴 receipt は child 専用 `CODEX_HOME` 経由の rollout path を記録していました。正常終了時の cleanup がその home と `sessions` symlink を削除するため、共有 Codex home に rollout の実体が残っていても dashboard は履歴との対応を確認できず、resume の手前で拒否していました。recorder は symlink を解決した実体 path を記録するようにしました。既存 receipt は、消えた path が同じ child の runtime 内 `codex-home/sessions` 配下にある場合だけ共有 Codex home の同じ相対 path へ引き直し、receipt と rollout header の session id が一致するときだけ採用します。
+
+### `--worktree` の child が、再起動後に作業 directory を失っていました（#57）
+
+isolated worktree は `/tmp/cc-worktrees` に固定されていたため、再起動や OS の一時 file 掃除で cwd や tracked file が消え、残っている child state と rollout から resume できませんでした。新規 worktree の既定を install root 配下の永続な `worktrees/` に変更し、`AGENTSTACK_WORKTREE_ROOT` で上書きできるようにしました。上書き先は Codex child の writable scope と dashboard resume にも渡します。`agentstack-doctor` は live でも active registration でもない worktree を報告しますが、削除しません。既存の `/tmp/cc-worktrees` は移動・削除しません。
+
+## 2026.09.18
+
+### launcher を通らずに起動した常駐 bot が、local credential を持てませんでした（#56）
+
+tmux に常駐する親なしの bot（Claude Channels bot など）は、launcher の外で素の `claude --channels ...` として起動されてきました。そのため local credential が一度も保存されず、SessionStart の案内が誘導する `agentstack-reregister` は `stage=local-token reason=credential-unavailable` で必ず失敗していました。credential が消えたのではなく、保存される経路が無かったためです。こうした bot を製品の経路に乗せる部品を 3 つ加えました。手順は [docs/persistent-agents.md](docs/persistent-agents.md) にあります。
+
+- **credential の enroll**（`agentstack-enroll inspect | claim | recover`）。ORRERY Mail がローカルの Unix 管理 socket（0600、peer UID 検査、稼働中の server instance に pin）を公開します。CLI は数値 agent id・project・期待する `credential_generation` を固定し、既存 row を compare-and-swap で更新して、server が受理した後にだけ 0600 の local credential を有効にします。alias も新しい row も作らず、結果・audit・log に secret は出ません。MCP / proxy の catalog には存在せず、operator が local terminal で実行するものです
+- **常駐 profile と起動 wrapper**（`agentstack-persistent inspect | run --profile`）。wrapper は instance lock を取り、保存済み credential を同じ row と照合し、観測された standalone の Mail alias を同名の bound proxy に置き換える MCP overlay を書いてから、設定された command を `exec` します。該当する alias が無ければ `orrery-mail` を 1 本生成します。interactive の Claude は通常の `--channels plugin:...` をそのまま使います（`--strict-mcp-config` は Channels を無効化するため使いません）。exec 前の検査は Claude の実効設定源を有限に列挙し、固定の reason と path で fail-closed します
+- **installer と入口**。`install.sh` は自分が動かす Mail deployment を記録し、再 install では稼働中の健全な Mail を adopt して、enroll CLI を未 build の candidate ではなくその deployment のものに向けます。install される `agentstack-persistent` は、installer が選んだ絶対パスの interpreter で実装を `exec` します。ambient `PATH` の `python3` へは fallback しません
+- DB に列 `agents.credential_generation` を加えました（default 0）。旧 server は読まないので、この版が claim した DB を前の版で開いても row・name・credential は同じままです
+- dashboard は headless profile にだけ `BRIDGE · HEADLESS` を表示します
+
+macOS 1 台で、既存の Channels bot 1 体を `recover` で enroll して確認しました。launchd から起動した wrapper、本番の headless provider 配送、2 台目の機体は未検証です。
+
+enroll の socket は新しい Mail build が公開します。稼働中の Mail は再 install で adopt されるだけで入れ替わらないので、enroll を使うには [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md) の手順で Mail を切り替えてください。
+
+### docs: ORRERY Mail の更新手順を installer の配置に合わせました
+
+`docs/agentstack-mail-update.md`（英語版も）は 8 月の手作業配置（`cutover-maintenance/` と pointer file）を前提にしていました。現在の配置では `install.sh` が「健康な listener があれば再利用、無ければ candidate を用意して起動」の二択で、更新は「`agentstack-mailctl stop` → installer」です。候補の事前 build、scratch port での offline 検証、autostart unit の退避、切替後の確認、`AGENTSTACK_MAIL_CANDIDATE_ID` による rollback を、実機で通した手順として書き直しました。dashboard の `/api/version` は Mail の切替の証拠にならないことも明記しています。
+
 ## 2026.09.17.1
 
 ### tool 引数の validation error が、引数の値ごと server log に出ていました（#49）

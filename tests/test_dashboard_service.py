@@ -225,6 +225,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_MURMUR"] == "__MURMUR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_DIRS"] == "__SPAWN_DIRS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_SPAWN_ROOTS"] == "__SPAWN_ROOTS__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_WORKTREE_ROOT"] == "__WORKTREE_ROOT__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_CHILD_APPROVAL"] == "__CODEX_CHILD_APPROVAL__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_NETWORK"] == "__CODEX_NETWORK__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_ADD_DIRS"] == "__CODEX_ADD_DIRS__"
@@ -810,6 +811,8 @@ def test_installer_rejects_explicit_python_39_before_writing(tmp_path):
 def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     python39 = fake_bin / "python3"
     python39.write_text(_fake_python_39(), encoding="utf-8")
     python39.chmod(0o755)
@@ -819,9 +822,16 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
         command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         command.chmod(0o755)
 
-    env = os.environ.copy()
-    env.pop("AGENTSTACK_PYTHON", None)
-    env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("AGENTSTACK_")
+    }
+    env.update({
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
+    })
     # Hermetic: nothing listens on port 1, so the installer plans a fresh
     # provision instead of detecting whatever mail server runs on this host.
     env["AGENTSTACK_MCP_URL"] = "http://127.0.0.1:1/mcp"
@@ -836,8 +846,8 @@ def test_installer_skips_old_path_python_for_versioned_candidate(tmp_path):
         env=env,
         text=True,
         capture_output=True,
-        check=True,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
 
     python_lines = [
         line for line in result.stdout.splitlines() if line.startswith("python: ")
