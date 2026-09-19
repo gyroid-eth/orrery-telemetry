@@ -83,3 +83,106 @@ ags_choose_dir() {
   echo "          pass a path ($AGS_PROG DIR) or install fzf to browse a vault" >&2
   return 0
 }
+
+# Only top-level entry points call these helpers. A delegated/reserved child
+# must keep its separately validated context, never pass it as an override.
+ags_parse_top_level_args() {
+  AGS_EXPLICIT_PROJECT_KEY=""
+  AGS_LAUNCH_DIR_ARGS=()
+  AGS_LAUNCH_DRY_RUN=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project-key)
+        [[ $# -ge 2 && -n "${2:-}" ]] || ags_die "--project-key requires a non-empty value"
+        [[ -z "$AGS_EXPLICIT_PROJECT_KEY" ]] || ags_die "--project-key specified more than once"
+        AGS_EXPLICIT_PROJECT_KEY="$2"
+        shift 2 ;;
+      --dry-run)
+        [[ "$AGS_PROG" == agent-start-gemini ]] || ags_die "unknown option: $1"
+        AGS_LAUNCH_DRY_RUN=true
+        shift ;;
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do AGS_LAUNCH_DIR_ARGS+=("$1"); shift; done ;;
+      -*) ags_die "unknown option: $1" ;;
+      *) AGS_LAUNCH_DIR_ARGS+=("$1"); shift ;;
+    esac
+  done
+  [[ ${#AGS_LAUNCH_DIR_ARGS[@]} -le 1 ]] || ags_die "expected at most one directory"
+  if [[ ${#AGS_LAUNCH_DIR_ARGS[@]} -eq 1 ]]; then
+    [[ -n "${AGS_LAUNCH_DIR_ARGS[0]}" && -d "${AGS_LAUNCH_DIR_ARGS[0]}" ]] \
+      || ags_die "directory not found: ${AGS_LAUNCH_DIR_ARGS[0]}"
+  fi
+}
+
+# Decode data, not shell assignments. Validate the complete tuple before
+# changing any environment; the legacy roots format cannot represent colons.
+ags_prepare_top_level_context() {
+  local target="$1"
+  local explicit_key="${2:-}"
+  local context="" decoded="" value=""
+  local fields=()
+  case "$target$explicit_key" in
+    *$'\n'*|*$'\r'*) printf 'agentstack: control characters cannot be passed to the launcher\n' >&2; return 1 ;;
+  esac
+  context="$(bash "$BIN_DIR/../hooks/project-context.sh" \
+    resolve-invocation-context "$target" "$explicit_key")" || return 1
+  decoded="$("${AGENTSTACK_PYTHON:-python3}" - "$context" <<'PY'
+import json
+import sys
+
+try:
+    data = json.loads(sys.argv[1])
+    fields = [data["project_key"], data["repository_key"] or "",
+              data["work_dir"], data["worktree_root"] or ""]
+    roots = data["protected_roots"]
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("protected roots must be a nonempty array")
+    if not all(isinstance(value, str) for value in fields + roots):
+        raise ValueError("context fields must be strings")
+    if not fields[0] or not fields[2] or any(not root for root in roots):
+        raise ValueError("context contains an empty key or workspace")
+    if any(any(ord(char) < 32 or ord(char) == 127 for char in value)
+           for value in fields + roots):
+        raise ValueError("control characters cannot be passed to the launcher")
+    if any(":" in root for root in roots):
+        raise ValueError("protected roots containing ':' cannot use the legacy environment")
+    print("\n".join(fields + [":".join(roots)]))
+except (KeyError, TypeError, ValueError) as exc:
+    print(f"agentstack: invalid launch context: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+)" || return 1
+  while IFS= read -r value; do fields+=("$value"); done <<< "$decoded"
+  [[ ${#fields[@]} -eq 5 ]] || return 1
+  AGENTSTACK_PROJECT_KEY="${fields[0]}"
+  PROJECT_KEY="${fields[0]}"
+  AGENTSTACK_PROJECT_REPOSITORY="${fields[1]}"
+  AGENTSTACK_PROJECT_WORK_DIR="${fields[2]}"
+  AGENTSTACK_PROJECT_WORKTREE_ROOT="${fields[3]}"
+  AGENTSTACK_PROTECTED_ROOTS="${fields[4]}"
+  export AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY
+  export AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS
+  # These outputs describe a workspace; they do not authenticate an identity.
+  unset AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY
+  unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+}
+
+# Emit shell-quoted tmux options outside the pane command's nested quoting.
+# Session values override a pre-existing server's stale global environment.
+ags_tmux_project_options() {
+  local name
+  for name in AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY \
+    AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS; do
+    printf -- '-e %q ' "$name=${!name}"
+  done
+  printf '%s' '-e AGENTSTACK_PROJECT_CONTEXT= -e AGENTSTACK_LOOKUP_PROJECT_KEY='
+}
+
+# After capturing the session options, do not seed a new tmux server globally
+# with this invocation's project. This changes only the launching process.
+ags_clear_client_project_context() {
+  unset AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY
+  unset AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS
+  unset AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY
+}

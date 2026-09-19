@@ -7,6 +7,8 @@
 #   agent-start          if fzf is installed, browse under $AGENTSTACK_BASE_DIR
 #                        (default: $HOME); otherwise fall back to the current dir
 #
+# Use --project-key KEY for an explicit top-level namespace override.
+#
 # Env:
 #   AGENTSTACK_BASE_DIR   root the interactive picker browses (default: $HOME).
 #                         Point this at your Obsidian vault to pick a subdir:
@@ -26,10 +28,10 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-register.sh
 . "$BIN_DIR/lib/agentstack-register.sh"
 ags_load_env
+ags_parse_top_level_args "$@"
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
 CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
@@ -38,8 +40,11 @@ TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
 command -v "$CLAUDE_BIN" >/dev/null 2>&1 || ags_die "claude not found on PATH (set AGENTSTACK_CLAUDE_BIN)"
 
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+DIR="$(ags_choose_dir ${AGS_LAUNCH_DIR_ARGS[@]+"${AGS_LAUNCH_DIR_ARGS[@]}"})" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+ags_prepare_top_level_context "$DIR" "$AGS_EXPLICIT_PROJECT_KEY" \
+  || ags_die "cannot resolve launch project context"
+DIR="$AGENTSTACK_PROJECT_WORK_DIR"
 
 # Prevent identity hijack: stale/inherited values must not select another agent
 # or become part of a newly created tmux server's global environment.
@@ -120,16 +125,19 @@ if [[ -n "$SESSION_AGENT_NAME" ]]; then
 fi
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 
+TMUX_PROJECT_OPTIONS="$(ags_tmux_project_options)"
+ags_clear_client_project_context
 INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  $TMUX_PROJECT_OPTIONS \
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
-  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  "unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY; if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

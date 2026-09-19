@@ -7,6 +7,8 @@
 #   agent-start-gemini --dry-run [DIR]   print the planned agy command only
 #   agent-start-gemini                   fzf-pick under $AGENTSTACK_BASE_DIR
 #
+# Use --project-key KEY for an explicit top-level namespace override.
+#
 # Env:
 #   AGENTSTACK_GEMINI_BIN      Antigravity CLI binary (default: agy)
 #   AGENTSTACK_GEMINI_MODEL    model slug (default: gemini-3.8-flash-high)
@@ -21,17 +23,13 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
 ags_load_env
+ags_parse_top_level_args "$@"
 
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
 GEMINI_MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
 GEMINI_EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"
 BOOTSTRAP="$BIN_DIR/agentstack-gemini-bootstrap"
-DRY_RUN=false
-
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN=true
-  shift
-fi
+DRY_RUN="$AGS_LAUNCH_DRY_RUN"
 
 case "$GEMINI_EFFORT" in
   low|medium|high) ;;
@@ -44,14 +42,19 @@ build_gemini_cmd() {
   printf '%s' "$out"
 }
 
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+DIR="$(ags_choose_dir ${AGS_LAUNCH_DIR_ARGS[@]+"${AGS_LAUNCH_DIR_ARGS[@]}"})" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+ags_prepare_top_level_context "$DIR" "$AGS_EXPLICIT_PROJECT_KEY" \
+  || ags_die "cannot resolve launch project context"
+DIR="$AGENTSTACK_PROJECT_WORK_DIR"
 
 # CI and reviewers can exercise the launcher contract without installing the
 # optional Antigravity binary. Dry-run intentionally stops before tmux, Mail
 # registration, bootstrap, or `command -v agy` checks.
 if [[ "$DRY_RUN" == true ]]; then
   printf '%s: dry-run cwd=%s\n' "$AGS_PROG" "$DIR"
+  printf '%s: project=%s repository=%s roots=%s\n' \
+    "$AGS_PROG" "$PROJECT_KEY" "$AGENTSTACK_PROJECT_REPOSITORY" "$AGENTSTACK_PROTECTED_ROOTS"
   printf '%s\n' "$(build_gemini_cmd)"
   exit 0
 fi
@@ -79,15 +82,18 @@ if [[ -n "${TMUX:-}" ]]; then
 fi
 
 GEMINI_CMD="$(build_gemini_cmd)"
+TMUX_PROJECT_OPTIONS="$(ags_tmux_project_options)"
+ags_clear_client_project_context
 INNER="$(mktemp -t agent-start-gemini.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  $TMUX_PROJECT_OPTIONS \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
   -e $(printf '%q' "AGENTSTACK_GEMINI_MODEL=$GEMINI_MODEL") \
-  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $GEMINI_CMD; exec \"\$SHELL\" -l"
+  "unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY; source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $GEMINI_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

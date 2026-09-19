@@ -6,6 +6,11 @@ if [ -n "${BASH_SOURCE:-}" ]; then _ags_register_src="${BASH_SOURCE[0]}"; else _
 AGS_REGISTER_LIB_DIR="$(cd "$(dirname "$_ags_register_src")" && pwd)"
 # shellcheck source=agentstack-scientists.sh
 . "$AGS_REGISTER_LIB_DIR/agentstack-scientists.sh"
+AGS_PROJECT_CONTEXT_LIB="${AGENTSTACK_PROJECT_CONTEXT_LIB:-$AGS_REGISTER_LIB_DIR/../../hooks/project-context.sh}"
+if [[ -f "$AGS_PROJECT_CONTEXT_LIB" ]] && ! declare -F agentstack_validate_project_context >/dev/null 2>&1; then
+  # shellcheck disable=SC1090
+  . "$AGS_PROJECT_CONTEXT_LIB"
+fi
 
 # These are private per-call channels. Never let ambient environment select
 # the diagnostic transport or an arbitrary diagnostic output path.
@@ -742,6 +747,35 @@ ags_register_session() {
   AGS_AGENT_NAME_SUBSTITUTED=0
   ags_registration_diag_reset
 
+  local context_json="" registration_token=""
+  declare -F agentstack_validate_project_context >/dev/null 2>&1 || {
+    echo "agentstack: project context validator is unavailable; refusing registration." >&2
+    return 1
+  }
+  context_json="$(agentstack_validate_project_context "$work_dir" "$project_key")" || {
+    echo "agentstack: project '$project_key' is not authorized for work directory '$work_dir'." >&2
+    return 1
+  }
+  project_key="$(agentstack_context_field "$context_json" project_key)" || return 1
+
+  # A reserved identity must already exist in the validated target project.
+  # whois is intentionally tokenless because some supported Mail schemas reject
+  # registration_token on read tools. The later register_agent call receives the
+  # owner token and authenticates it atomically against that existing row before
+  # updating it. This prevents a foreign token from creating a same-name agent in
+  # the target project while preserving the published whois schema.
+  if [[ "$requested_mode" == "reserved" && -n "$requested_name" ]]; then
+    registration_token="${CHILD_REGISTRATION_TOKEN:-}"
+    if [[ -z "$registration_token" ]]; then
+      registration_token="$(ags_load_registration_token "$requested_name" 2>/dev/null || true)"
+    fi
+    [[ -n "$registration_token" ]] || return 1
+    ags_agent_exists "$project_key" "$requested_name" || {
+      echo "agentstack: reserved identity '$requested_name' does not exist in '$project_key'." >&2
+      return 1
+    }
+  fi
+
   local task_description="Agent session in $work_dir"
   case "$program" in
     claude-code) task_description="Claude session in $work_dir" ;;
@@ -764,19 +798,9 @@ ags_register_session() {
     return 1
   fi
 
-  # Ambient owner credentials are valid only for an explicitly verified
-  # reserved identity. Candidate/top-level registration must not adopt a token
-  # inherited from another tmux session.
-  local registration_token=""
-  if [[ "$requested_mode" == "reserved" && -n "$requested_name" ]]; then
-    registration_token="${CHILD_REGISTRATION_TOKEN:-}"
-    if [[ -z "$registration_token" ]]; then
-      registration_token="$(ags_load_registration_token "$agent_name" 2>/dev/null || true)"
-    fi
-  fi
-  # Mint a fresh owner token only for a name the server positively reports as
-  # free. An 'unknown' answer must not mint one: that is how an unverified name
-  # used to get claimed on top of a live agent.
+  # Candidate/top-level registration never adopts an ambient owner token.
+  # Mint a fresh token only for a name Mail positively reports as free. An
+  # 'unknown' answer must not mint one: that could claim a live identity.
   if [[ -z "$registration_token" ]] && ags_agent_name_available "$project_key" "$agent_name"; then
     registration_token="$(ags_generate_registration_token)" || return 1
   fi

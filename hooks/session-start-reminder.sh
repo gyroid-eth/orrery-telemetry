@@ -14,12 +14,14 @@ PROJECT_CONTEXT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-conte
 . "$PROJECT_CONTEXT_LIB"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HEALTH_URL="${AGENTSTACK_MCP_HEALTH_URL:-${MCP_AGENT_MAIL_HEALTH_URL:-}}"
-PROJECT_KEY="$(agentstack_resolve_project_key "$(pwd -P)")"
+PROJECT_KEY=""
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 SHELL_REGISTERED_AGENT=""
 SHELL_REGISTRATION_ERROR=""
 SHELL_REGISTRATION_REASON=""
+SESSION_START_INPUT=""
+SESSION_START_CWD=""
 
 if [ -z "$HEALTH_URL" ]; then
     case "$MCP_URL" in
@@ -123,6 +125,8 @@ raise SystemExit(1)
 # no launcher is identified: resolve-agent-name.sh looks up the binding that
 # register_agent recorded for it. Without this the reminder cannot name an
 # identity that already exists, and tells an established session it is nobody.
+# Its cwd is also the actual session target and must be used for registration
+# validation instead of an inherited shell PWD from another repository.
 if [ ! -t 0 ]; then
     SESSION_START_INPUT="$(cat)"
     AGENTSTACK_SESSION_ID="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
@@ -133,8 +137,18 @@ try:
 except Exception:
     print("")
 ' 2>/dev/null || echo "")"
+    SESSION_START_CWD="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("cwd", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")"
     export AGENTSTACK_SESSION_ID
 fi
+
+PROJECT_KEY="$(agentstack_resolve_project_key "${SESSION_START_CWD:-$(pwd -P)}")"
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     # shellcheck disable=SC1091
@@ -193,7 +207,7 @@ shell_register_resolved_agent() {
 
     CHILD_REGISTRATION_TOKEN="$restored_token"
     export CHILD_REGISTRATION_TOKEN
-    work_dir="${PWD:-$PROJECT_KEY}"
+    work_dir="${SESSION_START_CWD:-${PWD:-$PROJECT_KEY}}"
     # spawn_child.sh hands the child its model as CLAUDE_CHILD_MODEL; without
     # it this re-registration overwrote the pre-registered model with the
     # program name, and the dashboard lost the provider (no logo, chip said
