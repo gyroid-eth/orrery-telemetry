@@ -263,8 +263,8 @@ def test_success_keeps_exact_stdout_and_cleans_temporary_files(tmp_path: pathlib
     assert calls[0]["arguments"] == {
         "project_key": "fixture-project",
         "agent_name": AGENT_NAME,
-        "registration_token": OWNER_SECRET,
     }
+    assert calls[2]["arguments"]["registration_token"] == OWNER_SECRET
     diagnosed_calls = calls[1:]
     assert all(call["output_mode"] == 0o600 for call in diagnosed_calls)
     assert all(call["diag_mode"] == 0o600 for call in diagnosed_calls)

@@ -48,7 +48,9 @@ printf 'status=%s calls=%s\\n' "$status" "$([ -f "$CALLS" ] && wc -l < "$CALLS" 
     assert "not authorized for work directory" in result.stderr
 
 
-def test_reserved_registration_authenticates_token_in_validated_project(tmp_path: pathlib.Path) -> None:
+def test_reserved_registration_checks_existing_identity_then_authenticates_on_register(
+    tmp_path: pathlib.Path,
+) -> None:
     target = tmp_path / "target"
     target.mkdir()
     calls = tmp_path / "calls"
@@ -56,15 +58,17 @@ def test_reserved_registration_authenticates_token_in_validated_project(tmp_path
 source "{REGISTER_LIB}"
 ags_mcp_call() {{
   local tool="$1"; shift
-  printf '%s\\n' "$tool" >> "$CALLS"
+  printf '%s|%s\\n' "$tool" "$*" >> "$CALLS"
   case "$tool" in
     whois)
+      [[ "$*" != *registration_token=* ]] || return 1
       printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child"}}}}}}'
       ;;
     ensure_project)
       printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
       ;;
     register_agent)
+      [[ "$*" == *registration_token=reserved-token* ]] || return 1
       printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child","registration_token":"reserved-token"}}}}}}'
       ;;
     *)
@@ -83,11 +87,47 @@ printf 'status=%s registered=%s\\n' "$status" "$AGS_REGISTERED_AGENT_NAME"
     result = _bash(script, {"TARGET": str(target), "CALLS": str(calls)})
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "status=0 registered=Child"
-    assert calls.read_text(encoding="utf-8").splitlines()[:3] == [
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert [line.split("|", 1)[0] for line in lines[:3]] == [
         "whois",
         "ensure_project",
         "register_agent",
     ]
+    assert "registration_token=" not in lines[0]
+    assert "registration_token=reserved-token" in lines[2]
+
+
+def test_reserved_registration_refuses_missing_identity_before_mutation(
+    tmp_path: pathlib.Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    calls = tmp_path / "calls"
+    script = f'''
+source "{REGISTER_LIB}"
+ags_mcp_call() {{
+  local tool="$1"; shift
+  printf '%s\\n' "$tool" >> "$CALLS"
+  case "$tool" in
+    whois)
+      printf '%s\\n' '{{"result":{{"isError":true,"content":[{{"type":"text","text":"not found"}}]}}}}'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}}
+CHILD_REGISTRATION_TOKEN=foreign-project-token
+export CHILD_REGISTRATION_TOKEN
+ags_register_session "$TARGET" claude-code model cc "$TARGET" Child reserved >/dev/null
+status=$?
+printf 'status=%s\\n' "$status"
+'''
+    result = _bash(script, {"TARGET": str(target), "CALLS": str(calls)})
+    assert result.returncode == 0
+    assert result.stdout.strip() == "status=1"
+    assert calls.read_text(encoding="utf-8").splitlines() == ["whois"]
+    assert "does not exist" in result.stderr
 
 
 def test_logical_project_key_requires_matching_bound_workspace(tmp_path: pathlib.Path) -> None:

@@ -663,19 +663,6 @@ ags_agent_name_available() {
   [[ "$name_status" == "available" ]]
 }
 
-ags_verify_registration_token() {
-  local project_key="$1" agent_name="$2" registration_token="$3" response returned
-  [[ -n "$project_key" && -n "$agent_name" && -n "$registration_token" ]] || return 1
-  response="$(ags_mcp_call "whois" \
-    "project_key=$project_key" \
-    "agent_name=$agent_name" \
-    "registration_token=$registration_token" 2>/dev/null || true)"
-  [[ -n "$response" ]] || return 1
-  ! printf '%s' "$response" | ags_mcp_has_error || return 1
-  returned="$(printf '%s' "$response" | ags_extract_agent_name)"
-  [[ "$returned" == "$agent_name" ]]
-}
-
 ags_pick_scientist_name() {
   local _prefix="${1:-}"
   ags_pick_adjective_scientist_name
@@ -771,17 +758,20 @@ ags_register_session() {
   }
   project_key="$(agentstack_context_field "$context_json" project_key)" || return 1
 
-  # Reserved credentials prove identity only after Mail authenticates the token
-  # in the validated target project. A same-name token from another project is
-  # not local authority and is rejected before ensure_project/register_agent.
+  # A reserved identity must already exist in the validated target project.
+  # whois is intentionally tokenless because some supported Mail schemas reject
+  # registration_token on read tools. The later register_agent call receives the
+  # owner token and authenticates it atomically against that existing row before
+  # updating it. This prevents a foreign token from creating a same-name agent in
+  # the target project while preserving the published whois schema.
   if [[ "$requested_mode" == "reserved" && -n "$requested_name" ]]; then
     registration_token="${CHILD_REGISTRATION_TOKEN:-}"
     if [[ -z "$registration_token" ]]; then
       registration_token="$(ags_load_registration_token "$requested_name" 2>/dev/null || true)"
     fi
     [[ -n "$registration_token" ]] || return 1
-    ags_verify_registration_token "$project_key" "$requested_name" "$registration_token" || {
-      echo "agentstack: reserved identity '$requested_name' is not authenticated in '$project_key'." >&2
+    ags_agent_exists "$project_key" "$requested_name" || {
+      echo "agentstack: reserved identity '$requested_name' does not exist in '$project_key'." >&2
       return 1
     }
   fi
