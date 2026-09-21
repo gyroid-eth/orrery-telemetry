@@ -14,6 +14,8 @@
 
 Codex child は正常終了時に owner credential と専用 home を削除していたため、履歴と provenance が残っていても同じ identity を再登録できず、dashboard の resume は `credential_missing` で止まっていました。正常 cleanup では remote retire と reservation release を維持したまま、schema version・`retired_at`・`resume_expires_at` 付き state と canonical credential を既定30日保持するようにしました。専用 home、proxy runtime、旧 MCP config は毎回削除し、resume 時に現在の source home と保存済み `codex_mcp_profile` から新しく作ります。credential 付き再登録と fresh binding expectation が成功した後、Codex exec の直前にだけ unretire します。保持期間は `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` で変更でき、`0` は従来どおり全削除です。明示 purge と期限切れ maintenance を追加し、doctor は削除せず期限切れ・purge 待ちだけを報告します。resume 後の receipt にも child provenance を引き継ぐため、cleanup を挟んだ2回目以降の resume も可能です。また、provenance gate が従来 resume できた `cx` 起動の top-level Codex まで child 扱いで拒否していたため、製品の top-level launch / receipt には `launch_origin: standalone` を記録し、private owner credential を検証したうえで child 専用 home・cleanup・unretire を使わない従来経路を維持します。
 
+upgrade 前に起動した top-level Codex の receipt は origin 不明のため、次に製品 launcher から起動して `standalone` provenance を記録するまでは dashboard から resume できません。
+
 ### cleanup 済み Codex child と unmanaged session を区別できませんでした（#59）
 
 正常終了時に child state と専用 home を削除すると、残った履歴だけでは製品が起動した child か、もともと管理外の Codex session かを判定できませんでした。Codex child の launch expectation と bound receipt に、秘密を含まない `launch_origin: child`、`codex_mcp_profile`、数値 agent ID、project、provider を保存し、cleanup 後も dashboard が child provenance を検証できるようにしました。既存の provenance 無し receipt は推測で child に昇格しません。
