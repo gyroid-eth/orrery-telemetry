@@ -41,6 +41,7 @@ CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
 CODEX_CHILD_CONFIG_OVERLAY_SETTING="${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
 CODEX_ADD_DIRS_SETTING="${AGENTSTACK_CODEX_ADD_DIRS:-}"
+CHILD_RESUME_RETENTION_DAYS_SETTING="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-}"
 # Where the Codex CLI lives. The dashboard runs under launchd / systemd with
 # the minimal AGENTSTACK_PATH, which does not contain the per-user Node
 # prefixes (nvm, nodebrew, ~/.npm-global) that `npm install -g` uses, so a
@@ -114,6 +115,10 @@ Options:
   --codex-add-dirs PATHS ':'-separated extra writable roots for Codex children
                          on top of project, spawn dirs/roots, install dir,
                          worktrees, ~/.claude and ~/.codex (default: none)
+  --child-resume-retention-days DAYS
+                         Keep normal-finished Codex child resume credentials
+                         for this many days (default: existing env.sh, else 30;
+                         0 restores full deletion)
   -h, --help             Show this help
 
 --assume-yes is not --force: validation and safety errors remain fatal. It must
@@ -202,6 +207,10 @@ while [[ $# -gt 0 ]]; do
       CODEX_ADD_DIRS_SETTING="$2"
       shift 2
       ;;
+    --child-resume-retention-days)
+      CHILD_RESUME_RETENTION_DAYS_SETTING="$2"
+      shift 2
+      ;;
     --codex-bin)
       CODEX_BIN_SETTING="$2"
       shift 2
@@ -257,6 +266,9 @@ fi
 if [[ -z "$CODEX_ADD_DIRS_SETTING" ]]; then
   CODEX_ADD_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_ADD_DIRS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
+  CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
+fi
 if [[ -z "$CODEX_BIN_SETTING" ]]; then
   CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")"
   if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
@@ -285,6 +297,7 @@ fi
 # and install-state.json all say what a child actually gets.
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
+CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"
 if [[ -z "$PORTRAITS_DIR_SETTING" ]]; then
   PORTRAITS_DIR_SETTING="$(agentstack_installed_env_value AGENTSTACK_PORTRAITS_DIR "$INSTALL_DIR/env.sh")"
 fi
@@ -451,6 +464,12 @@ case "$CODEX_NETWORK_SETTING" in
   on|off) ;;
   *)
     echo "error: --codex-network must be on or off (got: $CODEX_NETWORK_SETTING)" >&2
+    exit 2
+    ;;
+esac
+case "$CHILD_RESUME_RETENTION_DAYS_SETTING" in
+  ''|*[!0-9]*)
+    echo "error: --child-resume-retention-days must be a non-negative integer (got: $CHILD_RESUME_RETENTION_DAYS_SETTING)" >&2
     exit 2
     ;;
 esac
@@ -1719,6 +1738,7 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
+    cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
     cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
     cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
     cp "$REPO_ROOT/bin/agentstack-mailctl" "$BIN_DIR/agentstack-mailctl"
@@ -1728,7 +1748,7 @@ install_payload() {
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
       "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
       "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
-      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
+      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-purge-child-resume" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
   fi
 }
@@ -2027,6 +2047,7 @@ values = {
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
+    "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
@@ -3078,6 +3099,7 @@ repl = {
     "__CODEX_CHILD_APPROVAL__": "$CODEX_CHILD_APPROVAL_SETTING",
     "__CODEX_NETWORK__": "$CODEX_NETWORK_SETTING",
     "__CODEX_ADD_DIRS__": "$CODEX_ADD_DIRS_SETTING",
+    "__CHILD_RESUME_RETENTION_DAYS__": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "__CODEX_BIN__": "$CODEX_BIN_SETTING",
     "__PORTRAITS_DIR__": "$PORTRAITS_DIR_SETTING",
     "__CUSTOM_PORTRAITS__": "$CUSTOM_PORTRAITS_SETTING",
@@ -3146,6 +3168,7 @@ env = {
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
+    "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
@@ -3549,12 +3572,8 @@ manifest = {
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
         "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
-    "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
-    "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
-    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
-    "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
-    "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
-    "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
+        "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
+        "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
         "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
@@ -3644,6 +3663,7 @@ main() {
   say "codex network: $CODEX_NETWORK_SETTING"
   say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
+  say "Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"
   validate_assume_yes
   if ! run_preflight; then
     exit 1

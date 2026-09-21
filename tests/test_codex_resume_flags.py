@@ -42,6 +42,9 @@ def policy_env(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "PROJECT_KEY", str(project))
     monkeypatch.setattr(server, "VAULT", "")
     monkeypatch.setenv("HOME", str(tmp_path))
+    source_home = tmp_path / ".codex"
+    source_home.mkdir()
+    _write_private(source_home / "config.toml", 'model = "gpt-5.6-terra"\n')
     return tmp_path, project
 
 
@@ -91,13 +94,19 @@ def _seed_child_identity(
     token_file = runtime / f"agent_token_{AGENT}"
     _write_private(token_file, OWNER_TOKEN)
     state = {
+        "schema_version": 1,
+        "launch_origin": "child",
+        "provider": "codex",
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
         "project_key": str(project),
         # Preregistration and the resume bootstrap use these two accepted
         # spellings in the live product; they are one provider family.
         "program": "codex-cli",
+        "codex_mcp_profile": "orrery-only",
         "registration_token": OWNER_TOKEN,
+        "retired_at": "2026-09-21T00:00:00Z",
+        "resume_expires_at": "2999-09-21T00:00:00Z",
     }
     state.update(state_updates or {})
     state_file = runtime / "child-agents" / f"{AGENT}.json"
@@ -133,6 +142,20 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
     bootstrap.parent.mkdir(parents=True, exist_ok=True)
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    installed_hooks = install_home / "hooks"
+    installed_hooks.mkdir()
+    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    runner = (
+        install_home
+        / "integrations"
+        / "codex_app"
+        / "plugin"
+        / "scripts"
+        / "run-mcp.sh"
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    runner.chmod(0o755)
     registration = {
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
@@ -209,10 +232,23 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
     bootstrap.parent.mkdir(parents=True)
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    hooks = install_home / "hooks"
+    hooks.mkdir()
+    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    runner = (
+        install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    runner.chmod(0o755)
     launched = []
     runtime = tmp_path / "runtime"
     custom_home = tmp_path / "custom-codex-home"
     custom_home.mkdir()
+    _write_private(custom_home / "config.toml", 'model = "gpt-5.6-terra"\n')
+    child_home, _token, _old_config = _seed_child_identity(
+        runtime, project, write_home=False
+    )
     monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
     monkeypatch.setenv("CODEX_HOME", str(custom_home))
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
@@ -240,8 +276,10 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     inner = launched[0][-1]
     assert f"source {shlex.quote(str(bootstrap))}" in inner
     assert "AGENTSTACK_CODEX_LAUNCH_KIND=resume" in inner
-    assert "export CODEX_HOME=" not in inner
-    assert "export CODEX_SHARED_CODEX_DIR=" not in inner
+    assert f"export CODEX_HOME={shlex.quote(str(child_home))}" in inner
+    assert f"export CODEX_SHARED_CODEX_DIR={shlex.quote(str(child_home))}" in inner
+    assert "AGENTSTACK_CODEX_CHILD_MCP_PROFILE=orrery-only" in inner
+    assert (child_home / "config.toml").is_file()
     assert ".codex/bin/codex_agent_bootstrap.sh" not in inner
 
 
@@ -272,9 +310,23 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     hooks.mkdir(parents=True)
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bindir)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
+    for name in (
+        "child_resume.py",
+        "cleanup-child-agent.sh",
+        "project-context.sh",
+        "resolve-agent-name.sh",
+    ):
+        shutil.copy2(ROOT / "hooks" / name, hooks)
+    proxy = (
+        install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    )
+    proxy.parent.mkdir(parents=True)
+    proxy.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    proxy.chmod(0o755)
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
-        "ags_mcp_call() { return 0; }\n"
+        "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
+        "ags_mcp_has_error() { return 1; }\n"
         "ags_start_mail_watcher() { :; }\n"
         "ags_register_session() {\n"
         "  AGS_REGISTERED_AGENT_NAME=BoundCodex\n"
@@ -294,15 +346,23 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     default_config = default_codex_home / "config.toml"
     _write_private(
         default_config,
+        'profile_marker = "current-source"\n\n'
         '[mcp_servers."orrery-mail"]\n'
         'url = "http://127.0.0.1:18765/mcp"\n'
-        'bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"\n',
+        'bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"\n\n'
+        '[mcp_servers.notion]\n'
+        'url = "https://mcp.notion.test/mcp"\n'
+        'enabled = true\n\n'
+        '[plugins."unrelated@fixture"]\n'
+        'enabled = true\n',
     )
     default_config_before = default_config.read_bytes()
     zdotdir = tmp_path / "zdotdir"
     zdotdir.mkdir()
     runtime = tmp_path / "runtime"
     codex_home, _token_file, config_before = _seed_child_identity(runtime, project)
+    _write_private(codex_home / "config.toml", 'stale_snapshot = true\n')
+    config_before = (codex_home / "config.toml").read_bytes()
     (codex_home / "sessions").symlink_to(shared_sessions, target_is_directory=True)
     capture = tmp_path / "codex-env.txt"
     release = tmp_path / "release-hook"
@@ -331,10 +391,11 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         "  session= cwd=\n"
         "  while [[ $# -gt 0 ]]; do\n"
         "    case \"$1\" in\n"
-        "      -A) shift ;;\n"
-        "      -s) session=$2; shift 2 ;;\n"
-        "      -c) cwd=$2; shift 2 ;;\n"
-        "      *) break ;;\n"
+            "      -A) shift ;;\n"
+            "      -s) session=$2; shift 2 ;;\n"
+            "      -c) cwd=$2; shift 2 ;;\n"
+            "      -e) export \"$2\"; shift 2 ;;\n"
+            "      *) break ;;\n"
         "    esac\n"
         "  done\n"
         "  export TMUX=/tmp/fake-tmux TMUX_PANE=%0 FAKE_TMUX_SESSION=$session\n"
@@ -374,6 +435,8 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
     monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", str(project))
     monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("AGENTSTACK_MCP_URL", "http://127.0.0.1:1/mcp")
+    monkeypatch.setenv("AGENTSTACK_MAIL_HTTP_BEARER_MODE", "disabled")
     monkeypatch.setenv("AGENTSTACK_HOOKS_DIR", str(hooks))
     monkeypatch.setenv("AGENTSTACK_PYTHON", sys.executable)
     monkeypatch.setenv("AGENTSTACK_LABEL_PREFIX", TEST_LABEL_PREFIX)
@@ -433,6 +496,10 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
             "startup",
             "--history-mode",
             "enabled",
+            "--launch-origin",
+            "child",
+            "--codex-mcp-profile",
+            "orrery-only",
         ],
         text=True,
         capture_output=True,
@@ -525,19 +592,68 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         launch = json.loads(Path(launch_path).read_text(encoding="utf-8"))
         assert launch["launch_id"] == launch_id
         assert launch["claimed_session_id"] is None
+        assert launch["launch_origin"] == "child"
+        assert launch["codex_mcp_profile"] == "orrery-only"
+        assert (codex_home / "config.toml").read_bytes() != config_before
+        child_config = tomllib.loads(
+            (codex_home / "config.toml").read_text(encoding="utf-8")
+        )
+        assert child_config["profile_marker"] == "current-source"
+        assert child_config["mcp_servers"]["notion"]["enabled"] is False
+        assert child_config["plugins"]["unrelated@fixture"]["enabled"] is False
+        assert (codex_home / "sessions").resolve() == shared_sessions.resolve()
         release.write_text("continue\n", encoding="utf-8")
         stdout, stderr = processes[0].communicate(timeout=10)
         assert processes[0].returncode == 0, {"stdout": stdout, "stderr": stderr}
         assert server._codex_history_binding("BoundCodex")["history_binding"] == "bound"
-        assert (codex_home / "config.toml").read_bytes() == config_before
         assert default_config.read_bytes() == default_config_before
-        child_config = tomllib.loads(
+        assert not codex_home.exists()
+        retained = json.loads(
+            (runtime / "child-agents" / f"{AGENT}.json").read_text(encoding="utf-8")
+        )
+        assert retained["retired_at"]
+        assert retained["resume_expires_at"]
+        assert _token_file.is_file()
+
+        # A fresh receipt must retain child provenance, otherwise cleanup after
+        # the first resume makes the same row fall back to provenance_missing.
+        first_receipt = json.loads(
+            (runtime / "session_index" / "73.json").read_text(encoding="utf-8")
+        )
+        assert first_receipt["launch_origin"] == "child"
+        assert first_receipt["codex_mcp_profile"] == "orrery-only"
+
+        default_config.write_text(
+            default_config.read_text(encoding="utf-8").replace(
+                'profile_marker = "current-source"',
+                'profile_marker = "current-source-second"',
+            ),
+            encoding="utf-8",
+        )
+        default_config.chmod(0o600)
+        capture.unlink()
+        release.unlink()
+        second = server._do_resume_codex("BoundCodex")
+        assert second["ok"] is True, second
+        second_launch_path, second_launch_id, *_rest = capture.read_text(
+            encoding="utf-8"
+        ).rstrip("\n").split("\t", 5)
+        assert second_launch_id != launch_id
+        assert second_launch_path == launch_path
+        second_config = tomllib.loads(
             (codex_home / "config.toml").read_text(encoding="utf-8")
         )
-        assert child_config["profile_marker"] == "orrery-only"
-        assert child_config["mcp_servers"]["notion"]["enabled"] is False
-        assert child_config["plugins"]["unrelated@fixture"]["enabled"] is False
-        assert (codex_home / "sessions").resolve() == shared_sessions.resolve()
+        assert second_config["profile_marker"] == "current-source-second"
+        release.write_text("continue\n", encoding="utf-8")
+        stdout, stderr = processes[1].communicate(timeout=10)
+        assert processes[1].returncode == 0, {"stdout": stdout, "stderr": stderr}
+        second_receipt = json.loads(
+            (runtime / "session_index" / "73.json").read_text(encoding="utf-8")
+        )
+        assert second_receipt["launch_origin"] == "child"
+        assert second_receipt["codex_mcp_profile"] == "orrery-only"
+        assert server._codex_history_binding("BoundCodex")["history_binding"] == "bound"
+        assert not codex_home.exists()
     finally:
         # An assertion before the normal release must not leave the fake Codex
         # spinning in its first-submit wait loop.
@@ -568,8 +684,9 @@ def test_resume_child_home_rejects_orphan_without_state(policy_env, monkeypatch)
         "program": "codex",
     }
 
-    with pytest.raises(ValueError, match="no matching child state"):
+    with pytest.raises(server._ResumeCapabilityError) as raised:
         server._codex_resume_child_home(AGENT, registration)
+    assert raised.value.code == "credential_missing"
 
 
 @pytest.mark.parametrize(
@@ -583,29 +700,6 @@ def test_resume_child_home_rejects_orphan_without_state(policy_env, monkeypatch)
          "state belongs to another registration"),
         ("state-token", {"registration_token": "older-owner-token"}, None,
          "state and credential are from different registrations"),
-        ("config-agent", None,
-         lambda project, token: _child_proxy_config(
-             agent="OtherAgent", project=project, token_file=token),
-         "proxy belongs to another registration"),
-        ("config-project", None,
-         lambda _project, token: _child_proxy_config(
-             agent=AGENT, project=Path("/another/project"), token_file=token),
-         "proxy belongs to another registration"),
-        ("config-program", None,
-         lambda project, token: _child_proxy_config(
-             agent=AGENT, project=project, token_file=token, program="claude-code"),
-         "proxy belongs to another registration"),
-        ("config-token", None,
-         lambda project, _token: _child_proxy_config(
-             agent=AGENT, project=project, token_file=Path("/tmp/other-token")),
-         "proxy belongs to another registration"),
-        ("direct-http", None,
-         lambda _project, _token: (
-             '[mcp_servers."orrery-mail"]\n'
-             'url = "http://127.0.0.1:18765/mcp"\n'
-             'bearer_token_env_var = "MCP_AGENT_MAIL_TOKEN"\n'
-         ),
-         "Mail alias is not a local proxy"),
     ],
 )
 def test_resume_child_home_rejects_identity_or_proxy_mismatch(
@@ -634,7 +728,7 @@ def test_resume_child_home_rejects_identity_or_proxy_mismatch(
 
 
 @pytest.mark.parametrize(
-    "case", ["state-program-list", "config-program-list", "nonascii-token"]
+    "case", ["state-program-list", "nonascii-token"]
 )
 def test_resume_entry_rejects_malformed_metadata_before_terminal(
     policy_env, monkeypatch, case
@@ -646,14 +740,6 @@ def test_resume_entry_rejects_malformed_metadata_before_terminal(
     secret = ""
     if case == "state-program-list":
         state_updates = {"program": ["codex"]}
-    elif case == "config-program-list":
-        token_file = runtime / f"agent_token_{AGENT}"
-        config_text = _child_proxy_config(
-            agent=AGENT, project=project, token_file=token_file
-        ).replace(
-            'AGENTSTACK_PROXY_PROGRAM = "codex"',
-            'AGENTSTACK_PROXY_PROGRAM = ["codex"]',
-        )
     else:
         secret = "所有者資格情報"
         state_updates = {"registration_token": secret}
@@ -667,13 +753,14 @@ def test_resume_entry_rejects_malformed_metadata_before_terminal(
     result, launched = _invoke_resume_entry(monkeypatch, tmp_path, project, runtime)
 
     assert result["ok"] is False
-    assert "Codex child 設定を確認できません" in result["error"]
+    assert result["resume_capability"] == "identity_mismatch"
+    assert result["error"] == server.RESUME_CAPABILITY_MESSAGES["identity_mismatch"]
     if secret:
         assert secret not in result["error"]
     assert launched == []
 
 
-def test_resume_entry_rejects_symlinked_child_config_before_terminal(
+def test_resume_entry_discards_old_symlinked_child_config_before_terminal(
     policy_env, monkeypatch
 ):
     tmp_path, project = policy_env
@@ -688,13 +775,31 @@ def test_resume_entry_rejects_symlinked_child_config_before_terminal(
 
     result, launched = _invoke_resume_entry(monkeypatch, tmp_path, project, runtime)
 
-    assert result["ok"] is False
-    assert "Codex child config is not a regular file" in result["error"]
-    assert launched == []
+    assert result["ok"] is True
+    assert len(launched) == 1
+    assert outside.is_file()
+    assert config_path.is_file()
+    assert not config_path.is_symlink()
 
 
-def test_resume_valid_state_without_home_uses_default_with_visible_warning(
-    policy_env, monkeypatch, caplog
+def test_resume_tmux_receives_runtime_and_retention_environment(
+    policy_env, monkeypatch
+):
+    tmp_path, project = policy_env
+    runtime = tmp_path / "runtime-resume-environment"
+    _seed_child_identity(runtime, project)
+    monkeypatch.setenv("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "17")
+
+    result, launched = _invoke_resume_entry(monkeypatch, tmp_path, project, runtime)
+
+    assert result["ok"] is True
+    assert len(launched) == 1
+    assert f"AGENTSTACK_RUNTIME_DIR={runtime}" in launched[0]
+    assert "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=17" in launched[0]
+
+
+def test_resume_valid_state_without_home_regenerates_private_home(
+    policy_env, monkeypatch
 ):
     tmp_path, project = policy_env
     runtime = tmp_path / "runtime"
@@ -712,6 +817,15 @@ def test_resume_valid_state_without_home_uses_default_with_visible_warning(
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
     bootstrap.parent.mkdir(parents=True)
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    installed_hooks = install_home / "hooks"
+    installed_hooks.mkdir()
+    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    runner = (
+        install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    runner.chmod(0o755)
     launched = []
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     registration = {
@@ -729,17 +843,14 @@ def test_resume_valid_state_without_home_uses_default_with_visible_warning(
         lambda args, **kwargs: launched.append(args) or {"ok": True, "adapter": "fixture"},
     )
 
-    with caplog.at_level("WARNING"):
-        result = server._do_resume_codex(AGENT)
+    result = server._do_resume_codex(AGENT)
 
     assert result["ok"] is True
-    assert "子専用設定なし" in result["detail"]
-    assert "Mail 接続は未確認" in result["detail"]
-    assert "child home absent" in caplog.text
-    assert f"agent={AGENT} id={AGENT_ID}" in caplog.text
     assert len(launched) == 1
-    assert "export CODEX_HOME=" not in launched[0][-1]
-    assert "export CODEX_SHARED_CODEX_DIR=" not in launched[0][-1]
+    child_home = runtime / "child-agents" / f"{AGENT}.codex-home"
+    assert (child_home / "config.toml").is_file()
+    assert f"export CODEX_HOME={shlex.quote(str(child_home))}" in launched[0][-1]
+    assert f"export CODEX_SHARED_CODEX_DIR={shlex.quote(str(child_home))}" in launched[0][-1]
 
 
 def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
@@ -762,9 +873,11 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         ),
         encoding="utf-8",
     )
+    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
-        "ags_mcp_call() { return 0; }\n"
+        "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
+        "ags_mcp_has_error() { return 1; }\n"
         "ags_start_mail_watcher() { :; }\n"
         "ags_register_session() {\n"
         "  AGS_REGISTERED_AGENT_NAME=BoundCodex\n"
@@ -775,6 +888,7 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         encoding="utf-8",
     )
     runtime = tmp_path / "runtime"
+    _seed_child_identity(runtime, project, write_home=False)
     command = (
         "AGENTSTACK_CODEX_LAUNCH_BINDING=/parent/launch.json; "
         "AGENTSTACK_CODEX_LAUNCH_ID=parent-launch; "
@@ -790,8 +904,10 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
             "AGENTSTACK_PROJECT_KEY": str(project),
             "AGENTSTACK_RUNTIME_DIR": str(runtime),
             "AGENTSTACK_HOOKS_DIR": str(hooks),
+            "AGENTSTACK_PYTHON": sys.executable,
             "AGENTSTACK_RESERVED_IDENTITY": "1",
             "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+            "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
             "AGENT_NAME": "BoundCodex",
             "TMUX": "",
         },
@@ -808,6 +924,10 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     assert launch["agent_id"] == 73
     assert launch["claimed_session_id"] is None
     assert launch["receipt_id"] is None
+    retained = json.loads(
+        (runtime / "child-agents" / f"{AGENT}.json").read_text(encoding="utf-8")
+    )
+    assert retained["resume_in_progress_at"].endswith("Z")
 
 
 @pytest.mark.parametrize("failure_mode", ["project_unset", "health_unreachable"])
@@ -846,6 +966,7 @@ def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
         "AGENTSTACK_RUNTIME_DIR": str(runtime),
         "AGENTSTACK_RESERVED_IDENTITY": "1",
         "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+        "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "inherit",
         "AGENT_NAME": "BoundCodex",
         "TMUX": "",
     }

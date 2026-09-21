@@ -482,6 +482,46 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"
 
+report_child_resume_retention() {
+  local expired
+  expired="$("$PYTHON_BIN" - "$CHILD_STATE_DIR" <<'PY' 2>/dev/null || true
+from datetime import datetime, timezone
+import json
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+now = datetime.now(timezone.utc)
+for path in root.glob("*.json") if root.is_dir() else ():
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = data.get("resume_expires_at")
+        expires = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (OSError, ValueError, TypeError):
+        continue
+    name = data.get("agent_name")
+    if (
+        data.get("schema_version") == 1
+        and data.get("launch_origin") == "child"
+        and isinstance(name, str)
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", name)
+        and expires.tzinfo is not None
+        and now >= expires.astimezone(timezone.utc)
+    ):
+        print(name)
+PY
+)"
+  if [[ -n "$expired" ]]; then
+    echo "warn: expired Codex child resume material awaits maintenance purge: $(printf '%s' "$expired" | paste -sd, -)" >&2
+    echo "      doctor reports only; run agentstack-purge-child-resume --expired or keep the dashboard running" >&2
+  else
+    echo "ok: no expired Codex child resume material awaiting purge"
+  fi
+}
+
+report_child_resume_retention
+
 collect_managed_agent_names() {
   if [[ -f "$MANAGED_AGENTS_FILE" ]]; then
     sed '/^[[:space:]]*$/d' "$MANAGED_AGENTS_FILE"

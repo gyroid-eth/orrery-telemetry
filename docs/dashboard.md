@@ -143,7 +143,7 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 
 既定の history `live` では running と finished しか出ません。`7d` / `30d` / `all` に切り替えるとその範囲で活動した `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
 
-card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING` など）を併記します。新しい Codex child の bound receipt は非秘密の child provenance を cleanup 後も保持するため、credential が削除済みなら `credential_missing` と判定できます。provenance 導入前の Codex row と unmanaged session は child と推測せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
+card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING`、`RETENTION EXPIRED`、`PURGED` など）を併記します。新しい Codex child の bound receipt は非秘密の child provenance を cleanup 後も保持し、private state / credential が有効期限内なら `ready` になります。provenance 導入前の Codex row と unmanaged session は child と推測せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
 
 ### カード操作
 
@@ -157,7 +157,9 @@ KILL の可否は frontend の見た目だけで決めず、server の `build_ag
 
 ### Child 完了後の表示
 
-正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire し、child runtime の credential と state を削除します。その command の終了に伴い tmux session も閉じます。
+正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire します。Claude child は runtime credential / state を削除します。Codex child は home、proxy runtime、旧 MCP config を削除し、再開用 state / canonical credential を既定30日だけ保持します。その command の終了に伴い tmux session も閉じます。
+
+保持期間内の `RESUME READY` は、古い home を復元する操作ではありません。dashboard は現在の source Codex home と保存済み profile から新しい home / proxy を作り、credential 付き再登録と fresh binding expectation の保存に成功してから、Codex exec の直前に identity を unretire します。期限切れまたは明示 purge 後は固定理由を表示して fail-closed します。期限切れ private material は dashboard の hourly maintenance が削除するため、dashboard が停止中なら物理削除は次の起動まで遅れることがあります。
 
 このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。history を `30d` にすると直近30日の、`all` にすると全期間の `gone` / `retired` agent もカードとして表示されます。検索が 0 件のときは、どの範囲を見て 0 件だったかと、次に広い範囲へのリンクを空状態に出します。
 

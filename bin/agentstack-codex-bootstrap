@@ -39,6 +39,17 @@ case "$CODEX_LAUNCH_KIND" in
   startup|resume) ;;
   *) CODEX_LAUNCH_KIND="startup" ;;
 esac
+CODEX_CHILD_MCP_PROFILE=""
+if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+  CODEX_CHILD_MCP_PROFILE="${AGENTSTACK_CODEX_CHILD_MCP_PROFILE:-}"
+  case "$CODEX_CHILD_MCP_PROFILE" in
+    inherit|orrery-only) ;;
+    *)
+      echo "⚠️  resumed Codex child has no valid saved MCP profile; refusing to start." >&2
+      return 1 2>/dev/null || exit 1
+      ;;
+  esac
+fi
 REQUIRE_FRESH_BINDING=0
 if [[ "$RESERVED_IDENTITY" == "1" || "$CODEX_LAUNCH_KIND" == "resume" ]]; then
   REQUIRE_FRESH_BINDING=1
@@ -195,14 +206,23 @@ if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
     return 1 2>/dev/null || exit 1
   fi
   if ! CODEX_LAUNCH_INFO="$(
-    "${AGENTSTACK_PYTHON:-python3}" "$PREPARE_BINDING" \
-      --runtime-dir "$RUNTIME_DIR" \
-      --agent-id "$AGS_REGISTERED_AGENT_ID" \
-      --agent-name "$AGENT_NAME" \
-      --project-key "$PROJECT_KEY" \
-      --program codex \
-      --launch-kind "$CODEX_LAUNCH_KIND" \
+    PREPARE_ARGS=(
+      --runtime-dir "$RUNTIME_DIR"
+      --agent-id "$AGS_REGISTERED_AGENT_ID"
+      --agent-name "$AGENT_NAME"
+      --project-key "$PROJECT_KEY"
+      --program codex
+      --launch-kind "$CODEX_LAUNCH_KIND"
       --history-mode enabled
+    )
+    if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+      PREPARE_ARGS+=(
+        --launch-origin child
+        --codex-mcp-profile "$CODEX_CHILD_MCP_PROFILE"
+      )
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" "$PREPARE_BINDING" \
+      "${PREPARE_ARGS[@]}"
   )"; then
     echo "⚠️  Codex history binding expectation could not be written; refusing to start." >&2
     return 1 2>/dev/null || exit 1
@@ -214,13 +234,51 @@ if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
     return 1 2>/dev/null || exit 1
   fi
 fi
+if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
+  return 1 2>/dev/null || exit 1
+fi
+RESUME_STATE_BEGUN=0
+RESUME_HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+  if [[ ! -f "$RESUME_HELPER" ]] || ! \
+     "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" begin-resume \
+       --runtime-dir "$RUNTIME_DIR" \
+       --agent-name "$AGENT_NAME" \
+       --agent-id "$AGS_REGISTERED_AGENT_ID" \
+       --project-key "$PROJECT_KEY" \
+       --program codex \
+       --mcp-profile "$CODEX_CHILD_MCP_PROFILE"; then
+    echo "⚠️  retained Codex child state could not enter resume; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  RESUME_STATE_BEGUN=1
+fi
 if [[ -n "$REGISTERED_AGENT_NAME" && "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
   echo "✅ ORRERY Mail registered: $AGENT_NAME"
 elif [[ -n "$REGISTERED_AGENT_NAME" ]]; then
-  echo "⚠️  ORRERY Mail registered as $AGENT_NAME, but the tmux session name is not synchronized." >&2
+  echo "⚠️  ORRERY Mail registered as $AGENT_NAME, but no tmux session name needed synchronization."
 else
   echo "ℹ️  ORRERY Mail not registered; AGENT_NAME preselected: ${AGENT_NAME:-}"
 fi
-if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
-  return 1 2>/dev/null || exit 1
+
+# Resume keeps the remote row retired until both credential-backed
+# registration and a fresh binding expectation have succeeded.  This is the
+# final bootstrap operation before the caller's `&& codex resume ...`.
+if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+  if ! UNRETIRE_RESULT="$(
+    ags_mcp_call "unretire_agent" \
+      "project_key=$PROJECT_KEY" "agent_name=$AGENT_NAME"
+  )" || \
+     printf '%s' "$UNRETIRE_RESULT" | ags_mcp_has_error; then
+    if [[ "$RESUME_STATE_BEGUN" == "1" ]]; then
+      "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" cancel-resume \
+        --runtime-dir "$RUNTIME_DIR" \
+        --agent-name "$AGENT_NAME" \
+        --agent-id "$AGS_REGISTERED_AGENT_ID" \
+        --project-key "$PROJECT_KEY" >/dev/null 2>&1 || \
+        echo "⚠️  retained Codex child state could not be restored after unretire failure." >&2
+    fi
+    echo "⚠️  resumed Codex identity could not be unretired; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
 fi

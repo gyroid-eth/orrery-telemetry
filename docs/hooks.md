@@ -151,7 +151,11 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 ### `cleanup-child-agent.sh`
 
-child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire して、child の state、token、MCP config、分離した Codex home を削除します。remote release / retire と managed-list 更新は best-effort で試し、その後に local child state を片付けます。Codex の bound session receipt にある非秘密 provenance はこの cleanup 対象外で、履歴とともに残ります。
+child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire します。remote release / retire と managed-list 更新は従来どおり best-effort で試し、その後に local child state を片付けます。
+
+Claude child と、`AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` の Codex child は state、token、MCP config、分離 home を全削除します。既定の Codex child は MCP config、home、proxy runtime を削除しますが、schema version、`retired_at`、`resume_expires_at`、非秘密 provenance を含む state と canonical owner credential を0600で保持します。保持処理が安全に完了しない場合は credential を推測で削除せず、明示 recovery / purge 用に private state を残して非0で終わります。bound session receipt と transcript はどちらの cleanup / purge の対象にも含みません。
+
+共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
 
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 

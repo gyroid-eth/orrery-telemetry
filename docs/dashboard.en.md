@@ -120,7 +120,7 @@ Top-bar `FILTER · name / task` searches not only names but also **task descript
 
 With the default history `live` only running and finished agents appear. Switching to `7d` / `30d` / `all` adds `gone` / `retired` agents active in that range, supporting the pattern of **finding a finished agent through search and resuming it**. This preserves a counterpart with old context for later restart; see “Resume a finished agent” under [Find an action](#find-an-action) for procedure and [After a child completes](#after-a-child-completes) for appearance.
 
-Cards and the detail panel display the backend's `resume_capability`. Anything other than `ready` changes the detail action to `RESUME UNAVAILABLE` and names a fixed reason such as `NO HISTORY`, `PROVENANCE MISSING`, or `CREDENTIAL MISSING`. A new Codex child's bound receipt keeps non-secret child provenance after cleanup, so a deleted credential can be classified as `credential_missing`. Codex rows from before provenance was recorded and unmanaged sessions are not guessed to be children and remain closed as `provenance_missing`. `/api/jump` repeats the same check immediately before acting, so a stale page or direct API call cannot bypass the gate.
+Cards and the detail panel display the backend's `resume_capability`. Anything other than `ready` changes the detail action to `RESUME UNAVAILABLE` and names a fixed reason such as `NO HISTORY`, `PROVENANCE MISSING`, `CREDENTIAL MISSING`, `RETENTION EXPIRED`, or `PURGED`. A new Codex child's bound receipt keeps non-secret child provenance after cleanup, and valid private state / credentials within the retention window make it `ready`. Codex rows from before provenance was recorded and unmanaged sessions are not guessed to be children and remain closed as `provenance_missing`. `/api/jump` repeats the same check immediately before acting, so a stale page or direct API call cannot bypass the gate.
 
 ### Card actions
 
@@ -134,7 +134,9 @@ KILL eligibility is not based only on frontend appearance; the server rechecks t
 
 ### After a child completes
 
-In a normal completion flow, a child started by `/delegate` sends an ORRERY Mail completion report to its parent before exiting. The parent reads the report, verifies the artifact, and then returns the result to the user. After the child REPL ends, launcher cleanup releases reservations, soft-retires the remote identity, and removes child runtime credentials and state. The tmux session closes when that command ends.
+In a normal completion flow, a child started by `/delegate` sends an ORRERY Mail completion report to its parent before exiting. The parent reads the report, verifies the artifact, and then returns the result to the user. After the child REPL ends, launcher cleanup releases reservations and soft-retires the remote identity. Claude children remove runtime credentials and state. Codex children remove their home, proxy runtime, and old MCP configuration while retaining resume state / the canonical credential for 30 days by default. The tmux session closes when that command ends.
+
+`RESUME READY` during the retention window does not restore the old home. The dashboard creates a new home / proxy from the current source Codex home and saved profile, completes credential-backed registration and a fresh binding expectation, then un-retires the identity immediately before Codex exec. An expired or explicitly purged entry fails closed with its fixed reason. Hourly maintenance removes expired private material while the dashboard is running, so physical deletion can wait until the next start if the dashboard is stopped.
 
 Thus a completed child's card disappears from the normal DECK view, but this is not a failure. History `30d` displays `gone` / `retired` agents from the last 30 days and `all` displays every period. When a search comes up empty, the empty state names the range it searched and links to the next wider one.
 

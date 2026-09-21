@@ -146,7 +146,11 @@ By default, a target declaration through `--resources` is required, and conflict
 
 ### `cleanup-child-agent.sh`
 
-This helper is chained after the child's Claude / Codex command and runs only when the REPL returns. It releases all reservations, retires identity with the child's owner token, and deletes child state, token, MCP configuration, and isolated Codex home. Remote release / retirement and managed-list updates are attempted best-effort before local child state is removed. Non-secret provenance in a bound Codex session receipt is outside this cleanup scope and remains with the history.
+This helper is chained after the child's Claude / Codex command and runs only when the REPL returns. It releases all reservations and retires the identity with the child's owner token. Remote release / retirement and managed-list updates remain best-effort and run before local child state is handled.
+
+Claude children, and Codex children configured with `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0`, fully delete state, token, MCP configuration, and isolated home. By default a Codex child deletes its MCP configuration, home, and proxy runtime but retains mode-0600 state containing the schema version, `retired_at`, `resume_expires_at`, and non-secret provenance together with the canonical owner credential. If safe retention cannot be finalized, cleanup does not guess and delete the credential; it leaves private state for explicit recovery or purge and exits nonzero. Bound session receipts and transcripts are outside both cleanup and purge scope.
+
+The shared `child_resume.py` helper uses one lock and validation path for fresh-spawn / resume state preparation, private-material checks, rebuilding a child home from the current source home, expiry maintenance, and explicit purge. Operator entry points are `agentstack-purge-child-resume <agent>` and `agentstack-purge-child-resume --expired`. `agentstack-doctor` reports expired entries but never invokes purge.
 
 This is not a Claude Code `SessionEnd` hook. Because `SessionEnd` can occur during a crash or resume, remote identity retirement is not tied to that event.
 

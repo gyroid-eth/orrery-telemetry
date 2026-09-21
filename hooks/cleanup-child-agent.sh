@@ -21,6 +21,7 @@ PROJECT_KEY_DEFAULT="$(agentstack_resolve_project_key "$(pwd -P)")"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+CHILD_RESUME_RETENTION_DAYS="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}"
 
 resolve_agent_name() {
     if [[ -f "$HOOKS_DIR/resolve-agent-name.sh" ]]; then
@@ -222,7 +223,36 @@ except OSError:
     raise SystemExit(0)
 path.write_text("\n".join(line for line in lines if line != name) + "\n", encoding="utf-8")
 PYEOF
-rm -f "$STATE_FILE" "$TOKEN_FILE" "$MCP_CONFIG_FILE"
+
+# The generated home contains only rebuildable config/proxy runtime and is
+# never reused.  A valid Codex child keeps its private owner credential and
+# schema-tagged state for the configured resume window; all other children and
+# a retention setting of 0 keep the historical full-delete behavior.
+rm -f "$MCP_CONFIG_FILE"
 rm -rf "$CODEX_HOME_DIR"
+case "$CHILD_RESUME_RETENTION_DAYS" in
+    ''|*[!0-9]*)
+        echo "[cleanup-child-agent] invalid AGENTSTACK_CHILD_RESUME_RETENTION_DAYS; using 30" >&2
+        CHILD_RESUME_RETENTION_DAYS=30
+        ;;
+esac
+RESUME_HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+RETENTION_ACTION="delete"
+if [[ -f "$RESUME_HELPER" ]]; then
+    if RETENTION_ACTION=$(
+        "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" mark-retired \
+            --runtime-dir "$RUNTIME_DIR" \
+            --agent-name "$AGENT_NAME" \
+            --retention-days "$CHILD_RESUME_RETENTION_DAYS"
+    ); then
+        :
+    else
+        echo "[cleanup-child-agent] could not finalize retained resume state for '$AGENT_NAME'; leaving private state intact for explicit recovery or purge" >&2
+        exit 1
+    fi
+fi
+if [[ "$RETENTION_ACTION" != "retained" ]]; then
+    rm -f "$STATE_FILE" "$TOKEN_FILE"
+fi
 
 exit 0

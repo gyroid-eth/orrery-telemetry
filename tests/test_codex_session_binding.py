@@ -375,6 +375,7 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
             "bin/lib/agentstack-register.sh",
             "bin/lib/agentstack-scientists.sh",
             "hooks/spawn_child.sh",
+            "hooks/child_resume.py",
             "hooks/prepare-codex-session-binding.py",
             "integrations/codex_app/plugin/scripts/record-codex-session-index.py",
         ):
@@ -617,13 +618,28 @@ def test_preregister_no_arg_spawn_reaches_recorder_and_reader(
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert canonical_token.is_file()
-    assert state == {
+    assert {
+        key: state[key]
+        for key in (
+            "agent_id",
+            "agent_name",
+            "program",
+            "project_key",
+            "registration_token",
+        )
+    } == {
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
         "program": "codex",
         "project_key": str(binding_env["project"]),
         "registration_token": "server-owner-token",
     }
+    assert state["schema_version"] == 1
+    assert state["launch_origin"] == "child"
+    assert state["provider"] == "codex"
+    assert state["codex_mcp_profile"] == "inherit"
+    assert state["retired_at"] is None
+    assert state["resume_expires_at"] is None
     assert handoff.exists() is False and sidecar.exists() is False
 
     child_env, command = _tmux_new_session_env(Path(env["FAKE_TMUX_LOG"]))
@@ -976,10 +992,11 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
         state_path.write_text(json.dumps(state), encoding="utf-8")
     if state_path.exists():
         state_path.chmod(0o600)
-    if failure_mode == "prepare_failure":
-        empty_hooks = tmp_path / "hooks-without-prepare"
-        empty_hooks.mkdir()
-        env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
+        if failure_mode == "prepare_failure":
+            empty_hooks = tmp_path / "hooks-without-prepare"
+            empty_hooks.mkdir()
+            shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
+            env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
     env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"
 

@@ -107,7 +107,7 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     monkeypatch.setattr(
         server,
         "_codex_resume_child_home",
-        lambda _session, _registration: (str(child_home), "restored"),
+        lambda _session, _registration: (str(child_home), "orrery-only"),
     )
 
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"
@@ -128,11 +128,12 @@ def test_cleaned_child_and_unmanaged_codex_have_distinct_capabilities(
             None,
         ),
     )
-    monkeypatch.setattr(
-        server,
-        "_codex_resume_child_home",
-        lambda *_args, **_kwargs: (None, "unmanaged"),
-    )
+    def missing_credential(*_args, **_kwargs):
+        raise server._ResumeCapabilityError(
+            "credential_missing", "retained credential is unavailable"
+        )
+
+    monkeypatch.setattr(server, "_codex_resume_child_home", missing_credential)
 
     assert (
         server._resume_capability(AGENT, "codex-cli", category="retired")
