@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### resume できない終了済み agent に、resume 操作を案内していました（#59）
+
+DECK と NETWORK は `gone` / `retired` という表示状態だけで resume 操作を出していたため、検証済み transcript、元の cwd、CLI、Codex child の provenance・credential・設定が無い row も resume 可能に見えていました。backend が row ごとに固定理由コードの `resume_capability` を返すようにし、DECK card、NETWORK の一括選択、詳細 panel、`/api/jump` が同じ判定を使うようにしました。古い Codex row は child provenance が無い限り推測で `ready` にせず、API から直接呼んでも terminal を開く前に拒否します。
+
 ## 2026.09.19
 
 ### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）
