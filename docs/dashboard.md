@@ -143,7 +143,7 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 
 既定の history `live` では running と finished しか出ません。`7d` / `30d` / `all` に切り替えるとその範囲で活動した `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
 
-card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING` など）を併記します。特に provenance 導入前の Codex row は、cleanup 済み child と unmanaged session を推測で区別せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
+card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING` など）を併記します。新しい Codex child の bound receipt は非秘密の child provenance を cleanup 後も保持するため、credential が削除済みなら `credential_missing` と判定できます。provenance 導入前の Codex row と unmanaged session は child と推測せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
 
 ### カード操作
 

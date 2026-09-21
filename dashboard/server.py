@@ -2953,15 +2953,84 @@ _RESUME_CAPABILITY_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
 _RESUME_CAPABILITY_CACHE_LOCK = threading.Lock()
 
 
-def _codex_resume_provenance(session: str) -> tuple[dict | None, str | None]:
-    """Read the current child state only far enough to establish provenance.
+def _codex_resume_provenance(
+    session: str,
+    *,
+    registration: dict | None = None,
+    transcript_path: str | None = None,
+) -> tuple[dict | None, str | None]:
+    """Return verified, non-secret child provenance from a bound receipt.
 
-    Stage 1 intentionally does not infer that a Codex row is a managed child
-    from its name, transcript location, or missing artifacts.  Stage 2 will
-    make this non-secret provenance survive cleanup.  Until then, old rows
-    fail closed while crash-preserved state can become ready once it carries
-    the explicit fields.
+    The receipt survives normal child cleanup and therefore distinguishes a
+    managed child from an unmanaged Codex session after private state, token,
+    and generated home removal.  Current private state remains a compatibility
+    source for a launch that has not produced its first receipt yet.
     """
+
+    registration = registration or _codex_registration(session)
+    transcript_path = transcript_path or _codex_transcript_path(session)
+    if registration is not None and transcript_path:
+        receipt_path = os.path.join(
+            SESSION_INDEX_DIR, f"{registration['agent_id']}.json"
+        )
+        try:
+            os.lstat(receipt_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return None, "config_unrestorable"
+        else:
+            try:
+                receipt = json.loads(
+                    _read_private_regular(
+                        receipt_path,
+                        "Codex session receipt",
+                        _CODEX_CHILD_STATE_MAX_BYTES,
+                    ).decode("utf-8")
+                )
+            except _PrivateFileError as exc:
+                return None, _private_file_capability(
+                    exc, unavailable="config_unrestorable"
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return None, "config_unrestorable"
+            identity_matches = (
+                isinstance(receipt, dict)
+                and receipt.get("schema_version") == 2
+                and receipt.get("binding_kind") == "self"
+                and receipt.get("provider") == "codex"
+                and receipt.get("program") == registration["program"]
+                and type(receipt.get("agent_id")) is int
+                and receipt["agent_id"] == registration["agent_id"]
+                and receipt.get("agent_name") == session
+                and receipt.get("project_key") == registration["project_key"]
+                and receipt.get("registered_by") == session
+                and isinstance(receipt.get("transcript_path"), str)
+                and os.path.realpath(receipt["transcript_path"])
+                == os.path.realpath(transcript_path)
+            )
+            if not identity_matches:
+                value = receipt if isinstance(receipt, dict) else None
+                return value, "identity_mismatch"
+            provenance = {
+                key: receipt.get(key)
+                for key in (
+                    "agent_id",
+                    "agent_name",
+                    "project_key",
+                    "provider",
+                    "program",
+                    "launch_origin",
+                    "codex_mcp_profile",
+                )
+            }
+            if (
+                provenance["launch_origin"] == "child"
+                and isinstance(provenance["codex_mcp_profile"], str)
+                and provenance["codex_mcp_profile"] in _CODEX_MCP_PROFILES
+            ):
+                return provenance, None
+            return provenance, "provenance_missing"
 
     state_path = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")
     try:
@@ -2986,6 +3055,7 @@ def _codex_resume_provenance(session: str) -> tuple[dict | None, str | None]:
         return None, "config_unrestorable"
     if (
         state.get("launch_origin") != "child"
+        or not isinstance(state.get("codex_mcp_profile"), str)
         or state.get("codex_mcp_profile") not in _CODEX_MCP_PROFILES
     ):
         return state, "provenance_missing"
@@ -3042,7 +3112,11 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
     registration = _codex_registration(session)
     if registration is None:
         return "registration_missing"
-    _state, provenance_error = _codex_resume_provenance(session)
+    _state, provenance_error = _codex_resume_provenance(
+        session,
+        registration=registration,
+        transcript_path=path,
+    )
     if provenance_error:
         return provenance_error
     try:
@@ -3055,6 +3129,10 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
         # A new validation branch must fail closed until it receives an
         # explicit stable code; never classify it from mutable message text.
         return "config_unrestorable"
+    if child_home_status == "unmanaged":
+        # A verified child receipt turns the absence of private child state
+        # from ambiguous unmanaged compatibility into a known cleanup result.
+        return "credential_missing"
     if not child_home or child_home_status != "restored":
         return "config_unrestorable"
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)

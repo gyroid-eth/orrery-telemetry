@@ -79,6 +79,16 @@ def _header_session_id(path: Path) -> str | None:
 def _valid_launch(record: Mapping[str, Any], launch_id: str) -> bool:
     claimed_session_id = record.get("claimed_session_id")
     receipt_id = record.get("receipt_id")
+    launch_origin = record.get("launch_origin")
+    codex_mcp_profile = record.get("codex_mcp_profile")
+    provenance_valid = (
+        launch_origin is None
+        and codex_mcp_profile is None
+    ) or (
+        launch_origin == "child"
+        and isinstance(codex_mcp_profile, str)
+        and codex_mcp_profile in {"inherit", "orrery-only"}
+    )
     return (
         record.get("schema_version") == 1
         and record.get("binding_expected") is True
@@ -94,6 +104,7 @@ def _valid_launch(record: Mapping[str, Any], launch_id: str) -> bool:
         and record.get("launch_kind") in {"startup", "resume"}
         and record.get("history_mode") == "enabled"
         and type(record.get("binding_conflicted")) is bool
+        and provenance_valid
         and (
             claimed_session_id is None
             or (isinstance(claimed_session_id, str) and bool(claimed_session_id))
@@ -281,6 +292,11 @@ def record_payload(
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
+        if launch.get("launch_origin") == "child":
+            receipt.update(
+                launch_origin="child",
+                codex_mcp_profile=launch["codex_mcp_profile"],
+            )
         try:
             _atomic_json(index_path, receipt)
         except OSError:

@@ -148,7 +148,9 @@ CLAUDECODE=1
 
 dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
 
-launcher が child 専用 `CODEX_HOME` を作っていた場合、dashboard resume は正式な project・agent ID・name と private child state / token、さらに `config.toml` 内の local ORRERY proxy identity を照合してから、同じ `CODEX_HOME` / `CODEX_SHARED_CODEX_DIR` と writable root を復元します。state の無い既存 session は従来どおり既存 / 既定設定を使い、state は正しいのに home が無い旧・`inherit` 互換経路も継続します。後者は「home を作らなかった」と「後から消えた」を現 metadata では区別できないため、resume の detail と backend warning に「子専用設定なし・Mail 接続未確認」を残します。state が無いのに同名 child home だけ残る場合や、proxy identity が違う場合は、名前から推測して採用せず resume を停止します。
+Codex child の fresh launch は、`launch_origin: child` と選択した `codex_mcp_profile` を launch expectation に記録します。公式 `SessionStart` が identity と rollout を検証した後、その非秘密 provenance は数値 agent ID・project・provider とともに bound session receipt へコピーされます。receipt は child state・token・専用 home の通常 cleanup 後も残るため、dashboard は cleanup 済み child と unmanaged Codex session を区別できます。provenance 導入前の receipt は名前や履歴から child と推測せず resume 不可にします。現段階では cleanup が credential を削除するため、確認済み child も `credential_missing` と表示されます。credential 保持と新しい home の再生成は resume retention の実装で行います。
+
+launcher が child 専用 `CODEX_HOME` を作っていた場合、dashboard resume は正式な project・agent ID・name と private child state / token、さらに `config.toml` 内の local ORRERY proxy identity を照合してから、同じ `CODEX_HOME` / `CODEX_SHARED_CODEX_DIR` と writable root を復元します。state が無いのに同名 child home だけ残る場合や、proxy identity が違う場合は、名前から推測して採用せず resume を停止します。
 
 `codex-cli 0.154.0` の interactive TUI では、startup / resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。そのため resume 直後は history が未確認でもよく、最初の submit 後に公式 payload と rollout header が fresh resume launch に一致して初めて bound になります。この発火時点は 0.154.0 の実測範囲であり、他 version / mode の一般保証ではありません。
 

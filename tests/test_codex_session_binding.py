@@ -203,12 +203,125 @@ def _prepare(env: dict, *, now: float = 100.0, history_mode: str = "enabled"):
     )
 
 
+def _prepare_child(
+    env: dict, *, profile: str = "orrery-only", now: float = 100.0
+):
+    return prepare_mod.prepare(
+        env["runtime"],
+        env["registration"],
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile=profile,
+        now=now,
+    )
+
+
 def _record(env: dict, launch_path: Path, launch_id: str, **overrides: object) -> str:
     return record_mod.record_payload(
         _payload(env["transcript"], **overrides),
         launch_path=launch_path,
         launch_id=launch_id,
     )
+
+
+def test_child_provenance_survives_private_cleanup_in_bound_receipt(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare_child(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+
+    receipt_path = (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["agent_id"] == AGENT_ID
+    assert receipt["agent_name"] == AGENT
+    assert receipt["project_key"] == str(binding_env["project"])
+    assert receipt["provider"] == "codex"
+    assert receipt["launch_origin"] == "child"
+    assert receipt["codex_mcp_profile"] == "orrery-only"
+    assert "registration_token" not in receipt
+
+    # Normal cleanup removes the private state, credential and generated home;
+    # the non-secret receipt remains the durable child/unmanaged distinction.
+    private_dir = binding_env["runtime"] / "child-agents"
+    private_dir.mkdir()
+    private_state = private_dir / f"{AGENT}.json"
+    private_state.write_text('{"registration_token":"secret"}\n')
+    private_state.unlink()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "tmux")
+
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance == {
+        "agent_id": AGENT_ID,
+        "agent_name": AGENT,
+        "project_key": str(binding_env["project"]),
+        "provider": "codex",
+        "program": "codex",
+        "launch_origin": "child",
+        "codex_mcp_profile": "orrery-only",
+    }
+    assert (
+        server._resume_capability(AGENT, "codex", category="retired")
+        == "credential_missing"
+    )
+
+
+def test_unmanaged_receipt_is_not_promoted_to_child_provenance(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "tmux")
+
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert provenance is not None
+    assert reason == "provenance_missing"
+    assert (
+        server._resume_capability(AGENT, "codex", category="retired")
+        == "provenance_missing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("launch_origin", "codex_mcp_profile"),
+    [
+        ("child", None),
+        (None, "inherit"),
+        ("child", "untrusted-profile"),
+        ("child", ["inherit"]),
+    ],
+)
+def test_prepare_rejects_partial_or_unknown_child_provenance(
+    binding_env: dict,
+    launch_origin: str | None,
+    codex_mcp_profile: object,
+) -> None:
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="startup",
+            history_mode="enabled",
+            launch_origin=launch_origin,
+            codex_mcp_profile=codex_mcp_profile,
+        )
+
+
+def test_recorder_does_not_bind_partial_child_provenance(binding_env: dict) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    launch["launch_origin"] = "child"
+    launch_path.write_text(json.dumps(launch), encoding="utf-8")
+
+    assert _record(binding_env, launch_path, launch_id) == "stale_launch"
+    assert not (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    ).exists()
 
 
 def _adopt_child_handoff(
@@ -633,6 +746,9 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
         ).read_text(encoding="utf-8")
     )
     assert receipt["transcript_path"] == str(rollout.resolve())
+    assert receipt["launch_origin"] == "child"
+    assert receipt["codex_mcp_profile"] == "inherit"
+    assert "registration_token" not in receipt
 
     cleaned = subprocess.run(
         ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
@@ -647,6 +763,11 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
     assert not child_home.exists()
     assert rollout.is_file()
     assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance is not None
+    assert provenance["launch_origin"] == "child"
+    assert provenance["codex_mcp_profile"] == "inherit"
 
 
 def test_reader_recovers_legacy_cleaned_child_home_receipt(
