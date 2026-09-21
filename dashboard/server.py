@@ -2807,6 +2807,30 @@ def _codex_resume_child_home(
     return child_home, state["codex_mcp_profile"]
 
 
+def _validate_codex_standalone_credential(session: str) -> None:
+    """Require the private owner credential used by reserved re-registration."""
+
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
+    token_path = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+    try:
+        token = _read_private_regular(
+            token_path, "Codex standalone credential", 4096
+        )
+    except _PrivateFileError as exc:
+        capability = (
+            "credential_permission"
+            if exc.reason in {"ownership", "permissions", "changed", "type"}
+            else "credential_missing"
+        )
+        raise _ResumeCapabilityError(
+            capability, str(exc)
+        ) from exc
+    if not token.strip():
+        raise _ResumeCapabilityError(
+            "credential_missing", "Codex standalone credential is empty"
+        )
+
+
 RESUME_CAPABILITY_MESSAGES = {
     "ready": "Resume prerequisites are verified.",
     "not_required": "This session is already available without transcript resume.",
@@ -2907,11 +2931,16 @@ def _codex_resume_provenance(
                     "codex_mcp_profile",
                 )
             }
-            if (
+            child = (
                 provenance["launch_origin"] == "child"
                 and isinstance(provenance["codex_mcp_profile"], str)
                 and provenance["codex_mcp_profile"] in _CODEX_MCP_PROFILES
-            ):
+            )
+            standalone = (
+                provenance["launch_origin"] == "standalone"
+                and provenance["codex_mcp_profile"] is None
+            )
+            if child or standalone:
                 return provenance, None
             return provenance, "provenance_missing"
 
@@ -2995,25 +3024,34 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
     registration = _codex_registration(session)
     if registration is None:
         return "registration_missing"
-    _state, provenance_error = _codex_resume_provenance(
+    provenance, provenance_error = _codex_resume_provenance(
         session,
         registration=registration,
         transcript_path=path,
     )
     if provenance_error:
         return provenance_error
-    try:
-        child_home, child_profile = _codex_resume_child_home(
-            session, registration
-        )
-    except _ResumeCapabilityError as exc:
-        return exc.code
-    except ValueError:
-        # A new validation branch must fail closed until it receives an
-        # explicit stable code; never classify it from mutable message text.
-        return "config_unrestorable"
-    if not child_home or child_profile not in _CODEX_MCP_PROFILES:
-        return "config_unrestorable"
+    launch_origin = provenance.get("launch_origin") if provenance else None
+    if launch_origin == "child":
+        try:
+            child_home, child_profile = _codex_resume_child_home(
+                session, registration
+            )
+        except _ResumeCapabilityError as exc:
+            return exc.code
+        except ValueError:
+            # A new validation branch must fail closed until it receives an
+            # explicit stable code; never classify it from mutable message text.
+            return "config_unrestorable"
+        if not child_home or child_profile not in _CODEX_MCP_PROFILES:
+            return "config_unrestorable"
+    elif launch_origin == "standalone":
+        try:
+            _validate_codex_standalone_credential(session)
+        except _ResumeCapabilityError as exc:
+            return exc.code
+    else:
+        return "provenance_missing"
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
     bootstrap = os.path.join(install_home, "bin", "agentstack-codex-bootstrap")
     if not os.path.isfile(bootstrap) or not shutil.which("codex"):
@@ -3163,13 +3201,28 @@ def _do_resume_codex(session: str) -> dict:
     if registration is None:
         return {"ok": False,
                 "error": "Codex の正式な project/agent 登録を確認できず再開できません"}
+    provenance, provenance_error = _codex_resume_provenance(
+        session,
+        registration=registration,
+        transcript_path=path,
+    )
+    if provenance_error:
+        return _resume_unavailable(provenance_error)
+    launch_origin = provenance.get("launch_origin") if provenance else None
+    child_home = ""
+    child_profile = ""
     try:
-        child_home, child_profile = _codex_resume_child_home(
-            session, registration
-        )
-        _rebuild_codex_child_home(
-            session, registration, child_home, child_profile
-        )
+        if launch_origin == "child":
+            child_home, child_profile = _codex_resume_child_home(
+                session, registration
+            )
+            _rebuild_codex_child_home(
+                session, registration, child_home, child_profile
+            )
+        elif launch_origin == "standalone":
+            _validate_codex_standalone_credential(session)
+        else:
+            return _resume_unavailable("provenance_missing")
     except _ResumeCapabilityError as exc:
         return _resume_unavailable(exc.code)
     except ValueError as exc:
@@ -3185,42 +3238,52 @@ def _do_resume_codex(session: str) -> dict:
     # reserved identity and persists a fresh launch generation.  `&&` is the
     # safety boundary: a bootstrap/prepare failure must not reach Codex exec.
     src = f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)}'
-    child_home_env = (
-        f'export CODEX_HOME={shlex.quote(child_home)}; '
-        f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
-        f'export AGENTSTACK_CODEX_CHILD_MCP_PROFILE={shlex.quote(child_profile)}; '
-    )
-    cleanup = os.path.join(install_home, "hooks", "cleanup-child-agent.sh")
-    discard_generated = " ".join(
-        shlex.quote(part)
-        for part in (
-            os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable,
-            _child_resume_helper_path(),
-            "discard-generated",
-            "--runtime-dir",
-            RUNTIME_DIR,
-            "--agent-name",
-            session,
-        )
-    )
-    inner = (
+    launch_prefix = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={shlex.quote(session)}; '
         'export AGENTSTACK_RESERVED_IDENTITY=1; '
         'export AGENTSTACK_CODEX_LAUNCH_KIND=resume; '
-        f'{child_home_env}'
-        f'if {src}; then '
-        f'env -u OPENAI_API_KEY codex resume {sid} '
-        f'-C {shlex.quote(cwd)} '
-        f'{_codex_child_launch_flags([child_home])}; '
-        'CODEX_STATUS=$?; '
-        f'/bin/bash {shlex.quote(cleanup)}; CLEANUP_STATUS=$?; '
-        '[[ "$CODEX_STATUS" -ne 0 ]] && exit "$CODEX_STATUS"; '
-        'exit "$CLEANUP_STATUS"; '
-        'else BOOTSTRAP_STATUS=$?; '
-        f'{discard_generated} >/dev/null 2>&1 || true; '
-        'exit "$BOOTSTRAP_STATUS"; fi'
+        f'export AGENTSTACK_CODEX_LAUNCH_ORIGIN={shlex.quote(launch_origin)}; '
     )
+    if launch_origin == "child":
+        child_home_env = (
+            f'export CODEX_HOME={shlex.quote(child_home)}; '
+            f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
+            f'export AGENTSTACK_CODEX_CHILD_MCP_PROFILE={shlex.quote(child_profile)}; '
+        )
+        cleanup = os.path.join(install_home, "hooks", "cleanup-child-agent.sh")
+        discard_generated = " ".join(
+            shlex.quote(part)
+            for part in (
+                os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable,
+                _child_resume_helper_path(),
+                "discard-generated",
+                "--runtime-dir",
+                RUNTIME_DIR,
+                "--agent-name",
+                session,
+            )
+        )
+        inner = (
+            f'{launch_prefix}{child_home_env}'
+            f'if {src}; then '
+            f'env -u OPENAI_API_KEY codex resume {sid} '
+            f'-C {shlex.quote(cwd)} '
+            f'{_codex_child_launch_flags([child_home])}; '
+            'CODEX_STATUS=$?; '
+            f'/bin/bash {shlex.quote(cleanup)}; CLEANUP_STATUS=$?; '
+            '[[ "$CODEX_STATUS" -ne 0 ]] && exit "$CODEX_STATUS"; '
+            'exit "$CLEANUP_STATUS"; '
+            'else BOOTSTRAP_STATUS=$?; '
+            f'{discard_generated} >/dev/null 2>&1 || true; '
+            'exit "$BOOTSTRAP_STATUS"; fi'
+        )
+    else:
+        inner = (
+            f'{launch_prefix}{src} && '
+            f'exec env -u OPENAI_API_KEY codex resume {sid} '
+            f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
+        )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,

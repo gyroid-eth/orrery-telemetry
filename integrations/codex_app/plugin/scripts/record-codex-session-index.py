@@ -85,6 +85,9 @@ def _valid_launch(record: Mapping[str, Any], launch_id: str) -> bool:
         launch_origin is None
         and codex_mcp_profile is None
     ) or (
+        launch_origin == "standalone"
+        and codex_mcp_profile is None
+    ) or (
         launch_origin == "child"
         and isinstance(codex_mcp_profile, str)
         and codex_mcp_profile in {"inherit", "orrery-only"}
@@ -292,11 +295,10 @@ def record_payload(
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
+        if launch.get("launch_origin") in {"child", "standalone"}:
+            receipt["launch_origin"] = launch["launch_origin"]
         if launch.get("launch_origin") == "child":
-            receipt.update(
-                launch_origin="child",
-                codex_mcp_profile=launch["codex_mcp_profile"],
-            )
+            receipt["codex_mcp_profile"] = launch["codex_mcp_profile"]
         try:
             _atomic_json(index_path, receipt)
         except OSError:

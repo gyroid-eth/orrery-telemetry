@@ -148,7 +148,7 @@ CLAUDECODE=1
 
 dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
 
-Codex child の fresh launch は、`launch_origin: child` と選択した `codex_mcp_profile` を launch expectation に記録します。公式 `SessionStart` が identity と rollout を検証した後、その非秘密 provenance は数値 agent ID・project・provider とともに bound session receipt へコピーされます。receipt は private resume state・credential・専用 home の外に残るため、dashboard は cleanup 済み child と unmanaged Codex session を区別できます。provenance 導入前の receipt は名前や履歴から child と推測せず resume 不可にします。
+Codex child の fresh launch は、`launch_origin: child` と選択した `codex_mcp_profile` を launch expectation に記録します。`cx` / `agent-start-codex` と persistent launcher の top-level Codex は `launch_origin: standalone` を記録し、child profile は持ちません。公式 `SessionStart` が identity と rollout を検証した後、その非秘密 provenance は数値 agent ID・project・provider とともに bound session receipt へコピーされます。receipt は private resume state・credential・専用 home の外に残るため、dashboard は cleanup 済み child、製品起動の top-level session、origin 不明の session を区別できます。provenance 導入前の receipt は名前や履歴から origin を推測せず resume 不可にします。
 
 正常 cleanup は reservation release と remote retire を行い、child home、proxy runtime、旧 MCP config を削除します。一方、schema・`retired_at`・`resume_expires_at` 付き state と canonical credential は既定30日保持します（`AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` は全削除）。dashboard resume は receipt、正式な project・数値 agent ID・name、private state / credential、期限、permission を照合し、保存した `codex_mcp_profile` と現在の source Codex home から新しい child home を作ります。古い home や proxy runtime の snapshot は再利用しません。
 

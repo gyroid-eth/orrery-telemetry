@@ -43,6 +43,9 @@ def _codex_prerequisites(monkeypatch, tmp_path: Path) -> Path:
     bootstrap.write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(
+        server, "SESSION_INDEX_DIR", str(tmp_path / "runtime" / "session_index")
+    )
     monkeypatch.setattr(server, "_codex_transcript_path", lambda _name: str(rollout))
     monkeypatch.setattr(server, "_terminal_adapter", lambda: "fixture")
     monkeypatch.setattr(
@@ -111,6 +114,66 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     )
 
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"
+
+
+def test_product_standalone_codex_row_remains_resume_ready(monkeypatch, tmp_path):
+    project = _codex_prerequisites(monkeypatch, tmp_path)
+    rollout = tmp_path / "rollout.jsonl"
+    _write_private(
+        tmp_path / "runtime" / "session_index" / f"{AGENT_ID}.json",
+        {
+            "schema_version": 2,
+            "binding_kind": "self",
+            "provider": "codex",
+            "program": "codex-cli",
+            "agent_id": AGENT_ID,
+            "agent_name": AGENT,
+            "project_key": str(project),
+            "registered_by": AGENT,
+            "transcript_path": str(rollout),
+            "launch_origin": "standalone",
+        },
+    )
+    token = tmp_path / "runtime" / f"agent_token_{AGENT}"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("owner-token", encoding="utf-8")
+    token.chmod(0o600)
+
+    assert server._resume_capability(AGENT, "codex-cli", category="finished") == "ready"
+
+
+def test_product_standalone_codex_requires_private_owner_credential(
+    monkeypatch, tmp_path
+):
+    project = _codex_prerequisites(monkeypatch, tmp_path)
+    rollout = tmp_path / "rollout.jsonl"
+    _write_private(
+        tmp_path / "runtime" / "session_index" / f"{AGENT_ID}.json",
+        {
+            "schema_version": 2,
+            "binding_kind": "self",
+            "provider": "codex",
+            "program": "codex-cli",
+            "agent_id": AGENT_ID,
+            "agent_name": AGENT,
+            "project_key": str(project),
+            "registered_by": AGENT,
+            "transcript_path": str(rollout),
+            "launch_origin": "standalone",
+        },
+    )
+
+    assert (
+        server._resume_capability(AGENT, "codex-cli", category="finished")
+        == "credential_missing"
+    )
+    token = tmp_path / "runtime" / f"agent_token_{AGENT}"
+    token.write_text("owner-token", encoding="utf-8")
+    token.chmod(0o644)
+    assert (
+        server._resume_capability(AGENT, "codex-cli", category="finished")
+        == "credential_permission"
+    )
 
 
 def test_cleaned_child_and_unmanaged_codex_have_distinct_capabilities(

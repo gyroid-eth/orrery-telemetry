@@ -217,12 +217,57 @@ def _prepare_child(
     )
 
 
+def _prepare_standalone(
+    env: dict, *, launch_kind: str = "startup", now: float = 100.0
+):
+    return prepare_mod.prepare(
+        env["runtime"],
+        env["registration"],
+        launch_kind=launch_kind,
+        history_mode="enabled",
+        launch_origin="standalone",
+        now=now,
+    )
+
+
 def _record(env: dict, launch_path: Path, launch_id: str, **overrides: object) -> str:
     return record_mod.record_payload(
         _payload(env["transcript"], **overrides),
         launch_path=launch_path,
         launch_id=launch_id,
     )
+
+
+def test_standalone_provenance_survives_in_bound_receipt(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare_standalone(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+
+    receipt_path = (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in receipt
+
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance is not None
+    assert provenance["launch_origin"] == "standalone"
+    assert provenance["codex_mcp_profile"] is None
+
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    assert _record(
+        binding_env, resume_path, resume_id, source="resume"
+    ) == "bound"
+    resumed = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert resumed["launch_kind"] == "resume"
+    assert resumed["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in resumed
 
 
 def test_child_provenance_survives_private_cleanup_in_bound_receipt(
@@ -292,6 +337,7 @@ def test_unmanaged_receipt_is_not_promoted_to_child_provenance(
     [
         ("child", None),
         (None, "inherit"),
+        ("standalone", "inherit"),
         ("child", "untrusted-profile"),
         ("child", ["inherit"]),
     ],

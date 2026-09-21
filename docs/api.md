@@ -204,7 +204,7 @@ response:
 
 実際の row には pane title、state、elapsed、context、attach、latest message などの表示用 field も含まれます。frontend は未知 field を無視します。
 
-各 row の `resume_capability` は backend が判定した固定 reason code です。`ready` のときだけ transcript resume を開始できます。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex child provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。期限切れの retained material は `retention_expired`、明示 purge 後は `purged` です。独立して poll する DECK / NETWORK の重複検査を避けるため表示値は最大 10 秒 cache されますが、`/api/jump` は cache を使わず操作直前に再検査します。
+各 row の `resume_capability` は backend が判定した固定 reason code です。`ready` のときだけ transcript resume を開始できます。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex launch provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。Codex の provenance は製品起動の `child` または `standalone` だけを受け入れ、origin 不明の旧 row は fail-closed です。期限切れの retained material は `retention_expired`、明示 purge 後は `purged` です。独立して poll する DECK / NETWORK の重複検査を避けるため表示値は最大 10 秒 cache されますが、`/api/jump` は cache を使わず操作直前に再検査します。
 
 ## GET `/api/graph`
 

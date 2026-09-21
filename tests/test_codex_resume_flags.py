@@ -283,6 +283,79 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     assert ".codex/bin/codex_agent_bootstrap.sh" not in inner
 
 
+def test_standalone_resume_uses_current_home_without_child_lifecycle(
+    policy_env, monkeypatch
+):
+    tmp_path, project = policy_env
+    runtime = tmp_path / "runtime"
+    rollout = tmp_path / "rollout-session.jsonl"
+    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": session_id, "cwd": str(project)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    install_home = tmp_path / "installed-agentstack"
+    bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    token = runtime / f"agent_token_{AGENT}"
+    _write_private(token, OWNER_TOKEN)
+    receipt = runtime / "session_index" / f"{AGENT_ID}.json"
+    _write_private(
+        receipt,
+        json.dumps(
+            {
+                "schema_version": 2,
+                "binding_kind": "self",
+                "provider": "codex",
+                "program": "codex",
+                "agent_id": AGENT_ID,
+                "agent_name": AGENT,
+                "project_key": str(project),
+                "registered_by": AGENT,
+                "transcript_path": str(rollout),
+                "launch_origin": "standalone",
+            }
+        ),
+    )
+    launched = []
+    monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(runtime / "session_index"))
+    monkeypatch.setattr(server, "_codex_transcript_path", lambda _name: str(rollout))
+    monkeypatch.setattr(
+        server,
+        "_codex_registration",
+        lambda _name: {
+            "agent_id": AGENT_ID,
+            "agent_name": AGENT,
+            "project_key": str(project),
+            "program": "codex",
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "_open_terminal_tmux",
+        lambda args, **kwargs: launched.append(args) or {"ok": True, "adapter": "fixture"},
+    )
+
+    result = server._do_resume_codex(AGENT)
+
+    assert result["ok"] is True
+    inner = launched[0][-1]
+    assert "AGENTSTACK_CODEX_LAUNCH_ORIGIN=standalone" in inner
+    assert "AGENTSTACK_CODEX_CHILD_MCP_PROFILE" not in inner
+    assert "export CODEX_HOME=" not in inner
+    assert "cleanup-child-agent.sh" not in inner
+    assert "discard-generated" not in inner
+
+
 def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch):
     tmp_path, project = policy_env
     zsh = shutil.which("zsh")
@@ -928,6 +1001,91 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         (runtime / "child-agents" / f"{AGENT}.json").read_text(encoding="utf-8")
     )
     assert retained["resume_in_progress_at"].endswith("Z")
+
+
+def test_top_level_bootstrap_records_standalone_origin(policy_env):
+    tmp_path, project = policy_env
+    install_home = tmp_path / "installed-agentstack"
+    bindir = install_home / "bin"
+    libdir = bindir / "lib"
+    hooks = install_home / "hooks"
+    libdir.mkdir(parents=True)
+    hooks.mkdir(parents=True)
+    bootstrap = bindir / "agentstack-codex-bootstrap"
+    shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
+    shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
+    (libdir / "agentstack-register.sh").write_text(
+        "ags_mail_load_token() { :; }\n"
+        "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
+        "ags_start_mail_watcher() { :; }\n"
+        "ags_pick_adjective_scientist_name() { printf 'CandidateCodex\\n'; }\n"
+        "ags_register_session() {\n"
+        "  AGS_REGISTERED_AGENT_NAME=TopLevelCodex\n"
+        "  AGS_REGISTERED_AGENT_ID=73\n"
+        "  return 0\n"
+        "}\n"
+        "ags_record_managed_agent() { :; }\n",
+        encoding="utf-8",
+    )
+    runtime = tmp_path / "runtime"
+    command = (
+        f'source "{bootstrap}" "{project}" >/dev/null; '
+        "result=$?; printf '%s|%s|%s\n' \"$result\" "
+        '"$AGENTSTACK_CODEX_LAUNCH_BINDING" "$AGENTSTACK_CODEX_LAUNCH_ID"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path / "clean-home"),
+            "AGENTSTACK_PROJECT_KEY": str(project),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_HOOKS_DIR": str(hooks),
+            "AGENTSTACK_PYTHON": sys.executable,
+            "TMUX": "",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    status, launch_path, launch_id = result.stdout.strip().split("|")
+    assert status == "0", result.stderr
+    assert launch_id
+    launch = json.loads(Path(launch_path).read_text(encoding="utf-8"))
+    assert launch["launch_kind"] == "startup"
+    assert launch["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in launch
+
+    resume_env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path / "clean-home"),
+        "AGENTSTACK_PROJECT_KEY": str(project),
+        "AGENTSTACK_RUNTIME_DIR": str(runtime),
+        "AGENTSTACK_HOOKS_DIR": str(hooks),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_RESERVED_IDENTITY": "1",
+        "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+        "AGENTSTACK_CODEX_LAUNCH_ORIGIN": "standalone",
+        "AGENT_NAME": "TopLevelCodex",
+        "TMUX": "",
+    }
+    resumed = subprocess.run(
+        ["bash", "-c", command],
+        env=resume_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    status, resumed_path, resumed_id = resumed.stdout.strip().split("|")
+    assert status == "0", resumed.stderr
+    assert resumed_path == launch_path
+    assert resumed_id and resumed_id != launch_id
+    resume_launch = json.loads(Path(resumed_path).read_text(encoding="utf-8"))
+    assert resume_launch["launch_kind"] == "resume"
+    assert resume_launch["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in resume_launch
+    assert not (runtime / "child-agents" / "TopLevelCodex.json").exists()
 
 
 @pytest.mark.parametrize("failure_mode", ["project_unset", "health_unreachable"])

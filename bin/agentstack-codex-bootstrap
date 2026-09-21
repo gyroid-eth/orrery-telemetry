@@ -39,16 +39,45 @@ case "$CODEX_LAUNCH_KIND" in
   startup|resume) ;;
   *) CODEX_LAUNCH_KIND="startup" ;;
 esac
+CODEX_LAUNCH_ORIGIN="${AGENTSTACK_CODEX_LAUNCH_ORIGIN:-}"
+if [[ "$CODEX_LAUNCH_KIND" == "startup" ]]; then
+  # Delegated children prepare their launch before exec and never source this
+  # bootstrap. A regular cx/agent-start-codex launch is therefore standalone.
+  CODEX_LAUNCH_ORIGIN="standalone"
+else
+  case "$CODEX_LAUNCH_ORIGIN" in
+    child|standalone) ;;
+    "")
+      # Compatibility with a stage-3 dashboard built before origin became an
+      # explicit resume environment field. Retained child validation below is
+      # still authoritative, so this does not promote an unknown receipt.
+      case "${AGENTSTACK_CODEX_CHILD_MCP_PROFILE:-}" in
+        inherit|orrery-only) CODEX_LAUNCH_ORIGIN="child" ;;
+        *)
+          echo "⚠️  resumed Codex session has no verified launch origin; refusing to start." >&2
+          return 1 2>/dev/null || exit 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "⚠️  resumed Codex session has an invalid launch origin; refusing to start." >&2
+      return 1 2>/dev/null || exit 1
+      ;;
+  esac
+fi
 CODEX_CHILD_MCP_PROFILE=""
-if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+if [[ "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
   CODEX_CHILD_MCP_PROFILE="${AGENTSTACK_CODEX_CHILD_MCP_PROFILE:-}"
   case "$CODEX_CHILD_MCP_PROFILE" in
     inherit|orrery-only) ;;
     *)
-      echo "⚠️  resumed Codex child has no valid saved MCP profile; refusing to start." >&2
+      echo "⚠️  Codex child launch has no valid saved MCP profile; refusing to start." >&2
       return 1 2>/dev/null || exit 1
       ;;
   esac
+elif [[ -n "${AGENTSTACK_CODEX_CHILD_MCP_PROFILE:-}" ]]; then
+  echo "⚠️  standalone Codex launch cannot use a child MCP profile; refusing to start." >&2
+  return 1 2>/dev/null || exit 1
 fi
 REQUIRE_FRESH_BINDING=0
 if [[ "$RESERVED_IDENTITY" == "1" || "$CODEX_LAUNCH_KIND" == "resume" ]]; then
@@ -214,10 +243,10 @@ if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
       --program codex
       --launch-kind "$CODEX_LAUNCH_KIND"
       --history-mode enabled
+      --launch-origin "$CODEX_LAUNCH_ORIGIN"
     )
-    if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+    if [[ "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
       PREPARE_ARGS+=(
-        --launch-origin child
         --codex-mcp-profile "$CODEX_CHILD_MCP_PROFILE"
       )
     fi
@@ -239,7 +268,7 @@ if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" 
 fi
 RESUME_STATE_BEGUN=0
 RESUME_HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
-if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+if [[ "$CODEX_LAUNCH_KIND" == "resume" && "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
   if [[ ! -f "$RESUME_HELPER" ]] || ! \
      "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" begin-resume \
        --runtime-dir "$RUNTIME_DIR" \
@@ -264,7 +293,7 @@ fi
 # Resume keeps the remote row retired until both credential-backed
 # registration and a fresh binding expectation have succeeded.  This is the
 # final bootstrap operation before the caller's `&& codex resume ...`.
-if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+if [[ "$CODEX_LAUNCH_KIND" == "resume" && "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
   if ! UNRETIRE_RESULT="$(
     ags_mcp_call "unretire_agent" \
       "project_key=$PROJECT_KEY" "agent_name=$AGENT_NAME"

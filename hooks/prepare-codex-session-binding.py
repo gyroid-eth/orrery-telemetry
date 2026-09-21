@@ -84,8 +84,8 @@ def prepare(
         raise ValueError("launch_kind must be startup or resume")
     if history_mode not in {"enabled", "disabled"}:
         raise ValueError("history_mode must be enabled or disabled")
-    if launch_origin is not None and launch_origin != "child":
-        raise ValueError("launch_origin must be child when supplied")
+    if launch_origin not in {None, "child", "standalone"}:
+        raise ValueError("launch_origin must be child or standalone when supplied")
     if launch_origin == "child":
         if not isinstance(codex_mcp_profile, str) or codex_mcp_profile not in {
             "inherit",
@@ -118,11 +118,10 @@ def prepare(
         "receipt_id": None,
         "last_reason": None,
     }
+    if launch_origin is not None:
+        record["launch_origin"] = launch_origin
     if launch_origin == "child":
-        record.update(
-            launch_origin="child",
-            codex_mcp_profile=codex_mcp_profile,
-        )
+        record["codex_mcp_profile"] = codex_mcp_profile
     descriptor: int | None = None
     try:
         launches.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -147,7 +146,7 @@ def main() -> int:
     parser.add_argument("--program", default="codex")
     parser.add_argument("--launch-kind", choices=("startup", "resume"), required=True)
     parser.add_argument("--history-mode", choices=("enabled", "disabled"), default="enabled")
-    parser.add_argument("--launch-origin", choices=("child",))
+    parser.add_argument("--launch-origin", choices=("child", "standalone"))
     parser.add_argument("--codex-mcp-profile", choices=("inherit", "orrery-only"))
     args = parser.parse_args()
     try:
