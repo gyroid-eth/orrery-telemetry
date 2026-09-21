@@ -509,7 +509,11 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", str(project))
     monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
     monkeypatch.setenv("AGENTSTACK_MCP_URL", "http://127.0.0.1:1/mcp")
-    monkeypatch.setenv("AGENTSTACK_MAIL_HTTP_BEARER_MODE", "disabled")
+    # server.py resolves service configuration at import time.  Updating only
+    # os.environ here made this fixture inherit the caller's import-time mode;
+    # under env -i that was the default `auto`, so cleanup correctly stopped
+    # before local deletion when no legacy bearer token existed.
+    monkeypatch.setattr(server, "MAIL_HTTP_BEARER_MODE", "disabled")
     monkeypatch.setenv("AGENTSTACK_HOOKS_DIR", str(hooks))
     monkeypatch.setenv("AGENTSTACK_PYTHON", sys.executable)
     monkeypatch.setenv("AGENTSTACK_LABEL_PREFIX", TEST_LABEL_PREFIX)
