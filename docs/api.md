@@ -204,7 +204,7 @@ response:
 
 実際の row には pane title、state、elapsed、context、attach、latest message などの表示用 field も含まれます。frontend は未知 field を無視します。
 
-各 row の `resume_capability` は backend が判定した固定 reason code です。`ready` のときだけ transcript resume を開始できます。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex child provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。`retention_expired` と `purged` は retained resume material の導入後に使う予約済み code です。独立して poll する DECK / NETWORK の重複検査を避けるため表示値は最大 10 秒 cache されますが、`/api/jump` は cache を使わず操作直前に再検査します。
+各 row の `resume_capability` は backend が判定した固定 reason code です。事前検証済みなら `ready` です。終了済み Claude row に exact index も transcript directory mtime と一致する確定済み cache もない場合、表示 API は transcript を全読みせず `verification_required` を返します。この code は NETWORK の一括 resume 対象にはなりませんが、DECK の action から `/api/jump` を1回呼ぶと full 検証し、`ready` なら同じ request で resume まで続けます。確定結果は directory mtime が変わるまで再利用します。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex launch provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。Codex の provenance は製品起動の `child` または `standalone` だけを受け入れ、origin 不明の旧 row は fail-closed です。期限切れの retained material は `retention_expired`、明示 purge 後は `purged` です。DECK / NETWORK 間の表示値は短期 cache されますが、`/api/jump` はそれを使わず操作直前に再検査します。
 
 ## GET `/api/graph`
 
@@ -409,7 +409,7 @@ request:
 {"session":"WindyFermi"}
 ```
 
-response は `{ok, session, actions}` です。既存 tmux session は configured terminal で open / focus します。session が無い場合と finished husk を transcript から復元する場合は、GET row と同じ `resume_capability` を server が再検査し、`ready` のときだけ resume を試みます。拒否時は HTTP 400 で `{"ok":false,"error":"...","resume_capability":"provenance_missing"}` のように固定 reason code を返し、husk の kill や terminal 起動は行いません。
+response は `{ok, session, actions}` です。既存 tmux session は configured terminal で open / focus します。session が無い場合と finished husk を transcript から復元する場合は、GET row と同じ判定を server が再検査します。表示が `verification_required` だった Claude row も、この1回の request 内で full 検証して `ready` になれば、そのまま resume します。Codex child は fresh home を生成し、credential 付き再登録と fresh binding expectation を作成した後、Codex exec の直前に unretire します。拒否時は HTTP 400 で `{"ok":false,"error":"...","resume_capability":"provenance_missing"}` のように確定した固定 reason code を返し、husk の kill や terminal 起動は行いません。bootstrap / unretire が失敗した場合も Codex は起動せず、生成した home / config だけを片付けます。
 
 ## POST `/api/exit`
 
