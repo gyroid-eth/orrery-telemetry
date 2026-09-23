@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.09.23
 
 ### Claude Opus 5.5 を child の current model として選べませんでした
 
