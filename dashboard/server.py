@@ -5109,6 +5109,7 @@ SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # UI radio と必ず一致させる。program はモデル文字列から決定。
 _SPAWN_MODELS = {
     "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
+    "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
     "claude-opus-5": ("claude-code", "claude-opus-5"),
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
     "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),

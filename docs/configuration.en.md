@@ -166,7 +166,7 @@ To move the worktree root, run the installer with an environment value such as `
 
 `AGENTSTACK_TERMINAL=auto` selects an available OS terminal and opens the child window in the background. This is the intentional default. It shows users immediately after installation, before they have the dashboard / ORRERY, that a child started; a headless default makes a healthy spawn look as if nothing happened. Set `AGENTSTACK_TERMINAL=none` explicitly only for an environment routinely monitored through the dashboard or a headless host.
 
-The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5` and `sonnet` means `claude-sonnet-5`; for Codex, omitted / `sol` means `gpt-5.6-sol`. Explicit legacy `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
+The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5-5` and `sonnet` means `claude-sonnet-5`; for Codex, omitted / `sol` means `gpt-5.6-sol`. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
 
 Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh`. The spawner rejects `ultra` for `gpt-5.6-luna`, and `max` / `ultra` for legacy `gpt-5.5`, because those combinations are unsupported. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
 
