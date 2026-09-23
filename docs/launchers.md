@@ -148,9 +148,15 @@ CLAUDECODE=1
 
 dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
 
-launcher が child 専用 `CODEX_HOME` を作っていた場合、dashboard resume は正式な project・agent ID・name と private child state / token、さらに `config.toml` 内の local ORRERY proxy identity を照合してから、同じ `CODEX_HOME` / `CODEX_SHARED_CODEX_DIR` と writable root を復元します。state の無い既存 session は従来どおり既存 / 既定設定を使い、state は正しいのに home が無い旧・`inherit` 互換経路も継続します。後者は「home を作らなかった」と「後から消えた」を現 metadata では区別できないため、resume の detail と backend warning に「子専用設定なし・Mail 接続未確認」を残します。state が無いのに同名 child home だけ残る場合や、proxy identity が違う場合は、名前から推測して採用せず resume を停止します。
+Codex child の fresh launch は、`launch_origin: child` と選択した `codex_mcp_profile` を launch expectation に記録します。`cx` / `agent-start-codex` と persistent launcher の top-level Codex は `launch_origin: standalone` を記録し、child profile は持ちません。公式 `SessionStart` が identity と rollout を検証した後、その非秘密 provenance は数値 agent ID・project・provider とともに bound session receipt へコピーされます。receipt は private resume state・credential・専用 home の外に残るため、dashboard は cleanup 済み child、製品起動の top-level session、origin 不明の session を区別できます。provenance 導入前の receipt は名前や履歴から origin を推測せず resume 不可にします。
 
-`codex-cli 0.154.0` の interactive TUI では、startup / resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。そのため resume 直後は history が未確認でもよく、最初の submit 後に公式 payload と rollout header が fresh resume launch に一致して初めて bound になります。この発火時点は 0.154.0 の実測範囲であり、他 version / mode の一般保証ではありません。
+正常 cleanup は reservation release と remote retire を行い、child home、proxy runtime、旧 MCP config を削除します。一方、schema・`retired_at`・`resume_expires_at` 付き state と canonical credential は既定30日保持します（`AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` は全削除）。dashboard resume は receipt、正式な project・数値 agent ID・name、private state / credential、期限、permission を照合し、保存した `codex_mcp_profile` と現在の source Codex home から新しい child home を作ります。古い home や proxy runtime の snapshot は再利用しません。
+
+resume bootstrap は retained credential で同じ identity を再登録し、fresh binding expectation を保存してから remote identity を unretire します。unretire は `codex resume` の直前に行い、それ以前の失敗では生成物だけを捨てて credential と retired 状態を保ちます。unretire の失敗でも Codex は起動しません。再開後の cleanup は provenance を保持した新しい receipt と private material を再び期限付きで残すため、同じ child を複数回 resume できます。
+
+`codex-cli 0.154.0` と `0.156.1` の interactive TUI では、resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。resume bootstrap は dashboard が選んだ session ID を既存 receipt と rollout header の両方で照合し、fresh resume expectation が未 claim・非 conflict の間だけ、その receipt の exact `launch_id` / `receipt_id` を history の根拠として保持します。prompt を送らず終了しても同じ session を再び resume できます。最初の submit 後は公式 payload の session ID も固定済み ID と header に一致するときだけ fresh receipt に置き換わり、別 ID・競合・次の startup expectation は fallback を無効にします。この発火時点は上記 version の実測範囲であり、他 version / mode の一般保証ではありません。
+
+SessionStart recorder は lock 待ち、rollout header 検査、launch transition、receipt write、最終 outcome の所要時間を `$AGENTSTACK_RUNTIME_DIR/codex-session-binding.log` に JSONL で残します。session ID、launch nonce、transcript path、credential は記録しません。`started` の後に `outcome` が無ければ hook が途中で打ち切られたことを区別できます。SessionStart の hook deadline は、cold start や短い lock 待ちで receipt 作成が途切れないよう5秒です。
 
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 

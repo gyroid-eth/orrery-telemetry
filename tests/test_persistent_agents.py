@@ -1651,6 +1651,8 @@ def test_interactive_codex_gets_fresh_binding_each_run_without_parent_pair(tmp_p
     final = json.loads((runtime / "codex_launches" / "41.json").read_text(encoding="utf-8"))
     assert final["launch_id"] == launches[-1]["launch_id"]
     assert final["launch_kind"] == "startup"
+    assert final["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in final
     assert final["claimed_session_id"] is None
 
 
@@ -1927,6 +1929,8 @@ def test_headless_mail_wake_reaches_bot_and_confirms_reply(tmp_path: Path):
     assert launch["agent_name"] == "PersistentBot"
     assert launch["project_key"] == str(tmp_path / "project")
     assert launch["launch_kind"] == "startup"
+    assert launch["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in launch
     assert launch["history_mode"] == "enabled"
     assert launch["launch_id"] == launch_environment["launch_id"]
     assert launch_environment["parent_binding"] is None

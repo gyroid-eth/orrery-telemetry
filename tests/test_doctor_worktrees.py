@@ -95,3 +95,45 @@ def test_doctor_reports_only_unregistered_nonlive_worktrees_without_deleting(tmp
         assert (worktree_root / name / "uncommitted.txt").read_text(
             encoding="utf-8"
         ) == "keep me\n"
+
+
+def test_doctor_reports_expired_resume_material_without_purging(tmp_path):
+    state_dir = tmp_path / "runtime" / "child-agents"
+    state_dir.mkdir(parents=True)
+    expired = state_dir / "ExpiredCodex.json"
+    expired.write_text(
+        '{"schema_version":1,"launch_origin":"child",'
+        '"agent_name":"ExpiredCodex",'
+        '"resume_expires_at":"2020-01-01T00:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    future = state_dir / "FutureCodex.json"
+    future.write_text(
+        '{"schema_version":1,"launch_origin":"child",'
+        '"agent_name":"FutureCodex",'
+        '"resume_expires_at":"2999-01-01T00:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            f"PYTHON_BIN={str(pathlib.Path(sys.executable))!r}",
+            f"CHILD_STATE_DIR={str(state_dir)!r}",
+            _extract_function("report_child_resume_retention"),
+            "report_child_resume_retention",
+        )
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "ExpiredCodex" in result.stderr
+    assert "FutureCodex" not in result.stderr
+    assert "reports only" in result.stderr
+    assert expired.is_file()
+    assert future.is_file()

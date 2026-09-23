@@ -94,6 +94,7 @@ def _run_helper(tmpdir: pathlib.Path, *, runner_executable: bool = True,
     token_file = tmpdir / "token"
     if token is not None:
         token_file.write_text(token, encoding="utf-8")
+        token_file.chmod(0o600)
 
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
@@ -166,6 +167,7 @@ def _run_codex_home_process(
     token_file = tmpdir / "token"
     if token is not None:
         token_file.write_text(token, encoding="utf-8")
+        token_file.chmod(0o600)
 
     source_home = tmpdir / "codex-home"
     source_home.mkdir()
@@ -191,7 +193,19 @@ def _run_codex_home_process(
     )
     env = os.environ.copy()
     env["AGENTSTACK_MCP_PROXY"] = str(runner)
+    env["HOOKS_DIR"] = str(_ROOT / "hooks")
     env["CODEX_HOME"] = str(source_home)
+    if corrupt_emitted_candidate:
+        altered = tmpdir / "child_resume_corrupt.py"
+        source = (_ROOT / "hooks" / "child_resume.py").read_text(encoding="utf-8")
+        altered.write_text(
+            source.replace(
+                "candidate = _emit_toml(config)",
+                "candidate = _emit_toml(config) + chr(0x7f)",
+            ),
+            encoding="utf-8",
+        )
+        env["AGENTSTACK_CHILD_RESUME_HELPER"] = str(altered)
     if overlay_path is not None:
         env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = str(overlay_path)
     else:
@@ -615,12 +629,26 @@ def test_both_codex_launch_paths_use_the_child_home():
     # The user's optional workspace launcher intentionally reads this override;
     # without it, that wrapper replaces the child home with ~/.codex again.
     assert text.count('-e "CODEX_SHARED_CODEX_DIR=$CHILD_CODEX_HOME"') == 2
-    assert text.count('prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup') == 2
+    assert text.count(
+        'prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" '
+        'startup "$CODEX_MCP_PROFILE"'
+    ) == 2
     assert text.count('if ! CHILD_LAUNCH_INFO="$(') == 2
     assert "prepare_codex_launch_binding \"$CHILD_STATE_DIR/$CHILD_NAME.json\" startup 2>/dev/null || true" not in text
     assert text.count("could not create a fresh Codex history binding expectation") == 2
     assert text.count('-e "AGENTSTACK_CODEX_LAUNCH_BINDING=$CHILD_LAUNCH_BINDING"') == 2
     assert text.count('-e "AGENTSTACK_CODEX_LAUNCH_ID=$CHILD_LAUNCH_ID"') == 2
+
+
+def test_codex_launch_expectation_records_child_profile_provenance():
+    text = _SPAWN.read_text(encoding="utf-8")
+    helper = _extract("prepare_codex_launch_binding")
+    assert "--launch-origin child" in helper
+    assert '--codex-mcp-profile "$mcp_profile"' in helper
+    assert text.count(
+        'prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" '
+        'startup "$CODEX_MCP_PROFILE"'
+    ) == 2
 
 
 def test_launcher_passes_the_config_to_claude_only_when_present():
@@ -853,6 +881,7 @@ def test_claude_child_keeps_default_name_on_new_endpoint():
         runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
         token = tmpdir / "token"
         token.write_text("child-owner-token", encoding="utf-8")
+        token.chmod(0o600)
         script = (
             'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
             + _extract("write_child_mcp_config")
@@ -935,6 +964,7 @@ def test_codex_child_keeps_default_name_on_new_endpoint():
         runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
         token = tmpdir / "token"
         token.write_text("child-owner-token", encoding="utf-8")
+        token.chmod(0o600)
         source_home = tmpdir / "codex-home"
         source_home.mkdir()
         script = (
@@ -943,7 +973,11 @@ def test_codex_child_keeps_default_name_on_new_endpoint():
             + '\nwrite_child_codex_home "Red-Euler" "$1"\n'
         )
         env = os.environ.copy()
-        env.update({"AGENTSTACK_MCP_PROXY": str(runner), "CODEX_HOME": str(source_home)})
+        env.update({
+            "AGENTSTACK_MCP_PROXY": str(runner),
+            "CODEX_HOME": str(source_home),
+            "HOOKS_DIR": str(_ROOT / "hooks"),
+        })
         proc = subprocess.run(
             ["bash", "-c", script, "bash", str(tmpdir / "runtime"), "/p",
              "http://127.0.0.1:18765/mcp", str(tmpdir / "new.env"), str(token)],

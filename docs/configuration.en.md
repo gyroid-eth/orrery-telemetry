@@ -158,6 +158,7 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child sandbox network (`-c sandbox_workspace_write.network_access=true`). Disable with `--codex-network off` |
 | `AGENTSTACK_CODEX_ADD_DIRS` | unset | Additional writable roots for Codex children (`:`-separated), persisted by `--codex-add-dirs` |
 | `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | Persistent root for new isolated worktrees; override and persist it by setting the variable when running the installer |
+| `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` | `30` | Days to retain resume state / credentials for normally completed Codex children. Persist with installer `--child-resume-retention-days DAYS`; `0` restores full deletion during cleanup |
 
 The product assembles Codex child startup flags. It does not consult user launchers under `~/.codex/bin/`, because doing so can silently substitute that launcher's default `on-request` and drop the network flag and additional roots. Since children run unattended, the defaults are approval `never` and network on. Writable roots are the project, `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`, install directory, `AGENTSTACK_WORKTREE_ROOT`, `~/.claude`, `~/.codex`, child-specific `CODEX_HOME`, and `AGENTSTACK_CODEX_ADD_DIRS`; nonexistent directories are silently omitted. Dashboard Codex resume uses the same values. These belong to dashboard service environment, so a shell `export` does not reach them. Pass them to the installer. The config overlay currently applies only to macOS/Linux (including Windows through WSL2) via `spawn_child.sh`; the native-Windows launcher does not apply it.
 
@@ -168,6 +169,8 @@ To move the worktree root, run the installer with an environment value such as `
 The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5` and `sonnet` means `claude-sonnet-5`; for Codex, omitted / `sol` means `gpt-5.6-sol`. Explicit legacy `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
 
 Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh`. The spawner rejects `ultra` for `gpt-5.6-luna`, and `max` / `ultra` for legacy `gpt-5.5`, because those combinations are unsupported. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
+
+After a Codex child completes normally, its remote identity remains retired while private state and the canonical owner credential are retained until expiry. Cleanup always removes the isolated home, proxy runtime, and old MCP configuration; resume rebuilds them from the current source Codex home plus the saved `codex_mcp_profile`. Maintenance removes expired material while the dashboard is running. `agentstack-doctor` only reports expired material awaiting purge and never deletes it. Use `agentstack-purge-child-resume <agent>` for an early explicit purge, or `agentstack-purge-child-resume --expired` for all expired entries. Neither command deletes transcript history or bound receipts.
 
 ## Skill
 

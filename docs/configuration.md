@@ -175,6 +175,7 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child の sandbox network（`-c sandbox_workspace_write.network_access=true`）。`--codex-network off` で切る |
 | `AGENTSTACK_CODEX_ADD_DIRS` | 未設定 | Codex child に追加で書込を許す root（`:` 区切り）。`--codex-add-dirs` で永続化 |
 | `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | 新規 isolated worktree の永続 root。installer 実行時の環境変数で上書き・永続化 |
+| `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` | `30` | 正常終了した Codex child の再開用 state / credential を保持する日数。installer の `--child-resume-retention-days DAYS` で永続化。`0` は従来どおり cleanup 時に全削除 |
 
 Codex child の起動フラグは製品が組み立てます。`~/.codex/bin/` にある利用者側の launcher は参照しません（参照すると、その launcher の既定 `on-request` に静かに置き換わり、network flag と追加 root も落ちます）。child は無人で動くので既定は approval `never`・network on です。書込を許す root は「project、`AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`、install dir、`AGENTSTACK_WORKTREE_ROOT`、`~/.claude`、`~/.codex`、child 専用 `CODEX_HOME`、`AGENTSTACK_CODEX_ADD_DIRS`」で、存在しない directory は黙って外します。dashboard の Codex resume も同じ値を使います。これらは dashboard service の環境なので、shell で `export` しても届きません。installer に渡してください。config overlay は現在 `spawn_child.sh` を使う macOS/Linux（Windows では WSL2 を含む）だけに適用され、native Windows launcher には適用されません。
 
@@ -185,6 +186,8 @@ worktree root を変える場合は、たとえば `AGENTSTACK_WORKTREE_ROOT=/sr
 child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` は `claude-opus-5`、`sonnet` は `claude-sonnet-5`、Codex の無指定 / `sol` は `gpt-5.6-sol` です。旧 `claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
 
 Codex の reasoning effort は `--effort` から決まり、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。既定は `xhigh` です。`gpt-5.6-luna` は `ultra` を、旧 `gpt-5.5` は `max` / `ultra` をサポートしないため spawner が拒否します。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
+
+正常終了した Codex child は、remote identity を retire したまま、private state と canonical owner credential を期限まで保持します。専用 home、proxy runtime、旧 MCP config は cleanup ごとに削除され、resume 時には現在の source Codex home と保存済みの `codex_mcp_profile` から作り直します。期限切れ material は dashboard 稼働中の maintenance が削除します。`agentstack-doctor` は期限切れ・purge 待ちを報告するだけで削除しません。期限前でも `agentstack-purge-child-resume <agent>`、期限切れをまとめて片付ける場合は `agentstack-purge-child-resume --expired` を使えます。どちらも履歴 transcript と bound receipt は削除しません。
 
 ## Skill
 
