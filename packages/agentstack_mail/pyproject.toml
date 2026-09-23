@@ -25,7 +25,10 @@ dependencies = [
   "PyYAML>=6.0.2",
   "pathspec>=0.12.1",
   "python-decouple>=3.8",
-  "sqlmodel>=0.0.16",
+  # SQLModel 0.0.45 changed plain datetime fields to UTC-aware storage.
+  # AgentStack Mail intentionally stores naive UTC for SQLite compatibility;
+  # keep the pre-0.0.45 contract until a dedicated datetime/data migration.
+  "sqlmodel>=0.0.16,<0.0.45",
   "sqlalchemy[asyncio]>=2.0.35",
   "aiosqlite>=0.20.0",
   "rich>=13.9.1",
