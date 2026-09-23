@@ -119,8 +119,8 @@ service が応答しているなら登録は可能なので、既定は**要求�
 | 実行ファイル | 呼び出し元 / 起動タイミング | 主な動作 |
 | --- | --- | --- |
 | [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
-| [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Codex CLI launcher が ORRERY Mail 登録後、CLI 起動直前に実行 | server 応答由来の project・数値 agent ID・name・program に fresh `launch_id` を加え、今回の receipt 期待を atomic write |
-| [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | 公式 Codex `SessionStart` payload を plugin runner が同期入力 | payload の `session_id` と rollout header ID を照合し、同じ `launch_id` の current launch だけを Codex session index として atomic write |
+| [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Codex CLI launcher が ORRERY Mail 登録後、CLI 起動直前に実行 | server 応答由来の project・数値 agent ID・name・program に fresh `launch_id` を加える。child は非秘密の launch origin / MCP profile も加え、今回の receipt 期待を atomic write |
+| [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | 公式 Codex `SessionStart` payload を plugin runner が同期入力 | payload の `session_id` と rollout header ID を照合し、同じ `launch_id` の current launch だけを Codex session index として atomic write。検証済み `child` / `standalone` provenance も receipt へ引き継ぐ |
 | [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → exact tmux session → session index（caller が `AGENTSTACK_SESSION_ID` を渡した場合）の順で identity を解決 |
 | [`spawn_child.sh`](../hooks/spawn_child.sh) | `/delegate` または dashboard の NEW AGENT が child 起動時に明示実行 | identity、token、task mail、reservation、tmux、Claude / Codex、worktree、readiness を一つの launch transaction にまとめる |
 | [`cleanup-child-agent.sh`](../hooks/cleanup-child-agent.sh) | `spawn_child.sh` が起動した child の REPL command が終了した直後 | reservation release、remote identity retire、managed list / state / credential / MCP config の削除を best-effort 実行 |
@@ -133,9 +133,9 @@ PostToolUse payload から ORRERY Mail の数値 ID、canonical name、Claude `s
 
 ### Codex CLI session binding helper
 
-`prepare-codex-session-binding.py` は launcher が取得した正式な登録情報を `$AGENTSTACK_RUNTIME_DIR/codex_launches/<agent_id>.json` に記録します。`launch_id` は起動ごとに新しく、`binding_expected` と起動種別を含みます。prepare は CLI 起動前の必要条件で、helper が無い、lock を作れない、または metadata を atomically 保存できない場合、launcher は新しい CLI を開始しません。これにより旧 launch / receipt を新 run の成功として残しません。pre-register helper と dashboard NEW AGENT は数値 ID を token とは別の非秘密 sidecar に残し、`spawn_child.sh` が child state へ取り込むため、名前による DB 再検索や親の一般 env を identity 根拠にしません。
+`prepare-codex-session-binding.py` は launcher が取得した正式な登録情報を `$AGENTSTACK_RUNTIME_DIR/codex_launches/<agent_id>.json` に記録します。`launch_id` は起動ごとに新しく、`binding_expected` と起動種別を含みます。Codex child では `launch_origin: child` と `codex_mcp_profile: inherit | orrery-only` も明示し、recorder が数値 ID・name・project・provider と一緒に bound receipt へコピーします。これらは非秘密で、owner credential を含みません。prepare は CLI 起動前の必要条件で、helper が無い、lock を作れない、または metadata を atomically 保存できない場合、launcher は新しい CLI を開始しません。これにより旧 launch / receipt を新 run の成功として残しません。pre-register helper と dashboard NEW AGENT は数値 ID を token とは別の非秘密 sidecar に残し、`spawn_child.sh` が child state へ取り込むため、名前による DB 再検索や親の一般 env を identity 根拠にしません。
 
-`record-codex-session-index.py` が identity に使う runtime 値は SessionStart stdin の `session_id` だけです。`CODEX_THREAD_ID`、`CODEX_SESSION_ID`、cwd、時刻、候補数は使いません。payload path の実体が通常 file で、先頭 `session_meta` ID が一致し、launch metadata の project・数値 ID・name・program と launcher がこの process に渡した `launch_id` がすべて一致したときだけ `provider: codex` の receipt を書きます。recorder は trusted plugin runner と同梱し、index の runtime root は launch metadata path から導出します。login shell が親の `AGENTSTACK_RUNTIME_DIR` を復元しても保存先をすり替えられません。内蔵 subagent event は別 CLI process ではなく root ID を共有するため除外します。
+`record-codex-session-index.py` が identity に使う runtime 値は SessionStart stdin の `session_id` だけです。`CODEX_THREAD_ID`、`CODEX_SESSION_ID`、cwd、時刻、候補数は使いません。payload path の実体が通常 file で、先頭 `session_meta` ID が一致し、launch metadata の project・数値 ID・name・program と launcher がこの process に渡した `launch_id` がすべて一致したときだけ `provider: codex` の receipt を書きます。provenance は launcher が `standalone`、または `child` と有効な MCP profile の組を明示した場合だけコピーし、矛盾する metadata は invalid binding として拒否します。receipt は通常 cleanup が削除する state / token / child home の外に残るため、dashboard は cleanup 済み child、製品起動の top-level session、origin 不明の session を名前から推測せず区別できます。provenance 導入前の receipt はどちらにも昇格しません。recorder は trusted plugin runner と同梱し、index の runtime root は launch metadata path から導出します。login shell が親の `AGENTSTACK_RUNTIME_DIR` を復元しても保存先をすり替えられません。内蔵 subagent event は別 CLI process ではなく root ID を共有するため除外します。
 
 この recorder は `agentstack-codex-app` の SessionStart hook plugin が導入・有効である場合にだけ呼ばれます。core install は配置済み plugin source を更新しても Codex が選ぶ optional marketplace/cache を自動更新・有効化しません。既存の有効な plugin には [plugin-only refresh](codex-app.md#core-更新後の既存-plugin-refresh) を実行し、その後の fresh process で確認します。未導入・disabled の利用者は自動 opt-in されません。
 
@@ -151,7 +151,11 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 ### `cleanup-child-agent.sh`
 
-child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire して、child の state、token、MCP config、分離した Codex home を削除します。remote release / retire と managed-list 更新は best-effort で試し、その後に local child state を片付けます。
+child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire します。remote release / retire と managed-list 更新は従来どおり best-effort で試し、その後に local child state を片付けます。
+
+Claude child と、`AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` の Codex child は state、token、MCP config、分離 home を全削除します。既定の Codex child は MCP config、home、proxy runtime を削除しますが、schema version、`retired_at`、`resume_expires_at`、非秘密 provenance を含む state と canonical owner credential を0600で保持します。保持処理が安全に完了しない場合は credential を推測で削除せず、明示 recovery / purge 用に private state を残して非0で終わります。bound session receipt と transcript はどちらの cleanup / purge の対象にも含みません。
+
+共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
 
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 

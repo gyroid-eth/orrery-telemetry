@@ -22,7 +22,7 @@ dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、O
 | 親子関係を見る | [NETWORK](#network) に切り替える。parent と child は spawn edge で結ばれ、node をクリックすると個別の詳細 panel が開きます。 |
 | エージェント同士が何を話したか読む | NETWORK の communication edge をクリックする。右側の mail drawer に、その2者間の subject、importance、時刻、本文が表示されます。[mail 設定がない場合](#edge-と-mail)は `NOT CONFIGURED` になります。 |
 | 複数のエージェントをまとめて操作する | NETWORK 上部の `Select` を有効にし、node をクリックするか空白部分を矩形 drag する。選択後に画面下部へ出る action bar で、running / finished agent は `Exit N`、2人以上は `Replay N` を選べます。EXIT は同じ button をもう一度押す二段確認です。 |
-| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出します。card の `RESUME READY` または詳細 panel の `RESUME` が出る row だけ復元できます。NETWORK の `Select` も `resume_capability: ready` の gone / retired node だけを `Resume N` に数えます。resume には検証済み transcript、元の cwd、対応 CLI、terminal adapter が必要で、Codex child では provenance・正式登録・credential・復元可能な設定も必要です。 |
+| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出します。card の `RESUME READY`、または古い Claude row の `RESUME · VERIFY` から復元できます。後者は詳細 panel の `VERIFY & RESUME` を1回押すと検証から resume まで続けます。NETWORK の `Select` は、事前検証済みの `resume_capability: ready` の gone / retired node だけを `Resume N` に数えます。resume には検証済み transcript、元の cwd、対応 CLI、terminal adapter が必要で、Codex child では provenance・正式登録・credential・復元可能な設定も必要です。 |
 | 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の history を `7d` / `30d` / `all` に切り替える。既定の `live` は running と finished だけで、`7d` / `30d` はその期間に活動した `gone` / `retired` card を、`all` は登録された全 agent を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
 
 NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の history `all`、親へ届く完了報告を確認してください。
@@ -143,7 +143,7 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 
 既定の history `live` では running と finished しか出ません。`7d` / `30d` / `all` に切り替えるとその範囲で活動した `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
 
-card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING` など）を併記します。特に provenance 導入前の Codex row は、cleanup 済み child と unmanaged session を推測で区別せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
+card と詳細 panel は backend の `resume_capability` を表示します。終了済み Claude row に exact session index も transcript directory mtime と一致する確定済み cache もない場合、poll 中に大量の transcript を全読みせず `verification_required`（`RESUME · VERIFY`）を返します。詳細 panel の `VERIFY & RESUME` は `/api/jump` の1回の呼び出しで full 検証し、`ready` になればそのまま resume します。確定結果は directory mtime が変わるまで表示にも再利用します。NETWORK の一括 resume は `ready` だけを対象にします。それ以外の非 `ready` 理由では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING`、`RETENTION EXPIRED`、`PURGED` など）を併記します。新しい Codex child の bound receipt は非秘密の child provenance を cleanup 後も保持し、private state / credential が有効期限内なら `ready` になります。`cx` / `agent-start-codex` など製品が起動した top-level Codex は `launch_origin: standalone` と private owner credential を検証し、child 専用の保持・home 再生成を使わず従来どおり resume します。provenance 導入前や製品外の origin 不明 row は名前や履歴から推測せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
 
 ### カード操作
 
@@ -157,7 +157,9 @@ KILL の可否は frontend の見た目だけで決めず、server の `build_ag
 
 ### Child 完了後の表示
 
-正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire し、child runtime の credential と state を削除します。その command の終了に伴い tmux session も閉じます。
+正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire します。Claude child は runtime credential / state を削除します。Codex child は home、proxy runtime、旧 MCP config を削除し、再開用 state / canonical credential を既定30日だけ保持します。その command の終了に伴い tmux session も閉じます。
+
+保持期間内の `RESUME READY` は、古い home を復元する操作ではありません。dashboard は現在の source Codex home と保存済み profile から新しい home / proxy を作り、credential 付き再登録と fresh binding expectation の保存に成功してから、Codex exec の直前に identity を unretire します。期限切れまたは明示 purge 後は固定理由を表示して fail-closed します。期限切れ private material は dashboard の hourly maintenance が削除するため、dashboard が停止中なら物理削除は次の起動まで遅れることがあります。
 
 このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。history を `30d` にすると直近30日の、`all` にすると全期間の `gone` / `retired` agent もカードとして表示されます。検索が 0 件のときは、どの範囲を見て 0 件だったかと、次に広い範囲へのリンクを空状態に出します。
 

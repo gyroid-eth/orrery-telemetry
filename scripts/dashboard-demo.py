@@ -694,15 +694,17 @@ def _create_transcripts(root: Path, now: datetime) -> None:
 
     Without these the detail panel shows only its empty state, which makes
     the documentation screenshots read as a broken feature.  Claude agents
-    are resolved through `runtime/session_index/<agent id>.json` (the exact
-    map the server prefers); Codex agents are matched by the session_meta
-    timestamp, so the rollout file carries the fixture's inception time.
+    are resolved through `runtime/session_index/<agent id>.json`. Codex uses
+    the same receipt path plus a matching launch expectation and rollout
+    header, mirroring the product's fail-closed history binding contract.
     """
     base = now.replace(second=0, microsecond=0) - timedelta(minutes=34)
     claude_dir = root / "home" / ".claude" / "projects" / "demo-aurora-terrarium"
     claude_dir.mkdir(parents=True, exist_ok=True)
     index_dir = root / "runtime" / "session_index"
     index_dir.mkdir(parents=True, exist_ok=True)
+    launch_dir = root / "runtime" / "codex_launches"
+    launch_dir.mkdir(parents=True, exist_ok=True)
 
     for agent in AGENTS:
         inception = base + timedelta(minutes=int(agent["inception_min"]))
@@ -729,6 +731,58 @@ def _create_transcripts(root: Path, now: datetime) -> None:
                         }],
                     },
                 })
+            launch_id = f"demo-launch-{agent['id']}"
+            receipt_id = f"demo-receipt-{agent['id']}"
+            (launch_dir / f"{agent['id']}.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "binding_expected": True,
+                        "provider": "codex",
+                        "program": agent["program"],
+                        "agent_id": agent["id"],
+                        "agent_name": agent["name"],
+                        "project_key": str(root / "project"),
+                        "launch_id": launch_id,
+                        "launch_kind": "startup",
+                        "history_mode": "enabled",
+                        "expected_at": inception.timestamp(),
+                        "claimed_session_id": uid,
+                        "binding_conflicted": False,
+                        "receipt_id": receipt_id,
+                        "last_reason": "bound",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (index_dir / f"{agent['id']}.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "binding_kind": "self",
+                        "provider": "codex",
+                        "program": agent["program"],
+                        "agent_id": agent["id"],
+                        "agent_name": agent["name"],
+                        "project_key": str(root / "project"),
+                        "registered_by": agent["name"],
+                        "launch_id": launch_id,
+                        "receipt_id": receipt_id,
+                        "launch_kind": "startup",
+                        "session_id": uid,
+                        "transcript_path": str(path),
+                        "source": "startup",
+                        "recorded_at": _iso(inception),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         else:
             path = claude_dir / f"{uid}.jsonl"
             lines = []

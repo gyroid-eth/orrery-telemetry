@@ -1277,6 +1277,8 @@ def _prepare_codex_binding(
         "startup",
         "--history-mode",
         "enabled",
+        "--launch-origin",
+        "standalone",
     ]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)

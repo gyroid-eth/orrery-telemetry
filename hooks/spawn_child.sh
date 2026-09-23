@@ -67,6 +67,7 @@ MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+CHILD_RESUME_RETENTION_DAYS="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}"
 PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
@@ -557,19 +558,37 @@ else:
 PY
 }
 
+# Add the non-secret launch provenance and retention schema only after the
+# canonical state/token pair has passed the identity join above.  The helper
+# also clears a prior purge tombstone when the same numeric registration is
+# intentionally launched again.
+prepare_codex_child_resume_state() {
+    local agent_name="$1" mcp_profile="$2"
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    [[ -f "$helper" ]] || return 1
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
+        --runtime-dir "$RUNTIME_DIR" \
+        --agent-name "$agent_name" \
+        --project-key "$PROJECT_KEY" \
+        --mcp-profile "$mcp_profile"
+}
+
 # Start one launch expectation from a registration receipt. Output is
 # "<stable metadata path><TAB><fresh launch id>". This is a startup
 # precondition: if no new generation can be persisted, starting another CLI
 # under the same registered identity could leave the old receipt authoritative.
 prepare_codex_launch_binding() {
     local registration_file="$1" launch_kind="${2:-startup}"
+    local mcp_profile="${3:-inherit}"
     local helper="$HOOKS_DIR/prepare-codex-session-binding.py"
     [[ -f "$helper" && -f "$registration_file" ]] || return 1
     "${AGENTSTACK_PYTHON:-python3}" "$helper" \
         --runtime-dir "$RUNTIME_DIR" \
         --registration-file "$registration_file" \
         --launch-kind "$launch_kind" \
-        --history-mode enabled
+        --history-mode enabled \
+        --launch-origin child \
+        --codex-mcp-profile "$mcp_profile"
 }
 
 # --- Child model catalog -------------------------------------------------
@@ -1269,334 +1288,24 @@ write_child_codex_home() {
     local mcp_profile="${3:-inherit}"
     local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
     local source_home="${CODEX_HOME:-$HOME/.codex}"
-    [[ -n "$token_file" && -f "$token_file" && -x "$runner" && -d "$source_home" ]] || return 0
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    [[ -n "$token_file" && -f "$token_file" && -x "$runner" && -d "$source_home" && -f "$helper" ]] || return 0
 
     local home_dir="$RUNTIME_DIR/child-agents/${child_name}.codex-home"
-    "${AGENTSTACK_PYTHON:-python3}" - "$home_dir" "$source_home" "$runner" "$child_name" "$PROJECT_KEY" \
-        "$token_file" "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" "$HTTP_BEARER_MODE" \
-        "${AGENTSTACK_PYTHON:-}" "$mcp_profile" <<'PY' || return 0
-import json
-import math
-import os
-import pathlib
-import re
-import sys
-import tomllib
-from datetime import date, datetime, time
-
-home, source, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, bearer_mode, python_bin, mcp_profile = sys.argv[1:13]
-home_path = pathlib.Path(home)
-source_path = pathlib.Path(source)
-home_path.mkdir(parents=True, exist_ok=True)
-
-# Shared state such as login and sessions stays linked to the real home, while
-# config.toml remains child-owned. Codex treats the names below as sandbox
-# metadata; writable symlinks for them prevent Linux sandbox construction.
-sandbox_metadata = {".git", ".agents", ".codex"}
-for entry in source_path.iterdir():
-    if entry.name == "config.toml" or entry.name in sandbox_metadata:
-        continue
-    link = home_path / entry.name
-    if link.is_symlink() or link.exists():
-        if link.is_symlink():
-            link.unlink()
-        else:
-            continue
-    os.symlink(entry, link)
-
-def looks_like_agent_mail(name):
-    normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
-    return normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"}
-
-
-def toml_string(value):
-    encoded = json.dumps(value, ensure_ascii=False)
-    # JSON and TOML escape the C0 controls compatibly, but json.dumps leaves
-    # DEL/C1 controls literal while TOML rejects them in a basic string.
-    return "".join(
-        "\\u" + format(ord(char), "04x")
-        if 0x7F <= ord(char) <= 0x9F else char
-        for char in encoded
-    )
-
-
-def toml_key(value):
-    return value if re.fullmatch(r"[A-Za-z0-9_]+", value) else toml_string(value)
-
-
-def toml_value(value):
-    if isinstance(value, str):
-        return toml_string(value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if math.isnan(value):
-            return "nan"
-        if math.isinf(value):
-            return "-inf" if value < 0 else "inf"
-        return repr(value)
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    if isinstance(value, list):
-        return "[" + ", ".join(toml_value(item) for item in value) + "]"
-    if isinstance(value, dict):
-        return "{ " + ", ".join(
-            toml_key(key) + " = " + toml_value(item)
-            for key, item in sorted(value.items())
-        ) + " }"
-    raise TypeError("unsupported TOML value: " + type(value).__name__)
-
-
-def emit_toml(config):
-    """Emit the subset used by Codex configs, deterministically."""
-    output = []
-
-    def emit_table(path, table, header_kind):
-        scalars = [(key, value) for key, value in table.items()
-                   if not isinstance(value, dict)
-                   and not (isinstance(value, list) and value
-                            and all(isinstance(item, dict) for item in value))]
-        children = [(key, value) for key, value in table.items()
-                    if isinstance(value, dict)]
-        arrays_of_tables = [(key, value) for key, value in table.items()
-                            if isinstance(value, list) and value
-                            and all(isinstance(item, dict) for item in value)]
-        dotted_path = ".".join(toml_key(part) for part in path)
-        if header_kind == "table":
-            output.append("[" + dotted_path + "]")
-        elif header_kind == "array":
-            output.append("[[" + dotted_path + "]]")
-        for key, value in sorted(scalars):
-            output.append(toml_key(key) + " = " + toml_value(value))
-        for key, value in sorted(children):
-            if output and output[-1] != "":
-                output.append("")
-            emit_table(path + (key,), value, "table")
-        for key, items in sorted(arrays_of_tables):
-            for item in items:
-                if output and output[-1] != "":
-                    output.append("")
-                emit_table(path + (key,), item, "array")
-
-    emit_table((), config, None)
-    return "\n".join(output) + "\n"
-
-
-def deep_merge(base, overlay):
-    for key, value in overlay.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            deep_merge(base[key], value)
-        else:
-            base[key] = value
-
-
-def protected_overlay_path(parts):
-    return ".".join(toml_key(part) for part in parts)
-
-
-def drop_protected_overlay_tables(overlay):
-    servers = overlay.get("mcp_servers")
-    if servers is not None and not isinstance(servers, dict):
-        print(
-            "[spawn_child] warning: ignored protected Codex child config "
-            "overlay key mcp_servers",
-            file=sys.stderr,
-        )
-        del overlay["mcp_servers"]
-    elif isinstance(servers, dict):
-        for name in list(servers):
-            if name == "agentstack" or looks_like_agent_mail(name):
-                print(
-                    "[spawn_child] warning: ignored protected Codex child "
-                    "config overlay key " + protected_overlay_path(("mcp_servers", name)),
-                    file=sys.stderr,
-                )
-                del servers[name]
-    plugins = overlay.get("plugins")
-    if plugins is not None and not isinstance(plugins, dict):
-        print(
-            "[spawn_child] warning: ignored protected Codex child config "
-            "overlay key plugins",
-            file=sys.stderr,
-        )
-        del overlay["plugins"]
-    elif isinstance(plugins, dict):
-        for plugin_id, plugin in plugins.items():
-            if not isinstance(plugin, dict):
-                print(
-                    "[spawn_child] warning: ignored protected Codex child "
-                    "config overlay key " + protected_overlay_path(
-                        ("plugins", plugin_id)
-                    ),
-                    file=sys.stderr,
-                )
-                plugins[plugin_id] = {}
-                continue
-            plugin_servers = plugin.get("mcp_servers")
-            if plugin_servers is not None and not isinstance(plugin_servers, dict):
-                print(
-                    "[spawn_child] warning: ignored protected Codex child "
-                    "config overlay key " + protected_overlay_path(
-                        ("plugins", plugin_id, "mcp_servers")
-                    ),
-                    file=sys.stderr,
-                )
-                del plugin["mcp_servers"]
-            elif isinstance(plugin_servers, dict) and "agentstack" in plugin_servers:
-                print(
-                    "[spawn_child] warning: ignored protected Codex child "
-                    "config overlay key " + protected_overlay_path(
-                        ("plugins", plugin_id, "mcp_servers", "agentstack")
-                    ),
-                    file=sys.stderr,
-                )
-                del plugin_servers["agentstack"]
-
-
-def plugin_name(header):
-    match = re.match(r'^plugins\.(?:"([^"]+)"|([A-Za-z0-9_-]+))', header)
-    return (match.group(1) or match.group(2)) if match else ""
-
-
-# `--ask-for-approval never` governs model-generated shell commands, not MCP
-# calls. Codex otherwise prompts for these tools even though this proxy is
-# already child-bound and exposes only this fixed coordination surface.
-proxy_tools = (
-    "bootstrap",
-    "fetch_inbox",
-    "send_message",
-    "acknowledge_message",
-    "reserve_files",
-    "renew_reservations",
-    "release_reservations",
-    "runtime_status",
-    "whois",
-)
-
-
-# Strip EVERY ORRERY Mail server the user has, not just one spelling. A child
-# that still sees the direct connection will use it — the model reaches for the
-# name it knows — and that connection is not authenticated as the child.
-lines = []
-skipping = False
-claimed = []
-plugin_ids = []
-config_source = source_path / "config.toml"
-text = config_source.read_text(encoding="utf-8") if config_source.exists() else ""
-for line in text.splitlines():
-    stripped = line.strip()
-    if stripped.startswith("["):
-        header = stripped.strip("[]").strip()
-        server = ""
-        if header.startswith("mcp_servers."):
-            server = header[len("mcp_servers."):].split(".")[0]
-        name = server.strip('"')
-        plugin_id = plugin_name(header)
-        if plugin_id.startswith("agentstack-codex-app@"):
-            if plugin_id not in plugin_ids:
-                plugin_ids.append(plugin_id)
-            plugin_prefix = "plugins." + toml_string(plugin_id)
-            skipping = header.startswith(plugin_prefix + ".mcp_servers.agentstack")
-        else:
-            skipping = False
-        if name and (looks_like_agent_mail(name) or name == "agentstack"):
-            skipping = True
-        if skipping:
-            if name and name not in claimed:
-                claimed.append(name)
-    if not skipping:
-        lines.append(line)
-if not claimed:
-    claimed = ["orrery-mail"]
-elif "orrery-mail" not in claimed:
-    claimed.append("orrery-mail")
-# Codex's deferred tool registry identifies this proxy by serverInfo.name
-# (`agentstack`), while direct MCP calls use the configured server key. Claim
-# both so the same per-tool policy applies through either path.
-if "agentstack" not in claimed:
-    claimed.append("agentstack")
-
-lines.append("")
-lines.append("# Written by spawn_child.sh: this child talks to ORRERY Mail through the")
-lines.append("# local proxy, which authenticates every call with the child's own token.")
-lines.append("# The proxy claims the same server name(s) the user's own config used,")
-lines.append("# so the model's habitual call lands on the authenticated connection.")
-for plugin_id in plugin_ids:
-    lines.append("")
-    lines.append("[plugins." + toml_string(plugin_id) + ".mcp_servers.agentstack]")
-    lines.append("enabled = false")
-for name in claimed:
-    key = "mcp_servers." + toml_string(name)
-    lines.append("")
-    lines.append("[" + key + "]")
-    lines.append("command = " + toml_string(runner))
-    lines.append("args = []")
-    lines.append("")
-    lines.append("[" + key + ".env]")
-    lines.append("AGENTSTACK_PROXY_AGENT_NAME = " + toml_string(child))
-    lines.append("AGENTSTACK_PROXY_TOKEN_FILE = " + toml_string(token_file))
-    lines.append("AGENTSTACK_PROXY_PROGRAM = " + toml_string("codex"))
-    lines.append("AGENTSTACK_PROJECT_KEY = " + toml_string(project_key))
-    lines.append("AGENTSTACK_MCP_URL = " + toml_string(mcp_url))
-    lines.append("AGENTSTACK_MAIL_ENV = " + toml_string(mail_env))
-    # Codex starts the proxy with this env table only; see the Claude writer.
-    lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))
-    lines.append("AGENTSTACK_RUNTIME_DIR = " + toml_string(runtime_dir))
-    if python_bin:
-        lines.append("AGENTSTACK_PYTHON = " + toml_string(python_bin))
-    # run-mcp.sh also reads the machine-wide Codex App env for missing values.
-    # Pin its state inside this child-owned home so a bridge install cannot
-    # redirect the sandboxed child back into the live bridge runtime.
-    lines.append("AGENTSTACK_CODEX_APP_RUNTIME_DIR = " + toml_string(
-        os.fspath(home_path / "proxy-runtime")
-    ))
-    for tool_name in proxy_tools:
-        lines.append("")
-        lines.append("[" + key + ".tools." + toml_string(tool_name) + "]")
-        lines.append("approval_mode = \"approve\"")
-
-target = home_path / "config.toml"
-config_text = "\n".join(lines) + "\n"
-overlay_setting = os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip()
-if overlay_setting:
-    overlay_path = pathlib.Path(overlay_setting)
-    try:
-        overlay = tomllib.loads(overlay_path.read_text(encoding="utf-8"))
-        config = tomllib.loads(config_text)
-        drop_protected_overlay_tables(overlay)
-        deep_merge(config, overlay)
-        candidate_config_text = emit_toml(config)
-        # Catch emitter gaps here, while falling back to the known-good config
-        # still preserves the spawn.
-        tomllib.loads(candidate_config_text)
-        config_text = candidate_config_text
-    except Exception as exc:
-        print(
-            "[spawn_child] warning: could not apply Codex child config overlay "
-            + toml_string(overlay_setting) + ": " + str(exc)
-            + "; continuing without it",
-            file=sys.stderr,
-        )
-if mcp_profile == "orrery-only":
-    config = tomllib.loads(config_text)
-    for name, server in config.get("mcp_servers", {}).items():
-        if name == "agentstack" or looks_like_agent_mail(name):
-            continue
-        if isinstance(server, dict):
-            server["enabled"] = False
-    for plugin_id, plugin in config.get("plugins", {}).items():
-        # This plugin supplies the SessionStart hook that binds Codex history.
-        if plugin_id.startswith("agentstack-codex-app@"):
-            continue
-        if isinstance(plugin, dict):
-            plugin["enabled"] = False
-    config_text = emit_toml(config)
-target.write_text(config_text, encoding="utf-8")
-os.chmod(target, 0o600)
-PY
-    printf '%s\n' "$home_dir"
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" build-home \
+        --runtime-dir "$RUNTIME_DIR" \
+        --home "$home_dir" \
+        --source "$source_home" \
+        --runner "$runner" \
+        --child "$child_name" \
+        --project-key "$PROJECT_KEY" \
+        --token-file "$token_file" \
+        --mcp-url "$MCP_URL" \
+        --mail-env "$MAIL_ENV" \
+        --bearer-mode "$HTTP_BEARER_MODE" \
+        --python-bin "${AGENTSTACK_PYTHON:-}" \
+        --mcp-profile "$mcp_profile" \
+        --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}" || return 0
 }
 
 # Generate the direct-spawn registration token in a 0600 one-shot file.  The
@@ -1896,6 +1605,10 @@ PY
             echo "  A legacy token-only runtime entry cannot be promoted to a verified history binding." >&2
             exit 1
         fi
+        if ! prepare_codex_child_resume_state "$CHILD_NAME" "$CODEX_MCP_PROFILE"; then
+            echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
+            exit 1
+        fi
     fi
 
     # --worktree が指定されていれば worktree を作って WORK_DIR を上書き
@@ -1922,12 +1635,15 @@ PY
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
     if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
+    fi
+    if [[ -n "${AGENTSTACK_PYTHON:-}" ]]; then
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_PYTHON=$AGENTSTACK_PYTHON")
     fi
     if [[ "$USE_CODEX" == true ]]; then
         # Codex startup (--pre-registered mode).
@@ -1940,7 +1656,7 @@ PY
             exit 1
         fi
         if ! CHILD_LAUNCH_INFO="$(
-            prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+            prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
         )"; then
             echo "Error: could not create a fresh Codex history binding expectation" >&2
             exit 1
@@ -2771,9 +2487,12 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
-TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
+fi
+if [[ -n "${AGENTSTACK_PYTHON:-}" ]]; then
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_PYTHON=$AGENTSTACK_PYTHON")
 fi
 if [[ -n "$RESOURCES" ]]; then
     TMUX_ENV_ARGS+=(-e "CHILD_RESOURCES=$RESOURCES")
@@ -2781,13 +2500,17 @@ fi
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_CODEX_BIN="$(resolve_codex_bin)"
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
+    if ! prepare_codex_child_resume_state "$CHILD_NAME" "$CODEX_MCP_PROFILE"; then
+        echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
+        exit 1
+    fi
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
     if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
         echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
         exit 1
     fi
     if ! CHILD_LAUNCH_INFO="$(
-        prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+        prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
     )"; then
         echo "Error: could not create a fresh Codex history binding expectation" >&2
         exit 1

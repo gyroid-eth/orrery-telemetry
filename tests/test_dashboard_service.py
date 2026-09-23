@@ -229,6 +229,10 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_CHILD_APPROVAL"] == "__CODEX_CHILD_APPROVAL__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_NETWORK"] == "__CODEX_NETWORK__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_ADD_DIRS"] == "__CODEX_ADD_DIRS__"
+    assert (
+        plist["EnvironmentVariables"]["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"]
+        == "__CHILD_RESUME_RETENTION_DAYS__"
+    )
     # The dashboard's launchd PATH has no per-user Node prefix, so the installer
     # resolves codex in the operator's shell and hands the path to the service.
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_BIN"] == "__CODEX_BIN__"

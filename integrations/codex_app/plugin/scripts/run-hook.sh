@@ -25,7 +25,11 @@ payload="$(</dev/stdin)"
 # verified plugin payload Codex selected.
 RECORDER="$PLUGIN_ROOT/scripts/record-codex-session-index.py"
 if [[ -f "$RECORDER" ]]; then
-  printf '%s' "$payload" | "$PYTHON_BIN" "$RECORDER" || true
+  if ! printf '%s' "$payload" | "$PYTHON_BIN" "$RECORDER"; then
+    # Keep the telemetry hook fail-open, but make an interpreter/process
+    # failure visible instead of silently discarding it with `|| true`.
+    echo "record-codex-session-index: recorder_process_failed" >&2
+  fi
 fi
 
 printf '%s' "$payload" | exec "$PYTHON_BIN" "$SOURCE_ROOT/agentstack_codex_app/hook_entry.py"

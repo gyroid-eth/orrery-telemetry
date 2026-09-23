@@ -417,7 +417,11 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         installed_spawn = (
             home / ".agentstack" / "hooks" / "spawn_child.sh"
         ).read_text(encoding="utf-8")
-        assert 'claimed = ["orrery-mail"]' in installed_spawn
+        installed_child_home_helper = (
+            home / ".agentstack" / "hooks" / "child_resume.py"
+        ).read_text(encoding="utf-8")
+        assert 'claimed = ["orrery-mail"]' in installed_child_home_helper
+        assert '"$helper" build-home' in installed_spawn
         assert "AGENTSTACK_MCP_URL=mcp_url" in installed_spawn
         dashboard_plist_template = (
             home / ".agentstack" / "dashboard" / "agentdashboard.plist.template"
