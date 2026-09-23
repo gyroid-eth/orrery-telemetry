@@ -154,6 +154,8 @@ Resume bootstrap uses the retained credential to re-register the same identity, 
 
 In the interactive TUI of `codex-cli 0.154.0` and `0.156.1`, measurement showed the resume `SessionStart` hook firing after the first submitted user message, not while the composer remained idle. Resume bootstrap compares the dashboard-selected session ID with both the existing receipt and rollout header, then retains that receipt's exact `launch_id` / `receipt_id` as history authority only while the fresh resume expectation is unclaimed and non-conflicted. The same session can therefore be resumed again after exiting without a prompt. After the first submit, the official payload replaces the fallback with a fresh receipt only when its session ID matches both the pinned ID and header; a different ID, a conflict, or the next startup expectation invalidates the fallback. This timing statement is limited to the measured versions and is not a general guarantee for other versions or modes.
 
+The SessionStart recorder writes JSONL timing records for lock acquisition, rollout-header validation, the launch transition, the receipt write, and the final outcome to `$AGENTSTACK_RUNTIME_DIR/codex-session-binding.log`. It does not record session IDs, launch nonces, transcript paths, or credentials. A `started` event without a matching `outcome` distinguishes a hook that was terminated in flight. The SessionStart hook deadline is five seconds so a cold start or brief lock wait does not interrupt receipt creation.
+
 Because an API key in the environment can override OAuth, it is removed only from the Codex subprocess.
 
 ## Mail watcher and REPL injection

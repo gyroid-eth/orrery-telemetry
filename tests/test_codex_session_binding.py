@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
+import signal
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1594,6 +1598,7 @@ def test_builtin_subagent_event_is_ignored(binding_env, hook_event: str) -> None
 
 
 def test_cli_entrypoint_is_fail_open_on_bad_payload(tmp_path: Path) -> None:
+    launch_path = tmp_path / "runtime" / "codex_launches" / f"{AGENT_ID}.json"
     result = subprocess.run(
         [
             sys.executable,
@@ -1606,12 +1611,123 @@ def test_cli_entrypoint_is_fail_open_on_bad_payload(tmp_path: Path) -> None:
         text=True,
         capture_output=True,
         env={
-            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(tmp_path / "missing.json"),
+            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
             "AGENTSTACK_CODEX_LAUNCH_ID": "missing",
         },
         check=False,
     )
     assert result.returncode == 0
+    log_text = (tmp_path / "runtime" / "codex-session-binding.log").read_text(
+        encoding="utf-8"
+    )
+    event = json.loads(log_text)
+    assert event["phase"] == "outcome"
+    assert event["outcome"] == "invalid_payload"
+    assert event["error_type"] == "JSONDecodeError"
+    assert "missing" not in log_text
+
+
+def test_session_start_deadline_survives_a_one_second_lock_wait(
+    binding_env, tmp_path: Path
+) -> None:
+    launch_path, launch_id = _prepare_standalone(binding_env)
+    receipt_path = binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    log_path = binding_env["runtime"] / "codex-session-binding.log"
+    runner = (
+        ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-hook.sh"
+    )
+    hooks = json.loads(
+        (
+            ROOT
+            / "integrations"
+            / "codex_app"
+            / "plugin"
+            / "hooks"
+            / "hooks.json"
+        ).read_text(encoding="utf-8")
+    )
+    timeout_seconds = hooks["hooks"]["SessionStart"][0]["hooks"][0]["timeoutSec"]
+    assert timeout_seconds >= 5
+    payload = json.dumps(
+        _payload(binding_env["transcript"], cwd=str(binding_env["project"]))
+    )
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_CODEX_APP_RUNTIME_DIR": str(tmp_path / "app-runtime"),
+        "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
+        "AGENTSTACK_CODEX_LAUNCH_ID": launch_id,
+    }
+    lock_path = launch_path.with_suffix(".lock")
+
+    # Reproduce the former one-second Codex hook deadline.  The recorder has
+    # entered and logged its start, but is killed while waiting for the same
+    # per-agent lock, leaving neither a transition nor a receipt.
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    process = subprocess.Popen(
+        [str(runner)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(payload, timeout=1)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+    assert not receipt_path.exists()
+    first_events = [
+        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["phase"] for event in first_events] == ["started"]
+
+    # The configured deadline leaves enough room for the same delayed lock.
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+    def release_lock() -> None:
+        time.sleep(1.25)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    releaser = threading.Thread(target=release_lock)
+    releaser.start()
+    completed = subprocess.run(
+        [str(runner)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    releaser.join(timeout=2)
+
+    assert completed.returncode == 0, completed.stderr
+    assert receipt_path.is_file()
+    events = [
+        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    successful = events[len(first_events) :]
+    assert successful[-1]["phase"] == "outcome"
+    assert successful[-1]["outcome"] == "bound"
+    lock_event = next(event for event in successful if event["phase"] == "lock_acquired")
+    assert lock_event["duration_ms"] >= 1_000
+    assert {event["phase"] for event in successful} >= {
+        "started",
+        "header_checked",
+        "launch_transitioned",
+        "receipt_written",
+        "outcome",
+    }
 
 
 def test_cli_entrypoint_derives_runtime_from_launch_path_not_ambient_env(

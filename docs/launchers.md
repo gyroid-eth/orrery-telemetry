@@ -156,6 +156,8 @@ resume bootstrap は retained credential で同じ identity を再登録し、fr
 
 `codex-cli 0.154.0` と `0.156.1` の interactive TUI では、resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。resume bootstrap は dashboard が選んだ session ID を既存 receipt と rollout header の両方で照合し、fresh resume expectation が未 claim・非 conflict の間だけ、その receipt の exact `launch_id` / `receipt_id` を history の根拠として保持します。prompt を送らず終了しても同じ session を再び resume できます。最初の submit 後は公式 payload の session ID も固定済み ID と header に一致するときだけ fresh receipt に置き換わり、別 ID・競合・次の startup expectation は fallback を無効にします。この発火時点は上記 version の実測範囲であり、他 version / mode の一般保証ではありません。
 
+SessionStart recorder は lock 待ち、rollout header 検査、launch transition、receipt write、最終 outcome の所要時間を `$AGENTSTACK_RUNTIME_DIR/codex-session-binding.log` に JSONL で残します。session ID、launch nonce、transcript path、credential は記録しません。`started` の後に `outcome` が無ければ hook が途中で打ち切られたことを区別できます。SessionStart の hook deadline は、cold start や短い lock 待ちで receipt 作成が途切れないよう5秒です。
+
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 
 ## Mail watcher と REPL 注入
