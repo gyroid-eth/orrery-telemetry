@@ -998,10 +998,19 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     # the mode must be written there or the proxy defaults to "auto" and
     # exits on a bearer-disabled service env before answering initialize.
     text = _SPAWN.read_text(encoding="utf-8")
+    child_home_helper = (_ROOT / "hooks" / "child_resume.py").read_text(
+        encoding="utf-8"
+    )
     assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode," in text
-    assert 'lines.append("AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + toml_string(bearer_mode))' in text
+    assert (
+        '"AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + _toml_string(bearer_mode)'
+        in child_home_helper
+    )
     run_mcp = (_ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh").read_text(encoding="utf-8")
     assert 'server_env["AGENTSTACK_PYTHON"] = python_bin' in text
-    assert 'lines.append("AGENTSTACK_PYTHON = " + toml_string(python_bin))' in text
+    assert (
+        'lines.append("AGENTSTACK_PYTHON = " + _toml_string(python_bin))'
+        in child_home_helper
+    )
     assert "read -r MCP_AGENT_MAIL_TOKEN" not in run_mcp
     assert "  AGENTSTACK_PYTHON\n" in run_mcp

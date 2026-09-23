@@ -749,6 +749,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
         "AGENTSTACK_CODEX_BIN": str(codex_bin),
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": str(codex_child_overlay),
+        "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "45",
         "AGENTSTACK_MCP_URL": f"http://127.0.0.1:{mail_port}/mcp",
         "AGENTSTACK_TERMINAL": "auto",
         "AGENTSTACK_TEST_PYTHON": sys.executable,
@@ -890,6 +891,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         f'Environment="AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"'
         in systemd_unit
     )
+    assert 'Environment="AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=45"' in systemd_unit
     generated_env = (install_dir / "env.sh").read_text(encoding="utf-8")
     assert f"export AGENTSTACK_PERSISTENT_PROFILES_DIR={install_dir}/profiles" in generated_env
     assert "export AGENTSTACK_LANG=ja" in generated_env
@@ -901,6 +903,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         f"export AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"
         in generated_env
     )
+    assert "export AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=45" in generated_env
     assert manifest["env"]["AGENTSTACK_SPAWN_DIRS"] == f"~/code:{project_dir}"
     assert manifest["env"]["AGENTSTACK_WORKTREE_ROOT"] == str(worktree_root)
     assert "export AGENTSTACK_PORTRAITS_DIR='~/faces'" in generated_env
@@ -909,6 +912,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
+    assert manifest["env"]["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"] == "45"
     fixture_enroll = (
         pathlib.Path(sys.executable).parent.parent.resolve()
         / "bin"
@@ -953,6 +957,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
+    normalized_env["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"] = sample["env"][
+        "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"
+    ]
     # This isolated fixture pins the repository's development venv. The public
     # sample depicts the normal immutable candidate selected by an unpinned
     # install, so normalize only this deployment-derived executable path.

@@ -10,9 +10,19 @@
 
 ## Unreleased
 
+### 正常終了した Codex child を再開できませんでした（#59）
+
+Codex child は正常終了時に owner credential と専用 home を削除していたため、履歴と provenance が残っていても同じ identity を再登録できず、dashboard の resume は `credential_missing` で止まっていました。正常 cleanup では remote retire と reservation release を維持したまま、schema version・`retired_at`・`resume_expires_at` 付き state と canonical credential を既定30日保持するようにしました。専用 home、proxy runtime、旧 MCP config は毎回削除し、resume 時に現在の source home と保存済み `codex_mcp_profile` から新しく作ります。credential 付き再登録と fresh binding expectation が成功した後、Codex exec の直前にだけ unretire します。保持期間は `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` で変更でき、`0` は従来どおり全削除です。明示 purge と期限切れ maintenance を追加し、doctor は削除せず期限切れ・purge 待ちだけを報告します。resume 後の receipt にも child provenance を引き継ぐため、cleanup を挟んだ2回目以降の resume も可能です。また、provenance gate が従来 resume できた `cx` 起動の top-level Codex まで child 扱いで拒否していたため、製品の top-level launch / receipt には `launch_origin: standalone` を記録し、private owner credential を検証したうえで child 専用 home・cleanup・unretire を使わない従来経路を維持します。実 Codex は resume の `SessionStart` を REPL 起動時ではなく最初の prompt 送信時に発火するため、prompt を送らず終了すると fresh receipt が無いまま旧 receipt も無効になり、次回以降を resume できませんでした。resume expectation は dashboard が選んだ session ID を旧 receipt と rollout header の両方で照合し、hook が未発火の間だけその receipt の nonce pair を fallback として保持します。別 session の hook、競合、startup、または別の fresh receipt が現れれば fail-closed で無効にします。SessionStart hook の1秒 deadline が recorder の途中で切れると、lock file だけ作られて launch transition と receipt が残らず、原因も観測できませんでした。deadline を5秒へ延ばし、lock・header・write・outcome の時間を session ID、path、nonce、credential を含まない runtime log へ記録するようにしました。
+
+upgrade 前に起動した top-level Codex の receipt は origin 不明のため、次に製品 launcher から起動して `standalone` provenance を記録するまでは dashboard から resume できません。
+
+### cleanup 済み Codex child と unmanaged session を区別できませんでした（#59）
+
+正常終了時に child state と専用 home を削除すると、残った履歴だけでは製品が起動した child か、もともと管理外の Codex session かを判定できませんでした。Codex child の launch expectation と bound receipt に、秘密を含まない `launch_origin: child`、`codex_mcp_profile`、数値 agent ID、project、provider を保存し、cleanup 後も dashboard が child provenance を検証できるようにしました。既存の provenance 無し receipt は推測で child に昇格しません。
+
 ### resume できない終了済み agent に、resume 操作を案内していました（#59）
 
-DECK と NETWORK は `gone` / `retired` という表示状態だけで resume 操作を出していたため、検証済み transcript、元の cwd、CLI、Codex child の provenance・credential・設定が無い row も resume 可能に見えていました。backend が row ごとに固定理由コードの `resume_capability` を返すようにし、DECK card、NETWORK の一括選択、詳細 panel、`/api/jump` が同じ判定を使うようにしました。古い Codex row は child provenance が無い限り推測で `ready` にせず、API から直接呼んでも terminal を開く前に拒否します。
+DECK と NETWORK は `gone` / `retired` という表示状態だけで resume 操作を出していたため、検証済み transcript、元の cwd、CLI、Codex の launch provenance・credential・設定が無い row も resume 可能に見えていました。backend が row ごとに固定理由コードの `resume_capability` を返すようにし、DECK card、NETWORK の一括選択、詳細 panel、`/api/jump` が同じ判定を使うようにしました。新しい製品 launch は `child` または `standalone` を receipt に記録し、provenance 導入前や製品外の origin 不明 row は推測で `ready` にせず、API から直接呼んでも terminal を開く前に拒否します。終了済み Claude row の表示判定が agent ごとに数千件の transcript を全読みして dashboard を止めていたため、表示では exact index または transcript directory mtime 付きの確定済み cache だけを使い、未検証 row は `verification_required` とするようにしました。この row は一括 resume には含めず、詳細 panel の `VERIFY & RESUME` を1回押すと `/api/jump` が full 検証し、成功時はその呼び出しのまま resume します。
 
 ### fresh install と CI が `sqlmodel 0.0.45` 以降で動かなくなっていました（#67）
 

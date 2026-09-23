@@ -66,6 +66,8 @@
     <string>__CODEX_NETWORK__</string>
     <key>AGENTSTACK_CODEX_ADD_DIRS</key>
     <string>__CODEX_ADD_DIRS__</string>
+    <key>AGENTSTACK_CHILD_RESUME_RETENTION_DAYS</key>
+    <string>__CHILD_RESUME_RETENTION_DAYS__</string>
     <key>AGENTSTACK_CODEX_BIN</key>
     <string>__CODEX_BIN__</string>
     <key>AGENTSTACK_PORTRAITS_DIR</key>

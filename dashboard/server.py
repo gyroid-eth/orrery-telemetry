@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import atexit
-import hmac
+import importlib.util
 import json
 import logging
 import math
@@ -33,7 +33,6 @@ import subprocess
 import sys
 import threading
 import time
-import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2160,7 +2159,85 @@ def _focus_existing_terminal(session: str) -> bool:
 CLAUDE_PROJECTS = os.path.expanduser("~/.claude/projects")
 
 
-_TPATH_CACHE: dict[str, tuple[float, str | None]] = {}
+_TPATH_CACHE: dict[str, tuple[tuple, str | None]] = {}
+_CLAUDE_TRANSCRIPT_CATALOG_CACHE: dict = {
+    "checked_at": 0.0,
+    "root": "",
+    "key": None,
+}
+
+
+def _claude_transcript_catalog_key(*, refresh: bool = False) -> tuple:
+    """Cheap invalidation key for Claude transcript resolution results.
+
+    A transcript file grows while its session is live, but resume capability is
+    only requested after that session has finished.  New, removed, or renamed
+    transcripts update their project directory mtime, so statting the root and
+    its immediate project directories is enough to invalidate a completed-row
+    lookup without opening thousands of JSONL files on every dashboard poll.
+    """
+
+    root = os.path.realpath(CLAUDE_PROJECTS)
+    now = time.monotonic()
+    cached = _CLAUDE_TRANSCRIPT_CATALOG_CACHE
+    if (
+        not refresh
+        and cached["root"] == root
+        and cached["key"] is not None
+        and now - cached["checked_at"] < 1.0
+    ):
+        return cached["key"]
+    try:
+        root_mtime = os.stat(root).st_mtime_ns
+    except OSError:
+        key = (root, None, ())
+        cached.update(checked_at=now, root=root, key=key)
+        return key
+    projects = []
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        projects.append((entry.path, entry.stat().st_mtime_ns))
+                except OSError:
+                    continue
+    except OSError:
+        key = (root, root_mtime, ())
+        cached.update(checked_at=now, root=root, key=key)
+        return key
+    projects.sort()
+    key = (root, root_mtime, tuple(projects))
+    cached.update(checked_at=now, root=root, key=key)
+    return key
+
+
+def _store_claude_transcript_resolution(
+    session: str, catalog_key: tuple, path: str | None
+) -> None:
+    _TPATH_CACHE[session] = (catalog_key, path)
+    # A full /api/jump verification must be visible on the next DECK/NETWORK
+    # poll, rather than hidden behind the short cross-view capability cache.
+    _invalidate_resume_capability_cache(session)
+
+
+def _cached_claude_transcript_path(
+    session: str, *, refresh_catalog: bool = False,
+) -> tuple[bool, str | None, tuple]:
+    """Return a proven cached result without entering the content scanner."""
+
+    catalog_key = _claude_transcript_catalog_key(refresh=refresh_catalog)
+    indexed = _indexed_transcript(session)
+    if indexed:
+        _claim_transcript(indexed, session, 1 << 30, exact=True)
+        _store_claude_transcript_resolution(session, catalog_key, indexed)
+        return True, indexed, catalog_key
+    hit = _TPATH_CACHE.get(session)
+    if hit and hit[0] == catalog_key:
+        path = hit[1]
+        if path is None or os.path.isfile(path):
+            return True, path, catalog_key
+    return False, None, catalog_key
 
 
 def _ownership_score(text: str, name: str) -> int:
@@ -2344,22 +2421,13 @@ def _transcript_path(session: str) -> str | None:
        last_active)で全 projects の jsonl を mtime 絞り込みし、自己参照
        最多の jsonl を選ぶ。データは DB/ディスクに残るので閲覧可能。
 
-    結果は 120 秒キャッシュ。
+    結果は transcript project directory の mtime が変わるまで保持する。
     """
-    now = time.time()
-    hit = _TPATH_CACHE.get(session)
-    if hit and now - hit[0] < 120:
-        return hit[1]
-
-    # 0) 精密マップ優先(登録時に焼いた id↔sessionId↔transcript)。
-    #    あればヒューリスティックを完全に飛ばす。NobleHubble 型の
-    #    "last_active 固着で活動期間窓から実ファイルが外れる" バグや
-    #    同名使い回しの誤マッチをここで根治する。
-    indexed = _indexed_transcript(session)
-    if indexed:
-        _claim_transcript(indexed, session, 1 << 30, exact=True)
-        _TPATH_CACHE[session] = (now, indexed)
-        return indexed
+    cached, cached_path, catalog_key = _cached_claude_transcript_path(
+        session, refresh_catalog=True
+    )
+    if cached:
+        return cached_path
 
     chosen: str | None = None
     chosen_score = 0
@@ -2413,7 +2481,7 @@ def _transcript_path(session: str) -> str | None:
         # 他人の履歴を見せるより空のほうがましなので諦める。
         chosen = None
 
-    _TPATH_CACHE[session] = (now, chosen)
+    _store_claude_transcript_resolution(session, catalog_key, chosen)
     return chosen
 
 
@@ -2643,7 +2711,6 @@ def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
 
 _CODEX_PROGRAMS = {"codex", "codex-cli"}
 _CODEX_CHILD_STATE_MAX_BYTES = 65536
-_CODEX_CHILD_CONFIG_MAX_BYTES = 1024 * 1024
 
 
 class _PrivateFileError(ValueError):
@@ -2660,6 +2727,55 @@ class _ResumeCapabilityError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+_CHILD_RESUME_MODULES: dict[str, object] = {}
+
+
+def _child_resume_helper_path() -> str:
+    configured = os.environ.get("AGENTSTACK_CHILD_RESUME_HELPER", "").strip()
+    install_home = os.environ.get("AGENTSTACK_HOME", "").strip()
+    if install_home:
+        candidates = [configured, os.path.join(install_home, "hooks", "child_resume.py")]
+    else:
+        candidates = [
+            configured,
+            os.path.join(HOOKS_DIR, "child_resume.py"),
+            os.path.join(os.path.dirname(HERE), "hooks", "child_resume.py"),
+        ]
+    return next((path for path in candidates if path and os.path.isfile(path)), "")
+
+
+def _child_resume_module():
+    path = _child_resume_helper_path()
+    if not path:
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child resume helper is unavailable"
+        )
+    cached = _CHILD_RESUME_MODULES.get(path)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location("agentstack_child_resume", path)
+    if spec is None or spec.loader is None:
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child resume helper cannot be loaded"
+        )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child resume helper cannot be loaded"
+        ) from exc
+    if not all(
+        hasattr(module, name)
+        for name in ("ResumeStateError", "inspect_retained", "purge_expired")
+    ):
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child resume helper is incomplete"
+        )
+    _CHILD_RESUME_MODULES[path] = module
+    return module
 
 
 def _read_private_regular(path: str, label: str, limit: int) -> bytes:
@@ -2706,225 +2822,89 @@ def _private_file_capability(
     return unavailable
 
 
-def _is_agentstack_mail_alias(name: str) -> bool:
-    normalized = name.replace("-", "").replace("_", "").replace('"', "").lower()
-    return normalized in {
-        "agentmail", "mcpagentmail", "agentstackmail", "orrerymail", "agentstack",
-    }
-
-
-def _validate_codex_child_proxy_config(
-    config: dict, *, session: str, registration: dict, token_file: str
-) -> None:
-    """Require every configured Mail alias to be this child's local proxy."""
-
-    servers = config.get("mcp_servers")
-    if not isinstance(servers, dict):
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "child Codex config has no ORRERY proxy"
-        )
-    mail_servers = [
-        (name, value)
-        for name, value in servers.items()
-        if isinstance(name, str) and _is_agentstack_mail_alias(name)
-    ]
-    if not mail_servers:
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "child Codex config has no ORRERY proxy"
-        )
-    expected_token = os.path.abspath(token_file)
-    for _name, server in mail_servers:
-        if not isinstance(server, dict):
-            raise _ResumeCapabilityError(
-                "config_unrestorable",
-                "child Codex Mail alias is not a local proxy",
-            )
-        # A direct HTTP/bearer entry is the default-home failure mode R1b must
-        # not mistake for an authenticated child proxy.
-        if (
-            not isinstance(server.get("command"), str)
-            or not server["command"].strip()
-            or "url" in server
-            or "bearer_token_env_var" in server
-        ):
-            raise _ResumeCapabilityError(
-                "config_unrestorable",
-                "child Codex Mail alias is not a local proxy",
-            )
-        env = server.get("env")
-        if not isinstance(env, dict):
-            raise _ResumeCapabilityError(
-                "config_unrestorable",
-                "child Codex Mail proxy has no identity environment",
-            )
-        configured_token = env.get("AGENTSTACK_PROXY_TOKEN_FILE")
-        if not isinstance(configured_token, str) or (
-            os.path.abspath(os.path.expanduser(configured_token)) != expected_token
-        ):
-            raise _ResumeCapabilityError(
-                "identity_mismatch",
-                "child Codex Mail proxy belongs to another registration",
-            )
-        if (
-            env.get("AGENTSTACK_PROXY_AGENT_NAME") != session
-            or env.get("AGENTSTACK_PROJECT_KEY") != registration["project_key"]
-            or not isinstance(env.get("AGENTSTACK_PROXY_PROGRAM"), str)
-            or env["AGENTSTACK_PROXY_PROGRAM"] not in _CODEX_PROGRAMS
-        ):
-            raise _ResumeCapabilityError(
-                "identity_mismatch",
-                "child Codex Mail proxy belongs to another registration",
-            )
-
-
 def _codex_resume_child_home(
     session: str, registration: dict
-) -> tuple[str | None, str]:
-    """Return a verified child CODEX_HOME and its restore status.
-
-    ``unmanaged`` means neither canonical child artifact exists and preserves
-    the pre-existing default/custom-home behavior. ``absent`` means formal
-    child state exists but no home was ever written (legacy/inherit) or it was
-    later removed; current metadata cannot distinguish those cases.
-    """
+) -> tuple[str, str]:
+    """Verify retained state and return the fresh-home target plus saved profile."""
 
     if not _valid(session):
         raise _ResumeCapabilityError(
             "invalid_identity", "Codex child identity is unsafe"
         )
-    state_dir = os.path.join(RUNTIME_DIR, "child-agents")
-    state_path = os.path.join(state_dir, f"{session}.json")
-    child_home = os.path.join(state_dir, f"{session}.codex-home")
+    module = _child_resume_module()
     try:
-        os.lstat(state_path)
-    except FileNotFoundError:
-        try:
-            os.lstat(child_home)
-        except FileNotFoundError:
-            return None, "unmanaged"
-        except OSError as exc:
-            raise _ResumeCapabilityError(
-                "config_unrestorable",
-                "canonical Codex child home cannot be inspected",
-            ) from exc
-        raise _ResumeCapabilityError(
-            "config_unrestorable",
-            "canonical Codex child home has no matching child state",
+        state = module.inspect_retained(
+            pathlib.Path(RUNTIME_DIR),
+            session,
+            agent_id=registration["agent_id"],
+            project_key=registration["project_key"],
+            program=registration["program"],
         )
-    except OSError as exc:
-        raise _ResumeCapabilityError(
-            "config_unrestorable",
-            "canonical Codex child state cannot be inspected",
-        ) from exc
+    except module.ResumeStateError as exc:
+        raise _ResumeCapabilityError(exc.code, str(exc)) from exc
 
-    try:
-        state = json.loads(
-            _read_private_regular(
-                state_path, "Codex child state", _CODEX_CHILD_STATE_MAX_BYTES
-            ).decode("utf-8")
-        )
-    except _PrivateFileError as exc:
-        raise _ResumeCapabilityError(
-            _private_file_capability(exc, unavailable="config_unrestorable"),
-            str(exc),
-        ) from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child state is invalid"
-        ) from exc
-    if not isinstance(state, dict):
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child state is invalid"
-        )
-    if (
-        type(state.get("agent_id")) is not int
-        or state["agent_id"] <= 0
-        or state["agent_id"] != registration["agent_id"]
-        or state.get("agent_name") != session
-        or registration.get("agent_name") != session
-        or state.get("project_key") != registration["project_key"]
-        or not isinstance(state.get("program"), str)
-        or state["program"] not in _CODEX_PROGRAMS
-        or not isinstance(registration.get("program"), str)
-        or registration["program"] not in _CODEX_PROGRAMS
-    ):
-        raise _ResumeCapabilityError(
-            "identity_mismatch",
-            "Codex child state belongs to another registration",
-        )
-    state_token = state.get("registration_token")
-    if not isinstance(state_token, str) or not state_token or len(state_token) > 4096:
-        raise _ResumeCapabilityError(
-            "credential_missing",
-            "Codex child state has no usable owner credential",
-        )
-    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
-    token_file = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
-    try:
-        canonical_token = _read_private_regular(
-            token_file, "canonical Codex child credential", 4096
-        ).decode("utf-8").strip()
-    except _PrivateFileError as exc:
-        raise _ResumeCapabilityError(
-            _private_file_capability(exc, unavailable="credential_missing"),
-            str(exc),
-        ) from exc
-    except UnicodeDecodeError as exc:
-        raise _ResumeCapabilityError(
-            "credential_missing", "canonical Codex child credential is invalid"
-        ) from exc
-    if not canonical_token or not hmac.compare_digest(
-        canonical_token.encode("utf-8"), state_token.encode("utf-8")
-    ):
-        raise _ResumeCapabilityError(
-            "identity_mismatch",
-            "Codex child state and credential are from different registrations",
-        )
-
-    try:
-        home_info = os.lstat(child_home)
-    except FileNotFoundError:
-        return None, "absent"
-    except OSError as exc:
-        raise _ResumeCapabilityError(
-            "config_unrestorable",
-            "canonical Codex child home cannot be inspected",
-        ) from exc
-    if not stat.S_ISDIR(home_info.st_mode):
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "canonical Codex child home is unsafe"
-        )
-    if home_info.st_uid != os.getuid():
-        raise _ResumeCapabilityError(
-            "credential_permission", "canonical Codex child home is unsafe"
-        )
-    config_path = os.path.join(child_home, "config.toml")
-    try:
-        config = tomllib.loads(
-            _read_private_regular(
-                config_path, "Codex child config", _CODEX_CHILD_CONFIG_MAX_BYTES
-            ).decode("utf-8")
-        )
-    except _PrivateFileError as exc:
-        raise _ResumeCapabilityError(
-            _private_file_capability(exc, unavailable="config_unrestorable"),
-            str(exc),
-        ) from exc
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child config is invalid"
-        ) from exc
-    _validate_codex_child_proxy_config(
-        config,
-        session=session,
-        registration=registration,
-        token_file=token_file,
+    install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
+    source_home = os.path.expanduser(
+        os.environ.get("CODEX_HOME", "").strip() or "~/.codex"
     )
-    return child_home, "restored"
+    runner = os.path.expanduser(
+        os.environ.get("AGENTSTACK_MCP_PROXY", "").strip()
+        or os.path.join(
+            install_home,
+            "integrations",
+            "codex_app",
+            "plugin",
+            "scripts",
+            "run-mcp.sh",
+        )
+    )
+    if not os.path.isdir(source_home) or not (
+        os.path.isfile(runner) and os.access(runner, os.X_OK)
+    ):
+        raise _ResumeCapabilityError(
+            "config_unrestorable",
+            "current Codex home or child Mail proxy is unavailable",
+        )
+    child_home = os.path.join(
+        RUNTIME_DIR, "child-agents", f"{session}.codex-home"
+    )
+    if os.path.realpath(source_home) == os.path.realpath(child_home):
+        raise _ResumeCapabilityError(
+            "config_unrestorable",
+            "current Codex home cannot be the generated child home",
+        )
+    return child_home, state["codex_mcp_profile"]
+
+
+def _validate_codex_standalone_credential(session: str) -> None:
+    """Require the private owner credential used by reserved re-registration."""
+
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
+    token_path = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+    try:
+        token = _read_private_regular(
+            token_path, "Codex standalone credential", 4096
+        )
+    except _PrivateFileError as exc:
+        capability = (
+            "credential_permission"
+            if exc.reason in {"ownership", "permissions", "changed", "type"}
+            else "credential_missing"
+        )
+        raise _ResumeCapabilityError(
+            capability, str(exc)
+        ) from exc
+    if not token.strip():
+        raise _ResumeCapabilityError(
+            "credential_missing", "Codex standalone credential is empty"
+        )
 
 
 RESUME_CAPABILITY_MESSAGES = {
     "ready": "Resume prerequisites are verified.",
+    "verification_required": (
+        "Transcript ownership and working directory will be verified on resume."
+    ),
     "not_required": "This session is already available without transcript resume.",
     "invalid_identity": "The saved agent identity is not safe to resume.",
     "unsupported_provider": "This provider does not support transcript resume.",
@@ -2940,7 +2920,6 @@ RESUME_CAPABILITY_MESSAGES = {
     "credential_permission": "The retained child credential permissions are unsafe.",
     "identity_mismatch": "The retained child identity does not match this row.",
     "config_unrestorable": "The child Codex configuration cannot be restored safely.",
-    # Stage 3 assigns these when retention and explicit purge are introduced.
     "retention_expired": "The child resume retention period has expired.",
     "purged": "The retained child resume material was explicitly purged.",
 }
@@ -2949,19 +2928,100 @@ _RESUME_CATEGORIES = frozenset({"finished", "gone", "retired"})
 _CODEX_MCP_PROFILES = frozenset({"inherit", "orrery-only"})
 _RESUME_CAPABILITY_CACHE_TTL = 10.0
 _RESUME_CAPABILITY_CACHE_MAX = 4096
-_RESUME_CAPABILITY_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
+_RESUME_CAPABILITY_CACHE: dict[tuple, tuple[float, str]] = {}
 _RESUME_CAPABILITY_CACHE_LOCK = threading.Lock()
 
 
-def _codex_resume_provenance(session: str) -> tuple[dict | None, str | None]:
-    """Read the current child state only far enough to establish provenance.
+def _invalidate_resume_capability_cache(session: str) -> None:
+    with _RESUME_CAPABILITY_CACHE_LOCK:
+        for key in list(_RESUME_CAPABILITY_CACHE):
+            if key[0] == session:
+                _RESUME_CAPABILITY_CACHE.pop(key, None)
 
-    Stage 1 intentionally does not infer that a Codex row is a managed child
-    from its name, transcript location, or missing artifacts.  Stage 2 will
-    make this non-secret provenance survive cleanup.  Until then, old rows
-    fail closed while crash-preserved state can become ready once it carries
-    the explicit fields.
+
+def _codex_resume_provenance(
+    session: str,
+    *,
+    registration: dict | None = None,
+    transcript_path: str | None = None,
+) -> tuple[dict | None, str | None]:
+    """Return verified, non-secret child provenance from a bound receipt.
+
+    The receipt is independent of private child material and therefore still
+    distinguishes a managed child from an unmanaged Codex session after expiry
+    or explicit purge removes state and credentials. Current private state is a
+    compatibility source for a launch that has not produced its first receipt.
     """
+
+    registration = registration or _codex_registration(session)
+    transcript_path = transcript_path or _codex_transcript_path(session)
+    if registration is not None and transcript_path:
+        receipt_path = os.path.join(
+            SESSION_INDEX_DIR, f"{registration['agent_id']}.json"
+        )
+        try:
+            os.lstat(receipt_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return None, "config_unrestorable"
+        else:
+            try:
+                receipt = json.loads(
+                    _read_private_regular(
+                        receipt_path,
+                        "Codex session receipt",
+                        _CODEX_CHILD_STATE_MAX_BYTES,
+                    ).decode("utf-8")
+                )
+            except _PrivateFileError as exc:
+                return None, _private_file_capability(
+                    exc, unavailable="config_unrestorable"
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return None, "config_unrestorable"
+            identity_matches = (
+                isinstance(receipt, dict)
+                and receipt.get("schema_version") == 2
+                and receipt.get("binding_kind") == "self"
+                and receipt.get("provider") == "codex"
+                and receipt.get("program") == registration["program"]
+                and type(receipt.get("agent_id")) is int
+                and receipt["agent_id"] == registration["agent_id"]
+                and receipt.get("agent_name") == session
+                and receipt.get("project_key") == registration["project_key"]
+                and receipt.get("registered_by") == session
+                and isinstance(receipt.get("transcript_path"), str)
+                and os.path.realpath(receipt["transcript_path"])
+                == os.path.realpath(transcript_path)
+            )
+            if not identity_matches:
+                value = receipt if isinstance(receipt, dict) else None
+                return value, "identity_mismatch"
+            provenance = {
+                key: receipt.get(key)
+                for key in (
+                    "agent_id",
+                    "agent_name",
+                    "project_key",
+                    "provider",
+                    "program",
+                    "launch_origin",
+                    "codex_mcp_profile",
+                )
+            }
+            child = (
+                provenance["launch_origin"] == "child"
+                and isinstance(provenance["codex_mcp_profile"], str)
+                and provenance["codex_mcp_profile"] in _CODEX_MCP_PROFILES
+            )
+            standalone = (
+                provenance["launch_origin"] == "standalone"
+                and provenance["codex_mcp_profile"] is None
+            )
+            if child or standalone:
+                return provenance, None
+            return provenance, "provenance_missing"
 
     state_path = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")
     try:
@@ -2986,13 +3046,20 @@ def _codex_resume_provenance(session: str) -> tuple[dict | None, str | None]:
         return None, "config_unrestorable"
     if (
         state.get("launch_origin") != "child"
+        or not isinstance(state.get("codex_mcp_profile"), str)
         or state.get("codex_mcp_profile") not in _CODEX_MCP_PROFILES
     ):
         return state, "provenance_missing"
     return state, None
 
 
-def _resume_capability(session: str, program: str, *, category: str) -> str:
+def _resume_capability(
+    session: str,
+    program: str,
+    *,
+    category: str,
+    verify_transcript: bool = True,
+) -> str:
     """Return the fixed reason code shared by every dashboard resume surface.
 
     This function is read-only.  `/api/jump` calls it again immediately before
@@ -3019,7 +3086,14 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
         return "terminal_unavailable"
 
     if normalized_program.startswith("claude"):
-        path = _transcript_path(session)
+        if verify_transcript:
+            path = _transcript_path(session)
+        else:
+            resolved, path, _catalog_key = _cached_claude_transcript_path(session)
+            if not resolved:
+                if not os.path.exists(ABS_CLAUDE):
+                    return "cli_missing"
+                return "verification_required"
         if not path:
             return "no_history"
         sid = os.path.basename(path)[:-6] if path.endswith(".jsonl") else ""
@@ -3042,21 +3116,34 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
     registration = _codex_registration(session)
     if registration is None:
         return "registration_missing"
-    _state, provenance_error = _codex_resume_provenance(session)
+    provenance, provenance_error = _codex_resume_provenance(
+        session,
+        registration=registration,
+        transcript_path=path,
+    )
     if provenance_error:
         return provenance_error
-    try:
-        child_home, child_home_status = _codex_resume_child_home(
-            session, registration
-        )
-    except _ResumeCapabilityError as exc:
-        return exc.code
-    except ValueError:
-        # A new validation branch must fail closed until it receives an
-        # explicit stable code; never classify it from mutable message text.
-        return "config_unrestorable"
-    if not child_home or child_home_status != "restored":
-        return "config_unrestorable"
+    launch_origin = provenance.get("launch_origin") if provenance else None
+    if launch_origin == "child":
+        try:
+            child_home, child_profile = _codex_resume_child_home(
+                session, registration
+            )
+        except _ResumeCapabilityError as exc:
+            return exc.code
+        except ValueError:
+            # A new validation branch must fail closed until it receives an
+            # explicit stable code; never classify it from mutable message text.
+            return "config_unrestorable"
+        if not child_home or child_profile not in _CODEX_MCP_PROFILES:
+            return "config_unrestorable"
+    elif launch_origin == "standalone":
+        try:
+            _validate_codex_standalone_credential(session)
+        except _ResumeCapabilityError as exc:
+            return exc.code
+    else:
+        return "provenance_missing"
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
     bootstrap = os.path.join(install_home, "bin", "agentstack-codex-bootstrap")
     if not os.path.isfile(bootstrap) or not shutil.which("codex"):
@@ -3075,13 +3162,25 @@ def _resume_capability_for_row(
     """
 
     normalized_program = (program or "").strip().lower()
-    key = (session, normalized_program, category)
+    transcript_catalog_key = (
+        _claude_transcript_catalog_key()
+        if normalized_program.startswith("claude")
+        else None
+    )
+    key = (session, normalized_program, category, transcript_catalog_key)
     now = time.monotonic()
     with _RESUME_CAPABILITY_CACHE_LOCK:
         hit = _RESUME_CAPABILITY_CACHE.get(key)
         if hit and now - hit[0] < _RESUME_CAPABILITY_CACHE_TTL:
             return hit[1]
-        capability = _resume_capability(session, program, category=category)
+
+    capability = _resume_capability(
+        session,
+        program,
+        category=category,
+        verify_transcript=False,
+    )
+    with _RESUME_CAPABILITY_CACHE_LOCK:
         if len(_RESUME_CAPABILITY_CACHE) >= _RESUME_CAPABILITY_CACHE_MAX:
             expired = [
                 cache_key
@@ -3112,6 +3211,76 @@ def _resume_unavailable(capability: str) -> dict:
     }
 
 
+def _rebuild_codex_child_home(
+    session: str, registration: dict, child_home: str, mcp_profile: str
+) -> None:
+    """Recreate the isolated home from current user config, never a snapshot."""
+
+    helper = _child_resume_helper_path()
+    install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
+    source_home = os.path.expanduser(
+        os.environ.get("CODEX_HOME", "").strip() or "~/.codex"
+    )
+    runner = os.path.expanduser(
+        os.environ.get("AGENTSTACK_MCP_PROXY", "").strip()
+        or os.path.join(
+            install_home,
+            "integrations",
+            "codex_app",
+            "plugin",
+            "scripts",
+            "run-mcp.sh",
+        )
+    )
+    token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
+    token_file = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
+    command = [
+        os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable,
+        helper,
+        "build-home",
+        "--runtime-dir",
+        RUNTIME_DIR,
+        "--home",
+        child_home,
+        "--source",
+        source_home,
+        "--runner",
+        runner,
+        "--child",
+        session,
+        "--project-key",
+        registration["project_key"],
+        "--token-file",
+        token_file,
+        "--mcp-url",
+        _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
+        "--mail-env",
+        MAIL_ENV_PATH,
+        "--bearer-mode",
+        MAIL_HTTP_BEARER_MODE,
+        "--python-bin",
+        os.environ.get("AGENTSTACK_PYTHON", "").strip(),
+        "--mcp-profile",
+        mcp_profile,
+        "--overlay",
+        os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip(),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child home could not be regenerated"
+        ) from exc
+    if result.returncode != 0 or not os.path.isfile(
+        os.path.join(child_home, "config.toml")
+    ):
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child home could not be regenerated"
+        )
+
+
 def _do_resume_codex(session: str) -> dict:
     """Codex agent を `codex resume <sid>` で tmux 再開する。
 
@@ -3136,10 +3305,30 @@ def _do_resume_codex(session: str) -> dict:
     if registration is None:
         return {"ok": False,
                 "error": "Codex の正式な project/agent 登録を確認できず再開できません"}
+    provenance, provenance_error = _codex_resume_provenance(
+        session,
+        registration=registration,
+        transcript_path=path,
+    )
+    if provenance_error:
+        return _resume_unavailable(provenance_error)
+    launch_origin = provenance.get("launch_origin") if provenance else None
+    child_home = ""
+    child_profile = ""
     try:
-        child_home, child_home_status = _codex_resume_child_home(
-            session, registration
-        )
+        if launch_origin == "child":
+            child_home, child_profile = _codex_resume_child_home(
+                session, registration
+            )
+            _rebuild_codex_child_home(
+                session, registration, child_home, child_profile
+            )
+        elif launch_origin == "standalone":
+            _validate_codex_standalone_credential(session)
+        else:
+            return _resume_unavailable("provenance_missing")
+    except _ResumeCapabilityError as exc:
+        return _resume_unavailable(exc.code)
     except ValueError as exc:
         return {"ok": False, "error": f"Codex child 設定を確認できません: {exc}"}
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
@@ -3152,44 +3341,98 @@ def _do_resume_codex(session: str) -> dict:
     # The product bootstrap clears inherited launch pairs, re-registers the
     # reserved identity and persists a fresh launch generation.  `&&` is the
     # safety boundary: a bootstrap/prepare failure must not reach Codex exec.
-    src = (
-        f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)} && '
-    )
-    child_home_env = ""
-    extra_dirs = None
-    if child_home:
-        child_home_env = (
-            f'export CODEX_HOME={shlex.quote(child_home)}; '
-            f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
-        )
-        extra_dirs = [child_home]
-    elif child_home_status == "absent":
-        logging.warning(
-            "Codex resume child home absent; using existing/default config "
-            "with Mail connectivity unconfirmed (agent=%s id=%s)",
-            session,
-            registration["agent_id"],
-        )
-    inner = (
+    src = f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)}'
+    launch_prefix = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={shlex.quote(session)}; '
         'export AGENTSTACK_RESERVED_IDENTITY=1; '
         'export AGENTSTACK_CODEX_LAUNCH_KIND=resume; '
-        f'{child_home_env}'
-        f'{src}'
-        f'exec env -u OPENAI_API_KEY codex resume {sid} '
-        f'-C {shlex.quote(cwd)} '
-        f'{_codex_child_launch_flags(extra_dirs)}'
+        f'export AGENTSTACK_CODEX_RESUME_SESSION_ID={shlex.quote(sid)}; '
+        f'export AGENTSTACK_CODEX_LAUNCH_ORIGIN={shlex.quote(launch_origin)}; '
     )
+    if launch_origin == "child":
+        child_home_env = (
+            f'export CODEX_HOME={shlex.quote(child_home)}; '
+            f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
+            f'export AGENTSTACK_CODEX_CHILD_MCP_PROFILE={shlex.quote(child_profile)}; '
+        )
+        cleanup = os.path.join(install_home, "hooks", "cleanup-child-agent.sh")
+        discard_generated = " ".join(
+            shlex.quote(part)
+            for part in (
+                os.environ.get("AGENTSTACK_PYTHON", "").strip() or sys.executable,
+                _child_resume_helper_path(),
+                "discard-generated",
+                "--runtime-dir",
+                RUNTIME_DIR,
+                "--agent-name",
+                session,
+            )
+        )
+        inner = (
+            f'{launch_prefix}{child_home_env}'
+            f'if {src}; then '
+            f'env -u OPENAI_API_KEY codex resume {sid} '
+            f'-C {shlex.quote(cwd)} '
+            f'{_codex_child_launch_flags([child_home])}; '
+            'CODEX_STATUS=$?; '
+            f'/bin/bash {shlex.quote(cleanup)}; CLEANUP_STATUS=$?; '
+            '[[ "$CODEX_STATUS" -ne 0 ]] && exit "$CODEX_STATUS"; '
+            'exit "$CLEANUP_STATUS"; '
+            'else BOOTSTRAP_STATUS=$?; '
+            f'{discard_generated} >/dev/null 2>&1 || true; '
+            'exit "$BOOTSTRAP_STATUS"; fi'
+        )
+    else:
+        inner = (
+            f'{launch_prefix}{src} && '
+            f'exec env -u OPENAI_API_KEY codex resume {sid} '
+            f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
+        )
+    resume_environment = {
+        "AGENTSTACK_HOME": install_home,
+        "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
+        "AGENTSTACK_PROJECT_KEY": registration["project_key"],
+        "AGENTSTACK_HOOKS_DIR": os.path.join(install_home, "hooks"),
+        "AGENTSTACK_MCP_URL": _env_text(
+            "AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"
+        ),
+        "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH,
+        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
+        "AGENTSTACK_MANAGED_AGENTS_FILE": _env_path(
+            "AGENTSTACK_MANAGED_AGENTS_FILE",
+            os.path.join(RUNTIME_DIR, "managed_agents.txt"),
+        ),
+        "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": _env_text(
+            "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"
+        ),
+    }
+    configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
+    if configured_python:
+        resume_environment["AGENTSTACK_PYTHON"] = configured_python
+    tmux_environment = [
+        argument
+        for key, value in resume_environment.items()
+        for argument in ("-e", f"{key}={value}")
+    ]
     launch = _open_terminal_tmux(
-        ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-         _login_shell(), "-lic", inner],
+        [
+            "tmux",
+            "new-session",
+            "-A",
+            "-s",
+            session,
+            "-c",
+            cwd,
+            *tmux_environment,
+            _login_shell(),
+            "-lic",
+            inner,
+        ],
         title=session,
     )
     if launch.get("ok"):
         detail = f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})"
-        if child_home_status == "absent":
-            detail += "。子専用設定なし。既存/既定設定で再開し、Mail 接続は未確認です"
         return {
             "ok": True,
             "action": "resumed",
@@ -3384,6 +3627,30 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
             launch = json.load(handle)
     except (OSError, ValueError):
         launch = None
+    launch_kind = launch.get("launch_kind") if isinstance(launch, dict) else None
+    resume_session_id = (
+        launch.get("resume_session_id") if isinstance(launch, dict) else None
+    )
+    fallback_launch_id = (
+        launch.get("fallback_launch_id") if isinstance(launch, dict) else None
+    )
+    fallback_receipt_id = (
+        launch.get("fallback_receipt_id") if isinstance(launch, dict) else None
+    )
+    resume_fields_valid = (
+        launch_kind == "startup"
+        and resume_session_id is None
+        and fallback_launch_id is None
+        and fallback_receipt_id is None
+    ) or (
+        launch_kind == "resume"
+        and isinstance(resume_session_id, str)
+        and bool(re.fullmatch(r"[0-9A-Fa-f-]{8,}", resume_session_id))
+        and isinstance(fallback_launch_id, str)
+        and bool(fallback_launch_id)
+        and isinstance(fallback_receipt_id, str)
+        and bool(fallback_receipt_id)
+    )
     valid_common = (
         isinstance(launch, dict)
         and launch.get("schema_version") == 1
@@ -3395,7 +3662,8 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
         and launch.get("project_key") == registration["project_key"]
         and isinstance(launch.get("launch_id"), str)
         and bool(launch.get("launch_id"))
-        and launch.get("launch_kind") in {"startup", "resume"}
+        and launch_kind in {"startup", "resume"}
+        and resume_fields_valid
         and type(launch.get("binding_conflicted")) is bool
         and (
             launch.get("claimed_session_id") is None
@@ -3456,6 +3724,33 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
             "history_binding_reason_code": "bound",
             "transcript_path": transcript,
         }
+
+    # Codex 0.156 emits SessionStart(resume) on the first submitted prompt,
+    # not when the REPL opens.  Until that hook claims this fresh expectation,
+    # retain only the exact receipt used to choose `codex resume <session_id>`.
+    # The nonce pair, registration, requested ID, and rollout header are all
+    # revalidated here. Any hook transition sets a current receipt nonce (or a
+    # conflict), so this fallback cannot survive a failed/conflicting claim.
+    if (
+        launch_kind == "resume"
+        and claimed_session_id is None
+        and receipt_id is None
+        and launch.get("binding_conflicted") is False
+    ):
+        fallback = _verified_codex_index(
+            session,
+            registration,
+            fallback_launch_id,
+            resume_session_id,
+            fallback_receipt_id,
+        )
+        if fallback:
+            return {
+                "history_binding": "bound",
+                "history_binding_reason": "",
+                "history_binding_reason_code": "bound",
+                "transcript_path": fallback,
+            }
 
     reason = launch.get("last_reason")
     if reason not in _CODEX_BINDING_REASONS or reason == "disabled":
@@ -7007,6 +7302,29 @@ def _start_supervisor_watchdog():
     threading.Thread(target=_watch_supervisor, daemon=True).start()
 
 
+def _start_child_resume_maintenance() -> None:
+    """Purge expired private resume material while the dashboard is running."""
+
+    def worker() -> None:
+        while True:
+            try:
+                removed = _child_resume_module().purge_expired(
+                    pathlib.Path(RUNTIME_DIR)
+                )
+                if removed:
+                    logging.info(
+                        "purged expired Codex child resume material (count=%d)",
+                        len(removed),
+                    )
+            except Exception as exc:  # maintenance must not stop the dashboard
+                logging.warning("child resume retention maintenance failed: %s", exc)
+            time.sleep(3600)
+
+    threading.Thread(
+        target=worker, name="child-resume-maintenance", daemon=True
+    ).start()
+
+
 JS_ERROR_LOG = os.path.join(HERE, "logs", "js-errors.log")
 
 
@@ -7042,6 +7360,7 @@ def _log_js_error(body: dict) -> dict:
 
 def main():
     _start_supervisor_watchdog()
+    _start_child_resume_maintenance()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     try:

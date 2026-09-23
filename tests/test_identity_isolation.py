@@ -324,6 +324,10 @@ def test_reserved_bootstrap_refuses_to_resume_without_prepare_helper(tmp_path):
             "AGENTSTACK_HOOKS_DIR": str(missing_hooks),
             "AGENTSTACK_RESERVED_IDENTITY": "1",
             "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+            "AGENTSTACK_CODEX_RESUME_SESSION_ID": (
+                "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+            ),
+            "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "inherit",
             "AGENT_NAME": "BoundCodex",
             "TMUX": "",
         },

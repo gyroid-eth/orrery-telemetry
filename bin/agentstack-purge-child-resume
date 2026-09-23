@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
+RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$INSTALL_HOME/hooks/child_resume.py}"
+EXPIRED=false
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: agentstack-purge-child-resume [--runtime-dir DIR] AGENT_NAME
+       agentstack-purge-child-resume [--runtime-dir DIR] --expired
+
+Remove only retained Codex-child resume credentials and generated runtime
+material. Session receipts and transcripts are not removed.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --runtime-dir)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            RUNTIME_DIR="$2"
+            shift 2
+            ;;
+        --expired)
+            EXPIRED=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --*)
+            usage
+            exit 2
+            ;;
+        *)
+            [[ -z "${AGENT_NAME_TO_PURGE:-}" ]] || { usage; exit 2; }
+            AGENT_NAME_TO_PURGE="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -f "$HELPER" ]] || {
+    echo "agentstack-purge-child-resume: helper is missing: $HELPER" >&2
+    exit 1
+}
+if [[ "$EXPIRED" == true ]]; then
+    [[ -z "${AGENT_NAME_TO_PURGE:-}" ]] || { usage; exit 2; }
+    exec "${AGENTSTACK_PYTHON:-python3}" "$HELPER" purge \
+        --runtime-dir "$RUNTIME_DIR" --expired
+fi
+[[ -n "${AGENT_NAME_TO_PURGE:-}" ]] || { usage; exit 2; }
+exec "${AGENTSTACK_PYTHON:-python3}" "$HELPER" purge \
+    --runtime-dir "$RUNTIME_DIR" "$AGENT_NAME_TO_PURGE"

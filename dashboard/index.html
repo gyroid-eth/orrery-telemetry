@@ -32806,6 +32806,7 @@ const CATLABEL={agent:"ACTIVE AGENTS",
   retired:"RETIRED — soft-deleted"};
 const RESUME_CAPABILITY_INFO={
   ready:{label:'READY',detail:'Resume prerequisites are verified.'},
+  verification_required:{label:'VERIFY ON RESUME',detail:'Transcript ownership and working directory will be verified when you resume.'},
   not_required:{label:'NOT REQUIRED',detail:'This session can be opened without transcript resume.'},
   invalid_identity:{label:'INVALID IDENTITY',detail:'The saved agent identity is not safe to resume.'},
   unsupported_provider:{label:'UNSUPPORTED PROVIDER',detail:'This provider does not support transcript resume.'},
@@ -33457,8 +33458,10 @@ function bay(a,i){
     const info=resumeCapabilityInfo(capability);
     chips.push(capability==='ready'
       ? `<span class="chip" title="${esc(info.detail)}">↻ RESUME READY</span>`
-      : `<span class="chip imp" title="${esc(info.detail)}">`+
-        `× RESUME · ${esc(info.label)}</span>`);
+      : capability==='verification_required'
+        ? `<span class="chip" title="${esc(info.detail)}">? RESUME · VERIFY</span>`
+        : `<span class="chip imp" title="${esc(info.detail)}">`+
+          `× RESUME · ${esc(info.label)}</span>`);
   }
   // 'agent' は section header(ACTIVE AGENTS) と冗長なので省略
   if(a.category==='finished')
@@ -36343,7 +36346,8 @@ function openPanelInner(name){
   const capabilityInfo=resumeCapabilityInfo(capability);
   const openBtn=TM('tm-open');
   if(openBtn){
-    const unavailable=resumeState&&capability!=='ready';
+    const verificationRequired=capability==='verification_required';
+    const unavailable=resumeState&&capability!=='ready'&&!verificationRequired;
     openBtn.disabled=unavailable;
     openBtn.style.opacity=unavailable?'.5':'';
     openBtn.style.cursor=unavailable?'not-allowed':'';
@@ -36353,7 +36357,7 @@ function openPanelInner(name){
     openBtn.textContent=resumeState
       ? (capability==='ready'
         ? (EMBED_MODE?'RESUME IN COCKPIT':'RESUME')
-        : 'RESUME UNAVAILABLE')
+        : verificationRequired?'VERIFY & RESUME':'RESUME UNAVAILABLE')
       : (EMBED_MODE?'OPEN IN COCKPIT':'OPEN TMUX');
     openBtn.title=resumeState?capabilityInfo.detail:'Open this live terminal session';
   }
@@ -36452,7 +36456,8 @@ function renderPanelSummary(name, a, g){
       g.resumeCapability||'provenance_missing';
     const info=resumeCapabilityInfo(capability);
     rows.push(`<div class="ts-row"><b>resume</b><span>`+
-      `${capability==='ready'?'READY':'UNAVAILABLE · '+esc(info.label)}`+
+      `${capability==='ready'?'READY':capability==='verification_required'
+        ?'VERIFY ON RESUME':'UNAVAILABLE · '+esc(info.label)}`+
       ` <span class="ts-empty">${esc(info.detail)}</span></span></div>`);
   }
   if(typeof ctxUsed==='number'){

@@ -20,12 +20,14 @@ def test_plugin_hooks_wire_every_p1_telemetry_event():
         "Stop",
         "SubagentStop",
     }
-    for groups in hooks.values():
+    for event, groups in hooks.items():
         assert len(groups) == 1
         handler = groups[0]["hooks"][0]
         assert handler["type"] == "command"
         assert handler["async"] is False
-        assert handler["timeoutSec"] == 1
+        # SessionStart gives the recorder time to bind; interactive hooks keep the 1-second budget.
+        expected_timeout = 5 if event == "SessionStart" else 1
+        assert handler["timeoutSec"] == expected_timeout
         assert handler["command"] == '"$PLUGIN_ROOT/scripts/run-hook.sh"'
 
 

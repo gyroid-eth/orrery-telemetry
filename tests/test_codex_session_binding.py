@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
+import signal
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -203,12 +207,172 @@ def _prepare(env: dict, *, now: float = 100.0, history_mode: str = "enabled"):
     )
 
 
+def _prepare_child(
+    env: dict, *, profile: str = "orrery-only", now: float = 100.0
+):
+    return prepare_mod.prepare(
+        env["runtime"],
+        env["registration"],
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile=profile,
+        now=now,
+    )
+
+
+def _prepare_standalone(
+    env: dict, *, launch_kind: str = "startup", now: float = 100.0
+):
+    return prepare_mod.prepare(
+        env["runtime"],
+        env["registration"],
+        launch_kind=launch_kind,
+        history_mode="enabled",
+        launch_origin="standalone",
+        resume_session_id=SESSION_ID if launch_kind == "resume" else None,
+        now=now,
+    )
+
+
 def _record(env: dict, launch_path: Path, launch_id: str, **overrides: object) -> str:
     return record_mod.record_payload(
         _payload(env["transcript"], **overrides),
         launch_path=launch_path,
         launch_id=launch_id,
     )
+
+
+def test_standalone_provenance_survives_in_bound_receipt(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare_standalone(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+
+    receipt_path = (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in receipt
+
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance is not None
+    assert provenance["launch_origin"] == "standalone"
+    assert provenance["codex_mcp_profile"] is None
+
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    assert _record(
+        binding_env, resume_path, resume_id, source="resume"
+    ) == "bound"
+    resumed = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert resumed["launch_kind"] == "resume"
+    assert resumed["launch_origin"] == "standalone"
+    assert "codex_mcp_profile" not in resumed
+
+
+def test_child_provenance_survives_private_cleanup_in_bound_receipt(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare_child(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+
+    receipt_path = (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["agent_id"] == AGENT_ID
+    assert receipt["agent_name"] == AGENT
+    assert receipt["project_key"] == str(binding_env["project"])
+    assert receipt["provider"] == "codex"
+    assert receipt["launch_origin"] == "child"
+    assert receipt["codex_mcp_profile"] == "orrery-only"
+    assert "registration_token" not in receipt
+
+    # Normal cleanup removes the private state, credential and generated home;
+    # the non-secret receipt remains the durable child/unmanaged distinction.
+    private_dir = binding_env["runtime"] / "child-agents"
+    private_dir.mkdir()
+    private_state = private_dir / f"{AGENT}.json"
+    private_state.write_text('{"registration_token":"secret"}\n')
+    private_state.unlink()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "tmux")
+
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance == {
+        "agent_id": AGENT_ID,
+        "agent_name": AGENT,
+        "project_key": str(binding_env["project"]),
+        "provider": "codex",
+        "program": "codex",
+        "launch_origin": "child",
+        "codex_mcp_profile": "orrery-only",
+    }
+    assert (
+        server._resume_capability(AGENT, "codex", category="retired")
+        == "credential_missing"
+    )
+
+
+def test_unmanaged_receipt_is_not_promoted_to_child_provenance(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(binding_env["runtime"]))
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "tmux")
+
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert provenance is not None
+    assert reason == "provenance_missing"
+    assert (
+        server._resume_capability(AGENT, "codex", category="retired")
+        == "provenance_missing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("launch_origin", "codex_mcp_profile"),
+    [
+        ("child", None),
+        (None, "inherit"),
+        ("standalone", "inherit"),
+        ("child", "untrusted-profile"),
+        ("child", ["inherit"]),
+    ],
+)
+def test_prepare_rejects_partial_or_unknown_child_provenance(
+    binding_env: dict,
+    launch_origin: str | None,
+    codex_mcp_profile: object,
+) -> None:
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="startup",
+            history_mode="enabled",
+            launch_origin=launch_origin,
+            codex_mcp_profile=codex_mcp_profile,
+        )
+
+
+def test_recorder_does_not_bind_partial_child_provenance(binding_env: dict) -> None:
+    launch_path, launch_id = _prepare(binding_env)
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    launch["launch_origin"] = "child"
+    launch_path.write_text(json.dumps(launch), encoding="utf-8")
+
+    assert _record(binding_env, launch_path, launch_id) == "stale_launch"
+    assert not (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    ).exists()
 
 
 def _adopt_child_handoff(
@@ -262,6 +426,7 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
             "bin/lib/agentstack-register.sh",
             "bin/lib/agentstack-scientists.sh",
             "hooks/spawn_child.sh",
+            "hooks/child_resume.py",
             "hooks/prepare-codex-session-binding.py",
             "integrations/codex_app/plugin/scripts/record-codex-session-index.py",
         ):
@@ -504,13 +669,28 @@ def test_preregister_no_arg_spawn_reaches_recorder_and_reader(
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert canonical_token.is_file()
-    assert state == {
+    assert {
+        key: state[key]
+        for key in (
+            "agent_id",
+            "agent_name",
+            "program",
+            "project_key",
+            "registration_token",
+        )
+    } == {
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
         "program": "codex",
         "project_key": str(binding_env["project"]),
         "registration_token": "server-owner-token",
     }
+    assert state["schema_version"] == 1
+    assert state["launch_origin"] == "child"
+    assert state["provider"] == "codex"
+    assert state["codex_mcp_profile"] == "inherit"
+    assert state["retired_at"] is None
+    assert state["resume_expires_at"] is None
     assert handoff.exists() is False and sidecar.exists() is False
 
     child_env, command = _tmux_new_session_env(Path(env["FAKE_TMUX_LOG"]))
@@ -633,6 +813,9 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
         ).read_text(encoding="utf-8")
     )
     assert receipt["transcript_path"] == str(rollout.resolve())
+    assert receipt["launch_origin"] == "child"
+    assert receipt["codex_mcp_profile"] == "inherit"
+    assert "registration_token" not in receipt
 
     cleaned = subprocess.run(
         ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
@@ -647,6 +830,11 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
     assert not child_home.exists()
     assert rollout.is_file()
     assert server._codex_history_binding(AGENT, now=200.0)["history_binding"] == "bound"
+    provenance, reason = server._codex_resume_provenance(AGENT)
+    assert reason is None
+    assert provenance is not None
+    assert provenance["launch_origin"] == "child"
+    assert provenance["codex_mcp_profile"] == "inherit"
 
 
 def test_reader_recovers_legacy_cleaned_child_home_receipt(
@@ -855,10 +1043,11 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
         state_path.write_text(json.dumps(state), encoding="utf-8")
     if state_path.exists():
         state_path.chmod(0o600)
-    if failure_mode == "prepare_failure":
-        empty_hooks = tmp_path / "hooks-without-prepare"
-        empty_hooks.mkdir()
-        env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
+        if failure_mode == "prepare_failure":
+            empty_hooks = tmp_path / "hooks-without-prepare"
+            empty_hooks.mkdir()
+            shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
+            env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
     env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"
 
@@ -969,11 +1158,14 @@ def test_same_launch_payload_becomes_the_verified_receipt(binding_env) -> None:
 
 
 def test_resume_revalidates_the_same_session_id_and_payload_path(binding_env) -> None:
+    startup_path, startup_id = _prepare(binding_env)
+    assert _record(binding_env, startup_path, startup_id) == "bound"
     launch_path, launch_id = prepare_mod.prepare(
         binding_env["runtime"],
         binding_env["registration"],
         launch_kind="resume",
         history_mode="enabled",
+        resume_session_id=SESSION_ID,
         now=100.0,
     )
 
@@ -1013,6 +1205,147 @@ def test_old_valid_index_is_not_success_for_a_new_launch(binding_env) -> None:
     assert server._codex_transcript_path(AGENT) is None
     state = server._codex_history_binding(AGENT, now=211.0)
     assert state["history_binding"] == "unconfirmed"
+
+
+def test_unclaimed_resume_keeps_the_exact_previous_receipt_authoritative(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    old_receipt = json.loads(
+        (
+            binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    launch = json.loads(resume_path.read_text(encoding="utf-8"))
+
+    assert resume_id != first_id
+    assert launch["resume_session_id"] == SESSION_ID
+    assert launch["fallback_launch_id"] == old_receipt["launch_id"]
+    assert launch["fallback_receipt_id"] == old_receipt["receipt_id"]
+    state = server._codex_history_binding(AGENT, now=211.0)
+    assert state["history_binding"] == "bound"
+    assert state["transcript_path"] == str(binding_env["transcript"])
+
+
+def test_startup_expectation_invalidates_an_unclaimed_resume_fallback(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    _prepare_standalone(binding_env, launch_kind="resume", now=200.0)
+    assert server._codex_history_binding(AGENT, now=211.0)[
+        "history_binding"
+    ] == "bound"
+
+    _prepare_standalone(binding_env, now=300.0)
+
+    state = server._codex_history_binding(AGENT, now=311.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "hook_not_observed"
+
+
+def test_resume_hook_for_a_different_session_poison_fails_closed(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    other_id = "02e24a69-9f2b-8888-b4e9-f3cb354dec50"
+    other = binding_env["transcript"].with_name("other-session.jsonl")
+    _rollout(other, other_id)
+
+    result = record_mod.record_payload(
+        _payload(other, source="resume", session_id=other_id),
+        launch_path=resume_path,
+        launch_id=resume_id,
+    )
+
+    assert result == "id_mismatch"
+    state = server._codex_history_binding(AGENT, now=211.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "id_mismatch"
+    assert not (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    ).exists()
+
+
+def test_unclaimed_resume_fallback_may_chain_only_for_the_same_header(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+
+    _prepare_standalone(binding_env, launch_kind="resume", now=200.0)
+    second_path, _second_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=300.0
+    )
+    second = json.loads(second_path.read_text(encoding="utf-8"))
+    assert second["resume_session_id"] == SESSION_ID
+    assert server._codex_history_binding(AGENT, now=311.0)[
+        "history_binding"
+    ] == "bound"
+
+    _rollout(binding_env["transcript"], "different-session-id")
+    with pytest.raises(ValueError):
+        _prepare_standalone(binding_env, launch_kind="resume", now=400.0)
+    # Failed preparation did not publish another expectation generation.
+    assert json.loads(second_path.read_text(encoding="utf-8"))["launch_id"] == second[
+        "launch_id"
+    ]
+
+
+def test_unclaimed_resume_fallback_cannot_chain_to_a_different_requested_id(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    resume_path, _resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    previous = json.loads(resume_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="resume",
+            history_mode="enabled",
+            launch_origin="standalone",
+            resume_session_id="02e24a69-9f2b-8888-b4e9-f3cb354dec50",
+            now=300.0,
+        )
+
+    assert json.loads(resume_path.read_text(encoding="utf-8"))["launch_id"] == previous[
+        "launch_id"
+    ]
+
+
+def test_resume_fallback_cannot_change_recorded_provenance(binding_env) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="resume",
+            history_mode="enabled",
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+            resume_session_id=SESSION_ID,
+            now=200.0,
+        )
+
+    assert server._codex_history_binding(AGENT, now=211.0)[
+        "history_binding"
+    ] == "bound"
 
 
 def test_write_failure_does_not_raise_and_is_visible(binding_env, monkeypatch) -> None:
@@ -1265,6 +1598,7 @@ def test_builtin_subagent_event_is_ignored(binding_env, hook_event: str) -> None
 
 
 def test_cli_entrypoint_is_fail_open_on_bad_payload(tmp_path: Path) -> None:
+    launch_path = tmp_path / "runtime" / "codex_launches" / f"{AGENT_ID}.json"
     result = subprocess.run(
         [
             sys.executable,
@@ -1277,12 +1611,123 @@ def test_cli_entrypoint_is_fail_open_on_bad_payload(tmp_path: Path) -> None:
         text=True,
         capture_output=True,
         env={
-            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(tmp_path / "missing.json"),
+            "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
             "AGENTSTACK_CODEX_LAUNCH_ID": "missing",
         },
         check=False,
     )
     assert result.returncode == 0
+    log_text = (tmp_path / "runtime" / "codex-session-binding.log").read_text(
+        encoding="utf-8"
+    )
+    event = json.loads(log_text)
+    assert event["phase"] == "outcome"
+    assert event["outcome"] == "invalid_payload"
+    assert event["error_type"] == "JSONDecodeError"
+    assert "missing" not in log_text
+
+
+def test_session_start_deadline_survives_a_one_second_lock_wait(
+    binding_env, tmp_path: Path
+) -> None:
+    launch_path, launch_id = _prepare_standalone(binding_env)
+    receipt_path = binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    log_path = binding_env["runtime"] / "codex-session-binding.log"
+    runner = (
+        ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-hook.sh"
+    )
+    hooks = json.loads(
+        (
+            ROOT
+            / "integrations"
+            / "codex_app"
+            / "plugin"
+            / "hooks"
+            / "hooks.json"
+        ).read_text(encoding="utf-8")
+    )
+    timeout_seconds = hooks["hooks"]["SessionStart"][0]["hooks"][0]["timeoutSec"]
+    assert timeout_seconds >= 5
+    payload = json.dumps(
+        _payload(binding_env["transcript"], cwd=str(binding_env["project"]))
+    )
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_CODEX_APP_RUNTIME_DIR": str(tmp_path / "app-runtime"),
+        "AGENTSTACK_CODEX_LAUNCH_BINDING": str(launch_path),
+        "AGENTSTACK_CODEX_LAUNCH_ID": launch_id,
+    }
+    lock_path = launch_path.with_suffix(".lock")
+
+    # Reproduce the former one-second Codex hook deadline.  The recorder has
+    # entered and logged its start, but is killed while waiting for the same
+    # per-agent lock, leaving neither a transition nor a receipt.
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    process = subprocess.Popen(
+        [str(runner)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(payload, timeout=1)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+    assert not receipt_path.exists()
+    first_events = [
+        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["phase"] for event in first_events] == ["started"]
+
+    # The configured deadline leaves enough room for the same delayed lock.
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+    def release_lock() -> None:
+        time.sleep(1.25)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    releaser = threading.Thread(target=release_lock)
+    releaser.start()
+    completed = subprocess.run(
+        [str(runner)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    releaser.join(timeout=2)
+
+    assert completed.returncode == 0, completed.stderr
+    assert receipt_path.is_file()
+    events = [
+        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    successful = events[len(first_events) :]
+    assert successful[-1]["phase"] == "outcome"
+    assert successful[-1]["outcome"] == "bound"
+    lock_event = next(event for event in successful if event["phase"] == "lock_acquired")
+    assert lock_event["duration_ms"] >= 1_000
+    assert {event["phase"] for event in successful} >= {
+        "started",
+        "header_checked",
+        "launch_transitioned",
+        "receipt_written",
+        "outcome",
+    }
 
 
 def test_cli_entrypoint_derives_runtime_from_launch_path_not_ambient_env(
