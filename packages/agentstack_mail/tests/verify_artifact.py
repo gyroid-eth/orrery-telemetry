@@ -1175,6 +1175,7 @@ REQUIRED_METADATA = {
     "Requires-Dist: anyio<5,>=4.5",
     "Requires-Dist: fastmcp==2.13.0.2",
     "Requires-Dist: pydantic==2.12.5",
+    "Requires-Dist: sqlmodel<0.0.45,>=0.0.16",
     "Requires-Dist: uvicorn==0.52.1",
 }
 
