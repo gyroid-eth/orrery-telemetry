@@ -195,6 +195,7 @@ response:
       "model":"gpt-5.6-sol",
       "provider":"openai",
       "task":"README を更新",
+      "resume_capability":"not_required",
       "last_active":1785480000
     }
   ]
@@ -202,6 +203,8 @@ response:
 ```
 
 実際の row には pane title、state、elapsed、context、attach、latest message などの表示用 field も含まれます。frontend は未知 field を無視します。
+
+各 row の `resume_capability` は backend が判定した固定 reason code です。`ready` のときだけ transcript resume を開始できます。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex child provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。`retention_expired` と `purged` は retained resume material の導入後に使う予約済み code です。独立して poll する DECK / NETWORK の重複検査を避けるため表示値は最大 10 秒 cache されますが、`/api/jump` は cache を使わず操作直前に再検査します。
 
 ## GET `/api/graph`
 
@@ -220,7 +223,7 @@ response:
 
 ```json
 {
-  "nodes":[{"id":"WindyFermi","name":"WindyFermi"}],
+  "nodes":[{"id":"WindyFermi","name":"WindyFermi","resume_capability":"not_required"}],
   "edges":[{"source":"Parent","target":"WindyFermi","count":3}],
   "spawn":[{"parent":"Parent","child":"WindyFermi"}],
   "timestamp_diagnostics":{"invalid_count":0,"fields":{}},
@@ -406,7 +409,7 @@ request:
 {"session":"WindyFermi"}
 ```
 
-response は `{ok, session, actions}` です。既存 tmux session は configured terminal で open / focus し、session がなければ保存 transcript の resume を試みます。
+response は `{ok, session, actions}` です。既存 tmux session は configured terminal で open / focus します。session が無い場合と finished husk を transcript から復元する場合は、GET row と同じ `resume_capability` を server が再検査し、`ready` のときだけ resume を試みます。拒否時は HTTP 400 で `{"ok":false,"error":"...","resume_capability":"provenance_missing"}` のように固定 reason code を返し、husk の kill や terminal 起動は行いません。
 
 ## POST `/api/exit`
 

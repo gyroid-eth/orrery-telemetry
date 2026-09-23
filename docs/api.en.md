@@ -195,6 +195,7 @@ Response:
       "model":"gpt-5.6-sol",
       "provider":"openai",
       "task":"README を更新",
+      "resume_capability":"not_required",
       "last_active":1785480000
     }
   ]
@@ -202,6 +203,8 @@ Response:
 ```
 
 Actual rows also include display fields such as pane title, state, elapsed, context, attach, and latest message. The frontend ignores unknown fields.
+
+Each row's `resume_capability` is a fixed reason code decided by the backend. Transcript resume can begin only when it is `ready`. A live row that needs no resume is `not_required`; an unconfirmed provider is `unsupported_provider`; failures to verify history, cwd, CLI, formal registration, Codex child provenance, credential, identity, or configuration are `no_history`, `cwd_missing`, `cli_missing`, `registration_missing`, `provenance_missing`, `credential_missing` / `credential_permission`, `identity_mismatch`, and `config_unrestorable`, respectively. `retention_expired` and `purged` are reserved for retained resume material once that lifecycle ships. Display values are cached for at most 10 seconds to deduplicate independent DECK and NETWORK polls, but `/api/jump` bypasses the cache and rechecks immediately before acting.
 
 ## GET `/api/graph`
 
@@ -220,7 +223,7 @@ Response:
 
 ```json
 {
-  "nodes":[{"id":"WindyFermi","name":"WindyFermi"}],
+  "nodes":[{"id":"WindyFermi","name":"WindyFermi","resume_capability":"not_required"}],
   "edges":[{"source":"Parent","target":"WindyFermi","count":3}],
   "spawn":[{"parent":"Parent","child":"WindyFermi"}],
   "timestamp_diagnostics":{"invalid_count":0,"fields":{}},
@@ -406,7 +409,7 @@ Request:
 {"session":"WindyFermi"}
 ```
 
-The response is `{ok, session, actions}`. An existing tmux session is opened / focused in the configured terminal; when no session exists, the server attempts to resume a saved transcript.
+The response is `{ok, session, actions}`. An existing tmux session is opened / focused in the configured terminal. When no session exists, or when a finished husk must be restored from its transcript, the server rechecks the same `resume_capability` returned on GET rows and attempts resume only for `ready`. A refusal returns HTTP 400 with a fixed reason code such as `{"ok":false,"error":"...","resume_capability":"provenance_missing"}` and does not kill the husk or open a terminal.
 
 ## POST `/api/exit`
 
