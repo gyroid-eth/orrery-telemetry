@@ -2159,7 +2159,85 @@ def _focus_existing_terminal(session: str) -> bool:
 CLAUDE_PROJECTS = os.path.expanduser("~/.claude/projects")
 
 
-_TPATH_CACHE: dict[str, tuple[float, str | None]] = {}
+_TPATH_CACHE: dict[str, tuple[tuple, str | None]] = {}
+_CLAUDE_TRANSCRIPT_CATALOG_CACHE: dict = {
+    "checked_at": 0.0,
+    "root": "",
+    "key": None,
+}
+
+
+def _claude_transcript_catalog_key(*, refresh: bool = False) -> tuple:
+    """Cheap invalidation key for Claude transcript resolution results.
+
+    A transcript file grows while its session is live, but resume capability is
+    only requested after that session has finished.  New, removed, or renamed
+    transcripts update their project directory mtime, so statting the root and
+    its immediate project directories is enough to invalidate a completed-row
+    lookup without opening thousands of JSONL files on every dashboard poll.
+    """
+
+    root = os.path.realpath(CLAUDE_PROJECTS)
+    now = time.monotonic()
+    cached = _CLAUDE_TRANSCRIPT_CATALOG_CACHE
+    if (
+        not refresh
+        and cached["root"] == root
+        and cached["key"] is not None
+        and now - cached["checked_at"] < 1.0
+    ):
+        return cached["key"]
+    try:
+        root_mtime = os.stat(root).st_mtime_ns
+    except OSError:
+        key = (root, None, ())
+        cached.update(checked_at=now, root=root, key=key)
+        return key
+    projects = []
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        projects.append((entry.path, entry.stat().st_mtime_ns))
+                except OSError:
+                    continue
+    except OSError:
+        key = (root, root_mtime, ())
+        cached.update(checked_at=now, root=root, key=key)
+        return key
+    projects.sort()
+    key = (root, root_mtime, tuple(projects))
+    cached.update(checked_at=now, root=root, key=key)
+    return key
+
+
+def _store_claude_transcript_resolution(
+    session: str, catalog_key: tuple, path: str | None
+) -> None:
+    _TPATH_CACHE[session] = (catalog_key, path)
+    # A full /api/jump verification must be visible on the next DECK/NETWORK
+    # poll, rather than hidden behind the short cross-view capability cache.
+    _invalidate_resume_capability_cache(session)
+
+
+def _cached_claude_transcript_path(
+    session: str, *, refresh_catalog: bool = False,
+) -> tuple[bool, str | None, tuple]:
+    """Return a proven cached result without entering the content scanner."""
+
+    catalog_key = _claude_transcript_catalog_key(refresh=refresh_catalog)
+    indexed = _indexed_transcript(session)
+    if indexed:
+        _claim_transcript(indexed, session, 1 << 30, exact=True)
+        _store_claude_transcript_resolution(session, catalog_key, indexed)
+        return True, indexed, catalog_key
+    hit = _TPATH_CACHE.get(session)
+    if hit and hit[0] == catalog_key:
+        path = hit[1]
+        if path is None or os.path.isfile(path):
+            return True, path, catalog_key
+    return False, None, catalog_key
 
 
 def _ownership_score(text: str, name: str) -> int:
@@ -2343,22 +2421,13 @@ def _transcript_path(session: str) -> str | None:
        last_active)で全 projects の jsonl を mtime 絞り込みし、自己参照
        最多の jsonl を選ぶ。データは DB/ディスクに残るので閲覧可能。
 
-    結果は 120 秒キャッシュ。
+    結果は transcript project directory の mtime が変わるまで保持する。
     """
-    now = time.time()
-    hit = _TPATH_CACHE.get(session)
-    if hit and now - hit[0] < 120:
-        return hit[1]
-
-    # 0) 精密マップ優先(登録時に焼いた id↔sessionId↔transcript)。
-    #    あればヒューリスティックを完全に飛ばす。NobleHubble 型の
-    #    "last_active 固着で活動期間窓から実ファイルが外れる" バグや
-    #    同名使い回しの誤マッチをここで根治する。
-    indexed = _indexed_transcript(session)
-    if indexed:
-        _claim_transcript(indexed, session, 1 << 30, exact=True)
-        _TPATH_CACHE[session] = (now, indexed)
-        return indexed
+    cached, cached_path, catalog_key = _cached_claude_transcript_path(
+        session, refresh_catalog=True
+    )
+    if cached:
+        return cached_path
 
     chosen: str | None = None
     chosen_score = 0
@@ -2412,7 +2481,7 @@ def _transcript_path(session: str) -> str | None:
         # 他人の履歴を見せるより空のほうがましなので諦める。
         chosen = None
 
-    _TPATH_CACHE[session] = (now, chosen)
+    _store_claude_transcript_resolution(session, catalog_key, chosen)
     return chosen
 
 
@@ -2833,6 +2902,9 @@ def _validate_codex_standalone_credential(session: str) -> None:
 
 RESUME_CAPABILITY_MESSAGES = {
     "ready": "Resume prerequisites are verified.",
+    "verification_required": (
+        "Transcript ownership and working directory will be verified on resume."
+    ),
     "not_required": "This session is already available without transcript resume.",
     "invalid_identity": "The saved agent identity is not safe to resume.",
     "unsupported_provider": "This provider does not support transcript resume.",
@@ -2856,8 +2928,15 @@ _RESUME_CATEGORIES = frozenset({"finished", "gone", "retired"})
 _CODEX_MCP_PROFILES = frozenset({"inherit", "orrery-only"})
 _RESUME_CAPABILITY_CACHE_TTL = 10.0
 _RESUME_CAPABILITY_CACHE_MAX = 4096
-_RESUME_CAPABILITY_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
+_RESUME_CAPABILITY_CACHE: dict[tuple, tuple[float, str]] = {}
 _RESUME_CAPABILITY_CACHE_LOCK = threading.Lock()
+
+
+def _invalidate_resume_capability_cache(session: str) -> None:
+    with _RESUME_CAPABILITY_CACHE_LOCK:
+        for key in list(_RESUME_CAPABILITY_CACHE):
+            if key[0] == session:
+                _RESUME_CAPABILITY_CACHE.pop(key, None)
 
 
 def _codex_resume_provenance(
@@ -2974,7 +3053,13 @@ def _codex_resume_provenance(
     return state, None
 
 
-def _resume_capability(session: str, program: str, *, category: str) -> str:
+def _resume_capability(
+    session: str,
+    program: str,
+    *,
+    category: str,
+    verify_transcript: bool = True,
+) -> str:
     """Return the fixed reason code shared by every dashboard resume surface.
 
     This function is read-only.  `/api/jump` calls it again immediately before
@@ -3001,7 +3086,14 @@ def _resume_capability(session: str, program: str, *, category: str) -> str:
         return "terminal_unavailable"
 
     if normalized_program.startswith("claude"):
-        path = _transcript_path(session)
+        if verify_transcript:
+            path = _transcript_path(session)
+        else:
+            resolved, path, _catalog_key = _cached_claude_transcript_path(session)
+            if not resolved:
+                if not os.path.exists(ABS_CLAUDE):
+                    return "cli_missing"
+                return "verification_required"
         if not path:
             return "no_history"
         sid = os.path.basename(path)[:-6] if path.endswith(".jsonl") else ""
@@ -3070,13 +3162,25 @@ def _resume_capability_for_row(
     """
 
     normalized_program = (program or "").strip().lower()
-    key = (session, normalized_program, category)
+    transcript_catalog_key = (
+        _claude_transcript_catalog_key()
+        if normalized_program.startswith("claude")
+        else None
+    )
+    key = (session, normalized_program, category, transcript_catalog_key)
     now = time.monotonic()
     with _RESUME_CAPABILITY_CACHE_LOCK:
         hit = _RESUME_CAPABILITY_CACHE.get(key)
         if hit and now - hit[0] < _RESUME_CAPABILITY_CACHE_TTL:
             return hit[1]
-        capability = _resume_capability(session, program, category=category)
+
+    capability = _resume_capability(
+        session,
+        program,
+        category=category,
+        verify_transcript=False,
+    )
+    with _RESUME_CAPABILITY_CACHE_LOCK:
         if len(_RESUME_CAPABILITY_CACHE) >= _RESUME_CAPABILITY_CACHE_MAX:
             expired = [
                 cache_key
