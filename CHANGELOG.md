@@ -24,6 +24,10 @@ upgrade 前に起動した top-level Codex の receipt は origin 不明のた�
 
 DECK と NETWORK は `gone` / `retired` という表示状態だけで resume 操作を出していたため、検証済み transcript、元の cwd、CLI、Codex の launch provenance・credential・設定が無い row も resume 可能に見えていました。backend が row ごとに固定理由コードの `resume_capability` を返すようにし、DECK card、NETWORK の一括選択、詳細 panel、`/api/jump` が同じ判定を使うようにしました。新しい製品 launch は `child` または `standalone` を receipt に記録し、provenance 導入前や製品外の origin 不明 row は推測で `ready` にせず、API から直接呼んでも terminal を開く前に拒否します。終了済み Claude row の表示判定が agent ごとに数千件の transcript を全読みして dashboard を止めていたため、表示では exact index または transcript directory mtime 付きの確定済み cache だけを使い、未検証 row は `verification_required` とするようにしました。この row は一括 resume には含めず、詳細 panel の `VERIFY & RESUME` を1回押すと `/api/jump` が full 検証し、成功時はその呼び出しのまま resume します。
 
+### fresh install と CI が `sqlmodel 0.0.45` 以降で動かなくなっていました（#67）
+
+ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。timezone-aware datetime への移行と既存 database の naive 値との互換対応は別の修正で行います。
+
 ## 2026.09.19
 
 ### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）
