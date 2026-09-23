@@ -615,12 +615,26 @@ def test_both_codex_launch_paths_use_the_child_home():
     # The user's optional workspace launcher intentionally reads this override;
     # without it, that wrapper replaces the child home with ~/.codex again.
     assert text.count('-e "CODEX_SHARED_CODEX_DIR=$CHILD_CODEX_HOME"') == 2
-    assert text.count('prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup') == 2
+    assert text.count(
+        'prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" '
+        'startup "$CODEX_MCP_PROFILE"'
+    ) == 2
     assert text.count('if ! CHILD_LAUNCH_INFO="$(') == 2
     assert "prepare_codex_launch_binding \"$CHILD_STATE_DIR/$CHILD_NAME.json\" startup 2>/dev/null || true" not in text
     assert text.count("could not create a fresh Codex history binding expectation") == 2
     assert text.count('-e "AGENTSTACK_CODEX_LAUNCH_BINDING=$CHILD_LAUNCH_BINDING"') == 2
     assert text.count('-e "AGENTSTACK_CODEX_LAUNCH_ID=$CHILD_LAUNCH_ID"') == 2
+
+
+def test_codex_launch_expectation_records_child_profile_provenance():
+    text = _SPAWN.read_text(encoding="utf-8")
+    helper = _extract("prepare_codex_launch_binding")
+    assert "--launch-origin child" in helper
+    assert '--codex-mcp-profile "$mcp_profile"' in helper
+    assert text.count(
+        'prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" '
+        'startup "$CODEX_MCP_PROFILE"'
+    ) == 2
 
 
 def test_launcher_passes_the_config_to_claude_only_when_present():

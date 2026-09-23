@@ -113,6 +113,33 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"
 
 
+def test_cleaned_child_and_unmanaged_codex_have_distinct_capabilities(
+    monkeypatch, tmp_path
+):
+    _codex_prerequisites(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        server,
+        "_codex_resume_provenance",
+        lambda *_args, **_kwargs: (
+            {
+                "launch_origin": "child",
+                "codex_mcp_profile": "inherit",
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_codex_resume_child_home",
+        lambda *_args, **_kwargs: (None, "unmanaged"),
+    )
+
+    assert (
+        server._resume_capability(AGENT, "codex-cli", category="retired")
+        == "credential_missing"
+    )
+
+
 def test_jump_rechecks_capability_before_it_calls_resume(monkeypatch):
     monkeypatch.setattr(server, "_agent_program", lambda _name: "codex-cli")
     monkeypatch.setattr(server, "_has_session", lambda _name: False)
@@ -169,7 +196,7 @@ def test_typed_capability_error_does_not_depend_on_message_text(
     monkeypatch.setattr(
         server,
         "_codex_resume_provenance",
-        lambda _name: ({"launch_origin": "child"}, None),
+        lambda _name, **_kwargs: ({"launch_origin": "child"}, None),
     )
 
     def fail_with_stable_code(_session, _registration):

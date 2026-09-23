@@ -563,13 +563,16 @@ PY
 # under the same registered identity could leave the old receipt authoritative.
 prepare_codex_launch_binding() {
     local registration_file="$1" launch_kind="${2:-startup}"
+    local mcp_profile="${3:-inherit}"
     local helper="$HOOKS_DIR/prepare-codex-session-binding.py"
     [[ -f "$helper" && -f "$registration_file" ]] || return 1
     "${AGENTSTACK_PYTHON:-python3}" "$helper" \
         --runtime-dir "$RUNTIME_DIR" \
         --registration-file "$registration_file" \
         --launch-kind "$launch_kind" \
-        --history-mode enabled
+        --history-mode enabled \
+        --launch-origin child \
+        --codex-mcp-profile "$mcp_profile"
 }
 
 # --- Child model catalog -------------------------------------------------
@@ -1940,7 +1943,7 @@ PY
             exit 1
         fi
         if ! CHILD_LAUNCH_INFO="$(
-            prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+            prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
         )"; then
             echo "Error: could not create a fresh Codex history binding expectation" >&2
             exit 1
@@ -2787,7 +2790,7 @@ if [[ "$USE_CODEX" == true ]]; then
         exit 1
     fi
     if ! CHILD_LAUNCH_INFO="$(
-        prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup
+        prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
     )"; then
         echo "Error: could not create a fresh Codex history binding expectation" >&2
         exit 1

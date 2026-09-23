@@ -64,6 +64,8 @@ def prepare(
     *,
     launch_kind: str,
     history_mode: str,
+    launch_origin: str | None = None,
+    codex_mcp_profile: str | None = None,
     now: float | None = None,
 ) -> tuple[Path, str]:
     agent_id = registration.get("agent_id")
@@ -82,6 +84,18 @@ def prepare(
         raise ValueError("launch_kind must be startup or resume")
     if history_mode not in {"enabled", "disabled"}:
         raise ValueError("history_mode must be enabled or disabled")
+    if launch_origin is not None and launch_origin != "child":
+        raise ValueError("launch_origin must be child when supplied")
+    if launch_origin == "child":
+        if not isinstance(codex_mcp_profile, str) or codex_mcp_profile not in {
+            "inherit",
+            "orrery-only",
+        }:
+            raise ValueError(
+                "child launch requires codex_mcp_profile inherit or orrery-only"
+            )
+    elif codex_mcp_profile is not None:
+        raise ValueError("codex_mcp_profile requires launch_origin child")
 
     launches = runtime_dir / "codex_launches"
     launch_path = launches / f"{agent_id}.json"
@@ -104,6 +118,11 @@ def prepare(
         "receipt_id": None,
         "last_reason": None,
     }
+    if launch_origin == "child":
+        record.update(
+            launch_origin="child",
+            codex_mcp_profile=codex_mcp_profile,
+        )
     descriptor: int | None = None
     try:
         launches.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -128,6 +147,8 @@ def main() -> int:
     parser.add_argument("--program", default="codex")
     parser.add_argument("--launch-kind", choices=("startup", "resume"), required=True)
     parser.add_argument("--history-mode", choices=("enabled", "disabled"), default="enabled")
+    parser.add_argument("--launch-origin", choices=("child",))
+    parser.add_argument("--codex-mcp-profile", choices=("inherit", "orrery-only"))
     args = parser.parse_args()
     try:
         launch_path, launch_id = prepare(
@@ -135,6 +156,8 @@ def main() -> int:
             _registration(args),
             launch_kind=args.launch_kind,
             history_mode=args.history_mode,
+            launch_origin=args.launch_origin,
+            codex_mcp_profile=args.codex_mcp_profile,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"prepare-codex-session-binding: {exc}", file=os.sys.stderr)
