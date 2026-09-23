@@ -32803,7 +32803,32 @@ const CATLABEL={agent:"ACTIVE AGENTS",
   unnamed:"UNNAMED — pending rename",
   warmup:"WARMUP spare",infra:"INFRA",idle:"IDLE",
   gone:"GONE — registered but tmux absent (kill to retire)",
-  retired:"RETIRED — soft-deleted (click to resume)"};
+  retired:"RETIRED — soft-deleted"};
+const RESUME_CAPABILITY_INFO={
+  ready:{label:'READY',detail:'Resume prerequisites are verified.'},
+  not_required:{label:'NOT REQUIRED',detail:'This session can be opened without transcript resume.'},
+  invalid_identity:{label:'INVALID IDENTITY',detail:'The saved agent identity is not safe to resume.'},
+  unsupported_provider:{label:'UNSUPPORTED PROVIDER',detail:'This provider does not support transcript resume.'},
+  no_history:{label:'NO HISTORY',detail:'No verified transcript is available for this agent.'},
+  cwd_missing:{label:'CWD MISSING',detail:'The original working directory is unavailable.'},
+  terminal_unavailable:{label:'NO TERMINAL',detail:'No supported terminal adapter is configured.'},
+  cli_missing:{label:'CLI MISSING',detail:'The provider CLI or resume bootstrap is unavailable.'},
+  registration_missing:{label:'REGISTRATION MISSING',detail:'The original project registration cannot be verified.'},
+  provenance_missing:{label:'PROVENANCE MISSING',detail:'This row predates child provenance and cannot be resumed safely.'},
+  credential_missing:{label:'CREDENTIAL MISSING',detail:'The retained child credential is unavailable or invalid.'},
+  credential_permission:{label:'UNSAFE PERMISSIONS',detail:'The retained child credential permissions are unsafe.'},
+  identity_mismatch:{label:'IDENTITY MISMATCH',detail:'The retained child identity does not match this row.'},
+  config_unrestorable:{label:'CONFIG UNRESTORABLE',detail:'The child Codex configuration cannot be restored safely.'},
+  retention_expired:{label:'RETENTION EXPIRED',detail:'The child resume retention period has expired.'},
+  purged:{label:'PURGED',detail:'The retained child resume material was explicitly purged.'}
+};
+function resumeCapabilityInfo(code){
+  return RESUME_CAPABILITY_INFO[code]||{
+    label:'UNVERIFIED',detail:'Resume prerequisites could not be verified.'};
+}
+function isResumeCategory(category){
+  return category==='finished'||category==='gone'||category==='retired';
+}
 /* ── Report JS exceptions to the server ──────────────────────────────
    This page is frequently viewed inside a webview with no devtools, where a
    thrown exception leaves no trace at all — it only ever looks like "clicking
@@ -33282,7 +33307,8 @@ function selCategorize(){
     const st=g.retired?'retired'
       :(g.state||(g.running?'run':g.present?'finished':'gone'));
     if(st==='run'||st==='finished')exitable.push(name);
-    else if(st==='retired'||st==='gone')resumable.push(name);
+    else if((st==='retired'||st==='gone')&&g.resumeCapability==='ready')
+      resumable.push(name);
   }
   return {exitable,resumable};
 }
@@ -33426,6 +33452,14 @@ function bay(a,i){
     chips.push('<span class="chip imp">? UNBOUND</span>');
   else if(a.history_binding==='disabled')
     chips.push('<span class="chip">— NO HISTORY</span>');
+  if(isResumeCategory(a.category)){
+    const capability=a.resume_capability||'provenance_missing';
+    const info=resumeCapabilityInfo(capability);
+    chips.push(capability==='ready'
+      ? `<span class="chip" title="${esc(info.detail)}">↻ RESUME READY</span>`
+      : `<span class="chip imp" title="${esc(info.detail)}">`+
+        `× RESUME · ${esc(info.label)}</span>`);
+  }
   // 'agent' は section header(ACTIVE AGENTS) と冗長なので省略
   if(a.category==='finished')
     chips.push(`<span class="chip imp">◢ EXITED</span>`);
@@ -33782,7 +33816,8 @@ async function netTick(){
         // 送っていても画面には出ない（この一覧は明示的なコピーなので、payload に
         // 足しただけでは届かない）。
         requested_name:n.requested_name||'',
-        surface:n.surface||''});
+        surface:n.surface||'',
+        resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
     gedges=j.edges.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
@@ -33797,6 +33832,7 @@ async function netTick(){
     // task/live/rel 等は tooltip が最新 gmap を都度読むため fingerprint 不要。
     const nodeKey=[...gmap].map(([name,g])=>[
       name,g.state,g.running,g.present,g.retired,g.actState,
+      g.resumeCapability,
       typeof g.ctxUsed==='number'?Math.round(g.ctxUsed):null,
       g.model||'',g.provider||'',g.deg,
       g.annot&&g.annot.emoji||'',g.annot&&g.annot.role||''
@@ -36299,6 +36335,28 @@ function openPanelInner(name){
   if(exitBtn){exitBtn.style.display=run?'':'none';
     exitBtn.classList.remove('arming');exitBtn.disabled=false;
     exitBtn.textContent='Exit';}
+  const resumeCategory=a.category||
+    (a.retired?'retired':(a.state||(run?'run':a.present?'finished':'gone')));
+  const resumeState=isResumeCategory(resumeCategory);
+  const capability=a.resume_capability||a.resumeCapability||
+    g.resumeCapability||(resumeState?'provenance_missing':'not_required');
+  const capabilityInfo=resumeCapabilityInfo(capability);
+  const openBtn=TM('tm-open');
+  if(openBtn){
+    const unavailable=resumeState&&capability!=='ready';
+    openBtn.disabled=unavailable;
+    openBtn.style.opacity=unavailable?'.5':'';
+    openBtn.style.cursor=unavailable?'not-allowed':'';
+    openBtn.style.background=unavailable?'transparent':'';
+    openBtn.style.color=unavailable?'var(--cyan)':'';
+    openBtn.style.boxShadow=unavailable?'none':'';
+    openBtn.textContent=resumeState
+      ? (capability==='ready'
+        ? (EMBED_MODE?'RESUME IN COCKPIT':'RESUME')
+        : 'RESUME UNAVAILABLE')
+      : (EMBED_MODE?'OPEN IN COCKPIT':'OPEN TMUX');
+    openBtn.title=resumeState?capabilityInfo.detail:'Open this live terminal session';
+  }
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);
@@ -36387,6 +36445,16 @@ function renderPanelSummary(name, a, g){
   const ROLE={parent:'parent (delegator)',child:'child (delegated)',
     both:'both',none:'none'};
   if(role) rows.push(`<div class="ts-row"><b>role</b><span>${ROLE[role]||'—'}</span></div>`);
+  const resumeCategory=a.category||
+    (a.retired?'retired':(a.state||(a.running?'run':a.present?'finished':'gone')));
+  if(isResumeCategory(resumeCategory)){
+    const capability=a.resume_capability||a.resumeCapability||
+      g.resumeCapability||'provenance_missing';
+    const info=resumeCapabilityInfo(capability);
+    rows.push(`<div class="ts-row"><b>resume</b><span>`+
+      `${capability==='ready'?'READY':'UNAVAILABLE · '+esc(info.label)}`+
+      ` <span class="ts-empty">${esc(info.detail)}</span></span></div>`);
+  }
   if(typeof ctxUsed==='number'){
     const hpv=100-ctxUsed,
       tier=hpv>=50?'hi':hpv>=20?'mid':'lo',
@@ -36736,7 +36804,7 @@ TM('tm-tabs').addEventListener('click',e=>{
   const b=e.target.closest('button[data-tab]');if(b)setTab(b.dataset.tab);
 });
 TM('tm-open').addEventListener('click',()=>{
-  if(panelName)jump(panelName,{stopPropagation(){}});
+  if(panelName&&!TM('tm-open').disabled)jump(panelName,{stopPropagation(){}});
 });
 
 document.getElementById('q').addEventListener('input',render);
