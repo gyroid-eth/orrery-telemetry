@@ -319,7 +319,7 @@ async def _seed_reservations(
     path_pattern: str = "probe.txt",
 ) -> tuple[int, int, int | None]:
     await ensure_schema()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
     async with get_session() as session:
         project = Project(slug="reservation-test", human_key=str(workspace))
         session.add(project)

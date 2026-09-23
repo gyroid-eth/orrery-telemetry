@@ -8,18 +8,42 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import Column, Index, UniqueConstraint
-from sqlalchemy.types import JSON
+from sqlalchemy.engine import Dialect
+from sqlalchemy.types import JSON, DateTime, TypeDecorator
 from sqlmodel import Field, SQLModel
 
 
-def _utcnow_naive() -> datetime:
-    """Return current UTC time as a naive datetime for SQLite compatibility.
+class AgentStackUTCDateTime(TypeDecorator[datetime]):
+    """Store aware datetimes and normalize legacy database values to UTC."""
 
-    SQLite stores datetimes without timezone info. Using naive UTC datetimes
-    throughout ensures consistent comparisons and avoids 'can't compare
-    offset-naive and offset-aware datetimes' errors in SQLAlchemy ORM evaluator.
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    impl = DateTime
+    cache_ok = True
+
+    def __init__(self) -> None:
+        super().__init__(timezone=True)
+
+    def process_bind_param(
+        self, value: datetime | None, dialect: Dialect
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.utcoffset() is None:
+            raise ValueError("Datetime values must include timezone information")
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(
+        self, value: datetime | None, dialect: Dialect
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.utcoffset() is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+def _utcnow() -> datetime:
+    """Return the current time as an aware UTC datetime."""
+    return datetime.now(timezone.utc)
 
 
 class Project(SQLModel, table=True):
@@ -28,8 +52,8 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     slug: str = Field(index=True, unique=True, max_length=255)
     human_key: str = Field(max_length=255, index=True)
-    created_at: datetime = Field(default_factory=_utcnow_naive)
-    archived_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    archived_at: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 class Product(SQLModel, table=True):
     """Logical grouping across multiple repositories for product-wide inbox/search and threads."""
@@ -40,7 +64,7 @@ class Product(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     product_uid: str = Field(index=True, max_length=64)
     name: str = Field(index=True, max_length=255)
-    created_at: datetime = Field(default_factory=_utcnow_naive)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
 
 class ProductProjectLink(SQLModel, table=True):
     """Associates a Project with a Product (many-to-many via link table)."""
@@ -54,7 +78,7 @@ class ProductProjectLink(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     product_id: int = Field(foreign_key="products.id", index=True)
     project_id: int = Field(foreign_key="projects.id", index=True)
-    created_at: datetime = Field(default_factory=_utcnow_naive)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
 
 
 class Agent(SQLModel, table=True):
@@ -67,15 +91,15 @@ class Agent(SQLModel, table=True):
     program: str = Field(max_length=128)
     model: str = Field(max_length=128)
     task_description: str = Field(default="", max_length=2048)
-    inception_ts: datetime = Field(default_factory=_utcnow_naive)
-    last_active_ts: datetime = Field(default_factory=_utcnow_naive)
+    inception_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    last_active_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
     attachments_policy: str = Field(default="auto", max_length=16)
     contact_policy: str = Field(default="auto", max_length=16)  # open | auto | contacts_only | block_all
     registration_token: Optional[str] = Field(default=None, max_length=64, index=True)
     # Monotonic compare-and-swap generation for operator enrollment.  Legacy
     # rows start at zero; the first claim/recovery advances them to one.
     credential_generation: int = Field(default=0)
-    retired_at: Optional[datetime] = Field(default=None)
+    retired_at: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 
 class MailInstance(SQLModel, table=True):
@@ -85,7 +109,7 @@ class MailInstance(SQLModel, table=True):
 
     id: int = Field(default=1, primary_key=True)
     instance_id: str = Field(index=True, unique=True, max_length=64)
-    created_at: datetime = Field(default_factory=_utcnow_naive)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
 
 
 class EnrollmentRequest(SQLModel, table=True):
@@ -107,7 +131,7 @@ class EnrollmentRequest(SQLModel, table=True):
     old_generation: int
     new_generation: int
     old_fingerprint: Optional[str] = Field(default=None, max_length=64)
-    created_at: datetime = Field(default_factory=_utcnow_naive)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
 
 
 class EnrollmentAudit(SQLModel, table=True):
@@ -117,7 +141,7 @@ class EnrollmentAudit(SQLModel, table=True):
     __table_args__ = (Index("idx_enrollment_audits_request", "request_id"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    occurred_at: datetime = Field(default_factory=_utcnow_naive, index=True)
+    occurred_at: datetime = Field(default_factory=_utcnow, index=True, sa_type=AgentStackUTCDateTime)
     request_id: str = Field(max_length=64)
     peer_uid: int
     server_instance_id: str = Field(max_length=64)
@@ -141,8 +165,8 @@ class MessageRecipient(SQLModel, table=True):
     message_id: int = Field(foreign_key="messages.id", primary_key=True)
     agent_id: int = Field(foreign_key="agents.id", primary_key=True)
     kind: str = Field(max_length=8, default="to")
-    read_ts: Optional[datetime] = Field(default=None)
-    ack_ts: Optional[datetime] = Field(default=None)
+    read_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
+    ack_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 
 class Message(SQLModel, table=True):
@@ -162,7 +186,7 @@ class Message(SQLModel, table=True):
     body_md: str
     importance: str = Field(default="normal", max_length=16)
     ack_required: bool = Field(default=False)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
     attachments: list[dict[str, Any]] = Field(
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
@@ -182,9 +206,9 @@ class FileReservation(SQLModel, table=True):
     path_pattern: str = Field(max_length=512)
     exclusive: bool = Field(default=True)
     reason: str = Field(default="", max_length=512)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
-    expires_ts: datetime
-    released_ts: Optional[datetime] = None
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    expires_ts: datetime = Field(sa_type=AgentStackUTCDateTime)
+    released_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 
 class AgentLink(SQLModel, table=True):
@@ -203,9 +227,9 @@ class AgentLink(SQLModel, table=True):
     b_agent_id: int = Field(foreign_key="agents.id", index=True)
     status: str = Field(default="pending", max_length=16)  # pending | approved | blocked
     reason: str = Field(default="", max_length=512)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
-    updated_ts: datetime = Field(default_factory=_utcnow_naive)
-    expires_ts: Optional[datetime] = None
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    updated_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    expires_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 
 class WindowIdentity(SQLModel, table=True):
@@ -226,9 +250,9 @@ class WindowIdentity(SQLModel, table=True):
     project_id: int = Field(foreign_key="projects.id", index=True)
     window_uuid: str = Field(max_length=64, index=True)
     display_name: str = Field(max_length=128)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
-    last_active_ts: datetime = Field(default_factory=_utcnow_naive)
-    expires_ts: Optional[datetime] = Field(default=None)
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    last_active_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    expires_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
 
 
 class MessageSummary(SQLModel, table=True):
@@ -242,13 +266,13 @@ class MessageSummary(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="projects.id", index=True)
     summary_text: str
-    start_ts: datetime
-    end_ts: datetime
+    start_ts: datetime = Field(sa_type=AgentStackUTCDateTime)
+    end_ts: datetime = Field(sa_type=AgentStackUTCDateTime)
     source_message_count: int = Field(default=0)
     source_thread_ids: str = Field(default="[]")  # JSON array of thread IDs
     llm_model: Optional[str] = Field(default=None, max_length=128)
     cost_usd: Optional[float] = Field(default=None)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
 
 
 class ProjectSiblingSuggestion(SQLModel, table=True):
@@ -263,7 +287,7 @@ class ProjectSiblingSuggestion(SQLModel, table=True):
     score: float = Field(default=0.0)
     status: str = Field(default="suggested", max_length=16)  # suggested | confirmed | dismissed
     rationale: str = Field(default="", max_length=4096)
-    created_ts: datetime = Field(default_factory=_utcnow_naive)
-    evaluated_ts: datetime = Field(default_factory=_utcnow_naive)
-    confirmed_ts: Optional[datetime] = Field(default=None)
-    dismissed_ts: Optional[datetime] = Field(default=None)
+    created_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    evaluated_ts: datetime = Field(default_factory=_utcnow, sa_type=AgentStackUTCDateTime)
+    confirmed_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
+    dismissed_ts: Optional[datetime] = Field(default=None, sa_type=AgentStackUTCDateTime)
