@@ -1331,6 +1331,11 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         )
         if row.get("program") in {"codex", "codex-cli"}:
             row.update(_codex_history_binding(row["name"], now=observed_now))
+        row["resume_capability"] = _resume_capability_for_row(
+            row["name"],
+            row.get("program") or "",
+            category=row.get("category") or "",
+        )
         signature = (
             row.get("act_state"),
             row.get("ctx_used"),
@@ -1903,6 +1908,15 @@ def graph_payload(days: float, show_all: bool) -> dict:
         for n in nodes
         if n["name"] in keep
     ]
+    for row in fn:
+        category = (
+            "retired"
+            if row.get("retired")
+            else (row.get("state") or ("run" if row.get("running") else "gone"))
+        )
+        row["resume_capability"] = _resume_capability_for_row(
+            row["name"], row.get("program") or "", category=category
+        )
     fe = [
         e
         for e in g.get("edges", [])
@@ -2632,36 +2646,64 @@ _CODEX_CHILD_STATE_MAX_BYTES = 65536
 _CODEX_CHILD_CONFIG_MAX_BYTES = 1024 * 1024
 
 
+class _PrivateFileError(ValueError):
+    """A private-file validation failure with a stable machine reason."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+class _ResumeCapabilityError(ValueError):
+    """A resume prerequisite failure with a public capability code."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 def _read_private_regular(path: str, label: str, limit: int) -> bytes:
     """Read one owner-only regular file without following a final symlink."""
 
     try:
         info = os.lstat(path)
     except OSError as exc:
-        raise ValueError(f"{label} is unavailable") from exc
+        raise _PrivateFileError("unavailable", f"{label} is unavailable") from exc
     if not stat.S_ISREG(info.st_mode):
-        raise ValueError(f"{label} is not a regular file")
+        raise _PrivateFileError("type", f"{label} is not a regular file")
     if info.st_uid != os.getuid():
-        raise ValueError(f"{label} is not owned by the dashboard user")
+        raise _PrivateFileError(
+            "ownership", f"{label} is not owned by the dashboard user"
+        )
     if stat.S_IMODE(info.st_mode) & 0o077:
-        raise ValueError(f"{label} permissions must be 0600")
+        raise _PrivateFileError("permissions", f"{label} permissions must be 0600")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise ValueError(f"{label} is unavailable") from exc
+        raise _PrivateFileError("unavailable", f"{label} is unavailable") from exc
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
-            raise ValueError(f"{label} changed while it was opened")
+            raise _PrivateFileError("changed", f"{label} changed while it was opened")
         if stat.S_IMODE(opened.st_mode) & 0o077:
-            raise ValueError(f"{label} permissions must be 0600")
+            raise _PrivateFileError(
+                "permissions", f"{label} permissions must be 0600"
+            )
         raw = os.read(descriptor, limit + 1)
     finally:
         os.close(descriptor)
     if len(raw) > limit:
-        raise ValueError(f"{label} is too large")
+        raise _PrivateFileError("size", f"{label} is too large")
     return raw
+
+
+def _private_file_capability(
+    error: _PrivateFileError, *, unavailable: str
+) -> str:
+    if error.reason in {"ownership", "permissions", "changed"}:
+        return "credential_permission"
+    return unavailable
 
 
 def _is_agentstack_mail_alias(name: str) -> bool:
@@ -2678,18 +2720,25 @@ def _validate_codex_child_proxy_config(
 
     servers = config.get("mcp_servers")
     if not isinstance(servers, dict):
-        raise ValueError("child Codex config has no ORRERY proxy")
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "child Codex config has no ORRERY proxy"
+        )
     mail_servers = [
         (name, value)
         for name, value in servers.items()
         if isinstance(name, str) and _is_agentstack_mail_alias(name)
     ]
     if not mail_servers:
-        raise ValueError("child Codex config has no ORRERY proxy")
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "child Codex config has no ORRERY proxy"
+        )
     expected_token = os.path.abspath(token_file)
     for _name, server in mail_servers:
         if not isinstance(server, dict):
-            raise ValueError("child Codex Mail alias is not a local proxy")
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "child Codex Mail alias is not a local proxy",
+            )
         # A direct HTTP/bearer entry is the default-home failure mode R1b must
         # not mistake for an authenticated child proxy.
         if (
@@ -2698,22 +2747,34 @@ def _validate_codex_child_proxy_config(
             or "url" in server
             or "bearer_token_env_var" in server
         ):
-            raise ValueError("child Codex Mail alias is not a local proxy")
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "child Codex Mail alias is not a local proxy",
+            )
         env = server.get("env")
         if not isinstance(env, dict):
-            raise ValueError("child Codex Mail proxy has no identity environment")
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "child Codex Mail proxy has no identity environment",
+            )
         configured_token = env.get("AGENTSTACK_PROXY_TOKEN_FILE")
         if not isinstance(configured_token, str) or (
             os.path.abspath(os.path.expanduser(configured_token)) != expected_token
         ):
-            raise ValueError("child Codex Mail proxy belongs to another registration")
+            raise _ResumeCapabilityError(
+                "identity_mismatch",
+                "child Codex Mail proxy belongs to another registration",
+            )
         if (
             env.get("AGENTSTACK_PROXY_AGENT_NAME") != session
             or env.get("AGENTSTACK_PROJECT_KEY") != registration["project_key"]
             or not isinstance(env.get("AGENTSTACK_PROXY_PROGRAM"), str)
             or env["AGENTSTACK_PROXY_PROGRAM"] not in _CODEX_PROGRAMS
         ):
-            raise ValueError("child Codex Mail proxy belongs to another registration")
+            raise _ResumeCapabilityError(
+                "identity_mismatch",
+                "child Codex Mail proxy belongs to another registration",
+            )
 
 
 def _codex_resume_child_home(
@@ -2728,7 +2789,9 @@ def _codex_resume_child_home(
     """
 
     if not _valid(session):
-        raise ValueError("Codex child identity is unsafe")
+        raise _ResumeCapabilityError(
+            "invalid_identity", "Codex child identity is unsafe"
+        )
     state_dir = os.path.join(RUNTIME_DIR, "child-agents")
     state_path = os.path.join(state_dir, f"{session}.json")
     child_home = os.path.join(state_dir, f"{session}.codex-home")
@@ -2740,10 +2803,19 @@ def _codex_resume_child_home(
         except FileNotFoundError:
             return None, "unmanaged"
         except OSError as exc:
-            raise ValueError("canonical Codex child home cannot be inspected") from exc
-        raise ValueError("canonical Codex child home has no matching child state")
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "canonical Codex child home cannot be inspected",
+            ) from exc
+        raise _ResumeCapabilityError(
+            "config_unrestorable",
+            "canonical Codex child home has no matching child state",
+        )
     except OSError as exc:
-        raise ValueError("canonical Codex child state cannot be inspected") from exc
+        raise _ResumeCapabilityError(
+            "config_unrestorable",
+            "canonical Codex child state cannot be inspected",
+        ) from exc
 
     try:
         state = json.loads(
@@ -2751,10 +2823,19 @@ def _codex_resume_child_home(
                 state_path, "Codex child state", _CODEX_CHILD_STATE_MAX_BYTES
             ).decode("utf-8")
         )
+    except _PrivateFileError as exc:
+        raise _ResumeCapabilityError(
+            _private_file_capability(exc, unavailable="config_unrestorable"),
+            str(exc),
+        ) from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Codex child state is invalid") from exc
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child state is invalid"
+        ) from exc
     if not isinstance(state, dict):
-        raise ValueError("Codex child state is invalid")
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child state is invalid"
+        )
     if (
         type(state.get("agent_id")) is not int
         or state["agent_id"] <= 0
@@ -2767,31 +2848,56 @@ def _codex_resume_child_home(
         or not isinstance(registration.get("program"), str)
         or registration["program"] not in _CODEX_PROGRAMS
     ):
-        raise ValueError("Codex child state belongs to another registration")
+        raise _ResumeCapabilityError(
+            "identity_mismatch",
+            "Codex child state belongs to another registration",
+        )
     state_token = state.get("registration_token")
     if not isinstance(state_token, str) or not state_token or len(state_token) > 4096:
-        raise ValueError("Codex child state has no usable owner credential")
+        raise _ResumeCapabilityError(
+            "credential_missing",
+            "Codex child state has no usable owner credential",
+        )
     token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
     token_file = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
     try:
         canonical_token = _read_private_regular(
             token_file, "canonical Codex child credential", 4096
         ).decode("utf-8").strip()
+    except _PrivateFileError as exc:
+        raise _ResumeCapabilityError(
+            _private_file_capability(exc, unavailable="credential_missing"),
+            str(exc),
+        ) from exc
     except UnicodeDecodeError as exc:
-        raise ValueError("canonical Codex child credential is invalid") from exc
+        raise _ResumeCapabilityError(
+            "credential_missing", "canonical Codex child credential is invalid"
+        ) from exc
     if not canonical_token or not hmac.compare_digest(
         canonical_token.encode("utf-8"), state_token.encode("utf-8")
     ):
-        raise ValueError("Codex child state and credential are from different registrations")
+        raise _ResumeCapabilityError(
+            "identity_mismatch",
+            "Codex child state and credential are from different registrations",
+        )
 
     try:
         home_info = os.lstat(child_home)
     except FileNotFoundError:
         return None, "absent"
     except OSError as exc:
-        raise ValueError("canonical Codex child home cannot be inspected") from exc
-    if not stat.S_ISDIR(home_info.st_mode) or home_info.st_uid != os.getuid():
-        raise ValueError("canonical Codex child home is unsafe")
+        raise _ResumeCapabilityError(
+            "config_unrestorable",
+            "canonical Codex child home cannot be inspected",
+        ) from exc
+    if not stat.S_ISDIR(home_info.st_mode):
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "canonical Codex child home is unsafe"
+        )
+    if home_info.st_uid != os.getuid():
+        raise _ResumeCapabilityError(
+            "credential_permission", "canonical Codex child home is unsafe"
+        )
     config_path = os.path.join(child_home, "config.toml")
     try:
         config = tomllib.loads(
@@ -2799,8 +2905,15 @@ def _codex_resume_child_home(
                 config_path, "Codex child config", _CODEX_CHILD_CONFIG_MAX_BYTES
             ).decode("utf-8")
         )
+    except _PrivateFileError as exc:
+        raise _ResumeCapabilityError(
+            _private_file_capability(exc, unavailable="config_unrestorable"),
+            str(exc),
+        ) from exc
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise ValueError("Codex child config is invalid") from exc
+        raise _ResumeCapabilityError(
+            "config_unrestorable", "Codex child config is invalid"
+        ) from exc
     _validate_codex_child_proxy_config(
         config,
         session=session,
@@ -2808,6 +2921,195 @@ def _codex_resume_child_home(
         token_file=token_file,
     )
     return child_home, "restored"
+
+
+RESUME_CAPABILITY_MESSAGES = {
+    "ready": "Resume prerequisites are verified.",
+    "not_required": "This session is already available without transcript resume.",
+    "invalid_identity": "The saved agent identity is not safe to resume.",
+    "unsupported_provider": "This provider does not support transcript resume.",
+    "no_history": "No verified transcript is available for this agent.",
+    "cwd_missing": "The original working directory is unavailable.",
+    "terminal_unavailable": "No supported terminal adapter is configured.",
+    "cli_missing": "The provider CLI or resume bootstrap is unavailable.",
+    "registration_missing": "The original project registration cannot be verified.",
+    "provenance_missing": (
+        "This Codex row predates child provenance and cannot be resumed safely."
+    ),
+    "credential_missing": "The retained child credential is unavailable or invalid.",
+    "credential_permission": "The retained child credential permissions are unsafe.",
+    "identity_mismatch": "The retained child identity does not match this row.",
+    "config_unrestorable": "The child Codex configuration cannot be restored safely.",
+    # Stage 3 assigns these when retention and explicit purge are introduced.
+    "retention_expired": "The child resume retention period has expired.",
+    "purged": "The retained child resume material was explicitly purged.",
+}
+
+_RESUME_CATEGORIES = frozenset({"finished", "gone", "retired"})
+_CODEX_MCP_PROFILES = frozenset({"inherit", "orrery-only"})
+_RESUME_CAPABILITY_CACHE_TTL = 10.0
+_RESUME_CAPABILITY_CACHE_MAX = 4096
+_RESUME_CAPABILITY_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
+_RESUME_CAPABILITY_CACHE_LOCK = threading.Lock()
+
+
+def _codex_resume_provenance(session: str) -> tuple[dict | None, str | None]:
+    """Read the current child state only far enough to establish provenance.
+
+    Stage 1 intentionally does not infer that a Codex row is a managed child
+    from its name, transcript location, or missing artifacts.  Stage 2 will
+    make this non-secret provenance survive cleanup.  Until then, old rows
+    fail closed while crash-preserved state can become ready once it carries
+    the explicit fields.
+    """
+
+    state_path = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")
+    try:
+        os.lstat(state_path)
+    except FileNotFoundError:
+        return None, "provenance_missing"
+    except OSError:
+        return None, "config_unrestorable"
+    try:
+        state = json.loads(
+            _read_private_regular(
+                state_path, "Codex child state", _CODEX_CHILD_STATE_MAX_BYTES
+            ).decode("utf-8")
+        )
+    except _PrivateFileError as exc:
+        return None, _private_file_capability(
+            exc, unavailable="config_unrestorable"
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, "config_unrestorable"
+    if not isinstance(state, dict):
+        return None, "config_unrestorable"
+    if (
+        state.get("launch_origin") != "child"
+        or state.get("codex_mcp_profile") not in _CODEX_MCP_PROFILES
+    ):
+        return state, "provenance_missing"
+    return state, None
+
+
+def _resume_capability(session: str, program: str, *, category: str) -> str:
+    """Return the fixed reason code shared by every dashboard resume surface.
+
+    This function is read-only.  `/api/jump` calls it again immediately before
+    any husk is killed or terminal process is opened, so stale UI state never
+    becomes authority for a resume.
+    """
+
+    if category not in _RESUME_CATEGORIES:
+        return "not_required"
+    if not _valid(session):
+        return "invalid_identity"
+    normalized_program = (program or "").strip().lower()
+    if (
+        normalized_program.startswith("antigravity")
+        or normalized_program == "codex-app"
+    ):
+        return "unsupported_provider"
+    if not (
+        normalized_program.startswith("claude")
+        or normalized_program in _CODEX_PROGRAMS
+    ):
+        return "unsupported_provider"
+    if _terminal_adapter() == "none":
+        return "terminal_unavailable"
+
+    if normalized_program.startswith("claude"):
+        path = _transcript_path(session)
+        if not path:
+            return "no_history"
+        sid = os.path.basename(path)[:-6] if path.endswith(".jsonl") else ""
+        if not re.fullmatch(r"[0-9A-Fa-f-]{8,}", sid):
+            return "no_history"
+        if not _transcript_cwd(path):
+            return "cwd_missing"
+        if not os.path.exists(ABS_CLAUDE):
+            return "cli_missing"
+        return "ready"
+
+    path = _codex_transcript_path(session)
+    if not path:
+        return "no_history"
+    sid, cwd = _codex_meta(path)
+    if not sid or not re.fullmatch(r"[0-9A-Fa-f-]{8,}", sid):
+        return "no_history"
+    if not cwd:
+        return "cwd_missing"
+    registration = _codex_registration(session)
+    if registration is None:
+        return "registration_missing"
+    _state, provenance_error = _codex_resume_provenance(session)
+    if provenance_error:
+        return provenance_error
+    try:
+        child_home, child_home_status = _codex_resume_child_home(
+            session, registration
+        )
+    except _ResumeCapabilityError as exc:
+        return exc.code
+    except ValueError:
+        # A new validation branch must fail closed until it receives an
+        # explicit stable code; never classify it from mutable message text.
+        return "config_unrestorable"
+    if not child_home or child_home_status != "restored":
+        return "config_unrestorable"
+    install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
+    bootstrap = os.path.join(install_home, "bin", "agentstack-codex-bootstrap")
+    if not os.path.isfile(bootstrap) or not shutil.which("codex"):
+        return "cli_missing"
+    return "ready"
+
+
+def _resume_capability_for_row(
+    session: str, program: str, *, category: str
+) -> str:
+    """Short-lived display cache around the authoritative predicate.
+
+    DECK and NETWORK poll independently, so uncached ALL views repeated every
+    transcript/index/private-file check twice per interval.  The action API
+    deliberately bypasses this cache and calls ``_resume_capability`` itself.
+    """
+
+    normalized_program = (program or "").strip().lower()
+    key = (session, normalized_program, category)
+    now = time.monotonic()
+    with _RESUME_CAPABILITY_CACHE_LOCK:
+        hit = _RESUME_CAPABILITY_CACHE.get(key)
+        if hit and now - hit[0] < _RESUME_CAPABILITY_CACHE_TTL:
+            return hit[1]
+        capability = _resume_capability(session, program, category=category)
+        if len(_RESUME_CAPABILITY_CACHE) >= _RESUME_CAPABILITY_CACHE_MAX:
+            expired = [
+                cache_key
+                for cache_key, (stored_at, _value) in (
+                    _RESUME_CAPABILITY_CACHE.items()
+                )
+                if now - stored_at >= _RESUME_CAPABILITY_CACHE_TTL
+            ]
+            for cache_key in expired:
+                _RESUME_CAPABILITY_CACHE.pop(cache_key, None)
+            if len(_RESUME_CAPABILITY_CACHE) >= _RESUME_CAPABILITY_CACHE_MAX:
+                oldest = min(
+                    _RESUME_CAPABILITY_CACHE,
+                    key=lambda cache_key: _RESUME_CAPABILITY_CACHE[cache_key][0],
+                )
+                _RESUME_CAPABILITY_CACHE.pop(oldest, None)
+        _RESUME_CAPABILITY_CACHE[key] = (now, capability)
+    return capability
+
+
+def _resume_unavailable(capability: str) -> dict:
+    return {
+        "ok": False,
+        "error": RESUME_CAPABILITY_MESSAGES.get(
+            capability, "Resume prerequisites could not be verified."
+        ),
+        "resume_capability": capability,
+    }
 
 
 def _do_resume_codex(session: str) -> dict:
@@ -4313,15 +4615,17 @@ def do_jump(session: str) -> dict:
     program = _agent_program(session)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
+    has_session = _has_session(session)
+    if not has_session:
+        # tmux セッションが無い = retire済み/過去セッション(gone)。
+        # UI の表示時点を信用せず、同じ capability を API 境界で再検査する。
+        capability = _resume_capability(session, program, category="gone")
+        if capability != "ready":
+            return _resume_unavailable(capability)
+        return do_resume(session)
+
     if _terminal_adapter() == "none":
         return _terminal_unsupported()
-    if subprocess.run(
-        ["tmux", "has-session", "-t", f"={session}"],
-        capture_output=True,
-    ).returncode != 0:
-        # tmux セッションが無い = retire済み/過去セッション(gone)。
-        # transcript から claude --resume で再開する。
-        return do_resume(session)
 
     # tmux セッションは在るが、claude が死んで「素の zsh 残骸(husk)」だけが
     # 残っている場合がある(= category 'finished')。この husk に attach しても
@@ -4345,6 +4649,13 @@ def do_jump(session: str) -> dict:
     # a harmless attachable shell into irreversible data loss. Preserve that
     # shell and let the normal terminal attach path handle the jump instead.
     if cat == "finished" and not program.startswith("antigravity"):
+        # A provider husk is not a successful conversation resume.  When the
+        # prerequisites fail, refuse the action but leave the shell intact:
+        # attaching would report false success, while killing it would discard
+        # the last recoverable artifact.
+        capability = _resume_capability(session, program, category="finished")
+        if capability != "ready":
+            return _resume_unavailable(capability)
         subprocess.run(
             ["tmux", "kill-session", "-t", f"={session}"],
             capture_output=True,
