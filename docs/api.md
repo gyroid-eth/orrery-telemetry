@@ -84,6 +84,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
   "dirs":["~","/path/to/project"],
   "models":[
     "claude-sonnet-5",
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-haiku-4-5-20251001",
     "claude-fable-5-1"
@@ -94,7 +95,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"claude",
       "label":"Claude",
       "program":"claude-code",
-      "models":["claude-sonnet-5"],
+      "models":["claude-sonnet-5","claude-opus-5-5","claude-opus-5","claude-haiku-4-5-20251001","claude-fable-5-1"],
       "default_model":"claude-sonnet-5",
       "efforts":null
     },

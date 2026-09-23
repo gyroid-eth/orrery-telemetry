@@ -198,7 +198,7 @@ The parent agent does not finish when it hands off the task. It remains responsi
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 
-The model generation names in `spawn_child.sh`'s model catalog are canonical. For Claude, an omitted model or `opus` means `claude-opus-5`, and `sonnet` means `claude-sonnet-5`; for Codex, an omitted model or `sol` means `gpt-5.6-sol`. `terra` / `luna` are aliases for the corresponding `gpt-5.6-*` models. Full IDs for older generations remain valid for compatibility, but the warm pool is claimed only for an exact match with the current 200K Opus / Sonnet entries in the catalog.
+The model generation names in `spawn_child.sh`'s model catalog are canonical. For Claude, an omitted model or `opus` means `claude-opus-5-5`, and `sonnet` means `claude-sonnet-5`; for Codex, an omitted model or `sol` means `gpt-5.6-sol`. `claude-opus-5` / `opus-5` remain valid compatibility forms for explicitly requesting the prior generation. `terra` / `luna` are aliases for the corresponding `gpt-5.6-*` models. Full IDs for older generations remain valid for compatibility, but the warm pool is claimed only for an exact match with the current 200K Opus / Sonnet entries in the catalog. Opus 5.5 requires Claude Code 2.1.280 or later.
 
 1. Determine risk and monitoring cadence from the target resources, exclusivity, failure points, and reversibility
 2. Create a child-owned token and canonical name with `agentstack-preregister-child`

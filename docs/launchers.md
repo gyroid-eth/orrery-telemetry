@@ -200,7 +200,7 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 
-model の世代名は `spawn_child.sh` の model catalog が正本です。Claude は無指定 / `opus` が `claude-opus-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定 / `sol` が `gpt-5.6-sol` です。`terra` / `luna` は対応する `gpt-5.6-*` alias です。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。
+model の世代名は `spawn_child.sh` の model catalog が正本です。Claude は無指定 / `opus` が `claude-opus-5-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定 / `sol` が `gpt-5.6-sol` です。`claude-opus-5` / `opus-5` は旧世代を明示指定する互換形として有効です。`terra` / `luna` は対応する `gpt-5.6-*` alias です。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。Opus 5.5 には Claude Code 2.1.280 以上が必要です。
 
 1. 対象 resource、排他性、失敗点、可逆性から risk と監視頻度を決める
 2. `agentstack-preregister-child` で child-owned token と canonical name を作る

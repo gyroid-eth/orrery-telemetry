@@ -428,11 +428,16 @@ def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
     expected = {
-        ("normalize_claude_model", ""): "claude-opus-5",
-        ("normalize_claude_model", "opus"): "claude-opus-5",
+        ("normalize_claude_model", ""): "claude-opus-5-5",
+        ("normalize_claude_model", "opus"): "claude-opus-5-5",
         ("normalize_claude_model", "opus[1m]"): "claude-opus-4-8[1m]",
         ("normalize_claude_model", "claude-opus-4-8"): "claude-opus-4-8",
+        ("normalize_claude_model", "claude-opus-5"): "claude-opus-5",
+        ("normalize_claude_model", "opus-5"): "claude-opus-5",
         ("normalize_claude_model", "opus-5[1m]"): "claude-opus-5[1m]",
+        ("normalize_claude_model", "opus-5-5[1m]"): "claude-opus-5-5[1m]",
+        ("normalize_claude_model", "opus-5-5-1m"): "claude-opus-5-5[1m]",
+        ("normalize_claude_model", "opus55[1m]"): "claude-opus-5-5[1m]",
         ("normalize_claude_model", "sonnet"): "claude-sonnet-5",
         ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
         ("normalize_claude_model", "fable"): "claude-fable-5-1",
