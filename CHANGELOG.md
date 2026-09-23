@@ -8,6 +8,16 @@
 
 ---
 
+## Unreleased
+
+### resume できない終了済み agent に、resume 操作を案内していました（#59）
+
+DECK と NETWORK は `gone` / `retired` という表示状態だけで resume 操作を出していたため、検証済み transcript、元の cwd、CLI、Codex child の provenance・credential・設定が無い row も resume 可能に見えていました。backend が row ごとに固定理由コードの `resume_capability` を返すようにし、DECK card、NETWORK の一括選択、詳細 panel、`/api/jump` が同じ判定を使うようにしました。古い Codex row は child provenance が無い限り推測で `ready` にせず、API から直接呼んでも terminal を開く前に拒否します。
+
+### fresh install と CI が `sqlmodel 0.0.45` 以降で動かなくなっていました（#67）
+
+ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。timezone-aware datetime への移行と既存 database の naive 値との互換対応は別の修正で行います。
+
 ## 2026.09.19
 
 ### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）

@@ -22,7 +22,7 @@ dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、O
 | 親子関係を見る | [NETWORK](#network) に切り替える。parent と child は spawn edge で結ばれ、node をクリックすると個別の詳細 panel が開きます。 |
 | エージェント同士が何を話したか読む | NETWORK の communication edge をクリックする。右側の mail drawer に、その2者間の subject、importance、時刻、本文が表示されます。[mail 設定がない場合](#edge-と-mail)は `NOT CONFIGURED` になります。 |
 | 複数のエージェントをまとめて操作する | NETWORK 上部の `Select` を有効にし、node をクリックするか空白部分を矩形 drag する。選択後に画面下部へ出る action bar で、running / finished agent は `Exit N`、2人以上は `Replay N` を選べます。EXIT は同じ button をもう一度押す二段確認です。 |
-| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出し、カード / node → 詳細 panel → `OPEN TMUX` と進む。tmux session がなければ `/api/jump` が保存済み transcript の resume に切り替わります。NETWORK の `Select` で gone / retired node を選び、画面下部の `Resume N` を二度押す経路もあります。resume には transcript、元の cwd、対応 CLI、terminal adapter が必要です。 |
+| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出します。card の `RESUME READY` または詳細 panel の `RESUME` が出る row だけ復元できます。NETWORK の `Select` も `resume_capability: ready` の gone / retired node だけを `Resume N` に数えます。resume には検証済み transcript、元の cwd、対応 CLI、terminal adapter が必要で、Codex child では provenance・正式登録・credential・復元可能な設定も必要です。 |
 | 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の history を `7d` / `30d` / `all` に切り替える。既定の `live` は running と finished だけで、`7d` / `30d` はその期間に活動した `gone` / `retired` card を、`all` は登録された全 agent を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
 
 NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の history `all`、親へ届く完了報告を確認してください。
@@ -142,6 +142,8 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 上部の `FILTER · name / task` は、名前だけでなく **task description、live pane title、最後に受け取った指示の subject と送信者**も対象にします。何をしていた agent かを覚えていれば、名前を思い出せなくても引けます。
 
 既定の history `live` では running と finished しか出ません。`7d` / `30d` / `all` に切り替えるとその範囲で活動した `gone` / `retired` も対象に入るので、**終了した agent を検索で見つけて resume する**という使い方ができます。過去の文脈を持った相手を取っておいて、必要になったら再開する形です（手順は[やりたいことから探す](#やりたいことから探す)の「終了したエージェントを resume する」、見え方は[Child 完了後の表示](#child-完了後の表示)）。
+
+card と詳細 panel は backend の `resume_capability` を表示します。`ready` 以外では詳細 panel の action は `RESUME UNAVAILABLE` になり、固定理由（`NO HISTORY`、`PROVENANCE MISSING`、`CREDENTIAL MISSING` など）を併記します。特に provenance 導入前の Codex row は、cleanup 済み child と unmanaged session を推測で区別せず `provenance_missing` として閉じます。`/api/jump` も操作直前に同じ判定をやり直すため、古い画面や API の直接呼び出しでこの gate を迂回できません。
 
 ### カード操作
 
