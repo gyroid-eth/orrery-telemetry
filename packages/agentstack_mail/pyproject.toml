@@ -25,9 +25,7 @@ dependencies = [
   "PyYAML>=6.0.2",
   "pathspec>=0.12.1",
   "python-decouple>=3.8",
-  # 0.0.45 rejects the existing naive UTC datetime writes. Keep fresh
-  # installs working while issue #67 migrates storage to aware datetimes.
-  "sqlmodel>=0.0.16,<0.0.45",
+  "sqlmodel>=0.0.16",
   "sqlalchemy[asyncio]>=2.0.35",
   "aiosqlite>=0.20.0",
   "rich>=13.9.1",

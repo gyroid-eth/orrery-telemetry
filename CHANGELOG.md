@@ -26,7 +26,9 @@ DECK と NETWORK は `gone` / `retired` という表示状態だけで resume �
 
 ### fresh install と CI が `sqlmodel 0.0.45` 以降で動かなくなっていました（#67）
 
-ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。timezone-aware datetime への移行と既存 database の naive 値との互換対応は別の修正で行います。
+ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。まず稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。
+
+続く本修正では database への書き込みと検索条件を timezone-aware UTC に統一しました。SQLModel の版に依存しない型で、既存 database に保存済みの naive 値は UTC として読み出し、新規の naive 値は拒否します。API・signal・通知の timestamp 文字列は従来形式を保ったまま、`sqlmodel` の上限 pin を外しました。
 
 ## 2026.09.19
 
