@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.09.19
 
 ### 正常終了した Codex child の履歴が `receipt_missing` になっていました（#58）
 
