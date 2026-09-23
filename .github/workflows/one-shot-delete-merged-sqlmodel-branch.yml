@@ -1,0 +1,28 @@
+name: one-shot delete merged sqlmodel branch
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.repository == 'kame447/orrery-telemetry'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify and delete merged branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch='fix/sqlmodel-naive-datetime-compat'
+          expected='a732f5637430c00ca260ee3dd88f16a85bb09b16'
+          git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" master
+          test "$(git rev-parse "origin/$branch")" = "$expected"
+          git merge-base --is-ancestor "$expected" origin/master
+          git push origin --delete -- "$branch"
