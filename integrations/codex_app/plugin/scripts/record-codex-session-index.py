@@ -12,6 +12,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -23,6 +24,7 @@ from typing import Any, Mapping
 
 MAX_PAYLOAD = 256 * 1024
 SUPPORTED_SOURCES = frozenset({"startup", "resume", "compact", "clear"})
+SAFE_SESSION_ID = re.compile(r"^[0-9A-Fa-f-]{8,}$")
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -81,6 +83,24 @@ def _valid_launch(record: Mapping[str, Any], launch_id: str) -> bool:
     receipt_id = record.get("receipt_id")
     launch_origin = record.get("launch_origin")
     codex_mcp_profile = record.get("codex_mcp_profile")
+    launch_kind = record.get("launch_kind")
+    resume_session_id = record.get("resume_session_id")
+    fallback_launch_id = record.get("fallback_launch_id")
+    fallback_receipt_id = record.get("fallback_receipt_id")
+    resume_fields_valid = (
+        launch_kind == "startup"
+        and resume_session_id is None
+        and fallback_launch_id is None
+        and fallback_receipt_id is None
+    ) or (
+        launch_kind == "resume"
+        and isinstance(resume_session_id, str)
+        and bool(SAFE_SESSION_ID.fullmatch(resume_session_id))
+        and isinstance(fallback_launch_id, str)
+        and bool(fallback_launch_id)
+        and isinstance(fallback_receipt_id, str)
+        and bool(fallback_receipt_id)
+    )
     provenance_valid = (
         launch_origin is None
         and codex_mcp_profile is None
@@ -104,7 +124,8 @@ def _valid_launch(record: Mapping[str, Any], launch_id: str) -> bool:
         and isinstance(record.get("project_key"), str)
         and bool(record.get("project_key"))
         and record.get("launch_id") == launch_id
-        and record.get("launch_kind") in {"startup", "resume"}
+        and launch_kind in {"startup", "resume"}
+        and resume_fields_valid
         and record.get("history_mode") == "enabled"
         and type(record.get("binding_conflicted")) is bool
         and provenance_valid
@@ -245,6 +266,11 @@ def record_payload(
             return reject("id_mismatch", conflict=True)
         if not isinstance(session_id, str) or not session_id:
             return reject("id_mismatch")
+        if (
+            launch.get("launch_kind") == "resume"
+            and session_id != launch.get("resume_session_id")
+        ):
+            return reject("id_mismatch", session_id, conflict=True)
 
         # The first runtime ID presented by this launch is a one-way claim.
         # A second CLI can inherit the launch pair, and `/clear` may present a

@@ -3347,6 +3347,7 @@ def _do_resume_codex(session: str) -> dict:
         f'export AGENT_NAME={shlex.quote(session)}; '
         'export AGENTSTACK_RESERVED_IDENTITY=1; '
         'export AGENTSTACK_CODEX_LAUNCH_KIND=resume; '
+        f'export AGENTSTACK_CODEX_RESUME_SESSION_ID={shlex.quote(sid)}; '
         f'export AGENTSTACK_CODEX_LAUNCH_ORIGIN={shlex.quote(launch_origin)}; '
     )
     if launch_origin == "child":
@@ -3626,6 +3627,30 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
             launch = json.load(handle)
     except (OSError, ValueError):
         launch = None
+    launch_kind = launch.get("launch_kind") if isinstance(launch, dict) else None
+    resume_session_id = (
+        launch.get("resume_session_id") if isinstance(launch, dict) else None
+    )
+    fallback_launch_id = (
+        launch.get("fallback_launch_id") if isinstance(launch, dict) else None
+    )
+    fallback_receipt_id = (
+        launch.get("fallback_receipt_id") if isinstance(launch, dict) else None
+    )
+    resume_fields_valid = (
+        launch_kind == "startup"
+        and resume_session_id is None
+        and fallback_launch_id is None
+        and fallback_receipt_id is None
+    ) or (
+        launch_kind == "resume"
+        and isinstance(resume_session_id, str)
+        and bool(re.fullmatch(r"[0-9A-Fa-f-]{8,}", resume_session_id))
+        and isinstance(fallback_launch_id, str)
+        and bool(fallback_launch_id)
+        and isinstance(fallback_receipt_id, str)
+        and bool(fallback_receipt_id)
+    )
     valid_common = (
         isinstance(launch, dict)
         and launch.get("schema_version") == 1
@@ -3637,7 +3662,8 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
         and launch.get("project_key") == registration["project_key"]
         and isinstance(launch.get("launch_id"), str)
         and bool(launch.get("launch_id"))
-        and launch.get("launch_kind") in {"startup", "resume"}
+        and launch_kind in {"startup", "resume"}
+        and resume_fields_valid
         and type(launch.get("binding_conflicted")) is bool
         and (
             launch.get("claimed_session_id") is None
@@ -3698,6 +3724,33 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
             "history_binding_reason_code": "bound",
             "transcript_path": transcript,
         }
+
+    # Codex 0.156 emits SessionStart(resume) on the first submitted prompt,
+    # not when the REPL opens.  Until that hook claims this fresh expectation,
+    # retain only the exact receipt used to choose `codex resume <session_id>`.
+    # The nonce pair, registration, requested ID, and rollout header are all
+    # revalidated here. Any hook transition sets a current receipt nonce (or a
+    # conflict), so this fallback cannot survive a failed/conflicting claim.
+    if (
+        launch_kind == "resume"
+        and claimed_session_id is None
+        and receipt_id is None
+        and launch.get("binding_conflicted") is False
+    ):
+        fallback = _verified_codex_index(
+            session,
+            registration,
+            fallback_launch_id,
+            resume_session_id,
+            fallback_receipt_id,
+        )
+        if fallback:
+            return {
+                "history_binding": "bound",
+                "history_binding_reason": "",
+                "history_binding_reason_code": "bound",
+                "transcript_path": fallback,
+            }
 
     reason = launch.get("last_reason")
     if reason not in _CODEX_BINDING_REASONS or reason == "disabled":

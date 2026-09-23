@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENT = "BoundCodex"
 AGENT_ID = 73
 OWNER_TOKEN = "server-owner-token"
+SESSION_ID = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
 
 
 @pytest.fixture
@@ -52,6 +53,51 @@ def _write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
+
+
+def _seed_bound_receipt(
+    runtime: Path,
+    project: Path,
+    transcript: Path,
+    *,
+    agent_name: str = AGENT,
+    launch_origin: str = "child",
+    launch_id: str = "prior-launch",
+) -> None:
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": SESSION_ID, "cwd": str(project)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    receipt = {
+        "schema_version": 2,
+        "binding_kind": "self",
+        "provider": "codex",
+        "program": "codex",
+        "agent_id": AGENT_ID,
+        "agent_name": agent_name,
+        "project_key": str(project),
+        "registered_by": agent_name,
+        "launch_id": launch_id,
+        "receipt_id": "prior-receipt",
+        "launch_kind": "startup",
+        "session_id": SESSION_ID,
+        "transcript_path": str(transcript),
+        "source": "startup",
+        "recorded_at": "2026-09-23T00:00:00+00:00",
+        "launch_origin": launch_origin,
+    }
+    if launch_origin == "child":
+        receipt["codex_mcp_profile"] = "orrery-only"
+    _write_private(
+        runtime / "session_index" / f"{AGENT_ID}.json",
+        json.dumps(receipt),
+    )
 
 
 def _child_proxy_config(
@@ -132,7 +178,7 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
         json.dumps({
             "type": "session_meta",
             "payload": {
-                "id": "01d13f58-8e1a-7777-a3d8-e2ba243cdb49",
+                "id": SESSION_ID,
                 "cwd": str(project),
             },
         }) + "\n",
@@ -220,7 +266,7 @@ def test_resume_honours_installer_settings_and_extra_roots(policy_env, monkeypat
 def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch):
     tmp_path, project = policy_env
     rollout = tmp_path / "rollout-session.jsonl"
-    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    session_id = SESSION_ID
     rollout.write_text(
         json.dumps({
             "type": "session_meta",
@@ -276,6 +322,7 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     inner = launched[0][-1]
     assert f"source {shlex.quote(str(bootstrap))}" in inner
     assert "AGENTSTACK_CODEX_LAUNCH_KIND=resume" in inner
+    assert f"AGENTSTACK_CODEX_RESUME_SESSION_ID={session_id}" in inner
     assert f"export CODEX_HOME={shlex.quote(str(child_home))}" in inner
     assert f"export CODEX_SHARED_CODEX_DIR={shlex.quote(str(child_home))}" in inner
     assert "AGENTSTACK_CODEX_CHILD_MCP_PROFILE=orrery-only" in inner
@@ -289,7 +336,7 @@ def test_standalone_resume_uses_current_home_without_child_lifecycle(
     tmp_path, project = policy_env
     runtime = tmp_path / "runtime"
     rollout = tmp_path / "rollout-session.jsonl"
-    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    session_id = SESSION_ID
     rollout.write_text(
         json.dumps(
             {
@@ -362,7 +409,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     if not zsh:
         pytest.skip("requires zsh to exercise the macOS login-shell boundary")
 
-    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    session_id = SESSION_ID
     rollout = tmp_path / "rollout-session.jsonl"
     rollout.write_text(
         json.dumps(
@@ -438,6 +485,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     config_before = (codex_home / "config.toml").read_bytes()
     (codex_home / "sessions").symlink_to(shared_sessions, target_is_directory=True)
     capture = tmp_path / "codex-env.txt"
+    submit = tmp_path / "submit-prompt"
     release = tmp_path / "release-hook"
     hook_payload = tmp_path / "session-start.json"
     hook_payload.write_text(
@@ -494,8 +542,15 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         "[[ \"${CODEX_SHARED_CODEX_DIR:-}\" == \"$EXPECTED_CODEX_HOME\" ]] || exit 0\n"
         "[[ \"$(cd \"$CODEX_HOME/sessions\" && pwd -P)\" == "
         "\"$EXPECTED_SHARED_SESSIONS\" ]] || exit 0\n"
-        "while [[ ! -f \"$FAKE_CODEX_RELEASE\" ]]; do /bin/sleep 0.01; done\n"
-        "\"$FAKE_HOOK_RUNNER\" < \"$FAKE_HOOK_PAYLOAD\"\n",
+        "hooked=0\n"
+        "while :; do\n"
+        "  if [[ \"$hooked\" == 0 && -f \"$FAKE_CODEX_SUBMIT\" ]]; then\n"
+        "    \"$FAKE_HOOK_RUNNER\" < \"$FAKE_HOOK_PAYLOAD\"\n"
+        "    hooked=1\n"
+        "  fi\n"
+        "  [[ -f \"$FAKE_CODEX_RELEASE\" ]] && break\n"
+        "  /bin/sleep 0.01\n"
+        "done\n",
         encoding="utf-8",
     )
     fake_tmux.chmod(0o755)
@@ -521,6 +576,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     monkeypatch.setenv("AGENTSTACK_CODEX_LAUNCH_BINDING", "/parent/launch.json")
     monkeypatch.setenv("AGENTSTACK_CODEX_LAUNCH_ID", "parent-launch")
     monkeypatch.setenv("FAKE_CODEX_CAPTURE", str(capture))
+    monkeypatch.setenv("FAKE_CODEX_SUBMIT", str(submit))
     monkeypatch.setenv("FAKE_CODEX_RELEASE", str(release))
     monkeypatch.setenv("EXPECTED_CODEX_HOME", str(codex_home))
     monkeypatch.setenv("EXPECTED_SHARED_SESSIONS", str(shared_sessions.resolve()))
@@ -650,7 +706,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         after_grace = time.time() + server.CODEX_BINDING_GRACE_SECONDS + 1
         assert server._codex_history_binding(
             "BoundCodex", now=after_grace
-        )["history_binding"] == "unconfirmed"
+        )["history_binding"] == "bound"
         (
             launch_path,
             launch_id,
@@ -669,6 +725,8 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         launch = json.loads(Path(launch_path).read_text(encoding="utf-8"))
         assert launch["launch_id"] == launch_id
         assert launch["claimed_session_id"] is None
+        assert launch["resume_session_id"] == session_id
+        assert launch["fallback_launch_id"] == old_launch_id
         assert launch["launch_origin"] == "child"
         assert launch["codex_mcp_profile"] == "orrery-only"
         assert (codex_home / "config.toml").read_bytes() != config_before
@@ -679,6 +737,9 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         assert child_config["mcp_servers"]["notion"]["enabled"] is False
         assert child_config["plugins"]["unrelated@fixture"]["enabled"] is False
         assert (codex_home / "sessions").resolve() == shared_sessions.resolve()
+        # Real Codex 0.156 emits SessionStart(resume) only after the first
+        # prompt is submitted. The fake keeps the REPL open until then.
+        submit.write_text("first prompt\n", encoding="utf-8")
         release.write_text("continue\n", encoding="utf-8")
         stdout, stderr = processes[0].communicate(timeout=10)
         assert processes[0].returncode == 0, {"stdout": stdout, "stderr": stderr}
@@ -710,6 +771,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
         default_config.chmod(0o600)
         capture.unlink()
         release.unlink()
+        submit.unlink()
         second = server._do_resume_codex("BoundCodex")
         assert second["ok"] is True, second
         second_launch_path, second_launch_id, *_rest = capture.read_text(
@@ -721,19 +783,59 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
             (codex_home / "config.toml").read_text(encoding="utf-8")
         )
         assert second_config["profile_marker"] == "current-source-second"
+        # Exit this resumed REPL without a prompt: no SessionStart receipt is
+        # emitted, but the exact prior receipt remains authoritative.
+        first_receipt_bytes = (
+            runtime / "session_index" / "73.json"
+        ).read_bytes()
         release.write_text("continue\n", encoding="utf-8")
         stdout, stderr = processes[1].communicate(timeout=10)
         assert processes[1].returncode == 0, {"stdout": stdout, "stderr": stderr}
-        second_receipt = json.loads(
+        assert (runtime / "session_index" / "73.json").read_bytes() == first_receipt_bytes
+        assert server._codex_history_binding("BoundCodex")["history_binding"] == "bound"
+        assert not codex_home.exists()
+
+        # The no-prompt exit is still one-click resumable. This third launch
+        # proves fallback chaining, then submits a prompt so a fresh receipt
+        # replaces the fallback normally.
+        default_config.write_text(
+            default_config.read_text(encoding="utf-8").replace(
+                'profile_marker = "current-source-second"',
+                'profile_marker = "current-source-third"',
+            ),
+            encoding="utf-8",
+        )
+        default_config.chmod(0o600)
+        capture.unlink()
+        release.unlink()
+        third = server._do_resume_codex("BoundCodex")
+        assert third["ok"] is True, third
+        third_launch_path, third_launch_id, *_rest = capture.read_text(
+            encoding="utf-8"
+        ).rstrip("\n").split("\t", 5)
+        assert third_launch_path == launch_path
+        assert third_launch_id not in {launch_id, second_launch_id}
+        third_config = tomllib.loads(
+            (codex_home / "config.toml").read_text(encoding="utf-8")
+        )
+        assert third_config["profile_marker"] == "current-source-third"
+        assert server._codex_history_binding("BoundCodex")["history_binding"] == "bound"
+        submit.write_text("third prompt\n", encoding="utf-8")
+        release.write_text("continue\n", encoding="utf-8")
+        stdout, stderr = processes[2].communicate(timeout=10)
+        assert processes[2].returncode == 0, {"stdout": stdout, "stderr": stderr}
+        third_receipt = json.loads(
             (runtime / "session_index" / "73.json").read_text(encoding="utf-8")
         )
-        assert second_receipt["launch_origin"] == "child"
-        assert second_receipt["codex_mcp_profile"] == "orrery-only"
+        assert third_receipt["launch_id"] == third_launch_id
+        assert third_receipt["launch_origin"] == "child"
+        assert third_receipt["codex_mcp_profile"] == "orrery-only"
         assert server._codex_history_binding("BoundCodex")["history_binding"] == "bound"
         assert not codex_home.exists()
     finally:
         # An assertion before the normal release must not leave the fake Codex
         # spinning in its first-submit wait loop.
+        submit.write_text("prompt\n", encoding="utf-8")
         release.write_text("continue\n", encoding="utf-8")
         for process in processes:
             if process.poll() is None:
@@ -882,7 +984,7 @@ def test_resume_valid_state_without_home_regenerates_private_home(
     runtime = tmp_path / "runtime"
     _seed_child_identity(runtime, project, write_home=False)
     rollout = tmp_path / "rollout-session.jsonl"
-    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    session_id = SESSION_ID
     rollout.write_text(
         json.dumps({
             "type": "session_meta",
@@ -966,6 +1068,7 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     )
     runtime = tmp_path / "runtime"
     _seed_child_identity(runtime, project, write_home=False)
+    _seed_bound_receipt(runtime, project, tmp_path / "prior-rollout.jsonl")
     command = (
         "AGENTSTACK_CODEX_LAUNCH_BINDING=/parent/launch.json; "
         "AGENTSTACK_CODEX_LAUNCH_ID=parent-launch; "
@@ -984,6 +1087,7 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
             "AGENTSTACK_PYTHON": sys.executable,
             "AGENTSTACK_RESERVED_IDENTITY": "1",
             "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+            "AGENTSTACK_CODEX_RESUME_SESSION_ID": SESSION_ID,
             "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
             "AGENT_NAME": "BoundCodex",
             "TMUX": "",
@@ -1001,6 +1105,9 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     assert launch["agent_id"] == 73
     assert launch["claimed_session_id"] is None
     assert launch["receipt_id"] is None
+    assert launch["resume_session_id"] == SESSION_ID
+    assert launch["fallback_launch_id"] == "prior-launch"
+    assert launch["fallback_receipt_id"] == "prior-receipt"
     retained = json.loads(
         (runtime / "child-agents" / f"{AGENT}.json").read_text(encoding="utf-8")
     )
@@ -1061,6 +1168,15 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
     assert launch["launch_origin"] == "standalone"
     assert "codex_mcp_profile" not in launch
 
+    _seed_bound_receipt(
+        runtime,
+        project,
+        tmp_path / "top-level-rollout.jsonl",
+        agent_name="TopLevelCodex",
+        launch_origin="standalone",
+        launch_id=launch_id,
+    )
+
     resume_env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(tmp_path / "clean-home"),
@@ -1070,6 +1186,7 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_RESERVED_IDENTITY": "1",
         "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+        "AGENTSTACK_CODEX_RESUME_SESSION_ID": SESSION_ID,
         "AGENTSTACK_CODEX_LAUNCH_ORIGIN": "standalone",
         "AGENT_NAME": "TopLevelCodex",
         "TMUX": "",
@@ -1087,12 +1204,16 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
     assert resumed_id and resumed_id != launch_id
     resume_launch = json.loads(Path(resumed_path).read_text(encoding="utf-8"))
     assert resume_launch["launch_kind"] == "resume"
+    assert resume_launch["resume_session_id"] == SESSION_ID
+    assert resume_launch["fallback_launch_id"] == launch_id
     assert resume_launch["launch_origin"] == "standalone"
     assert "codex_mcp_profile" not in resume_launch
     assert not (runtime / "child-agents" / "TopLevelCodex.json").exists()
 
 
-@pytest.mark.parametrize("failure_mode", ["project_unset", "health_unreachable"])
+@pytest.mark.parametrize(
+    "failure_mode", ["session_missing", "project_unset", "health_unreachable"]
+)
 def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
     policy_env, failure_mode
 ):
@@ -1128,6 +1249,9 @@ def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
         "AGENTSTACK_RUNTIME_DIR": str(runtime),
         "AGENTSTACK_RESERVED_IDENTITY": "1",
         "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+        "AGENTSTACK_CODEX_RESUME_SESSION_ID": (
+            "" if failure_mode == "session_missing" else SESSION_ID
+        ),
         "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "inherit",
         "AGENT_NAME": "BoundCodex",
         "TMUX": "",
@@ -1144,3 +1268,5 @@ def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
     assert result.returncode != 0
     assert "REACHED_CODEX_EXEC_BRANCH" not in result.stdout
     assert not (runtime / "codex_launches").exists()
+    if failure_mode == "session_missing":
+        assert "no valid target session id" in result.stderr

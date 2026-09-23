@@ -154,7 +154,7 @@ Codex child の fresh launch は、`launch_origin: child` と選択した `codex
 
 resume bootstrap は retained credential で同じ identity を再登録し、fresh binding expectation を保存してから remote identity を unretire します。unretire は `codex resume` の直前に行い、それ以前の失敗では生成物だけを捨てて credential と retired 状態を保ちます。unretire の失敗でも Codex は起動しません。再開後の cleanup は provenance を保持した新しい receipt と private material を再び期限付きで残すため、同じ child を複数回 resume できます。
 
-`codex-cli 0.154.0` の interactive TUI では、startup / resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。そのため resume 直後は history が未確認でもよく、最初の submit 後に公式 payload と rollout header が fresh resume launch に一致して初めて bound になります。この発火時点は 0.154.0 の実測範囲であり、他 version / mode の一般保証ではありません。
+`codex-cli 0.154.0` と `0.156.1` の interactive TUI では、resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。resume bootstrap は dashboard が選んだ session ID を既存 receipt と rollout header の両方で照合し、fresh resume expectation が未 claim・非 conflict の間だけ、その receipt の exact `launch_id` / `receipt_id` を history の根拠として保持します。prompt を送らず終了しても同じ session を再び resume できます。最初の submit 後は公式 payload の session ID も固定済み ID と header に一致するときだけ fresh receipt に置き換わり、別 ID・競合・次の startup expectation は fallback を無効にします。この発火時点は上記 version の実測範囲であり、他 version / mode の一般保証ではありません。
 
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 

@@ -21,12 +21,56 @@ AGENT = "RetainedCodex"
 AGENT_ID = 73
 PROJECT = "/fixture/project"
 TOKEN = "fixture-owner-token"
+SESSION_ID = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
 
 
 def _private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
+
+
+def _seed_bound_child_receipt(
+    runtime: Path,
+    project: str,
+    transcript: Path,
+    *,
+    session_id: str = SESSION_ID,
+) -> None:
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": session_id, "cwd": project},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _private(
+        runtime / "session_index" / f"{AGENT_ID}.json",
+        json.dumps(
+            {
+                "schema_version": 2,
+                "binding_kind": "self",
+                "provider": "codex",
+                "program": "codex",
+                "agent_id": AGENT_ID,
+                "agent_name": AGENT,
+                "project_key": project,
+                "registered_by": AGENT,
+                "launch_id": "prior-launch",
+                "receipt_id": "prior-receipt",
+                "launch_kind": "startup",
+                "session_id": session_id,
+                "transcript_path": str(transcript),
+                "source": "startup",
+                "recorded_at": "2026-09-23T00:00:00+00:00",
+                "launch_origin": "child",
+                "codex_mcp_profile": "orrery-only",
+            }
+        ),
+    )
 
 
 def _retained_state(*, expires_at: str) -> dict[str, object]:
@@ -332,6 +376,7 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
         json.dumps(_retained_state(expires_at="2999-01-01T00:00:00Z")),
     )
     _private(runtime / f"agent_token_{AGENT}", TOKEN)
+    _seed_bound_child_receipt(runtime, PROJECT, tmp_path / "prior-rollout.jsonl")
     result = subprocess.run(
         [
             "/bin/bash",
@@ -347,6 +392,7 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
             "AGENTSTACK_PYTHON": sys.executable,
             "AGENTSTACK_RESERVED_IDENTITY": "1",
             "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+            "AGENTSTACK_CODEX_RESUME_SESSION_ID": SESSION_ID,
             "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
             "AGENT_NAME": AGENT,
             "FAKE_MCP_CALL_LOG": str(call_log),
@@ -366,6 +412,8 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
     )
     assert launch["launch_origin"] == "child"
     assert launch["codex_mcp_profile"] == "orrery-only"
+    assert launch["resume_session_id"] == SESSION_ID
+    assert launch["fallback_launch_id"] == "prior-launch"
     assert call_log.read_text(encoding="utf-8").splitlines()[-1] == "unretire_agent"
     state = json.loads(state_file.read_text(encoding="utf-8"))
     if unretire_succeeds:
@@ -529,17 +577,13 @@ def test_real_resume_command_can_cleanup_and_resume_again(
     sessions.mkdir(parents=True)
     source_config = source_home / "config.toml"
     _private(source_config, 'profile_marker = "first"\n')
-    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    session_id = SESSION_ID
     rollout = sessions / "rollout-fixture.jsonl"
-    rollout.write_text(
-        json.dumps(
-            {
-                "type": "session_meta",
-                "payload": {"id": session_id, "cwd": str(project)},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+    _seed_bound_child_receipt(
+        runtime,
+        str(project),
+        rollout,
+        session_id=session_id,
     )
     _private(
         runtime / "child-agents" / f"{AGENT}.json",

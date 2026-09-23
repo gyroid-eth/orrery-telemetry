@@ -39,6 +39,15 @@ case "$CODEX_LAUNCH_KIND" in
   startup|resume) ;;
   *) CODEX_LAUNCH_KIND="startup" ;;
 esac
+CODEX_RESUME_SESSION_ID="${AGENTSTACK_CODEX_RESUME_SESSION_ID:-}"
+if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+  if [[ ! "$CODEX_RESUME_SESSION_ID" =~ ^[0-9A-Fa-f-]{8,}$ ]]; then
+    echo "⚠️  resumed Codex session has no valid target session id; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+else
+  CODEX_RESUME_SESSION_ID=""
+fi
 CODEX_LAUNCH_ORIGIN="${AGENTSTACK_CODEX_LAUNCH_ORIGIN:-}"
 if [[ "$CODEX_LAUNCH_KIND" == "startup" ]]; then
   # Delegated children prepare their launch before exec and never source this
@@ -248,6 +257,11 @@ if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
     if [[ "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
       PREPARE_ARGS+=(
         --codex-mcp-profile "$CODEX_CHILD_MCP_PROFILE"
+      )
+    fi
+    if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
+      PREPARE_ARGS+=(
+        --resume-session-id "$CODEX_RESUME_SESSION_ID"
       )
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$PREPARE_BINDING" \

@@ -226,6 +226,7 @@ def _prepare_standalone(
         launch_kind=launch_kind,
         history_mode="enabled",
         launch_origin="standalone",
+        resume_session_id=SESSION_ID if launch_kind == "resume" else None,
         now=now,
     )
 
@@ -1153,11 +1154,14 @@ def test_same_launch_payload_becomes_the_verified_receipt(binding_env) -> None:
 
 
 def test_resume_revalidates_the_same_session_id_and_payload_path(binding_env) -> None:
+    startup_path, startup_id = _prepare(binding_env)
+    assert _record(binding_env, startup_path, startup_id) == "bound"
     launch_path, launch_id = prepare_mod.prepare(
         binding_env["runtime"],
         binding_env["registration"],
         launch_kind="resume",
         history_mode="enabled",
+        resume_session_id=SESSION_ID,
         now=100.0,
     )
 
@@ -1197,6 +1201,147 @@ def test_old_valid_index_is_not_success_for_a_new_launch(binding_env) -> None:
     assert server._codex_transcript_path(AGENT) is None
     state = server._codex_history_binding(AGENT, now=211.0)
     assert state["history_binding"] == "unconfirmed"
+
+
+def test_unclaimed_resume_keeps_the_exact_previous_receipt_authoritative(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    old_receipt = json.loads(
+        (
+            binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    launch = json.loads(resume_path.read_text(encoding="utf-8"))
+
+    assert resume_id != first_id
+    assert launch["resume_session_id"] == SESSION_ID
+    assert launch["fallback_launch_id"] == old_receipt["launch_id"]
+    assert launch["fallback_receipt_id"] == old_receipt["receipt_id"]
+    state = server._codex_history_binding(AGENT, now=211.0)
+    assert state["history_binding"] == "bound"
+    assert state["transcript_path"] == str(binding_env["transcript"])
+
+
+def test_startup_expectation_invalidates_an_unclaimed_resume_fallback(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    _prepare_standalone(binding_env, launch_kind="resume", now=200.0)
+    assert server._codex_history_binding(AGENT, now=211.0)[
+        "history_binding"
+    ] == "bound"
+
+    _prepare_standalone(binding_env, now=300.0)
+
+    state = server._codex_history_binding(AGENT, now=311.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "hook_not_observed"
+
+
+def test_resume_hook_for_a_different_session_poison_fails_closed(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    resume_path, resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    other_id = "02e24a69-9f2b-8888-b4e9-f3cb354dec50"
+    other = binding_env["transcript"].with_name("other-session.jsonl")
+    _rollout(other, other_id)
+
+    result = record_mod.record_payload(
+        _payload(other, source="resume", session_id=other_id),
+        launch_path=resume_path,
+        launch_id=resume_id,
+    )
+
+    assert result == "id_mismatch"
+    state = server._codex_history_binding(AGENT, now=211.0)
+    assert state["history_binding"] == "unconfirmed"
+    assert state["history_binding_reason_code"] == "id_mismatch"
+    assert not (
+        binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    ).exists()
+
+
+def test_unclaimed_resume_fallback_may_chain_only_for_the_same_header(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+
+    _prepare_standalone(binding_env, launch_kind="resume", now=200.0)
+    second_path, _second_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=300.0
+    )
+    second = json.loads(second_path.read_text(encoding="utf-8"))
+    assert second["resume_session_id"] == SESSION_ID
+    assert server._codex_history_binding(AGENT, now=311.0)[
+        "history_binding"
+    ] == "bound"
+
+    _rollout(binding_env["transcript"], "different-session-id")
+    with pytest.raises(ValueError):
+        _prepare_standalone(binding_env, launch_kind="resume", now=400.0)
+    # Failed preparation did not publish another expectation generation.
+    assert json.loads(second_path.read_text(encoding="utf-8"))["launch_id"] == second[
+        "launch_id"
+    ]
+
+
+def test_unclaimed_resume_fallback_cannot_chain_to_a_different_requested_id(
+    binding_env,
+) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    resume_path, _resume_id = _prepare_standalone(
+        binding_env, launch_kind="resume", now=200.0
+    )
+    previous = json.loads(resume_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="resume",
+            history_mode="enabled",
+            launch_origin="standalone",
+            resume_session_id="02e24a69-9f2b-8888-b4e9-f3cb354dec50",
+            now=300.0,
+        )
+
+    assert json.loads(resume_path.read_text(encoding="utf-8"))["launch_id"] == previous[
+        "launch_id"
+    ]
+
+
+def test_resume_fallback_cannot_change_recorded_provenance(binding_env) -> None:
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+
+    with pytest.raises(ValueError):
+        prepare_mod.prepare(
+            binding_env["runtime"],
+            binding_env["registration"],
+            launch_kind="resume",
+            history_mode="enabled",
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+            resume_session_id=SESSION_ID,
+            now=200.0,
+        )
+
+    assert server._codex_history_binding(AGENT, now=211.0)[
+        "history_binding"
+    ] == "bound"
 
 
 def test_write_failure_does_not_raise_and_is_visible(binding_env, monkeypatch) -> None:
