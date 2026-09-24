@@ -26,6 +26,12 @@ import time
 
 import pytest
 
+from _env_isolation import (
+    REAL_USER_INSTRUCTION_FILES,
+    digest_files,
+    is_inherited_stack_variable,
+)
+
 # Labels this machine's own services use. The mail service is the one the
 # suite has actually stopped; the autostart wrapper is named per install, so
 # it is read from the environment rather than written down here -- an operator
@@ -54,9 +60,15 @@ def _no_inherited_agentstack_env():
     reported where the test expected its own. On this machine that made 28
     tests fail in a full run that is green in CI, and every one of them was
     read as "environment-dependent" for two days instead of being fixed.
+
+    The same applies to variables that point tools at the real user's config
+    directories. A Codex child agent runs with CODEX_HOME set to a per-child
+    directory whose AGENTS.md is a symlink to the real ~/.codex/AGENTS.md; an
+    installer rehearsal that inherited it wrote the rehearsal's temporary project
+    key through that symlink into every later Codex session's instructions (#73).
     """
     inherited = {
-        key: value for key, value in os.environ.items() if key.startswith("AGENTSTACK_")
+        key: value for key, value in os.environ.items() if is_inherited_stack_variable(key)
     }
     for key in inherited:
         del os.environ[key]
@@ -64,6 +76,25 @@ def _no_inherited_agentstack_env():
         yield
     finally:
         os.environ.update(inherited)
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_suite_leaves_real_user_instructions_alone():
+    """Fail the run if a test rewrote the real user's instruction files.
+
+    Scrubbing known variables fixes the path we found; this catches the next
+    one. The files are the ones the installers write managed blocks into.
+    """
+    before = digest_files(REAL_USER_INSTRUCTION_FILES)
+    yield
+    after = digest_files(REAL_USER_INSTRUCTION_FILES)
+    changed = sorted(str(path) for path in before if before[path] != after[path])
+    if changed:
+        pytest.fail(
+            "the test run modified the real user's instruction files: "
+            + ", ".join(changed),
+            pytrace=False,
+        )
+
 
 # Which test is running right now. A disturbance that only appears in a full
 # run is an interaction between tests, and "somewhere in the suite" is not a
