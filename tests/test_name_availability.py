@@ -86,6 +86,26 @@ def test_status_classifies_every_whois_outcome():
     assert _status("") == "unknown"
 
 
+def test_status_normalizes_name_before_whois_for_older_mail():
+    with tempfile.TemporaryDirectory() as tmp:
+        call_log = pathlib.Path(tmp) / "call.log"
+        script = (
+            f'source "{_LIB}" >/dev/null 2>&1; '
+            'ags_mcp_call() { printf \'%s\\n\' "$*" > "$CALL_LOG"; '
+            'printf \'%s\' "$STUB_RESPONSE"; }; '
+            'ags_agent_name_status "/p" "Brave-Hubble"'
+        )
+        result = _run_bash(
+            script,
+            {"CALL_LOG": str(call_log), "STUB_RESPONSE": _FOUND},
+        )
+
+        assert result.stdout.strip() == "occupied"
+        assert call_log.read_text(encoding="utf-8").strip() == (
+            "whois project_key=/p agent_name=BraveHubble"
+        )
+
+
 def test_picker_refuses_to_hand_out_an_unverifiable_name():
     """Repeated 'unknown' must abort instead of claiming a possibly-live name."""
     script = (

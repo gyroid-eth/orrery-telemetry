@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +69,15 @@ def _configure_isolated_runtime(
     monkeypatch.setenv(
         "AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR",
         str(tmp_path / "signals"),
+    )
+    management_root = (
+        Path(tempfile.gettempdir()) / f"agentstack-mail-tests-{os.getpid()}"
+    )
+    management_root.mkdir(mode=0o700, exist_ok=True)
+    socket_id = hashlib.sha256(os.fsencode(tmp_path)).hexdigest()[:12]
+    monkeypatch.setenv(
+        "AGENTSTACK_MAIL_MANAGEMENT_SOCKET",
+        str(management_root / f"{socket_id}.sock"),
     )
     monkeypatch.setenv("AGENTSTACK_MAIL_LOG_RICH_ENABLED", "false")
     monkeypatch.setenv("AGENTSTACK_MAIL_TOOLS_LOG_ENABLED", "false")
@@ -204,6 +216,51 @@ def test_passthrough_keeps_frozen_name_sanitization_behavior(
         result = asyncio.run(attempt_registration())
         assert result.is_error is False
         assert _payload(result)["name"] == "ProOpus"
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()
+
+
+def test_whois_normalizes_agent_name_like_registration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_isolated_runtime(monkeypatch, tmp_path, mode="passthrough")
+    project = str(tmp_path / "project")
+
+    async def lookup_sanitized_name() -> Any:
+        async with Client(app.build_mcp_server()) as client:
+            await _ensure_project(client, project)
+            registered = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": project,
+                    "program": "identity-contract",
+                    "model": "fixture-model",
+                    "name": "BraveHubble",
+                    "registration_token": "normalization-token",
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+            assert registered.is_error is False
+            result = await client.call_tool(
+                "whois",
+                {
+                    "project_key": project,
+                    "agent_name": "Brave-Hubble",
+                    "include_recent_commits": False,
+                    "format": "json",
+                },
+                raise_on_error=False,
+            )
+        await db.dispose_database_for_shutdown()
+        return result
+
+    try:
+        result = asyncio.run(lookup_sanitized_name())
+        assert result.is_error is False
+        assert _payload(result)["name"] == "BraveHubble"
     finally:
         db.reset_database_state()
         config.clear_settings_cache()

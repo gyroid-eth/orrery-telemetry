@@ -618,9 +618,20 @@ ags_apply_contact_policy() {
 # Previously every error mapped to "does not exist", so an auth error or a
 # timeout read as "this name is free" and a fresh session could register under
 # a live agent's identity. Availability decisions must be fail-closed.
+ags_sanitize_agent_name() {
+  # Keep this byte-for-byte compatible with Mail's [^A-Za-z0-9]+ removal and
+  # 128-character limit. The C locale makes the shell character class ASCII.
+  printf '%s' "$1" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C cut -c 1-128
+}
+
 ags_agent_name_status() {
-  local project_key="$1" agent_name="$2" response
-  response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$agent_name" 2>/dev/null || true)"
+  local project_key="$1" agent_name="$2" lookup_name response
+  lookup_name="$(ags_sanitize_agent_name "$agent_name")"
+  if [[ -z "$lookup_name" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$lookup_name" 2>/dev/null || true)"
   if [[ -z "$response" ]]; then
     printf 'unknown\n'
     return 0
