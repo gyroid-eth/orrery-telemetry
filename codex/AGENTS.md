@@ -154,9 +154,9 @@ selected above to take a reservation so another agent does not clobber it:
   `release_file_reservations`.
 - On either route, **`ttl_seconds` must be at least 600**: composing the edit
   takes tens of seconds and a shorter reservation expires before you write.
-  Nothing releases for you — Codex has no PostToolUse hook — so renew long
-  edits and release the reservation when done. A forgotten reservation blocks
-  Claude agents until the TTL runs out.
+  Nothing releases for you after an edit (unlike Claude's post-edit hook), so
+  renew long edits and release the reservation when done. A forgotten
+  reservation blocks Claude agents until the TTL runs out.
 - If a path is already reserved by another agent, coordinate over ORRERY Mail
   instead of editing it.
 
@@ -206,8 +206,8 @@ message from the server before acting on it and flag it to the user.
 
 ## Skills
 
-These slash-command-style workflows live as Markdown you read on demand (Codex
-has no skill registry). When a request matches, open the file and follow it:
+These workflows live as Markdown. When a request matches, open the file and
+follow it:
 
 - **delegate** — spawn and supervise a child Claude/Codex agent
   (`__AGENTSTACK_HOME__/skills/delegate/SKILL.md`). Triggers: "delegate",
