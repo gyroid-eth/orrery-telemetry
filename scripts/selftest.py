@@ -369,20 +369,11 @@ def reservations(mail: AgentMail, project_key: str, pair: list[str], report: Rep
     }, agent=holder)
 
 
-def dashboard_sees(url: str, pair: list[str], report: Reporter) -> None:
-    """Does the dashboard read the database ORRERY Mail just wrote to?
+# The dashboard caches /api/graph for 8 seconds (dashboard/server.py _raw_graph).
+GRAPH_SETTLE_SECONDS = 12.0
 
-    Ask the graph, not the deck. The deck (`/api/agents`) is built from tmux
-    sessions and shows agents that have one; these two were registered over
-    HTTP and have none, so the deck could never list them and this check used
-    to fail on every clean run — while blaming the database, which was fine.
-    A tester diagnosed that for us.
 
-    It is the same mistake this whole exercise is about, made by the thing
-    meant to catch it: the checker held a different model of the system than
-    the system did. The graph is built from the database, so it answers the
-    question that was actually being asked.
-    """
+def _read_graph(url: str) -> dict:
     try:
         graph = dashboard(url, "/api/graph?all=1")
     except (OSError, ValueError) as exc:
@@ -405,19 +396,48 @@ def dashboard_sees(url: str, pair: list[str], report: Reporter) -> None:
             "the dashboard graph degraded while normalizing timestamps: "
             f"invalid_count={invalid_timestamps}, fields={fields or {}}"
         )
-    known = {node.get("name") for node in (graph.get("nodes") or [])}
-    missing = [name for name in pair if name not in known]
+    return graph
+
+
+def dashboard_sees(url: str, pair: list[str], report: Reporter) -> None:
+    """Does the dashboard read the database ORRERY Mail just wrote to?
+
+    Ask the graph, not the deck. The deck (`/api/agents`) is built from tmux
+    sessions and shows agents that have one; these two were registered over
+    HTTP and have none, so the deck could never list them and this check used
+    to fail on every clean run — while blaming the database, which was fine.
+    A tester diagnosed that for us.
+
+    It is the same mistake this whole exercise is about, made by the thing
+    meant to catch it: the checker held a different model of the system than
+    the system did. The graph is built from the database, so it answers the
+    question that was actually being asked.
+
+    The dashboard caches the graph for a few seconds, so a graph read right
+    after registering can predate the pair. Read it again until the pair and
+    their link appear or GRAPH_SETTLE_SECONDS pass; only then is a missing
+    agent evidence of a different database.
+    """
+    deadline = time.monotonic() + GRAPH_SETTLE_SECONDS
+    while True:
+        graph = _read_graph(url)
+        known = {node.get("name") for node in (graph.get("nodes") or [])}
+        missing = [name for name in pair if name not in known]
+        edges = graph.get("edges") or []
+        linked = any(
+            {edge.get("source"), edge.get("target")} == set(pair) for edge in edges
+        )
+        if (not missing and linked) or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
     if missing:
         raise Fail(
-            f"the dashboard graph does not contain {', '.join(missing)} — it is "
-            "probably reading a different database than ORRERY Mail writes to"
+            f"the dashboard graph does not contain {', '.join(missing)} after "
+            f"{GRAPH_SETTLE_SECONDS:g} s — it is probably reading a different "
+            "database than ORRERY Mail writes to"
         )
     report.ok("the dashboard reads the same database ORRERY Mail wrote to")
 
-    edges = graph.get("edges") or []
-    linked = any(
-        {edge.get("source"), edge.get("target")} == set(pair) for edge in edges
-    )
     if linked:
         report.ok("the dashboard draws the link between them")
     else:

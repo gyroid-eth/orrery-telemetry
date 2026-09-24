@@ -150,6 +150,7 @@ def test_dashboard_on_different_database_makes_selftest_fail(
 
     # Model the regression exactly: ORRERY Mail registered the pair, but the
     # dashboard successfully answers from another database and lists neither.
+    monkeypatch.setattr(SELFTEST, "GRAPH_SETTLE_SECONDS", 0.0)
     monkeypatch.setattr(
         SELFTEST,
         "dashboard",
@@ -208,3 +209,44 @@ def test_dashboard_timestamp_diagnostics_precede_database_mismatch(monkeypatch):
     assert "invalid_count=2" in message
     assert "messages.created_ts" in message
     assert "different database" not in message
+
+
+def test_dashboard_graph_cached_before_registration_is_read_again(monkeypatch):
+    # The dashboard caches /api/graph; the first read can predate the pair.
+    pair = ["ProbeSender", "ProbeRecipient"]
+    stale = {"nodes": [{"name": "UnrelatedAgent"}], "edges": []}
+    fresh = {
+        "nodes": [{"name": name} for name in pair],
+        "edges": [{"source": pair[0], "target": pair[1]}],
+    }
+    reads = []
+
+    def graph(_url, _path):
+        reads.append(_path)
+        return stale if len(reads) == 1 else fresh
+
+    monkeypatch.setattr(SELFTEST, "dashboard", graph)
+    monkeypatch.setattr(SELFTEST.time, "sleep", lambda _seconds: None)
+    report = SELFTEST.Reporter()
+
+    SELFTEST.dashboard_sees("http://dashboard.invalid", pair, report)
+
+    assert len(reads) == 2
+    assert report.failures == []
+
+
+def test_dashboard_missing_pair_after_settle_window_names_the_wait(monkeypatch):
+    pair = ["ProbeSender", "ProbeRecipient"]
+    clock = iter([0.0, 5.0, 13.0])
+    monkeypatch.setattr(SELFTEST.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(SELFTEST.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        SELFTEST, "dashboard", lambda _url, _path: {"nodes": [], "edges": []}
+    )
+
+    with pytest.raises(SELFTEST.Fail) as raised:
+        SELFTEST.dashboard_sees("http://dashboard.invalid", pair, SELFTEST.Reporter())
+
+    message = str(raised.value)
+    assert "after 12 s" in message
+    assert "different database" in message
