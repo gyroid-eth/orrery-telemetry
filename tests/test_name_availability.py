@@ -91,9 +91,36 @@ def test_status_normalizes_name_before_whois_for_older_mail():
         call_log = pathlib.Path(tmp) / "call.log"
         script = (
             f'source "{_LIB}" >/dev/null 2>&1; '
-            'ags_mcp_call() { printf \'%s\\n\' "$*" > "$CALL_LOG"; '
-            'printf \'%s\' "$STUB_RESPONSE"; }; '
+            'ags_mcp_call() { printf \'%s\\n\' "$*" >> "$CALL_LOG"; '
+            'case "$*" in *agent_name=Brave-Hubble*) '
+            'printf \'%s\' "$NOT_FOUND_RESPONSE" ;; *) '
+            'printf \'%s\' "$FOUND_RESPONSE" ;; esac; }; '
             'ags_agent_name_status "/p" "Brave-Hubble"'
+        )
+        result = _run_bash(
+            script,
+            {
+                "CALL_LOG": str(call_log),
+                "NOT_FOUND_RESPONSE": _NOT_FOUND,
+                "FOUND_RESPONSE": _FOUND,
+            },
+        )
+
+        assert result.stdout.strip() == "occupied"
+        assert call_log.read_text(encoding="utf-8").splitlines() == [
+            "whois project_key=/p agent_name=Brave-Hubble",
+            "whois project_key=/p agent_name=BraveHubble",
+        ]
+
+
+def test_status_prefers_exact_legacy_name_before_normalized_fallback():
+    with tempfile.TemporaryDirectory() as tmp:
+        call_log = pathlib.Path(tmp) / "call.log"
+        script = (
+            f'source "{_LIB}" >/dev/null 2>&1; '
+            'ags_mcp_call() { printf \'%s\\n\' "$*" >> "$CALL_LOG"; '
+            'printf \'%s\' "$STUB_RESPONSE"; }; '
+            'ags_agent_name_status "/p" "Zesty-Einstein"'
         )
         result = _run_bash(
             script,
@@ -102,7 +129,7 @@ def test_status_normalizes_name_before_whois_for_older_mail():
 
         assert result.stdout.strip() == "occupied"
         assert call_log.read_text(encoding="utf-8").strip() == (
-            "whois project_key=/p agent_name=BraveHubble"
+            "whois project_key=/p agent_name=Zesty-Einstein"
         )
 
 

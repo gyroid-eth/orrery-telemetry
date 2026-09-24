@@ -3140,20 +3140,37 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
         }
 
 
+async def _find_registration_equivalent_agent(
+    session: Any,
+    project_id: int,
+    name: str,
+) -> Optional[Agent]:
+    """Find an exact name first, then any legacy row with the same sanitized name."""
+    normalized_name = sanitize_agent_name(name)
+    if not normalized_name:
+        return None
+    result = await session.execute(select(Agent).where(Agent.project_id == project_id))
+    agents = result.scalars().all()
+    exact_lower = (name or "").lower()
+    exact = next((agent for agent in agents if agent.name.lower() == exact_lower), None)
+    if exact is not None:
+        return exact
+    normalized_lower = normalized_name.lower()
+    return next(
+        (
+            agent
+            for agent in agents
+            if (sanitize_agent_name(agent.name) or "").lower() == normalized_lower
+        ),
+        None,
+    )
+
+
 async def _agent_name_exists(project: Project, name: str) -> bool:
     if project.id is None:
         raise ValueError("Project must have an id before querying agents.")
-    normalized_name = sanitize_agent_name(name)
-    if not normalized_name:
-        return False
     async with get_session() as session:
-        result = await session.execute(
-            select(Agent.id).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == normalized_name.lower(),
-            )
-        )
-        return result.first() is not None
+        return await _find_registration_equivalent_agent(session, project.id, name) is not None
 
 
 async def _get_window_identity(
@@ -3480,14 +3497,12 @@ async def _get_or_create_agent(
     await ensure_schema()
     async with get_session() as session:
         for _attempt in range(5):
-            # Use case-insensitive matching to be consistent with _agent_name_exists() and _get_agent()
-            result = await session.execute(
-                select(Agent).where(
-                    cast(Any, Agent.project_id == project.id),
-                    cast(Any, func.lower(Agent.name) == desired_name.lower()),
-                )
+            # Preserve exact legacy names, then detect their normalized aliases.
+            agent = await _find_registration_equivalent_agent(
+                session,
+                cast(int, project.id),
+                desired_name,
             )
-            agent = result.scalars().first()
             if agent:
                 agent = await update_existing_agent(session, agent)
                 break
@@ -3518,13 +3533,11 @@ async def _get_or_create_agent(
 
                 if explicit_name_used:
                     # Another concurrent call created this identity; treat as idempotent update.
-                    result = await session.execute(
-                        select(Agent).where(
-                            cast(Any, Agent.project_id == project.id),
-                            cast(Any, func.lower(Agent.name) == desired_name.lower()),
-                        )
+                    agent = await _find_registration_equivalent_agent(
+                        session,
+                        cast(int, project.id),
+                        desired_name,
                     )
-                    agent = result.scalars().first()
                     if agent is None:
                         raise
                     agent = await update_existing_agent(session, agent)
@@ -3607,12 +3620,41 @@ async def _touch_agent_activity(agent: Agent) -> None:
     # with the database it was read from.
 
 
-def _normalized_agent_lookup_value(name: str) -> str:
-    """Return the case-folded registration form used in agent-name queries."""
-    normalized_name = sanitize_agent_name(name)
-    if not normalized_name:
-        raise ValueError("Agent name must contain alphanumeric characters.")
-    return normalized_name.lower()
+def _agent_name_lookup_values(name: str) -> tuple[str, ...]:
+    """Return lookup keys in compatibility order: exact, then registration form."""
+    exact = (name or "").lower()
+    normalized_name = sanitize_agent_name(name or "")
+    values = [exact] if exact else []
+    if normalized_name:
+        normalized = normalized_name.lower()
+        if normalized not in values:
+            values.append(normalized)
+    return tuple(values)
+
+
+def _resolve_agent_from_rows(agents: Sequence[Agent], name: str) -> Optional[Agent]:
+    """Resolve an agent from fetched rows using exact-before-normalized precedence."""
+    by_lower = {agent.name.lower(): agent for agent in agents}
+    return next(
+        (by_lower[value] for value in _agent_name_lookup_values(name) if value in by_lower),
+        None,
+    )
+
+
+async def _get_unique_project_by_agent_name(name: str) -> Optional[Project]:
+    """Find a unique project, preferring an exact legacy-compatible agent name."""
+    for lookup_value in _agent_name_lookup_values(name):
+        async with get_session() as session:
+            rows = await session.execute(
+                select(Project)
+                .join(Agent, cast(Any, Agent.project_id) == Project.id)
+                .where(func.lower(Agent.name) == lookup_value)
+                .limit(2)
+            )
+            projects = [row[0] for row in rows.all()]
+        if projects:
+            return projects[0] if len(projects) == 1 else None
+    return None
 
 
 async def _get_agent(project: Project, name: str) -> Agent:
@@ -3655,6 +3697,7 @@ async def _get_agent(project: Project, name: str) -> Agent:
                 },
             )
 
+    lookup_values = _agent_name_lookup_values(name)
     normalized_name = sanitize_agent_name(name)
     if not normalized_name:
         raise ToolExecutionError(
@@ -3672,10 +3715,10 @@ async def _get_agent(project: Project, name: str) -> Agent:
         result = await session.execute(
             select(Agent).where(
                 Agent.project_id == project.id,
-                func.lower(Agent.name) == normalized_name.lower(),
+                func.lower(Agent.name).in_(lookup_values),
             )
         )
-        agent = result.scalars().first()
+        agent = _resolve_agent_from_rows(result.scalars().all(), name)
         if agent:
             return agent
 
@@ -3742,19 +3785,19 @@ async def _get_agents_batch(project: Project, names: Sequence[str]) -> dict[str,
     if project.id is None:
         raise ValueError("Project must have an id before querying agents.")
 
-    normalized_by_name: dict[str, str] = {}
+    lookup_values_by_name: dict[str, tuple[str, ...]] = {}
     lowered_names: list[str] = []
     seen: set[str] = set()
     for name in names:
-        normalized = sanitize_agent_name(name)
-        if not normalized:
+        lookup_values = _agent_name_lookup_values(name)
+        if not sanitize_agent_name(name):
             continue
-        lowered = normalized.lower()
-        normalized_by_name[name] = lowered
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        lowered_names.append(lowered)
+        lookup_values_by_name[name] = lookup_values
+        for lowered in lookup_values:
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lowered_names.append(lowered)
 
     async with get_session() as session:
         result = await session.execute(
@@ -3766,7 +3809,10 @@ async def _get_agents_batch(project: Project, names: Sequence[str]) -> dict[str,
     resolved: dict[str, Agent] = {}
     missing: list[str] = []
     for name in names:
-        agent = by_lower.get(normalized_by_name.get(name, ""))
+        agent = next(
+            (by_lower[value] for value in lookup_values_by_name.get(name, ()) if value in by_lower),
+            None,
+        )
         if agent is None:
             missing.append(name)
         else:
@@ -3805,19 +3851,19 @@ async def _get_agents_batch_lenient(project: Project, names: Sequence[str]) -> d
         return {}
 
     # Deduplicate and lowercase for efficient IN query
-    normalized_by_name: dict[str, str] = {}
+    lookup_values_by_name: dict[str, tuple[str, ...]] = {}
     lowered_names: list[str] = []
     seen: set[str] = set()
     for name in names:
-        normalized = sanitize_agent_name(name)
-        if not normalized:
+        lookup_values = _agent_name_lookup_values(name)
+        if not sanitize_agent_name(name):
             continue
-        lowered = normalized.lower()
-        normalized_by_name[name] = lowered
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        lowered_names.append(lowered)
+        lookup_values_by_name[name] = lookup_values
+        for lowered in lookup_values:
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lowered_names.append(lowered)
 
     async with get_session() as session:
         result = await session.execute(
@@ -3831,7 +3877,10 @@ async def _get_agents_batch_lenient(project: Project, names: Sequence[str]) -> d
     # Resolve original names to agents (preserving original case in keys)
     resolved: dict[str, Agent] = {}
     for name in names:
-        agent = by_lower.get(normalized_by_name.get(name, ""))
+        agent = next(
+            (by_lower[value] for value in lookup_values_by_name.get(name, ()) if value in by_lower),
+            None,
+        )
         if agent is not None:
             resolved[name] = agent
 
@@ -7050,16 +7099,18 @@ def build_mcp_server() -> FastMCP:
         external: dict[int, dict[str, Any]] = {}
 
         async with get_session() as sx:
-            # Preload local agent names (normalized -> canonical stored name)
+            # Preload local agent names (case-folded exact -> stored name).
             existing = await sx.execute(select(Agent.name).where(Agent.project_id == project.id))
             local_lookup: dict[str, str] = {}
-            for row in existing.fetchall():
-                canonical_name = (row[0] or "").strip()
-                if not canonical_name:
-                    continue
-                sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
-                for key in {canonical_name.lower(), sanitized_canonical.lower()}:
-                    local_lookup.setdefault(key, canonical_name)
+            canonical_names = [
+                (row[0] or "").strip()
+                for row in existing.fetchall()
+                if (row[0] or "").strip()
+            ]
+            # Inputs carry exact and normalized keys in precedence order; the
+            # map itself contains only exact stored names.
+            for canonical_name in canonical_names:
+                local_lookup.setdefault(canonical_name.lower(), canonical_name)
 
             sender_candidate_keys = {
                 key.lower()
@@ -7070,15 +7121,11 @@ def build_mcp_server() -> FastMCP:
                 if key
             }
 
-            def _normalize(value: str) -> tuple[str, set[str], Optional[str]]:
-                """Trim input, derive comparable lowercase keys, and canonical lookup token."""
+            def _normalize(value: str) -> tuple[str, tuple[str, ...], Optional[str]]:
+                """Trim input and derive exact-before-normalized lookup keys."""
                 trimmed = (value or "").strip()
                 sanitized = sanitize_agent_name(trimmed)
-                keys: set[str] = set()
-                if trimmed:
-                    keys.add(trimmed.lower())
-                if sanitized:
-                    keys.add(sanitized.lower())
+                keys = _agent_name_lookup_values(trimmed)
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
@@ -7160,7 +7207,6 @@ def build_mcp_server() -> FastMCP:
                                 local_bcc.append(resolved_local)
                             continue
 
-                    lookup_value = canonical.lower()
                     rows = None
                     if explicit_override and target_project_override is not None:
                         rows = await sx.execute(
@@ -7172,9 +7218,9 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
                                 cast(Any, Project.id == target_project_override.id),
-                                cast(Any, func.lower(Agent.name) == lookup_value),
+                                cast(Any, func.lower(Agent.name).in_(key_candidates)),
                             )
-                            .limit(1)
+                            .limit(len(key_candidates))
                         )
                     else:
                         rows = await sx.execute(
@@ -7185,12 +7231,17 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_project_id) == project.id,
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
-                                cast(Any, func.lower(Agent.name) == lookup_value),
+                                cast(Any, func.lower(Agent.name).in_(key_candidates)),
                             )
-                            .limit(1)
+                            .limit(len(key_candidates))
                         )
 
-                    rec = rows.first() if rows else None
+                    records = rows.all() if rows else []
+                    records_by_name = {record[2].name.lower(): record for record in records}
+                    rec = next(
+                        (records_by_name[key] for key in key_candidates if key in records_by_name),
+                        None,
+                    )
                     if rec:
                         _link, target_project, target_agent = rec
                         pol = (getattr(target_agent, "contact_policy", "auto") or "auto").lower()
@@ -7295,11 +7346,10 @@ def build_mcp_server() -> FastMCP:
                                             continue
                                         remaining: list[str] = []
                                         for nm in list(names):
-                                            normalized_name = sanitize_agent_name(nm or "")
-                                            if not normalized_name:
+                                            lookup_values = _agent_name_lookup_values(nm or "")
+                                            if not sanitize_agent_name(nm or ""):
                                                 remaining.append(nm)
                                                 continue
-                                            lookup_value = normalized_name.lower()
                                             rows = await scheck.execute(
                                                 select(AgentLink, Project, Agent)
                                                 .join(Project, Project.id == AgentLink.b_project_id)
@@ -7309,9 +7359,9 @@ def build_mcp_server() -> FastMCP:
                                                     cast(Any, AgentLink.a_agent_id) == sender.id,
                                                     cast(Any, AgentLink.status == "approved"),
                                                     cast(Any, Project.id == tproj.id),
-                                                    cast(Any, func.lower(Agent.name) == lookup_value),
+                                                    cast(Any, func.lower(Agent.name).in_(lookup_values)),
                                                 )
-                                                .limit(1)
+                                                .limit(len(lookup_values))
                                             )
                                             if rows.first() is None:
                                                 remaining.append(nm)
@@ -7626,11 +7676,12 @@ def build_mcp_server() -> FastMCP:
 
         async with get_session() as sx:
             existing = await sx.execute(select(Agent.name).where(Agent.project_id == project.id))
-            local_lookup = {
-                normalized.lower(): row[0]
+            canonical_names = [
+                (row[0] or "").strip()
                 for row in existing.fetchall()
-                if (normalized := sanitize_agent_name(row[0] or ""))
-            }
+                if (row[0] or "").strip()
+            ]
+            local_lookup = {name.lower(): name for name in canonical_names}
 
             class _ContactBlocked(Exception):
                 pass
@@ -7648,10 +7699,14 @@ def build_mcp_server() -> FastMCP:
                         except Exception:
                             target_project_override = None
                             target_name_override = None
-                    lookup_name = sanitize_agent_name(target_name_override or nm)
+                    requested_name = target_name_override or nm
+                    lookup_values = _agent_name_lookup_values(requested_name)
                     local_name = (
-                        local_lookup.get(lookup_name.lower())
-                        if lookup_name and target_project_override is None
+                        next(
+                            (local_lookup[key] for key in lookup_values if key in local_lookup),
+                            None,
+                        )
+                        if sanitize_agent_name(requested_name) and target_project_override is None
                         else None
                     )
                     if local_name:
@@ -7663,7 +7718,7 @@ def build_mcp_server() -> FastMCP:
                             local_bcc.append(local_name)
                         continue
                     rows = None
-                    if target_project_override is not None and lookup_name:
+                    if target_project_override is not None and sanitize_agent_name(requested_name):
                         rows = await sx.execute(
                             select(AgentLink, Project, Agent)
                             .join(Project, Project.id == AgentLink.b_project_id)
@@ -7673,11 +7728,11 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
                                 cast(Any, Project.id == target_project_override.id),
-                                cast(Any, func.lower(Agent.name) == lookup_name.lower()),
+                                cast(Any, func.lower(Agent.name).in_(lookup_values)),
                             )
-                            .limit(1)
+                            .limit(len(lookup_values))
                         )
-                    elif lookup_name:
+                    elif sanitize_agent_name(requested_name):
                         rows = await sx.execute(
                             select(AgentLink, Project, Agent)
                             .join(Project, Project.id == AgentLink.b_project_id)
@@ -7686,11 +7741,16 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_project_id) == project.id,
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
-                                cast(Any, func.lower(Agent.name) == lookup_name.lower()),
+                                cast(Any, func.lower(Agent.name).in_(lookup_values)),
                             )
-                            .limit(1)
+                            .limit(len(lookup_values))
                         )
-                    rec = rows.first() if rows else None
+                    records = rows.all() if rows else []
+                    records_by_name = {record[2].name.lower(): record for record in records}
+                    rec = next(
+                        (records_by_name[key] for key in lookup_values if key in records_by_name),
+                        None,
+                    )
                     if rec:
                         _link, target_project, target_agent = rec
                         recipient_policy = (getattr(target_agent, "contact_policy", "auto") or "auto").lower()
@@ -11939,17 +11999,8 @@ def build_mcp_server() -> FastMCP:
 
         if project is None:
             # Auto-detect project by agent name if uniquely identifiable
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for inbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12016,17 +12067,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for urgent view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12091,17 +12133,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for ack view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12178,17 +12211,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for stale acks view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12270,17 +12294,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for ack-overdue view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12354,17 +12369,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for mailbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12433,17 +12439,8 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for mailbox-with-commits resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12502,17 +12499,8 @@ def build_mcp_server() -> FastMCP:
 
         if project is None:
             # Auto-detect project by agent name if uniquely identifiable
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == _normalized_agent_lookup_value(agent))
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for outbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)

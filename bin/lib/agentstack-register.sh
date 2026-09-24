@@ -624,13 +624,8 @@ ags_sanitize_agent_name() {
   printf '%s' "$1" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C cut -c 1-128
 }
 
-ags_agent_name_status() {
-  local project_key="$1" agent_name="$2" lookup_name response
-  lookup_name="$(ags_sanitize_agent_name "$agent_name")"
-  if [[ -z "$lookup_name" ]]; then
-    printf 'unknown\n'
-    return 0
-  fi
+ags_agent_name_status_once() {
+  local project_key="$1" lookup_name="$2" response
   response="$(ags_mcp_call "whois" "project_key=$project_key" "agent_name=$lookup_name" 2>/dev/null || true)"
   if [[ -z "$response" ]]; then
     printf 'unknown\n'
@@ -651,6 +646,30 @@ ags_agent_name_status() {
   else
     printf 'available\n'
   fi
+}
+
+ags_agent_name_status() {
+  local project_key="$1" agent_name="$2" lookup_name name_status
+
+  # Preserve old Mail identities that stored punctuation verbatim. Only when
+  # that exact spelling is positively absent do we probe the registration form
+  # used by current Mail versions.
+  name_status="$(ags_agent_name_status_once "$project_key" "$agent_name")"
+  if [[ "$name_status" != "available" ]]; then
+    printf '%s\n' "$name_status"
+    return 0
+  fi
+
+  lookup_name="$(ags_sanitize_agent_name "$agent_name")"
+  if [[ -z "$lookup_name" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  if [[ "$lookup_name" == "$agent_name" ]]; then
+    printf 'available\n'
+    return 0
+  fi
+  ags_agent_name_status_once "$project_key" "$lookup_name"
 }
 
 # Back-compat wrapper: true only for a positively confirmed existing agent.
