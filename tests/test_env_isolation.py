@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from _env_isolation import INHERITED_CONFIG_DIR_VARS, is_inherited_stack_variable
+from service_teardown import TEST_LABEL_PREFIX
 
 
 def test_config_dir_variables_count_as_inherited_stack_state() -> None:
@@ -40,6 +41,7 @@ def test_installer_rehearsal_env_writes_codex_block_under_the_test_home(tmp_path
         {
             "HOME": str(home),
             "AGENTSTACK_HOME": str(stack),
+            "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
             "AGENTSTACK_TEMPLATE_HOME": str(root),
             "AGENTSTACK_PROJECT_KEY": str(project),
         }
