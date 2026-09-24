@@ -8,6 +8,24 @@
 
 ---
 
+## 2026.09.24
+
+### 子の事前登録が、ハイフン付きの名前で既存の agent と衝突していました（#72）
+
+ORRERY Mail は `register_agent` で名前の英数字以外を取り除いて保存する一方、`whois` などの参照は受け取った名前をそのまま探していました。そのため `agentstack-preregister-child` が生成した `Hardy-Somerville` のような名前は、空きの確認では見つからないのに、登録すると既存の `HardySomerville` と同じ名前になり、事前登録が失敗していました。参照を「完全一致を先に探し、無ければ同じ規則で正規化して探す」に揃え、`agentstack-register.sh` も同じ正規化を使うようにしました。旧形式の名前での参照は、そのまま既存の agent に解決されます。
+
+### install 系のテストが、本物の `~/.codex/AGENTS.md` を書き換えることがありました（#73）
+
+Codex の子の中でテストを流すと、子から受け継いだ `CODEX_HOME` が本物の `~/.codex` を指したまま install 系のテストが走り、managed block の project key を pytest の一時ディレクトリに書き換えていました。テストの前に `CODEX_HOME` と `CLAUDE_CONFIG_DIR` を消し、実ホームを書き換えようとしたテストを止める検査を足しました。
+
+### managed block と docs の記述が実態とずれていました（#74）
+
+Codex 向けの managed block が「Codex には PostToolUse hook が無い」「skill registry が無い」と説明し、docs には存在しない見出し `#credential-unavailable` へのリンクがありました。記述を実態に合わせ、見出しを追加しました。docs 内のアンカーが実在するかを検査するテストも足しました。
+
+### `agentstack-selftest` が、正常なのに「dashboard が別の database を読んでいる」と失敗することがありました
+
+dashboard はグラフを 8 秒 cache します。selftest は agent を登録した直後に1回だけグラフを読むため、直前に cockpit などがグラフを読んでいると、登録前の古いグラフを受け取って失敗していました。2つの agent とそのリンクが揃うまで最大 12 秒読み直し、それでも無いときだけ失敗とするようにしました。
+
 ## 2026.09.23
 
 ### Claude Opus 5.5 を child の current model として選べませんでした
