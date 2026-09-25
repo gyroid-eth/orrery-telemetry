@@ -288,3 +288,39 @@ def test_mismatched_identity_arguments_are_refused(tmp_path):
         _dispatch(proxy, "fetch_inbox", {"agent_name": "Other-Bohr"})
     with pytest.raises(ProxyError):
         _dispatch(proxy, "fetch_inbox", {"project_key": "/somewhere/else"})
+
+
+def test_bootstrap_naming_itself_as_agent_id_reports_the_binding(tmp_path):
+    """A Codex child called bootstrap with its own name as agent_id.
+
+    That built a subagent id which never matched the direct binding, returned
+    "MCP process is already bound to another runtime", and the child then
+    declined to report to its parent (2026-09-25).
+    """
+    proxy, _ = _proxy(tmp_path)
+    status = _dispatch(
+        proxy, "bootstrap", {"session_id": CODEX_THREAD_ID, "agent_id": AGENT}
+    )
+    assert status["agent_name"] == AGENT
+
+
+def test_send_message_naming_itself_as_agent_id_is_delivered(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    _dispatch(proxy, "send_message", {
+        "session_id": CODEX_THREAD_ID,
+        "agent_id": AGENT,
+        "to": ["Sturdy-Koch"],
+        "subject": "done",
+        "body_md": "finished",
+    })
+    tool, arguments = transport.calls[-1]
+    assert tool == "send_message"
+    assert arguments["sender_name"] == AGENT
+
+
+def test_agent_id_naming_another_agent_is_refused(tmp_path):
+    proxy, _ = _proxy(tmp_path)
+    with pytest.raises(ProxyError, match="names another agent"):
+        _dispatch(
+            proxy, "bootstrap", {"session_id": CODEX_THREAD_ID, "agent_id": "Other-Agent"}
+        )
