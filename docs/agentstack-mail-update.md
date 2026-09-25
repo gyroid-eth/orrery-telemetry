@@ -348,7 +348,8 @@ installer が管理する範囲に第二の supervisor はありません。旧�
    step_7() {
      local pid new_env r
      pid=$(listener_pid "$PORT") || return 1
-     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
+     # venv の python は Homebrew の Python.app として見えることがある（Air で実測）。venv/bin/ の下の実行ファイルで判定する
+     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
      new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
      [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
      sed -n 2p "$SVC/runtime/agentstack-mail.pid" | grep -q "$(dirname "$new_env")/" || { echo "pidfile runner is not inside the new render" >&2; return 1; }

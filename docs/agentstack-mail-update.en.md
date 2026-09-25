@@ -357,7 +357,8 @@ pre-flight has also been checked under `zsh`.
    step_7() {
      local pid new_env r
      pid=$(listener_pid "$PORT") || return 1
-     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
+     # the venv's python can show up as Homebrew's Python.app (measured on a second Mac); match the executable under venv/bin/
+     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
      new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
      [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
      sed -n 2p "$SVC/runtime/agentstack-mail.pid" | grep -q "$(dirname "$new_env")/" || { echo "pidfile runner is not inside the new render" >&2; return 1; }
