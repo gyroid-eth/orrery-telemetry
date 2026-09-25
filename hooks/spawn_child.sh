@@ -1032,6 +1032,9 @@ claude_pane_ready() {
     # Only an empty input row counts. A selected dialog row also starts with
     # the cursor glyph ("❯ No, exit") and must not read as ready.
     printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*$' && return 0
+    # Claude Code 2.1.282 shows a placeholder in the empty input row
+    # ('❯ Try "fix lint errors"') and no "for shortcuts" footer.
+    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*Try "' && return 0
     return 1
 }
 
