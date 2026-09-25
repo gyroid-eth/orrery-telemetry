@@ -920,6 +920,27 @@ def test_claude_safety_check_dialog_is_never_readiness():
     assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": "Claude Code\n\n❯ \n" + "\n" * 30}).returncode == 0
 
 
+# Claude Code 2.1.282 startup screen, captured from a failed spawn: the empty
+# input row carries a placeholder and there is no "for shortcuts" footer.
+_CLAUDE_2_1_282_STARTUP = "\n".join([
+    "",
+    "",
+    "─" * 80,
+    '❯ Try "fix lint errors"',
+    "─" * 80,
+    "  project | Opus 5.5",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+])
+
+
+def test_claude_2_1_282_placeholder_prompt_is_readiness():
+    ready = _helpers() + "\n" + _extract("claude_pane_ready")
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": _CLAUDE_2_1_282_STARTUP}).returncode == 0
+    # The dialogs stay not ready even though their selected row starts with ❯.
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": _CLAUDE_SAFETY_CHECK}).returncode != 0
+    assert _run_bash(ready + '\nclaude_pane_ready "$PANE"\n', {"PANE": _CLAUDE_SAFETY_CHECK_YES_SELECTED}).returncode != 0
+
+
 def test_claude_safety_check_detector_sees_both_wordings():
     detector = _helpers()
     for pane in (_CLAUDE_SAFETY_CHECK, "Do you trust the files in this folder?\n  Yes\n  No\n"):
