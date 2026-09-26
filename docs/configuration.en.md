@@ -150,7 +150,8 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `AGENTSTACK_FOCUS_CHILD` | unset | Set to `1` to bring the child's terminal window to the foreground. By default it opens behind other windows and does not take over the user's work |
+| `AGENTSTACK_AUTO_OPEN_CHILD` | `0` | Set to `1` to open an OS terminal after a Claude / Codex child starts. The tmux session and Deck Open tmux remain independent |
+| `AGENTSTACK_FOCUS_CHILD` | unset | When automatic opening is enabled, `1` brings the window forward. It does not enable automatic opening on its own |
 | `AGENTSTACK_STRICT_AGENT_NAMES` | unset | Set to `1` to make an off-list child name an error instead of a warning |
 | `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | Set to `1` to enable dangerous-command detection in the monitor. Passive by default |
 | `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | Codex child `--ask-for-approval`, persisted by installer `--codex-approval` |
@@ -164,7 +165,9 @@ The product assembles Codex child startup flags. It does not consult user launch
 
 To move the worktree root, run the installer with an environment value such as `AGENTSTACK_WORKTREE_ROOT=/srv/agent-worktrees ./scripts/install.sh ...`. Relative paths are rejected. The launcher continues to reject paths containing `Syncthing` or `Obsidian`. The old `/tmp/cc-worktrees` default is neither moved nor deleted; only new spawns use the persistent root. `agentstack-doctor` reports directories under the current root that are neither live nor actively registered, but leaves removal to the operator.
 
-`AGENTSTACK_TERMINAL=auto` selects an available OS terminal and opens the child window in the background. This is the intentional default. It shows users immediately after installation, before they have the dashboard / ORRERY, that a child started; a headless default makes a healthy spawn look as if nothing happened. Set `AGENTSTACK_TERMINAL=none` explicitly only for an environment routinely monitored through the dashboard or a headless host.
+`spawn_child.sh` does not open an OS terminal automatically by default. Each child still runs in its own detached tmux session; use Deck Open tmux when you need its screen. Keep `AGENTSTACK_TERMINAL=auto` to select that terminal. `none` also disables manual Open tmux, so it is not the switch for disabling automatic opening alone.
+
+To watch every child immediately, pass `AGENTSTACK_AUTO_OPEN_CHILD=1 ./scripts/install.sh ...` to the installer. It persists the setting in `env.sh`, the Dashboard service and install-state, and preserves it on reinstall. Older installs without the setting adopt `0`; an explicit `0` / `1` overrides the saved value. An existing `AGENTSTACK_FOCUS_CHILD=1` alone no longer opens windows. For direct shell launches, export the same variable in the launching shell. Children pass the setting to their own children. This does not add OS-terminal automatic opening to the separate Gemini launcher.
 
 The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5-5` and `sonnet` means `claude-sonnet-5`; for Codex, omitted / `sol` means `gpt-5.6-sol`. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
 

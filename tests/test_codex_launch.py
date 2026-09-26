@@ -794,7 +794,7 @@ def test_preregistered_standalone_contract_is_parentless_and_direct_prompted():
     assert prereg.count("printf '\\033[200~'") == 2
 
 
-def test_child_window_opens_in_the_background_by_default():
+def test_opted_in_child_window_does_not_take_focus_by_default():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "open -na Ghostty.app" not in text, "child window still steals focus"
     assert "open ${open_bg[@]+\"${open_bg[@]}\"} -na Ghostty.app" in text

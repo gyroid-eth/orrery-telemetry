@@ -82,6 +82,8 @@ Inside the running agent, ask for a child. This is the same in Claude Code and C
 
 **Success**: a second card appears on the dashboard with a line from the parent to the child. When the child finishes, a "done" message arrives in the parent's terminal. The NETWORK tab shows the messages passing between the two.
 
+The child's OS terminal does not open automatically by default. Use Deck Open tmux when you need its screen; see [Configuration](docs/configuration.en.md#child-spawn) to enable automatic opening.
+
 ### 5. Play shiritori as an end-to-end check
 
 The quickest way to confirm the whole install at once is a game of shiritori (Japanese word chain) between a Claude Code agent and a Codex child. Name registration, ORRERY Mail round trips, notification injection, and dashboard rendering all have to work for even one round to complete.

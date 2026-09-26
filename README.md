@@ -82,6 +82,8 @@ open http://127.0.0.1:8770/
 
 **成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。
 
+child の OS terminal は既定では自動で開きません。画面が必要なら Deck の Open tmux を使ってください。自動表示の有効化は[設定](docs/configuration.md#child-spawn)を参照してください。
+
 ### 5. しりとりで通しの確認をする
 
 install が本当にできたかを一度に確かめるには、Claude Code と Codex の child にしりとりをさせるのが手軽です。名前の登録、ORRERY Mail の往復、通知の差し込み、dashboard の描画がすべて動いていないと、しりとりは一巡もしません。
