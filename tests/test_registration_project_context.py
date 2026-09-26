@@ -205,3 +205,47 @@ def test_register_library_loads_project_validator_when_sourced_from_zsh() -> Non
     )
     assert result.returncode == 0, result.stderr
     assert "agentstack_validate_project_context" in result.stdout
+
+
+def test_reserved_registration_runs_when_library_is_sourced_from_zsh(
+    tmp_path: pathlib.Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    script = f'''
+source "{REGISTER_LIB}"
+ags_mcp_call() {{
+  local tool="$1"; shift
+  case "$tool" in
+    whois)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child"}}}}}}'
+      ;;
+    ensure_project)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
+      ;;
+    register_agent)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child","registration_token":"reserved-token"}}}}}}'
+      ;;
+    *) return 1 ;;
+  esac
+}}
+ags_store_registration_token() {{ :; }}
+ags_apply_contact_policy() {{ :; }}
+CHILD_REGISTRATION_TOKEN=reserved-token
+export CHILD_REGISTRATION_TOKEN
+ags_register_session logical-project claude-code model cc "$TARGET" Child reserved >/dev/null
+printf 'registered=%s\\n' "$AGS_REGISTERED_AGENT_NAME"
+'''
+    env = os.environ.copy()
+    env["TARGET"] = str(target)
+    result = subprocess.run(
+        ["/bin/zsh", "-c", script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "registered=Child"
