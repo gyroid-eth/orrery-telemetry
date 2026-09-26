@@ -96,6 +96,26 @@ def _stub_healthy_mail_flow(monkeypatch) -> list[str]:
     return pair
 
 
+def test_success_reports_codex_history_scope(tmp_path, monkeypatch, capsys):
+    _stub_healthy_mail_flow(monkeypatch)
+    install_dir = _write_installed_env(
+        tmp_path,
+        mcp_url="http://agent-mail.invalid/mcp",
+        dashboard_port=8770,
+    )
+    monkeypatch.setattr(
+        SELFTEST,
+        "dashboard_sees",
+        lambda _url, _pair, _report: None,
+    )
+
+    assert _run_main(monkeypatch, install_dir) == 0
+    stdout = capsys.readouterr().out
+    assert "does not exercise Codex lifecycle hooks" in stdout
+    assert "history-binding receipts" in stdout
+    assert "Codex /hooks" in stdout
+
+
 def test_missing_agent_mail_makes_selftest_fail(tmp_path, monkeypatch, capsys):
     port = _unused_port()
     install_dir = _write_installed_env(

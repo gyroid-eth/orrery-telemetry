@@ -85,6 +85,8 @@ The installer performs the following steps.
 4. Build a self-contained local marketplace and register the Codex plugin
 5. On macOS, actually bootstrap `org.agentstack.codex-app-bridge` into launchd; if the GUI domain rejects it, start the Bridge in supervised-background mode
 
+Registering the plugin is not enough to run its lifecycle hooks. After installation, open `/hooks` in Codex, review and approve the AgentStack hooks, then start a new Codex process before launching a child. An already-running process is not guaranteed to refire SessionStart.
+
 launchd availability is not inferred from login information. It is determined by whether bootstrap, enable, and kickstart against `gui/$UID` all succeed. If this fails during headless SSH, display sleep, or another condition, the installer leaves no live plist and switches to a background supervisor with `bridge-supervisor.pid`. This supervisor restarts the Bridge child process after five seconds by default when it exits. The install manifest and doctor record and display the method actually selected, not the preferred one.
 
 Primary options:
@@ -116,7 +118,7 @@ CODEX_HOME="$HOME/.codex" \
 
 Add `--dry-run` to perform only the read-only preflight. Refresh rebuilds the snapshot from the deployed integration and runs the official `codex plugin add` path only when the exact plugin is installed and enabled and its existing local marketplace root matches. An absent or disabled plugin is skipped with a reason; it is never installed or enabled implicitly. A different marketplace, an unreadable registry, or a mismatch in the hooks, runner, or recorder selected in the CLI cache is an error.
 
-This path does not reconfigure env, plist, service, or install-state. **A full installer run with `--no-service` is not a substitute for a pure plugin refresh.** After refresh, verify the SessionStart ID mapping in a new Codex process/thread. It does not promise to refire SessionStart in an already-running child.
+This path does not reconfigure env, plist, service, or install-state. **A full installer run with `--no-service` is not a substitute for a pure plugin refresh.** After refresh, open `/hooks` in Codex and review/approve the AgentStack lifecycle hooks, then verify the SessionStart ID mapping in a new Codex process/thread. It does not promise to refire SessionStart in an already-running child.
 
 To run a `--no-service` installation in the foreground, execute the generated runner.
 
@@ -127,6 +129,8 @@ To run a `--no-service` installation in the foreground, execute the generated ru
 ## Verification
 
 The dedicated doctor checks the manifest, file modes, payload, marketplace, plugin, actual service mode, socket, binding store, stale drain, and delivery errors together. For launchd it checks `state = running` or a positive `pid`, not merely registration. For supervised background it checks that the supervisor named by the pidfile is alive.
+
+The core `agentstack-doctor` also reports the exact `codex` binary and shared `CODEX_HOME` selected by the child launcher, and distinguishes a missing, disabled, or enabled history-binding plugin. When hook approval cannot be established from stable public information, it reports the state as unknown and directs the operator to `/hooks`. This diagnostic does not treat a Claude-only installation as broken.
 
 ```bash
 ~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration

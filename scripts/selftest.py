@@ -526,6 +526,12 @@ def main() -> int:
         elif pair and args.keep:
             report.note(f"left {', '.join(pair)} registered as requested")
 
+    report.note(
+        "scope: this self-test does not exercise Codex lifecycle hooks or "
+        "history-binding receipts; use agentstack-doctor and Codex /hooks "
+        "when diagnosing UNBOUND history."
+    )
+
     print()
     if report.failures:
         print(f"self-test failed: {len(report.failures)} problem(s)", file=sys.stderr)
