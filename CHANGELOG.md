@@ -8,6 +8,23 @@
 
 ---
 
+## 2026.09.26.1
+
+### Codex の子の履歴が UNBOUND のとき、何を確かめればよいかが分かるようにしました（#86）
+
+Codex の子を dashboard の履歴と結び付けるには、任意の plugin `agentstack-codex-app` を入れて有効にするだけでなく、Codex の `/hooks` でその hook を承認する必要があります。これがセットアップからも診断からも分からず、子は正常に動いているのに履歴だけが UNBOUND のまま、という状態になっていました。
+
+- `install-codex-app-integration.sh` は、plugin を入れた後と `--refresh-plugin-only` の後に、`/hooks` での承認と新しい Codex process での起動を案内します
+- `agentstack-doctor` は、子の起動に実際に使う `codex` と `CODEX_HOME` を表示し、plugin が未導入・無効・有効のどれかを見分けます。承認状態は Codex の内部ファイルからは推測せず、「不明」として `/hooks` での確認を案内します。Claude だけで使う環境は故障として扱いません
+- self-test は、Codex の hook と履歴の対応を検査していないことを結果に書きます
+- dashboard は UNBOUND の判定を変えず、理由の文に確認すべき点を添えます
+
+hook の自動承認はしません。調査と実装は kame447 さんによるものです。
+
+### installer の完了表示に、子の窓の自動表示だけを止める設定の案内を足しました（#87）
+
+`automatically open child terminals: 1` の後ろに、再インストール時に `AGENTSTACK_AUTO_OPEN_CHILD=0` にすれば Open tmux を残して自動表示だけ止められる、という案内を出します。表示だけの変更です。
+
 ## 2026.09.26
 
 ### 子のターミナルの自動表示だけを止められるようにしました（#87）
