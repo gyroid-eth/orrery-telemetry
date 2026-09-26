@@ -82,7 +82,7 @@ open http://127.0.0.1:8770/
 
 **成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。
 
-child の OS terminal は既定では自動で開きません。画面が必要なら Deck の Open tmux を使ってください。自動表示の有効化は[設定](docs/configuration.md#child-spawn)を参照してください。
+child の OS terminal は既定で背面に自動で開きます。dashboard から child を見る場合は、`AGENTSTACK_AUTO_OPEN_CHILD=0` にすると窓が増えず、必要な child だけ Deck の Open tmux で開けます（[設定](docs/configuration.md#child-spawn)）。
 
 ### 5. しりとりで通しの確認をする
 

@@ -299,7 +299,7 @@ if [[ -n "$CODEX_BIN_SETTING" ]]; then
 fi
 # Product defaults are written out explicitly so env.sh, the service definition
 # and install-state.json all say what a child actually gets.
-AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-0}"
+AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"

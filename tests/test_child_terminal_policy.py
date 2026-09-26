@@ -50,11 +50,11 @@ def _fake_terminals(bindir: Path, env: dict[str, str], log: Path) -> None:
 
 @pytest.mark.parametrize("adapter", ["auto", "ghostty", "iterm", "terminal", "none"])
 @pytest.mark.parametrize("setting,focus,opens", [
-    (None, "", False), ("", "", False), ("0", "1", False),
-    (None, "1", False), ("1", "", True), ("1", "1", True),
+    (None, "", True), ("", "", True), ("0", "1", False), ("0", "", False),
+    (None, "1", True), ("1", "", True), ("1", "1", True),
     ("yes", "", False),
 ])
-def test_automatic_open_is_opt_in_and_focus_is_independent(
+def test_automatic_open_is_default_on_and_focus_is_independent(
     tmp_path, adapter, setting, focus, opens,
 ):
     env = {**os.environ, "HOME": str(tmp_path), "AGENTSTACK_TERMINAL": adapter,
@@ -113,12 +113,12 @@ def test_spawn_keeps_detached_session_and_propagates_observer_policy(
     assert Path(env["FAKE_TMUX_ALIVE"]).exists()
     calls = Path(env["FAKE_TMUX_LOG"]).read_text().replace("\x1c", " ")
     assert f"new-session -d -s {child}" in calls
-    assert f"AGENTSTACK_AUTO_OPEN_CHILD={setting or '0'}" in calls
-    if setting == "1":
+    assert f"AGENTSTACK_AUTO_OPEN_CHILD={setting or '1'}" in calls
+    if setting != "0":
         deadline = time.monotonic() + 3
         while not log.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
-    assert log.exists() == (setting == "1")
+    assert log.exists() == (setting != "0")
 
 
 @pytest.mark.parametrize("setting", ["0", "1"])
@@ -140,7 +140,7 @@ def test_manual_deck_terminal_open_ignores_automatic_policy(monkeypatch, setting
 
 
 @pytest.mark.parametrize("explicit,saved,expected", [
-    (None, None, "0"), (None, "1", "1"), (None, "0", "0"),
+    (None, None, "1"), (None, "1", "1"), (None, "0", "0"),
     ("0", "1", "0"), ("1", "0", "1"), ("bad", None, None),
     (None, "bad", None),
 ])
@@ -160,7 +160,7 @@ def test_installer_preserves_valid_saved_policy_and_explicit_override(
     env.pop("AGENTSTACK_AUTO_OPEN_CHILD", None)
     if explicit is not None:
         env["AGENTSTACK_AUTO_OPEN_CHILD"] = explicit
-    default = 'AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-0}"'
+    default = 'AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"'
     assert default in text
     result = _shell("\n".join([
         f". {shlex.quote(str(ROOT / 'hooks/project-context.sh'))}",
@@ -245,4 +245,4 @@ def test_resumed_agent_keeps_observer_policy_for_its_children(
         monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", setting)
     result, launched = _invoke_resume_entry(monkeypatch, tmp_path, project, runtime)
     assert result["ok"] is True, result
-    assert f"AGENTSTACK_AUTO_OPEN_CHILD={setting or '0'}" in launched[0]
+    assert f"AGENTSTACK_AUTO_OPEN_CHILD={setting or '1'}" in launched[0]

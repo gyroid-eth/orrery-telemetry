@@ -71,7 +71,7 @@ HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 CHILD_RESUME_RETENTION_DAYS="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}"
 PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
-AUTO_OPEN_CHILD="${AGENTSTACK_AUTO_OPEN_CHILD:-0}"
+AUTO_OPEN_CHILD="${AGENTSTACK_AUTO_OPEN_CHILD:-1}"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
 if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
     AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
@@ -201,7 +201,7 @@ _open_child_terminal() {
     return 0
 }
 
-# Automatic terminal opening is opt-in; Deck Open tmux remains independent.
+# Automatic terminal opening is on by default (AGENTSTACK_AUTO_OPEN_CHILD=0 turns it off); Deck Open tmux remains independent.
 # Terminal activation is an optional observer side effect, never part of child
 # readiness. On headless macOS, `open` / `osascript` can wait indefinitely for
 # a GUI application, which used to keep a successful spawn_child.sh call stuck

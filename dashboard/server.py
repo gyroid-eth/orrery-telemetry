@@ -3406,7 +3406,7 @@ def _do_resume_codex(session: str) -> dict:
         "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": _env_text(
             "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"
         ),
-        "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "0"),
+        "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
     }
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
