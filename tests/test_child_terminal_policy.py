@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_spawn_child_embed_task import _codex_handoff, _fake_launch_env
+from test_codex_resume_flags import policy_env, _seed_child_identity, _invoke_resume_entry
 
 ROOT = Path(__file__).resolve().parent.parent
 SPAWN = ROOT / "hooks/spawn_child.sh"
@@ -227,3 +228,21 @@ def test_installer_writes_same_policy_for_shell_launchd_and_systemd(tmp_path, se
     unit = (tmp_path / ".config/systemd/user/org.agentstack.test.observer.service").read_text()
     assert f'Environment="AGENTSTACK_AUTO_OPEN_CHILD={setting}"' in unit
     assert 'Environment="AGENTSTACK_TERMINAL=auto"' in unit
+
+
+@pytest.mark.parametrize("setting", [None, "0", "1"])
+def test_resumed_agent_keeps_observer_policy_for_its_children(
+    policy_env, monkeypatch, setting,
+):
+    from dashboard import server
+
+    tmp_path, project = policy_env
+    runtime = tmp_path / "runtime"
+    _seed_child_identity(runtime, project)
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(runtime / "session_index"))
+    monkeypatch.delenv("AGENTSTACK_AUTO_OPEN_CHILD", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", setting)
+    result, launched = _invoke_resume_entry(monkeypatch, tmp_path, project, runtime)
+    assert result["ok"] is True, result
+    assert f"AGENTSTACK_AUTO_OPEN_CHILD={setting or '0'}" in launched[0]

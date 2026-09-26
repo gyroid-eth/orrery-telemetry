@@ -184,7 +184,7 @@ worktree root を変える場合は、たとえば `AGENTSTACK_WORKTREE_ROOT=/sr
 
 `spawn_child.sh` は既定では OS terminal を自動表示しません。child は独立した detached tmux session で動き、必要なときだけ Deck の Open tmux から開けます。`AGENTSTACK_TERMINAL=auto` はそのための terminal 選択として維持します。`none` は手動 Open tmux も無効にするため、自動表示だけを止める用途には使いません。
 
-起動直後から全 child の画面を見たい場合は、`AGENTSTACK_AUTO_OPEN_CHILD=1 ./scripts/install.sh ...` として installer に渡してください。設定は `env.sh`、Dashboard service、install-state に保存され、再インストールでも保持されます。未設定の旧 install は `0` へ移行し、明示した `0` / `1` が保存値より優先されます。既存の `AGENTSTACK_FOCUS_CHILD=1` だけでは自動表示されなくなります。直接 shell から起動する場合は、その shell に同じ変数を export します。child から孫への起動にも設定を渡します。Gemini の別 launcher に OS terminal 自動表示を追加する設定ではありません。
+起動直後から全 child の画面を見たい場合は、`AGENTSTACK_AUTO_OPEN_CHILD=1 ./scripts/install.sh ...` として installer に渡してください。設定は `env.sh`、Dashboard service、install-state に保存され、再インストールでも保持されます。未設定の旧 install は `0` へ移行し、明示した `0` / `1` が保存値より優先されます。既存の `AGENTSTACK_FOCUS_CHILD=1` だけでは自動表示されなくなります。直接 shell から起動する場合は、その shell に同じ変数を export します。child から孫への新規起動と、Codex session の再開先へも設定を渡します。Gemini の別 launcher に OS terminal 自動表示を追加する設定ではありません。
 
 child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` は `claude-opus-5-5`、`sonnet` は `claude-sonnet-5`、Codex の無指定 / `sol` は `gpt-5.6-sol` です。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
 
