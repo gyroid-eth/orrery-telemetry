@@ -5113,6 +5113,10 @@ SPAWN_SCRIPT = _env_path(
 )
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # UI radio と必ず一致させる。program はモデル文字列から決定。
+# Matches hooks/spawn_child.sh CLAUDE_DEFAULT_MODEL so NEW AGENT and the CLI
+# launcher start the same Claude model when none is chosen.
+_CLAUDE_SPAWN_DEFAULT_MODEL = "claude-opus-5-5"
+
 _SPAWN_MODELS = {
     "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
     "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
@@ -5371,9 +5375,9 @@ def spawn_names_payload() -> dict:
         "naming": "adjective-scientist",
         "dirs": dirs,
         "models": list(_SPAWN_MODELS),
-        "default_model": "claude-sonnet-5",
+        "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL,
         "providers": [
-            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": "claude-sonnet-5", "efforts": None},
+            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL, "efforts": None},
             {"id": "codex", "label": "Codex", "program": "codex-cli", "models": _codex_models(), "default_model": _codex_models()[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
         ],
     }
@@ -5826,7 +5830,7 @@ def do_spawn(payload: dict) -> dict:
     if error:
         return error
     provider = (payload.get("provider") or "claude").strip().lower()
-    model = (payload.get("model") or ("claude-sonnet-5" if provider == "claude" else _codex_models()[0])).strip()
+    model = (payload.get("model") or (_CLAUDE_SPAWN_DEFAULT_MODEL if provider == "claude" else _codex_models()[0])).strip()
     effort = (payload.get("effort") or "").strip().lower()
     if provider == "claude":
         if model not in _SPAWN_MODELS:
