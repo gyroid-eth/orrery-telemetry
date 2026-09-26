@@ -8,11 +8,23 @@
 
 ---
 
-## Unreleased
+## 2026.09.26
 
 ### 子のターミナルの自動表示だけを止められるようにしました（#87）
 
 子を起動すると OS のターミナルが自動で開きますが、これを止める手段は `AGENTSTACK_TERMINAL=none` しかなく、dashboard の Open tmux まで使えなくなっていました。新しい設定 `AGENTSTACK_AUTO_OPEN_CHILD` を足し、`0` にすると自動表示だけが止まります。tmux session、Open tmux、Mail には影響しません。既定は `1` で、これまでと挙動は変わりません。dashboard から子を見ている場合は `AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` で切り替えられ、再インストールしても保持されます。実装は kame447 さんによるものです。
+
+### Codex の子が、親への完了報告を送れないことがありました（#85）
+
+事前登録して起動した Codex の子が、`bootstrap` に自分の名前を `agent_id` として渡すと、`MCP process is already bound to another runtime` で拒否されていました。子は誤った送信者で送るのを避けて送信そのものをやめるため、親は timeout まで待たされていました。`bootstrap` をこの形で呼ぶかはモデル次第なので、失敗は間欠的に見えていました。直接束縛の子では、自分の名前の `agent_id` を取り除いて続けるようにしました。別の名前はこれまでどおり拒否します。
+
+### Mail パッケージのテストが、稼働中の Mail に触れることがありました（#80）
+
+稼働中の Mail の設定を読み込んだ shell から `packages/agentstack_mail/tests` を流すと、テスト内の Mail が本物の管理 socket を開こうとして失敗していました。`tests/` と同じく、Mail パッケージのテストでも継承した `AGENTSTACK_*` を消すようにしました。
+
+### Mail 更新手順の検証と確認が、環境によって失敗していました（#79・#84）
+
+[docs/agentstack-mail-update.md](docs/agentstack-mail-update.md) の手順3で、隔離した検証用の Mail が稼働中の Mail と同じ管理 socket を開こうとして起動直後に落ちていました。管理 socket も検証用の場所に書き換え、稼働中の場所を指したままの設定が残っていれば起動前に止まるようにしました。手順7の稼働確認も、Homebrew の Python から作った venv では process が `Python.app` として見えて失敗していたので、判定を `candidates/<sha>/venv/bin/` に変えました。
 
 ## 2026.09.25
 
