@@ -1128,6 +1128,10 @@ def test_metadata_without_hook_becomes_unconfirmed_after_grace(binding_env) -> N
     assert pending["history_binding"] == "pending"
     assert unconfirmed["history_binding"] == "unconfirmed"
     assert unconfirmed["history_binding_reason_code"] == "hook_not_observed"
+    reason = unconfirmed["history_binding_reason"]
+    assert "plugin" in reason
+    assert "/hooks" in reason
+    assert "new Codex process" in reason
 
 
 def test_future_launch_timestamp_does_not_extend_the_display_grace(binding_env) -> None:

@@ -3601,7 +3601,12 @@ def _verified_codex_index(
 _CODEX_BINDING_REASONS = {
     "awaiting_hook": "Waiting for this run's history binding receipt.",
     "binding_missing": "This launch has no verified registration binding.",
-    "hook_not_observed": "This run did not produce a verified history binding receipt.",
+    "hook_not_observed": (
+        "This run did not produce a verified history binding receipt. "
+        "Check that the AgentStack Codex plugin is installed and enabled, "
+        "review/approve its lifecycle hooks in Codex /hooks, then start a new "
+        "Codex process."
+    ),
     "no_transcript": "This run did not provide a usable transcript file.",
     "id_mismatch": "The runtime session ID did not match the rollout metadata.",
     "write_failed": "The verified history receipt could not be written.",

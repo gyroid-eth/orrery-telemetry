@@ -90,6 +90,8 @@ installer は次を行います。
 4. self-contained local marketplace を構築し、Codex plugin を登録
 5. macOS では `org.agentstack.codex-app-bridge` を launchd へ実際に bootstrap し、GUI domain が拒否した場合は supervised background で Bridge を起動
 
+plugin の登録だけでは lifecycle hook は実行されません。install 完了後に Codex の `/hooks` を開き、AgentStack の hooks を review・承認してから、新しい Codex process で child を起動してください。既に起動中の process では SessionStart が再発火する保証はありません。
+
 launchd の可否はログイン情報から推測せず、`gui/$UID` への bootstrap、enable、kickstart がすべて成功したかで決めます。ヘッドレス SSH や画面スリープ中などで失敗した場合、live plist を残さず `bridge-supervisor.pid` を持つ background supervisor に切り替わります。この supervisor は Bridge 子プロセスが終了すると既定5秒後に再起動します。install manifest と doctor は、希望した方式ではなく実際に選ばれた方式を記録・表示します。
 
 主な option:
@@ -121,7 +123,7 @@ CODEX_HOME="$HOME/.codex" \
 
 先に read-only の確認だけを行う場合は `--dry-run` を加えます。refresh は exact plugin が installed + enabled で、既存 local marketplace root が一致するときだけ、配置済み integration から snapshot を再構築して正規の `codex plugin add` を実行します。未導入または disabled なら理由付きで skip し、plugin を自動導入・有効化しません。別 marketplace、registry 読取失敗、または CLI が選んだ cache payload の hooks / runner / recorder 不一致はエラーです。
 
-この経路は env、plist、service、install-state を再構成しません。**full installer の `--no-service` は純粋な plugin refresh の代用ではありません。** refresh 後は新しい Codex process / thread で SessionStart の ID 対応を確認してください。既に起動中の子で SessionStart が再発火することは保証しません。
+この経路は env、plist、service、install-state を再構成しません。**full installer の `--no-service` は純粋な plugin refresh の代用ではありません。** refresh 後は Codex の `/hooks` で AgentStack の lifecycle hooks を review・承認し、その後に新しい Codex process / thread で SessionStart の ID 対応を確認してください。既に起動中の子で SessionStart が再発火することは保証しません。
 
 `--no-service` の install を前面で動かす場合は、生成された runner を実行します。
 
@@ -132,6 +134,8 @@ CODEX_HOME="$HOME/.codex" \
 ## 確認
 
 専用 doctor は manifest、file mode、payload、marketplace、plugin、実際の service mode、socket、binding store、stale drain、delivery error をまとめて確認します。launchd は登録の有無だけでなく `state = running` または正の `pid` を確認し、supervised background は pidfile の supervisor が生存していることを確認します。
+
+core の `agentstack-doctor` は child launcher が実際に選ぶ `codex` と共有 `CODEX_HOME` を表示し、history binding plugin が未導入・disabled・enabled のどれかを区別します。hook の承認状態を安定した公開情報から確認できない場合は「不明」として `/hooks` での確認を案内します。この診断は Codex history を使わない Claude-only 環境を故障扱いしません。
 
 ```bash
 ~/.agentstack/integrations/codex_app/bin/doctor-codex-app-integration
