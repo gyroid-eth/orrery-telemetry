@@ -14,16 +14,17 @@
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
 # モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
-#   --model 省略/opus    → claude-opus-5（200K。warm pool 対象）
+#   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
-#   --model claude-opus-4-8 → 旧 200K Opus を明示指定（引き続き有効）
+#   --model opus-5-5[1m] → claude-opus-5-5[1m]（current 1M。要シングルクォート: glob 回避）
+#   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
 #   --codex --model 省略/sol → gpt-5.6-sol（terra / luna / astra=gpt-6-astra alias も利用可）
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
-#     事前起動モデル（opus=claude-opus-5/200K, sonnet=claude-sonnet-5/200K）と
+#     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と
 #     完全一致するときだけ claim する（[1m]/fable 等は cold-start で正しく起動）。
 #
 # リソース管理:
@@ -70,6 +71,7 @@ HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 CHILD_RESUME_RETENTION_DAYS="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}"
 PROJECT_KEY="${PROJECT_KEY:-${AGENTSTACK_PROJECT_KEY:-}}"
 TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
+AUTO_OPEN_CHILD="${AGENTSTACK_AUTO_OPEN_CHILD:-1}"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
 if [[ -z "$AGENTSTACK_HOME_DIR" && -d "$HOOKS_DIR/.." ]]; then
     AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
@@ -199,12 +201,14 @@ _open_child_terminal() {
     return 0
 }
 
+# Automatic terminal opening is on by default (AGENTSTACK_AUTO_OPEN_CHILD=0 turns it off); Deck Open tmux remains independent.
 # Terminal activation is an optional observer side effect, never part of child
 # readiness. On headless macOS, `open` / `osascript` can wait indefinitely for
 # a GUI application, which used to keep a successful spawn_child.sh call stuck
 # after the tmux child was already alive. Detach it from the launcher's critical
 # path; failures remain best-effort diagnostics from the worker above.
 open_child_terminal() {
+    [[ "$AUTO_OPEN_CHILD" == "1" ]] || return 0
     (_open_child_terminal "$1") </dev/null >/dev/null 2>&1 &
     return 0
 }
@@ -594,9 +598,11 @@ prepare_codex_launch_binding() {
 # --- Child model catalog -------------------------------------------------
 # Keep defaults and warm-pool identities here. Both launch paths normalize
 # through the functions below instead of carrying their own generation names.
-CLAUDE_DEFAULT_MODEL="claude-opus-5"
+CLAUDE_DEFAULT_MODEL="claude-opus-5-5"
 CLAUDE_DEFAULT_SONNET_MODEL="claude-sonnet-5"
-CLAUDE_CURRENT_OPUS_1M_MODEL="claude-opus-5[1m]"
+CLAUDE_CURRENT_OPUS_1M_MODEL="claude-opus-5-5[1m]"
+CLAUDE_LEGACY_OPUS_5_MODEL="claude-opus-5"
+CLAUDE_LEGACY_OPUS_5_1M_MODEL="claude-opus-5[1m]"
 CLAUDE_LEGACY_OPUS_MODEL="claude-opus-4-8"
 CLAUDE_LEGACY_OPUS_1M_MODEL="claude-opus-4-8[1m]"
 CLAUDE_LEGACY_SONNET_MODEL="claude-sonnet-4-6"
@@ -626,13 +632,17 @@ normalize_claude_model() {
     m="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
 
     case "$m" in
-        ""|opus|opus-5|opus5|"$CLAUDE_DEFAULT_MODEL")
+        ""|opus|"$CLAUDE_DEFAULT_MODEL")
             printf '%s\n' "$CLAUDE_DEFAULT_MODEL" ;;
+        opus-5|opus5|"$CLAUDE_LEGACY_OPUS_5_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_MODEL" ;;
         opus-1m|opus1m|"opus[1m]"|claude-opus-4-8-1m|"$CLAUDE_LEGACY_OPUS_1M_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_OPUS_1M_MODEL" ;;
         opus-200k|opus200k|"$CLAUDE_LEGACY_OPUS_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_OPUS_MODEL" ;;
-        opus-5-1m|opus51m|"opus-5[1m]"|"opus5[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
+        opus-5-1m|opus51m|"opus-5[1m]"|"opus5[1m]"|"$CLAUDE_LEGACY_OPUS_5_1M_MODEL")
+            printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_1M_MODEL" ;;
+        opus-5-5-1m|opus551m|"opus-5-5[1m]"|"opus55[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
             printf '%s\n' "$CLAUDE_CURRENT_OPUS_1M_MODEL" ;;
         sonnet|sonnet-5|sonnet5|"$CLAUDE_DEFAULT_SONNET_MODEL")
             printf '%s\n' "$CLAUDE_DEFAULT_SONNET_MODEL" ;;
@@ -649,7 +659,7 @@ normalize_claude_model() {
                 # 正式 ID は前方互換で素通り（新モデル ID 対応）
                 printf '%s\n' "$m"
             else
-                echo "Error: unknown model '$raw'. Valid forms: opus / opus[1m] / opus-5[1m] / claude-opus-4-8 / sonnet / sonnet-4-6 / haiku / fable / claude-<id>" >&2
+                echo "Error: unknown model '$raw'. Valid forms: opus / opus[1m] / opus-5[1m] / opus-5-5[1m] / claude-opus-5 / claude-opus-4-8 / sonnet / sonnet-4-6 / haiku / fable / claude-<id>" >&2
                 return 1
             fi
             ;;
@@ -1025,6 +1035,9 @@ claude_pane_ready() {
     # Only an empty input row counts. A selected dialog row also starts with
     # the cursor glyph ("❯ No, exit") and must not read as ready.
     printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*$' && return 0
+    # Claude Code 2.1.282 shows a placeholder in the empty input row
+    # ('❯ Try "fix lint errors"') and no "for shortcuts" footer.
+    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*Try "' && return 0
     return 1
 }
 
@@ -1635,7 +1648,7 @@ PY
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
-    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+    TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
@@ -2487,7 +2500,7 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
-TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
+TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi

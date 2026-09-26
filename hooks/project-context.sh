@@ -45,10 +45,13 @@ agentstack_physical_dir() {
     (CDPATH= cd -- "$1" 2>/dev/null && pwd -P)
 }
 
-# Resolve one top-level invocation from its actual target directory. Ambient /
-# installed project keys and inherited Git selectors are deliberately not
-# consulted. An explicit key changes only the Mail namespace; repository,
-# worktree and protected-root provenance still come from TARGET.
+# Resolve one top-level invocation into two independent dimensions:
+# - project_key is the ORRERY Mail coordination namespace and follows the
+#   published runtime precedence (explicit override > live key > installed key
+#   > cwd fallback);
+# - repository/work_dir/worktree_root describe the actual target workspace.
+# A namespace may intentionally span repositories. Workspace provenance and
+# protected roots therefore come from TARGET and never from the key's path.
 agentstack_resolve_invocation_context() {
     [ "$#" -ge 1 ] && [ "$#" -le 2 ] || return 2
     local target="$1" explicit_key="${2:-}"
@@ -87,16 +90,16 @@ agentstack_resolve_invocation_context() {
     fi
 
     if [ -n "$explicit_key" ]; then
-        if [ -d "$explicit_key" ]; then
-            project_key="$(agentstack_physical_dir "$explicit_key")" || return 1
-        else
-            project_key="$explicit_key"
-        fi
-    elif [ -n "$repository" ]; then
-        project_key="$repository"
+        # Mail project keys are opaque human keys. Even a path-shaped key is
+        # namespace data, not proof that TARGET belongs to that repository.
+        project_key="$explicit_key"
     else
-        project_key="$work_dir"
+        project_key="$(agentstack_resolve_project_key "$work_dir")" || return 1
     fi
+    [ -n "$project_key" ] || {
+        printf 'agentstack: cannot resolve project namespace for invocation target\n' >&2
+        return 1
+    }
 
     "${AGENTSTACK_PYTHON:-python3}" - \
         "$project_key" "$repository" "$work_dir" "$worktree_root" <<'PY'
@@ -192,8 +195,8 @@ PY
 }
 
 # Priority: live AGENTSTACK_PROJECT_KEY, live PROJECT_KEY, installed env, cwd.
-# Legacy consumers retain this behavior; top-level launchers use the invocation
-# context function above instead.
+# Top-level launchers keep this namespace contract and separately bind the
+# actual repository/workspace provenance through resolve-invocation-context.
 agentstack_resolve_project_key() {
     local fallback="${1:-}"
     local env_file="${2:-${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh}"

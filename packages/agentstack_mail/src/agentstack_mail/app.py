@@ -878,19 +878,24 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _naive_utc(dt: Optional[datetime] = None) -> datetime:
-    """Return a naive UTC datetime for SQLite comparisons.
+def _legacy_timestamp_text(dt: Any, *, separator: str = " ") -> str:
+    """Keep legacy offset-free API text while storage uses aware datetimes."""
+    if isinstance(dt, str):
+        return dt
+    normalized = _ensure_utc(dt)
+    if normalized is None:
+        return str(dt)
+    return normalized.replace(tzinfo=None).isoformat(sep=separator)
 
-    SQLite stores datetimes without timezone info. When comparing Python
-    datetime objects with SQLite DATETIME columns via SQLAlchemy, both must
-    be naive to avoid 'can't compare offset-naive and offset-aware datetimes'.
-    """
+
+def _aware_utc(dt: Optional[datetime] = None) -> datetime:
+    """Return an aware UTC datetime, using the current time by default."""
     if dt is None:
-        dt = datetime.now(timezone.utc)
-    if dt.tzinfo is not None:
-        # Convert to UTC first, then strip timezone
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
+        return datetime.now(timezone.utc)
+    normalized = _ensure_utc(dt)
+    if normalized is None:  # pragma: no cover - guarded by the argument type
+        raise ValueError("datetime is required")
+    return normalized
 
 
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
@@ -2935,7 +2940,6 @@ async def refresh_project_sibling_suggestions(*, max_pairs: int = _PROJECT_SIBLI
             existing_map[pair] = suggestion
 
         now = datetime.now(timezone.utc)
-        naive_now = _naive_utc(now)
         to_evaluate: list[tuple[Project, Project, ProjectSiblingSuggestion | None]] = []
         for idx, project_a in enumerate(projects):
             if project_a.id is None:
@@ -2999,7 +3003,7 @@ async def refresh_project_sibling_suggestions(*, max_pairs: int = _PROJECT_SIBLI
                 # Preserve user decisions
                 if record.status not in {"confirmed", "dismissed"}:
                     record.status = "suggested"
-            record.evaluated_ts = naive_now
+            record.evaluated_ts = now
             updated = True
 
         if updated:
@@ -3033,7 +3037,7 @@ async def get_project_sibling_data() -> dict[int, dict[str, list[dict[str, Any]]
                 "score": float(row[3] or 0.0),
                 "status": row[4],
                 "rationale": row[5] or "",
-                "evaluated_ts": str(row[6]) if row[6] else None,
+                "evaluated_ts": _legacy_timestamp_text(row[6]) if row[6] else None,
             }
             a_info = {"id": a_id, "slug": row[7], "human_key": row[8]}
             b_info = {"id": b_id, "slug": row[9], "human_key": row[10]}
@@ -3096,14 +3100,13 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
             await session.flush()
 
         now = datetime.now(timezone.utc)
-        naive_now = _naive_utc(now)
         suggestion.status = normalized_status
-        suggestion.evaluated_ts = naive_now
+        suggestion.evaluated_ts = now
         if normalized_status == "confirmed":
-            suggestion.confirmed_ts = naive_now
+            suggestion.confirmed_ts = now
             suggestion.dismissed_ts = None
         elif normalized_status == "dismissed":
-            suggestion.dismissed_ts = naive_now
+            suggestion.dismissed_ts = now
             suggestion.confirmed_ts = None
 
         await session.commit()
@@ -3129,18 +3132,45 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
             "rationale": suggestion.rationale,
             "project_a": _project_payload(suggestion.project_a_id),
             "project_b": _project_payload(suggestion.project_b_id),
-            "evaluated_ts": str(suggestion.evaluated_ts) if suggestion.evaluated_ts else None,
+            "evaluated_ts": (
+                _legacy_timestamp_text(suggestion.evaluated_ts)
+                if suggestion.evaluated_ts
+                else None
+            ),
         }
+
+
+async def _find_registration_equivalent_agent(
+    session: Any,
+    project_id: int,
+    name: str,
+) -> Optional[Agent]:
+    """Find an exact name first, then any legacy row with the same sanitized name."""
+    normalized_name = sanitize_agent_name(name)
+    if not normalized_name:
+        return None
+    result = await session.execute(select(Agent).where(Agent.project_id == project_id))
+    agents = result.scalars().all()
+    exact_lower = (name or "").lower()
+    exact = next((agent for agent in agents if agent.name.lower() == exact_lower), None)
+    if exact is not None:
+        return exact
+    normalized_lower = normalized_name.lower()
+    return next(
+        (
+            agent
+            for agent in agents
+            if (sanitize_agent_name(agent.name) or "").lower() == normalized_lower
+        ),
+        None,
+    )
 
 
 async def _agent_name_exists(project: Project, name: str) -> bool:
     if project.id is None:
         raise ValueError("Project must have an id before querying agents.")
     async with get_session() as session:
-        result = await session.execute(
-            select(Agent.id).where(Agent.project_id == project.id, func.lower(Agent.name) == name.lower())
-        )
-        return result.first() is not None
+        return await _find_registration_equivalent_agent(session, project.id, name) is not None
 
 
 async def _get_window_identity(
@@ -3151,7 +3181,7 @@ async def _get_window_identity(
     if project.id is None:
         return None
     await ensure_schema()
-    now = _naive_utc()
+    now = _aware_utc()
     async with get_session() as session:
         result = await session.execute(
             select(WindowIdentity).where(
@@ -3178,7 +3208,7 @@ async def _create_window_identity(
     if project.id is None:
         raise ValueError("Project must have an id before creating window identities.")
     await ensure_schema()
-    now = _naive_utc()
+    now = _aware_utc()
     expires = now + timedelta(days=ttl_days)
     async with get_session() as session:
         identity = WindowIdentity(
@@ -3208,7 +3238,7 @@ async def _touch_window_identity(
     ttl_days: int = 30,
 ) -> None:
     """Update last_active_ts and extend expiry for a window identity."""
-    now = _naive_utc()
+    now = _aware_utc()
     async with get_session() as session:
         db_identity = await session.get(WindowIdentity, identity.id)
         if db_identity:
@@ -3406,7 +3436,7 @@ async def _get_or_create_agent(
             "program": program,
             "model": model,
             "task_description": task_description,
-            "last_active_ts": _naive_utc(),
+            "last_active_ts": _aware_utc(),
         }
         if attachments_policy is not None:
             values["attachments_policy"] = attachments_policy
@@ -3467,14 +3497,12 @@ async def _get_or_create_agent(
     await ensure_schema()
     async with get_session() as session:
         for _attempt in range(5):
-            # Use case-insensitive matching to be consistent with _agent_name_exists() and _get_agent()
-            result = await session.execute(
-                select(Agent).where(
-                    cast(Any, Agent.project_id == project.id),
-                    cast(Any, func.lower(Agent.name) == desired_name.lower()),
-                )
+            # Preserve exact legacy names, then detect their normalized aliases.
+            agent = await _find_registration_equivalent_agent(
+                session,
+                cast(int, project.id),
+                desired_name,
             )
-            agent = result.scalars().first()
             if agent:
                 agent = await update_existing_agent(session, agent)
                 break
@@ -3505,13 +3533,11 @@ async def _get_or_create_agent(
 
                 if explicit_name_used:
                     # Another concurrent call created this identity; treat as idempotent update.
-                    result = await session.execute(
-                        select(Agent).where(
-                            cast(Any, Agent.project_id == project.id),
-                            cast(Any, func.lower(Agent.name) == desired_name.lower()),
-                        )
+                    agent = await _find_registration_equivalent_agent(
+                        session,
+                        cast(int, project.id),
+                        desired_name,
                     )
-                    agent = result.scalars().first()
                     if agent is None:
                         raise
                     agent = await update_existing_agent(session, agent)
@@ -3561,7 +3587,7 @@ async def _touch_agent_activity(agent: Agent) -> None:
     agent_id = agent.id
     if agent_id is None:
         return
-    now = _naive_utc()
+    now = _aware_utc()
     try:
         async with get_session() as session:
             # Only ever move the clock forward. `now` is sampled before the
@@ -3592,6 +3618,43 @@ async def _touch_agent_activity(agent: Agent) -> None:
     # If the guard rejected the write, the row already holds something newer.
     # Copying `now` onto this detached object anyway would make it disagree
     # with the database it was read from.
+
+
+def _agent_name_lookup_values(name: str) -> tuple[str, ...]:
+    """Return lookup keys in compatibility order: exact, then registration form."""
+    exact = (name or "").lower()
+    normalized_name = sanitize_agent_name(name or "")
+    values = [exact] if exact else []
+    if normalized_name:
+        normalized = normalized_name.lower()
+        if normalized not in values:
+            values.append(normalized)
+    return tuple(values)
+
+
+def _resolve_agent_from_rows(agents: Sequence[Agent], name: str) -> Optional[Agent]:
+    """Resolve an agent from fetched rows using exact-before-normalized precedence."""
+    by_lower = {agent.name.lower(): agent for agent in agents}
+    return next(
+        (by_lower[value] for value in _agent_name_lookup_values(name) if value in by_lower),
+        None,
+    )
+
+
+async def _get_unique_project_by_agent_name(name: str) -> Optional[Project]:
+    """Find a unique project, preferring an exact legacy-compatible agent name."""
+    for lookup_value in _agent_name_lookup_values(name):
+        async with get_session() as session:
+            rows = await session.execute(
+                select(Project)
+                .join(Agent, cast(Any, Agent.project_id) == Project.id)
+                .where(func.lower(Agent.name) == lookup_value)
+                .limit(2)
+            )
+            projects = [row[0] for row in rows.all()]
+        if projects:
+            return projects[0] if len(projects) == 1 else None
+    return None
 
 
 async def _get_agent(project: Project, name: str) -> Agent:
@@ -3634,16 +3697,33 @@ async def _get_agent(project: Project, name: str) -> Agent:
                 },
             )
 
+    lookup_values = _agent_name_lookup_values(name)
+    normalized_name = sanitize_agent_name(name)
+    if not normalized_name:
+        raise ToolExecutionError(
+            "INVALID_ARGUMENT",
+            "Agent name must contain alphanumeric characters.",
+            recoverable=True,
+            data={
+                "parameter": "agent_name",
+                "provided": name,
+                "project": project.slug,
+            },
+        )
+
     async with get_session() as session:
         result = await session.execute(
-            select(Agent).where(Agent.project_id == project.id, func.lower(Agent.name) == name.lower())
+            select(Agent).where(
+                Agent.project_id == project.id,
+                func.lower(Agent.name).in_(lookup_values),
+            )
         )
-        agent = result.scalars().first()
+        agent = _resolve_agent_from_rows(result.scalars().all(), name)
         if agent:
             return agent
 
     # Agent not found - provide helpful suggestions
-    suggestions = await _find_similar_agents(project, name)
+    suggestions = await _find_similar_agents(project, normalized_name)
     available_agents = await _list_project_agents(project)
 
     # Check for common mistakes (Unix username, program name, etc.)
@@ -3705,14 +3785,19 @@ async def _get_agents_batch(project: Project, names: Sequence[str]) -> dict[str,
     if project.id is None:
         raise ValueError("Project must have an id before querying agents.")
 
+    lookup_values_by_name: dict[str, tuple[str, ...]] = {}
     lowered_names: list[str] = []
     seen: set[str] = set()
     for name in names:
-        lowered = name.lower()
-        if lowered in seen:
+        lookup_values = _agent_name_lookup_values(name)
+        if not sanitize_agent_name(name):
             continue
-        seen.add(lowered)
-        lowered_names.append(lowered)
+        lookup_values_by_name[name] = lookup_values
+        for lowered in lookup_values:
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lowered_names.append(lowered)
 
     async with get_session() as session:
         result = await session.execute(
@@ -3724,7 +3809,10 @@ async def _get_agents_batch(project: Project, names: Sequence[str]) -> dict[str,
     resolved: dict[str, Agent] = {}
     missing: list[str] = []
     for name in names:
-        agent = by_lower.get(name.lower())
+        agent = next(
+            (by_lower[value] for value in lookup_values_by_name.get(name, ()) if value in by_lower),
+            None,
+        )
         if agent is None:
             missing.append(name)
         else:
@@ -3763,14 +3851,19 @@ async def _get_agents_batch_lenient(project: Project, names: Sequence[str]) -> d
         return {}
 
     # Deduplicate and lowercase for efficient IN query
+    lookup_values_by_name: dict[str, tuple[str, ...]] = {}
     lowered_names: list[str] = []
     seen: set[str] = set()
     for name in names:
-        lowered = name.lower()
-        if lowered in seen:
+        lookup_values = _agent_name_lookup_values(name)
+        if not sanitize_agent_name(name):
             continue
-        seen.add(lowered)
-        lowered_names.append(lowered)
+        lookup_values_by_name[name] = lookup_values
+        for lowered in lookup_values:
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lowered_names.append(lowered)
 
     async with get_session() as session:
         result = await session.execute(
@@ -3784,7 +3877,10 @@ async def _get_agents_batch_lenient(project: Project, names: Sequence[str]) -> d
     # Resolve original names to agents (preserving original case in keys)
     resolved: dict[str, Agent] = {}
     for name in names:
-        agent = by_lower.get(name.lower())
+        agent = next(
+            (by_lower[value] for value in lookup_values_by_name.get(name, ()) if value in by_lower),
+            None,
+        )
         if agent is not None:
             resolved[name] = agent
 
@@ -3825,7 +3921,7 @@ async def _create_message(
         for recipient, kind in recipients:
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
-        sender.last_active_ts = _naive_utc()
+        sender.last_active_ts = _aware_utc()
         session.add(sender)
         await session.commit()
         await session.refresh(message)
@@ -3844,7 +3940,7 @@ async def _create_file_reservation(
         raise ValueError("Project and agent must have ids before creating file_reservations.")
     import unicodedata
     path = unicodedata.normalize("NFC", path)
-    expires = _naive_utc() + timedelta(seconds=ttl_seconds)
+    expires = _aware_utc() + timedelta(seconds=ttl_seconds)
     await ensure_schema()
     async with get_session() as session:
         file_reservation = FileReservation(
@@ -3883,7 +3979,7 @@ async def _ensure_file_reservation_min_ttl(
     if reservation.id is None:
         raise ValueError("Reservation must have an id before extending TTL.")
     await ensure_schema()
-    target_expiry = _naive_utc() + timedelta(seconds=ttl_seconds)
+    target_expiry = _aware_utc() + timedelta(seconds=ttl_seconds)
     async with get_session() as session:
         db_reservation = await session.get(FileReservation, reservation.id)
         if db_reservation is None:
@@ -4141,7 +4237,7 @@ async def _expire_stale_file_reservations(
 ) -> _FileReservationSweepResult:
     await ensure_schema()
     now = datetime.now(timezone.utc)
-    naive_now = _naive_utc(now)  # Compute once for consistency and efficiency
+    now_utc = _aware_utc(now)
 
     project: Optional[Project] = None
     async with get_session() as session:
@@ -4158,7 +4254,7 @@ async def _expire_stale_file_reservations(
             .where(
                 cast(Any, FileReservation.project_id) == project_id,
                 cast(Any, FileReservation.released_ts).is_(None),
-                cast(Any, FileReservation.expires_ts) < naive_now,  # SQLite needs naive datetime
+                cast(Any, FileReservation.expires_ts) < now_utc,
             )
         )
         expired_pairs = [cast(tuple[FileReservation, Agent], row) for row in expired_rows.all()]
@@ -4168,9 +4264,9 @@ async def _expire_stale_file_reservations(
                 .where(
                     cast(Any, FileReservation.project_id) == project_id,
                     cast(Any, FileReservation.released_ts).is_(None),
-                    cast(Any, FileReservation.expires_ts) < naive_now,  # SQLite needs naive datetime
+                    cast(Any, FileReservation.expires_ts) < now_utc,
                 )
-                .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
+                .values(released_ts=now_utc)
             )
             await session.commit()
     statuses = await _collect_file_reservation_statuses(
@@ -4195,7 +4291,7 @@ async def _expire_stale_file_reservations(
         # concurrent sweeper releases reservations belonging to an agent that
         # is demonstrably working -- the exact defect the liveness bump was
         # added to fix, reintroduced through a different caller.
-        inactive_cutoff = _naive_utc(
+        inactive_cutoff = _aware_utc(
             now - timedelta(seconds=max(0, int(get_settings().file_reservation_inactivity_seconds)))
         )
         still_inactive = (
@@ -4218,7 +4314,7 @@ async def _expire_stale_file_reservations(
                     cast(Any, FileReservation.released_ts).is_(None),
                     still_inactive,
                 )
-                .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
+                .values(released_ts=now_utc)
             )
             await session.commit()
             survivors = await session.execute(
@@ -4264,10 +4360,10 @@ async def _expire_stale_file_reservations(
                 status for status in stale_statuses if status.reservation.id not in spared
             ]
         for status in stale_statuses:
-            status.reservation.released_ts = naive_now
+            status.reservation.released_ts = now_utc
 
     for reservation, _agent in expired_pairs:
-        reservation.released_ts = naive_now
+        reservation.released_ts = now_utc
 
     released_pairs: list[tuple[FileReservation, Agent]] = []
     seen_ids: set[int] = set()
@@ -4498,7 +4594,7 @@ async def _list_inbox(
         if since_ts:
             since_dt = _parse_iso(since_ts)
             if since_dt:
-                stmt = stmt.where(Message.created_ts > _naive_utc(since_dt))
+                stmt = stmt.where(Message.created_ts > _aware_utc(since_dt))
         if topic:
             stmt = stmt.where(cast(Any, func.lower(Message.topic)) == topic.lower())
         result = await session.execute(stmt)
@@ -4534,7 +4630,7 @@ async def _list_outbox(
         if since_ts:
             since_dt = _parse_iso(since_ts)
             if since_dt:
-                stmt = stmt.where(Message.created_ts > _naive_utc(since_dt))
+                stmt = stmt.where(Message.created_ts > _aware_utc(since_dt))
         result = await session.execute(stmt)
         message_rows = result.scalars().all()
 
@@ -4875,7 +4971,6 @@ async def _update_recipient_timestamp(
     if agent.id is None:
         raise ValueError("Agent must have an id before updating message state.")
     now = datetime.now(timezone.utc)
-    naive_now = _naive_utc(now)  # Use naive UTC for SQLite compatibility
     async with get_session() as session:
         # Read current value first
         result_sel = await session.execute(
@@ -4892,11 +4987,11 @@ async def _update_recipient_timestamp(
         stmt = (
             update(MessageRecipient)
             .where(MessageRecipient.message_id == message_id, MessageRecipient.agent_id == agent.id)
-            .values({field: naive_now})
+            .values({field: now})
         )
         await session.execute(stmt)
         await session.commit()
-    return naive_now
+    return now
 
 
 def build_mcp_server() -> FastMCP:
@@ -5008,7 +5103,7 @@ def build_mcp_server() -> FastMCP:
                         .where(
                             cast(Any, FileReservation.project_id) == project.id,
                             cast(Any, FileReservation.released_ts).is_(None),
-                            cast(Any, FileReservation.expires_ts) > _naive_utc(now_ts),
+                            cast(Any, FileReservation.expires_ts) > _aware_utc(now_ts),
                         )
                     )
                     active_file_reservations: list[tuple[FileReservation, str]] = [
@@ -5528,7 +5623,7 @@ def build_mcp_server() -> FastMCP:
         async with get_session() as session:
             db_agent = await session.get(Agent, agent.id)
             if db_agent:
-                db_agent.retired_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                db_agent.retired_at = datetime.now(timezone.utc)
                 session.add(db_agent)
                 await session.commit()
 
@@ -5625,7 +5720,7 @@ def build_mcp_server() -> FastMCP:
         async with get_session() as session:
             db_project = await session.get(Project, project.id)
             if db_project:
-                db_project.archived_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                db_project.archived_at = datetime.now(timezone.utc)
                 session.add(db_project)
                 await session.commit()
 
@@ -6232,7 +6327,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _get_project_by_identifier(project_key)
         await ensure_schema()
-        now = _naive_utc()
+        now = _aware_utc()
         async with get_session() as session:
             result = await session.execute(
                 select(WindowIdentity).where(
@@ -6300,7 +6395,7 @@ def build_mcp_server() -> FastMCP:
             )
         project = await _get_project_by_identifier(project_key)
         await ensure_schema()
-        now = _naive_utc()
+        now = _aware_utc()
         async with get_session() as session:
             result = await session.execute(
                 select(WindowIdentity).where(
@@ -6367,7 +6462,7 @@ def build_mcp_server() -> FastMCP:
             )
         project = await _get_project_by_identifier(project_key)
         await ensure_schema()
-        now = _naive_utc()
+        now = _aware_utc()
         async with get_session() as session:
             result = await session.execute(
                 select(WindowIdentity).where(
@@ -6552,7 +6647,7 @@ def build_mcp_server() -> FastMCP:
                 )
             await ensure_schema()
             async with get_session() as _bcast_session:
-                _bcast_cutoff = _naive_utc() - timedelta(days=30)
+                _bcast_cutoff = _aware_utc() - timedelta(days=30)
                 _bcast_result = await _bcast_session.execute(
                     select(Agent.name, Agent.contact_policy, Agent.retired_at).where(
                         cast(Any, Agent.project_id == project.id),
@@ -6748,7 +6843,7 @@ def build_mcp_server() -> FastMCP:
                     file_reservation_rows = await s2.execute(
                         select(FileReservation, Agent.name)
                         .join(Agent, cast(Any, FileReservation.agent_id) == Agent.id)
-                        .where(FileReservation.project_id == project.id, cast(Any, FileReservation.released_ts).is_(None), cast(Any, FileReservation.expires_ts) > _naive_utc(now_utc))
+                        .where(FileReservation.project_id == project.id, cast(Any, FileReservation.released_ts).is_(None), cast(Any, FileReservation.expires_ts) > _aware_utc(now_utc))
                     )
                     name_to_file_reservations: dict[str, list[str]] = {}
                     for c, nm in file_reservation_rows.all():
@@ -6783,7 +6878,7 @@ def build_mcp_server() -> FastMCP:
                             .where(
                                 cast(Any, Message.project_id) == project.id,
                                 cast(Any, Message.sender_id) == sender.id,
-                                cast(Any, Message.created_ts) > _naive_utc(since_dt),
+                                cast(Any, Message.created_ts) > _aware_utc(since_dt),
                                 cast(Any, Agent.name).in_(recipient_name_filter),
                             )
                         )
@@ -6798,7 +6893,7 @@ def build_mcp_server() -> FastMCP:
                             .where(
                                 cast(Any, Message.project_id) == project.id,
                                 cast(Any, MessageRecipient.agent_id) == sender.id,
-                                cast(Any, Message.created_ts) > _naive_utc(since_dt),
+                                cast(Any, Message.created_ts) > _aware_utc(since_dt),
                                 cast(Any, sender_alias2.name).in_(recipient_name_filter),
                             )
                         )
@@ -7004,16 +7099,18 @@ def build_mcp_server() -> FastMCP:
         external: dict[int, dict[str, Any]] = {}
 
         async with get_session() as sx:
-            # Preload local agent names (normalized -> canonical stored name)
+            # Preload local agent names (case-folded exact -> stored name).
             existing = await sx.execute(select(Agent.name).where(Agent.project_id == project.id))
             local_lookup: dict[str, str] = {}
-            for row in existing.fetchall():
-                canonical_name = (row[0] or "").strip()
-                if not canonical_name:
-                    continue
-                sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
-                for key in {canonical_name.lower(), sanitized_canonical.lower()}:
-                    local_lookup.setdefault(key, canonical_name)
+            canonical_names = [
+                (row[0] or "").strip()
+                for row in existing.fetchall()
+                if (row[0] or "").strip()
+            ]
+            # Inputs carry exact and normalized keys in precedence order; the
+            # map itself contains only exact stored names.
+            for canonical_name in canonical_names:
+                local_lookup.setdefault(canonical_name.lower(), canonical_name)
 
             sender_candidate_keys = {
                 key.lower()
@@ -7024,15 +7121,11 @@ def build_mcp_server() -> FastMCP:
                 if key
             }
 
-            def _normalize(value: str) -> tuple[str, set[str], Optional[str]]:
-                """Trim input, derive comparable lowercase keys, and canonical lookup token."""
+            def _normalize(value: str) -> tuple[str, tuple[str, ...], Optional[str]]:
+                """Trim input and derive exact-before-normalized lookup keys."""
                 trimmed = (value or "").strip()
                 sanitized = sanitize_agent_name(trimmed)
-                keys: set[str] = set()
-                if trimmed:
-                    keys.add(trimmed.lower())
-                if sanitized:
-                    keys.add(sanitized.lower())
+                keys = _agent_name_lookup_values(trimmed)
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
@@ -7114,7 +7207,6 @@ def build_mcp_server() -> FastMCP:
                                 local_bcc.append(resolved_local)
                             continue
 
-                    lookup_value = canonical.lower()
                     rows = None
                     if explicit_override and target_project_override is not None:
                         rows = await sx.execute(
@@ -7126,9 +7218,9 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
                                 cast(Any, Project.id == target_project_override.id),
-                                cast(Any, func.lower(Agent.name) == lookup_value),
+                                cast(Any, func.lower(Agent.name).in_(key_candidates)),
                             )
-                            .limit(1)
+                            .limit(len(key_candidates))
                         )
                     else:
                         rows = await sx.execute(
@@ -7139,12 +7231,17 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_project_id) == project.id,
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
-                                cast(Any, func.lower(Agent.name) == lookup_value),
+                                cast(Any, func.lower(Agent.name).in_(key_candidates)),
                             )
-                            .limit(1)
+                            .limit(len(key_candidates))
                         )
 
-                    rec = rows.first() if rows else None
+                    records = rows.all() if rows else []
+                    records_by_name = {record[2].name.lower(): record for record in records}
+                    rec = next(
+                        (records_by_name[key] for key in key_candidates if key in records_by_name),
+                        None,
+                    )
                     if rec:
                         _link, target_project, target_agent = rec
                         pol = (getattr(target_agent, "contact_policy", "auto") or "auto").lower()
@@ -7249,7 +7346,10 @@ def build_mcp_server() -> FastMCP:
                                             continue
                                         remaining: list[str] = []
                                         for nm in list(names):
-                                            lookup_value = (nm or "").strip().lower()
+                                            lookup_values = _agent_name_lookup_values(nm or "")
+                                            if not sanitize_agent_name(nm or ""):
+                                                remaining.append(nm)
+                                                continue
                                             rows = await scheck.execute(
                                                 select(AgentLink, Project, Agent)
                                                 .join(Project, Project.id == AgentLink.b_project_id)
@@ -7259,9 +7359,9 @@ def build_mcp_server() -> FastMCP:
                                                     cast(Any, AgentLink.a_agent_id) == sender.id,
                                                     cast(Any, AgentLink.status == "approved"),
                                                     cast(Any, Project.id == tproj.id),
-                                                    cast(Any, func.lower(Agent.name) == lookup_value),
+                                                    cast(Any, func.lower(Agent.name).in_(lookup_values)),
                                                 )
-                                                .limit(1)
+                                                .limit(len(lookup_values))
                                             )
                                             if rows.first() is None:
                                                 remaining.append(nm)
@@ -7442,7 +7542,7 @@ def build_mcp_server() -> FastMCP:
             raise ValueError(f"Project '{project_key}' not found")
 
         age_limit = max_age_days if max_age_days is not None else settings.retention_max_age_days
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=age_limit)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=age_limit)
 
         async with get_session() as session:
             stale_filter = [Message.project_id == project.id, Message.created_ts < cutoff]
@@ -7463,11 +7563,12 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
 
         status = "purged" if not dry_run else "dry_run"
-        await ctx.info(f"purge_old_messages: {status}, {count} messages affected (cutoff={cutoff.isoformat()})")
+        cutoff_text = _legacy_timestamp_text(cutoff, separator="T")
+        await ctx.info(f"purge_old_messages: {status}, {count} messages affected (cutoff={cutoff_text})")
         return {
             "status": status,
             "messages_affected": count,
-            "cutoff_date": cutoff.isoformat(),
+            "cutoff_date": cutoff_text,
             "max_age_days": age_limit,
         }
 
@@ -7575,7 +7676,12 @@ def build_mcp_server() -> FastMCP:
 
         async with get_session() as sx:
             existing = await sx.execute(select(Agent.name).where(Agent.project_id == project.id))
-            local_names = {row[0] for row in existing.fetchall()}
+            canonical_names = [
+                (row[0] or "").strip()
+                for row in existing.fetchall()
+                if (row[0] or "").strip()
+            ]
+            local_lookup = {name.lower(): name for name in canonical_names}
 
             class _ContactBlocked(Exception):
                 pass
@@ -7593,16 +7699,26 @@ def build_mcp_server() -> FastMCP:
                         except Exception:
                             target_project_override = None
                             target_name_override = None
-                    if nm in local_names:
+                    requested_name = target_name_override or nm
+                    lookup_values = _agent_name_lookup_values(requested_name)
+                    local_name = (
+                        next(
+                            (local_lookup[key] for key in lookup_values if key in local_lookup),
+                            None,
+                        )
+                        if sanitize_agent_name(requested_name) and target_project_override is None
+                        else None
+                    )
+                    if local_name:
                         if kind == "to":
-                            local_to.append(nm)
+                            local_to.append(local_name)
                         elif kind == "cc":
-                            local_cc.append(nm)
+                            local_cc.append(local_name)
                         else:
-                            local_bcc.append(nm)
+                            local_bcc.append(local_name)
                         continue
                     rows = None
-                    if target_project_override is not None and target_name_override:
+                    if target_project_override is not None and sanitize_agent_name(requested_name):
                         rows = await sx.execute(
                             select(AgentLink, Project, Agent)
                             .join(Project, Project.id == AgentLink.b_project_id)
@@ -7612,11 +7728,11 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
                                 cast(Any, Project.id == target_project_override.id),
-                                cast(Any, Agent.name == target_name_override),
+                                cast(Any, func.lower(Agent.name).in_(lookup_values)),
                             )
-                            .limit(1)
+                            .limit(len(lookup_values))
                         )
-                    else:
+                    elif sanitize_agent_name(requested_name):
                         rows = await sx.execute(
                             select(AgentLink, Project, Agent)
                             .join(Project, Project.id == AgentLink.b_project_id)
@@ -7625,11 +7741,16 @@ def build_mcp_server() -> FastMCP:
                                 cast(Any, AgentLink.a_project_id) == project.id,
                                 cast(Any, AgentLink.a_agent_id) == sender.id,
                                 cast(Any, AgentLink.status == "approved"),
-                                cast(Any, Agent.name == nm),
+                                cast(Any, func.lower(Agent.name).in_(lookup_values)),
                             )
-                            .limit(1)
+                            .limit(len(lookup_values))
                         )
-                    rec = rows.first()
+                    records = rows.all() if rows else []
+                    records_by_name = {record[2].name.lower(): record for record in records}
+                    rec = next(
+                        (records_by_name[key] for key in lookup_values if key in records_by_name),
+                        None,
+                    )
                     if rec:
                         _link, target_project, target_agent = rec
                         recipient_policy = (getattr(target_agent, "contact_policy", "auto") or "auto").lower()
@@ -7815,8 +7936,7 @@ def build_mcp_server() -> FastMCP:
                 f"[warn] ttl_seconds={ttl_seconds} is below minimum (60s); auto-correcting to 60 seconds."
             )
         now = datetime.now(timezone.utc)
-        naive_now = _naive_utc(now)
-        exp = naive_now + timedelta(seconds=max(60, ttl_seconds))
+        exp = now + timedelta(seconds=max(60, ttl_seconds))
         should_notify = False
         async with get_session() as s:
             # upsert link
@@ -7833,7 +7953,7 @@ def build_mcp_server() -> FastMCP:
                 previous_status = link.status
                 link.status = "pending"
                 link.reason = reason
-                link.updated_ts = naive_now
+                link.updated_ts = now
                 link.expires_ts = exp
                 s.add(link)
                 should_notify = previous_status != "pending"
@@ -7845,8 +7965,8 @@ def build_mcp_server() -> FastMCP:
                     b_agent_id=b.id or 0,
                     status="pending",
                     reason=reason,
-                    created_ts=naive_now,
-                    updated_ts=naive_now,
+                    created_ts=now,
+                    updated_ts=now,
                     expires_ts=exp,
                 )
                 s.add(link)
@@ -7869,7 +7989,7 @@ def build_mcp_server() -> FastMCP:
                     raise
                 link.status = "pending"
                 link.reason = reason
-                link.updated_ts = naive_now
+                link.updated_ts = now
                 link.expires_ts = exp
                 s.add(link)
                 await s.commit()
@@ -7927,8 +8047,7 @@ def build_mcp_server() -> FastMCP:
                 f"[warn] ttl_seconds={ttl_seconds} is below minimum (60s); auto-correcting to 60 seconds."
             )
         now = datetime.now(timezone.utc)
-        naive_now = _naive_utc(now)
-        exp = naive_now + timedelta(seconds=max(60, ttl_seconds)) if accept else None
+        exp = now + timedelta(seconds=max(60, ttl_seconds)) if accept else None
         updated = 0
         async with get_session() as s:
             existing = await s.execute(
@@ -7942,7 +8061,7 @@ def build_mcp_server() -> FastMCP:
             link = existing.scalars().first()
             if link:
                 link.status = "approved" if accept else "blocked"
-                link.updated_ts = naive_now
+                link.updated_ts = now
                 link.expires_ts = exp
                 s.add(link)
                 updated = 1
@@ -7957,8 +8076,8 @@ def build_mcp_server() -> FastMCP:
                         b_agent_id=b.id,
                         status="approved",
                         reason="",
-                        created_ts=naive_now,
-                        updated_ts=naive_now,
+                        created_ts=now,
+                        updated_ts=now,
                         expires_ts=exp,
                     ))
                     updated = 1
@@ -8183,7 +8302,7 @@ def build_mcp_server() -> FastMCP:
             if since_ts:
                 since_dt = _parse_iso(since_ts)
                 if since_dt:
-                    stmt = stmt.where(Message.created_ts > _naive_utc(since_dt))
+                    stmt = stmt.where(Message.created_ts > _aware_utc(since_dt))
             result = await session.execute(stmt)
             rows = result.all()
         messages: list[dict[str, Any]] = []
@@ -8650,8 +8769,7 @@ def build_mcp_server() -> FastMCP:
                     f"[warn] ttl_seconds={ttl_seconds} is below minimum (60s); auto-correcting to 60 seconds."
                 )
             now = datetime.now(timezone.utc)
-            naive_now = _naive_utc(now)
-            exp = naive_now + timedelta(seconds=max(60, ttl_seconds))
+            exp = now + timedelta(seconds=max(60, ttl_seconds))
 
             async with get_session() as s:
                 existing = await s.execute(
@@ -8666,7 +8784,7 @@ def build_mcp_server() -> FastMCP:
                 if link:
                     link.status = "approved"
                     link.reason = reason
-                    link.updated_ts = naive_now
+                    link.updated_ts = now
                     link.expires_ts = exp
                     s.add(link)
                 else:
@@ -8677,8 +8795,8 @@ def build_mcp_server() -> FastMCP:
                         b_agent_id=b.id or 0,
                         status="approved",
                         reason=reason,
-                        created_ts=naive_now,
-                        updated_ts=naive_now,
+                        created_ts=now,
+                        updated_ts=now,
                         expires_ts=exp,
                     )
                     s.add(link)
@@ -8700,7 +8818,7 @@ def build_mcp_server() -> FastMCP:
                         raise
                     link.status = "approved"
                     link.reason = reason
-                    link.updated_ts = naive_now
+                    link.updated_ts = now
                     link.expires_ts = exp
                     s.add(link)
                     await s.commit()
@@ -9179,7 +9297,7 @@ def build_mcp_server() -> FastMCP:
             raise ToolExecutionError("PROJECT_NOT_FOUND", "Project has no id.", recoverable=True)
 
         max_messages = min(max_messages, 500)
-        now = _naive_utc()
+        now = _aware_utc()
         window_start = now - timedelta(hours=since_hours)
 
         # ── Idempotency: check for cached summary within 5-min tolerance ──
@@ -9390,7 +9508,7 @@ def build_mcp_server() -> FastMCP:
         if project.id is None:
             raise ToolExecutionError("PROJECT_NOT_FOUND", "Project has no id.", recoverable=True)
 
-        cutoff = _naive_utc() - timedelta(hours=since_hours)
+        cutoff = _aware_utc() - timedelta(hours=since_hours)
         await ensure_schema()
         async with get_session() as session:
             stmt = (
@@ -9603,7 +9721,7 @@ def build_mcp_server() -> FastMCP:
                     .where(
                         cast(Any, FileReservation.project_id) == project_id,
                         cast(Any, FileReservation.released_ts).is_(None),
-                        cast(Any, FileReservation.expires_ts) > _naive_utc(),
+                        cast(Any, FileReservation.expires_ts) > _aware_utc(),
                     )
                 )
                 existing_reservations = [(row[0], row[1]) for row in existing_rows.all()]
@@ -9782,8 +9900,7 @@ def build_mcp_server() -> FastMCP:
             if project.id is None or agent.id is None:
                 raise ValueError("Project and agent must have ids before releasing file_reservations.")
             await ensure_schema()
-            now = datetime.now(timezone.utc)
-            naive_now = _naive_utc(now)  # Compute once for consistency
+            now = _aware_utc()
             reservations: list[FileReservation] = []
             async with get_session() as session:
                 select_stmt = (
@@ -9825,7 +9942,7 @@ def build_mcp_server() -> FastMCP:
                                     cast(Any, FileReservation.released_ts).is_(None),
                                     cast(Any, FileReservation.id) == reservation_id,
                                 )
-                                .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
+                                .values(released_ts=now)
                                 # The session holds every selected reservation,
                                 # so the default 'auto' synchronisation walks
                                 # them on each of these statements -- 4.7s for a
@@ -9848,10 +9965,10 @@ def build_mcp_server() -> FastMCP:
                                     cast(Any, Agent.id) == agent.id,
                                     or_(
                                         cast(Any, Agent.last_active_ts).is_(None),
-                                        cast(Any, Agent.last_active_ts) < naive_now,
+                                        cast(Any, Agent.last_active_ts) < now,
                                     ),
                                 )
-                                .values(last_active_ts=naive_now)
+                                .values(last_active_ts=now)
                             )
                         await session.commit()
             # Report only what this call actually released. A concurrent caller
@@ -9863,10 +9980,10 @@ def build_mcp_server() -> FastMCP:
             reservations = [r for r in reservations if r.id in released_set]
             affected = len(reservations)
             for reservation in reservations:
-                reservation.released_ts = naive_now
+                reservation.released_ts = now
             if reservations:
-                if agent.last_active_ts is None or agent.last_active_ts < naive_now:
-                    agent.last_active_ts = naive_now
+                if agent.last_active_ts is None or agent.last_active_ts < now:
+                    agent.last_active_ts = now
                 await _write_file_reservation_records(
                     project,
                     [(reservation, agent) for reservation in reservations],
@@ -9964,7 +10081,6 @@ def build_mcp_server() -> FastMCP:
             )
 
         now = datetime.now(timezone.utc)
-        naive_now = _naive_utc(now)
         async with get_session() as session:
             await session.execute(
                 update(FileReservation)
@@ -9972,11 +10088,11 @@ def build_mcp_server() -> FastMCP:
                     cast(Any, FileReservation.id) == file_reservation_id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
-                .values(released_ts=naive_now)  # Use naive UTC for SQLite compatibility
+                .values(released_ts=now)
             )
             await session.commit()
 
-        reservation.released_ts = naive_now
+        reservation.released_ts = now
         await _write_file_reservation_records(
             project,
             [(reservation, holder)],
@@ -10161,8 +10277,7 @@ def build_mcp_server() -> FastMCP:
                     from datetime import timezone as _tz
                     old_exp = old_exp.replace(tzinfo=_tz.utc)
                 base = old_exp if old_exp > now else now
-                # Convert to naive UTC for SQLite compatibility
-                file_reservation.expires_ts = _naive_utc(base + timedelta(seconds=bump))
+                file_reservation.expires_ts = _aware_utc(base + timedelta(seconds=bump))
                 session.add(file_reservation)
                 updated.append(
                     {
@@ -11884,17 +11999,8 @@ def build_mcp_server() -> FastMCP:
 
         if project is None:
             # Auto-detect project by agent name if uniquely identifiable
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for inbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -11961,17 +12067,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for urgent view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12036,17 +12133,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for ack view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12123,17 +12211,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for stale acks view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12215,17 +12294,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for ack-overdue view")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12299,17 +12369,8 @@ def build_mcp_server() -> FastMCP:
                 pass
 
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for mailbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12378,17 +12439,8 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         if project is None:
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for mailbox-with-commits resource")
         else:
             project_obj = await _get_project_by_identifier(project)
@@ -12447,17 +12499,8 @@ def build_mcp_server() -> FastMCP:
 
         if project is None:
             # Auto-detect project by agent name if uniquely identifiable
-            async with get_session() as s_auto:
-                rows = await s_auto.execute(
-                    select(Project)
-                    .join(Agent, cast(Any, Agent.project_id) == Project.id)
-                    .where(func.lower(Agent.name) == agent.lower())
-                    .limit(2)
-                )
-                projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
+            project_obj = await _get_unique_project_by_agent_name(agent)
+            if project_obj is None:
                 raise ValueError("project parameter is required for outbox resource")
         else:
             project_obj = await _get_project_by_identifier(project)

@@ -25,6 +25,14 @@ agent-start
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
 
+## Project namespace と workspace
+
+`AGENTSTACK_PROJECT_KEY` は ORRERY Mail 上で協調するための project namespace です。実際にコードを操作する repository / worktree と同じ path である必要はありません。たとえば1つの namespace の下で、別 repository の child を動かす既存の委任運用は有効です。
+
+top-level launcher は namespace と workspace provenance を別々に決めます。namespace の優先順位は `--project-key`、live `AGENTSTACK_PROJECT_KEY`、live `PROJECT_KEY`、install 済み `env.sh`、最後に起動対象 directory の順です。一方、repository identity、実 `work_dir`、worktree root、`AGENTSTACK_PROTECTED_ROOTS` は必ず今回選んだ起動対象から解決します。別 repository を選んだからという理由だけで namespace を書き換えません。
+
+この分離により、意図した cross-repository coordination は維持しつつ、親 shell や既存 tmux server に残った別 workspace の repository / protected-root 情報を新しい session の安全境界として使い回しません。`--project-key KEY` は namespace だけを明示する指定で、`KEY` が path 形式でもその path を workspace ownership の証拠にはしません。
+
 ## tmux session
 
 tmux 外から起動すると、新しい named session を作って現在の terminal tab を置き換えます。tmux 内からは current session を rename し、その場で CLI を `exec` します。
@@ -200,7 +208,7 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 
-model の世代名は `spawn_child.sh` の model catalog が正本です。Claude は無指定 / `opus` が `claude-opus-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定 / `sol` が `gpt-5.6-sol` です。`terra` / `luna` は対応する `gpt-5.6-*` alias です。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。
+model の世代名は `spawn_child.sh` の model catalog が正本です。Claude は無指定 / `opus` が `claude-opus-5-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定 / `sol` が `gpt-5.6-sol` です。`claude-opus-5` / `opus-5` は旧世代を明示指定する互換形として有効です。`terra` / `luna` は対応する `gpt-5.6-*` alias です。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。Opus 5.5 には Claude Code 2.1.280 以上が必要です。
 
 1. 対象 resource、排他性、失敗点、可逆性から risk と監視頻度を決める
 2. `agentstack-preregister-child` で child-owned token と canonical name を作る

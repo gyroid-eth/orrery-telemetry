@@ -25,6 +25,14 @@ agent-start
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
 
+## Project namespace and workspace
+
+`AGENTSTACK_PROJECT_KEY` is the ORRERY Mail coordination namespace. It does not have to be the same path as the repository or worktree where code is edited. Existing delegation that runs children from different repositories under one shared namespace remains valid.
+
+A top-level launcher resolves the namespace separately from workspace provenance. Namespace precedence is `--project-key`, live `AGENTSTACK_PROJECT_KEY`, live `PROJECT_KEY`, the installed `env.sh`, then the launch target directory as the final fallback. Repository identity, actual `work_dir`, worktree root, and `AGENTSTACK_PROTECTED_ROOTS` are instead derived from the selected launch target. Selecting another repository does not by itself replace the namespace.
+
+This separation preserves intentional cross-repository coordination while preventing repository or protected-root metadata left by a parent shell or an existing tmux server from becoming the new session's workspace safety boundary. `--project-key KEY` selects only the namespace; even a path-shaped `KEY` is not proof of workspace ownership.
+
 ## tmux session
 
 When launched from outside tmux, the launcher creates a new named session and replaces the current terminal tab. From inside tmux, it renames the current session and runs the CLI in place with `exec`.
@@ -198,7 +206,7 @@ The parent agent does not finish when it hands off the task. It remains responsi
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 
-The model generation names in `spawn_child.sh`'s model catalog are canonical. For Claude, an omitted model or `opus` means `claude-opus-5`, and `sonnet` means `claude-sonnet-5`; for Codex, an omitted model or `sol` means `gpt-5.6-sol`. `terra` / `luna` are aliases for the corresponding `gpt-5.6-*` models. Full IDs for older generations remain valid for compatibility, but the warm pool is claimed only for an exact match with the current 200K Opus / Sonnet entries in the catalog.
+The model generation names in `spawn_child.sh`'s model catalog are canonical. For Claude, an omitted model or `opus` means `claude-opus-5-5`, and `sonnet` means `claude-sonnet-5`; for Codex, an omitted model or `sol` means `gpt-5.6-sol`. `claude-opus-5` / `opus-5` remain valid compatibility forms for explicitly requesting the prior generation. `terra` / `luna` are aliases for the corresponding `gpt-5.6-*` models. Full IDs for older generations remain valid for compatibility, but the warm pool is claimed only for an exact match with the current 200K Opus / Sonnet entries in the catalog. Opus 5.5 requires Claude Code 2.1.280 or later.
 
 1. Determine risk and monitoring cadence from the target resources, exclusivity, failure points, and reversibility
 2. Create a child-owned token and canonical name with `agentstack-preregister-child`

@@ -300,6 +300,8 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 
 A startup service or tmux script should make this its final `exec`. Do not hide the interactive process behind another child if the interactive surface must be retained.
 
+### credential-unavailable
+
 Only when restart reports `local-credential-unavailable` or the exact diagnostic `stage=local-token reason=credential-unavailable` should an operator stop the bot, begin again with `$HOME/.agentstack/bin/agentstack-enroll inspect`, and choose `recover` if the state is `server-token` plus a missing local credential. Do not have the model run it. Do not infer credential loss from a generic registration failure, HTTP 401/403, or a stopped Mail service.
 
 ## Applying the contract to another Mail instance or machine

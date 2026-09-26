@@ -65,7 +65,7 @@ async def _seed(
 ) -> tuple[int, int]:
     """One project, one long-idle agent, one live reservation."""
     await ensure_schema()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
     async with get_session() as session:
         project = Project(slug=PROJECT_SLUG, human_key=str(workspace))
         session.add(project)
@@ -94,8 +94,10 @@ async def _seed(
         return project.id, reservation.id
 
 
-def _as_utc(naive: datetime) -> datetime:
-    return naive.replace(tzinfo=timezone.utc)
+def _as_utc(value: datetime) -> datetime:
+    if value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _no_archive(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,7 +242,7 @@ def test_reservation_traffic_counts_as_being_alive(
         f"{tool_name} left last_active_ts untouched, so the sweep will keep "
         "treating a working agent as idle"
     )
-    assert (datetime.now(timezone.utc).replace(tzinfo=None) - after) < timedelta(minutes=5)
+    assert (datetime.now(timezone.utc) - after) < timedelta(minutes=5)
 
 
 def test_granting_a_reservation_does_not_sweep_the_agents_older_ones(
@@ -364,9 +366,7 @@ def test_an_unmatched_pattern_stops_being_excused_after_the_grace_window(
         async with get_session() as session:
             reservation = await session.get(FileReservation, reservation_id)
             assert reservation is not None
-            reservation.created_ts = datetime.now(timezone.utc).replace(
-                tzinfo=None
-            ) - timedelta(hours=1)
+            reservation.created_ts = datetime.now(timezone.utc) - timedelta(hours=1)
             await session.commit()
         await app._expire_stale_file_reservations(project_id)
         async with get_session() as session:
@@ -396,7 +396,7 @@ def test_a_late_bump_cannot_move_last_active_backwards(
 
     async def exercise() -> tuple[datetime, datetime]:
         await _seed(workspace, "docs/thing.md", idle_for=timedelta(hours=2))
-        newer = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)
+        newer = datetime.now(timezone.utc) + timedelta(minutes=5)
         async with get_session() as session:
             agent = await session.get(Agent, 1)
             assert agent is not None
@@ -554,7 +554,7 @@ def test_renewing_does_not_restart_the_awaiting_first_write_grace(
         project_id, reservation_id = await _seed(
             workspace, "**/*", idle_for=timedelta(hours=2)
         )
-        old_created = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        old_created = datetime.now(timezone.utc) - timedelta(hours=1)
         async with get_session() as session:
             reservation = await session.get(FileReservation, reservation_id)
             assert reservation is not None
@@ -581,9 +581,7 @@ def test_renewing_does_not_restart_the_awaiting_first_write_grace(
         async with get_session() as session:
             agent = await session.get(Agent, 1)
             assert agent is not None
-            agent.last_active_ts = datetime.now(timezone.utc).replace(
-                tzinfo=None
-            ) - timedelta(hours=2)
+            agent.last_active_ts = datetime.now(timezone.utc) - timedelta(hours=2)
             await session.commit()
         await app._expire_stale_file_reservations(project_id)
         async with get_session() as session:
@@ -614,7 +612,7 @@ def test_a_spared_reservation_is_not_reported_as_stale(
     _no_archive(monkeypatch)
 
     real_probe = app._probe_reservation_activities
-    idle_stamp = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
+    idle_stamp = datetime.now(timezone.utc) - timedelta(hours=2)
 
     archived: list[Any] = []
 
@@ -698,8 +696,7 @@ def test_releasing_one_path_does_not_expose_the_agents_other_reservations(
                 project_id=project_id,
                 agent_id=agent.id,
                 path_pattern="one.md",
-                expires_ts=datetime.now(timezone.utc).replace(tzinfo=None)
-                + timedelta(hours=1),
+                expires_ts=datetime.now(timezone.utc) + timedelta(hours=1),
             )
             session.add(released_target)
             await session.commit()
@@ -772,8 +769,7 @@ def test_no_sweepable_gap_between_the_release_write_and_the_liveness_write(
                     project_id=project_id,
                     agent_id=agent.id,
                     path_pattern="one.md",
-                    expires_ts=datetime.now(timezone.utc).replace(tzinfo=None)
-                    + timedelta(hours=1),
+                    expires_ts=datetime.now(timezone.utc) + timedelta(hours=1),
                 )
             )
             await session.commit()
@@ -943,12 +939,12 @@ def test_a_competitor_writing_the_same_microsecond_is_not_claimed_as_ours(
 
     monkeypatch.setattr(app, "_write_file_reservation_records", record_archive)
 
-    real_naive_utc = app._naive_utc
+    real_aware_utc = app._aware_utc
     real_overlap = app._patterns_overlap
     stamps: list[datetime] = []
 
-    def recording_naive_utc(*args: Any, **kwargs: Any) -> Any:
-        value = real_naive_utc(*args, **kwargs)
+    def recording_aware_utc(*args: Any, **kwargs: Any) -> Any:
+        value = real_aware_utc(*args, **kwargs)
         stamps.append(value)
         return value
 
@@ -959,7 +955,7 @@ def test_a_competitor_writing_the_same_microsecond_is_not_claimed_as_ours(
         stolen = {"done": False}
 
         def steal_with_the_same_stamp(*args: Any, **kwargs: Any) -> Any:
-            # Runs after the tool has computed naive_now and selected the row,
+            # Runs after the tool has computed its UTC stamp and selected the row,
             # and before its UPDATE.
             if not stolen["done"] and stamps:
                 stolen["done"] = True
@@ -967,14 +963,17 @@ def test_a_competitor_writing_the_same_microsecond_is_not_claimed_as_ours(
                 try:
                     connection.execute(
                         "UPDATE file_reservations SET released_ts = ? WHERE id = ?",
-                        (stamps[-1].isoformat(sep=" "), reservation_id),
+                        (
+                            stamps[-1].replace(tzinfo=None).isoformat(sep=" "),
+                            reservation_id,
+                        ),
                     )
                     connection.commit()
                 finally:
                     connection.close()
             return real_overlap(*args, **kwargs)
 
-        monkeypatch.setattr(app, "_naive_utc", recording_naive_utc)
+        monkeypatch.setattr(app, "_aware_utc", recording_aware_utc)
         monkeypatch.setattr(app, "_patterns_overlap", steal_with_the_same_stamp)
         async with Client(app.build_mcp_server()) as client:
             result = await client.call_tool(
@@ -988,7 +987,7 @@ def test_a_competitor_writing_the_same_microsecond_is_not_claimed_as_ours(
             )
             assert result.is_error is False, result.content
         assert stolen["done"], "the competing release never ran"
-        monkeypatch.setattr(app, "_naive_utc", real_naive_utc)
+        monkeypatch.setattr(app, "_aware_utc", real_aware_utc)
         async with get_session() as session:
             return (
                 result.structured_content or {},

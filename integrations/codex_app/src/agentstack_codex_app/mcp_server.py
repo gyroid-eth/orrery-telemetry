@@ -588,6 +588,26 @@ def _dispatch(
                     f"this process serves {pinned['agent_name']!r}"
                 )
             call_arguments["session_id"] = proxy.bound_session_id
+    # The same holds for agent_id. A child that calls bootstrap (or any tool)
+    # with its own name as agent_id built a subagent id that could never equal
+    # the root binding, and got "MCP process is already bound to another
+    # runtime"; the child then declined to report to its parent at all
+    # (2026-09-25, 2 of ~10 Codex children). Its own name is not a request for
+    # another runtime: drop it. A different name still is, and is refused.
+    pinned = proxy.bound_binding
+    if (
+        pinned is not None
+        and pinned.get("surface") == "direct"
+        and "agent_id" in call_arguments
+    ):
+        supplied_agent = call_arguments["agent_id"]
+        if supplied_agent is None or str(supplied_agent) == str(pinned["agent_name"]):
+            call_arguments.pop("agent_id")
+        else:
+            raise ProxyError(
+                "agent_id names another agent: "
+                f"this process serves {pinned['agent_name']!r}"
+            )
     # Agents are told (by CLAUDE.md / AGENTS.md and by habit) to call ORRERY Mail
     # with project_key and agent_name. The proxy takes those from its binding
     # instead, but rejecting the arguments outright turns documented usage into

@@ -96,19 +96,35 @@ subprocess.run(["/bin/bash", "-c", args[-1]], cwd=cwd, env=env, check=True, time
 ''')
         self.env["TEST_TMUX"] = str(self.tmux)
         self.env["TEST_SNAPSHOT"] = str(self.snapshot)
-        self.stale = {
-            "AGENTSTACK_PROJECT_KEY": str(self.other), "PROJECT_KEY": "ambient-namespace",
+        # A project key is a coordination namespace, not repository ownership.
+        # The live namespace is intentional even when the workspace provenance
+        # inherited beside it is stale and points at another repository.
+        self.ambient = {
+            "AGENTSTACK_PROJECT_KEY": "live-project",
+            "PROJECT_KEY": "stale-project-alias",
             "AGENTSTACK_PROJECT_REPOSITORY": str(self.other),
             "AGENTSTACK_PROJECT_WORK_DIR": str(self.other),
             "AGENTSTACK_PROJECT_WORKTREE_ROOT": str(self.other),
-            "AGENTSTACK_PROTECTED_ROOTS": str(self.other), "AGENTSTACK_PROJECT_CONTEXT": "1",
+            "AGENTSTACK_PROTECTED_ROOTS": str(self.other),
+            "AGENTSTACK_PROJECT_CONTEXT": "1",
             "AGENTSTACK_LOOKUP_PROJECT_KEY": "stale-lookup",
-            "GIT_DIR": str(self.other / ".git"), "GIT_WORK_TREE": str(self.other),
+            "GIT_DIR": str(self.other / ".git"),
+            "GIT_WORK_TREE": str(self.other),
             "GIT_COMMON_DIR": str(self.other / ".git"),
-            "AGENT_NAME": "StaleAgent", "PARENT_AGENT": "StaleParent",
-            "CHILD_REGISTRATION_TOKEN": "stale-token", "AGENTSTACK_RESERVED_IDENTITY": "1",
+            "AGENT_NAME": "StaleAgent",
+            "PARENT_AGENT": "StaleParent",
+            "CHILD_REGISTRATION_TOKEN": "stale-token",
+            "AGENTSTACK_RESERVED_IDENTITY": "1",
         }
-        self.env["TEST_SERVER_ENV"] = json.dumps(self.stale)
+        # A pre-existing tmux server can hold a different namespace and stale
+        # repository selectors. Per-session launch context must override these
+        # without mutating the server-global environment.
+        self.server_stale = {
+            **self.ambient,
+            "AGENTSTACK_PROJECT_KEY": "server-stale-project",
+            "PROJECT_KEY": "server-stale-project",
+        }
+        self.env["TEST_SERVER_ENV"] = json.dumps(self.server_stale)
         for name in LAUNCHERS.values():
             shutil.copy2(ROOT / "bin" / name, self.bin / name)
         shutil.copy2(ROOT / "hooks/project-context.sh", self.install / "hooks/project-context.sh")
@@ -143,9 +159,9 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
 ''')
             self.env[f"AGENTSTACK_{provider.upper()}_BIN"] = str(executable)
         (self.install / "env.sh").write_text(
-            'export AGENTSTACK_PROJECT_KEY=installed-foreign\n'
-            'export PROJECT_KEY=installed-foreign\n'
+            'export AGENTSTACK_PROJECT_KEY=installed-project\n'
             f'export AGENTSTACK_PROTECTED_ROOTS={shlex.quote(str(self.other))}\n')
+
 
     def executable(self, name: str, source: str) -> Path:
         path = self.root / name
@@ -160,24 +176,25 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                        text=True, check=True, timeout=20)
 
     def run_launcher(self, provider: str, *args: str | Path, inside: bool = False,
+                     ambient: bool = True,
                      extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         for path in self.output.glob("*.json"):
             path.unlink()
-        env = {**self.env, **self.stale, "TMUX": "isolated-double,1,0" if inside else "",
-               **(extra or {})}
+        env = {**self.env, **(self.ambient if ambient else {}),
+               "TMUX": "isolated-double,1,0" if inside else "", **(extra or {})}
         return subprocess.run(["/bin/bash", str(self.bin / LAUNCHERS[provider]), *map(str, args)],
                               cwd=self.root, env=env, capture_output=True, text=True, timeout=30)
 
     def read(self, name: str) -> dict:
         return json.loads((self.output / (name + ".json")).read_text())
 
-    def assert_context(self, actual: dict, target: Path, *, key: str | None = None,
+    def assert_context(self, actual: dict, target: Path, *, key: str = "live-project",
                        repository: Path | None = None, worktree: Path | None = None) -> None:
         repository = self.repo if repository is None else repository
         worktree = target if worktree is None else worktree
         env = actual["env"]
-        self.assertEqual(env["AGENTSTACK_PROJECT_KEY"], key or str(repository))
-        self.assertEqual(env["PROJECT_KEY"], key or str(repository))
+        self.assertEqual(env["AGENTSTACK_PROJECT_KEY"], key)
+        self.assertEqual(env["PROJECT_KEY"], key)
         self.assertEqual(env["AGENTSTACK_PROJECT_REPOSITORY"], str(repository))
         self.assertEqual(env["AGENTSTACK_PROJECT_WORK_DIR"], str(target))
         self.assertEqual(env["AGENTSTACK_PROJECT_WORKTREE_ROOT"], str(worktree))
@@ -186,7 +203,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                      "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
             self.assertFalse(env[name], (name, env[name]))
 
-    def test_all_launchers_replace_stale_context_inside_and_outside_tmux(self) -> None:
+    def test_all_launchers_keep_namespace_but_replace_stale_workspace_provenance(self) -> None:
         for provider in PROVIDERS:
             for inside in (False, True):
                 for target in (self.repo, self.linked):
@@ -223,16 +240,33 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                 self.assertEqual(record["cwd"], str(nested))
                 self.assert_context(record, nested, worktree=self.linked)
 
-    def test_independent_clone_is_a_separate_project(self) -> None:
+    def test_independent_clone_keeps_namespace_but_tracks_repository_separately(self) -> None:
         clone = self.root / "clone"
         self.git("clone", "-q", str(self.repo), str(clone))
         result = self.run_launcher("codex", clone)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_context(self.read("provider"), clone, repository=clone)
 
-    def test_non_git_defaults_to_target_and_explicit_key_only_changes_namespace(self) -> None:
+    def test_installed_project_key_remains_valid_for_a_different_repository(self) -> None:
         for provider in PROVIDERS:
-            for args, key in (((self.plain,), str(self.plain)),
+            with self.subTest(provider=provider):
+                result = self.run_launcher(provider, self.repo, ambient=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_context(self.read("provider"), self.repo, key="installed-project")
+
+    def test_live_project_key_alias_beats_installed_namespace(self) -> None:
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                result = self.run_launcher(
+                    provider, self.repo, ambient=False,
+                    extra={"PROJECT_KEY": "live-project-alias"},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_context(self.read("provider"), self.repo, key="live-project-alias")
+
+    def test_non_git_keeps_selected_namespace_and_explicit_key_overrides_it(self) -> None:
+        for provider in PROVIDERS:
+            for args, key in (((self.plain,), "live-project"),
                               (("--project-key", "plain-key", self.plain), "plain-key")):
                 with self.subTest(provider=provider, key=key):
                     result = self.run_launcher(provider, *args)
@@ -243,6 +277,13 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                     self.assertEqual(env["AGENTSTACK_PROJECT_REPOSITORY"], "")
                     self.assertEqual(env["AGENTSTACK_PROJECT_WORK_DIR"], str(self.plain))
                     self.assertEqual(env["AGENTSTACK_PROTECTED_ROOTS"], str(self.plain))
+
+    def test_explicit_physical_project_key_is_namespace_not_repository_authority(self) -> None:
+        namespace_alias = self.root / "namespace alias"
+        namespace_alias.symlink_to(self.other, target_is_directory=True)
+        result = self.run_launcher("codex", "--project-key", str(namespace_alias), self.repo)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_context(self.read("provider"), self.repo, key=str(namespace_alias))
 
     def test_bad_arguments_fail_before_registration_or_tmux(self) -> None:
         invalid = (("--project-key",), ("--project-key", "", self.repo),
@@ -324,7 +365,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
         socket = str(self.root / "tmux.sock")
         command = [real, "-S", socket, "-f", os.devnull]
         # The outer launcher uses true to avoid an interactive shell; tmux needs a real command shell.
-        server_env = {**self.env, **self.stale, "SHELL": "/bin/bash"}
+        server_env = {**self.env, **self.server_stale, "SHELL": "/bin/bash"}
         subprocess.run([*command, "new-session", "-d", "-s", "seed", "-c", str(self.other),
                         "sleep 60"], env=server_env, check=True, capture_output=True, timeout=10)
         try:
@@ -347,7 +388,7 @@ raise SystemExit(subprocess.run([os.environ["TEST_REAL_TMUX"], "-S", os.environ[
                     self.assert_context(self.read("provider"), self.linked)
             result = subprocess.run([*command, "show-environment", "-g", "AGENTSTACK_PROJECT_KEY"],
                                     env=self.env, check=True, capture_output=True, text=True, timeout=10)
-            self.assertEqual(result.stdout.strip(), "AGENTSTACK_PROJECT_KEY=" + str(self.other))
+            self.assertEqual(result.stdout.strip(), "AGENTSTACK_PROJECT_KEY=server-stale-project")
         finally:
             subprocess.run([*command, "kill-server"], env=self.env, capture_output=True, timeout=10)
 
@@ -356,7 +397,7 @@ raise SystemExit(subprocess.run([os.environ["TEST_REAL_TMUX"], "-S", os.environ[
         script += 'if ags_prepare_top_level_context "$3"; then exit 9; fi; [ "$(export -p)" = "$before" ]'
         result = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", script, "test",
                                  str(ROOT / "bin/lib/agentstack-launch.sh"), str(self.bin), str(self.root / "missing")],
-                                cwd=self.root, env={**self.env, **self.stale}, capture_output=True, text=True, timeout=20)
+                                cwd=self.root, env={**self.env, **self.ambient}, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

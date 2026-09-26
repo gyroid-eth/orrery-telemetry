@@ -578,10 +578,10 @@
         return DEMO_SPAWN_ROOT + '/' + name;
       }),
       models: claudeModels.slice(),
-      default_model: 'claude-sonnet-5',
+      default_model: 'claude-opus-5-5',
       providers: [
         { id: 'claude', label: 'Claude', program: 'claude-code',
-          models: claudeModels.slice(), default_model: 'claude-sonnet-5',
+          models: claudeModels.slice(), default_model: 'claude-opus-5-5',
           efforts: null },
         { id: 'codex', label: 'Codex', program: 'codex-cli',
           models: codexModels, default_model: 'gpt-5.6-sol',

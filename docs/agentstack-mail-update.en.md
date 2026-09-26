@@ -184,6 +184,14 @@ pre-flight has also been checked under `zsh`.
    mode and a plain copy of the main file can miss committed pages. The
    snapshot contains credentials, so keep it private and delete it after.
 
+   After copying the live render env, rewrite every setting that names a
+   location to the scratch directory. A setting left out of the rewrite keeps
+   pointing where the live service does, and the scratch server tries to open
+   the live resource (when the enrollment management socket was added, this
+   made the scratch server fail with `management socket is already active`).
+   `scratch_env_isolated` stops when a line copied unchanged names a path under
+   an existing directory. If it stops, add a rewrite for that setting to `sed`.
+
    ```bash
    probe() {  # probe <url> <tool> '<json arguments>'  → prints the JSON-RPC response
      "$PY" - "$1" "$2" "$3" <<'PY'
@@ -195,6 +203,22 @@ pre-flight has also been checked under `zsh`.
          headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
    print(urllib.request.urlopen(req, timeout=15).read().decode())
    PY
+   }
+   scratch_env_isolated() {  # scratch_env_isolated <live env> <scratch env>
+     # 1 when a line copied unchanged from the live env names a real location
+     local line key v d bad=0
+     while IFS= read -r line; do
+       case "$line" in AGENTSTACK_MAIL_*=*) ;; *) continue ;; esac
+       grep -qxF -- "$line" "$1" || continue
+       key=${line%%=*}; v=${line#*=}; v=${v#[\'\"]}; v=${v%[\'\"]}; v=${v#*:///}
+       case "$v" in
+         /*) d=$(dirname "$v")
+             if [ "$d" != / ] && [ -d "$d" ]; then
+               echo "scratch env still points $key at the live location $v; rewrite it to \$S" >&2; bad=1
+             fi ;;
+       esac
+     done < "$2"
+     return $bad
    }
    step_3() {
      local S SPORT=18799 SPID rc=1 r
@@ -211,8 +235,10 @@ pre-flight has also been checked under `zsh`.
          -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
          -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
          -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
+         -e "s#^AGENTSTACK_MAIL_MANAGEMENT_SOCKET=.*#AGENTSTACK_MAIL_MANAGEMENT_SOCKET=$S/mgmt.sock#" \
          "$OLD_ENV" > "$S/service.env"
      grep -qE '^AGENTSTACK_MAIL_HTTP_HOST=(127\.0\.0\.1|localhost|::1)$' "$S/service.env" || { echo "scratch env is not loopback" >&2; rm -rf "$S"; return 1; }
+     scratch_env_isolated "$OLD_ENV" "$S/service.env" || { rm -rf "$S"; return 1; }
      env -i HOME="$HOME" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$S/service.env" \
        "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
      SPID=$!
@@ -331,7 +357,8 @@ pre-flight has also been checked under `zsh`.
    step_7() {
      local pid new_env r
      pid=$(listener_pid "$PORT") || return 1
-     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
+     # the venv's python can show up as Homebrew's Python.app (measured on a second Mac); match the executable under venv/bin/
+     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
      new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
      [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
      sed -n 2p "$SVC/runtime/agentstack-mail.pid" | grep -q "$(dirname "$new_env")/" || { echo "pidfile runner is not inside the new render" >&2; return 1; }

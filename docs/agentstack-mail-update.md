@@ -178,6 +178,13 @@ installer が管理する範囲に第二の supervisor はありません。旧�
    ことがあります。snapshot は credential を含むので private に保ち、終わったら
    削除します。
 
+   live の render env を写したあと、場所を指す設定はすべて scratch に書き換えます。
+   書き換えの対象から漏れた設定は live と同じ場所を指したままになり、scratch server
+   が live の資源を開こうとします（enroll の管理 socket が加わったとき、これで
+   `management socket is already active` と起動に失敗しました）。
+   `scratch_env_isolated` は、書き換えずに写した行が実在するディレクトリの下を
+   指していれば止めます。止まったら、その設定の書き換えを `sed` に足してください。
+
    ```bash
    probe() {  # probe <url> <tool> '<json arguments>'  → JSON-RPC の応答を出力
      "$PY" - "$1" "$2" "$3" <<'PY'
@@ -189,6 +196,22 @@ installer が管理する範囲に第二の supervisor はありません。旧�
          headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
    print(urllib.request.urlopen(req, timeout=15).read().decode())
    PY
+   }
+   scratch_env_isolated() {  # scratch_env_isolated <live env> <scratch env>
+     # live から書き換えずに写した行が、実在する場所を指していたら 1 を返す
+     local line key v d bad=0
+     while IFS= read -r line; do
+       case "$line" in AGENTSTACK_MAIL_*=*) ;; *) continue ;; esac
+       grep -qxF -- "$line" "$1" || continue
+       key=${line%%=*}; v=${line#*=}; v=${v#[\'\"]}; v=${v%[\'\"]}; v=${v#*:///}
+       case "$v" in
+         /*) d=$(dirname "$v")
+             if [ "$d" != / ] && [ -d "$d" ]; then
+               echo "scratch env still points $key at the live location $v; rewrite it to \$S" >&2; bad=1
+             fi ;;
+       esac
+     done < "$2"
+     return $bad
    }
    step_3() {
      local S SPORT=18799 SPID rc=1 r
@@ -205,8 +228,10 @@ installer が管理する範囲に第二の supervisor はありません。旧�
          -e "s#^AGENTSTACK_MAIL_DATABASE_URL=.*#AGENTSTACK_MAIL_DATABASE_URL=sqlite+aiosqlite:///$S/state/storage.sqlite3#" \
          -e "s#^AGENTSTACK_MAIL_STORAGE_ROOT=.*#AGENTSTACK_MAIL_STORAGE_ROOT=$S/state/archive#" \
          -e "s#^AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=.*#AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR=$S/state/signals#" \
+         -e "s#^AGENTSTACK_MAIL_MANAGEMENT_SOCKET=.*#AGENTSTACK_MAIL_MANAGEMENT_SOCKET=$S/mgmt.sock#" \
          "$OLD_ENV" > "$S/service.env"
      grep -qE '^AGENTSTACK_MAIL_HTTP_HOST=(127\.0\.0\.1|localhost|::1)$' "$S/service.env" || { echo "scratch env is not loopback" >&2; rm -rf "$S"; return 1; }
+     scratch_env_isolated "$OLD_ENV" "$S/service.env" || { rm -rf "$S"; return 1; }
      env -i HOME="$HOME" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$S/service.env" \
        "$V/bin/agentstack-mail" > "$S/server.log" 2>&1 &
      SPID=$!
@@ -323,7 +348,8 @@ installer が管理する範囲に第二の supervisor はありません。旧�
    step_7() {
      local pid new_env r
      pid=$(listener_pid "$PORT") || return 1
-     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/python" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
+     # venv の python は Homebrew の Python.app として見えることがある（Air で実測）。venv/bin/ の下の実行ファイルで判定する
+     ps -o command= -p "$pid" | grep -q "candidates/$SHA/venv/bin/" || { echo "port $PORT is not served by candidate $SHA" >&2; return 1; }
      new_env=$( set +u; . "$INSTALL/env.sh" || exit 1; printf '%s' "$AGENTSTACK_MAIL_ENV" )
      [ "${new_env#$SVC/renders/$SHA-}" != "$new_env" ] || { echo "env.sh does not point at a render of $SHA: $new_env" >&2; return 1; }
      sed -n 2p "$SVC/runtime/agentstack-mail.pid" | grep -q "$(dirname "$new_env")/" || { echo "pidfile runner is not inside the new render" >&2; return 1; }

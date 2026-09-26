@@ -17,13 +17,24 @@ AGS_PROG="${AGS_PROG:-agentstack}"
 
 ags_die() { printf '%s: %s\n' "$AGS_PROG" "$*" >&2; exit 1; }
 
-# Pull in installer-written AGENTSTACK_* values. Variables already set in the
-# environment win (env.sh uses `export KEY=val`, so we load it first and let the
-# caller's explicit overrides be re-applied by the caller if needed).
+# Pull in installer-written AGENTSTACK_* values. The documented project-key
+# precedence is live AGENTSTACK_PROJECT_KEY > live PROJECT_KEY > installed env.
+# Sourcing env.sh would otherwise overwrite the first two before the launcher
+# can distinguish them, so preserve only those live selectors across the load.
 ags_load_env() {
   local envf="${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
+  local live_agentstack_project_key="${AGENTSTACK_PROJECT_KEY:-}"
+  local live_project_key="${PROJECT_KEY:-}"
   # shellcheck disable=SC1090
   [[ -f "$envf" ]] && . "$envf"
+  if [[ -n "$live_agentstack_project_key" ]]; then
+    AGENTSTACK_PROJECT_KEY="$live_agentstack_project_key"
+    export AGENTSTACK_PROJECT_KEY
+  elif [[ -n "$live_project_key" ]]; then
+    unset AGENTSTACK_PROJECT_KEY
+    PROJECT_KEY="$live_project_key"
+    export PROJECT_KEY
+  fi
   return 0
 }
 
