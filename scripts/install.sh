@@ -22,6 +22,7 @@ MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
 PORT="${AGENTSTACK_PORT:-8770}"
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
+AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
@@ -244,6 +245,9 @@ PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_K
 # The dashboard runs under launchd/systemd, so a shell `export` never reaches
 # it: these presets only take effect when the installer persists them. A
 # re-install keeps what the previous install recorded unless told otherwise.
+if [[ -z "$AUTO_OPEN_CHILD_SETTING" ]]; then
+  AUTO_OPEN_CHILD_SETTING="$(agentstack_installed_env_value AGENTSTACK_AUTO_OPEN_CHILD "$INSTALL_DIR/env.sh")"
+fi
 if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
   SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")"
 fi
@@ -295,6 +299,7 @@ if [[ -n "$CODEX_BIN_SETTING" ]]; then
 fi
 # Product defaults are written out explicitly so env.sh, the service definition
 # and install-state.json all say what a child actually gets.
+AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"
@@ -443,6 +448,13 @@ validate_spawn_paths AGENTSTACK_WORKTREE_ROOT "$WORKTREE_ROOT_SETTING"
 validate_spawn_paths AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING"
 validate_spawn_paths AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING"
 validate_spawn_paths AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING"
+case "$AUTO_OPEN_CHILD_SETTING" in
+  0|1) ;;
+  *)
+    echo "error: AGENTSTACK_AUTO_OPEN_CHILD must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
 case "$CODEX_CHILD_APPROVAL_SETTING" in
   never|on-request|on-failure|untrusted) ;;
   *)
@@ -2035,6 +2047,7 @@ values = {
     "AGENTSTACK_MCP_URL": "$MCP_URL",
     "AGENTSTACK_CLAUDE_JSON": "$CLAUDE_JSON",
     "AGENTSTACK_TERMINAL": "$TERMINAL",
+    "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
@@ -3088,6 +3101,7 @@ repl = {
     "__SIGNALS_DIR__": "$SIGNALS_DIR",
     "__MCP_URL__": "$MCP_URL",
     "__TERMINAL__": "$TERMINAL",
+    "__AUTO_OPEN_CHILD__": "$AUTO_OPEN_CHILD_SETTING",
     "__PROJECT_KEY__": "$PROJECT_KEY",
     "__PROTECTED_ROOTS__": "$PROTECTED_ROOTS",
     "__DELIVERABLE_ROOTS__": "$DELIVERABLE_ROOTS",
@@ -3156,6 +3170,7 @@ env = {
     "AGENTSTACK_SIGNALS_DIR": "$SIGNALS_DIR",
     "AGENTSTACK_MCP_URL": "$MCP_URL",
     "AGENTSTACK_TERMINAL": "$TERMINAL",
+    "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
@@ -3593,6 +3608,7 @@ manifest = {
         "AGENTSTACK_MCP_URL": "$MCP_URL",
         "AGENTSTACK_CLAUDE_JSON": "$CLAUDE_JSON",
         "AGENTSTACK_TERMINAL": "$TERMINAL",
+        "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     },
     "owned_files": owned_files,
     "owned_dirs": owned_dirs,
@@ -3658,6 +3674,7 @@ main() {
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
+  say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING"
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"

@@ -44,6 +44,8 @@
     <string>__MCP_URL__</string>
     <key>AGENTSTACK_TERMINAL</key>
     <string>__TERMINAL__</string>
+    <key>AGENTSTACK_AUTO_OPEN_CHILD</key>
+    <string>__AUTO_OPEN_CHILD__</string>
     <key>AGENTSTACK_PROJECT_KEY</key>
     <string>__PROJECT_KEY__</string>
     <key>AGENTSTACK_PROTECTED_ROOTS</key>

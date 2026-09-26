@@ -16,6 +16,7 @@ PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PORT="${AGENTSTACK_PORT:-8770}"
 PYTHON="${AGENTSTACK_PYTHON:-/usr/bin/python3}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
+AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-1}"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-$HOME/.agentstack/mail/storage.sqlite3}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
@@ -67,6 +68,7 @@ render_plist() {
     -e "s|__SIGNALS_DIR__|$(sed_escape "$SIGNALS_DIR")|g" \
     -e "s|__MCP_URL__|$(sed_escape "$MCP_URL")|g" \
     -e "s|__TERMINAL__|$(sed_escape "$TERMINAL")|g" \
+    -e "s|__AUTO_OPEN_CHILD__|$(sed_escape "$AUTO_OPEN_CHILD_SETTING")|g" \
     -e "s|__PROJECT_KEY__|$(sed_escape "$PROJECT_KEY")|g" \
     -e "s|__PROTECTED_ROOTS__|$(sed_escape "$PROTECTED_ROOTS")|g" \
     -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
@@ -122,6 +124,7 @@ export_background_env() {
   export AGENTSTACK_SIGNALS_DIR="$SIGNALS_DIR"
   export AGENTSTACK_MCP_URL="$MCP_URL"
   export AGENTSTACK_TERMINAL="$TERMINAL"
+  export AGENTSTACK_AUTO_OPEN_CHILD="$AUTO_OPEN_CHILD_SETTING"
   export AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
   export AGENTSTACK_PROTECTED_ROOTS="$PROTECTED_ROOTS"
   export AGENTSTACK_DELIVERABLE_ROOTS="$DELIVERABLE_ROOTS"

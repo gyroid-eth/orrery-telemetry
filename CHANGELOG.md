@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### 子のターミナルの自動表示だけを止められるようにしました（#87）
+
+子を起動すると OS のターミナルが自動で開きますが、これを止める手段は `AGENTSTACK_TERMINAL=none` しかなく、dashboard の Open tmux まで使えなくなっていました。新しい設定 `AGENTSTACK_AUTO_OPEN_CHILD` を足し、`0` にすると自動表示だけが止まります。tmux session、Open tmux、Mail には影響しません。既定は `1` で、これまでと挙動は変わりません。dashboard から子を見ている場合は `AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` で切り替えられ、再インストールしても保持されます。実装は kame447 さんによるものです。
+
 ## 2026.09.25
 
 ### Claude Code 2.1.282 で、Claude の子が全部起動に失敗していました（#81）

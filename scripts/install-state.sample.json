@@ -85,6 +85,7 @@
     "AGENTSTACK_CODEX_ADD_DIRS": "",
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "30",
     "AGENTSTACK_CODEX_BIN": "/home/alice/.local/bin/codex",
+    "AGENTSTACK_AUTO_OPEN_CHILD": "1",
     "AGENTSTACK_TERMINAL": "auto"
   },
   "install_dir": "/home/alice/.agentstack",
