@@ -188,6 +188,11 @@ def _run_root_claude_substitution(*, collision: bool):
     bindir = tmpdir / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    hooksdir = tmpdir / "hooks"
+    hooksdir.mkdir()
+    (hooksdir / "project-context.sh").write_text(
+        _read("hooks/project-context.sh"), encoding="utf-8"
+    )
     launcher = bindir / "agent-start"
     launcher.write_text(_read("bin/agent-start"), encoding="utf-8")
     launcher.chmod(0o755)
@@ -209,6 +214,7 @@ def _run_root_claude_substitution(*, collision: bool):
     fake_claude.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     fake_claude.chmod(0o755)
     (libdir / "agentstack-launch.sh").write_text(
+        f'source "{_ROOT / "bin/lib/agentstack-launch.sh"}"\n'
         'ags_die() { printf "%s: %s\\n" "$AGS_PROG" "$*" >&2; exit 1; }\n'
         "ags_load_env() { :; }\n"
         'ags_resolve_tmux() { printf "%s\\n" "$FAKE_TMUX"; }\n'
