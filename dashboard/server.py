@@ -3406,6 +3406,7 @@ def _do_resume_codex(session: str) -> dict:
         "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": _env_text(
             "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"
         ),
+        "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
     }
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
@@ -3600,7 +3601,12 @@ def _verified_codex_index(
 _CODEX_BINDING_REASONS = {
     "awaiting_hook": "Waiting for this run's history binding receipt.",
     "binding_missing": "This launch has no verified registration binding.",
-    "hook_not_observed": "This run did not produce a verified history binding receipt.",
+    "hook_not_observed": (
+        "This run did not produce a verified history binding receipt. "
+        "Check that the AgentStack Codex plugin is installed and enabled, "
+        "review/approve its lifecycle hooks in Codex /hooks, then start a new "
+        "Codex process."
+    ),
     "no_transcript": "This run did not provide a usable transcript file.",
     "id_mismatch": "The runtime session ID did not match the rollout metadata.",
     "write_failed": "The verified history receipt could not be written.",
@@ -5107,8 +5113,13 @@ SPAWN_SCRIPT = _env_path(
 )
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # UI radio と必ず一致させる。program はモデル文字列から決定。
+# Matches hooks/spawn_child.sh CLAUDE_DEFAULT_MODEL so NEW AGENT and the CLI
+# launcher start the same Claude model when none is chosen.
+_CLAUDE_SPAWN_DEFAULT_MODEL = "claude-opus-5-5"
+
 _SPAWN_MODELS = {
     "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
+    "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
     "claude-opus-5": ("claude-code", "claude-opus-5"),
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
     "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),
@@ -5364,9 +5375,9 @@ def spawn_names_payload() -> dict:
         "naming": "adjective-scientist",
         "dirs": dirs,
         "models": list(_SPAWN_MODELS),
-        "default_model": "claude-sonnet-5",
+        "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL,
         "providers": [
-            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": "claude-sonnet-5", "efforts": None},
+            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL, "efforts": None},
             {"id": "codex", "label": "Codex", "program": "codex-cli", "models": _codex_models(), "default_model": _codex_models()[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
         ],
     }
@@ -5819,7 +5830,7 @@ def do_spawn(payload: dict) -> dict:
     if error:
         return error
     provider = (payload.get("provider") or "claude").strip().lower()
-    model = (payload.get("model") or ("claude-sonnet-5" if provider == "claude" else _codex_models()[0])).strip()
+    model = (payload.get("model") or (_CLAUDE_SPAWN_DEFAULT_MODEL if provider == "claude" else _codex_models()[0])).strip()
     effort = (payload.get("effort") or "").strip().lower()
     if provider == "claude":
         if model not in _SPAWN_MODELS:

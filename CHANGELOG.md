@@ -10,6 +10,75 @@
 
 ## Unreleased
 
+### NEW AGENT で最初に選ばれる Claude のモデルを、launcher の既定に揃えました
+
+dashboard の NEW AGENT は Claude のモデルとして `claude-sonnet-5` を最初から選んでいましたが、`spawn_child.sh` など launcher の既定は `claude-opus-5-5` で、起動経路によって既定が違っていました。NEW AGENT と `/api/spawn` でモデルを省略したときも `claude-opus-5-5` を使うようにし、両者がずれたらテストで分かるようにしました。選択肢の一覧は変わりません。
+
+## 2026.09.26.1
+
+### Codex の子の履歴が UNBOUND のとき、何を確かめればよいかが分かるようにしました（#86）
+
+Codex の子を dashboard の履歴と結び付けるには、任意の plugin `agentstack-codex-app` を入れて有効にするだけでなく、Codex の `/hooks` でその hook を承認する必要があります。これがセットアップからも診断からも分からず、子は正常に動いているのに履歴だけが UNBOUND のまま、という状態になっていました。
+
+- `install-codex-app-integration.sh` は、plugin を入れた後と `--refresh-plugin-only` の後に、`/hooks` での承認と新しい Codex process での起動を案内します
+- `agentstack-doctor` は、子の起動に実際に使う `codex` と `CODEX_HOME` を表示し、plugin が未導入・無効・有効のどれかを見分けます。承認状態は Codex の内部ファイルからは推測せず、「不明」として `/hooks` での確認を案内します。Claude だけで使う環境は故障として扱いません
+- self-test は、Codex の hook と履歴の対応を検査していないことを結果に書きます
+- dashboard は UNBOUND の判定を変えず、理由の文に確認すべき点を添えます
+
+hook の自動承認はしません。調査と実装は kame447 さんによるものです。
+
+### installer の完了表示に、子の窓の自動表示だけを止める設定の案内を足しました（#87）
+
+`automatically open child terminals: 1` の後ろに、再インストール時に `AGENTSTACK_AUTO_OPEN_CHILD=0` にすれば Open tmux を残して自動表示だけ止められる、という案内を出します。表示だけの変更です。
+
+## 2026.09.26
+
+### 子のターミナルの自動表示だけを止められるようにしました（#87）
+
+子を起動すると OS のターミナルが自動で開きますが、これを止める手段は `AGENTSTACK_TERMINAL=none` しかなく、dashboard の Open tmux まで使えなくなっていました。新しい設定 `AGENTSTACK_AUTO_OPEN_CHILD` を足し、`0` にすると自動表示だけが止まります。tmux session、Open tmux、Mail には影響しません。既定は `1` で、これまでと挙動は変わりません。dashboard から子を見ている場合は `AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` で切り替えられ、再インストールしても保持されます。実装は kame447 さんによるものです。
+
+### Codex の子が、親への完了報告を送れないことがありました（#85）
+
+事前登録して起動した Codex の子が、`bootstrap` に自分の名前を `agent_id` として渡すと、`MCP process is already bound to another runtime` で拒否されていました。子は誤った送信者で送るのを避けて送信そのものをやめるため、親は timeout まで待たされていました。`bootstrap` をこの形で呼ぶかはモデル次第なので、失敗は間欠的に見えていました。直接束縛の子では、自分の名前の `agent_id` を取り除いて続けるようにしました。別の名前はこれまでどおり拒否します。
+
+### Mail パッケージのテストが、稼働中の Mail に触れることがありました（#80）
+
+稼働中の Mail の設定を読み込んだ shell から `packages/agentstack_mail/tests` を流すと、テスト内の Mail が本物の管理 socket を開こうとして失敗していました。`tests/` と同じく、Mail パッケージのテストでも継承した `AGENTSTACK_*` を消すようにしました。
+
+### Mail 更新手順の検証と確認が、環境によって失敗していました（#79・#84）
+
+[docs/agentstack-mail-update.md](docs/agentstack-mail-update.md) の手順3で、隔離した検証用の Mail が稼働中の Mail と同じ管理 socket を開こうとして起動直後に落ちていました。管理 socket も検証用の場所に書き換え、稼働中の場所を指したままの設定が残っていれば起動前に止まるようにしました。手順7の稼働確認も、Homebrew の Python から作った venv では process が `Python.app` として見えて失敗していたので、判定を `candidates/<sha>/venv/bin/` に変えました。
+
+## 2026.09.25
+
+### Claude Code 2.1.282 で、Claude の子が全部起動に失敗していました（#81）
+
+Claude Code 2.1.282 は、起動直後の入力欄にプレースホルダ（`❯ Try "fix lint errors"`）を出し、`? for shortcuts` を出さなくなりました。`spawn_child.sh` は「空の `❯` 行」か「`for shortcuts`」でしか起動完了を判定していなかったため、60 秒待って打ち切り、`Claude readiness timeout (60s)` で Claude の子を1体も起動できませんでした。`❯` の直後が `Try "` の行も入力待ちとして扱うようにしました。安全確認ダイアログの `❯ No, exit`・`❯ Yes, I trust` は、従来どおり入力待ちとして扱いません。
+
+## 2026.09.24
+
+### 子の事前登録が、ハイフン付きの名前で既存の agent と衝突していました（#72）
+
+ORRERY Mail は `register_agent` で名前の英数字以外を取り除いて保存する一方、`whois` などの参照は受け取った名前をそのまま探していました。そのため `agentstack-preregister-child` が生成した `Hardy-Somerville` のような名前は、空きの確認では見つからないのに、登録すると既存の `HardySomerville` と同じ名前になり、事前登録が失敗していました。参照を「完全一致を先に探し、無ければ同じ規則で正規化して探す」に揃え、`agentstack-register.sh` も同じ正規化を使うようにしました。旧形式の名前での参照は、そのまま既存の agent に解決されます。
+
+### install 系のテストが、本物の `~/.codex/AGENTS.md` を書き換えることがありました（#73）
+
+Codex の子の中でテストを流すと、子から受け継いだ `CODEX_HOME` が本物の `~/.codex` を指したまま install 系のテストが走り、managed block の project key を pytest の一時ディレクトリに書き換えていました。テストの前に `CODEX_HOME` と `CLAUDE_CONFIG_DIR` を消し、実ホームを書き換えようとしたテストを止める検査を足しました。
+
+### managed block と docs の記述が実態とずれていました（#74）
+
+Codex 向けの managed block が「Codex には PostToolUse hook が無い」「skill registry が無い」と説明し、docs には存在しない見出し `#credential-unavailable` へのリンクがありました。記述を実態に合わせ、見出しを追加しました。docs 内のアンカーが実在するかを検査するテストも足しました。
+
+### `agentstack-selftest` が、正常なのに「dashboard が別の database を読んでいる」と失敗することがありました
+
+dashboard はグラフを 8 秒 cache します。selftest は agent を登録した直後に1回だけグラフを読むため、直前に cockpit などがグラフを読んでいると、登録前の古いグラフを受け取って失敗していました。2つの agent とそのリンクが揃うまで最大 12 秒読み直し、それでも無いときだけ失敗とするようにしました。
+
+## 2026.09.23
+
+### Claude Opus 5.5 を child の current model として選べませんでした
+
+child launcher の無指定 `opus` と warm pool は Claude Opus 5 のままで、2026-09-22 に公開された Opus 5.5 を選べませんでした。既定を `claude-opus-5-5` に更新し、current 1M alias を `claude-opus-5-5[1m]` に向けました。generic な `opus[1m]` は既存どおり legacy Opus 4.8 1M のままにし、`claude-opus-5`、`opus-5`、`opus-5[1m]` は旧世代を明示指定する互換形として維持しています。dashboard の Claude model allow-list にも Opus 5.5 を追加しました。
+
 ### 正常終了した Codex child を再開できませんでした（#59）
 
 Codex child は正常終了時に owner credential と専用 home を削除していたため、履歴と provenance が残っていても同じ identity を再登録できず、dashboard の resume は `credential_missing` で止まっていました。正常 cleanup では remote retire と reservation release を維持したまま、schema version・`retired_at`・`resume_expires_at` 付き state と canonical credential を既定30日保持するようにしました。専用 home、proxy runtime、旧 MCP config は毎回削除し、resume 時に現在の source home と保存済み `codex_mcp_profile` から新しく作ります。credential 付き再登録と fresh binding expectation が成功した後、Codex exec の直前にだけ unretire します。保持期間は `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` で変更でき、`0` は従来どおり全削除です。明示 purge と期限切れ maintenance を追加し、doctor は削除せず期限切れ・purge 待ちだけを報告します。resume 後の receipt にも child provenance を引き継ぐため、cleanup を挟んだ2回目以降の resume も可能です。また、provenance gate が従来 resume できた `cx` 起動の top-level Codex まで child 扱いで拒否していたため、製品の top-level launch / receipt には `launch_origin: standalone` を記録し、private owner credential を検証したうえで child 専用 home・cleanup・unretire を使わない従来経路を維持します。実 Codex は resume の `SessionStart` を REPL 起動時ではなく最初の prompt 送信時に発火するため、prompt を送らず終了すると fresh receipt が無いまま旧 receipt も無効になり、次回以降を resume できませんでした。resume expectation は dashboard が選んだ session ID を旧 receipt と rollout header の両方で照合し、hook が未発火の間だけその receipt の nonce pair を fallback として保持します。別 session の hook、競合、startup、または別の fresh receipt が現れれば fail-closed で無効にします。SessionStart hook の1秒 deadline が recorder の途中で切れると、lock file だけ作られて launch transition と receipt が残らず、原因も観測できませんでした。deadline を5秒へ延ばし、lock・header・write・outcome の時間を session ID、path、nonce、credential を含まない runtime log へ記録するようにしました。
@@ -26,7 +95,9 @@ DECK と NETWORK は `gone` / `retired` という表示状態だけで resume �
 
 ### fresh install と CI が `sqlmodel 0.0.45` 以降で動かなくなっていました（#67）
 
-ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。timezone-aware datetime への移行と既存 database の naive 値との互換対応は別の修正で行います。
+ORRERY Mail は datetime を naive UTC で書き込んでいますが、依存に上限が無かったため、fresh venv は naive datetime を拒否する新しい `sqlmodel` を解決し、Mail の tool と installer が database write で失敗していました。隔離した同じ fixture は `0.0.44` で通り、`0.0.45` から失敗します。まず稼働中と同じ挙動へ戻す即応として `sqlmodel<0.0.45` に pin しました。
+
+続く本修正では database への書き込みと検索条件を timezone-aware UTC に統一しました。SQLModel の版に依存しない型で、既存 database に保存済みの naive 値は UTC として読み出し、新規の naive 値は拒否します。API・signal・通知の timestamp 文字列は従来形式を保ったまま、`sqlmodel` の上限 pin を外しました。
 
 ## 2026.09.19
 

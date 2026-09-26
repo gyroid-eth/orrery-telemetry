@@ -121,8 +121,18 @@ def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
     data = server.spawn_names_payload()
     assert data["names"] == [{"name": "Curie", "portrait": True, "status": "unknown"}]
     assert data["adjectives"] == ["Sunny"]
-    assert data["default_model"] == "claude-sonnet-5"
+    assert data["default_model"] == "claude-opus-5-5"
     assert "emoji" not in data
+
+
+def test_new_agent_claude_default_matches_cli_launcher():
+    """NEW AGENT preselects the model the CLI launcher uses when none is given."""
+    spawn = (pathlib.Path(__file__).resolve().parent.parent / "hooks/spawn_child.sh").read_text(encoding="utf-8")
+    launcher_default = re.search(r'^CLAUDE_DEFAULT_MODEL="([^"]+)"', spawn, re.M).group(1)
+    assert server._CLAUDE_SPAWN_DEFAULT_MODEL == launcher_default
+    assert server._CLAUDE_SPAWN_DEFAULT_MODEL in server._SPAWN_MODELS
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == launcher_default
 
 
 def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_path):
@@ -318,7 +328,7 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     assert result["requested_name"] == "Zesty-Curie"
     assert result["name_substituted"] is False
     assert calls[0] == ("register_agent", {
-        "project_key": "/project", "program": "claude-code", "model": "claude-sonnet-5",
+        "project_key": "/project", "program": "claude-code", "model": "claude-opus-5-5",
         "task_description": "work", "registration_token": calls[0][1]["registration_token"],
         "name": "Zesty-Curie",
     })

@@ -19,6 +19,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install pytest pytest-timeout -e ./packages/agentstack_mail
+      - name: Measure node start-up (first call is cold)
+        shell: pwsh
+        run: |
+          foreach ($i in 1..2) {
+            $t = Measure-Command { node -e 0 }
+            "node start #${i}: $([int]$t.TotalMilliseconds) ms"
+          }
       - name: Check checkout bytes, long Mail paths, and dashboard HTTP startup
         env:
           PYTHONPATH: .

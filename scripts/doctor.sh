@@ -378,7 +378,112 @@ warn_managed_block() {
   fi
 }
 
+# Keep binary resolution aligned with hooks/spawn_child.sh:find_codex_bin.
+codex_launcher_search_path() {
+  local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  local candidate
+  for candidate in "$nvm_dir"/versions/node/*/bin; do
+    [[ -d "$candidate" ]] && extra="$extra:$candidate"
+  done
+  printf '%s\n' "$PATH:$extra"
+}
+
+resolve_launcher_codex_bin() {
+  local codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+  if [[ -n "$codex_bin" && ! -x "$codex_bin" ]]; then
+    codex_bin=""
+  fi
+  if [[ -z "$codex_bin" ]]; then
+    codex_bin="$(PATH="$(codex_launcher_search_path)" command -v codex 2>/dev/null || true)"
+  fi
+  printf '%s\n' "$codex_bin"
+}
+
+report_codex_history_binding_prereqs() {
+  local codex_bin="$1" codex_home="$2"
+  local plugin_result plugin_state plugin_id
+
+  if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
+    echo "note: Codex launcher binary not found; Codex history binding was not checked (Claude-only use is unaffected)."
+    echo "note: Codex launcher CODEX_HOME would be $codex_home"
+    return 0
+  fi
+
+  echo "ok: Codex launcher binary $codex_bin"
+  echo "ok: Codex launcher CODEX_HOME $codex_home (source for per-child homes)"
+  if [[ ! -d "$codex_home" ]]; then
+    echo "note: Codex history binding plugin status unknown because CODEX_HOME does not exist: $codex_home (Claude-only use is unaffected)."
+    return 0
+  fi
+
+  # Query only the public registry. A failed/changed response is unknown, not
+  # evidence that the plugin is absent. Bound the CLI so doctor cannot hang.
+  plugin_result="$("$PYTHON_BIN" - "$codex_bin" "$codex_home" <<'PYPLUGIN' 2>/dev/null || true
+import json
+import os
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        [sys.argv[1], "plugin", "list", "--json"],
+        env=dict(os.environ, CODEX_HOME=sys.argv[2]),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    data = json.loads(result.stdout)
+    installed = data["installed"]
+    if not isinstance(installed, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("pluginId"), str)
+        for item in installed
+    ):
+        raise ValueError("unrecognised registry shape")
+    items = [
+        item for item in installed
+        if isinstance(item.get("pluginId"), str)
+        and item["pluginId"].startswith("agentstack-codex-app@")
+    ]
+    if not items:
+        print("absent")
+    else:
+        item = next((item for item in items if item.get("enabled") is True), None)
+        if item is not None:
+            print("enabled", item["pluginId"], sep="\t")
+        elif all(item.get("enabled") is False for item in items):
+            print("disabled", items[0]["pluginId"], sep="\t")
+        else:
+            print("unknown")
+except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+    print("unknown")
+PYPLUGIN
+)"
+  plugin_state="${plugin_result%%$'\t'*}"
+  plugin_id="${plugin_result#*$'\t'}"
+
+  case "$plugin_state" in
+    enabled)
+      echo "ok: Codex history binding plugin installed and enabled ($plugin_id)"
+      echo "note: Codex lifecycle hook approval is unknown; open /hooks in Codex to review/approve the AgentStack hooks, then start a new Codex process before expecting BOUND history."
+      ;;
+    disabled)
+      echo "note: Codex history binding plugin installed but disabled ($plugin_id); Codex CLI history requires enabling it and reviewing its hooks in /hooks before a new process. Claude-only use is unaffected."
+      ;;
+    absent)
+      echo "note: Codex history binding plugin is not installed in $codex_home; Codex CLI history requires this optional plugin; see docs/codex-app.md for setup and /hooks approval. Claude-only use is unaffected."
+      ;;
+    *)
+      echo "note: Codex history binding plugin status is unknown for $codex_bin with CODEX_HOME=$codex_home; inspect 'codex plugin list --json' and /hooks if you use Codex history."
+      ;;
+  esac
+}
+
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+CODEX_LAUNCHER_BIN="$(resolve_launcher_codex_bin)"
+report_codex_history_binding_prereqs "$CODEX_LAUNCHER_BIN" "$CODEX_HOME"
 warn_managed_block "Codex AGENTS.md" "$CODEX_HOME/AGENTS.md" \
   "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->"
 

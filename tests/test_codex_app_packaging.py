@@ -210,6 +210,9 @@ def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
         "if sys.argv[1:] == ['plugin', 'list', '--json']:\n"
         "    print(os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
         "    raise SystemExit(0)\n"
+        "if len(sys.argv) >= 4 and sys.argv[1:4] == ['plugin', 'marketplace', 'add']:\n"
+        "    print('{}')\n"
+        "    raise SystemExit(0)\n"
         "if sys.argv[1:] == ['plugin', 'add', 'agentstack-codex-app@agentstack-local', '--json']:\n"
         "    print(os.environ['AGENTSTACK_TEST_PLUGIN_ADD'])\n"
         "    raise SystemExit(0)\n"
@@ -230,6 +233,34 @@ def _read_generated_env(path: Path) -> dict[str, str]:
         assert separator == "="
         values[key] = value
     return values
+
+
+def test_installer_guides_hook_review_after_plugin_install(tmp_path):
+    home = _prepare_home(tmp_path)
+    codex_binary, codex_log = _fake_codex(tmp_path)
+    environment = _environment(home)
+    environment.update(
+        {
+            "AGENTSTACK_TEST_CODEX_LOG": str(codex_log),
+            "AGENTSTACK_TEST_PLUGIN_LIST": json.dumps({"installed": []}),
+            "AGENTSTACK_TEST_PLUGIN_ADD": "{}",
+        }
+    )
+    args = _install_args(home)
+    args[args.index("--codex-bin") + 1] = str(codex_binary)
+
+    result = subprocess.run(
+        args,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "open /hooks" in result.stdout
+    assert "review/approve the AgentStack lifecycle hooks" in result.stdout
+    assert "start a new Codex process" in result.stdout
 
 
 @needs_codex_cli
@@ -324,7 +355,9 @@ def test_refresh_plugin_only_replaces_same_version_cache_without_bridge_side_eff
     )
     assert refreshed.returncode == 0, refreshed.stderr
     assert f"Plugin refresh complete: {PLUGIN_ID} -> {cached}" in refreshed.stdout
-    assert "Start a new Codex process/thread" in refreshed.stdout
+    assert "open /hooks" in refreshed.stdout
+    assert "review/approve the AgentStack lifecycle hooks" in refreshed.stdout
+    assert "start a new Codex process" in refreshed.stdout
     assert (cached / "scripts" / "run-hook.sh").read_bytes() == (
         current_plugin / "scripts" / "run-hook.sh"
     ).read_bytes()

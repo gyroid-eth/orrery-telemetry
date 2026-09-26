@@ -66,6 +66,11 @@ def test_unavailable_catalog_disables_spawn_and_ignores_stale_response():
     button_function = html.split("function updateSpawnButton(){", 1)[1].split("\nfunction populateParentSelect", 1)[0]
     script = "async function loadSpawnCatalog(seq){" + function + "\nfunction updateSpawnButton(){" + button_function + r'''
 const assert=require('node:assert/strict');
+// Hang guard measured from inside node, so node.exe start-up time on a cold
+// Windows runner does not count against it. Deliberately not unref()'d: an
+// unresolved promise does not keep the event loop alive, so without a live
+// timer a stuck loadSpawnCatalog would exit 0 and skip every assertion.
+const watchdog=setTimeout(()=>{console.error('loadSpawnCatalog did not settle within 5s');process.exit(2);},5000);
 let spmLoadSeq=2,spmReady=true,spmBusy=false,spmSelectedName='',spmIdentityState='auto';
 const elements={};
 const SPM=id=>elements[id]||(elements[id]={});
@@ -85,6 +90,9 @@ async function fetch(){return {ok:true,json:async()=>({unavailable:reason})};}
   assert.equal(status,reason);
   assert.equal(SPM('spm-agent-strip').textContent,'scientist roster unavailable');
   assert.equal(SPM('spm-models').textContent,'engine catalog unavailable');
-})();
+  clearTimeout(watchdog);
+})().catch(error=>{console.error(error);process.exit(1);});
 '''
-    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True, timeout=10)
+    # The in-script watchdog detects a stuck test. This outer limit only catches a
+    # node process that never gets going; it includes start-up, so it is generous.
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True, timeout=60)

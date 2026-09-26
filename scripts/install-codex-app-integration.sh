@@ -104,6 +104,11 @@ SERVICE_PATH=""
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
+
+say_hook_approval_guidance() {
+  say "Next: in Codex, open /hooks and review/approve the AgentStack lifecycle hooks."
+  say "Then start a new Codex process before checking history binding; existing processes may not refire SessionStart."
+}
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 plan() {
   if [[ "$DRY_RUN" == true ]]; then
@@ -497,7 +502,7 @@ refresh_plugin_only() {
     die "Codex CLI selected a payload that failed refresh verification"
   fi
   say "Plugin refresh complete: agentstack-codex-app@$MARKETPLACE_NAME -> $selected_path"
-  say "Start a new Codex process/thread to verify the refreshed lifecycle hook."
+  say_hook_approval_guidance
 }
 
 render_plist() {
@@ -703,6 +708,9 @@ main() {
         say "  AGENTSTACK_CODEX_APP_SELF_RESTART=1 nohup /bin/bash $RUNNER >> $RUNTIME_DIR/bridge.stdout.log 2>> $RUNTIME_DIR/bridge.stderr.log &"
         ;;
     esac
+    if [[ "$NO_PLUGIN" != true ]]; then
+      say_hook_approval_guidance
+    fi
     say "Doctor: $INSTALL_DIR/bin/doctor-codex-app-integration"
   fi
 }
