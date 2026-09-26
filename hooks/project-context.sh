@@ -132,65 +132,17 @@ print(value)
 PY
 }
 
-# Validate a project key before a project-scoped side effect. Physical keys are
-# accepted only for the same Git repository/non-Git root. A logical key needs
-# the complete launcher-provided repository/workspace tuple; the key alone is
-# never authority.
+# Validate one registration target without treating the Mail project key as
+# repository ownership. The selected key is an opaque coordination namespace;
+# repository/worktree/protected-root provenance is recomputed from TARGET.
+# This accepts intentional cross-repository coordination while still refusing
+# missing targets and broken Git metadata before any Mail side effect.
 agentstack_validate_project_context() {
-    local target="$1" selected="$2" context="" project="" repository="" work_dir=""
-    local selected_context="" selected_repository="" selected_work="" live_key="" bound=""
+    local target="$1" selected="$2" context="" project=""
     [ -n "$selected" ] || return 1
     context="$(agentstack_resolve_invocation_context "$target" "$selected")" || return 1
     project="$(agentstack_context_field "$context" project_key)" || return 1
-    repository="$(agentstack_context_field "$context" repository_key)" || return 1
-    work_dir="$(agentstack_context_field "$context" work_dir)" || return 1
-
-    if [ "$project" = "${repository:-$work_dir}" ]; then
-        printf '%s\n' "$context"
-        return 0
-    fi
-
-    if [ -d "$selected" ]; then
-        selected_context="$(agentstack_resolve_invocation_context "$selected")" || return 1
-        selected_repository="$(agentstack_context_field "$selected_context" repository_key)" || return 1
-        selected_work="$(agentstack_context_field "$selected_context" work_dir)" || return 1
-        if [ -n "$repository" ]; then
-            [ -n "$selected_repository" ] && [ "$selected_repository" = "$repository" ] || return 1
-        else
-            [ -z "$selected_repository" ] || return 1
-            "${AGENTSTACK_PYTHON:-python3}" - "$work_dir" "$selected_work" <<'PY' >/dev/null || return 1
-import os
-import sys
-path, root = map(os.path.realpath, sys.argv[1:])
-try:
-    ok = os.path.commonpath([path, root]) == root
-except ValueError:
-    ok = False
-raise SystemExit(0 if ok else 1)
-PY
-        fi
-        printf '%s\n' "$context"
-        return 0
-    fi
-
-    live_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-    [ "$live_key" = "$selected" ] || return 1
-    if [ -n "$repository" ]; then
-        bound="$(agentstack_physical_dir "${AGENTSTACK_PROJECT_REPOSITORY:-}" 2>/dev/null)" || return 1
-        [ "$bound" = "$repository" ] || return 1
-    else
-        bound="$(agentstack_physical_dir "${AGENTSTACK_PROJECT_WORK_DIR:-}" 2>/dev/null)" || return 1
-        "${AGENTSTACK_PYTHON:-python3}" - "$work_dir" "$bound" <<'PY' >/dev/null || return 1
-import os
-import sys
-path, root = map(os.path.realpath, sys.argv[1:])
-try:
-    ok = os.path.commonpath([path, root]) == root
-except ValueError:
-    ok = False
-raise SystemExit(0 if ok else 1)
-PY
-    fi
+    [ "$project" = "$selected" ] || return 1
     printf '%s\n' "$context"
 }
 

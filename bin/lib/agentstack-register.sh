@@ -7,7 +7,7 @@ AGS_REGISTER_LIB_DIR="$(cd "$(dirname "$_ags_register_src")" && pwd)"
 # shellcheck source=agentstack-scientists.sh
 . "$AGS_REGISTER_LIB_DIR/agentstack-scientists.sh"
 AGS_PROJECT_CONTEXT_LIB="${AGENTSTACK_PROJECT_CONTEXT_LIB:-$AGS_REGISTER_LIB_DIR/../../hooks/project-context.sh}"
-if [[ -f "$AGS_PROJECT_CONTEXT_LIB" ]] && ! declare -F agentstack_validate_project_context >/dev/null 2>&1; then
+if [[ -f "$AGS_PROJECT_CONTEXT_LIB" ]] && ! command -v agentstack_validate_project_context >/dev/null 2>&1; then
   # shellcheck disable=SC1090
   . "$AGS_PROJECT_CONTEXT_LIB"
 fi
@@ -778,12 +778,12 @@ ags_register_session() {
   ags_registration_diag_reset
 
   local context_json="" registration_token=""
-  declare -F agentstack_validate_project_context >/dev/null 2>&1 || {
+  command -v agentstack_validate_project_context >/dev/null 2>&1 || {
     echo "agentstack: project context validator is unavailable; refusing registration." >&2
     return 1
   }
   context_json="$(agentstack_validate_project_context "$work_dir" "$project_key")" || {
-    echo "agentstack: project '$project_key' is not authorized for work directory '$work_dir'." >&2
+    echo "agentstack: cannot resolve registration workspace context for '$work_dir'." >&2
     return 1
   }
   project_key="$(agentstack_context_field "$context_json" project_key)" || return 1

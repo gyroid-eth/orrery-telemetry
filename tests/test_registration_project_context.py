@@ -25,27 +25,55 @@ def _bash(script: str, env: dict[str, str] | None = None) -> subprocess.Complete
     )
 
 
-def test_registration_rejects_unrelated_physical_project_before_mail(tmp_path: pathlib.Path) -> None:
+def test_registration_allows_project_namespace_outside_target_repository(
+    tmp_path: pathlib.Path,
+) -> None:
     target = tmp_path / "target"
-    other = tmp_path / "other"
+    namespace = tmp_path / "coordination-project"
     target.mkdir()
-    other.mkdir()
+    namespace.mkdir()
     calls = tmp_path / "calls"
     script = f'''
 source "{REGISTER_LIB}"
-ags_mcp_call() {{ printf '%s\\n' "$1" >> "$CALLS"; return 1; }}
+ags_mcp_call() {{
+  local tool="$1"; shift
+  printf '%s|%s\\n' "$tool" "$*" >> "$CALLS"
+  case "$tool" in
+    whois)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child"}}}}}}'
+      ;;
+    ensure_project)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":1}}}}}}'
+      ;;
+    register_agent)
+      printf '%s\\n' '{{"result":{{"structuredContent":{{"id":7,"name":"Child","registration_token":"reserved-token"}}}}}}'
+      ;;
+    *) return 1 ;;
+  esac
+}}
+ags_store_registration_token() {{ :; }}
+ags_apply_contact_policy() {{ :; }}
 CHILD_REGISTRATION_TOKEN=reserved-token
 export CHILD_REGISTRATION_TOKEN
-ags_register_session "$OTHER" claude-code model cc "$TARGET" Child reserved >/dev/null
+ags_register_session "$NAMESPACE" claude-code model cc "$TARGET" Child reserved >/dev/null
 status=$?
-printf 'status=%s calls=%s\\n' "$status" "$([ -f "$CALLS" ] && wc -l < "$CALLS" | tr -d ' ' || printf 0)"
+printf 'status=%s registered=%s\\n' "$status" "$AGS_REGISTERED_AGENT_NAME"
 '''
     result = _bash(
         script,
-        {"TARGET": str(target), "OTHER": str(other), "CALLS": str(calls)},
+        {"TARGET": str(target), "NAMESPACE": str(namespace), "CALLS": str(calls)},
     )
-    assert result.stdout.strip() == "status=1 calls=0", (result.stdout, result.stderr)
-    assert "not authorized for work directory" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "status=0 registered=Child"
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert [line.split("|", 1)[0] for line in lines] == [
+        "whois",
+        "ensure_project",
+        "register_agent",
+    ]
+    assert f"project_key={namespace}" in lines[0]
+    assert f"human_key={namespace}" in lines[1]
+    assert f"project_key={namespace}" in lines[2]
 
 
 def test_reserved_registration_checks_existing_identity_then_authenticates_on_register(
@@ -130,35 +158,50 @@ printf 'status=%s\\n' "$status"
     assert "does not exist" in result.stderr
 
 
-def test_logical_project_key_requires_matching_bound_workspace(tmp_path: pathlib.Path) -> None:
+def test_logical_project_key_rebinds_workspace_provenance_without_rejecting_namespace(
+    tmp_path: pathlib.Path,
+) -> None:
     target = tmp_path / "target"
     other = tmp_path / "other"
     target.mkdir()
     other.mkdir()
     script = f'''
 source "{PROJECT_CONTEXT}"
-if agentstack_validate_project_context "$TARGET" logical-project >/dev/null; then
-  printf 'accepted\\n'
-else
-  printf 'rejected\\n'
-fi
+agentstack_validate_project_context "$TARGET" logical-project
 '''
-    rejected = _bash(
+    result = _bash(
         script,
         {
             "TARGET": str(target),
             "AGENTSTACK_PROJECT_KEY": "logical-project",
             "AGENTSTACK_PROJECT_WORK_DIR": str(other),
+            "AGENTSTACK_PROJECT_REPOSITORY": str(other),
         },
     )
-    assert rejected.stdout.strip() == "rejected"
+    assert result.returncode == 0, result.stderr
 
-    accepted = _bash(
-        script,
-        {
-            "TARGET": str(target),
-            "AGENTSTACK_PROJECT_KEY": "logical-project",
-            "AGENTSTACK_PROJECT_WORK_DIR": str(target),
-        },
+    import json
+
+    context = json.loads(result.stdout)
+    assert context["project_key"] == "logical-project"
+    assert context["work_dir"] == str(target)
+    assert context["repository_key"] is None
+    assert context["protected_roots"] == [str(target)]
+
+
+def test_register_library_loads_project_validator_when_sourced_from_zsh() -> None:
+    result = subprocess.run(
+        [
+            "/bin/zsh",
+            "-c",
+            f'source "{REGISTER_LIB}"; command -v agentstack_validate_project_context',
+        ],
+        cwd=ROOT,
+        env=os.environ.copy(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
     )
-    assert accepted.stdout.strip() == "accepted"
+    assert result.returncode == 0, result.stderr
+    assert "agentstack_validate_project_context" in result.stdout
