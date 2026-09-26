@@ -89,14 +89,14 @@ curl -s http://127.0.0.1:8770/api/spawn-names
     "claude-haiku-4-5-20251001",
     "claude-fable-5-1"
   ],
-  "default_model":"claude-sonnet-5",
+  "default_model":"claude-opus-5-5",
   "providers":[
     {
       "id":"claude",
       "label":"Claude",
       "program":"claude-code",
       "models":["claude-sonnet-5","claude-opus-5-5","claude-opus-5","claude-haiku-4-5-20251001","claude-fable-5-1"],
-      "default_model":"claude-sonnet-5",
+      "default_model":"claude-opus-5-5",
       "efforts":null
     },
     {

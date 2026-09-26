@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### NEW AGENT で最初に選ばれる Claude のモデルを、launcher の既定に揃えました
+
+dashboard の NEW AGENT は Claude のモデルとして `claude-sonnet-5` を最初から選んでいましたが、`spawn_child.sh` など launcher の既定は `claude-opus-5-5` で、起動経路によって既定が違っていました。NEW AGENT と `/api/spawn` でモデルを省略したときも `claude-opus-5-5` を使うようにし、両者がずれたらテストで分かるようにしました。選択肢の一覧は変わりません。
+
 ## 2026.09.26.1
 
 ### Codex の子の履歴が UNBOUND のとき、何を確かめればよいかが分かるようにしました（#86）
