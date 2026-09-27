@@ -53,7 +53,7 @@ def test_default_is_not_the_first_cache_candidate(provider):
 
 
 def test_excluded_default_requires_explicit_selection(provider):
-    provider["models"] = ["gpt-6-sol", "gpt-6-luna"]
+    provider["models"] = ["gpt-6-luna", "gpt-5.6-sol"]
     result = run_ui(provider, "out.initial=state();selectSpawnModel('gpt-6-luna');out.chosen=state();")
     assert result["initial"]["payload"]["model"] == ""
     assert result["initial"]["launchDisabled"]

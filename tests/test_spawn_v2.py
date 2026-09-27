@@ -186,7 +186,7 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     providers = server.spawn_names_payload()["providers"]
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
-        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-5.6-sol",
+        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6-sol",
         "model_source": "override", "model_error": "",
         "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
@@ -198,8 +198,8 @@ def test_spawn_names_uses_current_codex_defaults(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     assert server._codex_models() == [
-        "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna",
-        "gpt-6-sol", "gpt-6-luna",
+        "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
+        "gpt-5.6-luna", "gpt-6-luna",
     ]
 
 
@@ -1105,15 +1105,15 @@ def test_codex_api_and_launcher_policy_agree(monkeypatch, tmp_path, model):
     assert captured[-1].effort == server.codex_models.resolve_effort(model)
     assert captured[-1].effort_arg == bool(captured[-1].effort)
     if model == "gpt-6-luna":
-        assert not server.do_spawn({**payload, "effort": "ultra"})["ok"]
-        assert len(captured) == 1
+        assert server.do_spawn({**payload, "effort": "ultra"})["ok"]
+        assert captured[-1].effort == "ultra"
 
 
 def test_codex_api_default_excluded_by_allowlist_never_selects_first(monkeypatch):
-    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-6-luna")
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-luna,gpt-5.6-sol")
     monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("disallowed default must not launch"))
     result = server.do_spawn({"standalone": True, "task": "work", "provider": "codex"})
-    assert not result["ok"] and "gpt-5.6-sol" in result["error"]
+    assert not result["ok"] and "gpt-6-sol" in result["error"]
 
 
 @pytest.fixture(autouse=True)

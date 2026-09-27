@@ -19,6 +19,7 @@ NOW = 1_800_000_000.0
 def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.delenv("AGENTSTACK_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(models.time, "time", lambda: NOW)
 
 
@@ -43,7 +44,7 @@ def test_fresh_cache_adds_gpt6_and_unknown_future_models_without_changing_defaul
     assert "gpt-9-future.1" in catalog.models
     assert "gpt-6-sol" in catalog.models and "gpt-6-luna" in catalog.models
     provider = models.provider_catalog()
-    assert provider["default_model"] == "gpt-5.6-sol"
+    assert provider["default_model"] == "gpt-6-sol"
     assert "ultra" not in provider["model_efforts"]["gpt-6-luna"]
     assert "ultra" in provider["model_efforts"]["gpt-6-sol"]
 
@@ -118,7 +119,7 @@ def test_cache_ttl_boundary(age):
     assert "gpt-fresh" in models.discover_models()
 
 
-def test_symlink_is_not_followed(tmp_path):
+def test_untrusted_symlink_is_not_followed(tmp_path):
     target = tmp_path / "other.json"
     target.write_text("not a catalog")
     path = Path(os.environ["CODEX_HOME"]) / "models_cache.json"
@@ -128,6 +129,26 @@ def test_symlink_is_not_followed(tmp_path):
     except OSError:
         pytest.skip("symlink privilege unavailable")
     assert models.discover_models() == {}
+
+
+def test_launcher_owned_child_cache_symlink_is_followed(monkeypatch, tmp_path):
+    source = tmp_path / "parent-codex" / "models_cache.json"
+    source.parent.mkdir()
+    source.write_text(json.dumps({
+        "fetched_at": datetime.fromtimestamp(NOW, timezone.utc).isoformat(),
+        "models": [row("gpt-child-cache")],
+    }), encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    child_home = runtime / "child-agents" / "ChildCurie.codex-home"
+    child_home.mkdir(parents=True)
+    path = child_home / "models_cache.json"
+    try:
+        path.symlink_to(source)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("CODEX_HOME", str(child_home))
+    assert "gpt-child-cache" in models.discover_models()
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
@@ -199,7 +220,7 @@ def test_formal_ids_remain_exact_even_when_cache_disappears(model):
 
 
 def test_explicit_aliases_are_separate_from_omitted_default():
-    assert models.normalize_model() == "gpt-5.6-sol"
+    assert models.normalize_model() == "gpt-6-sol"
     assert models.normalize_model("sol") == "gpt-6-sol"
     assert models.normalize_model(" LUNA ") == "gpt-6-luna"
     assert models.normalize_model("astra") == "gpt-6-astra"
@@ -207,20 +228,16 @@ def test_explicit_aliases_are_separate_from_omitted_default():
 
 
 @pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.5"])
-def test_bundled_effort_restrictions_survive_cache_failure(model):
-    with pytest.raises(ValueError, match="does not support ultra"):
-        models.resolve_effort(model, "ultra")
+def test_explicit_effort_is_passed_through_when_metadata_is_narrower(model):
+    assert models.resolve_effort(model, "ultra") == "ultra"
     assert models.resolve_effort(model, "xhigh") == "xhigh"
-    if model == "gpt-5.5":
-        with pytest.raises(ValueError, match="does not support max"):
-            models.resolve_effort(model, "max")
+    assert models.resolve_effort(model, "max") == "max"
 
 
 def test_fresh_effort_metadata_overrides_bundled_and_uses_valid_default():
     cache([row("gpt-6-sol", ("medium", "high"))])
     assert models.resolve_effort("gpt-6-sol") == "medium"
-    with pytest.raises(ValueError, match="does not support xhigh"):
-        models.resolve_effort("gpt-6-sol", "xhigh")
+    assert models.resolve_effort("gpt-6-sol", "xhigh") == "xhigh"
 
 
 def test_unknown_model_and_nonreasoning_model_omit_effort_by_default():
@@ -228,16 +245,15 @@ def test_unknown_model_and_nonreasoning_model_omit_effort_by_default():
     assert models.resolve_effort("gpt-future", "high") == "high"
     cache([row("gpt-no-reasoning", ())])
     assert models.resolve_effort("gpt-no-reasoning") == ""
-    with pytest.raises(ValueError, match="does not support"):
-        models.resolve_effort("gpt-no-reasoning", "high")
+    assert models.resolve_effort("gpt-no-reasoning", "high") == "high"
 
 
 def test_cli_entrypoint_matches_python_policy():
     helper = Path(models.__file__)
     result = subprocess.run([sys.executable, str(helper), "normalize", "luna"], capture_output=True, text=True)
     assert result.returncode == 0 and result.stdout.strip() == "gpt-6-luna"
-    rejected = subprocess.run([sys.executable, str(helper), "effort", "gpt-6-luna", "ultra"], capture_output=True, text=True)
-    assert rejected.returncode == 1 and "does not support ultra" in rejected.stderr
+    explicit = subprocess.run([sys.executable, str(helper), "effort", "gpt-6-luna", "ultra"], capture_output=True, text=True)
+    assert explicit.returncode == 0 and explicit.stdout.strip() == "ultra"
 
 
 @pytest.mark.parametrize("fraction", ["1", "12", "123", "123456", "123456789"])

@@ -13,7 +13,7 @@
 #   spawn_child.sh --pre-registered <name> --codex --codex-mcp orrery-only "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
-# モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
+# モデル指定（--model。Codex は gpt-6-sol 既定で旧 model 名も有効）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
@@ -21,7 +21,7 @@
 #   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
-#   --codex --model 省略 → gpt-5.6-sol（固定既定）。sol / luna → GPT-6、terra → GPT-5.6、astra → GPT-6。
+#   --codex --model 省略 → gpt-6-sol（固定既定）。sol / luna → GPT-6、terra → GPT-5.6、astra → GPT-6。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と

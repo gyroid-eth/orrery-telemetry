@@ -15,10 +15,10 @@ import stat
 import sys
 import time
 
-DEFAULT_MODEL = "gpt-5.6-sol"  # Deliberately independent of explicit aliases.
+DEFAULT_MODEL = "gpt-6-sol"  # Deliberately independent of catalog ordering.
 DEFAULT_MODELS = (
-    DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna",
-    "gpt-6-sol", "gpt-6-luna",
+    DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
+    "gpt-5.6-luna", "gpt-6-luna",
 )
 ALIASES = {"sol": "gpt-6-sol", "luna": "gpt-6-luna",
            "astra": "gpt-6-astra", "terra": "gpt-5.6-terra"}
@@ -86,13 +86,37 @@ def normalize_model(raw: str = "") -> str:
     return model
 
 
+def _cache_open_path(path: Path) -> Path | None:
+    """Return a cache path safe to open without arbitrary symlink following."""
+    if not path.is_symlink():
+        return path
+    runtime_raw = os.environ.get("AGENTSTACK_RUNTIME_DIR", "").strip()
+    if not runtime_raw:
+        return None
+    runtime = Path(runtime_raw).expanduser()
+    if not runtime.is_absolute():
+        return None
+    child_root = runtime / "child-agents"
+    home = path.parent
+    if home.parent != child_root or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None:
+        return None
+    try:
+        target = Path(os.readlink(path))
+    except OSError:
+        return None
+    if not target.is_absolute() or target.name != "models_cache.json":
+        return None
+    return target
+
+
 def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
     try:
-        # Never block on a FIFO or follow a catalog symlink into other files.
-        if path.is_symlink():
+        open_path = _cache_open_path(path)
+        if open_path is None:
             return {}
+        # Never block on a FIFO and never follow the final path component.
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        with os.fdopen(os.open(path, flags), "rb") as stream:
+        with os.fdopen(os.open(open_path, flags), "rb") as stream:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
                 return {}
@@ -182,9 +206,7 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
         return policy.default if policy else ""
     if effort not in EFFORTS:
         raise ValueError("unknown Codex reasoning effort")
-    if policy is not None and effort not in policy.supported:
-        raise ValueError(f"{model} does not support {effort} reasoning effort")
-    # An explicit tier for a future ID with no metadata remains CLI-validated.
+    # Explicit effort remains the operator choice; Codex validates it at launch.
     return effort
 
 

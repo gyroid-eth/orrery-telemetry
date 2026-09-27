@@ -444,7 +444,7 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
         ("normalize_claude_model", "fable"): "claude-fable-5-1",
         ("normalize_claude_model", "claude-fable-5"): "claude-fable-5-1",
-        ("normalize_codex_model", ""): "gpt-5.6-sol",
+        ("normalize_codex_model", ""): "gpt-6-sol",
         ("normalize_codex_model", "sol"): "gpt-6-sol",
         ("normalize_codex_model", "terra"): "gpt-5.6-terra",
         ("normalize_codex_model", "luna"): "gpt-6-luna",
@@ -464,12 +464,12 @@ def test_model_specific_effort_constraints_are_enforced():
     assert accepted.stdout.strip() == "ultra"
 
     luna = _model_call("validate_codex_effort", "gpt-5.6-luna", "ultra")
-    assert luna.returncode != 0
-    assert "does not support ultra" in luna.stderr
+    assert luna.returncode == 0
+    assert luna.stdout.strip() == "ultra"
 
     legacy = _model_call("validate_codex_effort", "gpt-5.5", "max")
-    assert legacy.returncode != 0
-    assert "does not support max" in legacy.stderr
+    assert legacy.returncode == 0
+    assert legacy.stdout.strip() == "max"
 
     unknown = _model_call("validate_codex_effort", "gpt-5.6-sol", "extreme")
     assert unknown.returncode != 0

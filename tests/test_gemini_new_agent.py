@@ -337,6 +337,22 @@ def test_gemini_model_collision_fails_closed(monkeypatch, tmp_path, override, pr
     }
 
 
+def test_gemini_rejects_future_gpt_namespace_even_when_allowlisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "gpt-future-not-in-codex-catalog")
+    ids = [item["id"] for item in server.spawn_names_payload()["providers"]]
+    assert "gemini" not in ids
+    result = server.do_spawn({
+        "parent": "Parent", "task": "work", "dir": str(tmp_path),
+        "provider": "gemini", "model": "gpt-future-not-in-codex-catalog",
+        "effort": "high", "resources": "src/**",
+    })
+    assert result == {
+        "ok": False,
+        "error": "provider gemini unavailable: model allow-list for provider gemini "
+                 "collides with provider codex: gpt-future-not-in-codex-catalog",
+    }
+
+
 def test_platform_unavailable_takes_precedence_for_gemini(monkeypatch):
     monkeypatch.setattr(
         server, "_spawn_unavailable_error",
