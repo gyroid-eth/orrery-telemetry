@@ -53,7 +53,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | --- | --- |
 | `codex` | `--codex` (a Codex child) |
 | `claude` | a Claude child (the default) |
-| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra` |
+| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-6-sol`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-6-astra` |
 | `opus`, `sonnet`, `haiku` | Claude model shorthand: `--model <word>` |
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
 | `--codex-mcp inherit` | Keep the user's configured MCP servers and plugins in a Codex child (the default) |
@@ -62,7 +62,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
 
-Model defaults: Claude children use `claude-opus-5`; Codex children use `gpt-5.6-sol` at effort `xhigh`. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree.
+Model defaults: Claude children use `claude-opus-5-5`; Codex children use `gpt-5.6-sol` at effort `xhigh`. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree. For Codex, resolve friendly names before registration with `python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" normalize "<word>"`; pass that exact formal ID to both steps. Do not derive the omitted default from candidate order.
 
 MCP defaults are deliberately backward-compatible: omit `--codex-mcp` or use `--codex-mcp inherit` to preserve the user's configured MCP/plugin surface. Use `--codex-mcp orrery-only` for a Codex child whose task needs shell/files plus ORRERY coordination but no inherited browser, application, or account tools. This is an explicit capability reduction: do not select it when the task depends on a plugin skill or any non-ORRERY MCP server.
 
@@ -145,7 +145,7 @@ substitute.
    ```
 
    The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
-   For a Codex child, pass `--program "codex" --model "<gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna | gpt-6-astra>"`, using the full model id the user's shorthand expands to (see "How to read the arguments"). Do not pass `--name` just because the user typed a word you do not recognize.
+   For a Codex child, pass `--program "codex" --model "<formal gpt-* ID>"`, using the full model id the user's shorthand expands to (see "How to read the arguments"). Do not pass `--name` just because the user typed a word you do not recognize.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
 4. Ensure the child can send its completion report to the parent. The stack registration helper sets the child's `contact_policy` to `open` by default. If either side uses a restrictive contact policy, complete a contact handshake or approval before spawning.
 5. Reserve file paths if the task edits shared resources.

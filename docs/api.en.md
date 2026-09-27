@@ -103,8 +103,10 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"codex",
       "label":"Codex",
       "program":"codex-cli",
-      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
+      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna","gpt-6-sol","gpt-6-luna"],
       "default_model":"gpt-5.6-sol",
+      "model_source":"bundled",
+      "model_error":"",
       "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
@@ -116,7 +118,7 @@ The scientist rail's `status` indicates whether at least one pairing of that sci
 
 The adjectives are synchronized word-for-word with ORRERY Mail's canonical `SIMPLE_ADJECTIVES` Round 3 list, and the launcher, catalog, and suggestion API use the same source. Custom additions are prohibited because they diverge from name validation in strict deployments.
 
-When present, `AGENTSTACK_CODEX_MODELS` overrides the Codex model list. Otherwise the order is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`; the default is `gpt-5.6-sol`, and the default effort is `xhigh`.
+Codex augments bundled candidates with fresh local CLI cache entries. Explicit `AGENTSTACK_CODEX_MODELS` restricts candidates to that allowlist; invalid configuration appears in `model_error`. `model_source` is `bundled`, `local_cache`, or `override`. The default stays `gpt-5.6-sol`, independently of candidate order. Provider dictionaries `model_efforts` and `model_effort_defaults`, keyed by model ID, take precedence in the UI. An empty effort list means omit effort and use the CLI default. See [configuration](configuration.en.md#codex-model-catalog).
 
 ## GET `/api/name-status`
 
@@ -504,7 +506,7 @@ Request:
 | `dir` | no | Existing working directory. Defaults to the source repository |
 | `provider` | no | `claude` (default) or `codex` |
 | `model` | no | From the provider catalog. Each provider has a default |
-| `effort` | Codex only | `low / medium / high / xhigh / max / ultra` (max / ultra: gpt-6-astra only); default `xhigh` |
+| `effort` | Codex only | Model-specific; use `model_efforts` / `model_effort_defaults`. Unknown metadata: omit for CLI default. |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
@@ -528,7 +530,7 @@ Success:
 
 With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a CC audit trail; the registration summary / launcher prompt uses the first 80 characters.
 
-Passing `effort` for the Claude provider is rejected. Codex models follow the `AGENTSTACK_CODEX_MODELS` allowlist; Claude models follow the server's `_SPAWN_MODELS`. Codex defaults are `gpt-5.6-sol` / `xhigh`.
+Passing `effort` for Claude is rejected. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. API and launcher share per-model effort validation and pass formal IDs unchanged. Omitted model stays `gpt-5.6-sol`; explicit `sol` / `luna` map to GPT-6. Claude models follow the server's `_SPAWN_MODELS`.
 
 Codex may show a trust dialog in a non-Git directory. The spawner accepts it with `C-m`; if the dialog remains after checks every three seconds, up to ten times, it fails fast. The server waits up to 120 seconds for launcher readiness and cleans up the tmux session and token / child credential files on failure.
 

@@ -34,7 +34,7 @@ jobs:
           python -m pytest -q tests/windows/ tests/test_mail_fixture_line_endings.py
           tests/test_dashboard_startup.py tests/test_codex_app_runtime_provider.py
           tests/test_dashboard_quotas.py tests/test_dashboard_quota_http.py
-          tests/test_dashboard_quota_adapters.py
+          tests/test_dashboard_quota_adapters.py tests/test_codex_models.py
 
   tests:
     # 対応 OS は macOS（README「対応環境」）。ubuntu で回すと launchd / launchctl /

@@ -186,15 +186,20 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     providers = server.spawn_names_payload()["providers"]
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
-        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-test-a",
+        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-5.6-sol",
+        "model_source": "override", "model_error": "",
+        "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
+        "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
         "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
     }
 
 
-def test_spawn_names_uses_current_codex_defaults(monkeypatch):
+def test_spawn_names_uses_current_codex_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     assert server._codex_models() == [
         "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-6-sol", "gpt-6-luna",
     ]
 
 
@@ -238,11 +243,13 @@ def test_mcp_call_shapes_credentials_to_the_live_server_schema(monkeypatch):
     }
 
 
-def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path):
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro"])
+def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path, model):
     launcher = tmp_path / "spawn_child.sh"
     launcher.write_text("#!/bin/bash\n")
     launcher.chmod(0o755)
-    calls, launched = [], []
+    calls, launched, environments = [], [], []
+    monkeypatch.delenv("AGENTSTACK_PYTHON", raising=False)
 
     def mcp(method, args, timeout=15):
         calls.append((method, args))
@@ -265,11 +272,12 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server.time, "sleep", lambda _: None)
-    monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
+    monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: (environments.append(kwargs["env"]), launched.append(args))[-1])
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
-    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": "gpt-5.6-sol", "effort": "high"})
+    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": model, "effort": "high"})
 
     assert result["ok"] is True
+    assert environments[0]["AGENTSTACK_PYTHON"] == server.sys.executable
     assert result["requested_name"] == "Sunny-Curie"
     assert result["child_name"] == "SunnyCurie"
     assert result["name_substituted"] is True
@@ -289,7 +297,7 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
         "project_key": "/project",
         "program": "codex-cli",
     }
-    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", "gpt-5.6-sol", "--effort", "high", "work", str(tmp_path)]
+    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", model, "--effort", "high", "work", str(tmp_path)]
 
 
 def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path):
@@ -1084,3 +1092,31 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
     for key in ("string", "boolean", "negative", "nan", "infinite", "shorter", "none"):
         assert limits[key] == 140000, key
     assert limits["huge"] == 3600000
+
+
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-future"])
+def test_codex_api_and_launcher_policy_agree(monkeypatch, tmp_path, model):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    captured = []
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: captured.append(spec) or {"ok": True})
+    payload = {"standalone": True, "task": "work", "provider": "codex", "model": model}
+    assert server.do_spawn(payload)["ok"]
+    assert captured[-1].model == model
+    assert captured[-1].effort == server.codex_models.resolve_effort(model)
+    assert captured[-1].effort_arg == bool(captured[-1].effort)
+    if model == "gpt-6-luna":
+        assert not server.do_spawn({**payload, "effort": "ultra"})["ok"]
+        assert len(captured) == 1
+
+
+def test_codex_api_default_excluded_by_allowlist_never_selects_first(monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-6-luna")
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("disallowed default must not launch"))
+    result = server.do_spawn({"standalone": True, "task": "work", "provider": "codex"})
+    assert not result["ok"] and "gpt-5.6-sol" in result["error"]
+
+
+@pytest.fixture(autouse=True)
+def isolate_codex_discovery_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)

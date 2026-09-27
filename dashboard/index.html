@@ -37671,15 +37671,18 @@ function normalizeSpawnProviders(catalog){
       !Array.isArray(rawCapabilities))?rawCapabilities:{};
     return {id,label:String(provider&&provider.label||id).trim(),
       models,defaultModel,efforts,
+      modelEfforts:provider&&provider.model_efforts||null,
+      modelEffortDefaults:provider&&provider.model_effort_defaults||{},
+      modelError:String(provider&&provider.model_error||'').trim(),
       defaultEffort:String(provider&&provider.effort_default||'').trim(),
       capabilities};
   }).filter(provider=>/^[a-z][a-z0-9_-]*$/.test(provider.id)&&
-    provider.models.length);
+    (provider.models.length||provider.modelError));
 }
 
 /* provider-capabilities:start */
 let spmWorktreeForced=false,spmWorktreeChoice=false;
-let spmProviderRequirementStatus=false;
+let spmProviderRequirementStatus='';
 function spawnSelectedProviderCapabilities(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
   return provider&&provider.capabilities||{};
@@ -37714,6 +37717,9 @@ function spawnProviderDisplayModels(provider){
   return visible;
 }
 function spawnProviderRequirementsMissing(){
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  if(provider&&provider.modelError)return provider.modelError;
+  if(!spmSelectedModel)return 'select a model for this provider';
   const caps=spawnSelectedProviderCapabilities();
   const input=SPM('spm-resources');
   if(caps.resources_required&&
@@ -37730,22 +37736,18 @@ function updateSpawnProviderRequirementStatus(){
   const missing=spawnProviderRequirementsMissing();
   const stat=SPM('spm-stat');
   if(!stat||spmBusy||!spmReady||stat.classList.contains('err'))return;
-  const requirementMessages=new Set([
-    'resources are required for this provider',
-    'select an effort for this provider'
-  ]);
   const ownsStatus=spmProviderRequirementStatus&&
-    requirementMessages.has(stat.textContent);
+    stat.textContent===spmProviderRequirementStatus;
   const normalStatus=!stat.textContent||stat.textContent.startsWith('ready ·');
   const draftStatus=stat.textContent.startsWith('restored saved task draft');
   if(missing&&(ownsStatus||normalStatus||draftStatus)){
     setSpawnStat(missing,'');
-    spmProviderRequirementStatus=true;
+    spmProviderRequirementStatus=missing;
   }else if(!missing&&ownsStatus){
-    spmProviderRequirementStatus=false;
+    spmProviderRequirementStatus='';
     setSpawnDraftStatus(spmDraftRestored);
   }else if(!missing){
-    spmProviderRequirementStatus=false;
+    spmProviderRequirementStatus='';
   }
 }
 function applySpawnProviderCapabilities(provider){
@@ -37776,7 +37778,7 @@ function applySpawnProviderCapabilities(provider){
 }
 function resetSpawnProviderCapabilities(){
   spmWorktreeForced=false;spmWorktreeChoice=false;
-  spmProviderRequirementStatus=false;
+  spmProviderRequirementStatus='';
   if(SPM('spm-worktree'))SPM('spm-worktree').disabled=false;
   if(SPM('spm-resources'))SPM('spm-resources').value='';
   if(SPM('spm-resources-row'))SPM('spm-resources-row').style.display='none';
@@ -37791,7 +37793,7 @@ const SPM_MODEL_TONES=Object.freeze({
 });
 const SPM_EFFORT_HINTS=Object.freeze({
   low:'routine',medium:'standard',high:'complex',xhigh:'hardest · default',
-  max:'astra only · beyond xhigh',ultra:'astra only · maximum'
+  max:'beyond xhigh',ultra:'maximum'
 });
 
 function spawnModelTone(providerId,modelId){
@@ -37837,9 +37839,9 @@ function selectSpawnProvider(providerId){
 
 function renderSpawnModels(provider){
   const root=SPM('spm-models');
-  const models=spawnProviderDisplayModels(provider);
-  const fallback=models.some(model=>model.id===provider.defaultModel)
-    ? provider.defaultModel:((models[0]||{}).id||'');
+  const models=provider&&provider.modelError?[]:spawnProviderDisplayModels(provider);
+  const fallback=models.some(model=>model.id===(provider&&provider.defaultModel))
+    ? provider.defaultModel:(provider&&['claude','codex'].includes(provider.id)?'':((models[0]||{}).id||''));
   root.innerHTML=models.map(model=>{
     const tone=spawnModelTone(provider&&provider.id||'',model.id);
     const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
@@ -37851,12 +37853,13 @@ function renderSpawnModels(provider){
       `<b>${esc(displayLabel)}</b>${catalogId}`+
       `${tone?`<em class="spm-model-tone">${esc(tone)}</em>`:''}`+
       `</button>`;
-  }).join('')||'<div class="spm-load">no models configured</div>';
+  }).join('')||(provider&&provider.modelError
+    ? '<div class="spm-load spm-stat err" role="alert">CONFIGURATION ERROR · '+esc(provider.modelError)+'</div>'
+    : '<div class="spm-load">no models configured</div>');
   root.querySelectorAll('.spm-model-chip').forEach(btn=>{
     btn.onclick=()=>selectSpawnModel(btn.dataset.model);
   });
   selectSpawnModel(fallback);
-  renderSpawnEfforts(provider);
 }
 
 function selectSpawnModel(model){
@@ -37868,14 +37871,23 @@ function selectSpawnModel(model){
     btn.classList.toggle('on',on);
     btn.setAttribute('aria-checked',on?'true':'false');
   });
-  renderSpawnEngineNote();
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  renderSpawnEfforts(provider);
+}
+
+function spawnModelEfforts(provider){
+  if(provider&&provider.modelEfforts){
+    const values=provider.modelEfforts[spmSelectedModel];
+    return Array.isArray(values)?values.filter(value=>typeof value==='string'):[];
+  }
+  return provider&&Array.isArray(provider.efforts)?provider.efforts:[];
 }
 
 function renderSpawnEfforts(provider){
   const row=SPM('spm-effort-row');
   const root=SPM('spm-efforts');
   const hint=SPM('spm-effort-hint');
-  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  const efforts=spawnModelEfforts(provider);
   row.hidden=!efforts.length;
   root.innerHTML=efforts.map(effort=>
     `<button type="button" class="spm-chip spm-effort-chip" `+
@@ -37889,9 +37901,11 @@ function renderSpawnEfforts(provider){
     btn.onclick=()=>selectSpawnEffort(btn.dataset.effort);
   });
   const effortRequired=!!(provider&&provider.capabilities&&provider.capabilities.effort_required);
+  const defaultEffort=provider&&provider.modelEfforts
+    ?provider.modelEffortDefaults[spmSelectedModel]:provider&&provider.defaultEffort;
   const fallback=effortRequired?'':(
-    efforts.includes(provider&&provider.defaultEffort)
-      ?provider.defaultEffort:(efforts[0]||''));
+    provider&&provider.modelEfforts&&efforts.includes(spmSelectedEffort)
+      ?spmSelectedEffort:(efforts.includes(defaultEffort)?defaultEffort:(efforts[0]||'')));
   selectSpawnEffort(fallback);
 }
 
@@ -38109,9 +38123,10 @@ async function submitSpawn(){
   if(!payload.dir){setSpawnStat('launch directory is required','err');
     SPM('spm-dir').focus();return;}
   if(!payload.provider){setSpawnStat('provider is required','err');return;}
-  if(!payload.model){setSpawnStat('model is required','err');return;}
   const provider=spmProviders.find(item=>item.id===payload.provider);
-  if(provider&&provider.efforts.length&&!payload.effort){
+  if(provider&&provider.modelError){setSpawnStat(provider.modelError,'err');return;}
+  if(!payload.model){setSpawnStat('model is required','err');return;}
+  if(spawnModelEfforts(provider).length&&!payload.effort){
     setSpawnStat('effort is required for this provider','err');return;
   }
   spmBusy=true;

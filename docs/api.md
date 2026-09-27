@@ -103,8 +103,10 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"codex",
       "label":"Codex",
       "program":"codex-cli",
-      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna"],
+      "models":["gpt-5.6-sol","gpt-6-astra","gpt-5.6-terra","gpt-5.6-luna","gpt-6-sol","gpt-6-luna"],
       "default_model":"gpt-5.6-sol",
+      "model_source":"bundled",
+      "model_error":"",
       "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
@@ -116,7 +118,7 @@ scientist rail の `status` は、その scientist と134語の adjective の組
 
 adjective は ORRERY Mail の正典 `SIMPLE_ADJECTIVES` Round 3 と逐語同期し、launcher・catalog・suggestion API が同じ source を使います。独自追加は strict deployment の name validation と乖離するため禁止です。
 
-`AGENTSTACK_CODEX_MODELS` があれば Codex model list を上書きします。未設定時は `gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna` の順で、default は `gpt-5.6-sol`、effort default は `xhigh` です。
+Codex は同梱候補に期限内のCLIローカルcacheの候補を追加します。`AGENTSTACK_CODEX_MODELS` 明示時はその許可リストだけを使い、不正設定は `model_error` に返します。`model_source` は `bundled` / `local_cache` / `override` です。既定モデルは候補順に依存せず `gpt-5.6-sol` に固定します。providerの `model_efforts` と `model_effort_defaults` はモデルIDをkeyとする辞書で、UIはこちらを優先します。空のeffort一覧はCLI既定を使うため、effortを省略してください。詳細は [設定](configuration.md#codex-model-catalog) を参照してください。
 
 ## GET `/api/name-status`
 
@@ -504,7 +506,7 @@ request:
 | `dir` | no | 存在する working directory。既定は source repo |
 | `provider` | no | `claude`（既定）または `codex` |
 | `model` | no | provider catalog 内。provider の default あり |
-| `effort` | Codex のみ | `low / medium / high / xhigh / max / ultra`（max / ultra は gpt-6-astra のみ）。既定 `xhigh` |
+| `effort` | Codex only | モデル別。`model_efforts` / `model_effort_defaults` を参照。対応情報がなければ省略してCLI既定を使用 |
 | `role` | no | 最大40文字 |
 | `group` | no | 最大24文字 |
 | `worktree` | no | isolated worktree |
@@ -528,7 +530,7 @@ request:
 
 `standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と CC audit trail を作り、登録 summary / launcher prompt は先頭80文字です。
 
-Claude provider に `effort` を渡すと拒否します。Codex model は `AGENTSTACK_CODEX_MODELS` allow-list、Claude model は server の `_SPAWN_MODELS` に従います。Codex の既定は `gpt-5.6-sol` / `xhigh` です。
+Claude provider に `effort` を渡すと拒否します。Codex は正式な `gpt-*` IDをcacheにないという理由では拒否せず、明示 `AGENTSTACK_CODEX_MODELS` がある場合だけmembershipを制限します。APIとlauncherで同じモデル別effort検証を行い、正式IDをそのまま渡します。無指定モデルは `gpt-5.6-sol`、短縮名 `sol` / `luna` はGPT-6系です。Claude modelはserverの `_SPAWN_MODELS` に従います。
 
 non-git directory では Codex が trust dialog を出すことがあります。spawner は `C-m` で受理し、3秒ごと・最大10回を超えて dialog が残る場合は fail-fast します。server は launcher readiness を最大120秒待ち、失敗時は tmux session と token / child credential file を cleanup します。
 

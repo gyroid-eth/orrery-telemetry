@@ -43,6 +43,11 @@ from urllib.parse import urlparse, parse_qs
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
+    from dashboard import codex_models
+except ModuleNotFoundError:  # direct `python dashboard/server.py`
+    import codex_models
+
+try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     from providers.codex_app import CodexAppRuntimeProvider
@@ -5124,23 +5129,15 @@ _SPAWN_MODELS = {
     "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
     "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),
 }
-_CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
-_CODEX_DEFAULT_MODELS = (
-    _CODEX_DEFAULT_MODEL,
-    "gpt-6-astra",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-)
-# max / ultra: gpt-6-astra (Codex CLI 0.153 models cache) accepts them; the
-# launcher still rejects combinations a model cannot take (luna:ultra, 5.5:max).
-_CODEX_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+_CODEX_DEFAULT_MODEL = codex_models.DEFAULT_MODEL
+_CODEX_DEFAULT_MODELS = codex_models.DEFAULT_MODELS
+_CODEX_EFFORTS = codex_models.EFFORTS
 SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
 
 
 def _codex_models() -> list[str]:
-    """Return the installer's Codex model allow-list (comma-separated override)."""
-    models = [value.strip() for value in os.environ.get("AGENTSTACK_CODEX_MODELS", "").split(",") if value.strip()]
-    return models or list(_CODEX_DEFAULT_MODELS)
+    """Candidates only; explicit authorization is checked at launch time."""
+    return list(codex_models.resolve_catalog().models)
 
 
 def _agent_name_comparison_key(name: str) -> str:
@@ -5378,7 +5375,7 @@ def spawn_names_payload() -> dict:
         "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL,
         "providers": [
             {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL, "efforts": None},
-            {"id": "codex", "label": "Codex", "program": "codex-cli", "models": _codex_models(), "default_model": _codex_models()[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
+            codex_models.provider_catalog(),
         ],
     }
 
@@ -5830,7 +5827,7 @@ def do_spawn(payload: dict) -> dict:
     if error:
         return error
     provider = (payload.get("provider") or "claude").strip().lower()
-    model = (payload.get("model") or (_CLAUDE_SPAWN_DEFAULT_MODEL if provider == "claude" else _codex_models()[0])).strip()
+    model = (payload.get("model") or (_CLAUDE_SPAWN_DEFAULT_MODEL if provider == "claude" else _CODEX_DEFAULT_MODEL)).strip()
     effort = (payload.get("effort") or "").strip().lower()
     if provider == "claude":
         if model not in _SPAWN_MODELS:
@@ -5843,15 +5840,15 @@ def do_spawn(payload: dict) -> dict:
             script=SPAWN_SCRIPT,
         )
     elif provider == "codex":
-        if model not in _codex_models():
-            return {"ok": False, "error": f"model not allowed for provider codex: {model}"}
-        effort = effort or "xhigh"
-        if effort not in _CODEX_EFFORTS:
-            return {"ok": False, "error": f"effort not allowed for provider codex: {effort}"}
+        try:
+            model = codex_models.normalize_model(model)
+            effort = codex_models.resolve_effort(model, effort)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         spec = SpawnLaunchSpec(
             provider="codex", program="codex-cli", model=model,
             script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",),
-            effort_arg=True,
+            effort_arg=bool(effort),
         )
     else:
         return {"ok": False, "error": f"provider not allowed: {provider}"}
@@ -6211,6 +6208,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(dict(spec.launcher_env))
+    if spec.provider == "codex" and not env.get("AGENTSTACK_PYTHON", "").strip():
+        # Direct development servers need the same interpreter as the API;
+        # installed services already carry the installer's pinned interpreter.
+        env["AGENTSTACK_PYTHON"] = sys.executable
     if standalone:
         env.pop("PARENT_AGENT", None)
     else:

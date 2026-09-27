@@ -308,7 +308,7 @@ def test_native_providers_keep_canonical_validation():
         }
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "codex",
                                 "model": "gemini-3.8-flash-high"})["error"] == (
-            "model not allowed for provider codex: gemini-3.8-flash-high")
+            "invalid Codex model ID; use sol / luna / astra / terra / gpt-<id>")
     assert canonical_server.do_spawn({"parent": "P", "task": "w", "provider": "gemini"}) == {
         "ok": False, "error": "provider not allowed: gemini",
     }
@@ -966,7 +966,7 @@ def test_rendered_dashboard_keeps_server_language_defaults(monkeypatch):
 _UI_FUNCTIONS = (
     "normalizeSpawnProviders", "spawnModelTone", "renderSpawnProviders",
     "selectSpawnProvider", "renderSpawnModels", "selectSpawnModel",
-    "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
+    "spawnModelEfforts", "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
     "updateSpawnButton", "setSpawnDraftStatus", "setSpawnStat", "buildSpawnPayload",
 )
 
@@ -1423,3 +1423,9 @@ def test_gemini_unqualified_custom_model_is_preserved(gemini_env, monkeypatch):
     result = server.do_spawn(_gemini_payload(gemini_env, model="custom-model", effort="low"))
     assert result["ok"] is True
     assert result["model"] == "custom-model"
+
+
+@pytest.fixture(autouse=True)
+def isolate_codex_discovery_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
