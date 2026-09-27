@@ -132,6 +132,41 @@ def _run_snippet(snippet: str, env_extra: dict | None = None):
 _SOURCE = f". {_LIB}\n"
 
 
+def test_extract_agent_id_ignores_jsonrpc_envelope_request_id():
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {"id": 203, "name": "BoundCodex", "registration_token": "token"}
+                        ),
+                    }
+                ]
+            },
+        }
+    )
+    r = _run_snippet(
+        _SOURCE + 'printf "%s" "$PAYLOAD" | ags_extract_agent_id\n',
+        {"PAYLOAD": payload},
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "203", r.stdout
+
+
+def test_extract_agent_id_keeps_plain_top_level_id_compatibility():
+    payload = json.dumps({"id": 73, "name": "PlainAgent"})
+    r = _run_snippet(
+        _SOURCE + 'printf "%s" "$PAYLOAD" | ags_extract_agent_id\n',
+        {"PAYLOAD": payload},
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "73", r.stdout
+
+
 # --- 1. loader returns success when there is no bearer token -----------------
 
 def test_load_token_succeeds_without_a_bearer_token():
