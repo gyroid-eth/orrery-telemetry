@@ -85,3 +85,12 @@ def test_supported_effort_survives_model_change(provider):
     result = run_ui(provider, "selectSpawnModel('gpt-6-sol');selectSpawnEffort('high');selectSpawnModel('gpt-6-luna');out.state=state();out.note=SPM('spm-engine-note').textContent;")
     assert result["state"]["payload"]["effort"] == "high"
     assert "gpt-6-luna" in result["note"] and "high" in result["note"]
+
+
+def test_auto_selected_effort_does_not_replace_the_next_model_default(provider):
+    provider["models"].append("gpt-lite")
+    provider["model_efforts"]["gpt-lite"] = ["low", "medium"]
+    provider["model_effort_defaults"]["gpt-lite"] = "low"
+    result = run_ui(provider, "selectSpawnModel('gpt-lite');out.lite=state();selectSpawnModel('gpt-6-sol');out.sol=state();")
+    assert result["lite"]["payload"]["effort"] == "low"
+    assert result["sol"]["payload"]["effort"] == "xhigh"

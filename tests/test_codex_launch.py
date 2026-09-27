@@ -425,7 +425,7 @@ def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
         _extract(name) for name in functions
     )
     command = " ".join([function, *(shlex.quote(arg) for arg in args)])
-    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home")})
+    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home")})
 
 
 def test_model_catalog_tracks_current_generations_without_dropping_old_ids():

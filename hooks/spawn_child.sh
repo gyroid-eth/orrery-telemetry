@@ -63,6 +63,8 @@
 set -euo pipefail
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Policy belongs to this launcher version, not an optional hooks override.
+CODEX_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/codex_models.py"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
@@ -664,11 +666,11 @@ normalize_claude_model() {
 }
 
 normalize_codex_model() {
-    "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/../dashboard/codex_models.py" normalize "${1:-}"
+    "${AGENTSTACK_PYTHON:-python3}" "$CODEX_MODEL_HELPER" normalize "${1:-}"
 }
 
 validate_codex_effort() {
-    "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/../dashboard/codex_models.py" effort "$1" "${2:-}"
+    "${AGENTSTACK_PYTHON:-python3}" "$CODEX_MODEL_HELPER" effort "$1" "${2:-}"
 }
 
 # 子用に独立した git worktree を作って WORK_DIR を上書きするヘルパー。

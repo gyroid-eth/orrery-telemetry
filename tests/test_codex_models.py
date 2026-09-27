@@ -180,7 +180,8 @@ def test_explicit_allowlist_wins_and_keeps_fixed_default(monkeypatch):
 @pytest.mark.parametrize("override", [",,,", "claude-opus-5", "gpt-ok,bad", "gpt-x;echo", "x"*(models.MAX_MODELS*129+1)])
 def test_invalid_allowlist_is_visible_error_not_silent_fallback(monkeypatch, override):
     cache([row("gpt-cache")])
-    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", override)
+    # Test the parser limit without exceeding Windows' OS environment limit.
+    monkeypatch.setattr(models.os, "environ", {**os.environ, "AGENTSTACK_CODEX_MODELS": override})
     provider = models.provider_catalog()
     assert provider["models"] == []
     assert "AGENTSTACK_CODEX_MODELS" in provider["model_error"]
