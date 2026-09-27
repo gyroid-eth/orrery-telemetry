@@ -378,8 +378,11 @@ except Exception:
     print("")
     sys.exit(0)
 
-found = candidate_id(data)
 result = data.get("result") if isinstance(data, dict) else None
+# JSON-RPC envelope ids correlate requests and responses; they are not ORRERY
+# agent row ids. Only plain (non-envelope) payloads may use a top-level id.
+is_jsonrpc_envelope = isinstance(data, dict) and "jsonrpc" in data
+found = None if is_jsonrpc_envelope else candidate_id(data)
 if found is None:
     found = candidate_id(result)
 if found is None and isinstance(result, dict):
