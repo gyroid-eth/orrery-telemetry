@@ -1287,7 +1287,8 @@ run_to() {{
             return 0
             ;;
         capture-pane) printf 'Claude ❯\n'; return 0 ;;
-        send-keys) return 0 ;;
+        load-buffer) printf 'load-buffer-content %s\n' "$(cat "$5")" >> "$FAKE_COMMAND_LOG"; return 0 ;;
+        paste-buffer|delete-buffer|send-keys) return 0 ;;
         *) return 98 ;;
     esac
 }}
@@ -1362,12 +1363,14 @@ def _state_should_attempt(
 def _assert_injection_commands(commands: list[str], *, expected_count: int) -> None:
     injection_sequence = []
     for command in commands:
-        if "send-keys -t BlueLake -l " in command:
+        if command.startswith("load-buffer-content "):
             assert "D12 completion delivery" in command
+            injection_sequence.append("body")
+        elif command.startswith("tmux paste-buffer -p -d ") and command.endswith(" -t BlueLake"):
             injection_sequence.append("prompt")
         elif command.endswith("send-keys -t BlueLake C-m"):
             injection_sequence.append("submit")
-    assert injection_sequence == ["prompt", "submit"] * expected_count
+    assert injection_sequence == ["body", "prompt", "submit"] * expected_count
 
 
 def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
@@ -1416,7 +1419,9 @@ def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
             .read_text(encoding="utf-8")
             .splitlines()
         )
-        assert commands[-1].endswith("send-keys -t BlueLake C-m")
+        assert [c for c in commands if " send-keys " in c][-1].endswith(
+            "send-keys -t BlueLake C-m"
+        )
         _assert_injection_commands(commands, expected_count=1)
 
         if crash_point == "after_external_injection":

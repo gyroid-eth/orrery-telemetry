@@ -955,7 +955,8 @@ printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
 case "$1" in
   has-session) exit 0 ;;
   capture-pane) printf '%s\n' 'Claude Code' ;;
-  send-keys) exit 0 ;;
+  load-buffer) cat "$4" >> "$FAKE_TMUX_LOG"; printf '\n' >> "$FAKE_TMUX_LOG" ;;
+  paste-buffer|delete-buffer|send-keys) exit 0 ;;
   *) exit 1 ;;
 esac
 """,
