@@ -9,6 +9,8 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from agentstack_codex_app.agent_mail_client import AgentMailError, Registration
 from agentstack_codex_app.daemon import (
     BridgeConfig,
@@ -695,23 +697,73 @@ def test_cleanup_orphans_purges_already_retired_legacy_token_binding(tmp_path):
     assert [next(iter(call)) for call in mail.calls] == ["whois"]
 
 
+def _wait_for_socket(socket_path: Path, *, timeout: float = 2) -> None:
+    # bind() creates the path before listen() makes it connectable.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(0.1)
+                connection.connect(os.fspath(socket_path))
+            return
+        except (FileNotFoundError, ConnectionRefusedError):
+            time.sleep(0.01)
+    raise AssertionError("Bridge socket did not start listening")
+
+
+def test_socket_readiness_waits_for_listen(monkeypatch):
+    with tempfile.TemporaryDirectory(prefix="cas-ready-", dir=SHORT_TMP_DIR) as directory:
+        socket_path = Path(directory) / "bridge.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(os.fspath(socket_path))
+            retried = []
+
+            def start_listening(_seconds):
+                retried.append(True)
+                listener.listen(1)
+
+            monkeypatch.setattr(time, "sleep", start_listening)
+            assert socket_path.exists()
+            _wait_for_socket(socket_path)
+            assert retried == [True]
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_socket_readiness_times_out_without_listener(monkeypatch, bound):
+    with tempfile.TemporaryDirectory(prefix="cas-unready-", dir=SHORT_TMP_DIR) as directory:
+        socket_path = Path(directory) / "bridge.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            if bound:
+                listener.bind(os.fspath(socket_path))
+            clock = [0.0]
+
+            def advance_clock(seconds):
+                clock[0] += seconds
+
+            monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+            monkeypatch.setattr(time, "sleep", advance_clock)
+            with pytest.raises(AssertionError, match="did not start listening"):
+                _wait_for_socket(socket_path, timeout=0.02)
+
+
 def test_private_socket_accepts_event_and_worker_writes_snapshot():
     with tempfile.TemporaryDirectory(prefix="cas-daemon-", dir=SHORT_TMP_DIR) as directory:
         config = _config(Path(directory))
         daemon = BridgeDaemon(config, FakeAgentMail())
         thread = threading.Thread(target=daemon.serve_forever)
         thread.start()
-        deadline = time.time() + 2
-        while not config.socket_path.exists() and time.time() < deadline:
-            time.sleep(0.01)
-        assert config.socket_path.exists()
-        assert stat_mode(config.socket_path) == 0o600
-        assert forward_event(_event(), config.socket_path, timeout=1) is True
-        while not config.snapshot_path.exists() and time.time() < deadline:
-            time.sleep(0.01)
-        daemon.stop()
-        thread.join(timeout=2)
-        assert config.snapshot_path.exists()
+        try:
+            _wait_for_socket(config.socket_path)
+            assert stat_mode(config.socket_path) == 0o600
+            assert forward_event(_event(), config.socket_path, timeout=1) is True
+            deadline = time.monotonic() + 2
+            while not config.snapshot_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert config.snapshot_path.exists()
+        finally:
+            daemon.stop()
+            thread.join(timeout=2)
+            assert not thread.is_alive()
 
 
 def test_bridge_worker_ticks_cold_wake_coordinator():
@@ -725,22 +777,21 @@ def test_bridge_worker_ticks_cold_wake_coordinator():
         )
         thread = threading.Thread(target=daemon.serve_forever)
         thread.start()
-        deadline = time.time() + 2
-        while not config.socket_path.exists() and time.time() < deadline:
-            time.sleep(0.01)
-        assert forward_event(_event(), config.socket_path, timeout=1) is True
-        while (
-            not any(tick for tick in wake.ticks)
-            and time.time() < deadline
-        ):
-            time.sleep(0.01)
-        daemon.stop()
-        thread.join(timeout=2)
-        assert any(
-            tick[0]["external_id"] == external_id_for("session-example")
-            for tick in wake.ticks
-            if tick
-        )
+        try:
+            _wait_for_socket(config.socket_path)
+            assert forward_event(_event(), config.socket_path, timeout=1) is True
+            deadline = time.monotonic() + 2
+            while not any(wake.ticks) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert any(
+                tick[0]["external_id"] == external_id_for("session-example")
+                for tick in wake.ticks
+                if tick
+            )
+        finally:
+            daemon.stop()
+            thread.join(timeout=2)
+            assert not thread.is_alive()
 
 
 def test_post_tool_use_coalesces_pending_agent_mail_signals(tmp_path):
