@@ -177,7 +177,8 @@ def test_explicit_allowlist_wins_and_keeps_fixed_default(monkeypatch):
         models.normalize_model("gpt-cache-only")
 
 
-@pytest.mark.parametrize("override", [",,,", "claude-opus-5", "gpt-ok,bad", "gpt-x;echo", "x"*(models.MAX_MODELS*129+1)])
+@pytest.mark.parametrize("override", [",,,", "claude-opus-5", "gpt-ok,bad", "gpt-x;echo", "x"*(models.MAX_MODELS*129+1)],
+                         ids=["empty", "foreign", "mixed", "unsafe", "oversized"])
 def test_invalid_allowlist_is_visible_error_not_silent_fallback(monkeypatch, override):
     cache([row("gpt-cache")])
     # Test the parser limit without exceeding Windows' OS environment limit.
