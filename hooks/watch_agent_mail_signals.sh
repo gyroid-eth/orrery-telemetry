@@ -482,11 +482,24 @@ deliver_worker() {
         prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
     fi
 
-    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" -l "$prompt" 2>/dev/null; then
+    # 本文は bracketed paste で渡す。send-keys -l は 1 文字ずつの打鍵として届くため、
+    # 受け側の読み取りが遅れる（機械の飽和など）と本文と C-m が同じ読み取りに入り、
+    # C-m が貼り付けの一部として扱われて submit されない。本文が入力欄に残り、
+    # 人が Enter を押すまで止まる。2026-09-27 に Codex と Claude Code の両方で、
+    # REPL を SIGSTOP した間に送って再現し、paste-buffer -p なら submit されることを確認。
+    # run_to は背景実行で stdin が /dev/null になるので、本文はファイル経由で渡す。
+    local paste_file paste_buf="agentstack-notify-$$-${RANDOM}"
+    paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
+    if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file" \
+       || ! run_to "$TMUX_TIMEOUT" tmux load-buffer -b "$paste_buf" "$paste_file" 2>/dev/null \
+       || ! run_to "$TMUX_TIMEOUT" tmux paste-buffer -p -d -b "$paste_buf" -t "$session_name" 2>/dev/null; then
+        [[ -n "$paste_file" ]] && rm -f "$paste_file"
+        run_to "$TMUX_TIMEOUT" tmux delete-buffer -b "$paste_buf" 2>/dev/null || true
         state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
+    rm -f "$paste_file"
     sleep 0.2
     # submit は Enter keysym ではなく C-m（Ctrl+M=CR）を使う。spawn_child.sh が
     # Claude/Codex 両方の prompt 注入で C-m を使っており（proven-universal）、Codex
@@ -497,6 +510,20 @@ deliver_worker() {
         state_mark_result "$agent_name" "$msg_key" "submit_failed" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
+    fi
+
+    # 保険: それでも入力欄に本文が残っていれば C-m を 1 回だけ送り直す。入力欄は
+    # 画面上で最後にある ›（Codex）/ ❯（Claude Code）の行。履歴の同じ文面は
+    # それより上にあるので誤判定しない。長い貼り付けは Claude Code が
+    # [Pasted text …] に畳むので、それも残留とみなす。
+    sleep 1
+    local input_line
+    input_line=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "$session_name" -p 2>/dev/null \
+        | grep -E '^[[:space:]]*(›|❯)' | tail -1) || input_line=""
+    if [[ -n "$input_line" ]] && { [[ "$input_line" == *"ORRERY Mail notification: message from ${from}"* ]] \
+        || [[ "$input_line" == *"[Pasted text"* ]]; }; then
+        log "  Notification still in the input box of '$agent_name'; resending C-m"
+        run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" C-m 2>/dev/null || true
     fi
 
     state_mark_result "$agent_name" "$msg_key" "success" "watcher"
