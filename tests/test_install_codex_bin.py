@@ -18,6 +18,8 @@ import shlex
 import subprocess
 import time
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALL = ROOT / "scripts" / "install.sh"
 
@@ -227,3 +229,68 @@ def test_a_native_child_that_ignores_term_is_not_left_behind(tmp_path):
                 os.kill(int(pidfile.read_text()), 9)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+def _stop_functions(script: str) -> str:
+    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    parts = []
+    for name in ("codex_probe_stop", "codex_process_start"):
+        start = text.index(f"\n{name}() {{") + 1
+        parts.append(text[start:text.index("\n}\n", start) + 3])
+    return "\n".join(parts)
+
+
+# Signals are stubbed: 410000 is the probe, 410001 its child. No real process
+# is signalled.
+_SIGNAL_STUBS = r"""
+tick=0
+pgrep() { [[ "$2" == 410000 ]] && echo 410001; return 0; }
+sleep() { tick=$((tick + 1)); }
+wait() { return 0; }
+ps() { printf '%s\n' "$(start_of "$4")"; }
+kill() {
+  case "$1:$2" in
+    -TERM:*) echo "TERM $2" ;;
+    -KILL:*) echo "KILL $2" ;;
+    -0:410000) return 0 ;;
+    -0:410001) child_alive ;;
+  esac
+}
+"""
+
+
+@pytest.mark.parametrize("script", ["install.sh", "doctor.sh"])
+def test_a_pid_seen_gone_is_never_killed_even_if_reused(script):
+    # The child exits during the grace period; its PID then shows up alive again
+    # (reused by an unrelated process). It must not receive KILL.
+    body = (_stop_functions(script) + _SIGNAL_STUBS
+            + 'start_of() { echo "Tue Sep 29 01:00:00 2026"; }\n'
+            + 'child_alive() { [[ "$tick" -ge 2 ]]; }\n'
+            + "codex_probe_stop 410000\n")
+    out = subprocess.run(["/bin/bash", "-c", body], capture_output=True, text=True, timeout=10).stdout.split("\n")
+    assert "TERM 410001" in out
+    assert "KILL 410001" not in out
+    assert "KILL 410000" in out
+
+
+@pytest.mark.parametrize("script", ["install.sh", "doctor.sh"])
+def test_a_pid_with_a_different_start_time_is_not_killed(script):
+    # Always alive, but by KILL time the PID belongs to a process that started later.
+    body = (_stop_functions(script) + _SIGNAL_STUBS
+            + 'start_of() { if [[ "$1" == 410001 && "$tick" -ge 5 ]]; then echo "Tue Sep 29 01:00:09 2026"; '
+              'else echo "Tue Sep 29 01:00:00 2026"; fi; }\n'
+            + "child_alive() { return 0; }\n"
+            + "codex_probe_stop 410000\n")
+    out = subprocess.run(["/bin/bash", "-c", body], capture_output=True, text=True, timeout=10).stdout.split("\n")
+    assert "KILL 410001" not in out
+    assert "KILL 410000" in out
+
+
+@pytest.mark.parametrize("script", ["install.sh", "doctor.sh"])
+def test_a_stubborn_child_with_the_same_start_time_is_killed(script):
+    body = (_stop_functions(script) + _SIGNAL_STUBS
+            + 'start_of() { echo "Tue Sep 29 01:00:00 2026"; }\n'
+            + "child_alive() { return 0; }\n"
+            + "codex_probe_stop 410000\n")
+    out = subprocess.run(["/bin/bash", "-c", body], capture_output=True, text=True, timeout=10).stdout.split("\n")
+    assert "KILL 410001" in out

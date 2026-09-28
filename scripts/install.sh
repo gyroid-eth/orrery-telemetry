@@ -308,14 +308,17 @@ codex_version_answers() {
 # Stop a probe that overran. Its process tree (an npm wrapper and the native
 # codex under it) is recorded first, while the children are still attached to
 # it; a wrapper that exits on TERM would otherwise orphan a native child that
-# ignores TERM, out of reach of `pkill -P`. Every recorded process gets TERM,
-# one second of grace, then KILL. Only descendants of the probe's own $! are
-# touched, never the caller's process group.
+# ignores TERM, out of reach of `pkill -P`. Every recorded process gets TERM
+# and one second of grace; a process seen gone is dropped for good, and KILL
+# goes only to one still carrying the start time recorded for it, so a PID
+# reused by an unrelated process is never signalled. Only descendants of the
+# probe's own $! are touched, never the caller's process group.
 codex_probe_stop() {
-  local pid="$1" targets="$1" level="$1" next p depth grace=0
+  local pid="$1" level="$1" targets next p t start depth grace=0
   # PID lists are space-separated; a caller may have narrowed IFS (the PATH
   # scan in find_usable_codex_bin splits on ":").
   local IFS=$' \t\n'
+  targets="$pid/$(codex_process_start "$pid")"
   if command -v pgrep >/dev/null 2>&1; then
     for depth in 1 2 3 4; do
       next=""
@@ -324,26 +327,40 @@ codex_probe_stop() {
       done
       next="$(echo $next)"
       [[ -n "$next" ]] || break
-      targets="$targets $next"
+      for p in $next; do
+        targets="$targets $p/$(codex_process_start "$p")"
+      done
       level="$next"
     done
   fi
-  for p in $targets; do
-    kill -TERM "$p" 2>/dev/null || true
+  for t in $targets; do
+    kill -TERM "${t%%/*}" 2>/dev/null || true
   done
-  while [[ "$grace" -lt 10 ]]; do
+  while [[ -n "$targets" ]]; do
     next=""
-    for p in $targets; do
-      kill -0 "$p" 2>/dev/null && next="$next $p"
+    for t in $targets; do
+      kill -0 "${t%%/*}" 2>/dev/null && next="$next $t"
     done
-    [[ -n "$next" ]] || break
+    targets="$(echo $next)"
+    [[ -n "$targets" && "$grace" -lt 10 ]] || break
     sleep 0.1
     grace=$((grace + 1))
   done
-  for p in $targets; do
-    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true
+  for t in $targets; do
+    p="${t%%/*}"
+    start="${t#*/}"
+    if [[ -n "$start" && "$(codex_process_start "$p")" != "$start" ]]; then
+      continue
+    fi
+    kill -KILL "$p" 2>/dev/null || true
   done
   wait "$pid" 2>/dev/null || true
+}
+
+# The process start time as one word (empty when ps cannot tell), used to
+# recognise the same process again under the same PID.
+codex_process_start() {
+  ps -o lstart= -p "$1" 2>/dev/null | tr -d ' \n' || true
 }
 
 # Prints why a codex candidate cannot be used; prints nothing when it can.
