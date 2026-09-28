@@ -126,6 +126,7 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENTSTACK_BASE_DIR` | `$HOME` | `fzf` picker root |
+| `AGENTSTACK_REQUIRE_EXPLICIT_PROJECT_KEY` | `0` | Set to `1` to require `--project-key` on top-level launchers; does not apply to child / resume / Dashboard spawn |
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Claude CLI |
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude registration model label |
 | `AGENTSTACK_CODEX_BIN` | `codex` resolved in the operator's shell at install time (`--codex-bin` to override) | Codex CLI. The dashboard runs under launchd / systemd with the minimal PATH, so a codex under nvm / nodebrew / `~/.npm-global` is reachable only through this value |

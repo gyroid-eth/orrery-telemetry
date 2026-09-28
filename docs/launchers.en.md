@@ -11,10 +11,12 @@ export PATH="$HOME/.agentstack/bin:$PATH"
 
 agent-start ~/code/my-project
 agent-start-codex ~/code/my-project
+agent-start-gemini ~/code/my-project
 ```
 
 - `agent-start`: Claude Code
 - `agent-start-codex`: Codex CLI
+- `agent-start-gemini`: Antigravity CLI
 
 If the directory argument is omitted and `fzf` is available, you can select a directory under `AGENTSTACK_BASE_DIR`. Otherwise, the current directory is used.
 
@@ -24,6 +26,16 @@ agent-start
 ```
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
+
+## Top-level project selection
+
+Before registration, all three top-level launchers print the selected project, where it came from, the working directory, and the reservation-protected roots. Project precedence is `--project-key KEY`, the launching shell's `AGENTSTACK_PROJECT_KEY`, the launching shell's `PROJECT_KEY`, then the installed `env.sh`. The launcher does not switch projects based on the repository and does not automatically rewrite `AGENTSTACK_PROTECTED_ROOTS`.
+
+```bash
+agent-start-codex --project-key shared-vault ~/code/my-project
+```
+
+The selected `--project-key` is passed explicitly into a new tmux session even if an existing tmux server carries a different value. To prevent accidental omission, set `AGENTSTACK_REQUIRE_EXPLICIT_PROJECT_KEY=1`; then a top-level launch without `--project-key` stops before registration and prints the required form. This opt-in applies only to `agent-start`, `agent-start-codex`, and `agent-start-gemini`, not to child launches, resume flows, or Dashboard NEW AGENT.
 
 ## tmux session
 

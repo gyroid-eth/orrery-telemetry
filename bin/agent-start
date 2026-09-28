@@ -3,7 +3,7 @@
 # current terminal tab, so it shows up in the dashboard and is click-to-jump-able.
 #
 # Directory selection (where `claude` runs):
-#   agent-start [DIR]    use DIR explicitly
+#   agent-start [--project-key KEY] [DIR]   use DIR explicitly
 #   agent-start          if fzf is installed, browse under $AGENTSTACK_BASE_DIR
 #                        (default: $HOME); otherwise fall back to the current dir
 #
@@ -25,11 +25,11 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN_DIR/lib/agentstack-launch.sh"
 # shellcheck source=lib/agentstack-register.sh
 . "$BIN_DIR/lib/agentstack-register.sh"
+ags_parse_top_level_args "$@"
 ags_load_env
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
 CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
-PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-}"
@@ -38,8 +38,10 @@ TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
 command -v "$CLAUDE_BIN" >/dev/null 2>&1 || ags_die "claude not found on PATH (set AGENTSTACK_CLAUDE_BIN)"
 
-DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
+DIR="$(ags_choose_top_level_dir)" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+ags_prepare_top_level_launch "$DIR" || exit $?
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 
 # Prevent identity hijack: stale/inherited values must not select another agent
 # or become part of a newly created tmux server's global environment.
@@ -126,6 +128,9 @@ cat > "$INNER" <<EOF
 cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  -e $(printf '%q' "AGENTSTACK_PROJECT_KEY=${AGENTSTACK_PROJECT_KEY:-}") \
+  -e $(printf '%q' "PROJECT_KEY=${PROJECT_KEY:-}") \
+  -e $(printf '%q' "AGENTSTACK_PROTECTED_ROOTS=${AGENTSTACK_PROTECTED_ROOTS:-}") \
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
