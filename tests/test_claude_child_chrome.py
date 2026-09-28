@@ -260,7 +260,16 @@ def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
     env, workdir = _launch_env(tmp_path, codex=True)
     result = _spawn(tmp_path, env, workdir, "CodexEnv", codex=True)
     assert result.returncode == 0, result.stderr
+    session = _new_session(env)
     inner = _codex_inner(env)
+    # tmux hands the launch script its -e variables; since #109 that includes
+    # the private file holding the initial task.
+    tmux_env = dict(
+        session[i + 1].split("=", 1)
+        for i, arg in enumerate(session[:-1])
+        if arg == "-e" and session[i + 1].startswith("AGENTSTACK_CODEX_PROMPT_FILE=")
+    )
+    assert tmux_env, session
 
     dump = tmp_path / "codex-env.txt"
     fake_codex = tmp_path / "fake-codex"
@@ -276,6 +285,7 @@ def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
         "AGENTSTACK_HOOKS_DIR": str(hooks),
         "AGENTSTACK_CLAUDE_CHILD_CHROME": "1",
         "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE": "from-server",
+        **tmux_env,
     }
     subprocess.run(["/bin/bash", "-c", inner], env=run_env, cwd=workdir,
                    capture_output=True, text=True, timeout=20, check=False)
