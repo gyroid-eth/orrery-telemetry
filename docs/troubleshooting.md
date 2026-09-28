@@ -246,6 +246,16 @@ dashboard は launcher 自身の readiness / early-death verdict を最大120秒
 
 Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-list も確認してください。
 
+## Codex の子の最初の task が画面に出ない
+
+Codex の子の最初の task は、画面への貼り付けではなく `codex -- "<task>"` の起動引数で渡します（起動途中の入力欄に貼ると、Codex 0.158 で task が消えることがあったため）。launcher は model・trust・sign-in の画面に応じながら、task が画面に出るまで最大90秒見張ります。出なければ `spawn_incidents.log` に `WARNING: task not seen on screen` と最後の画面を残し、子は残したまま終わります。task は再送しません。
+
+1. `tmux capture-pane -t '<child-name>' -p -S -1000` で画面を見る。Codex が作業中なら task は届いています
+2. trust などの画面で止まっていれば、その画面に応じる
+3. 届いていないと確かめられたときだけ、task を手で送る
+
+task は1つのコマンドライン引数になるため、120000 byte を超える task は起動前にエラーになります。長い説明は ORRERY Mail で送ってください。
+
 ## Spawn 名が拒否される
 
 指定名は hyphen を除去した後、ASCII letter で始まる2〜64文字の alphabetic 名である必要があります。

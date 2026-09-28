@@ -231,6 +231,16 @@ The dashboard waits up to 120 seconds for the launcher's own readiness / early-d
 
 For Codex, also check `AGENTSTACK_CODEX_MODELS` against the requested model and the effort allowlist.
 
+## A Codex child's first task does not appear on screen
+
+A Codex child's first task is passed as its launch argument, `codex -- "<task>"`, not pasted into the screen (pasted into the composer during startup, it was sometimes lost on Codex 0.158). The launcher handles the model, trust and sign-in screens and watches for up to 90 seconds until the task appears. If it does not, it records `WARNING: task not seen on screen` with the last screen in `spawn_incidents.log` and ends leaving the child running. The task is not resent.
+
+1. Look at the screen with `tmux capture-pane -t '<child-name>' -p -S -1000`. If Codex is working, the task arrived
+2. If it is stopped at a trust or similar screen, answer that screen
+3. Send the task by hand only once you have confirmed it did not arrive
+
+The task is one command-line argument, so a task over 120000 bytes fails before launch. Send long details by ORRERY Mail.
+
 ## Spawn name is rejected
 
 After removing hyphens, an explicit name must be a 2–64-character alphabetic name beginning with an ASCII letter.

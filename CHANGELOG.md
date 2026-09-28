@@ -10,6 +10,10 @@
 
 ## 未リリース
 
+### Codex の子の最初の task を、起動引数で渡すようにしました
+
+Codex の子の最初の task を、画面に貼り付けて送信する代わりに、Codex の公式の `[PROMPT]` 引数（`codex -- "<task>"`）で渡します。Codex 0.158 は起動途中にも入力欄を描き、確認画面の前に入力を捨てることがあり、WSL で8回に1回、task が届かないまま子が待っていました。task は 0600 のファイルを通して子の shell が読み、1つの引数として渡すので、shell のコマンドとして解釈されることはありません。launcher は model・trust・sign-in の画面に応じながら task が画面に出るまで見張り、出なければ診断を残して子はそのままにします（再送しません）。Claude の子と resume は変わりません。
+
 ### WSL で Codex の子が起動直後に終わっていました
 
 WSL の PATH には Windows の PATH（`/mnt/c/...`）が混ざるため、installer が Windows 側の npm の `codex` を選び、`AGENTSTACK_CODEX_BIN` に保存していました。これは Ubuntu の node では `Missing optional dependency @openai/codex-linux-x64` で即座に終わり、NEW AGENT の Codex の子がすべて、指示が届く前に終わっていました。installer は、WSL では `/mnt/<drive>/` 配下の `codex` を候補から外し、どの候補も `--version` に短い時間で答えるものだけを使うようにしました。PATH に無い `~/.npm-global/bin` なども探します。以前の install で保存された値が使えなければ選び直し、`--codex-bin` で明示した値が使えなければ理由を示して止まります。`agentstack-doctor` も、使われる `codex` が動かないときは `ok` ではなく `warn` と直し方を出し、0.157 より古い Codex CLI には更新を促す note を出します（0.153.4 では ChatGPT アカウントで GPT-6 系のモデルが拒否されました）。`--version` の確認は、応答しない候補を TERM のあと KILL してでも時間内に打ち切ります。
