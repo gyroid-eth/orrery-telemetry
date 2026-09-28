@@ -21,6 +21,9 @@ class ModelCatalog:
     models: tuple[str, ...]
     source: str
     error: str = ""
+    # Models the CLI's own picker files under its "overflow" section (older
+    # generations). Display-only: they stay launchable like any other model.
+    overflow: tuple[str, ...] = ()
 
 
 def is_model_id(value: object) -> bool:
@@ -50,7 +53,9 @@ def _timestamp(value: object) -> bool:
         return False
 
 
-def _read_catalog(path: Path, now_ms: float) -> tuple[float, tuple[str, ...]] | None:
+def _read_catalog(
+    path: Path, now_ms: float
+) -> tuple[float, tuple[str, ...], tuple[str, ...]] | None:
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         with os.fdopen(os.open(path, flags), "rb") as stream:
@@ -76,35 +81,52 @@ def _read_catalog(path: Path, now_ms: float) -> tuple[float, tuple[str, ...]] | 
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         return None
     models = _model_ids([row.get("id") for row in rows])
-    return (fetched, models) if models else None
+    if not models:
+        return None
+    overflow = tuple(row["id"] for row in rows if row.get("section") == "overflow")
+    return fetched, models, overflow
 
 
-def discover_models(now_ms: float | None = None) -> tuple[str, ...]:
+def _newest_catalog(
+    now_ms: float | None = None,
+) -> tuple[float, tuple[str, ...], tuple[str, ...]] | None:
     """Read the freshest v2 CLI cache without merging sources or inferring access."""
     try:
         root = Path(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or "~/.claude").expanduser()
     except (OSError, RuntimeError):
-        return ()
+        return None
     if not root.is_absolute():
-        return ()
+        return None
     directory = root / "cache" / "model-catalog"
     paths: list[Path] = []
     try:
         with os.scandir(directory) as entries:
             for count, entry in enumerate(entries):
                 if count >= MAX_FILES:
-                    return ()  # Never guess the newest from an incomplete scan.
+                    return None  # Never guess the newest from an incomplete scan.
                 if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False):
                     paths.append(Path(entry.path))
     except OSError:
-        return ()
+        return None
     now_ms = time.time() * 1000 if now_ms is None else now_ms
-    newest: tuple[float, tuple[str, ...]] | None = None
+    newest: tuple[float, tuple[str, ...], tuple[str, ...]] | None = None
     for path in sorted(paths):
         candidate = _read_catalog(path, now_ms)
         if candidate and (newest is None or candidate[0] > newest[0]):
             newest = candidate
-    return newest[1] if newest else ()
+    return newest
+
+
+def discover_catalog(
+    now_ms: float | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(models, overflow) from one read of the freshest cache."""
+    newest = _newest_catalog(now_ms)
+    return (newest[1], newest[2]) if newest else ((), ())
+
+
+def discover_models(now_ms: float | None = None) -> tuple[str, ...]:
+    return discover_catalog(now_ms)[0]
 
 
 def resolve_catalog(fallback: tuple[str, ...]) -> ModelCatalog:
@@ -116,7 +138,9 @@ def resolve_catalog(fallback: tuple[str, ...]) -> ModelCatalog:
         if not models:
             return ModelCatalog((), "override", "AGENTSTACK_CLAUDE_MODELS contains invalid model IDs")
         return ModelCatalog(models, "override")
-    models = discover_models()
+    models, overflow = discover_catalog()
     if models:
-        return ModelCatalog(tuple(dict.fromkeys((*fallback, *models))), "local_cache")
+        merged = tuple(dict.fromkeys((*fallback, *models)))
+        overflow = tuple(m for m in overflow if m in merged)
+        return ModelCatalog(merged, "local_cache", overflow=overflow)
     return ModelCatalog(fallback, "bundled")

@@ -37,7 +37,7 @@ def write(root, data, name="cache.json"):
 def test_override_precedes_cache_and_preserves_order(monkeypatch, profile):
     write(profile, document("claude-cache-9"))
     monkeypatch.setenv("AGENTSTACK_CLAUDE_MODELS", " claude-opus-9, ,claude-opus-9,claude-sonnet-9[1m] ")
-    monkeypatch.setattr(catalog, "discover_models", lambda: pytest.fail("override read cache"))
+    monkeypatch.setattr(catalog, "discover_catalog", lambda: pytest.fail("override read cache"))
     assert catalog.resolve_catalog(FALLBACK) == catalog.ModelCatalog(("claude-opus-9", "claude-sonnet-9[1m]"), "override")
 
 
@@ -170,3 +170,25 @@ def test_discovery_adds_candidates_without_reordering_or_removing_bundled(profil
 ])
 def test_formal_id_validation_is_independent_of_catalog(value, valid):
     assert catalog.is_model_id(value) is valid
+
+
+def test_overflow_section_is_reported_for_display_only(profile):
+    data = document("claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6")
+    rows = data["catalog"]["config"]["models"]
+    rows[0]["section"] = "main"
+    rows[1]["section"] = "overflow"
+    rows[2]["section"] = "overflow"
+    write(profile, data)
+    resolved = catalog.resolve_catalog(FALLBACK)
+    assert resolved.source == "local_cache"
+    assert resolved.models == ("claude-sonnet-5", "claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6")
+    assert resolved.overflow == ("claude-opus-4-8", "claude-sonnet-4-6")
+
+
+def test_no_overflow_without_a_fresh_catalog(profile):
+    data = document("claude-opus-4-8", stale=500)
+    data["catalog"]["config"]["models"][0]["section"] = "overflow"
+    write(profile, data)
+    resolved = catalog.resolve_catalog(FALLBACK)
+    assert resolved == catalog.ModelCatalog(FALLBACK, "bundled")
+    assert resolved.overflow == ()
