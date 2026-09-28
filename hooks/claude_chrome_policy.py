@@ -19,11 +19,11 @@ with. The lifecycle is:
 3. dashboard ``do_resume`` looks up the record for the exact session id it is
    about to resume (``claude --resume`` keeps the id) and passes its launch id
    on, so a /clear after the resume is bound to the same launch.
-4. The policy text carries a launch-id marker, so the transcript itself shows
-   that a conversation was started with --chrome. A conversation with the
-   marker but no bound record (the SessionStart write failed) is not mistaken
-   for one started without --chrome: resume binds it from the launch's record,
-   or stops when that record is gone.
+
+Only these record files decide how a conversation resumes; free text in a
+transcript (prompts, tool output) never does. If binding fails, the session is
+told not to use the browser, and a later resume of that session id starts
+without --chrome (a documented limitation).
 
 The deviceId is a selection policy the child is told to follow, not a
 technical binding: Claude Code has no flag that pins Claude in Chrome to one
@@ -32,7 +32,7 @@ compaction) because a resumed transcript alone may carry an older selection.
 
 Usage:
   claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1>
-  claude_chrome_policy.py prompt <device|""> <standalone 0|1> <launch_id>
+  claude_chrome_policy.py prompt <device|""> <standalone 0|1>
   claude_chrome_policy.py session <dir> <agent> <session_id> <launch_id|"">
 """
 from __future__ import annotations
@@ -78,16 +78,7 @@ def session_path(directory: str, agent: str, session_id: str) -> str:
     return os.path.join(directory, f"{agent}.claude-launch.{session_id}.json")
 
 
-MARKER = "Claude in Chrome launch id: "
-MARKER_RE = re.compile(re.escape(MARKER) + r"([A-Za-z0-9-]{8,128})")
-
-
-def policy_text(device: str, standalone: bool, launch_id: str = "") -> str:
-    marker = f" ({MARKER}{launch_id})" if launch_id else ""
-    return _policy_body(device, standalone) + marker
-
-
-def _policy_body(device: str, standalone: bool) -> str:
+def policy_text(device: str, standalone: bool) -> str:
     report_to = "the operator" if standalone else "your parent agent"
     if device:
         return (
@@ -218,17 +209,6 @@ def find_launch(directory: str, agent: str, launch_id: str) -> dict | None:
     return None
 
 
-def transcript_launch_id(path: str, limit: int = 1 << 20) -> str:
-    """The launch-id marker in a transcript's first ``limit`` bytes, or ""."""
-    try:
-        with open(path, "rb") as handle:
-            head = handle.read(limit).decode("utf-8", "replace")
-    except OSError:
-        return ""
-    match = MARKER_RE.search(head)
-    return match.group(1) if match else ""
-
-
 def claim(directory: str, agent: str, session_id: str, launch_id: str) -> dict | None:
     """Bind this session to its launch; return the record or None.
 
@@ -262,12 +242,10 @@ def main(argv: list[str]) -> int:
         if command == "prepare" and len(args) == 5:
             prepare(args[0], args[1], args[2], args[3], args[4] == "1")
             return 0
-        if command == "prompt" and len(args) == 3:
+        if command == "prompt" and len(args) == 2:
             if not valid_device(args[0]):
                 raise RecordError("invalid deviceId")
-            if not TOKEN_RE.fullmatch(args[2]):
-                raise RecordError("invalid launch id")
-            sys.stdout.write(policy_text(args[0], args[1] == "1", args[2]))
+            sys.stdout.write(policy_text(args[0], args[1] == "1"))
             return 0
         if command == "session" and len(args) == 4:
             # A session-start hook must never fail the session; a bad record
@@ -291,8 +269,7 @@ def main(argv: list[str]) -> int:
                 )
                 return 0
             if state is not None:
-                print(policy_text(state["chrome_device"], state["standalone"],
-                                  state["launch_id"]))
+                print(policy_text(state["chrome_device"], state["standalone"]))
             return 0
     except (OSError, RecordError) as exc:
         print(f"claude_chrome_policy: {command}: {exc}", file=sys.stderr)

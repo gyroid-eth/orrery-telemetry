@@ -1540,8 +1540,7 @@ claude_chrome_prompt_block() {
     [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
     local text
     text="$(python3 "$HOOKS_DIR/claude_chrome_policy.py" prompt \
-        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" \
-        "$CLAUDE_CHROME_LAUNCH_ID")" || return 1
+        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)")" || return 1
     printf '\n\n%s' "$text"
 }
 

@@ -333,8 +333,6 @@ def test_policy_reaches_every_first_prompt(tmp_path, mode):
     assert "not a technical lock" in log
     report_to = "the operator" if mode == "standalone" else "your parent agent"
     assert f"report it to {report_to}" in log
-    # The transcript itself shows the launch (see do_resume).
-    assert f"(Claude in Chrome launch id: {_launch_id(env)})" in log
 
 
 def test_without_a_device_the_child_holds_all_browser_actions(tmp_path):
@@ -581,23 +579,35 @@ def test_clear_after_resume_stays_bound_to_the_launch(monkeypatch, tmp_path):
     assert state["launch_id"] == LAUNCH
 
 
-MARKED = f'{{"type":"user","message":"... (Claude in Chrome launch id: {LAUNCH})"}}\n'
-
-
-def test_unbound_marked_conversation_resumes_from_its_launch_record(monkeypatch, tmp_path):
+def test_transcript_text_never_decides_the_resume(monkeypatch, tmp_path):
+    """Quoted launch ids or policy text in a transcript (tool output, another
+    agent's log) must not turn an inherit conversation into a Chrome one."""
     d = str(tmp_path / "runtime" / "child-agents")
     assert _policy("prepare", d, "ResumeChild", LAUNCH, "win-brave", "0").returncode == 0
-    _result, launched = _resume(monkeypatch, tmp_path, transcript_text=MARKED)
-    inner = launched[0][-1]
-    assert inner.endswith("--chrome")
-    assert f"AGENTSTACK_CLAUDE_LAUNCH_ID={LAUNCH}" in inner
+    quoted = json.dumps({"type": "user", "message": {"content": [{
+        "type": "tool_result",
+        "content": f"Browser: ... deviceId win-brave ... AGENTSTACK_CLAUDE_LAUNCH_ID={LAUNCH} "
+                   f"(Claude in Chrome launch id: {LAUNCH})"}]}}) + "\n"
+    result, launched = _resume(monkeypatch, tmp_path, transcript_text=quoted)
+    assert launched[0][-1].endswith(f"--resume {SID} -n ResumeChild")
 
 
-def test_unbound_marked_conversation_without_any_record_stops(monkeypatch, tmp_path):
-    result, launched = _resume(monkeypatch, tmp_path, transcript_text=MARKED)
-    assert launched == []
-    assert result["ok"] is False
-    assert "started with --claude-chrome but its launch record is gone" in result["error"]
+def test_known_limitation_unsaved_clear_session_resumes_as_inherit(monkeypatch, tmp_path):
+    """Documented limitation, not a fix: when the record for a new session id
+    (after /clear) cannot be saved, the hook says "no browser" at that moment,
+    but a later resume of that session id has no record and resumes as inherit
+    -- the chosen browser is not restored and no browser ban is enforced."""
+    d = tmp_path / "runtime" / "child-agents"
+    _bound_record(tmp_path, session_id=OTHER_SID)  # the original session
+    d.chmod(0o500)
+    try:
+        out = _policy("session", str(d), "ResumeChild", SID, LAUNCH).stdout
+    finally:
+        d.chmod(0o700)
+    assert "Use no browser tool" in out
+    assert not (d / f"ResumeChild.claude-launch.{SID}.json").exists()
+    _result, launched = _resume(monkeypatch, tmp_path)
+    assert launched[0][-1].endswith(f"--resume {SID} -n ResumeChild")
 
 
 def test_resume_ignores_records_of_other_conversations(monkeypatch, tmp_path):

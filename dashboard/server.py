@@ -2577,42 +2577,24 @@ def _claude_chrome_policy_module():
     raise RuntimeError("claude_chrome_policy.py is unavailable")
 
 
-def _claude_child_chrome(session: str, sid: str,
-                         transcript: str = "") -> tuple[bool, str, str]:
+def _claude_child_chrome(session: str, sid: str) -> tuple[bool, str, str]:
     """Return (``--chrome`` requested, launch id, error) for one Claude resume.
 
-    The record is bound to the conversation (session id), not only to the
-    agent name, so a later launch under the same name cannot change what this
-    conversation resumes with. Without a bound record, the transcript's
-    launch-id marker tells a conversation started with ``--claude-chrome``
-    (whose SessionStart could not save the binding) apart from one started
-    without it; the former resumes from its launch's record, or stops when
-    that record is gone. A record that exists but cannot be validated stops
-    the resume: resuming without it could leave a session with the user's
-    default Chrome integration and no known target browser."""
+    Only the launch record bound to this conversation's session id decides;
+    the transcript's text never does. The record is bound to the session, not
+    only to the agent name, so a later launch under the same name cannot
+    change what this conversation resumes with. No record means the
+    conversation resumes unchanged (inherit). A record that exists but cannot
+    be validated stops the resume."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", session or ""):
         return False, "", ""
     directory = os.path.join(RUNTIME_DIR, "child-agents")
     path = os.path.join(directory, f"{session}.claude-launch.{sid}.json")
-    try:
-        policy = _claude_chrome_policy_module()
-    except Exception as exc:  # noqa: BLE001
-        if os.path.lexists(path):
-            return False, "", f"Claude in Chrome launch record is invalid: {exc}"
+    if not os.path.lexists(path):
         return False, "", ""
     try:
-        if os.path.lexists(path):
-            state = policy.session_record(directory, session, sid)
-        else:
-            launch_id = policy.transcript_launch_id(transcript) if transcript else ""
-            if not launch_id:
-                return False, "", ""
-            state = policy.find_launch(directory, session, launch_id)
-            if state is None:
-                return False, "", (
-                    "Claude in Chrome launch record is invalid: this conversation "
-                    "was started with --claude-chrome but its launch record is gone"
-                )
+        policy = _claude_chrome_policy_module()
+        state = policy.session_record(directory, session, sid)
     except Exception as exc:  # noqa: BLE001 - any failure is fail-closed
         return False, "", f"Claude in Chrome launch record is invalid: {exc}"
     if state is None:
@@ -2689,7 +2671,7 @@ def do_resume(session: str) -> dict:
     # A child started with --claude-chrome gets --chrome back on resume. Its
     # browser policy is repeated by session-start-reminder.sh from the same
     # launch record, so the resumed model re-checks the target browser.
-    chrome, chrome_launch_id, chrome_error = _claude_child_chrome(session, sid, path)
+    chrome, chrome_launch_id, chrome_error = _claude_child_chrome(session, sid)
     if chrome_error:
         return {"ok": False, "error": chrome_error}
     if chrome:
