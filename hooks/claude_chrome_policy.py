@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-"""Launch record and browser policy for Claude children started with --chrome.
+"""Launch records and browser policy for Claude children started with --chrome.
 
-spawn_child.sh writes one record per child that asked for Claude in Chrome
-(``--claude-chrome``); dashboard ``do_resume`` and session-start-reminder.sh read
-it back. The record holds no credential.
+A record says "this Claude conversation was started with --chrome, and this is
+the browser it was told to use". It holds no credential.
 
-The deviceId in the record is a selection policy the child is told to follow,
-not a technical binding: Claude Code has no flag that pins Claude in Chrome to
-one browser. The policy text says so, and it is repeated at every session start
-(startup, resume, compaction) because a resumed transcript alone may carry an
-older selection.
+Records are bound to one conversation, never to an agent name alone, so a later
+launch under the same name cannot change what an earlier conversation resumes
+with. The lifecycle is:
+
+1. spawn_child.sh writes ``<agent>.claude-launch.pending-<launch_id>.json``
+   before starting tmux and passes ``AGENTSTACK_CLAUDE_LAUNCH_ID`` to the
+   child. Nothing that already exists is modified; a failed launch only leaves
+   a pending record that no session will ever claim.
+2. The child's first SessionStart (session-start-reminder.sh) finds the
+   pending record whose launch id matches its own environment and copies it to
+   ``<agent>.claude-launch.<session_id>.json``. A later /clear in the same
+   process gets a new session id and is bound the same way.
+3. dashboard ``do_resume`` looks up the record for the exact session id it is
+   about to resume (``claude --resume`` keeps the id). No record means the
+   conversation was not started with --chrome.
+
+The deviceId is a selection policy the child is told to follow, not a
+technical binding: Claude Code has no flag that pins Claude in Chrome to one
+browser. The policy is printed at every session start (startup, resume,
+compaction) because a resumed transcript alone may carry an older selection.
 
 Usage:
-  claude_chrome_policy.py write <record> <agent> <device|""> <standalone 0|1>
-  claude_chrome_policy.py clear <record>
+  claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1>
   claude_chrome_policy.py prompt <device|""> <standalone 0|1>
-  claude_chrome_policy.py session <record> <agent>
+  claude_chrome_policy.py session <dir> <agent> <session_id> <launch_id|"">
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -26,8 +40,10 @@ import stat
 import sys
 import tempfile
 
-VERSION = 1
+VERSION = 2
 DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+TOKEN_RE = re.compile(r"[A-Za-z0-9-]{8,128}")
+AGENT_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 MAX_BYTES = 4096
 
 
@@ -37,6 +53,24 @@ class RecordError(ValueError):
 
 def valid_device(device: str) -> bool:
     return device == "" or DEVICE_RE.fullmatch(device) is not None
+
+
+def _check_names(agent: str, *tokens: str) -> None:
+    if not AGENT_RE.fullmatch(agent or ""):
+        raise RecordError("invalid agent name")
+    for token in tokens:
+        if not TOKEN_RE.fullmatch(token or ""):
+            raise RecordError("invalid session or launch id")
+
+
+def pending_path(directory: str, agent: str, launch_id: str) -> str:
+    _check_names(agent, launch_id)
+    return os.path.join(directory, f"{agent}.claude-launch.pending-{launch_id}.json")
+
+
+def session_path(directory: str, agent: str, session_id: str) -> str:
+    _check_names(agent, session_id)
+    return os.path.join(directory, f"{agent}.claude-launch.{session_id}.json")
 
 
 def policy_text(device: str, standalone: bool) -> str:
@@ -100,24 +134,33 @@ def read_record(path: str, agent: str) -> dict | None:
         raise RecordError("invalid deviceId")
     if not isinstance(state.get("standalone"), bool):
         raise RecordError("invalid standalone flag")
+    launch_id = state.get("launch_id")
+    if not isinstance(launch_id, str) or not TOKEN_RE.fullmatch(launch_id):
+        raise RecordError("invalid launch id")
+    session_id = state.get("session_id")
+    if session_id is not None and (
+        not isinstance(session_id, str) or not TOKEN_RE.fullmatch(session_id)
+    ):
+        raise RecordError("invalid session id")
     return state
 
 
-def write_record(path: str, agent: str, device: str, standalone: bool) -> None:
-    if not valid_device(device):
-        raise RecordError("invalid deviceId")
+def session_record(directory: str, agent: str, session_id: str) -> dict | None:
+    """The record bound to exactly this conversation, if any."""
+    path = session_path(directory, agent, session_id)
+    state = read_record(path, agent)
+    if state is not None and state.get("session_id") != session_id:
+        raise RecordError("recorded for a different session")
+    return state
+
+
+def _write(path: str, state: dict) -> None:
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".claude-launch.", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({
-                "version": VERSION,
-                "agent_name": agent,
-                "claude_chrome": True,
-                "chrome_device": device,
-                "standalone": standalone,
-            }, handle)
+            json.dump(state, handle)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -131,31 +174,80 @@ def write_record(path: str, agent: str, device: str, standalone: bool) -> None:
         raise
 
 
+def prepare(directory: str, agent: str, launch_id: str, device: str,
+            standalone: bool) -> None:
+    if not valid_device(device):
+        raise RecordError("invalid deviceId")
+    _write(pending_path(directory, agent, launch_id), {
+        "version": VERSION,
+        "agent_name": agent,
+        "launch_id": launch_id,
+        "claude_chrome": True,
+        "chrome_device": device,
+        "standalone": standalone,
+    })
+
+
+def claim(directory: str, agent: str, session_id: str, launch_id: str) -> dict | None:
+    """Bind this session to its launch; return the record or None.
+
+    An existing record for the session wins (resume, compaction). Otherwise
+    the session is bound to the record of the launch whose id is in its own
+    environment: the pending record on first start, or an already bound
+    record of the same launch after /clear."""
+    state = session_record(directory, agent, session_id)
+    if state is not None:
+        return state
+    if not launch_id:
+        return None
+    _check_names(agent, launch_id)
+    source = None
+    pending = pending_path(directory, agent, launch_id)
+    candidates = [pending] + sorted(
+        glob.glob(os.path.join(directory, f"{agent}.claude-launch.*.json")))
+    for path in candidates:
+        try:
+            candidate = read_record(path, agent)
+        except RecordError:
+            continue
+        if candidate is not None and candidate["launch_id"] == launch_id:
+            source = candidate
+            break
+    if source is None:
+        raise RecordError("no launch record for this session's launch id")
+    state = {**source, "session_id": session_id}
+    _write(session_path(directory, agent, session_id), state)
+    try:
+        os.unlink(pending)
+    except OSError:
+        pass
+    return state
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
     command, args = argv[1], argv[2:]
     try:
-        if command == "write" and len(args) == 4:
-            write_record(args[0], args[1], args[2], args[3] == "1")
-            return 0
-        if command == "clear" and len(args) == 1:
-            try:
-                os.unlink(args[0])
-            except FileNotFoundError:
-                pass
+        if command == "prepare" and len(args) == 5:
+            prepare(args[0], args[1], args[2], args[3], args[4] == "1")
             return 0
         if command == "prompt" and len(args) == 2:
             if not valid_device(args[0]):
                 raise RecordError("invalid deviceId")
             sys.stdout.write(policy_text(args[0], args[1] == "1"))
             return 0
-        if command == "session" and len(args) == 2:
+        if command == "session" and len(args) == 4:
             # A session-start hook must never fail the session; a bad record
             # is reported to the model as "do not use the browser" instead.
+            directory, agent, session_id, launch_id = args
             try:
-                state = read_record(args[0], args[1])
+                if not session_id:
+                    if not launch_id:
+                        return 0
+                    raise RecordError("the session id is unknown")
+                state = claim(directory, agent, session_id, launch_id)
             except RecordError as exc:
                 print(
                     "Browser: this session's Claude in Chrome launch record is "

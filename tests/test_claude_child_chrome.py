@@ -120,8 +120,19 @@ def _launch_env(tmp_path, *, codex=False):
     return env, workdir
 
 
-def _record(env, name) -> pathlib.Path:
-    return pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / f"{name}.claude-launch.json"
+def _state_dir(env) -> pathlib.Path:
+    return pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents"
+
+
+def _records(env, name) -> list[pathlib.Path]:
+    return sorted(_state_dir(env).glob(f"{name}.claude-launch.*.json"))
+
+
+def _launch_id(env) -> str:
+    args = _new_session(env)
+    ids = [a.split("=", 1)[1] for a in args if a.startswith("AGENTSTACK_CLAUDE_LAUNCH_ID=")]
+    assert len(ids) == 1, args
+    return ids[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -222,6 +233,13 @@ def test_cli_device_wins_over_env_device(tmp_path):
     assert "from-env" not in log
 
 
+def _codex_inner(env) -> str:
+    command = _new_session(env)[-1]
+    prefix, _, rest = command.partition(" -lc '")
+    assert rest.endswith("'"), command
+    return rest[:-1]
+
+
 def test_env_default_is_ignored_for_codex_children(tmp_path):
     env, workdir = _launch_env(tmp_path, codex=True)
     env["AGENTSTACK_CLAUDE_CHILD_CHROME"] = "1"
@@ -231,7 +249,39 @@ def test_env_default_is_ignored_for_codex_children(tmp_path):
     log = _log_text(env)
     assert "--chrome" not in log
     assert "Browser:" not in log
-    assert not _record(env, "CodexChild").exists()
+    assert "AGENTSTACK_CLAUDE_LAUNCH_ID" not in log
+    assert _records(env, "CodexChild") == []
+
+
+def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
+    """Run the Codex launch script the way tmux would, with the Chrome defaults
+    in its environment (as when the tmux server itself carries them), and read
+    the environment the Codex process actually receives."""
+    env, workdir = _launch_env(tmp_path, codex=True)
+    result = _spawn(tmp_path, env, workdir, "CodexEnv", codex=True)
+    assert result.returncode == 0, result.stderr
+    inner = _codex_inner(env)
+
+    dump = tmp_path / "codex-env.txt"
+    fake_codex = tmp_path / "fake-codex"
+    _executable(fake_codex, f"#!/bin/bash\nenv > {dump}\n")
+    hooks = tmp_path / "noop-hooks"
+    hooks.mkdir()
+    _executable(hooks / "cleanup-child-agent.sh", "#!/bin/bash\nexit 0\n")
+    run_env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "AGENTSTACK_CODEX_BIN": str(fake_codex),
+        "AGENTSTACK_CODEX_MODEL": "gpt-6-sol",
+        "AGENTSTACK_HOOKS_DIR": str(hooks),
+        "AGENTSTACK_CLAUDE_CHILD_CHROME": "1",
+        "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE": "from-server",
+    }
+    subprocess.run(["/bin/bash", "-c", inner], env=run_env, cwd=workdir,
+                   capture_output=True, text=True, timeout=20, check=False)
+    seen = dump.read_text(encoding="utf-8")
+    assert "AGENTSTACK_CODEX_MODEL=gpt-6-sol" in seen  # the fake really ran
+    assert "AGENTSTACK_CLAUDE_CHILD_CHROME" not in seen
 
 
 @pytest.mark.parametrize(
@@ -301,38 +351,76 @@ def test_default_prompt_has_no_browser_policy(tmp_path):
     assert "Browser:" not in _log_text(env)
 
 
-def test_chrome_spawn_writes_a_private_record(tmp_path):
+def test_chrome_spawn_writes_only_a_pending_record_for_its_launch(tmp_path):
     env, workdir = _launch_env(tmp_path)
     result = _spawn(tmp_path, env, workdir, "Recorded", "--claude-chrome-device", "win-brave")
     assert result.returncode == 0, result.stderr
-    record = _record(env, "Recorded")
+    launch_id = _launch_id(env)
+    record = _state_dir(env) / f"Recorded.claude-launch.pending-{launch_id}.json"
+    assert _records(env, "Recorded") == [record]
     assert stat.S_IMODE(record.stat().st_mode) == 0o600
     assert json.loads(record.read_text()) == {
-        "version": 1, "agent_name": "Recorded", "claude_chrome": True,
-        "chrome_device": "win-brave", "standalone": False,
+        "version": 2, "agent_name": "Recorded", "launch_id": launch_id,
+        "claude_chrome": True, "chrome_device": "win-brave", "standalone": False,
     }
 
 
-def test_default_spawn_removes_a_record_left_by_an_earlier_same_named_child(tmp_path):
+def test_default_spawn_passes_no_launch_id(tmp_path):
     env, workdir = _launch_env(tmp_path)
-    assert _spawn(tmp_path, env, workdir, "Reused", "--claude-chrome").returncode == 0
-    assert _record(env, "Reused").exists()
+    assert _spawn(tmp_path, env, workdir, "Plain").returncode == 0
+    assert not any(a.startswith("AGENTSTACK_CLAUDE_LAUNCH_ID=") for a in _new_session(env))
+    assert _records(env, "Plain") == []
+
+
+SID = "0123abcd-4567-89ef-0123-456789abcdef"
+OTHER_SID = "fedcba98-7654-3210-fedc-ba9876543210"
+
+
+def _bind(env, name, session_id=SID):
+    """What the child's first SessionStart does with its launch id."""
+    out = _policy("session", str(_state_dir(env)), name, session_id, _launch_id(env))
+    assert out.returncode == 0
+    return out.stdout
+
+
+@pytest.mark.parametrize("second", ["failed-chrome", "inherit", "chrome"])
+def test_a_later_launch_never_changes_an_earlier_conversation(tmp_path, second):
+    env, workdir = _launch_env(tmp_path)
+    assert _spawn(tmp_path, env, workdir, "Reused", "--claude-chrome-device", "win-original").returncode == 0
+    assert "deviceId win-original" in _bind(env, "Reused")
+
     pathlib.Path(env["FAKE_TMUX_ALIVE"]).unlink()
     pathlib.Path(env["FAKE_TMUX_LOG"]).unlink()
-    result = _spawn(tmp_path, env, workdir, "Reused")
-    assert result.returncode == 0, result.stderr
-    assert not _record(env, "Reused").exists()
-    assert "--chrome" not in _new_session(env)[-1]
+    flags = [] if second == "inherit" else ["--claude-chrome-device", "mac-after"]
+    if second == "failed-chrome":
+        tmux = pathlib.Path(env["PATH"].split(":")[0]) / "tmux"
+        tmux.write_text(tmux.read_text().replace(
+            "  new-session) :", "  new-session) exit 42 ;;\n  unused) :"), encoding="utf-8")
+    result = _spawn(tmp_path, env, workdir, "Reused", *flags)
+    assert (result.returncode != 0) == (second == "failed-chrome"), result.stderr
+
+    policy = _load_policy()
+    state = policy.session_record(str(_state_dir(env)), "Reused", SID)
+    assert state["chrome_device"] == "win-original"
+    if second == "chrome":
+        assert "deviceId mac-after" in _bind(env, "Reused", OTHER_SID)
+        assert policy.session_record(str(_state_dir(env)), "Reused", SID)["chrome_device"] == "win-original"
 
 
 def test_chrome_spawn_stops_when_the_record_cannot_be_written(tmp_path):
     env, workdir = _launch_env(tmp_path)
-    state_dir = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents"
-    state_dir.mkdir(parents=True)
-    (state_dir / "Blocked.claude-launch.json").mkdir()  # os.replace onto a dir fails
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    for entry in (ROOT / "hooks").iterdir():
+        if entry.name != "claude_chrome_policy.py":
+            (hooks / entry.name).symlink_to(entry)
+    _executable(hooks / "claude_chrome_policy.py",
+                "import sys\nif sys.argv[1] == 'prepare': sys.exit(1)\n"
+                f"exec(open({str(POLICY)!r}).read())\n")
+    env["AGENTSTACK_HOOKS_DIR"] = str(hooks)
     result = _spawn(tmp_path, env, workdir, "Blocked", "--claude-chrome")
     assert result.returncode != 0
-    assert "could not update the Claude in Chrome launch record" in result.stderr
+    assert "could not write the Claude in Chrome launch record" in result.stderr
     assert all(c[0] != "new-session" for c in _calls(env))
 
 
@@ -345,24 +433,57 @@ def _policy(*args):
     )
 
 
-def test_session_policy_for_valid_absent_and_bad_records(tmp_path):
-    record = tmp_path / "A.claude-launch.json"
-    assert _policy("session", str(record), "A").stdout == ""
-    assert _policy("write", str(record), "A", "dev-1", "0").returncode == 0
-    assert "deviceId dev-1" in _policy("session", str(record), "A").stdout
-    # Recorded for another agent, or tampered: target unknown, no browser.
-    out = _policy("session", str(record), "B").stdout
-    assert "Use no browser tool" in out and "different agent" in out
-    record.write_text("{not json", encoding="utf-8")
-    assert "Use no browser tool" in _policy("session", str(record), "A").stdout
-    record.chmod(0o644)
-    assert "0600" in _policy("session", str(record), "A").stdout
+def _load_policy():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ccp_under_test", POLICY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_reminder_repeats_the_policy_at_session_start(tmp_path):
+LAUNCH = "11111111-2222-3333-4444-555555555555"
+
+
+def test_session_binding_resume_clear_and_bad_records(tmp_path):
+    d = str(tmp_path)
+    # No record and no launch id: an ordinary session, nothing printed.
+    assert _policy("session", d, "A", SID, "").stdout == ""
+    assert _policy("prepare", d, "A", LAUNCH, "dev-1", "0").returncode == 0
+    # First start binds the pending record to the session and consumes it.
+    assert "deviceId dev-1" in _policy("session", d, "A", SID, LAUNCH).stdout
+    assert not (tmp_path / f"A.claude-launch.pending-{LAUNCH}.json").exists()
+    bound = tmp_path / f"A.claude-launch.{SID}.json"
+    assert json.loads(bound.read_text())["session_id"] == SID
+    # Resume / compaction: same session id, launch id may be gone.
+    assert "deviceId dev-1" in _policy("session", d, "A", SID, "").stdout
+    # /clear in the same process: new session id, same launch id.
+    assert "deviceId dev-1" in _policy("session", d, "A", OTHER_SID, LAUNCH).stdout
+    # A launch id with no record, or another agent's record: no browser.
+    out = _policy("session", d, "A", "99999999-0000-0000-0000-000000000000",
+                  "22222222-2222-2222-2222-222222222222").stdout
+    assert "Use no browser tool" in out
+    assert "Use no browser tool" in _policy("session", d, "B", SID, LAUNCH).stdout
+    # Tampered records.
+    bound.write_text("{not json", encoding="utf-8")
+    assert "Use no browser tool" in _policy("session", d, "A", SID, "").stdout
+    other = tmp_path / f"A.claude-launch.{OTHER_SID}.json"
+    other.chmod(0o644)
+    assert "0600" in _policy("session", d, "A", OTHER_SID, "").stdout
+
+
+def test_a_record_renamed_to_another_session_is_rejected(tmp_path):
+    d = str(tmp_path)
+    assert _policy("prepare", d, "A", LAUNCH, "dev-1", "0").returncode == 0
+    _policy("session", d, "A", SID, LAUNCH)
+    (tmp_path / f"A.claude-launch.{SID}.json").rename(tmp_path / f"A.claude-launch.{OTHER_SID}.json")
+    out = _policy("session", d, "A", OTHER_SID, "").stdout
+    assert "different session" in out
+
+
+def test_reminder_binds_and_repeats_the_policy_at_session_start(tmp_path):
     runtime = tmp_path / "runtime"
-    record = runtime / "child-agents" / "HookChild.claude-launch.json"
-    assert _policy("write", str(record), "HookChild", "win-brave", "0").returncode == 0
+    state = runtime / "child-agents"
+    assert _policy("prepare", str(state), "HookChild", LAUNCH, "win-brave", "0").returncode == 0
     env = {
         **os.environ,
         "HOME": str(tmp_path),
@@ -373,20 +494,26 @@ def test_reminder_repeats_the_policy_at_session_start(tmp_path):
         "AGENTSTACK_MCP_URL": "http://127.0.0.1:9/mcp",
         "PROJECT_KEY": "/shared/project",
         "AGENTSTACK_PROJECT_KEY": "/shared/project",
+        "AGENTSTACK_CLAUDE_LAUNCH_ID": LAUNCH,
     }
     env.pop("TMUX", None)
     env.pop("TMUX_PANE", None)
     result = subprocess.run(
-        ["/bin/bash", str(REMINDER)], input="{}", env=env, text=True,
-        capture_output=True, timeout=30, check=False, cwd=tmp_path,
+        ["/bin/bash", str(REMINDER)], input=json.dumps({"session_id": SID}),
+        env=env, text=True, capture_output=True, timeout=30, check=False, cwd=tmp_path,
     )
     assert "The browser to use is deviceId win-brave" in result.stdout, result.stdout
+    assert (state / f"HookChild.claude-launch.{SID}.json").exists()
 
 
 # --------------------------------------------------------------------------- #
 # dashboard: resume and NEW AGENT
 # --------------------------------------------------------------------------- #
-SID = "0123abcd-4567-89ef-0123-456789abcdef"
+def _bound_record(tmp_path, name="ResumeChild", session_id=SID, device="win-brave"):
+    d = str(tmp_path / "runtime" / "child-agents")
+    assert _policy("prepare", d, name, LAUNCH, device, "0").returncode == 0
+    _policy("session", d, name, session_id, LAUNCH)
+    return pathlib.Path(d) / f"{name}.claude-launch.{session_id}.json"
 
 
 def _resume(monkeypatch, tmp_path, session="ResumeChild"):
@@ -415,21 +542,33 @@ def test_resume_without_a_record_is_unchanged(monkeypatch, tmp_path):
 
 
 def test_resume_of_a_chrome_child_adds_chrome(monkeypatch, tmp_path):
-    record = tmp_path / "runtime" / "child-agents" / "ResumeChild.claude-launch.json"
-    assert _policy("write", str(record), "ResumeChild", "win-brave", "0").returncode == 0
+    _bound_record(tmp_path)
     _result, launched = _resume(monkeypatch, tmp_path)
     assert launched[0][-1].endswith(f"--resume {SID} -n ResumeChild --chrome")
 
 
-@pytest.mark.parametrize("damage", ["json", "agent", "mode"])
+def test_resume_ignores_records_of_other_conversations(monkeypatch, tmp_path):
+    # A later launch under the same name (another session id) and a launch
+    # that never started (pending only) do not affect this conversation.
+    _bound_record(tmp_path, session_id=OTHER_SID)
+    d = str(tmp_path / "runtime" / "child-agents")
+    assert _policy("prepare", d, "ResumeChild",
+                   "33333333-3333-3333-3333-333333333333", "mac", "0").returncode == 0
+    _result, launched = _resume(monkeypatch, tmp_path)
+    assert launched[0][-1].endswith(f"--resume {SID} -n ResumeChild")
+
+
+@pytest.mark.parametrize("damage", ["json", "agent", "mode", "session"])
 def test_resume_stops_on_an_invalid_record(monkeypatch, tmp_path, damage):
-    record = tmp_path / "runtime" / "child-agents" / "ResumeChild.claude-launch.json"
-    assert _policy("write", str(record), "ResumeChild", "win-brave", "0").returncode == 0
+    record = _bound_record(tmp_path)
     if damage == "json":
         record.write_text("{", encoding="utf-8")
     elif damage == "agent":
         state = json.loads(record.read_text())
         record.write_text(json.dumps({**state, "agent_name": "Other"}))
+    elif damage == "session":
+        state = json.loads(record.read_text())
+        record.write_text(json.dumps({**state, "session_id": OTHER_SID}))
     else:
         record.chmod(0o644)
     result, launched = _resume(monkeypatch, tmp_path)

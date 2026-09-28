@@ -308,14 +308,16 @@ fi
 
 # A child started with --claude-chrome gets its browser policy again at every
 # session start (startup, resume, compaction): the transcript alone may carry an
-# older browser selection. Children without the launch record print nothing.
+# older browser selection. The first start binds the launch's pending record to
+# this session id. Sessions without a record print nothing.
 if [ -n "$RESOLVED_AGENT" ] && [ -f "$HOOKS_DIR/claude_chrome_policy.py" ]; then
     case "$RESOLVED_AGENT" in
-        *[!A-Za-z0-9_.-]*) ;;
+        *[!A-Za-z0-9_-]*) ;;
         *)
             python3 "$HOOKS_DIR/claude_chrome_policy.py" session \
-                "$RUNTIME_DIR/child-agents/$RESOLVED_AGENT.claude-launch.json" \
-                "$RESOLVED_AGENT" 2>/dev/null || true
+                "$RUNTIME_DIR/child-agents" "$RESOLVED_AGENT" \
+                "${AGENTSTACK_SESSION_ID:-}" "${AGENTSTACK_CLAUDE_LAUNCH_ID:-}" \
+                2>/dev/null || true
             ;;
     esac
 fi

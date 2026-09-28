@@ -1544,20 +1544,23 @@ claude_chrome_prompt_block() {
     printf '\n\n%s' "$text"
 }
 
-# Records what a resume must restore (dashboard do_resume and the session-start
-# hook read it). It carries no credential. With chrome off, a record left by an
-# earlier child of the same name is removed so a resume never adds --chrome.
-record_claude_launch_state() {
-    local state_file="$CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json"
-    if [[ "$CLAUDE_CHILD_CHROME" != true ]]; then
-        rm -f -- "$state_file" 2>/dev/null || true
-        [[ ! -e "$state_file" && ! -L "$state_file" ]]
-        return
-    fi
+# Prepares the launch record a resume needs (hooks/claude_chrome_policy.py has
+# the lifecycle). Only a pending record for this launch is written; records of
+# earlier conversations under the same name are never touched, so a failed
+# launch cannot change what they resume with. The child's first SessionStart
+# binds the pending record to its session id via AGENTSTACK_CLAUDE_LAUNCH_ID.
+CLAUDE_CHROME_TMUX_ENV=()
+prepare_claude_launch_record() {
+    CLAUDE_CHROME_TMUX_ENV=()
+    [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    local launch_id
+    launch_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
     mkdir -p "$CHILD_STATE_DIR" || return 1
     chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || true
-    python3 "$HOOKS_DIR/claude_chrome_policy.py" write "$state_file" "$CHILD_NAME" \
-        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)"
+    python3 "$HOOKS_DIR/claude_chrome_policy.py" prepare "$CHILD_STATE_DIR" "$CHILD_NAME" \
+        "$launch_id" "$CLAUDE_CHILD_CHROME_DEVICE" \
+        "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" || return 1
+    CLAUDE_CHROME_TMUX_ENV=(-e "AGENTSTACK_CLAUDE_LAUNCH_ID=$launch_id")
 }
 
 build_codex_mail_task_prompt() {
@@ -1829,6 +1832,9 @@ ${TASK}"
                 # consulted. Handing off to one silently replaced `never` with
                 # its `on-request` default and dropped the network flag and the
                 # extra roots (2026-09-04).
+                # Claude in Chrome defaults are for Claude children; do not hand them on
+                # through a Codex child (the tmux server env may carry them).
+                unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE
                 EXTRA_ARGS=()
                 # Portable across zsh and bash (Ubuntu ships no zsh): split the
                 # colon list with IFS, and word-split the flag strings through
@@ -1936,8 +1942,8 @@ ${TASK}"
             esac
         fi
 
-        if ! record_claude_launch_state; then
-            echo "[spawn_child/pre-reg] Aborting: could not update the Claude in Chrome launch record ($CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json)." >&2
+        if ! prepare_claude_launch_record; then
+            echo "[spawn_child/pre-reg] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
             exit 1
         fi
 
@@ -1968,6 +1974,7 @@ ${TASK}"
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+                ${CLAUDE_CHROME_TMUX_ENV[@]+"${CLAUDE_CHROME_TMUX_ENV[@]}"} \
                 "$(claude_child_launch_command)"
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
@@ -2676,6 +2683,9 @@ if [[ "$USE_CODEX" == true ]]; then
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.
+            # Claude in Chrome defaults are for Claude children; do not hand them on
+            # through a Codex child (the tmux server env may carry them).
+            unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE
             EXTRA_ARGS=()
             # Portable across zsh and bash: see the pre-registered path.
             _ifs="$IFS"; IFS=":"
@@ -2768,8 +2778,8 @@ if [[ "$USE_CODEX" == true ]]; then
     verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
 else
     # Claude Code 起動（モデル指定付き）
-    if ! record_claude_launch_state; then
-        echo "[spawn_child] Aborting: could not update the Claude in Chrome launch record ($CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json)." >&2
+    if ! prepare_claude_launch_record; then
+        echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
     fi
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
@@ -2778,6 +2788,7 @@ else
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+        ${CLAUDE_CHROME_TMUX_ENV[@]+"${CLAUDE_CHROME_TMUX_ENV[@]}"} \
         "$(claude_child_launch_command)"
     CHILD_SESSION_STARTED=true
     SPAWN_TRAP_SESSION="$CHILD_NAME"

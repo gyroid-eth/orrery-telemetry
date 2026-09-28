@@ -320,6 +320,9 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     assert result["ok"] is True
     assert len(launched) == 1
     inner = launched[0][-1]
+    # Claude in Chrome defaults must not reach a Codex child (tmux server env).
+    assert inner.startswith(
+        "unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; ")
     assert f"source {shlex.quote(str(bootstrap))}" in inner
     assert "AGENTSTACK_CODEX_LAUNCH_KIND=resume" in inner
     assert f"AGENTSTACK_CODEX_RESUME_SESSION_ID={session_id}" in inner
