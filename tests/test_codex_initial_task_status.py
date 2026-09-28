@@ -128,10 +128,13 @@ def test_a_malformed_line_does_not_hide_the_records_that_parse(tmp_path):
     ({"launch_kind": "resume"}, {"launch_kind": "resume"}),
     ({"codex_mcp_profile": "everything"}, {"codex_mcp_profile": "everything"}),
     ({}, {"codex_mcp_profile": "orrery-only"}),
+    ({"resume_session_id": SESSION}, {}),
+    ({"fallback_launch_id": "older-launch"}, {}),
+    ({"fallback_receipt_id": "r0"}, {}),
 ], ids=["no-receipt", "unclaimed", "conflicted", "stale-launch", "stale-receipt", "receipt-id",
         "receipt-session", "other-agent", "schema", "launch-schema", "history-disabled",
         "binding-not-expected", "program", "project-missing", "resume", "profile-invalid",
-        "profile-mismatch"])
+        "profile-mismatch", "resume-session-left", "fallback-launch-left", "fallback-receipt-left"])
 def test_any_break_in_the_chain_is_unknown(tmp_path, launch, receipt):
     assert _status(_setup(tmp_path, [META, TURN, USER_ITEM], launch=launch, receipt=receipt)) == "unknown"
 

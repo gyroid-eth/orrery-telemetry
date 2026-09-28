@@ -80,6 +80,9 @@ def _verified_binding(launch_path: Path, launch_id: str, agent_name: str) -> tup
         and launch.get("program") in PROGRAMS
         and launch.get("launch_id") == launch_id
         and launch.get("launch_kind") == "startup"
+        and launch.get("resume_session_id") is None
+        and launch.get("fallback_launch_id") is None
+        and launch.get("fallback_receipt_id") is None
         and launch.get("agent_name") == agent_name
         and type(agent_id) is int
         and agent_id > 0
