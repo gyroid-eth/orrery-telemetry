@@ -37881,9 +37881,9 @@ function renderSpawnModels(provider){
   const models=provider&&provider.modelError?[]:spawnProviderDisplayModels(provider);
   const fallback=models.some(model=>model.id===(provider&&provider.defaultModel))
     ? provider.defaultModel:(provider&&provider.id==='claude'?'':((models[0]||{}).id||''));
-  // Older generations (the CLI catalog's "overflow" section) sit behind a
-  // fold so the current models are what the eye lands on. The fold opens
-  // itself when the selected model is one of them.
+  // overflow_models (the CLI picker's "overflow" section or the bundled table)
+  // sit behind a "more models" fold so the main models are what the eye lands
+  // on. The fold opens itself when the selected model is one of them.
   const overflow=new Set(provider&&provider.overflowModels||[]);
   const chip=model=>{
     const tone=spawnModelTone(provider&&provider.id||'',model.id);
@@ -37900,7 +37900,7 @@ function renderSpawnModels(provider){
   const current=models.filter(model=>!overflow.has(model.id));
   const older=models.filter(model=>overflow.has(model.id));
   root.innerHTML=(current.map(chip).join('')+(older.length
-    ? `<details class="spm-models-overflow"><summary>previous models · ${older.length}</summary>`+
+    ? `<details class="spm-models-overflow"><summary>more models · ${older.length}</summary>`+
       `<div class="spm-models">${older.map(chip).join('')}</div></details>`
     : ''))||(provider&&provider.modelError
     ? '<div class="spm-load spm-stat err" role="alert">CONFIGURATION ERROR · '+esc(provider.modelError)+'</div>'

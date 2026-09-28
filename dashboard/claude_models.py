@@ -21,8 +21,8 @@ class ModelCatalog:
     models: tuple[str, ...]
     source: str
     error: str = ""
-    # Models the CLI's own picker files under its "overflow" section (older
-    # generations). Display-only: they stay launchable like any other model.
+    # Models shown under "more models": the CLI picker's "overflow" section or
+    # the bundled table. Display-only: they stay launchable like any other.
     overflow: tuple[str, ...] = ()
 
 
@@ -53,9 +53,22 @@ def _timestamp(value: object) -> bool:
         return False
 
 
-def _read_catalog(
-    path: Path, now_ms: float
-) -> tuple[float, tuple[str, ...], tuple[str, ...]] | None:
+# Bundled models that belong under "more models" when no fresh catalog says
+# otherwise. Display-only: review this table in the same PR that changes the
+# bundled candidates or the fixed default.
+BUNDLED_OVERFLOW = ("claude-opus-5",)
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    fetched: float
+    fresh: bool
+    models: tuple[str, ...]
+    main: tuple[str, ...]
+    overflow: tuple[str, ...]
+
+
+def _read_catalog(path: Path, now_ms: float) -> _Snapshot | None:
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         with os.fdopen(os.open(path, flags), "rb") as stream:
@@ -71,7 +84,8 @@ def _read_catalog(
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 2:
         return None
     fetched, stale = data.get("fetchedAt"), data.get("staleAt")
-    if not (_timestamp(fetched) and _timestamp(stale) and fetched <= now_ms < stale):
+    # A future or inverted window is malformed, not merely stale.
+    if not (_timestamp(fetched) and _timestamp(stale) and fetched <= now_ms and fetched < stale):
         return None
     catalog = data.get("catalog")
     if not isinstance(catalog, dict) or catalog.get("surface") != "cc":
@@ -83,53 +97,80 @@ def _read_catalog(
     models = _model_ids([row.get("id") for row in rows])
     if not models:
         return None
+    main = tuple(row["id"] for row in rows if row.get("section") == "main")
     overflow = tuple(row["id"] for row in rows if row.get("section") == "overflow")
-    return fetched, models, overflow
+    return _Snapshot(fetched, now_ms < stale, models, main, overflow)
 
 
-def _newest_catalog(
+def _newest_snapshots(
     now_ms: float | None = None,
-) -> tuple[float, tuple[str, ...], tuple[str, ...]] | None:
-    """Read the freshest v2 CLI cache without merging sources or inferring access."""
+) -> tuple[_Snapshot | None, _Snapshot | None]:
+    """(newest fresh, newest valid) v2 CLI caches from one scan; never merged."""
     try:
         root = Path(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or "~/.claude").expanduser()
     except (OSError, RuntimeError):
-        return None
+        return None, None
     if not root.is_absolute():
-        return None
+        return None, None
     directory = root / "cache" / "model-catalog"
     paths: list[Path] = []
     try:
         with os.scandir(directory) as entries:
             for count, entry in enumerate(entries):
                 if count >= MAX_FILES:
-                    return None  # Never guess the newest from an incomplete scan.
+                    return None, None  # Never guess the newest from an incomplete scan.
                 if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False):
                     paths.append(Path(entry.path))
     except OSError:
-        return None
+        return None, None
     now_ms = time.time() * 1000 if now_ms is None else now_ms
-    newest: tuple[float, tuple[str, ...], tuple[str, ...]] | None = None
+    fresh: _Snapshot | None = None
+    any_valid: _Snapshot | None = None
     for path in sorted(paths):
-        candidate = _read_catalog(path, now_ms)
-        if candidate and (newest is None or candidate[0] > newest[0]):
-            newest = candidate
-    return newest
+        snap = _read_catalog(path, now_ms)
+        if snap is None:
+            continue
+        if any_valid is None or snap.fetched > any_valid.fetched:
+            any_valid = snap
+        if snap.fresh and (fresh is None or snap.fetched > fresh.fetched):
+            fresh = snap
+    return fresh, any_valid
 
 
 def discover_catalog(
     now_ms: float | None = None,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(models, overflow) from one read of the freshest cache."""
-    newest = _newest_catalog(now_ms)
-    return (newest[1], newest[2]) if newest else ((), ())
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """(fresh models, fresh main, fresh overflow, stale overflow) from one scan.
+
+    Only a fresh cache may add candidates. A stale one is used for nothing but
+    folding candidates that already exist, and only when no fresh cache exists.
+    """
+    fresh, newest = _newest_snapshots(now_ms)
+    if fresh is not None:
+        return fresh.models, fresh.main, fresh.overflow, ()
+    return (), (), (), (newest.overflow if newest is not None else ())
 
 
 def discover_models(now_ms: float | None = None) -> tuple[str, ...]:
     return discover_catalog(now_ms)[0]
 
 
-def resolve_catalog(fallback: tuple[str, ...]) -> ModelCatalog:
+def _display_overflow(candidates, fresh_main, fresh_overflow, stale_overflow, bundled):
+    """Fold order: fresh section > bundled table > stale overflow > main."""
+    folded = []
+    for model in candidates:
+        if model in fresh_overflow:
+            folded.append(model)
+        elif model in fresh_main:
+            continue
+        elif model in bundled or model in stale_overflow:
+            folded.append(model)
+    return tuple(folded)
+
+
+def resolve_catalog(
+    fallback: tuple[str, ...], bundled_overflow: tuple[str, ...] = BUNDLED_OVERFLOW,
+) -> ModelCatalog:
     """An explicit allow-list, otherwise bundled candidates plus fresh discovery."""
     override = os.environ.get("AGENTSTACK_CLAUDE_MODELS", "")
     if override.strip():
@@ -138,9 +179,7 @@ def resolve_catalog(fallback: tuple[str, ...]) -> ModelCatalog:
         if not models:
             return ModelCatalog((), "override", "AGENTSTACK_CLAUDE_MODELS contains invalid model IDs")
         return ModelCatalog(models, "override")
-    models, overflow = discover_catalog()
-    if models:
-        merged = tuple(dict.fromkeys((*fallback, *models)))
-        overflow = tuple(m for m in overflow if m in merged)
-        return ModelCatalog(merged, "local_cache", overflow=overflow)
-    return ModelCatalog(fallback, "bundled")
+    models, main, overflow, stale_overflow = discover_catalog()
+    candidates = tuple(dict.fromkeys((*fallback, *models))) if models else fallback
+    folded = _display_overflow(candidates, main, overflow, stale_overflow, bundled_overflow)
+    return ModelCatalog(candidates, "local_cache" if models else "bundled", overflow=folded)
