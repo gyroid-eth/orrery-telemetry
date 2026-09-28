@@ -94,3 +94,17 @@ def test_auto_selected_effort_does_not_replace_the_next_model_default(provider):
     result = run_ui(provider, "selectSpawnModel('gpt-lite');out.lite=state();selectSpawnModel('gpt-6-sol');out.sol=state();")
     assert result["lite"]["payload"]["effort"] == "low"
     assert result["sol"]["payload"]["effort"] == "xhigh"
+
+
+def test_codex_overflow_models_sit_behind_the_more_models_fold(provider):
+    result = run_ui(provider, """
+out.initial=state();out.html=SPM('spm-models').innerHTML;
+selectSpawnModel('gpt-5.6-sol');out.folded=state();
+""")
+    front, _, fold = result["html"].partition('<details class="spm-models-overflow">')
+    assert "more models · 2" in fold
+    assert 'data-model="gpt-5.6-sol"' in fold and 'data-model="gpt-5.6-luna"' in fold
+    for model in ("gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-terra"):
+        assert f'data-model="{model}"' in front
+    assert result["initial"]["payload"]["model"] == codex_models.DEFAULT_MODEL
+    assert result["folded"]["payload"]["model"] == "gpt-5.6-sol"

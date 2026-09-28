@@ -151,6 +151,99 @@ def test_launcher_owned_child_cache_symlink_is_followed(monkeypatch, tmp_path):
     assert "gpt-child-cache" in models.discover_models()
 
 
+def _load_child_resume():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "child_resume_for_catalog_test", Path(__file__).resolve().parents[1] / "hooks" / "child_resume.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_grandchild_home_built_by_child_resume_follows_the_link_chain(monkeypatch, tmp_path):
+    """Codex child -> Codex grandchild: build_home links to the parent home's entry, two hops."""
+    child_resume = _load_child_resume()
+    source = tmp_path / "codex"
+    source.mkdir()
+    (source / "models_cache.json").write_text(json.dumps({
+        "fetched_at": datetime.fromtimestamp(NOW, timezone.utc).isoformat(),
+        "models": [row("gpt-grandchild-cache")],
+    }), encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runner = tmp_path / "runner"
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+
+    def build(parent_home, name):
+        token = tmp_path / f"token-{name}"
+        token.write_text("token")
+        token.chmod(0o600)
+        home = runtime / "child-agents" / f"{name}.codex-home"
+        try:
+            return child_resume.build_home(
+                home=home, source=parent_home, runner=runner, child=name, project_key=str(tmp_path),
+                token_file=token, mcp_url="http://127.0.0.1:9/mcp", mail_env="", runtime_dir=runtime,
+                bearer_mode="off", python_bin="", mcp_profile="inherit")
+        except OSError:
+            pytest.skip("symlink privilege unavailable")
+
+    child = build(source, "ChildCurie")
+    grandchild = build(child, "GrandchildNoether")
+    assert os.readlink(grandchild / "models_cache.json") == str(child / "models_cache.json")
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    for home in (child, grandchild):
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        assert "gpt-grandchild-cache" in models.discover_models()
+
+
+def _child_link(runtime, name, target):
+    home = runtime / "child-agents" / f"{name}.codex-home"
+    home.mkdir(parents=True, exist_ok=True)
+    link = home / "models_cache.json"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    return link
+
+
+def test_link_chain_cycle_is_not_followed(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    first = runtime / "child-agents" / "A.codex-home" / "models_cache.json"
+    second = _child_link(runtime, "B", first)
+    _child_link(runtime, "A", second)
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("CODEX_HOME", str(first.parent))
+    assert models.discover_models() == {}
+
+
+def test_link_chain_through_an_untrusted_hop_is_not_followed(monkeypatch, tmp_path):
+    cache()  # a valid catalog at the end of the chain
+    real = Path(os.environ["CODEX_HOME"]) / "models_cache.json"
+    stray = tmp_path / "elsewhere" / "models_cache.json"
+    stray.parent.mkdir()
+    try:
+        stray.symlink_to(real)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    runtime = tmp_path / "runtime"
+    link = _child_link(runtime, "ChildCurie", stray)
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("CODEX_HOME", str(link.parent))
+    assert models.discover_models() == {}
+
+
+def test_link_chain_longer_than_the_hop_limit_is_not_followed(monkeypatch, tmp_path):
+    cache()
+    runtime = tmp_path / "runtime"
+    target = Path(os.environ["CODEX_HOME"]) / "models_cache.json"
+    for depth in range(models.MAX_CACHE_LINK_HOPS + 1):
+        target = _child_link(runtime, f"Depth{depth}", target)
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("CODEX_HOME", str(target.parent))
+    assert models.discover_models() == {}
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
 def test_fifo_does_not_block():
     path = Path(os.environ["CODEX_HOME"]) / "models_cache.json"
@@ -261,3 +354,32 @@ def test_rfc3339_fractional_seconds_are_portable(fraction):
     whole = datetime.fromtimestamp(NOW-1, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     cache([row("gpt-nanosecond")], fetched_at=whole+"."+fraction+"Z")
     assert "gpt-nanosecond" in models.discover_models()
+
+
+def test_bundled_overflow_folds_only_the_fixed_table():
+    catalog = models.resolve_catalog()
+    assert catalog.overflow == ("gpt-5.6-sol", "gpt-5.6-luna")
+    front = [model for model in catalog.models if model not in catalog.overflow]
+    assert front == ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-6-luna"]
+    assert models.provider_catalog()["overflow_models"] == ["gpt-5.6-sol", "gpt-5.6-luna"]
+
+
+def test_overflow_follows_the_table_not_version_numbers():
+    # gpt-5.5 folds once the cache lists it; an unknown older-looking model does not.
+    cache([row(), row("gpt-5.5", ("low", "medium", "high", "xhigh")), row("gpt-5.4-mini")])
+    catalog = models.resolve_catalog()
+    assert catalog.overflow == ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
+    assert "gpt-5.4-mini" in catalog.models and "gpt-5.4-mini" not in catalog.overflow
+    assert models.DEFAULT_MODEL not in catalog.overflow
+
+
+def test_hidden_models_stay_hidden_and_are_not_folded():
+    cache([row(), row("gpt-5.5", visibility="hide")])
+    catalog = models.resolve_catalog()
+    assert "gpt-5.5" not in catalog.models and "gpt-5.5" not in catalog.overflow
+
+
+def test_explicit_allowlist_is_not_folded(monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-5.6-sol")
+    assert models.resolve_catalog().overflow == ()
+    assert models.provider_catalog()["overflow_models"] == []

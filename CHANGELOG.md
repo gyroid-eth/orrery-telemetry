@@ -10,9 +10,17 @@
 
 ## 2026.09.27
 
+### NEW AGENT の Codex でも、旧世代のモデルを「more models」に畳みます
+
+Claude と同じく、Codex の `gpt-5.6-sol`・`gpt-5.6-luna`・`gpt-5.5` を NEW AGENT の「more models」の中に移しました。`gpt-6-astra`・`gpt-6-sol`・`gpt-6-luna`・`gpt-5.6-terra` は前面のままです。どれを畳むかは同梱の表で決め、番号の大小では決めません。既定のモデルは畳まず、catalog が隠しているモデルは今までどおり表示しません。`AGENTSTACK_CODEX_MODELS` で許可リストを明示している場合は畳みません。`/api/spawn-names` の Codex provider は `overflow_models` を返します。
+
+### Codex の子が起動した Codex の子（孫）でも、ローカルのモデル一覧を読めるようにしました
+
+孫の `CODEX_HOME` の `models_cache.json` は「孫→子→元」と symlink を2段たどる必要があり、1段しかたどらなかったため、孫では同梱の候補に戻っていました。launcher が作る子の home の中だけを通る連鎖を、段数の上限（8）と循環の検査付きでたどるようにしました。
+
 ### NEW AGENT の Codex 既定を GPT-6 Sol に更新しました（#97）
 
-Codex のローカル model catalog 追従に合わせ、短縮名 `sol` とモデル無指定時の既定をどちらも `gpt-6-sol` に揃えました。以前の世代を固定して使う場合は `gpt-5.6-sol` のように正式 ID を指定してください。`AGENTSTACK_CODEX_MODELS` で許可モデルを明示している環境では、新しい既定の `gpt-6-sol` が許可リストに無ければ、これまで無指定で通っていた起動が拒否されます。
+Codex のローカル model catalog 追従に合わせ、短縮名 `sol` とモデル無指定時の既定をどちらも `gpt-6-sol` に揃えました。以前の世代を固定して使う場合は `gpt-5.6-sol` のように正式 ID を指定してください。`AGENTSTACK_CODEX_MODELS` で許可モデルを明示している環境では、新しい既定の `gpt-6-sol` が許可リストに無ければ、これまで無指定で通っていた起動が拒否されます。短縮名も同じで、`--model sol` は `gpt-6-sol` に展開されてから許可リストと照合されるため、`gpt-6-sol` が許可されていなければ拒否されます（`luna`・`astra`・`terra` も展開先の正式 ID で照合されます）。
 
 ローカル cache は候補表示と無指定 effort の補助に使い、期限切れや候補情報だけを理由に明示 effort を拒否しません。launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink も読み取れるようにし、Gemini provider では `gpt-*` 名前空間を予約して provider 間のモデル名衝突を防ぎます。
 

@@ -20,6 +20,10 @@ DEFAULT_MODELS = (
     DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
     "gpt-5.6-luna", "gpt-6-luna",
 )
+# Listed models shown under NEW AGENT's "more models" fold. A fixed table (a product
+# call), not a version comparison; the default is never folded, and models the
+# catalog hides (`visibility` other than "list") never reach this list at all.
+BUNDLED_OVERFLOW = ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
 ALIASES = {"sol": "gpt-6-sol", "luna": "gpt-6-luna",
            "astra": "gpt-6-astra", "terra": "gpt-5.6-terra"}
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
@@ -28,6 +32,7 @@ MODEL_RE = re.compile(r"gpt-[a-z0-9]+(?:[._-][a-z0-9]+)*")
 MAX_BYTES = 2 * 1024 * 1024
 MAX_MODELS = 256
 CACHE_TTL_SECONDS = 300  # Codex CLI rust-v0.154.0 models-manager default.
+MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is still read.
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class ModelCatalog:
     source: str
     efforts: dict[str, EffortPolicy]
     error: str = ""
+    overflow: tuple[str, ...] = ()
 
 
 def is_model_id(value: object) -> bool:
@@ -87,7 +93,13 @@ def normalize_model(raw: str = "") -> str:
 
 
 def _cache_open_path(path: Path) -> Path | None:
-    """Return a cache path safe to open without arbitrary symlink following."""
+    """Return a cache path safe to open without arbitrary symlink following.
+
+    The launcher links each child home's entries to its parent's home, so a
+    Codex grandchild sees a chain (grandchild -> child -> original). Every hop
+    but the last must be a launcher-owned child home entry; the chain is
+    bounded and a revisited link is rejected.
+    """
     if not path.is_symlink():
         return path
     runtime_raw = os.environ.get("AGENTSTACK_RUNTIME_DIR", "").strip()
@@ -97,16 +109,24 @@ def _cache_open_path(path: Path) -> Path | None:
     if not runtime.is_absolute():
         return None
     child_root = runtime / "child-agents"
-    home = path.parent
-    if home.parent != child_root or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None:
-        return None
-    try:
-        target = Path(os.readlink(path))
-    except OSError:
-        return None
-    if not target.is_absolute() or target.name != "models_cache.json":
-        return None
-    return target
+    current, seen = path, set()
+    for _ in range(MAX_CACHE_LINK_HOPS):
+        home = current.parent
+        if (current.name != "models_cache.json" or home.parent != child_root
+                or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None
+                or current in seen):
+            return None
+        seen.add(current)
+        try:
+            target = Path(os.readlink(current))
+        except OSError:
+            return None
+        if not target.is_absolute() or target.name != "models_cache.json":
+            return None
+        if not target.is_symlink():
+            return target
+        current = target
+    return None
 
 
 def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
@@ -189,7 +209,11 @@ def resolve_catalog(now: float | None = None) -> ModelCatalog:
     policies = {**BUNDLED_EFFORTS, **discovered}
     models = allowed if allowed is not None else tuple(dict.fromkeys((*DEFAULT_MODELS, *discovered)))
     source = "override" if allowed is not None else ("local_cache" if discovered else "bundled")
-    return ModelCatalog(models, source, policies)
+    # An explicit allow-list is the operator's own menu and is not folded,
+    # matching the Claude provider.
+    overflow = () if allowed is not None else tuple(
+        model for model in models if model in BUNDLED_OVERFLOW and model != DEFAULT_MODEL)
+    return ModelCatalog(models, source, policies, overflow=overflow)
 
 
 def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = None) -> str:
@@ -216,6 +240,7 @@ def provider_catalog() -> dict:
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": list(catalog.models), "default_model": DEFAULT_MODEL,
         "model_source": catalog.source, "model_error": catalog.error,
+        "overflow_models": list(catalog.overflow),
         "efforts": list(_STANDARD), "effort_default": DEFAULT_EFFORT,
         "model_efforts": {model: list(catalog.efforts[model].supported) if model in catalog.efforts else [] for model in catalog.models},
         "model_effort_defaults": {model: catalog.efforts[model].default if model in catalog.efforts else "" for model in catalog.models},
