@@ -291,3 +291,23 @@ def test_old_codex_cli_gets_an_update_note(tmp_path, output, noted):
     assert result.returncode == 0, result.stderr
     assert f"ok: Codex launcher binary {codex}" in result.stdout
     assert ("npm install -g @openai/codex@latest" in result.stdout) is noted
+
+
+def test_doctor_does_not_leave_a_stubborn_native_child_behind(tmp_path):
+    from test_install_codex_bin import _alive, _wrapper_with_stubborn_native
+    import time
+    wrapper, pidfile = _wrapper_with_stubborn_native(tmp_path)
+    try:
+        result = _report(tmp_path, wrapper)
+        assert "did not succeed within 2s" in result.stdout
+        native_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 3
+        while _alive(native_pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(native_pid), "native child survived the doctor probe"
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass

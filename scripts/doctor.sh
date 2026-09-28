@@ -425,25 +425,44 @@ codex_version_answers() {
   wait "$pid"
 }
 
-# Stop a probe that overran: TERM it and its direct children (an npm wrapper's
-# native codex), allow one second, then KILL. A candidate that ignores TERM
-# must not turn the bounded probe into an unbounded wait.
+# Stop a probe that overran. Its process tree (an npm wrapper and the native
+# codex under it) is recorded first, while the children are still attached to
+# it; a wrapper that exits on TERM would otherwise orphan a native child that
+# ignores TERM, out of reach of `pkill -P`. Every recorded process gets TERM,
+# one second of grace, then KILL. Only descendants of the probe's own $! are
+# touched, never the caller's process group.
 codex_probe_stop() {
-  local pid="$1" grace=0
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -P "$pid" 2>/dev/null || true
+  local pid="$1" targets="$1" level="$1" next p depth grace=0
+  # PID lists are space-separated; a caller may have narrowed IFS (the PATH
+  # scan in find_usable_codex_bin splits on ":").
+  local IFS=$' \t\n'
+  if command -v pgrep >/dev/null 2>&1; then
+    for depth in 1 2 3 4; do
+      next=""
+      for p in $level; do
+        next="$next $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ' || true)"
+      done
+      next="$(echo $next)"
+      [[ -n "$next" ]] || break
+      targets="$targets $next"
+      level="$next"
+    done
   fi
-  kill -TERM "$pid" 2>/dev/null || true
-  while kill -0 "$pid" 2>/dev/null && [[ "$grace" -lt 10 ]]; do
+  for p in $targets; do
+    kill -TERM "$p" 2>/dev/null || true
+  done
+  while [[ "$grace" -lt 10 ]]; do
+    next=""
+    for p in $targets; do
+      kill -0 "$p" 2>/dev/null && next="$next $p"
+    done
+    [[ -n "$next" ]] || break
     sleep 0.1
     grace=$((grace + 1))
   done
-  if kill -0 "$pid" 2>/dev/null; then
-    if command -v pkill >/dev/null 2>&1; then
-      pkill -KILL -P "$pid" 2>/dev/null || true
-    fi
-    kill -KILL "$pid" 2>/dev/null || true
-  fi
+  for p in $targets; do
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true
+  done
   wait "$pid" 2>/dev/null || true
 }
 

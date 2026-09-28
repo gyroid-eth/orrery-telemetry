@@ -183,3 +183,47 @@ def test_a_codex_that_ignores_term_is_still_bounded(tmp_path):
     _, resolved, _ = _resolve(tmp_path, path_dirs=[stubborn.parent, linux.parent], timeout=1)
     assert resolved == str(linux)
     assert time.monotonic() - started < 8
+
+
+def _wrapper_with_stubborn_native(tmp_path) -> tuple[pathlib.Path, pathlib.Path]:
+    """An npm-style wrapper that exits on TERM over a native child that ignores it."""
+    pidfile = tmp_path / "native.pid"
+    native = tmp_path / "native"
+    native.write_text('#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.1; done\n', encoding="utf-8")
+    native.chmod(0o755)
+    wrapper = tmp_path / "wrapper-bin" / "codex"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(
+        f"#!/bin/bash\n{shlex.quote(str(native))} &\necho $! > {shlex.quote(str(pidfile))}\nwait\n",
+        encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper, pidfile
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def test_a_native_child_that_ignores_term_is_not_left_behind(tmp_path):
+    wrapper, pidfile = _wrapper_with_stubborn_native(tmp_path)
+    linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
+    try:
+        _, resolved, _ = _resolve(tmp_path, path_dirs=[wrapper.parent, linux.parent], timeout=1)
+        assert resolved == str(linux)
+        native_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 3
+        while _alive(native_pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(native_pid), "native child survived the probe"
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass
