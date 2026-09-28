@@ -190,7 +190,7 @@ ORRERY Telemetry delegation must be entered with the leading slash as `/delegate
 | Item | Details |
 | --- | --- |
 | Trigger | A request to delegate to a child, launch a subagent, or perform parallel work |
-| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>]` |
+| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>]` |
 | Required prerequisites | The parent's ORRERY Mail identity and canonical project key. Editing tasks require a resource declaration and reservation |
 | Optional prerequisites | `--worktree` requires a Git repository; dashboard annotation requires the dashboard service |
 

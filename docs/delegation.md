@@ -90,6 +90,16 @@ default_tools_approval_mode = "approve"
 
 Codex CLI 0.154.0 の interactive session で、事前設定済みの stdio MCP を disabled から enabled へ変えた限定実測では、config の変更後に `/mcp` が一覧を更新して server を起動しても tool call は確認できず、同じ会話を resume した1対照も成功しませんでした。新しい process と新しい会話の対照では成功したため、現行案内では config の変更、`/mcp`、resume を確実な途中切替として扱いません。この結果を他の version、HTTP/OAuth、plugin 由来の server、新規 MCP 追加へ一般化するものではありません。
 
+## Claude child とブラウザ操作（Claude in Chrome）
+
+`/delegate "<task>" --claude-chrome-device <deviceId>`（または `--claude-chrome`）を明示すると、Claude child の `claude` に `--chrome` を付けて起動し、Claude in Chrome のブラウザ操作を渡します。Claude child 専用で、`--codex` とは併用できません。OS のデスクトップ操作とは別の指定です。
+
+- **既定は inherit**。指定しない child の起動コマンドは従来と同じで、`--chrome` も `--no-chrome` も付けません。Chrome を使えるかどうかは利用者自身の Claude 設定（`claudeInChromeDefaultEnabled` など）で決まります。既定は「ブラウザ無効」ではありません。
+- **deviceId は選択ポリシー**。同じアカウントに複数のブラウザ（例: Mac の Chrome と Windows の Brave）がつながっているときに、どれを使うかを child に指示します。child は `list_connected_browsers` で deviceId が接続中であることを確かめ、`select_browser` が成功してから自分のタブを作ります。一覧に無い・切断されているときはブラウザ作業を止めて報告し、先頭や local のブラウザへ切り替えません。deviceId を渡さないときは、`list_connected_browsers` 以外のブラウザ操作をせず、親に deviceId を尋ねます。**これは child への指示であって、技術的な隔離ではありません**。Claude Code には Claude in Chrome を特定のブラウザに固定する CLI フラグがないためです。誤操作を確実に避けたい検証では、対象外のブラウザの拡張を切断して候補を減らしてください。
+- **起動経路**。cold start と legacy のどちらでも `--chrome` が付きます。warm pool のセッションは `--chrome` なしで起動済みなので claim せず、cold start します。dashboard からの resume は `AGENTSTACK_RUNTIME_DIR/child-agents/<name>.claude-launch.json` を読んで `--chrome` を付け直します。このファイルが壊れている・別の agent のもの・権限が 0600 でないときは、resume を止めて理由を返します。SessionStart hook は起動・resume・compaction のたびに同じポリシーを child に伝え直します。
+- **WSL**。公式ドキュメント（[Claude in Chrome](https://code.claude.com/docs/en/chrome)）では WSL は非対応です。Claude Code 2.1.283 で、アカウント経由で接続した Windows のブラウザを WSL の `claude -p --chrome` から操作できたことを 1 台の実機で確認しています。サポート対象として扱わず、version を上げたら確認し直してください。
+- **env の既定**。`AGENTSTACK_CLAUDE_CHILD_CHROME=1` と `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE=<id>` を設定すると、`spawn_child.sh` から起動する Claude child すべてに同じ指定が付きます。CLI のフラグが env より優先されます。Codex child では無視します。dashboard の NEW AGENT は、フォームで指定した値だけを使い、env の既定は使いません。
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。

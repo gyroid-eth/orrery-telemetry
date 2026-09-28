@@ -513,6 +513,8 @@ Request:
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
 | `worktree_base` | no | Base revision; default `HEAD` |
+| `claude_chrome` | Claude only | Boolean. `true` adds `--chrome` to the child. Omitted or `false` means inherit (the user's Claude settings decide). The launcher's env defaults are not used. See [Claude in Chrome](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
+| `claude_chrome_device` | Claude only | deviceId of the browser to use (`[A-Za-z0-9._:-]{1,128}`). Implies `claude_chrome: true`; combining it with `claude_chrome: false` is rejected |
 
 Success:
 

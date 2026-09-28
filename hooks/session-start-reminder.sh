@@ -305,3 +305,17 @@ else
     fi
     echo "この間、ファイル予約は取得も確認もできません。他のエージェントと同じファイルを編集しても衝突は検出されません。"
 fi
+
+# A child started with --claude-chrome gets its browser policy again at every
+# session start (startup, resume, compaction): the transcript alone may carry an
+# older browser selection. Children without the launch record print nothing.
+if [ -n "$RESOLVED_AGENT" ] && [ -f "$HOOKS_DIR/claude_chrome_policy.py" ]; then
+    case "$RESOLVED_AGENT" in
+        *[!A-Za-z0-9_.-]*) ;;
+        *)
+            python3 "$HOOKS_DIR/claude_chrome_policy.py" session \
+                "$RUNTIME_DIR/child-agents/$RESOLVED_AGENT.claude-launch.json" \
+                "$RESOLVED_AGENT" 2>/dev/null || true
+            ;;
+    esac
+fi

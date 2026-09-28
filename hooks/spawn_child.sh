@@ -12,6 +12,17 @@
 #   spawn_child.sh --pre-registered <name> --codex --embed-task --task-file <path> [<workdir>]
 #   spawn_child.sh --pre-registered <name> --codex --codex-mcp orrery-only "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
+#   spawn_child.sh --pre-registered <name> --child-token-file <path> --claude-chrome-device <id> "<task>"
+#
+# ブラウザ操作（Claude の子だけ）:
+#   既定は inherit: 起動コマンドを変えず、Claude 自身の設定（claudeInChromeDefaultEnabled 等）に従う。
+#   --claude-chrome              子の claude に --chrome を付ける（Claude in Chrome）
+#   --claude-chrome-device ID    使うブラウザの deviceId を子に指示する（--claude-chrome を含む）
+#   env AGENTSTACK_CLAUDE_CHILD_CHROME=1 / AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE=ID でも同じ。
+#     CLI が env より優先。env は Claude の子にだけ効く（--codex では無視）。
+#   deviceId は起動 prompt と SessionStart hook で渡す選択ポリシーであり、
+#   他のブラウザの操作を技術的に禁止するものではない。
+#   chrome を要求した子は warm pool を使わず cold start する。
 #
 # モデル指定（--model。Codex は gpt-6-sol 既定で旧 model 名も有効）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
@@ -229,6 +240,13 @@ STANDALONE=false
 EMBED_TASK=false
 TASK_FILE=""
 USE_WORKTREE=false
+# Claude in Chrome: CLI flags win over the env defaults, and the env defaults
+# apply to Claude children only (a Codex spawn ignores them). Unset / "" / 0
+# means inherit: no flag is added and the user's own Claude settings decide.
+CLAUDE_CHILD_CHROME=false
+CLAUDE_CHILD_CHROME_CLI=false
+CLAUDE_CHILD_CHROME_DEVICE=""
+CLAUDE_CHILD_CHROME_DEVICE_CLI=false
 WORKTREE_BASE="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 if [[ "$WORKTREE_BASE" == "~" ]]; then
     WORKTREE_BASE="$HOME"
@@ -297,6 +315,22 @@ while [[ "${1:-}" == --* ]]; do
             TASK_FILE="$2"
             shift 2
             ;;
+        --claude-chrome)
+            CLAUDE_CHILD_CHROME=true
+            CLAUDE_CHILD_CHROME_CLI=true
+            shift
+            ;;
+        --claude-chrome-device)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --claude-chrome-device requires a deviceId" >&2
+                exit 1
+            fi
+            CLAUDE_CHILD_CHROME=true
+            CLAUDE_CHILD_CHROME_CLI=true
+            CLAUDE_CHILD_CHROME_DEVICE="$2"
+            CLAUDE_CHILD_CHROME_DEVICE_CLI=true
+            shift 2
+            ;;
         --worktree)
             USE_WORKTREE=true
             shift
@@ -321,6 +355,31 @@ case "$CODEX_MCP_PROFILE" in
 esac
 if [[ "$CODEX_MCP_PROFILE" != "inherit" && "$USE_CODEX" != true ]]; then
     echo "Error: --codex-mcp is only valid with --codex" >&2
+    exit 1
+fi
+
+if [[ "$CLAUDE_CHILD_CHROME_CLI" == true && "$USE_CODEX" == true ]]; then
+    echo "Error: --claude-chrome is only valid for Claude children (not with --codex)" >&2
+    exit 1
+fi
+if [[ "$USE_CODEX" != true ]]; then
+    case "${AGENTSTACK_CLAUDE_CHILD_CHROME:-}" in
+        ""|0) ;;
+        1) CLAUDE_CHILD_CHROME=true ;;
+        *)
+            echo "Error: AGENTSTACK_CLAUDE_CHILD_CHROME must be 1, 0 or unset" >&2
+            exit 1
+            ;;
+    esac
+    if [[ "$CLAUDE_CHILD_CHROME_DEVICE_CLI" != true \
+        && -n "${AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE:-}" ]]; then
+        CLAUDE_CHILD_CHROME=true
+        CLAUDE_CHILD_CHROME_DEVICE="$AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"
+    fi
+fi
+if [[ -n "$CLAUDE_CHILD_CHROME_DEVICE" ]] \
+    && ! [[ "$CLAUDE_CHILD_CHROME_DEVICE" =~ ^[A-Za-z0-9._:-]{1,128}$ ]]; then
+    echo "Error: --claude-chrome-device must match [A-Za-z0-9._:-]{1,128}" >&2
     exit 1
 fi
 
@@ -1463,6 +1522,44 @@ build_embedded_task_prompt() {
         "$parent_name" "$task_text"
 }
 
+# The Claude child's tmux command. With chrome off this must stay byte-for-byte
+# the command used before --claude-chrome existed; --chrome is the only addition.
+claude_child_launch_command() {
+    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    if [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
+        inner+=' --chrome'
+    fi
+    inner+='; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'
+    printf "%s -lc '%s'" "$CHILD_SHELL" "$inner"
+}
+
+# Appended to the child's first prompt when --claude-chrome is on. The same
+# text is repeated by session-start-reminder.sh at every session start. A
+# deviceId is a selection policy the child follows, not a technical binding.
+claude_chrome_prompt_block() {
+    [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    local text
+    text="$(python3 "$HOOKS_DIR/claude_chrome_policy.py" prompt \
+        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)")" || return 1
+    printf '\n\n%s' "$text"
+}
+
+# Records what a resume must restore (dashboard do_resume and the session-start
+# hook read it). It carries no credential. With chrome off, a record left by an
+# earlier child of the same name is removed so a resume never adds --chrome.
+record_claude_launch_state() {
+    local state_file="$CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json"
+    if [[ "$CLAUDE_CHILD_CHROME" != true ]]; then
+        rm -f -- "$state_file" 2>/dev/null || true
+        [[ ! -e "$state_file" && ! -L "$state_file" ]]
+        return
+    fi
+    mkdir -p "$CHILD_STATE_DIR" || return 1
+    chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || true
+    python3 "$HOOKS_DIR/claude_chrome_policy.py" write "$state_file" "$CHILD_NAME" \
+        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)"
+}
+
 build_codex_mail_task_prompt() {
     local child_name="$1"
     local parent_name="$2"
@@ -1827,6 +1924,10 @@ ${TASK}"
             # A claimed warm session may retain a parent environment. Cold
             # start standalone children so PARENT_AGENT is guaranteed absent.
             WARM_TYPE="__skip_warm__"
+        elif [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
+            # A warm session was started without --chrome, and a claim cannot
+            # add a CLI flag to a running process. Cold start instead.
+            WARM_TYPE="__skip_warm__"
         else
             case "$CHILD_MODEL" in
                 "$CLAUDE_WARM_OPUS_MODEL")   WARM_TYPE="opus" ;;
@@ -1835,9 +1936,15 @@ ${TASK}"
             esac
         fi
 
+        if ! record_claude_launch_state; then
+            echo "[spawn_child/pre-reg] Aborting: could not update the Claude in Chrome launch record ($CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json)." >&2
+            exit 1
+        fi
+
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
-        if [[ -f "$WARM_POOL" ]] && echo "$WARM_STATUS" | grep -q "${WARM_TYPE}.*ready"; then
+        if [[ "$CLAUDE_CHILD_CHROME" != true && -f "$WARM_POOL" ]] \
+            && echo "$WARM_STATUS" | grep -q "${WARM_TYPE}.*ready"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
             if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
                 WARM_CLAIMED=true
@@ -1861,7 +1968,7 @@ ${TASK}"
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-                "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+                "$(claude_child_launch_command)"
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
@@ -1923,6 +2030,11 @@ ${TASK}"
         else
             CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
         fi
+        if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
+            echo "[spawn_child/pre-reg] Aborting: could not build the Claude in Chrome browser policy." >&2
+            exit 1
+        fi
+        CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
         send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
         sleep 2
         flush_queued_prompt "$CHILD_NAME" || true
@@ -2656,13 +2768,17 @@ if [[ "$USE_CODEX" == true ]]; then
     verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
 else
     # Claude Code 起動（モデル指定付き）
+    if ! record_claude_launch_state; then
+        echo "[spawn_child] Aborting: could not update the Claude in Chrome launch record ($CHILD_STATE_DIR/$CHILD_NAME.claude-launch.json)." >&2
+        exit 1
+    fi
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
-        "$CHILD_SHELL"' -lc '"'"'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'"'"''
+        "$(claude_child_launch_command)"
     CHILD_SESSION_STARTED=true
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機
@@ -2714,6 +2830,11 @@ else
     echo "[spawn_child] Waited ${WAITED}s (+1s); injecting prompt" >&2
 
     CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+    if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
+        echo "[spawn_child] Aborting: could not build the Claude in Chrome browser policy." >&2
+        exit 1
+    fi
+    CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
     send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
     sleep 2
     flush_queued_prompt "$CHILD_NAME" || true

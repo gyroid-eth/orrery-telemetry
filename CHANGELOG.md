@@ -10,6 +10,10 @@
 
 ## 2026.09.27
 
+### Claude の子に Claude in Chrome（ブラウザ操作）を明示して渡せるようにしました
+
+`spawn_child.sh --claude-chrome` / `--claude-chrome-device <deviceId>`、`/delegate` の同名フラグ、NEW AGENT の「Explicitly enable Claude in Chrome」で、Claude の子を `--chrome` 付きで起動します。指定しない子の起動コマンドは従来と同じ（inherit）で、Chrome を使えるかは利用者の Claude 設定で決まります。deviceId は子への選択ポリシーで、技術的な隔離ではありません。子は `list_connected_browsers` で接続を確かめて `select_browser` が成功してから自分のタブで操作し、見つからないときは止まって報告します。指定した子は warm pool を使わず cold start し、dashboard からの resume でも `--chrome` を付け直します（記録が壊れていれば resume を止めます）。SessionStart hook が起動・resume・compaction のたびに同じポリシーを伝え直します。公式 docs では WSL は非対応です。Claude Code 2.1.283 のアカウント接続で WSL から Windows のブラウザを操作できたことを 1 台で確認しています。詳細は [docs/delegation.md](docs/delegation.md#claude-child-とブラウザ操作claude-in-chrome)。
+
 ### NEW AGENT の Codex でも、旧世代のモデルを「more models」に畳みます
 
 Claude と同じく、Codex の `gpt-5.6-sol`・`gpt-5.6-luna`・`gpt-5.5` を NEW AGENT の「more models」の中に移しました。`gpt-6-astra`・`gpt-6-sol`・`gpt-6-luna`・`gpt-5.6-terra` は前面のままです。どれを畳むかは同梱の表で決め、番号の大小では決めません。既定のモデルは畳みません。期限内のローカル catalog が隠しているモデル（`visibility` が `list` 以外）は、同梱の候補に入っていても一覧から外し、畳む対象にも入れません（launcher の既定 `gpt-6-sol` だけは残します）。`AGENTSTACK_CODEX_MODELS` で許可リストを明示している場合は畳みません。`/api/spawn-names` の Codex provider は `overflow_models` を返します。

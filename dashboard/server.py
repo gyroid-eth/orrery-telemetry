@@ -2559,6 +2559,46 @@ def _agent_program(session: str) -> str:
         return ""
 
 
+def _claude_chrome_policy_module():
+    """Load hooks/claude_chrome_policy.py, the one validator for launch records."""
+    for path in (
+        os.path.join(HOOKS_DIR, "claude_chrome_policy.py"),
+        os.path.join(os.path.dirname(HERE), "hooks", "claude_chrome_policy.py"),
+    ):
+        if not os.path.isfile(path):
+            continue
+        spec = importlib.util.spec_from_file_location(
+            "agentstack_claude_chrome_policy", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise RuntimeError("claude_chrome_policy.py is unavailable")
+
+
+def _claude_child_chrome(session: str) -> tuple[bool, str, str]:
+    """Return (``--chrome`` requested, deviceId, error) for a Claude resume.
+
+    No record means the child was started without ``--claude-chrome``, and the
+    resume command stays unchanged. A record that exists but cannot be
+    validated stops the resume: resuming without it could leave a session
+    with the user's default Chrome integration and no known target browser."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", session or ""):
+        return False, "", ""
+    path = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.claude-launch.json")
+    if not os.path.lexists(path):
+        return False, "", ""
+    try:
+        policy = _claude_chrome_policy_module()
+        state = policy.read_record(path, session)
+    except Exception as exc:  # noqa: BLE001 - any failure is fail-closed
+        return False, "", f"Claude in Chrome launch record is invalid: {exc}"
+    if state is None:
+        return False, "", ""
+    return True, state["chrome_device"], ""
+
+
 def do_resume(session: str) -> dict:
     """retire 済み / 過去セッションを tmux 再開する。
 
@@ -2625,6 +2665,15 @@ def do_resume(session: str) -> dict:
         f'export AGENT_NAME={session}; '
         f'exec {ABS_CLAUDE} --resume {sid} -n {session}'
     )
+    # A child started with --claude-chrome gets --chrome back on resume. Its
+    # browser policy is repeated by session-start-reminder.sh from the same
+    # launch record, so the resumed model re-checks the target browser.
+    chrome, _chrome_device, chrome_error = _claude_child_chrome(session)
+    if chrome_error:
+        return {"ok": False, "error": chrome_error}
+    if chrome:
+        inner += ' --chrome'
+
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が
     # 誤爆する(2026-06-02 調査)。dashboard が tmux 内から再起動された場合に備え剥がす。
@@ -5845,11 +5894,14 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
     return request, None
 
 
+_CLAUDE_CHROME_DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
     payload: {parent?, standalone?, name?, dir?, role?, group?, task,
-              provider?, model?, effort?}.
+              provider?, model?, effort?, claude_chrome?, claude_chrome_device?}.
     """
     unavailable = _spawn_unavailable_error()
     if unavailable:
@@ -5868,6 +5920,28 @@ def do_spawn(payload: dict) -> dict:
     )
     model = (payload.get("model") or default_model).strip()
     effort = (payload.get("effort") or "").strip().lower()
+    # Claude in Chrome. The request is authoritative: omitted / false means
+    # inherit (no flag; the user's Claude settings decide), true adds --chrome,
+    # and a deviceId implies true. The launcher's env defaults are stripped in
+    # _spawn_launch so an unchecked box cannot be overridden by them.
+    chrome = payload.get("claude_chrome", False)
+    chrome_device = payload.get("claude_chrome_device", "")
+    if not isinstance(chrome, bool):
+        return {"ok": False, "error": "claude_chrome must be a boolean"}
+    if not isinstance(chrome_device, str):
+        return {"ok": False, "error": "claude_chrome_device must be a string"}
+    chrome_device = chrome_device.strip()
+    if chrome_device:
+        if "claude_chrome" in payload and not chrome:
+            return {"ok": False,
+                    "error": "claude_chrome_device requires claude_chrome"}
+        if not _CLAUDE_CHROME_DEVICE_RE.fullmatch(chrome_device):
+            return {"ok": False,
+                    "error": "claude_chrome_device must match [A-Za-z0-9._:-]{1,128}"}
+        chrome = True
+    if chrome and provider != "claude":
+        return {"ok": False,
+                "error": f"claude_chrome not supported for provider: {provider}"}
     if provider == "claude":
         # Discovery only adds choices; only an explicit override restricts IDs.
         if (not _is_claude_model_id(model)
@@ -5875,9 +5949,14 @@ def do_spawn(payload: dict) -> dict:
             return {"ok": False, "error": f"model not allowed for provider claude: {model}"}
         if effort:
             return {"ok": False, "error": "effort not supported for provider: claude"}
+        chrome_args: tuple[str, ...] = ()
+        if chrome_device:
+            chrome_args = ("--claude-chrome-device", chrome_device)
+        elif chrome:
+            chrome_args = ("--claude-chrome",)
         spec = SpawnLaunchSpec(
             provider="claude", program="claude-code", model=model,
-            script=SPAWN_SCRIPT,
+            script=SPAWN_SCRIPT, provider_args=chrome_args,
         )
     elif provider == "codex":
         try:
@@ -6248,6 +6327,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(dict(spec.launcher_env))
+    # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
+    # the CLI env defaults would otherwise turn an unchecked box back on.
+    env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)
+    env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE", None)
     if spec.provider == "codex" and not env.get("AGENTSTACK_PYTHON", "").strip():
         # Direct development servers need the same interpreter as the API;
         # installed services already carry the installer's pinned interpreter.
