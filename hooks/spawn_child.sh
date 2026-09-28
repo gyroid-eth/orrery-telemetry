@@ -1226,11 +1226,13 @@ verify_injection() {
 }
 
 # --- Codex cold start: the first task travels as the positional [PROMPT] ---
-# Codex 0.158 draws a provisional composer ("Ask Codex to do anything") before
-# its startup screens and drops input buffered then, so a task pasted as soon as
-# a footer appeared was sometimes lost (WSL, 2026-09-28: 1 of 8 cold spawns
-# never started a turn). The task is therefore given to `codex -- "<task>"` as
-# one argv and never pasted, submitted or resent. It reaches the child through
+# On WSL (2026-09-28) 1 of 8 cold Codex 0.158 children never started a turn
+# after its task was pasted. Codex 0.158 draws a provisional composer ("Ask
+# Codex to do anything") during startup and can discard pending input before a
+# protected screen; a race between the paste and that screen change is the
+# leading hypothesis, not a confirmed cause. Either way the task no longer goes
+# through the terminal: it is given to `codex -- "<task>"` as one argv and is
+# never pasted, submitted or resent. It reaches the child through
 # a 0600 file that the child's shell reads and removes; it is never spliced
 # into a shell command string.
 # One argv is capped by the OS (Linux: 128 KiB per argument); a task past the
@@ -1271,6 +1273,35 @@ codex_task_on_screen() {
     [[ -n "$tail_key" ]] && printf '%s' "$pane_key" | grep -qF -- "$tail_key"
 }
 
+# Which Codex startup screen is up: prints trust, model, signin or nothing.
+# With the task on screen from the first frame, a dialog phrase anywhere in the
+# pane is no longer evidence of a dialog: the task itself, or Codex's answer,
+# may quote "Do you trust ...", "Use existing model" or "Press enter to
+# continue". So only whole lines laid out as a dialog count (a numbered option
+# row, a lone option, the dialog's own footer), and lines that are part of the
+# task text are set aside first.
+codex_startup_screen() {
+    local pane_text="$1" prompt_text="$2" task_key line key rest=""
+    task_key="$(injection_match_key "$prompt_text")"
+    while IFS= read -r line; do
+        key="$(injection_match_key "$line")"
+        if [[ ${#key} -ge 8 && "$task_key" == *"$key"* ]]; then
+            continue
+        fi
+        rest="$rest$line"$'\n'
+    done <<< "$pane_text"
+    rest="$(printf '%s' "$rest" | pane_normalize_nbsp)"
+    if printf '%s' "$rest" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*(Trust and( continue)?|Yes, continue)[[:space:]]*$' \
+        || printf '%s' "$rest" | grep -qE '^[[:space:]]*enter continue · esc quit[[:space:]]*$' \
+        || printf '%s' "$rest" | grep -qE '^[[:space:]]*(>[[:space:]]*)?Do you trust the contents of this directory\?'; then
+        echo trust
+    elif printf '%s' "$rest" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*([0-9]\.[[:space:]]*)?Use existing model[[:space:]]*$'; then
+        echo model
+    elif printf '%s' "$rest" | grep -qE '^[[:space:]]*Press enter to continue[[:space:]]*$'; then
+        echo signin
+    fi
+}
+
 # Watch a cold-started Codex child until its argv task is on screen. The model,
 # trust and sign-in screens are handled on every poll, before the task check,
 # for the whole bounded wait: a ready-looking footer ends nothing, and the task
@@ -1282,7 +1313,7 @@ codex_task_on_screen() {
 # child is left running; the caller only records a diagnostic).
 codex_watch_initial_task() {
     local session_name="$1" prompt_text="$2" log_prefix="$3"
-    local waited=0 wait_max=90 trust_attempts=0 trust_max=10 seen=0 pane_text
+    local waited=0 wait_max=90 trust_attempts=0 trust_max=10 seen=0 pane_text screen
     # Counted polls and wall-clock time both end the watch: the dialog handlers
     # sleep too, and the dashboard signals a launcher after 120s, whose exit
     # trap would then remove the child this watch means to leave running.
@@ -1291,21 +1322,22 @@ codex_watch_initial_task() {
         sleep 3
         waited=$((waited + 3))
         pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        if printf '%s' "$pane_text" | grep -qF "Use existing model"; then
+        screen="$(codex_startup_screen "$pane_text" "$prompt_text")"
+        if [[ "$screen" == model ]]; then
             echo "[$log_prefix] Model selection dialog detected; choosing existing model" >&2
             tmux send-keys -t "$session_name" Down Enter
             seen=0
             sleep 5
             continue
         fi
-        if codex_trust_dialog_present "$pane_text"; then
+        if [[ "$screen" == trust ]]; then
             trust_attempts=$((trust_attempts + 1))
             codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
             seen=0
             sleep 3
             continue
         fi
-        if printf '%s' "$pane_text" | grep -qi "Press enter to continue"; then
+        if [[ "$screen" == signin ]]; then
             echo "[$log_prefix] Sign-in prompt detected; pressing Enter" >&2
             tmux send-keys -t "$session_name" Enter
             seen=0
@@ -1314,18 +1346,18 @@ codex_watch_initial_task() {
         fi
         if codex_task_on_screen "$session_name" "$prompt_text"; then
             seen=$((seen + 1))
-            if (( seen >= 2 )); then
-                INJECTION_VERIFIED=true
-                spawn_note "task started from argv ($session_name, ${waited}s)"
-                return 0
-            fi
-            continue
+        else
+            seen=0
         fi
-        seen=0
         if ! codex_session_alive "$session_name"; then
             echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
             printf '%s\n' "$pane_text" | tail -15 >&2
             return 2
+        fi
+        if (( seen >= 2 )); then
+            INJECTION_VERIFIED=true
+            spawn_note "task started from argv ($session_name, ${waited}s)"
+            return 0
         fi
     done
     spawn_note "WARNING: task not seen on screen ($session_name) within ${wait_max}s. It was passed to codex as its [PROMPT] argument and is not resent; the child is left running. Inspect with 'tmux capture-pane -t $session_name -p -S -1000'. Last screen: $(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"

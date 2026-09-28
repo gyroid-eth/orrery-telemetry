@@ -248,7 +248,7 @@ Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-li
 
 ## Codex の子の最初の task が画面に出ない
 
-Codex の子の最初の task は、画面への貼り付けではなく `codex -- "<task>"` の起動引数で渡します（起動途中の入力欄に貼ると、Codex 0.158 で task が消えることがあったため）。launcher は model・trust・sign-in の画面に応じながら、task が画面に出るまで最大90秒見張ります。出なければ `spawn_incidents.log` に `WARNING: task not seen on screen` と最後の画面を残し、子は残したまま終わります。task は再送しません。
+Codex の子の最初の task は、画面への貼り付けではなく `codex -- "<task>"` の起動引数で渡します（Codex 0.158 で、起動途中に貼った task から turn が始まらないことがあったため。起動中の画面の切り替わりとの競争が最有力の仮説です）。launcher は model・trust・sign-in の画面に応じながら、task が画面に出るまで最大90秒見張ります。出なければ `spawn_incidents.log` に `WARNING: task not seen on screen` と最後の画面を残し、子は残したまま終わります。task は再送しません。
 
 1. `tmux capture-pane -t '<child-name>' -p -S -1000` で画面を見る。Codex が作業中なら task は届いています
 2. trust などの画面で止まっていれば、その画面に応じる

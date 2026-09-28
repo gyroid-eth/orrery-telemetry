@@ -1,9 +1,9 @@
 """A cold Codex child gets its first task as the positional [PROMPT] argument.
 
-Codex 0.158 draws a provisional composer before its startup screens and drops
-input buffered then, so a task pasted as soon as a footer appeared was
-sometimes lost (WSL, 2026-09-28: 1 of 8 cold spawns never started a turn). The
-launcher now writes the task to a 0600 file; the child's shell reads it and
+On WSL (2026-09-28) 1 of 8 cold Codex 0.158 children never started a turn
+after its task was pasted. A race between the paste and Codex's startup screens
+(which can discard pending input) is the leading hypothesis, not a confirmed
+cause; the launcher removes the paste instead. It now writes the task to a 0600 file; the child's shell reads it and
 runs `codex ... -- "<task>"`. Nothing is pasted, submitted or resent, and the
 model / trust / sign-in screens are handled until the task is on screen.
 
@@ -146,7 +146,8 @@ def _extract(func: str) -> str:
 def _launcher_functions() -> str:
     names = ("pane_nonblank_tail", "pane_normalize_nbsp", "injection_match_key",
              "injection_utf8_locale", "codex_trust_dialog_present", "codex_trust_row_selected",
-             "codex_accept_trust_dialog", "codex_task_on_screen", "codex_watch_initial_task")
+             "codex_accept_trust_dialog", "codex_task_on_screen", "codex_startup_screen",
+             "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
@@ -159,7 +160,7 @@ STARTED = ("\n› You are Child, a standalone agent with no parent. Start it imm
 ANSWERED = STARTED.replace("• Working (1s • esc to interrupt)", "• STARTED")
 
 
-def _watch(tmp_path, screens: list[str], alive=True):
+def _watch(tmp_path, screens: list[str], alive=True, prompt=PROMPT):
     """Run codex_watch_initial_task against a tmux stub replaying `screens`
     (the last one repeats); record every tmux call."""
     for i, screen in enumerate(screens):
@@ -187,7 +188,7 @@ def _watch(tmp_path, screens: list[str], alive=True):
         + '\nstatus=0; codex_watch_initial_task Child "$PROMPT" test || status=$?\n'
         'printf "STATUS=%s VERIFIED=%s\\n" "$status" "$INJECTION_VERIFIED"\n'
     )
-    result = subprocess.run(["/bin/bash", "-c", script], env=dict(os.environ, PROMPT=PROMPT),
+    result = subprocess.run(["/bin/bash", "-c", script], env=dict(os.environ, PROMPT=prompt),
                             capture_output=True, text=True, timeout=60)
     keys = [line for line in calls.read_text().splitlines() if not line.startswith(("capture-pane", "has-session"))]
     notes = (tmp_path / "notes").read_text() if (tmp_path / "notes").exists() else ""
@@ -257,3 +258,62 @@ def test_prompt_file_is_private_and_oversized_tasks_fail_visibly(tmp_path):
     assert oct((tmp_path / "state").stat().st_mode & 0o777) == "0o700"
     assert "BIG_FAIL" in result.stdout
     assert "passed as one command-line argument" in result.stderr
+
+
+# --- review 2026-09-29: a phrase quoted in the task or the answer is no dialog ---
+
+def _quoting(phrase: str) -> str:
+    return STARTED.replace("  reply STARTED\n", f"  reply STARTED; explain the phrase {phrase}\n")
+
+
+@pytest.mark.parametrize("phrase", [
+    "Do you trust this directory?", "Use existing model", "Press enter to continue",
+])
+def test_a_dialog_phrase_quoted_in_the_task_sends_no_keys(tmp_path, phrase):
+    quoted_prompt = PROMPT.replace("reply STARTED", f"reply STARTED; explain the phrase {phrase}")
+    result, keys, _ = _watch(tmp_path, [_quoting(phrase)], prompt=quoted_prompt)
+    assert "STATUS=0 VERIFIED=true" in result.stdout, result.stdout + result.stderr
+    assert keys == []
+
+
+@pytest.mark.parametrize("phrase", [
+    "Do you trust the contents of this directory?", "Use existing model", "Press enter to continue",
+])
+def test_a_dialog_phrase_on_its_own_line_in_the_answer_sends_no_keys(tmp_path, phrase):
+    # Codex's answer renders as "• ..." and indented continuation lines; a
+    # phrase inside a sentence of it is no dialog either.
+    answer = STARTED.replace("• Working (1s • esc to interrupt)",
+                             f"• The phrase \"{phrase}\" appears in dialogs.")
+    result, keys, _ = _watch(tmp_path, [answer])
+    assert "STATUS=0" in result.stdout
+    assert keys == []
+
+
+def test_a_real_trust_dialog_over_the_task_is_still_answered(tmp_path):
+    # The task is already drawn behind a real dialog: the option rows count.
+    over = STARTED.replace("• Working (1s • esc to interrupt)\n\n› Ask Codex to do anything\n", TRUST)
+    result, keys, _ = _watch(tmp_path, [over, STARTED])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child C-m"]
+
+
+def test_real_model_and_signin_screens_are_answered(tmp_path):
+    model = "  Choose a model\n\n› 1. Use existing model\n  2. Upgrade\n"
+    signin = "  Signed in as someone\n\n  Press enter to continue\n"
+    result, keys, _ = _watch(tmp_path, [model, signin, STARTED])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child Down Enter", "send-keys -t Child Enter"]
+
+
+def test_a_legacy_trust_dialog_is_answered(tmp_path):
+    legacy = ("> You are in /home/example\n  Do you trust the contents of this directory? Working with untrusted contents\n"
+              "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n")
+    result, keys, _ = _watch(tmp_path, [legacy, STARTED])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child C-m"]
+
+
+def test_a_task_on_the_screen_of_a_dead_session_is_not_a_success(tmp_path):
+    result, keys, _ = _watch(tmp_path, [STARTED], alive=False)
+    assert "STATUS=2" in result.stdout
+    assert keys == []

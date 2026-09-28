@@ -42,9 +42,12 @@ def _fake_launch_env(
         # (the argv path); record what it would have received.
         "  new-session) : > \"$FAKE_TMUX_ALIVE\"\n"
         "    for arg in \"$@\"; do case \"$arg\" in AGENTSTACK_CODEX_PROMPT_FILE=*)\n"
-        "      printf 'ARGV_TASK\\034' >> \"$FAKE_TMUX_LOG\"; cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\" ;; esac; done ;;\n"
+        "      printf 'ARGV_TASK\\034' >> \"$FAKE_TMUX_LOG\"; cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\"\n"
+        # Codex then shows the task it was started with, as the real one does.
+        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;; esac; done ;;\n"
         "  capture-pane)\n"
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
+        "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
         "      printf '\\ngpt-5.5 xhigh · ~/workspace\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
@@ -246,8 +249,10 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
-    # The task went in as the child's argv, never through a paste buffer.
+    # The task went in as the child's argv, never through a paste buffer, and
+    # the launcher saw it on screen instead of waiting out its watch.
     assert "ARGV_TASK" in injected
+    assert "task started from argv" in result.stderr
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -399,6 +404,7 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
         # Codex gets the task as its argv; Claude keeps the pasted prompt.
         assert "ARGV_TASK" in injected
         assert "\034paste-buffer" not in injected
+        assert "task started from argv" in result.stderr
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
     assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected
