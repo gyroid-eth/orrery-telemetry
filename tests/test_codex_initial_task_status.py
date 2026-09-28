@@ -46,11 +46,13 @@ def _setup(tmp_path: pathlib.Path, lines: list[str], *, launch: dict | None = No
     transcript.parent.mkdir()
     body = "\n".join(lines)
     transcript.write_text(body + ("\n" if newline_at_end and lines else ""), encoding="utf-8")
+    # Shaped like a real launch record (BriskGalileo, WSL 2026-09-28), claimed.
     record = {
-        "schema_version": 1, "provider": "codex", "program": "codex-cli", "agent_id": 46,
+        "schema_version": 1, "binding_expected": True, "history_mode": "enabled",
+        "provider": "codex", "program": "codex-cli", "agent_id": 46,
         "agent_name": "Child", "project_key": "/p", "launch_id": LAUNCH_ID,
-        "launch_kind": "startup", "binding_conflicted": False,
-        "claimed_session_id": SESSION, "receipt_id": "r1",
+        "launch_kind": "startup", "launch_origin": "child", "codex_mcp_profile": "inherit",
+        "binding_conflicted": False, "claimed_session_id": SESSION, "receipt_id": "r1",
     }
     record.update(launch or {})
     (launches / "46.json").write_text(json.dumps(record), encoding="utf-8")
@@ -58,7 +60,8 @@ def _setup(tmp_path: pathlib.Path, lines: list[str], *, launch: dict | None = No
         data = {
             "schema_version": 2, "binding_kind": "self", "provider": "codex", "program": "codex-cli",
             "agent_id": 46, "agent_name": "Child", "registered_by": "Child", "project_key": "/p",
-            "launch_id": LAUNCH_ID, "receipt_id": "r1", "session_id": SESSION,
+            "launch_id": LAUNCH_ID, "receipt_id": "r1", "launch_kind": "startup",
+            "launch_origin": "child", "codex_mcp_profile": "inherit", "session_id": SESSION,
             "transcript_path": str(transcript),
         }
         data.update(receipt or {})
@@ -117,8 +120,18 @@ def test_a_malformed_line_does_not_hide_the_records_that_parse(tmp_path):
     ({}, {"session_id": "another-session"}),
     ({}, {"agent_name": "OtherChild", "registered_by": "OtherChild"}),
     ({}, {"schema_version": 1}),
+    ({"schema_version": 99}, {}),
+    ({"history_mode": "disabled", "binding_expected": False}, {}),
+    ({"binding_expected": False}, {}),
+    ({"program": "other"}, {"program": "other"}),
+    ({"project_key": None}, {"project_key": None}),
+    ({"launch_kind": "resume"}, {"launch_kind": "resume"}),
+    ({"codex_mcp_profile": "everything"}, {"codex_mcp_profile": "everything"}),
+    ({}, {"codex_mcp_profile": "orrery-only"}),
 ], ids=["no-receipt", "unclaimed", "conflicted", "stale-launch", "stale-receipt", "receipt-id",
-        "receipt-session", "other-agent", "schema"])
+        "receipt-session", "other-agent", "schema", "launch-schema", "history-disabled",
+        "binding-not-expected", "program", "project-missing", "resume", "profile-invalid",
+        "profile-mismatch"])
 def test_any_break_in_the_chain_is_unknown(tmp_path, launch, receipt):
     assert _status(_setup(tmp_path, [META, TURN, USER_ITEM], launch=launch, receipt=receipt)) == "unknown"
 

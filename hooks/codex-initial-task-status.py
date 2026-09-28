@@ -37,6 +37,7 @@ from typing import Any
 MAX_RECORD_BYTES = 256 * 1024
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 TURN_STARTED = {"task_started", "turn_started"}
+PROGRAMS = {"codex", "codex-cli"}
 
 
 def _load_object(path: Path) -> dict[str, Any] | None:
@@ -66,15 +67,31 @@ def _verified_binding(launch_path: Path, launch_id: str, agent_name: str) -> tup
     if launch is None:
         return None
     agent_id = launch.get("agent_id")
+    origin = launch.get("launch_origin")
+    profile = launch.get("codex_mcp_profile")
+    # The same launch contract the SessionStart recorder accepts
+    # (record-codex-session-index.py _valid_launch), narrowed to a claimed,
+    # unconflicted cold start; anything it would not bind is unknown here.
     if not (
-        launch.get("provider") == "codex"
+        launch.get("schema_version") == 1
+        and launch.get("binding_expected") is True
+        and launch.get("history_mode") == "enabled"
+        and launch.get("provider") == "codex"
+        and launch.get("program") in PROGRAMS
         and launch.get("launch_id") == launch_id
+        and launch.get("launch_kind") == "startup"
         and launch.get("agent_name") == agent_name
         and type(agent_id) is int
+        and agent_id > 0
         and launch_path.stem == str(agent_id)
+        and _nonempty_str(launch.get("project_key"))
         and launch.get("binding_conflicted") is False
         and _nonempty_str(launch.get("claimed_session_id"))
         and _nonempty_str(launch.get("receipt_id"))
+        and (
+            (origin in (None, "standalone") and profile is None)
+            or (origin == "child" and profile in {"inherit", "orrery-only"})
+        )
     ):
         return None
     receipt = _load_object(launch_path.parent.parent / "session_index" / f"{agent_id}.json")
@@ -93,6 +110,9 @@ def _verified_binding(launch_path: Path, launch_id: str, agent_name: str) -> tup
         and receipt.get("launch_id") == launch_id
         and receipt.get("receipt_id") == launch.get("receipt_id")
         and receipt.get("session_id") == launch.get("claimed_session_id")
+        and receipt.get("launch_kind") == "startup"
+        and receipt.get("launch_origin") == origin
+        and receipt.get("codex_mcp_profile") == profile
     ):
         return None
     return launch, receipt
