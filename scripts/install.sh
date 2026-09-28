@@ -274,18 +274,94 @@ fi
 if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
   CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
 fi
+# --- codex launcher resolution (tests extract from here to the end marker) ---
+# Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
+# there is the Windows npm shim: run by the Linux node it dies at once with
+# "Missing optional dependency @openai/codex-linux-x64", and every Codex child
+# spawned from the dashboard ends before its prompt arrives. A candidate is
+# therefore used only if it is not under a Windows drive mount (WSL only) and
+# answers `--version` within a short time.
+WSL_WINDOWS_MOUNT_ROOT=/mnt
+CODEX_VERSION_TIMEOUT_SECONDS=10
+
+running_under_wsl() {
+  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+}
+
+# Succeeds when `$1 --version` exits 0 within the timeout (portable: no
+# coreutils `timeout` on macOS).
+codex_version_answers() {
+  local bin="$1" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
+  "$bin" --version </dev/null >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$tick" -ge "$limit" ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+    tick=$((tick + 1))
+  done
+  wait "$pid"
+}
+
+# Prints why a codex candidate cannot be used; prints nothing when it can.
+codex_bin_problem() {
+  local bin="$1"
+  if running_under_wsl && [[ "$bin" == "$WSL_WINDOWS_MOUNT_ROOT"/?/* ]]; then
+    echo "it is a Windows install under $WSL_WINDOWS_MOUNT_ROOT (install Codex inside WSL; the Windows npm shim cannot run here)"
+    return 0
+  fi
+  if [[ ! -x "$bin" ]]; then
+    echo "it is not executable"
+    return 0
+  fi
+  if ! codex_version_answers "$bin"; then
+    echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+  fi
+}
+
+# First usable `codex` on PATH, then the per-user install locations that
+# hooks/spawn_child.sh also searches (a fresh WSL shell may not have
+# ~/.npm-global/bin on PATH yet).
+find_usable_codex_bin() {
+  local search="$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+  local dir candidate seen=":"
+  local IFS=:
+  for dir in $search; do
+    [[ -n "$dir" && "$seen" != *":$dir:"* ]] || continue
+    seen="$seen$dir:"
+    candidate="$dir/codex"
+    [[ -f "$candidate" || -L "$candidate" ]] || continue
+    if [[ -z "$(codex_bin_problem "$candidate")" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 0
+}
+# --- end codex launcher resolution ---
+
 if [[ -z "$CODEX_BIN_SETTING" ]]; then
   CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")"
-  if [[ -n "$CODEX_BIN_SETTING" && ! -x "$CODEX_BIN_SETTING" ]]; then
-    # A stale path from an earlier install (Node upgraded, prefix moved) must
-    # not pin the dashboard to a binary that no longer exists. An explicit
-    # --codex-bin that does not exist is rejected below instead.
-    echo "note: installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is not executable; resolving codex again" >&2
-    CODEX_BIN_SETTING=""
+  if [[ -n "$CODEX_BIN_SETTING" ]]; then
+    # A stale path from an earlier install (Node upgraded, prefix moved, or a
+    # Windows shim picked up under WSL) must not pin the dashboard to a binary
+    # that cannot run. An explicit --codex-bin that cannot run is rejected
+    # below instead.
+    codex_stale_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")"
+    if [[ -n "$codex_stale_reason" ]]; then
+      echo "note: installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is stale ($codex_stale_reason); resolving codex again" >&2
+      CODEX_BIN_SETTING=""
+    fi
   fi
   if [[ -z "$CODEX_BIN_SETTING" ]]; then
-    CODEX_BIN_SETTING="$(command -v codex 2>/dev/null || true)"
+    CODEX_BIN_SETTING="$(find_usable_codex_bin)"
   fi
+elif codex_explicit_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")" && [[ -n "$codex_explicit_reason" ]]; then
+  echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: $CODEX_BIN_SETTING ($codex_explicit_reason)" >&2
+  exit 2
 fi
 # A Node-installed `codex` is a wrapper that loads its platform package through
 # whichever `node` is first on PATH; under the service's own PATH that is a

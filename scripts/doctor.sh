@@ -400,6 +400,44 @@ resolve_launcher_codex_bin() {
   printf '%s\n' "$codex_bin"
 }
 
+# Same rules as scripts/install.sh "codex launcher resolution": under WSL a
+# codex under /mnt/<drive>/ is the Windows npm shim and cannot run, and any
+# candidate must answer `--version` within a short time.
+WSL_WINDOWS_MOUNT_ROOT=/mnt
+CODEX_VERSION_TIMEOUT_SECONDS=10
+
+running_under_wsl() {
+  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+}
+
+codex_version_answers() {
+  local bin="$1" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
+  "$bin" --version </dev/null >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$tick" -ge "$limit" ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+    tick=$((tick + 1))
+  done
+  wait "$pid"
+}
+
+# Prints why the launcher's codex cannot run; nothing when it can.
+codex_launcher_problem() {
+  local bin="$1"
+  if running_under_wsl && [[ "$bin" == "$WSL_WINDOWS_MOUNT_ROOT"/?/* ]]; then
+    echo "it is the Windows install under $WSL_WINDOWS_MOUNT_ROOT, which cannot run inside WSL"
+    return 0
+  fi
+  if ! codex_version_answers "$bin"; then
+    echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+  fi
+}
+
 report_codex_history_binding_prereqs() {
   local codex_bin="$1" codex_home="$2"
   local plugin_result plugin_state plugin_id
@@ -410,6 +448,14 @@ report_codex_history_binding_prereqs() {
     return 0
   fi
 
+  local problem
+  problem="$(codex_launcher_problem "$codex_bin")"
+  if [[ -n "$problem" ]]; then
+    # Codex children spawned with this binary end before their prompt arrives.
+    echo "warn: Codex launcher binary $codex_bin cannot start Codex: $problem"
+    echo "hint: install Codex where this shell can run it (in WSL: npm install -g @openai/codex under your Linux user), then re-run ./scripts/install.sh, or pass --codex-bin /path/to/codex"
+    return 0
+  fi
   echo "ok: Codex launcher binary $codex_bin"
   echo "ok: Codex launcher CODEX_HOME $codex_home (source for per-child homes)"
   if [[ ! -d "$codex_home" ]]; then

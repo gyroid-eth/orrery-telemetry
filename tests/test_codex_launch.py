@@ -1121,3 +1121,81 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
                 assert argv[argv.index("--model")+1] == model
                 assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
                     ["model_reasoning_effort="+effort] if effort else [])
+
+
+# --- 2026-09-28: Codex 0.153-0.157 trust dialog ------------------------------
+
+_CODEX_TRUST_NEW = (
+    "> You are in /home/example/work/project\n\n"
+    "  Trust this folder? Codex can read, edit, and run files here. Only trust\n"
+    "  folders whose contents you know.\n\n"
+    "› 1. Trust and continue\n"
+    "  2. Quit\n\n"
+    "  enter continue · esc quit\n"
+    + "\n" * 10
+)
+_CODEX_TRUST_NEW_QUIT_SELECTED = _CODEX_TRUST_NEW.replace(
+    "› 1. Trust and continue\n  2. Quit", "  1. Trust and continue\n› 2. Quit"
+)
+_CODEX_TRUST_OLD = (
+    "> You are in /Users/example/code/project\n"
+    "  Do you trust the contents of this directory? Working with untrusted contents\n"
+    "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n"
+)
+
+
+def test_codex_trust_detector_sees_old_and_new_wordings():
+    detector = _helpers()
+    for pane in (_CODEX_TRUST_OLD, _CODEX_TRUST_NEW, _CODEX_TRUST_NEW_QUIT_SELECTED):
+        assert _run_bash(detector + '\ncodex_trust_dialog_present "$PANE"\n', {"PANE": pane}).returncode == 0
+    assert _run_bash(detector + '\ncodex_trust_dialog_present "$PANE"\n', {"PANE": _CODEX_FOOTER_PADDED}).returncode != 0
+
+
+def _codex_accept_with_screens(screens: list[str]) -> list[str]:
+    script = _accept_script_with_screens(screens, "codex_accept_trust_dialog", extra=("codex_trust_row_selected",))
+    return [line for line in _run_bash(script, {f"SCREEN_{i}": x for i, x in enumerate(screens)}).stdout.splitlines()
+            if line.startswith("KEYS:")]
+
+
+def _accept_script_with_screens(screens, func, extra=()):
+    """The same capture-pane / send-keys stub as _accept_with_screens, for any accept helper."""
+    lines = [
+        'SCREEN_IDX_FILE="$(mktemp)"; printf 0 > "$SCREEN_IDX_FILE"',
+        "tmux() {",
+        '  case "$1" in',
+        "    capture-pane)",
+        '      local idx; idx="$(cat "$SCREEN_IDX_FILE")"',
+        '      printf \'%s\' "${SCREENS[$idx]}"',
+        '      if (( idx + 1 < ${#SCREENS[@]} )); then printf %s "$((idx + 1))" > "$SCREEN_IDX_FILE"; fi',
+        "      ;;",
+        "    send-keys)",
+        '      printf \'KEYS:%s\\n\' "$*"',
+        "      ;;",
+        "  esac",
+        "}",
+        "sleep() { :; }",
+    ]
+    return (
+        "SCREENS=(" + " ".join(f'"$SCREEN_{i}"' for i in range(len(screens))) + ")\n"
+        + "\n".join(lines) + "\n"
+        + "\n".join(_extract(name) for name in ("pane_normalize_nbsp", *extra, func))
+        + f"\n{func} Child 1 10 test-prefix\n"
+    )
+
+
+def test_codex_new_trust_dialog_confirms_only_the_trust_row():
+    assert _codex_accept_with_screens([_CODEX_TRUST_NEW]) == ["KEYS:send-keys -t Child C-m"]
+
+
+def test_codex_new_trust_dialog_moves_off_quit_before_confirming():
+    keys = _codex_accept_with_screens([_CODEX_TRUST_NEW_QUIT_SELECTED, _CODEX_TRUST_NEW])
+    assert keys == ["KEYS:send-keys -t Child Up", "KEYS:send-keys -t Child C-m"]
+
+
+def test_codex_new_trust_dialog_never_presses_enter_on_quit():
+    keys = _codex_accept_with_screens([_CODEX_TRUST_NEW_QUIT_SELECTED, _CODEX_TRUST_NEW_QUIT_SELECTED])
+    assert keys == ["KEYS:send-keys -t Child Up"]
+
+
+def test_codex_old_trust_dialog_keeps_the_plain_carriage_return():
+    assert _codex_accept_with_screens([_CODEX_TRUST_OLD]) == ["KEYS:send-keys -t Child C-m"]

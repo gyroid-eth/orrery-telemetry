@@ -950,8 +950,12 @@ pane_nonblank_tail() {
 # Dialog detectors read the visible screen only: the Codex polls below capture
 # without scrollback, because a capture that included history kept showing an
 # already-accepted dialog and the launcher pressed Enter on every poll.
+# Codex 0.153-0.157 replaced "Do you trust the contents of this directory?"
+# with "Trust this folder? ..." / "› 1. Trust and continue  2. Quit" /
+# "enter continue · esc quit". Missing it read the dialog as readiness and left
+# the task pasted but unsent (WSL, 2026-09-28). Both wordings are a modal.
 codex_trust_dialog_present() {
-    printf '%s' "$1" | grep -qi "Do you trust"
+    printf '%s' "$1" | grep -qiE "Do you trust|Trust this folder|Trust and continue"
 }
 
 # Claude Code 2.1.259 replaced "Do you trust ..." with a "Quick safety check"
@@ -973,8 +977,32 @@ codex_accept_trust_dialog() {
         echo "[$log_prefix] Trust dialog persisted after ${max_attempts} attempts; aborting" >&2
         return 1
     fi
+    local pane_text
+    pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+    if printf '%s' "$pane_text" | grep -q "Trust and continue"; then
+        # New dialog: confirm only while "Trust and continue" is the selected
+        # row; Enter on "Quit" would end the child. Its default is the Trust
+        # row, so a cursor elsewhere is moved up once and checked again.
+        if ! codex_trust_row_selected "$pane_text"; then
+            tmux send-keys -t "$session_name" Up
+            sleep 1
+            pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        fi
+        if codex_trust_row_selected "$pane_text"; then
+            echo "[$log_prefix] Trust dialog detected; selecting 'Trust and continue' with C-m (${attempt}/${max_attempts})" >&2
+            tmux send-keys -t "$session_name" C-m
+        else
+            echo "[$log_prefix] Trust dialog detected but 'Trust and continue' is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
+        fi
+        return 0
+    fi
     echo "[$log_prefix] Trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
     tmux send-keys -t "$session_name" C-m
+}
+
+codex_trust_row_selected() {
+    printf '%s' "$1" | pane_normalize_nbsp \
+        | grep -qE '(›|❯|>)[[:space:]]*(1\.[[:space:]]*)?Trust and continue'
 }
 
 # Claude Code shows the same trust gate on a directory it has never opened.

@@ -119,6 +119,7 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    npm install -g @openai/codex
    ```
    Log in with `claude` (then `/login`) and `codex login`. Open the URL each prints in a Windows browser to authorize.
+   If Codex is also installed on the Windows side, Ubuntu's PATH shows that Windows `codex` (`/mnt/c/...`) too, and it cannot run inside Ubuntu. The installer skips it and chooses the `codex` installed inside Ubuntu (one that answers `--version`); re-running it also replaces a Windows `codex` saved by an earlier install. If `agentstack-doctor` prints `warn: Codex launcher binary ... cannot start Codex`, install Codex inside Ubuntu and re-run the installer.
 7. **Start an agent** (inside Ubuntu). Use the same commands as in "Starting the first agent" above. The dashboard's jump opens a new Windows Terminal (`wt.exe`, preinstalled on Windows 11) tab attached to the tmux session. If Windows Terminal is missing, install it from the Microsoft Store.
 
 **Do not close every window.** When the last Ubuntu window closes, WSL2 stops the whole VM and Mail and the dashboard go with it. To keep them resident, set `loginctl enable-linger` and `vmIdleTimeout=-1` in `.wslconfig` as described in the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-the-services-vanish-when-the-last-shell-closes).
