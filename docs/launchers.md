@@ -192,7 +192,7 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 | 項目 | 内容 |
 | --- | --- |
 | トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
-| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>]` |
+| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>]` |
 | 必須前提 | 親の ORRERY Mail identity と正本 project key。編集 task では対象 resource 宣言と reservation |
 | 任意前提 | `--worktree` には git repository、dashboard annotation には dashboard service |
 

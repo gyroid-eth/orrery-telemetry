@@ -513,6 +513,8 @@ request:
 | `group` | no | 最大24文字 |
 | `worktree` | no | isolated worktree |
 | `worktree_base` | no | base revision。既定 `HEAD` |
+| `claude_chrome` | Claude only | boolean。`true` で child に `--chrome` を付ける。省略・`false` は inherit（利用者の Claude 設定に従う）。launcher の env 既定は使わない。[Claude in Chrome](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |
+| `claude_chrome_device` | Claude only | 使うブラウザの deviceId（`[A-Za-z0-9._:-]{1,128}`）。指定すると `claude_chrome: true` と同じ。`claude_chrome: false` との併用は拒否 |
 
 成功:
 

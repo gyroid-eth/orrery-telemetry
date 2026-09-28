@@ -2971,6 +2971,18 @@ OFF = legacy snapshot+comet mode">
                      style="margin-top:0">
             </div>
           </div>
+          <div class="spm-row full" id="spm-chrome-row" style="display:none">
+            <label class="spm-lab">browser</label>
+            <label class="spm-check">
+              <input type="checkbox" id="spm-chrome">
+              <span>Explicitly enable Claude in Chrome (--chrome)</span>
+            </label>
+            <div class="spm-wt-base" id="spm-chrome-opts">
+              <input type="text" id="spm-chrome-device" maxlength="128" autocomplete="off"
+                     placeholder="browser deviceId (optional)" style="margin-top:0">
+            </div>
+            <div class="spm-hint">Unchecked follows your Claude settings. The deviceId is an instruction the child follows, not a lock on other browsers.</div>
+          </div>
         </div>
       </details>
     </div>
@@ -37817,6 +37829,18 @@ function applySpawnProviderCapabilities(provider){
     worktree.disabled=!!caps.worktree_required;
     SPM('spm-wt-base').classList.toggle('on',worktree.checked);
   }
+  // Claude in Chrome is a Claude CLI flag; other providers never carry it.
+  const chromeRow=SPM('spm-chrome-row');
+  if(chromeRow){
+    const isClaude=!!provider&&provider.id==='claude';
+    chromeRow.style.display=isClaude?'grid':'none';
+    if(!isClaude)resetSpawnChrome();
+  }
+}
+function resetSpawnChrome(){
+  if(SPM('spm-chrome'))SPM('spm-chrome').checked=false;
+  if(SPM('spm-chrome-device'))SPM('spm-chrome-device').value='';
+  if(SPM('spm-chrome-opts'))SPM('spm-chrome-opts').classList.remove('on');
 }
 function resetSpawnProviderCapabilities(){
   spmWorktreeForced=false;spmWorktreeChoice=false;
@@ -37824,6 +37848,8 @@ function resetSpawnProviderCapabilities(){
   if(SPM('spm-worktree'))SPM('spm-worktree').disabled=false;
   if(SPM('spm-resources'))SPM('spm-resources').value='';
   if(SPM('spm-resources-row'))SPM('spm-resources-row').style.display='none';
+  if(SPM('spm-chrome-row'))SPM('spm-chrome-row').style.display='none';
+  resetSpawnChrome();
 }
 /* provider-capabilities:end */
 
@@ -38130,6 +38156,9 @@ document.addEventListener('change',e=>{
   if(e.target&&e.target.id==='spm-worktree'){
     SPM('spm-wt-base').classList.toggle('on',e.target.checked);
   }
+  if(e.target&&e.target.id==='spm-chrome'){
+    SPM('spm-chrome-opts').classList.toggle('on',e.target.checked);
+  }
 });
 
 // Esc でモーダルを閉じる
@@ -38159,6 +38188,11 @@ function buildSpawnPayload(){
   const resources=(SPM('spm-resources')&&SPM('spm-resources').value||'').trim();
   if(spawnProviderAcceptsResources(spawnSelectedProviderCapabilities())&&resources)
     payload.resources=resources;
+  if(payload.provider==='claude'&&SPM('spm-chrome')&&SPM('spm-chrome').checked){
+    payload.claude_chrome=true;
+    const device=(SPM('spm-chrome-device').value||'').trim();
+    if(device)payload.claude_chrome_device=device;
+  }
   if(SPM('spm-worktree').checked){
     payload.worktree=true;
     const base=SPM('spm-worktree-base').value.trim();
