@@ -8,6 +8,16 @@
 
 ---
 
+## 未リリース
+
+### WSL で Codex の子が起動直後に終わっていました
+
+WSL の PATH には Windows の PATH（`/mnt/c/...`）が混ざるため、installer が Windows 側の npm の `codex` を選び、`AGENTSTACK_CODEX_BIN` に保存していました。これは Ubuntu の node では `Missing optional dependency @openai/codex-linux-x64` で即座に終わり、NEW AGENT の Codex の子がすべて、指示が届く前に終わっていました。installer は、WSL では `/mnt/<drive>/` 配下の `codex` を候補から外し、どの候補も `--version` に短い時間で答えるものだけを使うようにしました。PATH に無い `~/.npm-global/bin` なども探します。以前の install で保存された値が使えなければ選び直し、`--codex-bin` で明示した値が使えなければ理由を示して止まります。`agentstack-doctor` も、使われる `codex` が動かないときは `ok` ではなく `warn` と直し方を出し、0.157 より古い Codex CLI には更新を促す note を出します（0.153.4 では ChatGPT アカウントで GPT-6 系のモデルが拒否されました）。`--version` の確認は、応答しない候補を TERM のあと KILL してでも時間内に打ち切ります。
+
+### Codex の新しい trust 画面で、指示が送られずに止まっていました
+
+Codex 0.153〜0.157 の trust 画面（「Trust this folder?」「1. Trust and continue / 2. Quit」）を trust 画面と見分けられず、入力できる状態と誤認して、指示を貼ったまま送らずに止まっていました。新旧どちらの文言も trust 画面として扱い、新しい画面では「Trust and continue」が選ばれているときだけ Enter で受けます。「Quit」が選ばれていれば一度上に移して確かめ、移らなければ Enter を押しません。ラベルが折り返された画面や、読み取れなかった画面でも Enter を押さず、Enter を無条件に押すのは旧い画面と確かめられたときだけです。
+
 ## 2026.09.27
 
 ### NEW AGENT の Codex でも、旧世代のモデルを「more models」に畳みます

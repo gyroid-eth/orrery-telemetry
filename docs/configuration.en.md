@@ -128,7 +128,7 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | `AGENTSTACK_BASE_DIR` | `$HOME` | `fzf` picker root |
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Claude CLI |
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude registration model label |
-| `AGENTSTACK_CODEX_BIN` | `codex` resolved in the operator's shell at install time (`--codex-bin` to override) | Codex CLI. The dashboard runs under launchd / systemd with the minimal PATH, so a codex under nvm / nodebrew / `~/.npm-global` is reachable only through this value |
+| `AGENTSTACK_CODEX_BIN` | `codex` resolved in the operator's shell at install time that answers `--version` (under WSL, a Windows install under `/mnt/<drive>/` is skipped; `--codex-bin` to override) | Codex CLI. The dashboard runs under launchd / systemd with the minimal PATH, so a codex under nvm / nodebrew / `~/.npm-global` is reachable only through this value |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap default | Codex registration model |
 | `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
 | `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `--ask-for-approval` for `agent-start-codex`, the user's own interactive session. Spawned children use `AGENTSTACK_CODEX_CHILD_APPROVAL`; see Child spawn |

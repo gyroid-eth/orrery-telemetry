@@ -24,6 +24,9 @@ def _fake_commands(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     codex.write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys, time\n"
+        "if sys.argv[1:] == ['--version']:\n"  # the doctor's runnability probe
+        "    print('codex-cli 0.157.0')\n"
+        "    raise SystemExit(0)\n"
         "if os.environ.get('AGENTSTACK_TEST_CODEX_LOG'):\n"
         "    with open(os.environ['AGENTSTACK_TEST_CODEX_LOG'], 'a') as log:\n"
         "        log.write(json.dumps({'args': sys.argv[1:], 'home': os.environ.get('CODEX_HOME')}) + '\\n')\n"
@@ -207,3 +210,104 @@ def test_binary_resolution_matches_child_launcher(tmp_path, explicit):
         check=True,
     )
     assert result.stdout.strip() == str(codex)
+
+
+# --- 2026-09-28: a codex that cannot run is a warning, not "ok" ---------------
+
+def _report(tmp_path, codex, *, wsl=False, mount_root=None):
+    source = DOCTOR.read_text()
+    functions = source[source.index("codex_launcher_search_path() {"):source.index('\nCODEX_HOME="')]
+    overrides = ""
+    if wsl:
+        overrides += "running_under_wsl() { return 0; }\n"
+    if mount_root:
+        overrides += f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(mount_root))}\n"
+    overrides += "CODEX_VERSION_TIMEOUT_SECONDS=2\n"
+    script = ("set -euo pipefail\n" + f"PYTHON_BIN={shlex.quote(sys.executable)}\n" + "status=0\n"
+              + functions + "\n" + overrides
+              + '\nreport_codex_history_binding_prereqs "$1" "$2"\nexit "$status"\n')
+    home = tmp_path / "codex-home"
+    home.mkdir(exist_ok=True)
+    return subprocess.run(["/bin/bash", "-c", script, "doctor-probe", str(codex), str(home)],
+                          env=dict(os.environ, AGENTSTACK_TEST_PLUGIN_LIST="{}"),
+                          capture_output=True, text=True, timeout=20)
+
+
+def _script(path: pathlib.Path, body: str) -> pathlib.Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_codex_whose_version_fails_is_a_warning_with_a_fix(tmp_path):
+    codex = _script(tmp_path / "bin" / "codex",
+                    'echo "Error: Missing optional dependency @openai/codex-linux-x64" >&2\nexit 1\n')
+    result = _report(tmp_path, codex)
+    assert result.returncode == 0, result.stderr
+    assert f"warn: Codex launcher binary {codex} cannot start Codex" in result.stdout
+    assert "--version' did not succeed" in result.stdout
+    assert "hint: install Codex where this shell can run it" in result.stdout
+    assert "ok: Codex launcher binary" not in result.stdout
+
+
+def test_windows_codex_under_wsl_is_a_warning_naming_the_reason(tmp_path):
+    mount = tmp_path / "mnt"
+    codex = _script(mount / "c" / "Users" / "someone" / "AppData" / "Roaming" / "npm" / "codex", "exit 0\n")
+    result = _report(tmp_path, codex, wsl=True, mount_root=mount)
+    assert "cannot start Codex: it is the Windows install under" in result.stdout
+    assert "ok: Codex launcher binary" not in result.stdout
+    # Outside WSL the same path is an ordinary, runnable binary.
+    result = _report(tmp_path, codex, wsl=False, mount_root=mount)
+    assert f"ok: Codex launcher binary {codex}" in result.stdout
+
+
+def test_codex_that_hangs_on_version_is_bounded(tmp_path):
+    codex = _script(tmp_path / "bin" / "codex", "sleep 30\n")
+    result = _report(tmp_path, codex)
+    assert "did not succeed within 2s" in result.stdout
+
+
+def test_codex_that_ignores_term_is_still_bounded(tmp_path):
+    codex = tmp_path / "bin" / "codex"
+    codex.parent.mkdir(parents=True)
+    codex.write_text('#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.1; done\n', encoding="utf-8")
+    codex.chmod(0o755)
+    result = _report(tmp_path, codex)  # subprocess timeout=20 would raise if unbounded
+    assert "did not succeed within 2s" in result.stdout
+
+
+@pytest.mark.parametrize(("output", "noted"), [
+    ("codex-cli 0.153.4", True),
+    ("codex-cli 0.157.0", False),
+    ("codex-cli 0.158.0", False),
+    ("codex-cli 1.0.0", False),
+    ("codex-cli dev-build", False),
+    ("", False),
+])
+def test_old_codex_cli_gets_an_update_note(tmp_path, output, noted):
+    codex = _script(tmp_path / "bin" / "codex", f"echo {shlex.quote(output)}\n")
+    result = _report(tmp_path, codex)
+    assert result.returncode == 0, result.stderr
+    assert f"ok: Codex launcher binary {codex}" in result.stdout
+    assert ("npm install -g @openai/codex@latest" in result.stdout) is noted
+
+
+def test_doctor_does_not_leave_a_stubborn_native_child_behind(tmp_path):
+    from test_install_codex_bin import _alive, _wrapper_with_stubborn_native
+    import time
+    wrapper, pidfile = _wrapper_with_stubborn_native(tmp_path)
+    try:
+        result = _report(tmp_path, wrapper)
+        assert "did not succeed within 2s" in result.stdout
+        native_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 3
+        while _alive(native_pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(native_pid), "native child survived the doctor probe"
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass

@@ -16,7 +16,7 @@
 - `tmux`
 - `git`
 - `uv`（同梱の ORRERY Mail 用の Python 環境を作るために使います）
-- Claude Code または Codex CLI
+- Claude Code または Codex CLI。Codex CLI は最新版にしてください（`npm install -g @openai/codex@latest`）。古い版（0.153.4 で確認）では、ChatGPT アカウントで GPT-6 系のモデルが `model is not supported when using Codex with a ChatGPT account` で拒否されます（0.158.0 では通りました）。`agentstack-doctor` は 0.157 より古い版に note を出します
 
 任意:
 
@@ -120,9 +120,11 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    sudo apt install -y nodejs npm
    npm config set prefix ~/.npm-global
    echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-   npm install -g @openai/codex
+   npm install -g @openai/codex@latest
    ```
    ログインは `claude`（起動後に `/login`）と `codex login` です。表示された URL を Windows 側のブラウザで開いて認可します。
+   Windows 側にも Codex を入れている場合、Ubuntu の PATH には Windows の `codex`（`/mnt/c/...`）も見えますが、これは Ubuntu の中では動きません。installer はそれを候補から外し、Ubuntu の中に入れた `codex`（`--version` に答えるもの）を選びます。以前の install で Windows の `codex` が保存されていても、再実行すると選び直します。`agentstack-doctor` が `warn: Codex launcher binary ... cannot start Codex` と出したら、Ubuntu の中に Codex を入れてから installer を再実行してください。
+   以前から Ubuntu に Codex が入っている場合も、`npm install -g @openai/codex@latest` で最新にしてください。古い版では GPT-6 系のモデルで起動した子が API に拒否されます（WSL で 0.153.4 は拒否、0.158.0 は応答）。
 7. **agent を起動する**（Ubuntu の中）。上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal（`wt.exe`、Windows 11 なら標準搭載）の新しいタブを開いて tmux に attach します。Windows Terminal が無い場合は Microsoft Store から入れてください。
 
 **閉じてはいけない窓。** Ubuntu の窓を全部閉じると WSL2 は VM ごと止まり、Mail と dashboard も消えます。常駐させたいときは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-では最後のシェルを閉じると-service-が消える) の `loginctl enable-linger` と `.wslconfig` の `vmIdleTimeout=-1` を設定してください。
