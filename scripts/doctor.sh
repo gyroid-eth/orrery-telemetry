@@ -411,19 +411,40 @@ running_under_wsl() {
 }
 
 codex_version_answers() {
-  local bin="$1" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
-  "$bin" --version </dev/null >/dev/null 2>&1 &
+  local bin="$1" out="${2:-/dev/null}" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
+  "$bin" --version </dev/null >"$out" 2>/dev/null &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$tick" -ge "$limit" ]]; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
+      codex_probe_stop "$pid"
       return 1
     fi
     sleep 0.1
     tick=$((tick + 1))
   done
   wait "$pid"
+}
+
+# Stop a probe that overran: TERM it and its direct children (an npm wrapper's
+# native codex), allow one second, then KILL. A candidate that ignores TERM
+# must not turn the bounded probe into an unbounded wait.
+codex_probe_stop() {
+  local pid="$1" grace=0
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [[ "$grace" -lt 10 ]]; do
+    sleep 0.1
+    grace=$((grace + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -KILL -P "$pid" 2>/dev/null || true
+    fi
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
 }
 
 # Prints why the launcher's codex cannot run; nothing when it can.
@@ -433,8 +454,24 @@ codex_launcher_problem() {
     echo "it is the Windows install under $WSL_WINDOWS_MOUNT_ROOT, which cannot run inside WSL"
     return 0
   fi
-  if ! codex_version_answers "$bin"; then
+  if ! codex_version_answers "$bin" "${CODEX_VERSION_OUTPUT:-/dev/null}"; then
     echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+  fi
+}
+
+# Codex CLI 0.153.4 had GPT-6 models rejected for a ChatGPT account ("model is
+# not supported when using Codex with a ChatGPT account"); 0.158.0 answered
+# (WSL, 2026-09-28). Only a parseable version below the floor is reported.
+CODEX_CLI_MIN_MINOR=157
+report_old_codex_cli() {
+  local text="$1" version major minor
+  version="$(printf '%s' "$text" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+  [[ -n "$version" ]] || return 0
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  if [[ "$major" -eq 0 && "$minor" -lt "$CODEX_CLI_MIN_MINOR" ]]; then
+    echo "note: Codex CLI $version is older than 0.$CODEX_CLI_MIN_MINOR; GPT-6 models may be rejected for a ChatGPT account. Update: npm install -g @openai/codex@latest"
   fi
 }
 
@@ -448,15 +485,21 @@ report_codex_history_binding_prereqs() {
     return 0
   fi
 
-  local problem
-  problem="$(codex_launcher_problem "$codex_bin")"
+  local problem version_file
+  version_file="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-version.XXXXXX" 2>/dev/null || true)"
+  problem="$(CODEX_VERSION_OUTPUT="${version_file:-/dev/null}" codex_launcher_problem "$codex_bin")"
   if [[ -n "$problem" ]]; then
     # Codex children spawned with this binary end before their prompt arrives.
     echo "warn: Codex launcher binary $codex_bin cannot start Codex: $problem"
     echo "hint: install Codex where this shell can run it (in WSL: npm install -g @openai/codex under your Linux user), then re-run ./scripts/install.sh, or pass --codex-bin /path/to/codex"
+    [[ -n "$version_file" ]] && rm -f "$version_file"
     return 0
   fi
   echo "ok: Codex launcher binary $codex_bin"
+  if [[ -n "$version_file" ]]; then
+    report_old_codex_cli "$(cat "$version_file" 2>/dev/null || true)"
+    rm -f "$version_file"
+  fi
   echo "ok: Codex launcher CODEX_HOME $codex_home (source for per-child homes)"
   if [[ ! -d "$codex_home" ]]; then
     echo "note: Codex history binding plugin status unknown because CODEX_HOME does not exist: $codex_home (Claude-only use is unaffected)."

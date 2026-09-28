@@ -296,14 +296,35 @@ codex_version_answers() {
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$tick" -ge "$limit" ]]; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
+      codex_probe_stop "$pid"
       return 1
     fi
     sleep 0.1
     tick=$((tick + 1))
   done
   wait "$pid"
+}
+
+# Stop a probe that overran: TERM it and its direct children (an npm wrapper's
+# native codex), allow one second, then KILL. A candidate that ignores TERM
+# must not turn the bounded probe into an unbounded wait.
+codex_probe_stop() {
+  local pid="$1" grace=0
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [[ "$grace" -lt 10 ]]; do
+    sleep 0.1
+    grace=$((grace + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -KILL -P "$pid" 2>/dev/null || true
+    fi
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
 }
 
 # Prints why a codex candidate cannot be used; prints nothing when it can.

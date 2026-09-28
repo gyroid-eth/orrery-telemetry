@@ -979,30 +979,36 @@ codex_accept_trust_dialog() {
     fi
     local pane_text
     pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-    if printf '%s' "$pane_text" | grep -q "Trust and continue"; then
-        # New dialog: confirm only while "Trust and continue" is the selected
-        # row; Enter on "Quit" would end the child. Its default is the Trust
-        # row, so a cursor elsewhere is moved up once and checked again.
-        if ! codex_trust_row_selected "$pane_text"; then
-            tmux send-keys -t "$session_name" Up
-            sleep 1
-            pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        fi
-        if codex_trust_row_selected "$pane_text"; then
-            echo "[$log_prefix] Trust dialog detected; selecting 'Trust and continue' with C-m (${attempt}/${max_attempts})" >&2
-            tmux send-keys -t "$session_name" C-m
-        else
-            echo "[$log_prefix] Trust dialog detected but 'Trust and continue' is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
-        fi
+    # The legacy C-m is allowed only for a screen positively identified as the
+    # old dialog. The new dialog, an empty capture, or anything unrecognised
+    # gets Enter only once the "1. Trust ..." row is seen selected: a narrow
+    # pane can wrap the label ("1. Trust and" / "continue"), and Enter on
+    # "Quit" ends the child.
+    if printf '%s' "$pane_text" | grep -q "Do you trust" \
+        && ! printf '%s' "$pane_text" | grep -qE "Trust this folder|Trust and|enter continue"; then
+        echo "[$log_prefix] Trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
         return 0
     fi
-    echo "[$log_prefix] Trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
-    tmux send-keys -t "$session_name" C-m
+    if ! codex_trust_row_selected "$pane_text"; then
+        tmux send-keys -t "$session_name" Up
+        sleep 1
+        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+    fi
+    if codex_trust_row_selected "$pane_text"; then
+        echo "[$log_prefix] Trust dialog detected; selecting 'Trust and continue' with C-m (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
+    else
+        echo "[$log_prefix] Trust dialog detected but 'Trust and continue' is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
+    fi
+    return 0
 }
 
+# The selected row is the cursor glyph followed by "1. Trust"; the rest of the
+# label may have wrapped onto the next line.
 codex_trust_row_selected() {
     printf '%s' "$1" | pane_normalize_nbsp \
-        | grep -qE '(›|❯|>)[[:space:]]*(1\.[[:space:]]*)?Trust and continue'
+        | grep -qE '^[[:space:]]*(›|❯|>)[[:space:]]*1\.[[:space:]]*Trust([[:space:]]|$)'
 }
 
 # Claude Code shows the same trust gate on a directory it has never opened.

@@ -266,3 +266,28 @@ def test_codex_that_hangs_on_version_is_bounded(tmp_path):
     codex = _script(tmp_path / "bin" / "codex", "sleep 30\n")
     result = _report(tmp_path, codex)
     assert "did not succeed within 2s" in result.stdout
+
+
+def test_codex_that_ignores_term_is_still_bounded(tmp_path):
+    codex = tmp_path / "bin" / "codex"
+    codex.parent.mkdir(parents=True)
+    codex.write_text('#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.1; done\n', encoding="utf-8")
+    codex.chmod(0o755)
+    result = _report(tmp_path, codex)  # subprocess timeout=20 would raise if unbounded
+    assert "did not succeed within 2s" in result.stdout
+
+
+@pytest.mark.parametrize(("output", "noted"), [
+    ("codex-cli 0.153.4", True),
+    ("codex-cli 0.157.0", False),
+    ("codex-cli 0.158.0", False),
+    ("codex-cli 1.0.0", False),
+    ("codex-cli dev-build", False),
+    ("", False),
+])
+def test_old_codex_cli_gets_an_update_note(tmp_path, output, noted):
+    codex = _script(tmp_path / "bin" / "codex", f"echo {shlex.quote(output)}\n")
+    result = _report(tmp_path, codex)
+    assert result.returncode == 0, result.stderr
+    assert f"ok: Codex launcher binary {codex}" in result.stdout
+    assert ("npm install -g @openai/codex@latest" in result.stdout) is noted

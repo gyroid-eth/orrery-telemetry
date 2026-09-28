@@ -16,7 +16,7 @@ Required:
 - `tmux`
 - `git`
 - `uv` (used to create the Python environment for the bundled ORRERY Mail)
-- Claude Code or Codex CLI
+- Claude Code or Codex CLI. Keep Codex CLI current (`npm install -g @openai/codex@latest`). An old release (seen with 0.153.4) has GPT-6 models rejected for a ChatGPT account with `model is not supported when using Codex with a ChatGPT account` (0.158.0 worked). `agentstack-doctor` prints a note for releases older than 0.157
 
 Optional:
 
@@ -116,10 +116,11 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    sudo apt install -y nodejs npm
    npm config set prefix ~/.npm-global
    echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-   npm install -g @openai/codex
+   npm install -g @openai/codex@latest
    ```
    Log in with `claude` (then `/login`) and `codex login`. Open the URL each prints in a Windows browser to authorize.
    If Codex is also installed on the Windows side, Ubuntu's PATH shows that Windows `codex` (`/mnt/c/...`) too, and it cannot run inside Ubuntu. The installer skips it and chooses the `codex` installed inside Ubuntu (one that answers `--version`); re-running it also replaces a Windows `codex` saved by an earlier install. If `agentstack-doctor` prints `warn: Codex launcher binary ... cannot start Codex`, install Codex inside Ubuntu and re-run the installer.
+   If Codex was already installed in Ubuntu, update it too with `npm install -g @openai/codex@latest`: with an old release, a child started on a GPT-6 model is rejected by the API (on WSL, 0.153.4 was rejected and 0.158.0 answered).
 7. **Start an agent** (inside Ubuntu). Use the same commands as in "Starting the first agent" above. The dashboard's jump opens a new Windows Terminal (`wt.exe`, preinstalled on Windows 11) tab attached to the tmux session. If Windows Terminal is missing, install it from the Microsoft Store.
 
 **Do not close every window.** When the last Ubuntu window closes, WSL2 stops the whole VM and Mail and the dashboard go with it. To keep them resident, set `loginctl enable-linger` and `vmIdleTimeout=-1` in `.wslconfig` as described in the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-the-services-vanish-when-the-last-shell-closes).

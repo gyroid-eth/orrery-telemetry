@@ -16,6 +16,7 @@ import os
 import pathlib
 import shlex
 import subprocess
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALL = ROOT / "scripts" / "install.sh"
@@ -169,3 +170,16 @@ def test_explicit_working_codex_is_used_as_is(tmp_path):
 def test_resolution_block_is_bash_3_2_clean():
     result = subprocess.run(["/bin/bash", "-n", str(INSTALL)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_a_codex_that_ignores_term_is_still_bounded(tmp_path):
+    # TERM is ignored and a child keeps running: the probe must still return.
+    stubborn = tmp_path / "stubborn-bin" / "codex"
+    stubborn.parent.mkdir(parents=True)
+    stubborn.write_text('#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.1; done\n', encoding="utf-8")
+    stubborn.chmod(0o755)
+    linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
+    started = time.monotonic()
+    _, resolved, _ = _resolve(tmp_path, path_dirs=[stubborn.parent, linux.parent], timeout=1)
+    assert resolved == str(linux)
+    assert time.monotonic() - started < 8

@@ -505,9 +505,13 @@ def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
 
 def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():
     helper = _extract("codex_accept_trust_dialog")
+    # capture-pane shows the legacy dialog; send-keys is echoed.
     fake_tmux = """
 tmux() {
-    printf '%s\\n' "$*"
+    case "$1" in
+        capture-pane) printf '%s\\n' "  Do you trust the contents of this directory?" "› 1. Yes, continue" ;;
+        *) printf '%s\\n' "$*" ;;
+    esac
 }
 """
     accepted = _run_bash(
@@ -1199,3 +1203,33 @@ def test_codex_new_trust_dialog_never_presses_enter_on_quit():
 
 def test_codex_old_trust_dialog_keeps_the_plain_carriage_return():
     assert _codex_accept_with_screens([_CODEX_TRUST_OLD]) == ["KEYS:send-keys -t Child C-m"]
+
+
+# --- 2026-09-29 review: a new dialog is never confirmed blind -----------------
+
+_CODEX_TRUST_WRAPPED_QUIT_SELECTED = (
+    "> You are in /home/example\nTrust this folder?\n  1. Trust and\n     continue\n› 2. Quit\n"
+    "enter continue · esc quit\n"
+)
+_CODEX_TRUST_WRAPPED_TRUST_SELECTED = _CODEX_TRUST_WRAPPED_QUIT_SELECTED.replace(
+    "  1. Trust and\n     continue\n› 2. Quit", "› 1. Trust and\n     continue\n  2. Quit"
+)
+
+
+def test_codex_wrapped_label_with_quit_selected_is_never_confirmed():
+    keys = _codex_accept_with_screens([_CODEX_TRUST_WRAPPED_QUIT_SELECTED, _CODEX_TRUST_WRAPPED_QUIT_SELECTED])
+    assert keys == ["KEYS:send-keys -t Child Up"]
+
+
+def test_codex_wrapped_label_with_trust_selected_is_confirmed():
+    assert _codex_accept_with_screens([_CODEX_TRUST_WRAPPED_TRUST_SELECTED]) == ["KEYS:send-keys -t Child C-m"]
+
+
+def test_codex_empty_or_unrecognised_capture_is_never_confirmed():
+    assert "KEYS:send-keys -t Child C-m" not in _codex_accept_with_screens(["", ""])
+    assert "KEYS:send-keys -t Child C-m" not in _codex_accept_with_screens(["Trust this folder?\n", "Trust this folder?\n"])
+
+
+def test_codex_trust_heading_is_not_mistaken_for_the_selected_row():
+    heading = "> Trust this folder?\n  1. Trust and continue\n› 2. Quit\n"
+    assert _codex_accept_with_screens([heading, heading]) == ["KEYS:send-keys -t Child Up"]
