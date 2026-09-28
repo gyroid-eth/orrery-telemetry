@@ -774,6 +774,52 @@ flush_queued_prompt Child
         assert flushed.exists()
 
 
+def _run_send_prompt(tmpdir: pathlib.Path, prompt: str, input_line: str) -> list[str]:
+    tmux_log = tmpdir / "tmux.log"
+    pasted = tmpdir / "pasted"
+    result = _run_bash(
+        f"""
+{_extract("injection_utf8_locale")}
+{_extract("resubmit_if_left_in_input")}
+{_extract("send_prompt_to_pane")}
+sleep() {{ :; }}
+tmux() {{
+    printf '%s\\n' "$*" >> {str(tmux_log)!r}
+    case "$1" in
+        load-buffer) cat "$4" > {str(pasted)!r} ;;
+        capture-pane) printf '%s\\n' '› earlier history line' {input_line!r} ;;
+    esac
+    return 0
+}}
+send_prompt_to_pane Child "$PROMPT" 0.5
+""",
+        env={"PROMPT": prompt},
+    )
+    assert result.returncode == 0, result.stderr
+    assert pasted.read_text(encoding="utf-8") == prompt
+    return tmux_log.read_text(encoding="utf-8").splitlines()
+
+
+def test_prompt_is_pasted_as_bracketed_paste_then_submitted():
+    prompt = "Child agent startup. AGENT_NAME=Child; parent=Parent.\n2行目"
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = _run_send_prompt(pathlib.Path(tmp), prompt, "› Ask Codex to do anything")
+    paste = next(i for i, c in enumerate(calls) if c.startswith("paste-buffer -p -d "))
+    assert calls[paste].endswith("-t Child")
+    assert calls[paste + 1] == "send-keys -t Child C-m"
+    assert not any(c.startswith("send-keys -t Child -l") for c in calls)
+    assert calls.count("send-keys -t Child C-m") == 1
+
+
+def test_prompt_left_in_the_input_box_is_submitted_once_more():
+    prompt = "Child agent startup. AGENT_NAME=Child; parent=Parent."
+    for input_line in ("› Child agent startup. AGENT_NAME=Chi", "❯ [Pasted text #1 +40 lines]",
+                       "› [Pasted Content 5120 chars]"):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = _run_send_prompt(pathlib.Path(tmp), prompt, input_line)
+        assert calls.count("send-keys -t Child C-m") == 2, input_line
+
+
 def test_optional_terminal_open_is_detached_from_spawn_completion():
     text = _SPAWN.read_text(encoding="utf-8")
     helper = _extract("open_child_terminal")
@@ -792,7 +838,8 @@ def test_preregistered_standalone_contract_is_parentless_and_direct_prompted():
     assert 'TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")' in prereg
     assert "a standalone agent with no parent" in prereg
     assert prereg.count("${TASK}") >= 2
-    assert prereg.count("printf '\\033[200~'") == 2
+    assert prereg.count('send_prompt_to_pane "$CHILD_NAME"') == 2
+    assert "\\033[200~" not in prereg
 
 
 def test_child_window_opens_in_the_background_by_default():
