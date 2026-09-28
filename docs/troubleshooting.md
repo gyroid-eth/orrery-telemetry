@@ -246,6 +246,24 @@ dashboard は launcher 自身の readiness / early-death verdict を最大120秒
 
 Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-list も確認してください。
 
+## Codex の子の最初の task が始まったか分からない
+
+Codex の子の最初の task は、画面への貼り付けではなく `codex -- "<task>"` の起動引数で渡します（Codex 0.158 で、起動途中に貼った task から turn が始まらないことがあったため。起動中の画面の切り替わりとの競争が最有力の仮説です）。task は再送しません。
+
+task が始まったかどうかは、画面の文字ではなく、この起動の Codex の記録（rollout）で確かめます。Codex の history binding（任意の plugin の SessionStart hook）が、この起動の session と記録の場所を receipt に残している場合だけ確かめられます。
+
+- 確かめられた: `spawn_incidents.log` に `task started (<name>, …; recorded in this launch's rollout)`
+- binding が無い・働いていない: 最大90秒見張ったあと `Codex started (<name>); first-task confirmation unknown` と残します。失敗ではなく、子はそのまま作業を続けます。ただし launcher と `/api/spawn`（非同期なら `/api/spawn-status`）の確定は、その90秒のあいだ待たされます
+- binding はあるが task の記録がまだ無い: `WARNING: first task not yet recorded` と残します。子は残します
+
+見張りのあいだ launcher がキーを送るのは、実際の画面で確かめた形の trust 画面（`Trust this folder?`、`1. Trust and continue` / `2. Quit` と選択カーソル、最下行の `enter continue · esc quit`）だけです。model 選択や sign-in の画面、会話の中に出てきた同じ文言には応じません。その画面で止まっていれば、手で応じてください。
+
+1. `tmux capture-pane -t '<child-name>' -p -S -1000` で画面を見る。Codex が作業中なら task は届いています
+2. 起動画面で止まっていれば、その画面に応じる
+3. 届いていないと確かめられたときだけ、task を手で送る
+
+task は1つのコマンドライン引数になるため、120000 byte を超える task は起動前にエラーになります。長い説明は ORRERY Mail で送ってください。
+
 ## Spawn 名が拒否される
 
 指定名は hyphen を除去した後、ASCII letter で始まる2〜64文字の alphabetic 名である必要があります。

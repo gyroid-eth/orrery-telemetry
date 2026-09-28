@@ -497,10 +497,9 @@ def test_launcher_no_longer_hardcodes_full_auto():
 
 def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
     text = _SPAWN.read_text(encoding="utf-8")
-    # Both readiness loops check liveness and abort.
-    assert text.count("codex_session_alive") == 3, "expected 1 definition + 2 call sites"
-    assert text.count("DIED=true") == 2
-    assert text.count("exited before becoming ready") == 2
+    # The shared Codex watch checks liveness; both cold paths abort on it.
+    assert "codex_session_alive" in _extract("codex_watch_initial_task")
+    assert text.count("exited before starting its task") == 2
 
 
 def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():
@@ -531,10 +530,12 @@ tmux() {
     assert "persisted after 10 attempts" in exhausted.stderr
 
     text = _SPAWN.read_text(encoding="utf-8")
-    assert text.count('TRUST_MAX=10') == 2
-    # Two Codex paths plus the corresponding Claude trust-gate paths.
-    assert text.count('TRUST_FAILED=true') == 4
-    assert text.count('codex_accept_trust_dialog \\') == 2
+    # Codex: one shared watch (both cold paths) with its own attempt limit.
+    watch = _extract("codex_watch_initial_task")
+    assert "trust_max=10" in watch and "codex_accept_trust_dialog" in watch
+    assert text.count('codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT"') == 2
+    # Claude keeps its two trust-gate paths.
+    assert text.count('TRUST_FAILED=true') == 2
 
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
@@ -565,7 +566,8 @@ def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
 def test_readiness_timeouts_fail_instead_of_injecting_into_unknown_ui():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "injecting prompt anyway" not in text
-    assert text.count("refusing to inject the task into an unknown screen state") == 4
+    # Claude only: a cold Codex task is its argv and is never injected.
+    assert text.count("refusing to inject the task into an unknown screen state") == 2
     assert text.count("claude_accept_trust_dialog") == 3  # definition + 2 paths
 
 
@@ -573,7 +575,9 @@ def test_prompt_injection_is_verified_in_every_launch_path():
     text = _SPAWN.read_text(encoding="utf-8")
     verifier = _extract("verify_injection")
 
-    assert text.count('verify_injection "$CHILD_NAME"') == 4
+    # Claude paths verify the paste; Codex cold paths watch for the argv task.
+    assert text.count('verify_injection "$CHILD_NAME"') == 2
+    assert text.count('codex_watch_initial_task "$CHILD_NAME"') == 2
     assert text.count('flush_queued_prompt "$CHILD_NAME"') == 2
     assert "capture-pane" in verifier and "-S -1000" in verifier
     assert "kill-session" not in verifier
@@ -844,7 +848,9 @@ def test_preregistered_standalone_contract_is_parentless_and_direct_prompted():
     assert 'TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")' in prereg
     assert "a standalone agent with no parent" in prereg
     assert prereg.count("${TASK}") >= 2
-    assert prereg.count('send_prompt_to_pane "$CHILD_NAME"') == 2
+    # Claude pastes; the Codex task is the child's argv.
+    assert prereg.count('send_prompt_to_pane "$CHILD_NAME"') == 1
+    assert 'codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT"' in prereg
     assert "\\033[200~" not in prereg
 
 
@@ -1065,7 +1071,9 @@ def test_codex_polls_capture_the_visible_screen_only():
     # so the launcher pressed Enter on every poll and never reached readiness.
     text = _SPAWN.read_text(encoding="utf-8")
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
-    assert text.count('PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)') == 4
+    # Two Claude polls plus the shared Codex watch.
+    assert text.count('PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)') == 2
+    assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
 
 
 def test_child_shell_never_sources_a_user_bootstrap():
@@ -1098,7 +1106,7 @@ def test_child_proxy_configs_carry_the_bearer_mode():
 
 def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
     text = _SPAWN.read_text(encoding="utf-8")
-    snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL"', text, re.S)
+    snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL" -- "\$AGENTSTACK_CODEX_TASK"', text, re.S)
     assert len(snippets) == 2
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -1112,7 +1120,10 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
             validated = _model_call("validate_codex_effort", model, effort)
             assert validated.returncode == 0, validated.stderr
             for snippet in snippets:
+                task_file = root / "task"
+                task_file.write_text("task", encoding="utf-8")
                 result = _run_bash(snippet, {
+                    "AGENTSTACK_CODEX_PROMPT_FILE": str(task_file),
                     "AGENTSTACK_CODEX_BIN": str(fake),
                     "AGENTSTACK_CODEX_MODEL": model,
                     "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),

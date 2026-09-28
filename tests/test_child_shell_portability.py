@@ -65,10 +65,14 @@ def test_codex_snippet_splits_dirs_and_flags_the_same_in_both_shells(shell):
             + '\nprintf "%s\\n" "${EXTRA_ARGS[@]}"\n'
             + 'printf "[%s]\\n" $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL")\n'
         )
+        task_file = os.path.join(td, "task")
+        with open(task_file, "w", encoding="utf-8") as f:
+            f.write("task")
         env = dict(
             os.environ,
             AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=f"{spaced}:{plain}:{td}/missing",
             AGENTSTACK_CODEX_APPROVAL="--ask-for-approval never",
+            AGENTSTACK_CODEX_PROMPT_FILE=task_file,
         )
         r = subprocess.run([shell, "-c", script], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

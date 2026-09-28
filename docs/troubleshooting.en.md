@@ -231,6 +231,24 @@ The dashboard waits up to 120 seconds for the launcher's own readiness / early-d
 
 For Codex, also check `AGENTSTACK_CODEX_MODELS` against the requested model and the effort allowlist.
 
+## Whether a Codex child's first task started is unknown
+
+A Codex child's first task is passed as its launch argument, `codex -- "<task>"`, not pasted into the screen (on Codex 0.158 a task pasted during startup sometimes never started a turn; a race with the startup screens is the leading hypothesis). The task is never resent.
+
+Whether the task started is read from this launch's Codex record (its rollout), not from the screen. That is possible only when the Codex history binding (the optional plugin's SessionStart hook) has left a receipt naming this launch's session and record.
+
+- Confirmed: `spawn_incidents.log` shows `task started (<name>, …; recorded in this launch's rollout)`
+- No binding, or it did not run: after watching for up to 90 seconds it records `Codex started (<name>); first-task confirmation unknown`. This is not a failure and the child keeps working, but the launcher and `/api/spawn` (or `/api/spawn-status` for async) settle only after those 90 seconds
+- Binding present but no task record yet: it records `WARNING: first task not yet recorded` and leaves the child running
+
+While watching, the launcher sends keys only to a trust screen of a layout seen on a real screen (`Trust this folder?`, `1. Trust and continue` / `2. Quit` with the selection cursor, and `enter continue · esc quit` as the last line). It does not answer model or sign-in screens, or the same wording appearing in the conversation; if the child stops at such a screen, answer it by hand.
+
+1. Look at the screen with `tmux capture-pane -t '<child-name>' -p -S -1000`. If Codex is working, the task arrived
+2. If it is stopped at a startup screen, answer that screen
+3. Send the task by hand only once you have confirmed it did not arrive
+
+The task is one command-line argument, so a task over 120000 bytes fails before launch. Send long details by ORRERY Mail.
+
 ## Spawn name is rejected
 
 After removing hyphens, an explicit name must be a 2–64-character alphabetic name beginning with an ASCII letter.

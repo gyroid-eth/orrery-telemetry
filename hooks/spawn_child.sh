@@ -1225,6 +1225,142 @@ verify_injection() {
     return 1
 }
 
+# --- Codex cold start: the first task travels as the positional [PROMPT] ---
+# On WSL (2026-09-28) 1 of 8 cold Codex 0.158 children never started a turn
+# after its task was pasted. Codex 0.158 draws a provisional composer ("Ask
+# Codex to do anything") during startup and can discard pending input before a
+# protected screen; a race between the paste and that screen change is the
+# leading hypothesis, not a confirmed cause. Either way the task no longer goes
+# through the terminal: it is given to `codex -- "<task>"` as one argv and is
+# never pasted, submitted or resent. It reaches the child through
+# a 0600 file that the child's shell reads and removes; it is never spliced
+# into a shell command string.
+# One argv is capped by the OS (Linux: 128 KiB per argument); a task past the
+# cap fails here, visibly, instead of as an exec error inside the pane.
+CODEX_PROMPT_MAX_BYTES=120000
+write_codex_prompt_file() {
+    local name="$1" text="$2" file bytes
+    bytes="$(printf '%s' "$text" | wc -c | tr -d ' ')"
+    if (( bytes > CODEX_PROMPT_MAX_BYTES )); then
+        echo "Error: the Codex task is ${bytes} bytes; it is passed as one command-line argument, whose limit here is ${CODEX_PROMPT_MAX_BYTES}. Shorten it or send the details by ORRERY Mail." >&2
+        return 1
+    fi
+    mkdir -p "$CHILD_STATE_DIR" && chmod 700 "$CHILD_STATE_DIR" || return 1
+    file="$(umask 077; mktemp "$CHILD_STATE_DIR/.$name.prompt.XXXXXX")" || return 1
+    if ! printf '%s' "$text" > "$file"; then
+        rm -f "$file"
+        return 1
+    fi
+    printf '%s\n' "$file"
+}
+
+# Whether this launch's first task has started, from its own rollout (see
+# hooks/codex-initial-task-status.py): started, bound or unknown.
+codex_initial_task_status() {
+    local session_name="$1" prompt_text="$2" launch_path="$3" launch_id="$4"
+    local helper="$HOOKS_DIR/codex-initial-task-status.py"
+    if [[ ! -f "$helper" || -z "$launch_path" || -z "$launch_id" ]]; then
+        echo unknown
+        return 0
+    fi
+    printf '%s' "$prompt_text" | "${AGENTSTACK_PYTHON:-python3}" "$helper" \
+        --launch-path "$launch_path" --launch-id "$launch_id" \
+        --agent-name "$session_name" 2>/dev/null || echo unknown
+}
+
+# Whether a Codex trust screen is up, identified by its whole layout at the
+# bottom of the pane, never by a phrase: the task and Codex's answers can quote
+# any dialog text, on a line of its own or not. The bottom region is the last
+# 12 non-blank lines and must hold no composer marker ("Ask Codex to do
+# anything", "? for shortcuts", "esc to interrupt"). The layouts accepted are
+# the ones seen on real screens:
+# - Codex 0.158: "Trust this folder?" (under "Folder access"), the option pair
+#   "1. Trust and continue" / "2. Quit" with the selection cursor on one of
+#   them, and "enter continue · esc quit" as the last line.
+# - Older Codex: "Do you trust the contents of this directory?", the pair
+#   "1. Yes, continue" / "2. No, quit" with the cursor, and "Press enter to
+#   continue" as the last line.
+# Model and sign-in screens get no keys: their current layouts have not been
+# seen on a real screen, and a guess could answer a quoted phrase instead.
+codex_trust_screen_up() {
+    local region last
+    region="$(printf '%s\n' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
+    printf '%s' "$region" | grep -qE 'Ask Codex to do anything|\? for shortcuts|esc to interrupt' && return 1
+    printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)[[:space:]]*[12]\.' || return 1
+    last="$(printf '%s' "$region" | tail -n 1)"
+    if [[ "$last" =~ ^[[:space:]]*enter\ continue\ ·\ esc\ quit[[:space:]]*$ ]]; then
+        printf '%s' "$region" | grep -qE '^[[:space:]]*Trust this folder\?' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*Trust and( continue)?[[:space:]]*$' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*2\.[[:space:]]*Quit[[:space:]]*$'
+        return
+    fi
+    if [[ "$last" =~ ^[[:space:]]*Press\ enter\ to\ continue[[:space:]]*$ ]]; then
+        printf '%s' "$region" | grep -qE 'Do you trust the contents of this directory\?' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*Yes, continue[[:space:]]*$' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*2\.[[:space:]]*No, quit[[:space:]]*$'
+        return
+    fi
+    return 1
+}
+
+# Watch a cold-started Codex child until its first task has started.
+# Success comes only from this launch's rollout (codex_initial_task_status),
+# never from the screen. Until this launch's session binding is verified, a
+# trust screen identified by its whole layout (codex_trust_screen_up) is
+# answered; once it is verified, no more keys are sent. The history binding is
+# optional: without it the watch still runs its full bound, answering a late
+# trust screen, and ends with "start not confirmed", leaving the child running. Nothing is typed into
+# the composer and nothing is resent.
+# Returns 0 when the task has started, 1 when the trust screen could not be
+# accepted, 2 when the session died, 3 when the start could not be confirmed
+# in time (the child is left running; the caller only records a diagnostic).
+codex_watch_initial_task() {
+    local session_name="$1" prompt_text="$2" log_prefix="$3" launch_path="$4" launch_id="$5"
+    local waited=0 wait_max=90 trust_attempts=0 trust_max=10 pane_text
+    local status=unknown bound=false
+    # Counted polls and wall-clock time both end the watch: the dialog handlers
+    # sleep too, and the dashboard signals a launcher after 120s, whose exit
+    # trap would then remove the child this watch means to leave running.
+    local deadline=$((SECONDS + wait_max))
+    while (( waited < wait_max && SECONDS < deadline )); do
+        sleep 3
+        waited=$((waited + 3))
+        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        if ! codex_session_alive "$session_name"; then
+            echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
+            printf '%s\n' "$pane_text" | tail -15 >&2
+            return 2
+        fi
+        status="$(codex_initial_task_status "$session_name" "$prompt_text" "$launch_path" "$launch_id")"
+        case "$status" in
+            started)
+                INJECTION_VERIFIED=true
+                spawn_note "task started ($session_name, ${waited}s; recorded in this launch's rollout)"
+                return 0
+                ;;
+            bound)
+                bound=true
+                ;;
+        esac
+        [[ "$bound" == true ]] && continue
+        if codex_trust_screen_up "$pane_text"; then
+            trust_attempts=$((trust_attempts + 1))
+            codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
+            sleep 3
+        fi
+    done
+    local last_screen
+    last_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
+    if [[ "$bound" == true ]]; then
+        spawn_note "WARNING: first task not yet recorded ($session_name) within ${wait_max}s: this launch's session is bound, but its rollout does not show the task in a turn. The task was passed to codex as its [PROMPT] argument and is not resent; the child is left running. Inspect with 'tmux capture-pane -t $session_name -p -S -1000'. Last screen: $last_screen"
+    else
+        # Not a failure: the Codex history binding is optional, and without its
+        # receipt the start of the task simply cannot be confirmed.
+        spawn_note "Codex started ($session_name); first-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $last_screen"
+    fi
+    return 3
+}
+
 # Existing failure cleanup terminates a half-started child. Preserve that
 # stronger repository contract, while leaving durable evidence that prompt
 # delivery was never verified before cleanup ran.
@@ -1593,6 +1729,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             return
         fi
         warn_if_uninjected
+        rm -f "${CODEX_PROMPT_FILE:-}"
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
         fi
@@ -1753,6 +1890,11 @@ ${TASK}"
             CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
         fi
         CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
+        if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
+            echo "Error: could not prepare the Codex task for $CHILD_NAME" >&2
+            exit 1
+        fi
+        TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_PROMPT_FILE=$CODEX_PROMPT_FILE")
         tmux new-session -d -s "$CHILD_NAME" \
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
@@ -1776,77 +1918,43 @@ ${TASK}"
                 done
                 IFS="$_ifs"
                 [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
+                # The first task is one argv after `--` (never a subcommand or
+                # a flag), read from the 0600 file the launcher wrote.
+                # Codex never starts without its task: an unreadable or empty file ends
+                # the session here, which the launcher reports as a failed start.
+                # The trailing "x" keeps trailing newlines, which $(...) would strip.
+                if AGENTSTACK_CODEX_TASK="$(cat "$AGENTSTACK_CODEX_PROMPT_FILE" && printf x)"; then
+                    AGENTSTACK_CODEX_TASK="${AGENTSTACK_CODEX_TASK%x}"
+                else
+                    AGENTSTACK_CODEX_TASK=""
+                fi
+                if [[ -z "$AGENTSTACK_CODEX_TASK" ]]; then
+                    echo "[spawn_child] cannot read the task file $AGENTSTACK_CODEX_PROMPT_FILE; not starting Codex without its task" >&2
+                    sleep 5  # long enough for the launcher to capture this line
+                    exit 1
+                fi
+                rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
                 env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
-                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL"
+                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
         PRE_REGISTERED_SESSION_STARTED=true
         SPAWN_TRAP_SESSION="$CHILD_NAME"
 
-        echo "[spawn_child/pre-reg] Waiting for Codex REPL..." >&2
-        WAITED=0
-        WAIT_MAX=90
-        READY=false
-        DIED=false
-        TRUST_FAILED=false
-        TRUST_ATTEMPTS=0
-        TRUST_MAX=10
-        while [[ $WAITED -lt $WAIT_MAX ]]; do
-            sleep 3
-            WAITED=$((WAITED + 3))
-            PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-            if echo "$PANE_TEXT" | grep -qF "Use existing model"; then
-                echo "[spawn_child/pre-reg] Model selection dialog detected; choosing existing model" >&2
-                tmux send-keys -t "$CHILD_NAME" Down Enter
-                sleep 5
-                continue
-            fi
-            # Trust ダイアログ: "Do you trust the contents of this directory?"
-            if codex_trust_dialog_present "$PANE_TEXT"; then
-                TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-                if ! codex_accept_trust_dialog \
-                    "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
-                    TRUST_FAILED=true
-                    break
-                fi
-                sleep 3
-                continue
-            fi
-            if echo "$PANE_TEXT" | grep -qi "Press enter to continue"; then
-                echo "[spawn_child/pre-reg] Sign-in prompt detected; pressing Enter" >&2
-                tmux send-keys -t "$CHILD_NAME" Enter
-                sleep 3
-                continue
-            fi
-            if codex_pane_ready "$PANE_TEXT"; then
-                READY=true
-                break
-            fi
-            if ! codex_session_alive "$CHILD_NAME"; then
-                echo "[spawn_child/pre-reg] Codex session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-                printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-                DIED=true
-                break
-            fi
-        done
-
-        if [[ "$TRUST_FAILED" == true ]]; then
-            echo "[spawn_child/pre-reg] Aborting: unable to accept the Codex trust dialog." >&2
-            exit 1
-        elif [[ "$DIED" == true ]]; then
-            echo "[spawn_child/pre-reg] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
-            exit 1
-        elif [[ "$READY" == true ]]; then
-            sleep 2
-            echo "[spawn_child/pre-reg] Waited ${WAITED}s (+2s); injecting prompt" >&2
-        else
-            echo "[spawn_child/pre-reg] Codex readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
-            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-            exit 1
-        fi
-
-        send_prompt_to_pane "$CHILD_NAME" "$CODEX_PROMPT" 0.5
-        verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
+        echo "[spawn_child/pre-reg] Waiting for Codex to start the task..." >&2
+        WATCH_STATUS=0
+        codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child/pre-reg" \
+            "$CHILD_LAUNCH_BINDING" "$CHILD_LAUNCH_ID" || WATCH_STATUS=$?
+        case "$WATCH_STATUS" in
+            1)
+                echo "[spawn_child/pre-reg] Aborting: unable to accept the Codex trust dialog." >&2
+                exit 1
+                ;;
+            2)
+                echo "[spawn_child/pre-reg] Aborting: the child exited before starting its task (check the codex flags above)." >&2
+                exit 1
+                ;;
+        esac
     else
         # Claude Code startup (--pre-registered mode).
         WARM_POOL="$HOOKS_DIR/warm_pool.sh"
@@ -2356,6 +2464,7 @@ cleanup_on_failure() {
         return
     fi
     warn_if_uninjected
+    rm -f "${CODEX_PROMPT_FILE:-}"
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
         tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
     fi
@@ -2590,6 +2699,11 @@ if [[ "$USE_CODEX" == true ]]; then
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
     CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
+    if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
+        echo "Error: could not prepare the Codex task for $CHILD_NAME" >&2
+        exit 1
+    fi
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_PROMPT_FILE=$CODEX_PROMPT_FILE")
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
@@ -2606,88 +2720,41 @@ if [[ "$USE_CODEX" == true ]]; then
             done
             IFS="$_ifs"
             [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
+            # See the pre-registered path: the first task is one argv after `--`.
+            # Codex never starts without its task: an unreadable or empty file ends
+            # the session here, which the launcher reports as a failed start.
+            # The trailing "x" keeps trailing newlines, which $(...) would strip.
+            if AGENTSTACK_CODEX_TASK="$(cat "$AGENTSTACK_CODEX_PROMPT_FILE" && printf x)"; then
+                AGENTSTACK_CODEX_TASK="${AGENTSTACK_CODEX_TASK%x}"
+            else
+                AGENTSTACK_CODEX_TASK=""
+            fi
+            if [[ -z "$AGENTSTACK_CODEX_TASK" ]]; then
+                echo "[spawn_child] cannot read the task file $AGENTSTACK_CODEX_PROMPT_FILE; not starting Codex without its task" >&2
+                sleep 5  # long enough for the launcher to capture this line
+                exit 1
+            fi
+            rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
             env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
-                "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL"
+                "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
     CHILD_SESSION_STARTED=true
     SPAWN_TRAP_SESSION="$CHILD_NAME"
-    # Codex REPL起動待機
-    # 注意: モデルアップグレードダイアログやサインインプロンプトが
-    # 表示されることがある。これらを自動スキップしてから入力待ちを検知する。
-    echo "[spawn_child] Waiting for Codex REPL..." >&2
-    WAITED=0
-    WAIT_MAX=90
-    READY=false
-    DIED=false
-    TRUST_FAILED=false
-    TRUST_ATTEMPTS=0
-    TRUST_MAX=10
-    while [[ $WAITED -lt $WAIT_MAX ]]; do
-        sleep 3
-        WAITED=$((WAITED + 3))
-        PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-
-        # モデルアップグレードダイアログ: "Use existing model" を選択
-        if echo "$PANE_TEXT" | grep -qF "Use existing model"; then
-            echo "[spawn_child] Model selection dialog detected; choosing existing model" >&2
-            tmux send-keys -t "$CHILD_NAME" Down Enter
-            sleep 5
-            continue
-        fi
-
-        # Trust ダイアログ: "Do you trust the contents of this directory?"
-        if codex_trust_dialog_present "$PANE_TEXT"; then
-            TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-            if ! codex_accept_trust_dialog \
-                "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
-                TRUST_FAILED=true
-                break
-            fi
-            sleep 3
-            continue
-        fi
-
-        # サインインプロンプト: Enter で続行
-        if echo "$PANE_TEXT" | grep -qi "Press enter to continue"; then
-            echo "[spawn_child] Sign-in prompt detected; pressing Enter" >&2
-            tmux send-keys -t "$CHILD_NAME" Enter
-            sleep 3
-            continue
-        fi
-
-        if codex_pane_ready "$PANE_TEXT"; then
-            READY=true
-            break
-        fi
-        if ! codex_session_alive "$CHILD_NAME"; then
-            echo "[spawn_child] Codex session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-            DIED=true
-            break
-        fi
-    done
-
-    if [[ "$TRUST_FAILED" == true ]]; then
-        echo "[spawn_child] Aborting: unable to accept the Codex trust dialog." >&2
-        exit 1
-    elif [[ "$DIED" == true ]]; then
-        echo "[spawn_child] Aborting: the child exited before becoming ready (check the codex flags above)." >&2
-        exit 1
-    elif [[ "$READY" == true ]]; then
-        sleep 2
-        echo "[spawn_child] Waited ${WAITED}s (+2s); injecting prompt" >&2
-    else
-        echo "[spawn_child] Codex readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
-        printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-        exit 1
-    fi
-
-    # Codex にはタスク概要を含むプロンプトを注入
-    # 注意: テキストと Enter は分離して送信する。
-    # 長いテキスト + C-m を同一コールで送ると C-m が落ちることがある。
-    send_prompt_to_pane "$CHILD_NAME" "$CODEX_PROMPT" 0.5
-    verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
+    echo "[spawn_child] Waiting for Codex to start the task..." >&2
+    WATCH_STATUS=0
+    codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child" \
+        "$CHILD_LAUNCH_BINDING" "$CHILD_LAUNCH_ID" || WATCH_STATUS=$?
+    case "$WATCH_STATUS" in
+        1)
+            echo "[spawn_child] Aborting: unable to accept the Codex trust dialog." >&2
+            exit 1
+            ;;
+        2)
+            echo "[spawn_child] Aborting: the child exited before starting its task (check the codex flags above)." >&2
+            exit 1
+            ;;
+    esac
 else
     # Claude Code 起動（モデル指定付き）
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"

@@ -10,6 +10,10 @@
 
 ## 未リリース
 
+### Codex の子の最初の task を、起動引数で渡すようにしました
+
+Codex の子の最初の task を、画面に貼り付けて送信する代わりに、Codex の公式の `[PROMPT]` 引数（`codex -- "<task>"`）で渡します。WSL で、Codex 0.158 の子が8回に1回、貼り付けた task で turn を始めないまま待っていました。Codex 0.158 は起動途中にも入力欄を描き、確認画面の前に入力を捨てる処理を持つため、貼り付けと画面の切り替わりの競争が最も有力な仮説です（原因は断定できていません）。そこで task を端末経由で渡すこと自体をやめました。task は 0600 のファイルを通して子の shell が読み、1つの引数として渡すので、shell のコマンドとして解釈されることはありません。task が始まったかは、画面の文字ではなく、この起動の Codex の記録（rollout）で確かめます。これは Codex の history binding（任意）が receipt を残した場合だけで、無い環境では最大90秒見張ったあと「確認できない」と残して子はそのままにします（失敗ではなく、再送もしません。その間 spawn の確定は待たされます）。見張りのあいだ launcher がキーを送るのは、実画面で確かめた形の trust 画面だけで、会話の中に出てきた同じ文言や、形を確かめていない model・sign-in の画面には応じません。Claude の子と resume は変わりません。
+
 ### WSL で Codex の子が起動直後に終わっていました
 
 WSL の PATH には Windows の PATH（`/mnt/c/...`）が混ざるため、installer が Windows 側の npm の `codex` を選び、`AGENTSTACK_CODEX_BIN` に保存していました。これは Ubuntu の node では `Missing optional dependency @openai/codex-linux-x64` で即座に終わり、NEW AGENT の Codex の子がすべて、指示が届く前に終わっていました。installer は、WSL では `/mnt/<drive>/` 配下の `codex` を候補から外し、どの候補も `--version` に短い時間で答えるものだけを使うようにしました。PATH に無い `~/.npm-global/bin` なども探します。以前の install で保存された値が使えなければ選び直し、`--codex-bin` で明示した値が使えなければ理由を示して止まります。`agentstack-doctor` も、使われる `codex` が動かないときは `ok` ではなく `warn` と直し方を出し、0.157 より古い Codex CLI には更新を促す note を出します（0.153.4 では ChatGPT アカウントで GPT-6 系のモデルが拒否されました）。`--version` の確認は、応答しない候補を TERM のあと KILL してでも時間内に打ち切ります。

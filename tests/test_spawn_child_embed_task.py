@@ -38,9 +38,16 @@ def _fake_launch_env(
         "{ printf 'CALL'; for arg in \"$@\"; do printf '\\034%s' \"$arg\"; done; "
         "printf '\\035\\n'; } >> \"$FAKE_TMUX_LOG\"\n"
         "case \"${1:-}\" in\n"
-        "  new-session) : > \"$FAKE_TMUX_ALIVE\" ;;\n"
+        # A Codex child reads its task from the 0600 file named in its env
+        # (the argv path); record what it would have received.
+        "  new-session) : > \"$FAKE_TMUX_ALIVE\"\n"
+        "    for arg in \"$@\"; do case \"$arg\" in AGENTSTACK_CODEX_PROMPT_FILE=*)\n"
+        "      printf 'ARGV_TASK\\034' >> \"$FAKE_TMUX_LOG\"; cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\"\n"
+        # Codex then shows the task it was started with, as the real one does.
+        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;; esac; done ;;\n"
         "  capture-pane)\n"
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
+        "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
         "      printf '\\ngpt-5.5 xhigh · ~/workspace\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
@@ -236,12 +243,19 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=10,
+        # Without a history-binding receipt the launcher's watch runs all its
+        # polls (each starts the status helper); allow for a loaded machine.
+        timeout=60,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+    # The task went in as the child's argv, never through a paste buffer. No
+    # history-binding receipt exists here, so its start is reported as unknown.
+    assert "ARGV_TASK" in injected
+    assert "first-task confirmation unknown" in result.stderr
+    assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
     assert "existing AgentStack session-binding plugin configuration is preserved" in injected
@@ -380,7 +394,9 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=10,
+        # Without a history-binding receipt the launcher's watch runs all its
+        # polls (each starts the status helper); allow for a loaded machine.
+        timeout=60,
         check=False,
     )
 
@@ -388,6 +404,11 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert result.stdout.strip() == child_name
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
     assert task in injected
+    if codex:
+        # Codex gets the task as its argv; Claude keeps the pasted prompt.
+        assert "ARGV_TASK" in injected
+        assert "\034paste-buffer" not in injected
+        assert "first-task confirmation unknown" in result.stderr
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
     assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected
