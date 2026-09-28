@@ -425,20 +425,24 @@ codex_version_answers() {
   wait "$pid"
 }
 
-# Stop a probe that overran. Its process tree (an npm wrapper and the native
-# codex under it) is recorded first, while the children are still attached to
-# it; a wrapper that exits on TERM would otherwise orphan a native child that
-# ignores TERM, out of reach of `pkill -P`. Every recorded process gets TERM
-# and one second of grace; a process seen gone is dropped for good, and KILL
-# goes only to one still carrying the start time recorded for it, so a PID
-# reused by an unrelated process is never signalled. Only descendants of the
-# probe's own $! are touched, never the caller's process group.
+# Stop a probe that overran, without ever blocking: every wait below is a
+# kill -0 poll with a deadline, and whatever has not exited by then is left
+# with a note on stderr instead of waiting on it.
+#
+# The probe itself ($!) is this shell's own child, so it gets TERM and then
+# KILL without further checks. Its descendants (an npm wrapper's native codex)
+# are recorded first, while they are still attached to it, because a wrapper
+# that exits on TERM orphans them out of reach of `pgrep -P`. They get TERM
+# too; a descendant seen gone during the grace period is dropped, and KILL goes
+# only to one whose `ps -o lstart=` start time (one-second resolution) still
+# matches what was recorded. This is a best-effort identity check: a PID reused
+# within the same second, or one whose start time could not be read, is not
+# told apart, and an unverifiable descendant is left rather than killed.
 codex_probe_stop() {
-  local pid="$1" level="$1" targets next p t start depth grace=0
+  local pid="$1" level="$1" descendants="" next p t start depth round
   # PID lists are space-separated; a caller may have narrowed IFS (the PATH
   # scan in find_usable_codex_bin splits on ":").
   local IFS=$' \t\n'
-  targets="$pid/$(codex_process_start "$pid")"
   if command -v pgrep >/dev/null 2>&1; then
     for depth in 1 2 3 4; do
       next=""
@@ -448,33 +452,47 @@ codex_probe_stop() {
       next="$(echo $next)"
       [[ -n "$next" ]] || break
       for p in $next; do
-        targets="$targets $p/$(codex_process_start "$p")"
+        descendants="$descendants $p/$(codex_process_start "$p")"
       done
       level="$next"
     done
   fi
-  for t in $targets; do
+  kill -TERM "$pid" 2>/dev/null || true
+  for t in $descendants; do
     kill -TERM "${t%%/*}" 2>/dev/null || true
   done
-  while [[ -n "$targets" ]]; do
+  # One second of grace for everything to exit on TERM.
+  for round in 1 2 3 4 5 6 7 8 9 10; do
     next=""
-    for t in $targets; do
+    for t in $descendants; do
       kill -0 "${t%%/*}" 2>/dev/null && next="$next $t"
     done
-    targets="$(echo $next)"
-    [[ -n "$targets" && "$grace" -lt 10 ]] || break
+    descendants="$(echo $next)"
+    if [[ -z "$descendants" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
     sleep 0.1
-    grace=$((grace + 1))
   done
-  for t in $targets; do
+  kill -KILL "$pid" 2>/dev/null || true
+  for t in $descendants; do
     p="${t%%/*}"
     start="${t#*/}"
-    if [[ -n "$start" && "$(codex_process_start "$p")" != "$start" ]]; then
-      continue
+    if [[ -n "$start" && "$(codex_process_start "$p")" == "$start" ]]; then
+      kill -KILL "$p" 2>/dev/null || true
+    elif kill -0 "$p" 2>/dev/null; then
+      echo "note: left process $p from the codex --version probe (its identity could not be confirmed)" >&2
     fi
-    kill -KILL "$p" 2>/dev/null || true
   done
-  wait "$pid" 2>/dev/null || true
+  # Reap the probe only once it is gone; never block on it.
+  for round in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "note: the codex --version probe (pid $pid) did not exit after KILL; leaving it" >&2
+  else
+    wait "$pid" 2>/dev/null || true
+  fi
 }
 
 # The process start time as one word (empty when ps cannot tell), used to

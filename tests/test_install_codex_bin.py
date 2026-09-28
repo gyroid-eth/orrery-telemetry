@@ -294,3 +294,34 @@ def test_a_stubborn_child_with_the_same_start_time_is_killed(script):
             + "codex_probe_stop 410000\n")
     out = subprocess.run(["/bin/bash", "-c", body], capture_output=True, text=True, timeout=10).stdout.split("\n")
     assert "KILL 410001" in out
+
+
+def _run_stop(script, extra):
+    body = _stop_functions(script) + _SIGNAL_STUBS + extra + "codex_probe_stop 410000\necho RETURNED\n"
+    return subprocess.run(["/bin/bash", "-c", body], capture_output=True, text=True, timeout=10)
+
+
+@pytest.mark.parametrize("script", ["install.sh", "doctor.sh"])
+def test_probe_stop_returns_even_if_nothing_exits(script):
+    # Probe and child survive TERM and KILL (stubbed): the function still returns,
+    # never reaching an unbounded wait, and says what it left.
+    result = _run_stop(script, 'start_of() { echo "Tue Sep 29 01:00:00 2026"; }\n'
+                               "child_alive() { return 0; }\n"
+                               'wait() { echo "WAIT $1"; }\n')
+    out = result.stdout.split("\n")
+    assert "RETURNED" in out
+    assert "WAIT 410000" not in out
+    assert "did not exit after KILL; leaving it" in result.stderr
+
+
+@pytest.mark.parametrize("script", ["install.sh", "doctor.sh"])
+def test_probe_is_killed_even_when_ps_stops_answering(script):
+    # First ps answers, the re-read before KILL fails: the probe (our own child)
+    # is still KILLed, the unverifiable descendant is left with a note.
+    result = _run_stop(script, 'start_of() { if [[ "$tick" -lt 3 ]]; then echo "Tue Sep 29 01:00:00 2026"; fi; }\n'
+                               "child_alive() { return 0; }\n")
+    out = result.stdout.split("\n")
+    assert "KILL 410000" in out
+    assert "KILL 410001" not in out
+    assert "RETURNED" in out
+    assert "left process 410001" in result.stderr
