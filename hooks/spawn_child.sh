@@ -13,7 +13,7 @@
 #   spawn_child.sh --pre-registered <name> --codex --codex-mcp orrery-only "<task>"
 #   spawn_child.sh --pre-registered <name> --child-token-file <path> --standalone "<task>"
 #
-# モデル指定（--model。Codex は gpt-5.6-sol 既定で旧 model 名も有効）:
+# モデル指定（--model。Codex は gpt-6-sol 既定で旧 model 名も有効）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
@@ -21,7 +21,7 @@
 #   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
-#   --codex --model 省略/sol → gpt-5.6-sol（terra / luna / astra=gpt-6-astra alias も利用可）
+#   --codex --model 省略 → gpt-6-sol（固定既定）。sol / luna → GPT-6、terra → GPT-5.6、astra → GPT-6。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と
@@ -63,6 +63,8 @@
 set -euo pipefail
 
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Policy belongs to this launcher version, not an optional hooks override.
+CODEX_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/codex_models.py"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
@@ -216,7 +218,7 @@ open_child_terminal() {
 # フラグの処理
 USE_CODEX=false
 CLAUDE_MODEL=""
-CODEX_EFFORT="xhigh"
+CODEX_EFFORT=""
 CODEX_MCP_PROFILE="inherit"
 RESOURCES=""
 RESOURCE_TTL=14400
@@ -611,11 +613,7 @@ CLAUDE_HAIKU_MODEL="claude-haiku-4-5-20251001"
 CLAUDE_FABLE_MODEL="claude-fable-5-1"
 CLAUDE_WARM_OPUS_MODEL="$CLAUDE_DEFAULT_MODEL"
 CLAUDE_WARM_SONNET_MODEL="$CLAUDE_DEFAULT_SONNET_MODEL"
-CODEX_DEFAULT_MODEL="gpt-5.6-sol"
-CODEX_TERRA_MODEL="gpt-5.6-terra"
-CODEX_LUNA_MODEL="gpt-5.6-luna"
-CODEX_ASTRA_MODEL="gpt-6-astra"
-CODEX_LEGACY_MODEL="gpt-5.5"
+# Codex candidates, aliases and effort policy live in dashboard/codex_models.py.
 
 # --- Claude モデル名の正規化 ---
 # friendly エイリアス / 略記を `claude --model` が受け付ける正式 model string に変換する。
@@ -668,48 +666,11 @@ normalize_claude_model() {
 }
 
 normalize_codex_model() {
-    local raw="${1:-}"
-    local model
-    model="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-
-    case "$model" in
-        ""|sol|gpt-5.6|"$CODEX_DEFAULT_MODEL")
-            printf '%s\n' "$CODEX_DEFAULT_MODEL" ;;
-        terra|"$CODEX_TERRA_MODEL")
-            printf '%s\n' "$CODEX_TERRA_MODEL" ;;
-        luna|"$CODEX_LUNA_MODEL")
-            printf '%s\n' "$CODEX_LUNA_MODEL" ;;
-        astra|gpt-6|"$CODEX_ASTRA_MODEL")
-            printf '%s\n' "$CODEX_ASTRA_MODEL" ;;
-        gpt-*)
-            printf '%s\n' "$model" ;;
-        *)
-            echo "Error: unknown Codex model '$raw'. Valid forms: sol / terra / luna / astra / gpt-<id>" >&2
-            return 1 ;;
-    esac
+    "${AGENTSTACK_PYTHON:-python3}" "$CODEX_MODEL_HELPER" normalize "${1:-}"
 }
 
 validate_codex_effort() {
-    local model="$1"
-    local raw_effort="${2:-xhigh}"
-    local effort
-    effort="$(printf '%s' "$raw_effort" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-
-    case "$effort" in
-        low|medium|high|xhigh|max|ultra) ;;
-        *)
-            echo "Error: unknown Codex reasoning effort '$raw_effort'. Valid values: low / medium / high / xhigh / max / ultra" >&2
-            return 1 ;;
-    esac
-    case "$model:$effort" in
-        "${CODEX_LUNA_MODEL}:ultra")
-            echo "Error: $CODEX_LUNA_MODEL does not support ultra reasoning effort" >&2
-            return 1 ;;
-        "${CODEX_LEGACY_MODEL}:max"|"${CODEX_LEGACY_MODEL}:ultra")
-            echo "Error: $CODEX_LEGACY_MODEL supports reasoning effort only through xhigh" >&2
-            return 1 ;;
-    esac
-    printf '%s\n' "$effort"
+    "${AGENTSTACK_PYTHON:-python3}" "$CODEX_MODEL_HELPER" effort "$1" "${2:-}"
 }
 
 # 子用に独立した git worktree を作って WORK_DIR を上書きするヘルパー。
@@ -1780,8 +1741,9 @@ ${TASK}"
                     [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
                 done
                 IFS="$_ifs"
+                [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
                 env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
-                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
+                    "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
         PRE_REGISTERED_SESSION_STARTED=true
@@ -2609,8 +2571,9 @@ if [[ "$USE_CODEX" == true ]]; then
                 [[ -d "$d" ]] && EXTRA_ARGS+=(--add-dir "$d")
             done
             IFS="$_ifs"
+            [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
             env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
-                "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT"
+                "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''
     CHILD_SESSION_STARTED=true

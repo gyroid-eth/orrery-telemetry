@@ -330,8 +330,9 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     assert ".codex/bin/codex_agent_bootstrap.sh" not in inner
 
 
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"])
 def test_standalone_resume_uses_current_home_without_child_lifecycle(
-    policy_env, monkeypatch
+    policy_env, monkeypatch, model
 ):
     tmp_path, project = policy_env
     runtime = tmp_path / "runtime"
@@ -392,6 +393,11 @@ def test_standalone_resume_uses_current_home_without_child_lifecycle(
         lambda args, **kwargs: launched.append(args) or {"ok": True, "adapter": "fixture"},
     )
 
+    with rollout.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"type": "turn_context", "payload": {"model": model, "effort": "high"}})+"\n")
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-other-new-agent-only")
+    monkeypatch.setattr(server.codex_models, "normalize_model", lambda *a: pytest.fail("resume must not normalize stored model IDs"))
+    original = rollout.read_bytes()
     result = server._do_resume_codex(AGENT)
 
     assert result["ok"] is True
@@ -401,6 +407,9 @@ def test_standalone_resume_uses_current_home_without_child_lifecycle(
     assert "export CODEX_HOME=" not in inner
     assert "cleanup-child-agent.sh" not in inner
     assert "discard-generated" not in inner
+    assert "--model" not in inner and "model_reasoning_effort" not in inner
+    assert f"codex resume {session_id}" in inner
+    assert rollout.read_bytes() == original
 
 
 def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch):

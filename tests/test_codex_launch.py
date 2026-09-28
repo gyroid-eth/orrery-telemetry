@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import os
 import pathlib
+import json
+import re
 import shlex
 import stat
 import subprocess
@@ -423,7 +425,7 @@ def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
         _extract(name) for name in functions
     )
     command = " ".join([function, *(shlex.quote(arg) for arg in args)])
-    return _run_bash(script + "\n" + command + "\n")
+    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home")})
 
 
 def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
@@ -443,10 +445,10 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_claude_model", "fable"): "claude-fable-5-1",
         ("normalize_claude_model", "claude-fable-5"): "claude-fable-5",
         ("normalize_claude_model", "claude-future-9"): "claude-future-9",
-        ("normalize_codex_model", ""): "gpt-5.6-sol",
-        ("normalize_codex_model", "sol"): "gpt-5.6-sol",
+        ("normalize_codex_model", ""): "gpt-6-sol",
+        ("normalize_codex_model", "sol"): "gpt-6-sol",
         ("normalize_codex_model", "terra"): "gpt-5.6-terra",
-        ("normalize_codex_model", "luna"): "gpt-5.6-luna",
+        ("normalize_codex_model", "luna"): "gpt-6-luna",
         ("normalize_codex_model", "astra"): "gpt-6-astra",
         ("normalize_codex_model", "gpt-6-astra"): "gpt-6-astra",
         ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
@@ -463,12 +465,12 @@ def test_model_specific_effort_constraints_are_enforced():
     assert accepted.stdout.strip() == "ultra"
 
     luna = _model_call("validate_codex_effort", "gpt-5.6-luna", "ultra")
-    assert luna.returncode != 0
-    assert "does not support ultra" in luna.stderr
+    assert luna.returncode == 0
+    assert luna.stdout.strip() == "ultra"
 
     legacy = _model_call("validate_codex_effort", "gpt-5.5", "max")
-    assert legacy.returncode != 0
-    assert "only through xhigh" in legacy.stderr
+    assert legacy.returncode == 0
+    assert legacy.stdout.strip() == "max"
 
     unknown = _model_call("validate_codex_effort", "gpt-5.6-sol", "extreme")
     assert unknown.returncode != 0
@@ -1088,3 +1090,34 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     )
     assert "read -r MCP_AGENT_MAIL_TOKEN" not in run_mcp
     assert "  AGENTSTACK_PYTHON\n" in run_mcp
+
+
+def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
+    text = _SPAWN.read_text(encoding="utf-8")
+    snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL"', text, re.S)
+    assert len(snippets) == 2
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        fake = root / "codex"
+        fake.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+        fake.chmod(0o755)
+        for raw, effort in [("sol", "ultra"), ("luna", "max"), ("gpt-5.6-luna", "xhigh"), ("gpt-future", "")]:
+            normalized = _model_call("normalize_codex_model", raw)
+            assert normalized.returncode == 0, normalized.stderr
+            model = normalized.stdout.strip()
+            validated = _model_call("validate_codex_effort", model, effort)
+            assert validated.returncode == 0, validated.stderr
+            for snippet in snippets:
+                result = _run_bash(snippet, {
+                    "AGENTSTACK_CODEX_BIN": str(fake),
+                    "AGENTSTACK_CODEX_MODEL": model,
+                    "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),
+                    "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
+                    "AGENTSTACK_CODEX_APPROVAL": "--ask-for-approval never",
+                    "AGENTSTACK_CODEX_NETWORK_FLAGS": "",
+                })
+                assert result.returncode == 0, result.stderr
+                argv = json.loads(result.stdout)
+                assert argv[argv.index("--model")+1] == model
+                assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
+                    ["model_reasoning_effort="+effort] if effort else [])

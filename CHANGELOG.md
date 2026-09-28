@@ -10,6 +10,12 @@
 
 ## 2026.09.27
 
+### NEW AGENT の Codex 既定を GPT-6 Sol に更新しました（#97）
+
+Codex のローカル model catalog 追従に合わせ、短縮名 `sol` とモデル無指定時の既定をどちらも `gpt-6-sol` に揃えました。以前の世代を固定して使う場合は `gpt-5.6-sol` のように正式 ID を指定してください。`AGENTSTACK_CODEX_MODELS` で許可モデルを明示している環境では、新しい既定の `gpt-6-sol` が許可リストに無ければ、これまで無指定で通っていた起動が拒否されます。
+
+ローカル cache は候補表示と無指定 effort の補助に使い、期限切れや候補情報だけを理由に明示 effort を拒否しません。launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink も読み取れるようにし、Gemini provider では `gpt-*` 名前空間を予約して provider 間のモデル名衝突を防ぎます。
+
 ### Codex の子を何体か起動すると、全員の履歴の紐付けがぶつかっていました（#95）
 
 子を登録したとき、ORRERY Mail の応答から子の番号を読み取る処理が、応答の外側にある JSON-RPC の id（通信の受付番号）を子の番号と取り違えていました。受付番号を数値で送る経路では全員が `1` になり、同じ `codex_launches/1.json` を共有して、dashboard で UNBOUND になっていました。JSON-RPC の応答では外側の id を使わず、応答の中身から子の番号を読むようにしました。外側の包みが無い応答は、これまでどおり読めます。調査と修正は kame447 さんによるものです。

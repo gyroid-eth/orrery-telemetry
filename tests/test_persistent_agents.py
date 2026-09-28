@@ -1606,13 +1606,14 @@ def test_claude_malformed_effective_user_config_blocks_exec_without_content_leak
     assert not marker.exists()
 
 
-def test_interactive_codex_gets_fresh_binding_each_run_without_parent_pair(tmp_path: Path):
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"])
+def test_interactive_codex_gets_fresh_binding_each_run_without_parent_pair(tmp_path: Path, model):
     record = tmp_path / "codex-runs.jsonl"
     fake_codex = _write_executable(
         tmp_path / "bin" / "codex",
         "#!/usr/bin/env python3\n"
-        "import json, os\n"
-        "value = {'binding': os.environ.get('AGENTSTACK_CODEX_LAUNCH_BINDING'), "
+        "import json, os, sys\n"
+        "value = {'argv': sys.argv[1:], 'binding': os.environ.get('AGENTSTACK_CODEX_LAUNCH_BINDING'), "
         "'launch_id': os.environ.get('AGENTSTACK_CODEX_LAUNCH_ID'), "
         "'parent': os.environ.get('PARENT_AGENT')}\n"
         f"with open({str(record)!r}, 'a', encoding='utf-8') as fh: fh.write(json.dumps(value) + '\\n')\n",
@@ -1621,7 +1622,7 @@ def test_interactive_codex_gets_fresh_binding_each_run_without_parent_pair(tmp_p
         tmp_path,
         interaction="interactive",
         provider="codex",
-        command=[str(fake_codex)],
+        command=[str(fake_codex), "--model", model, "-c", "model_reasoning_effort=high"],
     )
     env.update(
         {
@@ -1643,6 +1644,7 @@ def test_interactive_codex_gets_fresh_binding_each_run_without_parent_pair(tmp_p
 
     launches = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
     assert len(launches) == 2
+    assert all(entry["argv"] == ["--model", model, "-c", "model_reasoning_effort=high"] for entry in launches)
     assert launches[0]["launch_id"] != launches[1]["launch_id"]
     assert {entry["binding"] for entry in launches} == {
         str(runtime / "codex_launches" / "41.json")

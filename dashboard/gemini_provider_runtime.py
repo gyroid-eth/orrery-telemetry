@@ -79,6 +79,11 @@ def _gemini_models(base: Any) -> tuple[list[str], str]:
     for model in models:
         if _MODEL_RE.fullmatch(model) is None:
             return [], f"invalid model id for provider gemini: {model!r}"
+        if model.startswith("gpt-"):
+            return [], (
+                "model allow-list for provider gemini collides with "
+                f"provider codex: {model}"
+            )
         for provider, ids in native:
             if model in ids or (provider == "claude" and model.startswith("claude-")):
                 # A shared id would make the model string ambiguous for every

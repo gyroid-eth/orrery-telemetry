@@ -308,7 +308,7 @@ def test_native_providers_keep_canonical_validation():
         }
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "codex",
                                 "model": "gemini-3.8-flash-high"})["error"] == (
-            "model not allowed for provider codex: gemini-3.8-flash-high")
+            "invalid Codex model ID; use sol / luna / astra / terra / gpt-<id>")
     assert canonical_server.do_spawn({"parent": "P", "task": "w", "provider": "gemini"}) == {
         "ok": False, "error": "provider not allowed: gemini",
     }
@@ -334,6 +334,22 @@ def test_gemini_model_collision_fails_closed(monkeypatch, tmp_path, override, pr
         "ok": False,
         "error": "provider gemini unavailable: model allow-list for provider gemini "
                  f"collides with provider {provider}: {colliding}",
+    }
+
+
+def test_gemini_rejects_future_gpt_namespace_even_when_allowlisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "gpt-future-not-in-codex-catalog")
+    ids = [item["id"] for item in server.spawn_names_payload()["providers"]]
+    assert "gemini" not in ids
+    result = server.do_spawn({
+        "parent": "Parent", "task": "work", "dir": str(tmp_path),
+        "provider": "gemini", "model": "gpt-future-not-in-codex-catalog",
+        "effort": "high", "resources": "src/**",
+    })
+    assert result == {
+        "ok": False,
+        "error": "provider gemini unavailable: model allow-list for provider gemini "
+                 "collides with provider codex: gpt-future-not-in-codex-catalog",
     }
 
 
@@ -972,7 +988,7 @@ def test_rendered_dashboard_keeps_server_language_defaults(monkeypatch):
 _UI_FUNCTIONS = (
     "normalizeSpawnProviders", "spawnModelTone", "renderSpawnProviders",
     "selectSpawnProvider", "renderSpawnModels", "selectSpawnModel",
-    "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
+    "spawnModelEfforts", "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
     "updateSpawnButton", "setSpawnDraftStatus", "setSpawnStat", "buildSpawnPayload",
 )
 
@@ -1488,3 +1504,9 @@ process.stdout.write(JSON.stringify(out));
     assert cases["fixedDefault"]["payload"]["model"] == "claude-opus-5-5"
 
     assert cases["submitStatus"] == "AGENTSTACK_CLAUDE_MODELS contains invalid model IDs"
+
+
+@pytest.fixture(autouse=True)
+def isolate_codex_discovery_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)

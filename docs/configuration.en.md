@@ -40,7 +40,7 @@ Its file mode is `0600`. Service environment is written into the launchd plist /
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:`-separated spawn-directory presets |
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:`-separated roots allowed for directory typeahead |
 | `AGENTSTACK_CLAUDE_MODELS` | unset | `,`-separated explicit dashboard Claude model override |
-| `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,`-separated dashboard Codex model allowlist |
+| `AGENTSTACK_CODEX_MODELS` | `unset` | `,`-separated dashboard Codex model allowlist |
 
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
 
@@ -172,9 +172,9 @@ If you routinely watch children from the dashboard, set `AGENTSTACK_AUTO_OPEN_CH
 
 To stop automatic opening, pass `AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` to the installer. It persists the setting in `env.sh`, the Dashboard service and install-state, and preserves it on reinstall. Older installs without the setting get `1`, so their behavior does not change; an explicit `0` / `1` overrides the saved value. `AGENTSTACK_FOCUS_CHILD=1` applies only while automatic opening is enabled. For direct shell launches, export the same variable in the launching shell. The setting is handed to newly spawned child sessions and resumed Codex sessions, so their children use the same policy. This does not add OS-terminal automatic opening to the separate Gemini launcher.
 
-The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5-5` and `sonnet` means `claude-sonnet-5`; for Codex, omitted / `sol` means `gpt-5.6-sol`. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
+The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` means `claude-opus-5-5` and `sonnet` means `claude-sonnet-5`; for Codex, omission and explicit `sol` both mean `gpt-6-sol`. Use a formal ID such as `gpt-5.6-sol` to pin the prior generation. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
 
-Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh`. The spawner rejects `ultra` for `gpt-5.6-luna`, and `max` / `ultra` for legacy `gpt-5.5`, because those combinations are unsupported. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
+Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh` when supported, the model default otherwise, or the CLI default when metadata is unavailable. The spawner rejects `ultra` for `gpt-5.6-luna` / `gpt-6-luna`, and `max` / `ultra` for legacy `gpt-5.5`, because those combinations are unsupported. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
 
 After a Codex child completes normally, its remote identity remains retired while private state and the canonical owner credential are retained until expiry. Cleanup always removes the isolated home, proxy runtime, and old MCP configuration; resume rebuilds them from the current source Codex home plus the saved `codex_mcp_profile`. Maintenance removes expired material while the dashboard is running. `agentstack-doctor` only reports expired material awaiting purge and never deletes it. Use `agentstack-purge-child-resume <agent>` for an early explicit purge, or `agentstack-purge-child-resume --expired` for all expired entries. Neither command deletes transcript history or bound receipts.
 
@@ -278,13 +278,26 @@ Discovery does not prove account authorization. Orrery passes the selected full 
 
 ## Codex model catalog
 
+Without an override, bundled candidates are augmented from the local Codex CLI catalog at `CODEX_HOME/models_cache.json`, or `~/.codex/models_cache.json` when unset. Dashboard and child launcher share ID normalization and effort metadata in `dashboard/codex_models.py`.
+
 ```bash
-AGENTSTACK_CODEX_MODELS="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna" ./scripts/install.sh
+# Set this only to restrict new launches to these exact formal IDs.
+AGENTSTACK_CODEX_MODELS="gpt-6-sol,gpt-6-luna" ./scripts/install.sh
 ```
 
-Pass it to the installer for persistence; a shell `export` does not reach the service.
+An explicit override is a strict allowlist with precedence over cache discovery. Empty entries, surrounding whitespace and duplicates are removed. Invalid IDs keep the Codex tab visible with a configuration error and block launch; they never silently select another provider or fall back to bundled candidates. Persistence uses the existing installer path; shell exports do not reach a running service.
 
-Empty entries and surrounding whitespace are removed. When unspecified, the four models above (`gpt-5.6-sol` / `gpt-6-astra` / `gpt-5.6-terra` / `gpt-5.6-luna`) are used and the first, `gpt-5.6-sol`, is the default. Reasoning effort is `low / medium / high / xhigh / max / ultra` (max / ultra: `gpt-6-astra` only), with default `xhigh`. Dashboard spawn rejects a Codex model / effort outside the allowlist.
+**The omitted default stays fixed at `gpt-6-sol`**, independently of cache or allowlist order. To keep the previous generation, specify the formal ID such as `gpt-5.6-sol`. If the allowlist excludes it, the UI requires an explicit model selection and the API rejects an omitted model. Explicit friendly names are separately mapped: `sol` → `gpt-6-sol`, `luna` → `gpt-6-luna`, `astra` → `gpt-6-astra`, `terra` → `gpt-5.6-terra`. Use a formal ID to pin a generation. Formal `gpt-*` IDs, including `gpt-6` and `gpt-5.6`, are never rewritten as aliases.
+
+The reader uses the observed `fetched_at` timestamp and `models[].slug`, `visibility`, `supported_reasoning_levels[].effort`, and `default_reasoning_level` schema. Its 300-second lifetime matches Codex CLI 0.154.0. Reads accept regular files or the canonical `models_cache.json` symlink that the launcher creates in a child `CODEX_HOME`, and remain bounded to 2 MiB, 256 models and 128-character IDs; hidden models are not added. Missing, corrupt, unsupported, empty or expired caches fall back to the six bundled candidates. Conflicting duplicate effort metadata also invalidates the snapshot.
+
+Bundled candidates are `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-sol`, and `gpt-6-luna`. Cache disappearance alone never prohibits a formal ID's direct launch. Membership is restricted only by an explicit allowlist. Discovery reads no credentials, API keys, tokens or Keychain entries and runs no CLI or network requests. Cache account identity and `client_version` are not compared to current authentication or executables, so a candidate is not proof of account access. Codex's own refresh and authorization behavior is unchanged.
+
+The UI uses per-model effort metadata for candidate display and omitted-effort defaults. Fresh cache metadata takes precedence, and IDs without metadata receive no invented override. An explicitly requested known effort is not rejected merely because cache metadata is stale or narrower; it is passed through to Codex CLI for the final compatibility decision.
+
+Resume passes the original session ID to Codex without overriding the model using NEW AGENT defaults, cache order or aliases. Persistent restart replays the saved command/config. Installing into alternate profiles or persisting `CODEX_HOME` in service configuration is outside this feature's scope.
+
+Verified implementation: [Codex CLI 0.154.0 models manager](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/manager.rs) and [file cache](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/cache.rs). The CLI fetches and stores the model endpoint response and renews freshness on ETag checks. Orrery only reads the result.
 
 ## Portrait overlay
 

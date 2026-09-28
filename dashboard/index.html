@@ -37709,6 +37709,8 @@ function normalizeSpawnProviders(catalog){
       !Array.isArray(rawCapabilities))?rawCapabilities:{};
     return {id,label:String(provider&&provider.label||id).trim(),
       models,defaultModel,efforts,
+      modelEfforts:provider&&provider.model_efforts||null,
+      modelEffortDefaults:provider&&provider.model_effort_defaults||{},
       modelError:String(provider&&provider.model_error||'').trim(),
       overflowModels:(Array.isArray(provider&&provider.overflow_models)
         ? provider.overflow_models:[]).map(value=>String(value||'').trim())
@@ -37722,6 +37724,7 @@ function normalizeSpawnProviders(catalog){
 /* provider-capabilities:start */
 let spmWorktreeForced=false,spmWorktreeChoice=false;
 let spmProviderRequirementStatus='';
+let spmEffortExplicit=false;
 function spawnSelectedProviderCapabilities(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
   return provider&&provider.capabilities||{};
@@ -37832,7 +37835,7 @@ const SPM_MODEL_TONES=Object.freeze({
 });
 const SPM_EFFORT_HINTS=Object.freeze({
   low:'routine',medium:'standard',high:'complex',xhigh:'hardest · default',
-  max:'astra only · beyond xhigh',ultra:'astra only · maximum'
+  max:'beyond xhigh',ultra:'maximum'
 });
 
 function spawnModelTone(providerId,modelId){
@@ -37866,6 +37869,7 @@ function selectSpawnProvider(providerId){
   spmSelectedProvider=provider?provider.id:'';
   spmSelectedModel='';
   spmSelectedEffort='';
+  spmEffortExplicit=false;
   applySpawnProviderCapabilities(provider);
   SPM('spm-providers').querySelectorAll('.spm-provider-tab').forEach(btn=>{
     const on=btn.dataset.provider===spmSelectedProvider;
@@ -37880,7 +37884,7 @@ function renderSpawnModels(provider){
   const root=SPM('spm-models');
   const models=provider&&provider.modelError?[]:spawnProviderDisplayModels(provider);
   const fallback=models.some(model=>model.id===(provider&&provider.defaultModel))
-    ? provider.defaultModel:(provider&&provider.id==='claude'?'':((models[0]||{}).id||''));
+    ? provider.defaultModel:(provider&&['claude','codex'].includes(provider.id)?'':((models[0]||{}).id||''));
   // overflow_models (the CLI picker's "overflow" section or the bundled table)
   // sit behind a "more models" fold so the main models are what the eye lands
   // on. The fold opens itself when the selected model is one of them.
@@ -37909,7 +37913,6 @@ function renderSpawnModels(provider){
     btn.onclick=()=>selectSpawnModel(btn.dataset.model);
   });
   selectSpawnModel(fallback);
-  renderSpawnEfforts(provider);
 }
 
 function selectSpawnModel(model){
@@ -37923,15 +37926,23 @@ function selectSpawnModel(model){
     const fold=on&&btn.closest&&btn.closest('.spm-models-overflow');
     if(fold)fold.open=true;
   });
-  renderSpawnEngineNote();
-  updateSpawnButton();
+  const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  renderSpawnEfforts(provider);
+}
+
+function spawnModelEfforts(provider){
+  if(provider&&provider.modelEfforts){
+    const values=provider.modelEfforts[spmSelectedModel];
+    return Array.isArray(values)?values.filter(value=>typeof value==='string'):[];
+  }
+  return provider&&Array.isArray(provider.efforts)?provider.efforts:[];
 }
 
 function renderSpawnEfforts(provider){
   const row=SPM('spm-effort-row');
   const root=SPM('spm-efforts');
   const hint=SPM('spm-effort-hint');
-  const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
+  const efforts=spawnModelEfforts(provider);
   row.hidden=!efforts.length;
   root.innerHTML=efforts.map(effort=>
     `<button type="button" class="spm-chip spm-effort-chip" `+
@@ -37945,16 +37956,20 @@ function renderSpawnEfforts(provider){
     btn.onclick=()=>selectSpawnEffort(btn.dataset.effort);
   });
   const effortRequired=!!(provider&&provider.capabilities&&provider.capabilities.effort_required);
-  const fallback=effortRequired?'':(
-    efforts.includes(provider&&provider.defaultEffort)
-      ?provider.defaultEffort:(efforts[0]||''));
-  selectSpawnEffort(fallback);
+  const defaultEffort=provider&&provider.modelEfforts
+    ?provider.modelEffortDefaults[spmSelectedModel]:provider&&provider.defaultEffort;
+  const preserve=!!(provider&&provider.modelEfforts&&spmEffortExplicit&&
+    efforts.includes(spmSelectedEffort));
+  const fallback=effortRequired?'':(preserve?spmSelectedEffort:(
+    efforts.includes(defaultEffort)?defaultEffort:(efforts[0]||'')));
+  selectSpawnEffort(fallback,preserve);
 }
 
-function selectSpawnEffort(effort){
+function selectSpawnEffort(effort,explicit=true){
   const valid=[...SPM('spm-efforts').querySelectorAll('.spm-effort-chip')]
     .some(btn=>btn.dataset.effort===effort);
   spmSelectedEffort=valid?effort:'';
+  spmEffortExplicit=valid&&explicit;
   SPM('spm-efforts').querySelectorAll('.spm-effort-chip').forEach(btn=>{
     const on=btn.dataset.effort===spmSelectedEffort;
     btn.classList.toggle('on',on);
@@ -38168,7 +38183,7 @@ async function submitSpawn(){
   const provider=spmProviders.find(item=>item.id===payload.provider);
   if(provider&&provider.modelError){setSpawnStat(provider.modelError,'err');return;}
   if(!payload.model){setSpawnStat('model is required','err');return;}
-  if(provider&&provider.efforts.length&&!payload.effort){
+  if(spawnModelEfforts(provider).length&&!payload.effort){
     setSpawnStat('effort is required for this provider','err');return;
   }
   spmBusy=true;
