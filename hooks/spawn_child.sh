@@ -652,7 +652,7 @@ normalize_claude_model() {
             printf '%s\n' "$CLAUDE_LEGACY_SONNET_1M_MODEL" ;;
         haiku|claude-haiku-4-5|"$CLAUDE_HAIKU_MODEL")
             printf '%s\n' "$CLAUDE_HAIKU_MODEL" ;;
-        fable|claude-fable-5|"$CLAUDE_FABLE_MODEL")
+        fable|"$CLAUDE_FABLE_MODEL")
             printf '%s\n' "$CLAUDE_FABLE_MODEL" ;;
         *)
             if [[ "$m" == claude-* ]]; then

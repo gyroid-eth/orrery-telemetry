@@ -54,6 +54,7 @@ CODEX_BIN_SETTING="${AGENTSTACK_CODEX_BIN:-}"
 # into env.sh and the service definition, inherited on re-install.
 PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
 CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
+CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
@@ -309,9 +310,15 @@ fi
 if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
   CUSTOM_PORTRAITS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CUSTOM_PORTRAITS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "${AGENTSTACK_CLAUDE_MODELS+x}" ]]; then
+  CLAUDE_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CLAUDE_MODELS "$INSTALL_DIR/env.sh")"
+fi
 if [[ -z "$CODEX_MODELS_SETTING" ]]; then
   CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")"
 fi
+
+# Pass the new settings as data, never interpolate them into Python source.
+export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
 
 HOOKS_DIR="$INSTALL_DIR/hooks"
 SKILLS_DIR="$INSTALL_DIR/skills"
@@ -2028,6 +2035,7 @@ write_env_file() {
   fi
   umask 077
   "$PYTHON_BIN" - "$ENV_FILE" <<PY
+import os
 import pathlib
 import shlex
 import sys
@@ -2064,6 +2072,7 @@ values = {
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
+    "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
@@ -3083,6 +3092,7 @@ render_launchd_plist() {
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$HOME/Library/LaunchAgents"
     "$PYTHON_BIN" - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" <<PY
+import os
 import pathlib
 import sys
 import xml.sax.saxutils
@@ -3117,6 +3127,7 @@ repl = {
     "__CODEX_BIN__": "$CODEX_BIN_SETTING",
     "__PORTRAITS_DIR__": "$PORTRAITS_DIR_SETTING",
     "__CUSTOM_PORTRAITS__": "$CUSTOM_PORTRAITS_SETTING",
+    "__CLAUDE_MODELS__": xml.sax.saxutils.escape(os.environ.get("AGENTSTACK_CLAUDE_MODELS", "")),
     "__CODEX_MODELS__": "$CODEX_MODELS_SETTING",
     "__HOOKS_DIR__": "$HOOKS_DIR",
     "__RUNTIME_DIR__": "$RUNTIME_DIR",
@@ -3155,6 +3166,7 @@ render_systemd_unit() {
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
     "$PYTHON_BIN" - "$unit" <<PY
+import os
 import pathlib
 import sys
 
@@ -3187,6 +3199,7 @@ env = {
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
+    "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
@@ -3591,6 +3604,7 @@ manifest = {
         "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
         "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
+        "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",

@@ -39,6 +39,7 @@ Its file mode is `0600`. Service environment is written into the launchd plist /
 | `AGENTSTACK_SPAWN_SCRIPT` | `$AGENTSTACK_HOOKS_DIR/spawn_child.sh` | NEW AGENT launcher |
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:`-separated spawn-directory presets |
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:`-separated roots allowed for directory typeahead |
+| `AGENTSTACK_CLAUDE_MODELS` | unset | `,`-separated explicit dashboard Claude model override |
 | `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,`-separated dashboard Codex model allowlist |
 
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
@@ -252,6 +253,28 @@ Running the installer with environment variables `AGENTSTACK_SPAWN_DIRS` / `AGEN
 - `SPAWN_ROOTS` means “scope visible through typeahead.” `GET /api/fs/dirs` returns only child directories inside these roots. The default sole root is `$HOME`. The server validates the boundary with `realpath` and rejects `..`, paths outside roots, hidden directories, and symlinks outside roots
 
 `SPAWN_ROOTS` is not derived automatically from `SPAWN_DIRS`. A chip outside the roots can be entered as an exact path, but suggestions below it are not shown. In most cases the default `$HOME` contains the chips, so setting only `SPAWN_DIRS` is sufficient.
+
+## Claude model catalog
+
+`NEW AGENT` uses an explicit `AGENTSTACK_CLAUDE_MODELS` allow-list when configured. Otherwise it keeps the bundled candidates and adds models from Claude Code's fresh local catalog, without reordering or removing the bundled entries. Missing, expired, unknown-schema or malformed caches leave the bundled candidates intact.
+
+Discovery reads fresh v2 / `surface=cc` entries under `CLAUDE_CONFIG_DIR/cache/model-catalog`, or `~/.claude/cache/model-catalog/` when that variable is unset or empty. It selects the valid file with the newest fetch time without merging account files. It does not verify whether that cache belongs to the currently logged-in account. `CLAUDE_CONFIG_DIR` is only a read-only discovery input here: this feature does not persist it, change installer hook/skill locations, or switch the profile used by children. Supporting a different installed Claude profile is a separate concern.
+
+This is an internal format observed in Claude Code 2.1.283, not a stable public API. Reads are bounded to 64 directory entries, 1 MiB per file and 128 models per source. Discovery never opens credential files, queries Keychain or the network, or scrapes running panes.
+
+To restrict candidates, pass an override to the installer; a shell export alone does not reach a running service.
+
+```bash
+AGENTSTACK_CLAUDE_MODELS="claude-sonnet-5,claude-opus-5-5" ./scripts/install.sh
+```
+
+Duplicates, empty entries and surrounding whitespace are removed. Invalid explicit IDs disable Claude launch rather than silently broadening the allow-list. NEW AGENT retains the Claude tab and shows a configuration error; Codex and Gemini remain selectable. An omitted value on reinstall preserves the previous model setting; explicit `AGENTSTACK_CLAUDE_MODELS=""` restores discovery.
+
+The default remains `claude-opus-5-5`, independently of catalog order. If an explicit override excludes that ID, the picker requires a model selection rather than choosing the first entry. Omitting the model in an API request still requests the fixed default, which that override rejects. An explicitly selected permitted ID is passed unchanged.
+
+Without an explicit override, launch validation accepts well-formed formal Claude IDs independently of cache membership or expiry. Local discovery only adds picker choices; it is not launch authorization. An override remains a strict allow-list, and malformed or other-provider IDs are rejected. A displayed candidate expiring before launch does not block that ID or substitute another model.
+
+Discovery does not prove account authorization. Orrery passes the selected full ID to the CLI. The `fable` shorthand still tracks the current version, while explicit `claude-fable-5` is preserved. Claude Code's own authorization and automatic fallback behavior are unchanged; a candidate or a ready tmux session is not proof of an authorized API request. See [Claude Code's model configuration](https://code.claude.com/docs/en/model-config) for the CLI's own policy.
 
 ## Codex model catalog
 

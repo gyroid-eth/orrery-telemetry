@@ -746,6 +746,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_WORKTREE_ROOT": str(worktree_root),
         "AGENTSTACK_PORTRAITS_DIR": "~/faces",
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
+        "AGENTSTACK_CLAUDE_MODELS": "claude-sonnet-5,claude-opus-5-5",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
         "AGENTSTACK_CODEX_BIN": str(codex_bin),
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": str(codex_child_overlay),
@@ -789,6 +790,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     # even when the canonical and first legacy migration targets already exist.
     _stop_fake_dashboard(env)
     legacy_log.write_text("second legacy dashboard crash\n", encoding="utf-8")
+    # Reinstall with no new value must preserve the model setting.
+    env.pop("AGENTSTACK_CLAUDE_MODELS")
     subprocess.run(
         install_command,
         cwd=ROOT,
@@ -887,6 +890,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert f'Environment="AGENTSTACK_SPAWN_ROOTS={project_dir}"' in systemd_unit
     assert f'Environment="AGENTSTACK_WORKTREE_ROOT={worktree_root}"' in systemd_unit
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
+    assert 'Environment="AGENTSTACK_CLAUDE_MODELS=claude-sonnet-5,claude-opus-5-5"' in systemd_unit
     assert 'Environment="AGENTSTACK_CODEX_MODELS=gpt-5.6-sol,gpt-5.6-luna"' in systemd_unit
     assert (
         f'Environment="AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"'
@@ -907,10 +911,12 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     )
     assert "export AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=45" in generated_env
     assert "export AGENTSTACK_AUTO_OPEN_CHILD=1" in generated_env
+    assert "export AGENTSTACK_CLAUDE_MODELS=claude-sonnet-5,claude-opus-5-5" in generated_env
     assert manifest["env"]["AGENTSTACK_SPAWN_DIRS"] == f"~/code:{project_dir}"
     assert manifest["env"]["AGENTSTACK_WORKTREE_ROOT"] == str(worktree_root)
     assert "export AGENTSTACK_PORTRAITS_DIR='~/faces'" in generated_env
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
+    assert manifest["env"]["AGENTSTACK_CLAUDE_MODELS"] == "claude-sonnet-5,claude-opus-5-5"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
@@ -959,6 +965,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     ]
     normalized_env["AGENTSTACK_PORTRAITS_DIR"] = ""
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
+    normalized_env["AGENTSTACK_CLAUDE_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
     normalized_env["AGENTSTACK_AUTO_OPEN_CHILD"] = sample["env"]["AGENTSTACK_AUTO_OPEN_CHILD"]

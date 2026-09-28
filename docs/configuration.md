@@ -39,6 +39,7 @@
 | `AGENTSTACK_SPAWN_SCRIPT` | `$AGENTSTACK_HOOKS_DIR/spawn_child.sh` | NEW AGENT launcher |
 | `AGENTSTACK_SPAWN_DIRS` | `~` | `:` 区切りの spawn directory preset |
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:` 区切りの directory typeahead 許可 root |
+| `AGENTSTACK_CLAUDE_MODELS` | 未設定 | `,` 区切りの dashboard Claude model 明示 override |
 | `AGENTSTACK_CODEX_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna` | `,` 区切りの dashboard Codex model allow-list |
 
 path 系は `~` を展開します。空文字は未設定として扱います。integer の `AGENTSTACK_PORT` が不正なら `8770` に戻ります。
@@ -276,6 +277,28 @@ installer に渡して `env.sh`・service 定義・`install-state.json` に永�
 - `SPAWN_ROOTS` は「typeahead で閲覧できる範囲」。`GET /api/fs/dirs` はこの root 内の child directory だけを返します。未設定時は `$HOME` が唯一の root です。server は `realpath` で境界を検証し、`..`、root 外、hidden directory、root 外への symlink を拒否します
 
 `SPAWN_ROOTS` は `SPAWN_DIRS` から自動導出しません。chip が root 外を指す構成では exact path として入力できますが、その配下の suggestion は表示されません。多くの場合は既定の `$HOME` が chip を含むので、`SPAWN_DIRS` だけ指定すれば足ります。
+
+## Claude model catalog
+
+`NEW AGENT` の Claude 候補は、`AGENTSTACK_CLAUDE_MODELS` が明示されていればその許可リストを使います。未指定なら同梱候補を残し、Claude Code の期限内の local catalog から追加候補を取得します。同梱候補の削除や並べ替えはしません。cache が無い・期限切れ・未知の形式・破損の場合は同梱候補だけを使います。
+
+探索先は `CLAUDE_CONFIG_DIR/cache/model-catalog`、未設定・空なら `~/.claude/cache/model-catalog/` です。期限内の v2 / `surface=cc` cache のうち、取得時刻が最新の有効な1ファイルを使い、複数アカウントのファイルは合算しません。現在のログイン先と cache のアカウントが一致するかは検証しません。ここでの `CLAUDE_CONFIG_DIR` は読み取り専用の探索入力に限ります。この機能はその値を永続化せず、installer の hook・skill の配置先や子が使う profile も切り替えません。別の Claude profile へのインストール対応は別の責務です。
+
+これは Claude Code 2.1.283 で観測した内部形式であり、安定した公開 API ではありません。読み取り上限は directory 内64件、1ファイル1 MiB、1取得元128モデルです。credential、Keychain、network、実行中 pane は探索しません。
+
+候補を制限する場合は installer へ明示指定します。shell で export するだけでは稼働中の service に届きません。
+
+```bash
+AGENTSTACK_CLAUDE_MODELS="claude-sonnet-5,claude-opus-5-5" ./scripts/install.sh
+```
+
+重複、空要素、前後の空白は除去します。不正な明示IDでは許可リストを勝手に広げず、Claude の起動を止めます。NEW AGENT は Claude のタブを残して設定エラーを表示し、Codex と Gemini は選択できます。再インストール時の省略は以前のモデル設定を保持し、明示的な `AGENTSTACK_CLAUDE_MODELS=""` は自動探索へ戻します。
+
+既定モデルは一覧の並び順に関係なく `claude-opus-5-5` です。明示した許可リストにこのIDがない場合、画面では先頭候補を勝手に選ばず、利用者のモデル選択を求めます。APIでモデルを省略すると固定の既定モデルを要求するため、その許可リストでは拒否されます。許可されたIDを明示して選んだ場合は、そのまま起動へ渡します。
+
+明示した許可リストがない場合、正しい形式の Claude 正式IDは cache 内の有無や期限とは独立して起動へ渡せます。local catalog は画面の候補を増やすためだけに使い、起動権限の判定には使いません。明示指定は引き続き厳格な許可リストで、不正形式や他providerのIDは拒否します。表示後に cache が失効しても、選択したIDを拒否したり別モデルへ置き換えたりしません。
+
+候補の発見はアカウントの利用権限を保証しません。Orrery は選択された正式IDを CLI へ渡します。短縮名 `fable` は現行版を指す既存動作を保ち、明示した `claude-fable-5` は維持します。Claude Code 自身の認可・自動fallback方針は変更しません。候補表示や tmux の ready 状態だけでは実APIの利用可否は保証できません。CLI 自身の方針は [Claude Code のモデル設定](https://code.claude.com/docs/en/model-config) を参照してください。
 
 ## Codex model catalog
 

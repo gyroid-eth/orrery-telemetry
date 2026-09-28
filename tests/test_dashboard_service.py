@@ -243,6 +243,8 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert '"__CODEX_BIN__": "$CODEX_BIN_SETTING"' in installer_text
     assert plist["EnvironmentVariables"]["AGENTSTACK_PORTRAITS_DIR"] == "__PORTRAITS_DIR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CUSTOM_PORTRAITS"] == "__CUSTOM_PORTRAITS__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_CLAUDE_MODELS"] == "__CLAUDE_MODELS__"
+    assert "CLAUDE_CONFIG_DIR" not in plist["EnvironmentVariables"]
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_MODELS"] == "__CODEX_MODELS__"
 
     installer = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")

@@ -57,6 +57,15 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
 # to an optional provider payload.  Acquisition lives in dashboard/quotas/.
 QUOTA_SERVICE = _build_quota_service()
 
+try:
+    from dashboard.claude_models import (
+        is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
+    )
+except ModuleNotFoundError:  # direct script execution
+    from claude_models import (
+        is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
+    )
+
 
 def _same_origin_request(handler) -> bool:
     origin = (handler.headers.get("Origin") or "").strip()
@@ -5112,11 +5121,10 @@ SPAWN_SCRIPT = _env_path(
     os.path.join(HOOKS_DIR, "spawn_child.sh"),
 )
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
-# UI radio と必ず一致させる。program はモデル文字列から決定。
-# Matches hooks/spawn_child.sh CLAUDE_DEFAULT_MODEL so NEW AGENT and the CLI
-# launcher start the same Claude model when none is chosen.
+# Claude Code の local catalog が使えない場合の bundled fallback。
+# _SPAWN_MODELS は既存 extension との互換性のため mapping のまま保つ。
+# Matches the CLI launcher default; discovery must not change it.
 _CLAUDE_SPAWN_DEFAULT_MODEL = "claude-opus-5-5"
-
 _SPAWN_MODELS = {
     "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
     "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
@@ -5135,6 +5143,20 @@ _CODEX_DEFAULT_MODELS = (
 # launcher still rejects combinations a model cannot take (luna:ultra, 5.5:max).
 _CODEX_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "agentstack-scientists.sh")
+
+
+def _claude_catalog():
+    return _resolve_claude_catalog(tuple(_SPAWN_MODELS))
+
+
+def _claude_models() -> list[str]:
+    return list(_claude_catalog().models)
+
+
+def _claude_default_model(models: list[str]) -> str:
+    if _CLAUDE_SPAWN_DEFAULT_MODEL in models:
+        return _CLAUDE_SPAWN_DEFAULT_MODEL
+    return ""  # A restrictive override requires an explicit choice, not a new default.
 
 
 def _codex_models() -> list[str]:
@@ -5368,17 +5390,22 @@ def spawn_names_payload() -> dict:
     raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
     dirs = [value for value in raw_dirs if value] or ["~"]
+    claude_catalog = _claude_catalog()
+    claude_models = list(claude_catalog.models)
+    claude_default = _claude_default_model(claude_models)
+    codex_models = _codex_models()
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
         "naming": "adjective-scientist",
         "dirs": dirs,
-        "models": list(_SPAWN_MODELS),
-        "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL,
+        "models": list(claude_models),
+        "default_model": claude_default,
         "providers": [
-            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(_SPAWN_MODELS), "default_model": _CLAUDE_SPAWN_DEFAULT_MODEL, "efforts": None},
-            {"id": "codex", "label": "Codex", "program": "codex-cli", "models": _codex_models(), "default_model": _codex_models()[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
+            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(claude_models), "default_model": claude_default, "efforts": None,
+             "model_source": claude_catalog.source, "model_error": claude_catalog.error},
+            {"id": "codex", "label": "Codex", "program": "codex-cli", "models": codex_models, "default_model": codex_models[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
         ],
     }
 
@@ -5830,16 +5857,25 @@ def do_spawn(payload: dict) -> dict:
     if error:
         return error
     provider = (payload.get("provider") or "claude").strip().lower()
-    model = (payload.get("model") or (_CLAUDE_SPAWN_DEFAULT_MODEL if provider == "claude" else _codex_models()[0])).strip()
+    claude_catalog = _claude_catalog() if provider == "claude" else None
+    if claude_catalog and claude_catalog.error:
+        return {"ok": False, "error": claude_catalog.error}
+    default_model = (
+        _CLAUDE_SPAWN_DEFAULT_MODEL
+        if provider == "claude"
+        else _codex_models()[0]
+    )
+    model = (payload.get("model") or default_model).strip()
     effort = (payload.get("effort") or "").strip().lower()
     if provider == "claude":
-        if model not in _SPAWN_MODELS:
+        # Discovery only adds choices; only an explicit override restricts IDs.
+        if (not _is_claude_model_id(model)
+                or (claude_catalog.source == "override" and model not in claude_catalog.models)):
             return {"ok": False, "error": f"model not allowed for provider claude: {model}"}
         if effort:
             return {"ok": False, "error": "effort not supported for provider: claude"}
-        program, model_str = _SPAWN_MODELS[model]
         spec = SpawnLaunchSpec(
-            provider="claude", program=program, model=model_str,
+            provider="claude", program="claude-code", model=model,
             script=SPAWN_SCRIPT,
         )
     elif provider == "codex":

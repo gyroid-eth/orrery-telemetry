@@ -815,6 +815,12 @@ def test_public_payload_cannot_spoof_launch_identity(gemini_env, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Concurrency
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _isolated_claude_catalog(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-profile"))
+    monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
+
+
 def test_concurrent_gemini_and_native_spawns_do_not_cross_contaminate(gemini_env):
     launches = gemini_env.launches
     release = launches.block(str(gemini_env.adapter))
@@ -1423,3 +1429,62 @@ def test_gemini_unqualified_custom_model_is_preserved(gemini_env, monkeypatch):
     result = server.do_spawn(_gemini_payload(gemini_env, model="custom-model", effort="low"))
     assert result["ok"] is True
     assert result["model"] == "custom-model"
+
+
+def test_claude_configuration_error_and_missing_default_are_visible_and_block_launch():
+    """Exercise the actual modal functions rather than only matching source text."""
+    rendered = (ROOT / "dashboard/index.html").read_text()
+    script = _extract_ui_script(rendered)
+    submit = re.search(r"async function submitSpawn\(\)\{.*?\n\}", rendered, re.DOTALL)
+    assert submit
+    script += "\n" + submit.group(0)
+    harness = _UI_HARNESS.split('const out={};', 1)[0]
+    catalog = {"providers": [
+        {"id": "claude", "label": "Claude", "models": [], "default_model": "",
+         "model_error": "AGENTSTACK_CLAUDE_MODELS contains invalid model IDs"},
+        {"id": "codex", "label": "Codex", "models": ["gpt-test-9"], "default_model": "gpt-test-9"},
+    ]}
+    scenarios = r'''
+const out={};
+renderSpawnProviders(normalizeSpawnProviders(CATALOG));
+out.invalid={...state(),tabs:spmProviders.map(p=>p.id),html:SPM('spm-models').innerHTML};
+selectSpawnProvider('codex');out.codex=state();
+selectSpawnProvider('claude');out.invalidAgain=state();
+CATALOG.providers[0]={id:'claude',label:'Claude',models:['claude-sonnet-5','claude-future-9'],default_model:''};
+renderSpawnProviders(normalizeSpawnProviders(CATALOG));
+out.noDefault=state();
+selectSpawnModel('claude-future-9');out.chosen=state();
+CATALOG.providers[0].models.reverse();
+renderSpawnProviders(normalizeSpawnProviders(CATALOG));out.reordered=state();
+CATALOG.providers[0].models.push('claude-opus-5-5');
+CATALOG.providers[0].default_model='claude-opus-5-5';
+renderSpawnProviders(normalizeSpawnProviders(CATALOG));out.fixedDefault=state();
+CATALOG.providers[0].models=[];
+CATALOG.providers[0].model_error='AGENTSTACK_CLAUDE_MODELS contains invalid model IDs';
+renderSpawnProviders(normalizeSpawnProviders(CATALOG));
+SPM('spm-task').value='work';SPM('spm-dir').value='/repo';
+submitSpawn();out.submitStatus=SPM('spm-stat').textContent;
+process.stdout.write(JSON.stringify(out));
+'''
+    result = subprocess.run(
+        ["node", "-e", "const CATALOG=" + json.dumps(catalog) + ";\n" + script + harness + scenarios],
+        text=True, capture_output=True, timeout=10, check=True,
+    )
+    cases = json.loads(result.stdout)
+    assert cases["invalid"]["tabs"] == ["claude", "codex"]
+    assert cases["invalid"]["payload"]["provider"] == "claude"
+    assert cases["invalid"]["launchDisabled"] is True
+    assert 'role="alert"' in cases["invalid"]["html"]
+    assert "CONFIGURATION ERROR" in cases["invalid"]["html"]
+    assert "AGENTSTACK_CLAUDE_MODELS" in cases["invalid"]["html"]
+    assert cases["codex"]["launchDisabled"] is False
+    assert "AGENTSTACK_CLAUDE_MODELS" not in cases["codex"]["status"]
+    assert cases["invalidAgain"]["launchDisabled"] is True
+    for case in ("noDefault", "reordered"):
+        assert cases[case]["payload"]["model"] == ""
+        assert cases[case]["launchDisabled"] is True
+    assert cases["chosen"]["payload"]["model"] == "claude-future-9"
+    assert cases["chosen"]["launchDisabled"] is False
+    assert cases["fixedDefault"]["payload"]["model"] == "claude-opus-5-5"
+
+    assert cases["submitStatus"] == "AGENTSTACK_CLAUDE_MODELS contains invalid model IDs"
