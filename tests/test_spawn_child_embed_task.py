@@ -249,10 +249,10 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
-    # The task went in as the child's argv, never through a paste buffer, and
-    # the launcher saw it on screen instead of waiting out its watch.
+    # The task went in as the child's argv, never through a paste buffer. No
+    # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected
-    assert "task started from argv" in result.stderr
+    assert "first-task confirmation unknown" in result.stderr
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -404,7 +404,7 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
         # Codex gets the task as its argv; Claude keeps the pasted prompt.
         assert "ARGV_TASK" in injected
         assert "\034paste-buffer" not in injected
-        assert "task started from argv" in result.stderr
+        assert "first-task confirmation unknown" in result.stderr
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
     assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected

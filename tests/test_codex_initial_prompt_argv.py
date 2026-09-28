@@ -144,32 +144,43 @@ def _extract(func: str) -> str:
 
 
 def _launcher_functions() -> str:
-    names = ("pane_nonblank_tail", "pane_normalize_nbsp", "injection_match_key",
-             "injection_utf8_locale", "codex_trust_dialog_present", "codex_trust_row_selected",
-             "codex_accept_trust_dialog", "codex_task_on_screen", "codex_startup_screen",
-             "codex_watch_initial_task")
+    names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
+             "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
 PROMPT = "You are Child, a standalone agent with no parent. Start it immediately:\n\nreply STARTED"
 PROVISIONAL = "\n› Ask Codex to do anything\n\n  gpt-6-luna low · ~ · ⠋\n  ? for shortcuts\n"
-TRUST = ("  Trust this folder? Codex can read, edit, and run files here.\n\n"
-         "› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n")
+# The trust screen of Codex 0.158 as captured on WSL (2026-09-28).
+TRUST = (
+    "\n  Folder access\n  /home/example\n\n"
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your\n"
+    "  permission settings. Folder settings can run code automatically, even\n"
+    "  without a model request. Continue only if you trust these files. Your trust\n"
+    "  decision will be saved.\n\n"
+    "› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n"
+)
+LEGACY_TRUST = ("> You are in /home/example\n"
+                "  Do you trust the contents of this directory? Working with untrusted contents\n"
+                "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n")
 STARTED = ("\n› You are Child, a standalone agent with no parent. Start it immediately:\n\n"
            "  reply STARTED\n\n• Working (1s • esc to interrupt)\n\n› Ask Codex to do anything\n")
-ANSWERED = STARTED.replace("• Working (1s • esc to interrupt)", "• STARTED")
 
 
-def _watch(tmp_path, screens: list[str], alive=True, prompt=PROMPT):
-    """Run codex_watch_initial_task against a tmux stub replaying `screens`
-    (the last one repeats); record every tmux call."""
+def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, alive=True, prompt=PROMPT):
+    """Run codex_watch_initial_task with tmux replaying `screens` and the rollout
+    helper replaying `statuses` (each list's last entry repeats)."""
+    statuses = statuses or ["unknown"]
     for i, screen in enumerate(screens):
         (tmp_path / f"screen{i}").write_text(screen, encoding="utf-8")
+    for i, status in enumerate(statuses):
+        (tmp_path / f"status{i}").write_text(status, encoding="utf-8")
     calls = tmp_path / "calls"
     script = (
         # The screen moves on only at a poll boundary (`sleep 3`), so the extra
         # captures a handler makes within one poll see the same screen.
-        f"SCREENS={len(screens)}; DIR={shlex.quote(str(tmp_path))}; printf -- -1 > \"$DIR/idx\"\n"
+        f"SCREENS={len(screens)}; STATUSES={len(statuses)}; DIR={shlex.quote(str(tmp_path))}\n"
+        'printf -- -1 > "$DIR/idx"; printf 0 > "$DIR/sidx"\n'
         "tmux() {\n"
         '  printf "%s\\n" "$*" >> "$DIR/calls"\n'
         '  case "$1" in\n'
@@ -181,11 +192,15 @@ def _watch(tmp_path, screens: list[str], alive=True, prompt=PROMPT):
         "  esac\n"
         "}\n"
         'sleep() { [[ "$1" == 3 ]] && : > "$DIR/advance"; return 0; }\n'
+        "codex_initial_task_status() {\n"
+        '  local i; i="$(cat "$DIR/sidx")"; cat "$DIR/status$i"\n'
+        '  if (( i + 1 < STATUSES )); then printf %s "$((i + 1))" > "$DIR/sidx"; fi\n'
+        "}\n"
         f'spawn_note() {{ printf "NOTE:%s\\n" "$1" >> {shlex.quote(str(tmp_path / "notes"))}; }}\n'
         "codex_session_alive() { tmux has-session -t \"=$1\"; }\n"
         "INJECTION_VERIFIED=false\n"
         + _launcher_functions()
-        + '\nstatus=0; codex_watch_initial_task Child "$PROMPT" test || status=$?\n'
+        + '\nstatus=0; codex_watch_initial_task Child "$PROMPT" test /launch/1.json abc || status=$?\n'
         'printf "STATUS=%s VERIFIED=%s\\n" "$status" "$INJECTION_VERIFIED"\n'
     )
     result = subprocess.run(["/bin/bash", "-c", script], env=dict(os.environ, PROMPT=prompt),
@@ -195,40 +210,96 @@ def _watch(tmp_path, screens: list[str], alive=True, prompt=PROMPT):
     return result, keys, notes
 
 
-def test_trust_after_a_provisional_composer_is_handled_before_the_task_counts(tmp_path):
-    result, keys, notes = _watch(tmp_path, [PROVISIONAL, TRUST, PROVISIONAL, STARTED])
-    # The provisional footer did not end the watch; only the trust row got C-m.
+def test_the_real_trust_screen_is_answered_and_the_rollout_confirms_the_start(tmp_path):
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL, TRUST, STARTED],
+                                 ["unknown", "unknown", "unknown", "started"])
     assert "STATUS=0 VERIFIED=true" in result.stdout, result.stderr
     assert keys == ["send-keys -t Child C-m"]
-    assert "task started from argv" in notes
+    assert "recorded in this launch's rollout" in notes
 
 
-def test_a_task_seen_once_before_a_trust_screen_does_not_end_the_watch(tmp_path):
-    result, keys, _ = _watch(tmp_path, [STARTED, TRUST, STARTED])
-    assert "STATUS=0" in result.stdout
+def test_without_a_binding_the_start_is_unknown_not_a_failure(tmp_path):
+    # The history binding is optional: a late trust screen is still answered,
+    # and the watch ends saying the start could not be confirmed.
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL, PROVISIONAL, TRUST, STARTED])
+    assert "STATUS=3 VERIFIED=false" in result.stdout
     assert keys == ["send-keys -t Child C-m"]
+    assert "Codex started (Child); first-task confirmation unknown" in notes
+    assert "WARNING" not in notes
 
 
-def test_an_already_answered_task_is_observed(tmp_path):
-    result, keys, _ = _watch(tmp_path, [ANSWERED])
-    assert "STATUS=0 VERIFIED=true" in result.stdout
+def test_a_task_on_screen_is_not_a_success_without_the_rollout(tmp_path):
+    result, keys, _ = _watch(tmp_path, [STARTED])
+    assert "STATUS=3 VERIFIED=false" in result.stdout
     assert keys == []
 
 
-def test_a_task_never_seen_is_a_diagnostic_not_a_resend_or_a_kill(tmp_path):
-    result, keys, notes = _watch(tmp_path, [PROVISIONAL])
-    assert "STATUS=3 VERIFIED=false" in result.stdout
-    assert keys == [], "nothing may be typed, pasted, resent or killed"
-    assert "task not seen on screen (Child)" in notes
-    assert "is not resent; the child is left running" in notes
+def test_a_bound_session_gets_no_more_keys(tmp_path):
+    # Once this launch's receipt is verified, even a trust-looking screen gets
+    # no keys; the watch waits for the rollout only.
+    result, keys, notes = _watch(tmp_path, [TRUST], ["bound"])
+    assert "STATUS=3" in result.stdout
+    assert keys == []
+    assert "WARNING: first task not yet recorded (Child)" in notes
 
 
-def test_a_dead_child_is_reported_apart_from_an_unseen_task(tmp_path):
+def test_a_dead_child_is_reported_apart_from_an_unconfirmed_start(tmp_path):
     result, keys, notes = _watch(tmp_path, ["error: unexpected argument\n"], alive=False)
     assert "STATUS=2" in result.stdout
     assert "died after" in result.stderr
     assert keys == []
-    assert "task not seen" not in notes
+    assert notes == ""
+
+
+def test_a_legacy_trust_screen_in_its_full_form_is_answered(tmp_path):
+    result, keys, _ = _watch(tmp_path, [LEGACY_TRUST, STARTED], ["unknown", "unknown", "started"])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child C-m"]
+
+
+@pytest.mark.parametrize("screen", [
+    "  Choose a model\n\n› 1. Use existing model\n  2. Upgrade\n",
+    "  Signed in as someone\n\n  Press enter to continue\n",
+], ids=["model", "signin"])
+def test_unverified_model_and_signin_layouts_get_no_keys(tmp_path, screen):
+    result, keys, _ = _watch(tmp_path, [screen])
+    assert "STATUS=3" in result.stdout
+    assert keys == []
+
+
+def _with_answer(lines: str) -> str:
+    return STARTED.replace("• Working (1s • esc to interrupt)", lines + "\n\n• Working (2s • esc to interrupt)")
+
+
+@pytest.mark.parametrize("screen", [
+    _with_answer("• The menu label is:\n\n  Do you trust the contents of this directory?"),
+    _with_answer("• The menu label is:\n\n  Use existing model"),
+    _with_answer("• The menu label is:\n\n  Press enter to continue"),
+    _with_answer("• It reads:\n\n  1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit"),
+    # The task itself quotes the whole trust screen, above the composer.
+    STARTED.replace("  reply STARTED\n", "  reply STARTED; the screen was:\n" + TRUST),
+], ids=["legacy-question", "model", "signin", "trust-block-in-answer", "trust-screen-in-task"])
+def test_dialog_text_in_the_conversation_gets_no_keys(tmp_path, screen):
+    result, keys, _ = _watch(tmp_path, [screen])
+    assert keys == [], "conversation text must never be answered as a dialog"
+    assert "STATUS=1" not in result.stdout
+
+
+def test_a_real_trust_screen_below_a_task_that_quotes_one_is_answered(tmp_path):
+    # Task text quoting the dialog is above; the real dialog is at the bottom.
+    quoting = "› reply STARTED; the screen was: 1. Trust and continue / 2. Quit\n"
+    result, keys, _ = _watch(tmp_path, [quoting + TRUST, STARTED], ["unknown", "unknown", "started"])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child C-m"]
+
+
+def test_the_trust_detector_accepts_the_captured_wsl_frame():
+    frame = pathlib.Path(__file__).with_name("fixtures") / "codex-0.158-trust-frame.txt"
+    body = (_extract("pane_nonblank_tail") + _extract("pane_normalize_nbsp") + _extract("codex_trust_screen_up")
+            + '\ncodex_trust_screen_up "$(cat "$FRAME")"\n')
+    result = subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, FRAME=str(frame)),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
 
 
 def test_the_launcher_never_pastes_or_submits_a_cold_codex_task():
@@ -258,81 +329,3 @@ def test_prompt_file_is_private_and_oversized_tasks_fail_visibly(tmp_path):
     assert oct((tmp_path / "state").stat().st_mode & 0o777) == "0o700"
     assert "BIG_FAIL" in result.stdout
     assert "passed as one command-line argument" in result.stderr
-
-
-# --- review 2026-09-29: a phrase quoted in the task or the answer is no dialog ---
-
-def _quoting(phrase: str) -> str:
-    return STARTED.replace("  reply STARTED\n", f"  reply STARTED; explain the phrase {phrase}\n")
-
-
-@pytest.mark.parametrize("phrase", [
-    "Do you trust this directory?", "Use existing model", "Press enter to continue",
-])
-def test_a_dialog_phrase_quoted_in_the_task_sends_no_keys(tmp_path, phrase):
-    quoted_prompt = PROMPT.replace("reply STARTED", f"reply STARTED; explain the phrase {phrase}")
-    result, keys, _ = _watch(tmp_path, [_quoting(phrase)], prompt=quoted_prompt)
-    assert "STATUS=0 VERIFIED=true" in result.stdout, result.stdout + result.stderr
-    assert keys == []
-
-
-@pytest.mark.parametrize("phrase", [
-    "Do you trust the contents of this directory?", "Use existing model", "Press enter to continue",
-])
-def test_a_dialog_phrase_quoted_in_a_sentence_of_the_answer_sends_no_keys(tmp_path, phrase):
-    answer = STARTED.replace("• Working (1s • esc to interrupt)",
-                             f"• The phrase \"{phrase}\" appears in dialogs.")
-    result, keys, _ = _watch(tmp_path, [answer])
-    assert "STATUS=0" in result.stdout
-    assert keys == []
-
-
-@pytest.mark.parametrize("phrase", [
-    "Do you trust the contents of this directory?", "Use existing model", "Press enter to continue",
-    "1. Trust and continue",
-])
-def test_a_dialog_phrase_on_its_own_line_of_the_answer_sends_no_keys(tmp_path, phrase):
-    # The answer puts the phrase on a line of its own, exactly as a dialog
-    # would; it is still transcript, above the composer.
-    answer = STARTED.replace("• Working (1s • esc to interrupt)",
-                             f"• The menu label is:\n\n  {phrase}\n\n• Working (2s • esc to interrupt)")
-    result, keys, _ = _watch(tmp_path, [answer])
-    assert "STATUS=0 VERIFIED=true" in result.stdout
-    assert keys == []
-
-
-def test_a_trust_dialog_below_a_provisional_composer_is_answered(tmp_path):
-    # Whatever is drawn after the last composer marker is a candidate dialog.
-    result, keys, _ = _watch(tmp_path, [PROVISIONAL + "\n" + TRUST, STARTED])
-    assert "STATUS=0" in result.stdout
-    assert keys == ["send-keys -t Child C-m"]
-
-
-def test_a_real_trust_dialog_over_the_task_is_still_answered(tmp_path):
-    # The task is already drawn behind a real dialog: the option rows count.
-    over = STARTED.replace("• Working (1s • esc to interrupt)\n\n› Ask Codex to do anything\n", TRUST)
-    result, keys, _ = _watch(tmp_path, [over, STARTED])
-    assert "STATUS=0" in result.stdout
-    assert keys == ["send-keys -t Child C-m"]
-
-
-def test_real_model_and_signin_screens_are_answered(tmp_path):
-    model = "  Choose a model\n\n› 1. Use existing model\n  2. Upgrade\n"
-    signin = "  Signed in as someone\n\n  Press enter to continue\n"
-    result, keys, _ = _watch(tmp_path, [model, signin, STARTED])
-    assert "STATUS=0" in result.stdout
-    assert keys == ["send-keys -t Child Down Enter", "send-keys -t Child Enter"]
-
-
-def test_a_legacy_trust_dialog_is_answered(tmp_path):
-    legacy = ("> You are in /home/example\n  Do you trust the contents of this directory? Working with untrusted contents\n"
-              "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n")
-    result, keys, _ = _watch(tmp_path, [legacy, STARTED])
-    assert "STATUS=0" in result.stdout
-    assert keys == ["send-keys -t Child C-m"]
-
-
-def test_a_task_on_the_screen_of_a_dead_session_is_not_a_success(tmp_path):
-    result, keys, _ = _watch(tmp_path, [STARTED], alive=False)
-    assert "STATUS=2" in result.stdout
-    assert keys == []

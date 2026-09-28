@@ -553,7 +553,7 @@ Spawn uses `AGENTSTACK_MCP_URL` from generated `env.sh`, falling back to `http:/
 
 ## Asynchronous spawn and `GET /api/spawn-status`
 
-Adding `"async": true` to `POST /api/spawn` returns after child registration and launcher startup (`ok: true, pending: true`; fields such as `child_name` match the synchronous response). REPL readiness and task-injection confirmation (for a Codex child, confirming that the first task passed as its launch argument appears on screen) continue in the background, and the result is read with:
+Adding `"async": true` to `POST /api/spawn` returns after child registration and launcher startup (`ok: true, pending: true`; fields such as `child_name` match the synchronous response). REPL readiness and task-injection confirmation (for a Codex child, confirming that the first task passed as its launch argument is in this launch's record; without the Codex history binding this cannot be confirmed, and the state becomes `ready` after up to 90 seconds) continue in the background, and the result is read with:
 
 ```bash
 curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'

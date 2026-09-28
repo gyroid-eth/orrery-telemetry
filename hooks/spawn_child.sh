@@ -1254,74 +1254,70 @@ write_codex_prompt_file() {
     printf '%s\n' "$file"
 }
 
-# True when the task text is on screen (history included), by the same
-# prefix/suffix keys verify_injection uses.
-codex_task_on_screen() {
-    local session_name="$1" prompt_text="$2" head_key tail_key pane_key utf8_locale
-    utf8_locale="$(injection_utf8_locale)"
-    if [[ -n "$utf8_locale" ]]; then
-        local LC_ALL="$utf8_locale"
+# Whether this launch's first task has started, from its own rollout (see
+# hooks/codex-initial-task-status.py): started, bound or unknown.
+codex_initial_task_status() {
+    local session_name="$1" prompt_text="$2" launch_path="$3" launch_id="$4"
+    local helper="$HOOKS_DIR/codex-initial-task-status.py"
+    if [[ ! -f "$helper" || -z "$launch_path" || -z "$launch_id" ]]; then
+        echo unknown
+        return 0
     fi
-    head_key="$(injection_match_key "${prompt_text:0:48}")"
-    [[ -n "$head_key" ]] || return 1
-    tail_key=""
-    if (( ${#prompt_text} > 48 )); then
-        tail_key="$(injection_match_key "${prompt_text: -48}")"
-    fi
-    pane_key="$(injection_match_key "$(tmux capture-pane -t "$session_name" -p -S -1000 2>/dev/null || true)")"
-    printf '%s' "$pane_key" | grep -qF -- "$head_key" && return 0
-    [[ -n "$tail_key" ]] && printf '%s' "$pane_key" | grep -qF -- "$tail_key"
+    printf '%s' "$prompt_text" | "${AGENTSTACK_PYTHON:-python3}" "$helper" \
+        --launch-path "$launch_path" --launch-id "$launch_id" \
+        --agent-name "$session_name" 2>/dev/null || echo unknown
 }
 
-# Which Codex startup screen is up: prints trust, model, signin or nothing.
-# With the task on screen from the first frame, a dialog phrase anywhere in the
-# pane is no longer evidence of a dialog: the task itself, or Codex's answer,
-# may quote "Do you trust ...", "Use existing model" or "Press enter to
-# continue", on a line of their own. So three things must hold: the line is
-# laid out as a dialog element (a numbered option row, a lone option, the
-# dialog's own footer); it is not part of the task text; and it is not above
-# the conversation's composer. A dialog is drawn in place of the composer, while
-# the transcript (task and answers) sits above it, so only what follows the
-# last composer marker ("Ask Codex to do anything", "? for shortcuts", "esc to
-# interrupt") is considered.
-codex_startup_screen() {
-    local pane_text="$1" prompt_text="$2" task_key line key rest=""
-    pane_text="$(printf '%s\n' "$pane_text" | awk '
-        /Ask Codex to do anything|\? for shortcuts|esc to interrupt/ { buf = ""; next }
-        { buf = buf $0 "\n" }
-        END { printf "%s", buf }')"
-    task_key="$(injection_match_key "$prompt_text")"
-    while IFS= read -r line; do
-        key="$(injection_match_key "$line")"
-        if [[ ${#key} -ge 8 && "$task_key" == *"$key"* ]]; then
-            continue
-        fi
-        rest="$rest$line"$'\n'
-    done <<< "$pane_text"
-    rest="$(printf '%s' "$rest" | pane_normalize_nbsp)"
-    if printf '%s' "$rest" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*(Trust and( continue)?|Yes, continue)[[:space:]]*$' \
-        || printf '%s' "$rest" | grep -qE '^[[:space:]]*enter continue · esc quit[[:space:]]*$' \
-        || printf '%s' "$rest" | grep -qE '^[[:space:]]*(>[[:space:]]*)?Do you trust the contents of this directory\?'; then
-        echo trust
-    elif printf '%s' "$rest" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*([0-9]\.[[:space:]]*)?Use existing model[[:space:]]*$'; then
-        echo model
-    elif printf '%s' "$rest" | grep -qE '^[[:space:]]*Press enter to continue[[:space:]]*$'; then
-        echo signin
+# Whether a Codex trust screen is up, identified by its whole layout at the
+# bottom of the pane, never by a phrase: the task and Codex's answers can quote
+# any dialog text, on a line of its own or not. The bottom region is the last
+# 12 non-blank lines and must hold no composer marker ("Ask Codex to do
+# anything", "? for shortcuts", "esc to interrupt"). The layouts accepted are
+# the ones seen on real screens:
+# - Codex 0.158: "Trust this folder?" (under "Folder access"), the option pair
+#   "1. Trust and continue" / "2. Quit" with the selection cursor on one of
+#   them, and "enter continue · esc quit" as the last line.
+# - Older Codex: "Do you trust the contents of this directory?", the pair
+#   "1. Yes, continue" / "2. No, quit" with the cursor, and "Press enter to
+#   continue" as the last line.
+# Model and sign-in screens get no keys: their current layouts have not been
+# seen on a real screen, and a guess could answer a quoted phrase instead.
+codex_trust_screen_up() {
+    local region last
+    region="$(printf '%s\n' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
+    printf '%s' "$region" | grep -qE 'Ask Codex to do anything|\? for shortcuts|esc to interrupt' && return 1
+    printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)[[:space:]]*[12]\.' || return 1
+    last="$(printf '%s' "$region" | tail -n 1)"
+    if [[ "$last" =~ ^[[:space:]]*enter\ continue\ ·\ esc\ quit[[:space:]]*$ ]]; then
+        printf '%s' "$region" | grep -qE '^[[:space:]]*Trust this folder\?' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*Trust and( continue)?[[:space:]]*$' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*2\.[[:space:]]*Quit[[:space:]]*$'
+        return
     fi
+    if [[ "$last" =~ ^[[:space:]]*Press\ enter\ to\ continue[[:space:]]*$ ]]; then
+        printf '%s' "$region" | grep -qE 'Do you trust the contents of this directory\?' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*1\.[[:space:]]*Yes, continue[[:space:]]*$' \
+            && printf '%s' "$region" | grep -qE '^[[:space:]]*(›|❯|>)?[[:space:]]*2\.[[:space:]]*No, quit[[:space:]]*$'
+        return
+    fi
+    return 1
 }
 
-# Watch a cold-started Codex child until its argv task is on screen. The model,
-# trust and sign-in screens are handled on every poll, before the task check,
-# for the whole bounded wait: a ready-looking footer ends nothing, and the task
-# counts only when seen on two consecutive polls with no startup screen up (a
-# task drawn early must not end the watch before a trust screen). Nothing is
-# typed into the composer and nothing is resent.
-# Returns 0 when the task is on screen, 1 when the trust screen could not be
-# accepted, 2 when the session died, 3 when the task was not seen in time (the
-# child is left running; the caller only records a diagnostic).
+# Watch a cold-started Codex child until its first task has started.
+# Success comes only from this launch's rollout (codex_initial_task_status),
+# never from the screen. Until this launch's session binding is verified, a
+# trust screen identified by its whole layout (codex_trust_screen_up) is
+# answered; once it is verified, no more keys are sent. The history binding is
+# optional: without it the watch still runs its full bound, answering a late
+# trust screen, and ends with "start not confirmed", leaving the child running. Nothing is typed into
+# the composer and nothing is resent.
+# Returns 0 when the task has started, 1 when the trust screen could not be
+# accepted, 2 when the session died, 3 when the start could not be confirmed
+# in time (the child is left running; the caller only records a diagnostic).
 codex_watch_initial_task() {
-    local session_name="$1" prompt_text="$2" log_prefix="$3"
-    local waited=0 wait_max=90 trust_attempts=0 trust_max=10 seen=0 pane_text screen
+    local session_name="$1" prompt_text="$2" log_prefix="$3" launch_path="$4" launch_id="$5"
+    local waited=0 wait_max=90 trust_attempts=0 trust_max=10 pane_text
+    local status=unknown bound=false
     # Counted polls and wall-clock time both end the watch: the dialog handlers
     # sleep too, and the dashboard signals a launcher after 120s, whose exit
     # trap would then remove the child this watch means to leave running.
@@ -1330,45 +1326,38 @@ codex_watch_initial_task() {
         sleep 3
         waited=$((waited + 3))
         pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        screen="$(codex_startup_screen "$pane_text" "$prompt_text")"
-        if [[ "$screen" == model ]]; then
-            echo "[$log_prefix] Model selection dialog detected; choosing existing model" >&2
-            tmux send-keys -t "$session_name" Down Enter
-            seen=0
-            sleep 5
-            continue
-        fi
-        if [[ "$screen" == trust ]]; then
-            trust_attempts=$((trust_attempts + 1))
-            codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
-            seen=0
-            sleep 3
-            continue
-        fi
-        if [[ "$screen" == signin ]]; then
-            echo "[$log_prefix] Sign-in prompt detected; pressing Enter" >&2
-            tmux send-keys -t "$session_name" Enter
-            seen=0
-            sleep 3
-            continue
-        fi
-        if codex_task_on_screen "$session_name" "$prompt_text"; then
-            seen=$((seen + 1))
-        else
-            seen=0
-        fi
         if ! codex_session_alive "$session_name"; then
             echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
             printf '%s\n' "$pane_text" | tail -15 >&2
             return 2
         fi
-        if (( seen >= 2 )); then
-            INJECTION_VERIFIED=true
-            spawn_note "task started from argv ($session_name, ${waited}s)"
-            return 0
+        status="$(codex_initial_task_status "$session_name" "$prompt_text" "$launch_path" "$launch_id")"
+        case "$status" in
+            started)
+                INJECTION_VERIFIED=true
+                spawn_note "task started ($session_name, ${waited}s; recorded in this launch's rollout)"
+                return 0
+                ;;
+            bound)
+                bound=true
+                ;;
+        esac
+        [[ "$bound" == true ]] && continue
+        if codex_trust_screen_up "$pane_text"; then
+            trust_attempts=$((trust_attempts + 1))
+            codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
+            sleep 3
         fi
     done
-    spawn_note "WARNING: task not seen on screen ($session_name) within ${wait_max}s. It was passed to codex as its [PROMPT] argument and is not resent; the child is left running. Inspect with 'tmux capture-pane -t $session_name -p -S -1000'. Last screen: $(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
+    local last_screen
+    last_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
+    if [[ "$bound" == true ]]; then
+        spawn_note "WARNING: first task not yet recorded ($session_name) within ${wait_max}s: this launch's session is bound, but its rollout does not show the task in a turn. The task was passed to codex as its [PROMPT] argument and is not resent; the child is left running. Inspect with 'tmux capture-pane -t $session_name -p -S -1000'. Last screen: $last_screen"
+    else
+        # Not a failure: the Codex history binding is optional, and without its
+        # receipt the start of the task simply cannot be confirmed.
+        spawn_note "Codex started ($session_name); first-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $last_screen"
+    fi
     return 3
 }
 
@@ -1954,7 +1943,8 @@ ${TASK}"
 
         echo "[spawn_child/pre-reg] Waiting for Codex to start the task..." >&2
         WATCH_STATUS=0
-        codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child/pre-reg" || WATCH_STATUS=$?
+        codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child/pre-reg" \
+            "$CHILD_LAUNCH_BINDING" "$CHILD_LAUNCH_ID" || WATCH_STATUS=$?
         case "$WATCH_STATUS" in
             1)
                 echo "[spawn_child/pre-reg] Aborting: unable to accept the Codex trust dialog." >&2
@@ -2753,7 +2743,8 @@ if [[ "$USE_CODEX" == true ]]; then
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     echo "[spawn_child] Waiting for Codex to start the task..." >&2
     WATCH_STATUS=0
-    codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child" || WATCH_STATUS=$?
+    codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT" "spawn_child" \
+        "$CHILD_LAUNCH_BINDING" "$CHILD_LAUNCH_ID" || WATCH_STATUS=$?
     case "$WATCH_STATUS" in
         1)
             echo "[spawn_child] Aborting: unable to accept the Codex trust dialog." >&2
