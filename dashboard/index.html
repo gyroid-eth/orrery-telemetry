@@ -773,6 +773,13 @@
     font-family:var(--mono);font-size:7.5px;font-style:normal;
     letter-spacing:.025em;line-height:1.35}
   #spawnmd .spm-model-chip.on small{color:var(--amber)}
+  #spawnmd .spm-models-overflow{grid-column:1/-1}
+  #spawnmd .spm-models-overflow>summary{cursor:pointer;padding:4px 2px;
+    color:var(--ink-dim);font-family:var(--mono);font-size:7.5px;
+    letter-spacing:.12em;text-transform:uppercase}
+  #spawnmd .spm-models-overflow>summary:focus-visible{outline:1px solid var(--amber);
+    outline-offset:2px}
+  #spawnmd .spm-models-overflow>.spm-models{margin-top:6px}
   #spawnmd .spm-effort-row{display:flex;align-items:center;gap:9px;
     flex-wrap:wrap;margin-top:9px}
   #spawnmd .spm-effort-row[hidden]{display:none}
@@ -37672,6 +37679,9 @@ function normalizeSpawnProviders(catalog){
     return {id,label:String(provider&&provider.label||id).trim(),
       models,defaultModel,efforts,
       modelError:String(provider&&provider.model_error||'').trim(),
+      overflowModels:(Array.isArray(provider&&provider.overflow_models)
+        ? provider.overflow_models:[]).map(value=>String(value||'').trim())
+        .filter(Boolean),
       defaultEffort:String(provider&&provider.effort_default||'').trim(),
       capabilities};
   }).filter(provider=>/^[a-z][a-z0-9_-]*$/.test(provider.id)&&
@@ -37840,7 +37850,11 @@ function renderSpawnModels(provider){
   const models=provider&&provider.modelError?[]:spawnProviderDisplayModels(provider);
   const fallback=models.some(model=>model.id===(provider&&provider.defaultModel))
     ? provider.defaultModel:(provider&&provider.id==='claude'?'':((models[0]||{}).id||''));
-  root.innerHTML=models.map(model=>{
+  // Older generations (the CLI catalog's "overflow" section) sit behind a
+  // fold so the current models are what the eye lands on. The fold opens
+  // itself when the selected model is one of them.
+  const overflow=new Set(provider&&provider.overflowModels||[]);
+  const chip=model=>{
     const tone=spawnModelTone(provider&&provider.id||'',model.id);
     const displayLabel=(provider&&provider.capabilities&&provider.capabilities.effort_required)
       ?(model.label||model.id):(tone?(model.label||model.id):model.id);
@@ -37851,7 +37865,13 @@ function renderSpawnModels(provider){
       `<b>${esc(displayLabel)}</b>${catalogId}`+
       `${tone?`<em class="spm-model-tone">${esc(tone)}</em>`:''}`+
       `</button>`;
-  }).join('')||(provider&&provider.modelError
+  };
+  const current=models.filter(model=>!overflow.has(model.id));
+  const older=models.filter(model=>overflow.has(model.id));
+  root.innerHTML=(current.map(chip).join('')+(older.length
+    ? `<details class="spm-models-overflow"><summary>previous models · ${older.length}</summary>`+
+      `<div class="spm-models">${older.map(chip).join('')}</div></details>`
+    : ''))||(provider&&provider.modelError
     ? '<div class="spm-load spm-stat err" role="alert">CONFIGURATION ERROR · '+esc(provider.modelError)+'</div>'
     : '<div class="spm-load">no models configured</div>');
   root.querySelectorAll('.spm-model-chip').forEach(btn=>{
@@ -37869,6 +37889,8 @@ function selectSpawnModel(model){
     const on=btn.dataset.model===spmSelectedModel;
     btn.classList.toggle('on',on);
     btn.setAttribute('aria-checked',on?'true':'false');
+    const fold=on&&btn.closest&&btn.closest('.spm-models-overflow');
+    if(fold)fold.open=true;
   });
   renderSpawnEngineNote();
   updateSpawnButton();

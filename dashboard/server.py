@@ -5408,7 +5408,8 @@ def spawn_names_payload() -> dict:
         "default_model": claude_default,
         "providers": [
             {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(claude_models), "default_model": claude_default, "efforts": None,
-             "model_source": claude_catalog.source, "model_error": claude_catalog.error},
+             "model_source": claude_catalog.source, "model_error": claude_catalog.error,
+             "overflow_models": [m for m in claude_catalog.overflow if m != claude_default]},
             {"id": "codex", "label": "Codex", "program": "codex-cli", "models": codex_models, "default_model": codex_models[0], "efforts": list(_CODEX_EFFORTS), "effort_default": "xhigh"},
         ],
     }
