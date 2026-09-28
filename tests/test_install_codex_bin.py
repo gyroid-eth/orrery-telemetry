@@ -42,8 +42,12 @@ WORKS = 'echo "codex-cli 0.157.0"\n'
 BROKEN = 'echo "Error: Missing optional dependency @openai/codex-linux-x64" >&2\nexit 1\n'
 
 
-def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=2):
-    """Run the block; returns (exit code, resolved CODEX_BIN_SETTING, stderr)."""
+def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5):
+    """Run the block; returns (exit code, resolved CODEX_BIN_SETTING, stderr).
+
+    The default probe budget is generous so a working fake codex is not failed
+    by a loaded machine; the hang tests pass a short timeout explicitly.
+    """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     stubs = (

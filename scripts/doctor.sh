@@ -425,9 +425,11 @@ codex_version_answers() {
   wait "$pid"
 }
 
-# Stop a probe that overran, without ever blocking: every wait below is a
-# kill -0 poll with a deadline, and whatever has not exited by then is left
-# with a note on stderr instead of waiting on it.
+# Stop a probe that overran. Every wait here is a kill -0 poll with a
+# deadline (one second of grace, one second for the probe to go after KILL),
+# so waiting on `codex --version` and on the cleanup after it is bounded. The
+# system commands used on the way (pgrep, ps) are not bounded: if they
+# themselves stop responding, so does this function.
 #
 # The probe itself ($!) is this shell's own child, so it gets TERM and then
 # KILL without further checks. Its descendants (an npm wrapper's native codex)
@@ -436,8 +438,9 @@ codex_version_answers() {
 # too; a descendant seen gone during the grace period is dropped, and KILL goes
 # only to one whose `ps -o lstart=` start time (one-second resolution) still
 # matches what was recorded. This is a best-effort identity check: a PID reused
-# within the same second, or one whose start time could not be read, is not
-# told apart, and an unverifiable descendant is left rather than killed.
+# within the same second is not told apart. A still-running descendant whose
+# start time cannot be read or no longer matches is left without KILL, with a
+# note on stderr; one that received KILL is not checked again. A probe still present after its second of reaping is left with a note.
 codex_probe_stop() {
   local pid="$1" level="$1" descendants="" next p t start depth round
   # PID lists are space-separated; a caller may have narrowed IFS (the PATH
