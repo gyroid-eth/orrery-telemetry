@@ -12,11 +12,11 @@
 
 ### NEW AGENT の Codex でも、旧世代のモデルを「more models」に畳みます
 
-Claude と同じく、Codex の `gpt-5.6-sol`・`gpt-5.6-luna`・`gpt-5.5` を NEW AGENT の「more models」の中に移しました。`gpt-6-astra`・`gpt-6-sol`・`gpt-6-luna`・`gpt-5.6-terra` は前面のままです。どれを畳むかは同梱の表で決め、番号の大小では決めません。既定のモデルは畳まず、catalog が隠しているモデルは今までどおり表示しません。`AGENTSTACK_CODEX_MODELS` で許可リストを明示している場合は畳みません。`/api/spawn-names` の Codex provider は `overflow_models` を返します。
+Claude と同じく、Codex の `gpt-5.6-sol`・`gpt-5.6-luna`・`gpt-5.5` を NEW AGENT の「more models」の中に移しました。`gpt-6-astra`・`gpt-6-sol`・`gpt-6-luna`・`gpt-5.6-terra` は前面のままです。どれを畳むかは同梱の表で決め、番号の大小では決めません。既定のモデルは畳みません。期限内のローカル catalog が隠しているモデル（`visibility` が `list` 以外）は、同梱の候補に入っていても一覧から外し、畳む対象にも入れません（launcher の既定 `gpt-6-sol` だけは残します）。`AGENTSTACK_CODEX_MODELS` で許可リストを明示している場合は畳みません。`/api/spawn-names` の Codex provider は `overflow_models` を返します。
 
 ### Codex の子が起動した Codex の子（孫）でも、ローカルのモデル一覧を読めるようにしました
 
-孫の `CODEX_HOME` の `models_cache.json` は「孫→子→元」と symlink を2段たどる必要があり、1段しかたどらなかったため、孫では同梱の候補に戻っていました。launcher が作る子の home の中だけを通る連鎖を、段数の上限（8）と循環の検査付きでたどるようにしました。
+孫の `CODEX_HOME` の `models_cache.json` は「孫→子→元」と symlink を2段たどる必要があり、1段しかたどらなかったため、孫では同梱の候補に戻っていました。launcher が作る子の home の中だけを通る連鎖を、段数の上限（8）と循環の検査付きでたどるようにしました。途中の home 自体が symlink の場合や、実体が `child-agents` の直下に無い場合はたどりません。
 
 ### NEW AGENT の Codex 既定を GPT-6 Sol に更新しました（#97）
 

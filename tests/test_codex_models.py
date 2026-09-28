@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -152,7 +153,6 @@ def test_launcher_owned_child_cache_symlink_is_followed(monkeypatch, tmp_path):
 
 
 def _load_child_resume():
-    import importlib.util
     spec = importlib.util.spec_from_file_location(
         "child_resume_for_catalog_test", Path(__file__).resolve().parents[1] / "hooks" / "child_resume.py")
     module = importlib.util.module_from_spec(spec)
@@ -160,6 +160,7 @@ def _load_child_resume():
     return module
 
 
+@pytest.mark.skipif(importlib.util.find_spec("fcntl") is None, reason="child_resume.py needs POSIX fcntl")
 def test_grandchild_home_built_by_child_resume_follows_the_link_chain(monkeypatch, tmp_path):
     """Codex child -> Codex grandchild: build_home links to the parent home's entry, two hops."""
     child_resume = _load_child_resume()
@@ -230,6 +231,33 @@ def test_link_chain_through_an_untrusted_hop_is_not_followed(monkeypatch, tmp_pa
     link = _child_link(runtime, "ChildCurie", stray)
     monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
     monkeypatch.setenv("CODEX_HOME", str(link.parent))
+    assert models.discover_models() == {}
+
+
+def test_link_chain_through_a_symlinked_child_home_is_not_followed(monkeypatch, tmp_path):
+    """B.codex-home passes the name check but is a directory symlink leading outside."""
+    external = tmp_path / "external-codex"
+    external.mkdir()
+    (external / "models_cache.json").write_text(json.dumps({
+        "fetched_at": datetime.fromtimestamp(NOW, timezone.utc).isoformat(),
+        "models": [row("gpt-marker-external")],
+    }), encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    runtime = tmp_path / "runtime"
+    child_root = runtime / "child-agents"
+    child_root.mkdir(parents=True)
+    try:
+        (outside / "models_cache.json").symlink_to(external / "models_cache.json")
+        (child_root / "B.codex-home").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    link = _child_link(runtime, "A", child_root / "B.codex-home" / "models_cache.json")
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("CODEX_HOME", str(link.parent))
+    assert models.discover_models() == {}
+    # The symlinked home itself is not a launcher-owned home either.
+    monkeypatch.setenv("CODEX_HOME", str(child_root / "B.codex-home"))
     assert models.discover_models() == {}
 
 
@@ -383,3 +411,31 @@ def test_explicit_allowlist_is_not_folded(monkeypatch):
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-5.6-sol")
     assert models.resolve_catalog().overflow == ()
     assert models.provider_catalog()["overflow_models"] == []
+
+
+def test_fresh_cache_hiding_bundled_models_removes_them_from_menu_and_fold():
+    cache([row(), row("gpt-5.6-sol", visibility="hide"), row("gpt-5.6-luna", visibility="hide"),
+           row("gpt-5.5", visibility="hide")])
+    catalog = models.resolve_catalog()
+    for model in ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"):
+        assert model not in catalog.models and model not in catalog.overflow
+    assert catalog.overflow == ()
+    assert models.provider_catalog()["overflow_models"] == []
+    assert "gpt-6-astra" in catalog.models  # not mentioned by the cache: bundled candidate stays
+
+
+def test_hidden_default_stays_as_the_fixed_contract():
+    cache([row("gpt-6-astra"), row(models.DEFAULT_MODEL, visibility="hide")])
+    assert models.DEFAULT_MODEL in models.resolve_catalog().models
+
+
+def test_expired_cache_does_not_hide_bundled_models():
+    cache([row(), row("gpt-5.6-sol", visibility="hide")], age=models.CACHE_TTL_SECONDS + 1)
+    catalog = models.resolve_catalog()
+    assert "gpt-5.6-sol" in catalog.models and "gpt-5.6-sol" in catalog.overflow
+
+
+def test_explicit_allowlist_keeps_a_model_the_cache_hides(monkeypatch):
+    cache([row(), row("gpt-5.6-sol", visibility="hide")])
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-5.6-sol")
+    assert models.resolve_catalog().models == ("gpt-6-sol", "gpt-5.6-sol")

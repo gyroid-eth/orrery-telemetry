@@ -109,12 +109,17 @@ def _cache_open_path(path: Path) -> Path | None:
     if not runtime.is_absolute():
         return None
     child_root = runtime / "child-agents"
+    real_child_root = Path(os.path.realpath(child_root))
     current, seen = path, set()
     for _ in range(MAX_CACHE_LINK_HOPS):
         home = current.parent
         if (current.name != "models_cache.json" or home.parent != child_root
                 or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None
                 or current in seen):
+            return None
+        # The name check is textual; a home that is itself a symlink (or whose
+        # real location is elsewhere) would lead the chain outside child-agents.
+        if home.is_symlink() or Path(os.path.realpath(home)) != real_child_root / home.name:
             return None
         seen.add(current)
         try:
@@ -129,7 +134,10 @@ def _cache_open_path(path: Path) -> Path | None:
     return None
 
 
-def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
+def _read_cache(path: Path, now: float,
+                hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
+    """Listed models' effort policies; `hidden_out` receives the models a valid
+    snapshot explicitly hides (a row with a visibility other than "list")."""
     try:
         open_path = _cache_open_path(path)
         if open_path is None:
@@ -165,10 +173,13 @@ def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
         if not isinstance(rows, list) or not rows or len(rows) > MAX_MODELS:
             return {}
         policies: dict[str, EffortPolicy] = {}
+        hidden: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
                 return {}
             if row.get("visibility") != "list":
+                if "visibility" in row and is_model_id(row.get("slug")):
+                    hidden.add(row["slug"])
                 continue
             model = row.get("slug")
             levels = row.get("supported_reasoning_levels")
@@ -184,18 +195,21 @@ def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
             if model in policies and policies[model] != policy:
                 return {}  # Conflicting duplicate metadata is not a trustworthy snapshot.
             policies[model] = policy
+        if hidden_out is not None:
+            hidden_out.update(hidden - set(policies))
         return policies
     except (OSError, ValueError, UnicodeError, RecursionError, OverflowError):
         return {}
 
 
-def discover_models(now: float | None = None) -> dict[str, EffortPolicy]:
+def discover_models(now: float | None = None,
+                    hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
     """Read one observed-schema cache; do not identify the current account."""
     try:
         root = Path(os.environ.get("CODEX_HOME", "").strip() or "~/.codex").expanduser()
         if not root.is_absolute():
             return {}
-        return _read_cache(root / "models_cache.json", time.time() if now is None else now)
+        return _read_cache(root / "models_cache.json", time.time() if now is None else now, hidden_out)
     except (OSError, RuntimeError, ValueError):
         return {}
 
@@ -205,9 +219,14 @@ def resolve_catalog(now: float | None = None) -> ModelCatalog:
         allowed = _allow_list()
     except ValueError as exc:
         return ModelCatalog((), "override", {}, str(exc))
-    discovered = discover_models(now)
+    hidden: set[str] = set()
+    discovered = discover_models(now, hidden)
     policies = {**BUNDLED_EFFORTS, **discovered}
-    models = allowed if allowed is not None else tuple(dict.fromkeys((*DEFAULT_MODELS, *discovered)))
+    # A fresh catalog that hides a bundled candidate removes it from the menu.
+    # The default stays: it is the launcher's fixed contract. An explicit
+    # allow-list is the operator's own menu and wins over the catalog.
+    bundled = tuple(model for model in DEFAULT_MODELS if model == DEFAULT_MODEL or model not in hidden)
+    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *discovered)))
     source = "override" if allowed is not None else ("local_cache" if discovered else "bundled")
     # An explicit allow-list is the operator's own menu and is not folded,
     # matching the Claude provider.
