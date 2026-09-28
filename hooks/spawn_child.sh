@@ -1109,6 +1109,59 @@ flush_queued_prompt() {
     return 1
 }
 
+# Deliver a prompt into a REPL pane and submit it.
+#
+# The text goes in as a real bracketed paste (tmux load-buffer + paste-buffer
+# -p). Typing it with send-keys -l, or wrapping it in hand-written ESC[200~
+# markers, lets a busy REPL read the text and the following C-m in one batch
+# and treat the C-m as part of the paste, so the task sits in the input box
+# unsubmitted and verify_injection still reports ok because the text is on
+# screen. Reproduced 2026-09-27 on Codex 0.157.1 and Claude Code by stopping
+# the REPL (SIGSTOP) during delivery: send-keys -l stuck every time, the
+# hand-written markers stuck 1 in 5, paste-buffer -p submitted 8 of 8.
+send_prompt_to_pane() {
+    local session_name="$1" prompt_text="$2" submit_gap="${3:-0.5}"
+    local paste_buf="agentstack-spawn-$$-${RANDOM}" paste_file
+    paste_file="$(mktemp "${TMPDIR:-/tmp}/agentstack-spawn-prompt.XXXXXX")" || paste_file=""
+    if [[ -n "$paste_file" ]] && printf '%s' "$prompt_text" > "$paste_file" \
+        && tmux load-buffer -b "$paste_buf" "$paste_file" 2>/dev/null \
+        && tmux paste-buffer -p -d -b "$paste_buf" -t "$session_name" 2>/dev/null; then
+        :
+    else
+        tmux delete-buffer -b "$paste_buf" 2>/dev/null || true
+        tmux send-keys -t "$session_name" -l "$prompt_text"
+    fi
+    [[ -n "$paste_file" ]] && rm -f "$paste_file"
+    sleep "$submit_gap"
+    tmux send-keys -t "$session_name" C-m
+    resubmit_if_left_in_input "$session_name" "$prompt_text"
+}
+
+# If the prompt is still in the input box after the submit, press C-m once
+# more. The input box is the last line starting with › (Codex) or ❯ (Claude
+# Code); earlier lines with the same text are history. Long pastes are folded
+# to "[Pasted Content …]" (Codex) or "[Pasted text …]" (Claude Code).
+resubmit_if_left_in_input() {
+    local session_name="$1" prompt_text="$2"
+    local first_line head input_line utf8_locale
+    utf8_locale="$(injection_utf8_locale)"
+    if [[ -n "$utf8_locale" ]]; then
+        local LC_ALL="$utf8_locale"
+    fi
+    first_line="${prompt_text%%$'\n'*}"
+    head="${first_line:0:24}"
+    sleep 1
+    input_line="$(tmux capture-pane -t "$session_name" -p 2>/dev/null \
+        | grep -E '^[[:space:]]*(›|❯)' | tail -1)" || input_line=""
+    [[ -n "$input_line" ]] || return 0
+    if { [[ -n "$head" ]] && [[ "$input_line" == *"$head"* ]]; } \
+        || [[ "$input_line" == *"[Pasted "* ]]; then
+        echo "[spawn_child] Prompt still in the input box; submitting again ($session_name)" >&2
+        tmux send-keys -t "$session_name" C-m
+    fi
+    return 0
+}
+
 # Reduce prompt or pane text to the characters that survive the REPL's
 # rendering: drop whitespace (the TUI re-wraps long lines, CJK mid-word) and
 # the Markdown markers Claude Code strips from a submitted prompt (`## Role:`
@@ -1796,13 +1849,7 @@ ${TASK}"
             exit 1
         fi
 
-        if [[ "$STANDALONE" == true || "$EMBED_TASK" == true ]]; then
-            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CODEX_PROMPT}$(printf '\033[201~')"
-        else
-            tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
-        fi
-        sleep 0.5
-        tmux send-keys -t "$CHILD_NAME" C-m
+        send_prompt_to_pane "$CHILD_NAME" "$CODEX_PROMPT" 0.5
         verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
     else
         # Claude Code startup (--pre-registered mode).
@@ -1914,13 +1961,7 @@ ${TASK}"
         else
             CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
         fi
-        if [[ "$STANDALONE" == true || "$EMBED_TASK" == true ]]; then
-            tmux send-keys -t "$CHILD_NAME" -l "$(printf '\033[200~')${CHILD_PROMPT}$(printf '\033[201~')"
-        else
-            tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
-        fi
-        sleep 0.3
-        tmux send-keys -t "$CHILD_NAME" C-m
+        send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
         sleep 2
         flush_queued_prompt "$CHILD_NAME" || true
         verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
@@ -2648,9 +2689,7 @@ if [[ "$USE_CODEX" == true ]]; then
     # Codex にはタスク概要を含むプロンプトを注入
     # 注意: テキストと Enter は分離して送信する。
     # 長いテキスト + C-m を同一コールで送ると C-m が落ちることがある。
-    tmux send-keys -t "$CHILD_NAME" -l "$CODEX_PROMPT"
-    sleep 0.5
-    tmux send-keys -t "$CHILD_NAME" C-m
+    send_prompt_to_pane "$CHILD_NAME" "$CODEX_PROMPT" 0.5
     verify_injection "$CHILD_NAME" "$CODEX_PROMPT" || true
 else
     # Claude Code 起動（モデル指定付き）
@@ -2712,9 +2751,7 @@ else
     echo "[spawn_child] Waited ${WAITED}s (+1s); injecting prompt" >&2
 
     CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
-    tmux send-keys -t "$CHILD_NAME" -l "$CHILD_PROMPT"
-    sleep 0.3
-    tmux send-keys -t "$CHILD_NAME" C-m
+    send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
     sleep 2
     flush_queued_prompt "$CHILD_NAME" || true
     verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true

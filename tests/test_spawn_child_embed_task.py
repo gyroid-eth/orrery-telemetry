@@ -47,6 +47,7 @@ def _fake_launch_env(
         "    fi ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
+        "  load-buffer) cat \"$4\" >> \"$FAKE_TMUX_LOG\" ;;\n"
         "  display-message) printf 'ParentAgent\\n' ;;\n"
         "esac\n",
     )
