@@ -88,6 +88,7 @@ subprocess.run(["/bin/bash", "-c", args[-1]], cwd=cwd, env=env, check=True, time
             "LC_ALL": "C",
             "SHELL": "/usr/bin/true",
             "AGENTSTACK_HOME": str(self.install),
+            "AGENTSTACK_LABEL_PREFIX": f"org.agentstack.test.top-project.{self.root.name}",
             "TEST_OUTPUT": str(self.output),
             "TEST_KEYS": json.dumps(KEYS),
             "TEST_TMUX": str(self.tmux),
