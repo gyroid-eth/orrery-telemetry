@@ -128,3 +128,48 @@ def test_pane_model_comes_only_from_a_statusline():
     assert server._pane_model_for("Sonnet 5", "codex") is None
     assert server._pane_model_for("Sonnet 5", "claude-code") == "Sonnet 5"
     assert server._pane_model_for("gpt-5.6", None) == "gpt-5.6"
+
+
+def test_stale_claude_approval_outside_current_tail_is_not_ask():
+    text = (
+        "Do you want to run this command?\n"
+        "❯ 1. Yes\n"
+        + "\n".join(f"later output {i}" for i in range(20))
+        + "\nAPI Error: The response stopped arriving.\n❯\n"
+    )
+
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_stale_codex_approval_outside_current_tail_is_not_ask():
+    text = (
+        "Press enter to confirm or esc to cancel\n"
+        + "\n".join(f"later output {i}" for i in range(20))
+        + "\n› Ask Codex to do anything\n"
+        "gpt-5.6-terra medium · ~/work\n"
+    )
+
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_fresh_claude_approval_in_current_tail_is_ask():
+    text = (
+        "tool request\n"
+        "Do you want to run this command?\n"
+        "❯ 1. Yes\n"
+        "  2. Yes, and don't ask again\n"
+        "  3. No\n"
+    )
+
+    assert server._parse_runtime(text)["act_state"] == "ask"
+
+
+def test_fresh_codex_approval_in_current_tail_is_ask():
+    text = (
+        "Would you like to run the following command?\n"
+        "› Yes\n"
+        "  No\n"
+        "Press enter to confirm or esc to cancel\n"
+    )
+
+    assert server._parse_runtime(text)["act_state"] == "ask"

@@ -4723,6 +4723,10 @@ def _parse_runtime(text: str) -> dict:
     # バッファ上部の自己マッチ（過去の出力にコードや報告文として regex 自体が
     # 書かれているケース等）を避けるため、末尾 12 行に絞って検出する。
     tail = "\n".join(text.splitlines()[-12:])
+    # 承認 UI も現在の TUI 末尾に出る。Codex は確定フッター自体が最下部付近、
+    # Claude は質問と番号付き選択が近接するため、少し余裕を持たせた 16 行だけを見る。
+    # 過去に回答済みの承認 UI が 45 行 capture に残っても ask に戻さない。
+    approval_tail = "\n".join(text.splitlines()[-16:])
     # スピナー行はタスクwidget(可変長)の直上に出るため 12 行窓では不足。
     # スクロールバッファの過去出力への誤マッチは避けたいので 25 行に限定。
     tail25 = "\n".join(text.splitlines()[-25:])
@@ -4731,9 +4735,9 @@ def _parse_runtime(text: str) -> dict:
         act = "work"
     elif _QUESTION_RE.search(tail):
         act = "question"
-    elif _ASK_CODEX_RE.search(text) \
-            or (_ASK_Q_RE.search(text) and _ASK_OPT_RE.search(text)) \
-            or _ASK_YN_RE.search(text):
+    elif _ASK_CODEX_RE.search(approval_tail) \
+            or (_ASK_Q_RE.search(approval_tail) and _ASK_OPT_RE.search(approval_tail)) \
+            or _ASK_YN_RE.search(approval_tail):
         act = "ask"
     else:
         act = "wait"   # running だが work/question/ask でない = ユーザー入力待ち
