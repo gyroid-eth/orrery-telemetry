@@ -206,7 +206,7 @@ def _isolated_claude_catalog(monkeypatch, tmp_path):
 
 def test_claude_catalog_adds_picker_choices_without_changing_default(monkeypatch):
     from dashboard import claude_models
-    monkeypatch.setattr(claude_models, "discover_catalog", lambda: (("claude-future-9",), ()))
+    monkeypatch.setattr(claude_models, "discover_catalog", lambda: (("claude-future-9",), (), (), ()))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
     monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model, "program": spec.program})
@@ -225,12 +225,14 @@ def test_claude_catalog_adds_picker_choices_without_changing_default(monkeypatch
 def test_claude_overflow_models_are_listed_without_the_default(monkeypatch):
     from dashboard import claude_models
     monkeypatch.setattr(claude_models, "discover_catalog",
-                        lambda: (("claude-opus-5-5", "claude-opus-4-8"), ("claude-opus-5-5", "claude-opus-4-8")))
+                        lambda: (("claude-opus-5-5", "claude-opus-4-8"), (), ("claude-opus-5-5", "claude-opus-4-8"), ()))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
     assert claude["default_model"] == "claude-opus-5-5"
-    assert claude["overflow_models"] == ["claude-opus-4-8"]
+    # opus-4-8 from the catalog; opus-5 from the bundled table (the catalog
+    # does not list it as main); the default is never folded.
+    assert claude["overflow_models"] == ["claude-opus-5", "claude-opus-4-8"]
     assert "claude-opus-4-8" in claude["models"]
 
 

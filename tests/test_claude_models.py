@@ -172,23 +172,47 @@ def test_formal_id_validation_is_independent_of_catalog(value, valid):
     assert catalog.is_model_id(value) is valid
 
 
-def test_overflow_section_is_reported_for_display_only(profile):
-    data = document("claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6")
-    rows = data["catalog"]["config"]["models"]
-    rows[0]["section"] = "main"
-    rows[1]["section"] = "overflow"
-    rows[2]["section"] = "overflow"
-    write(profile, data)
-    resolved = catalog.resolve_catalog(FALLBACK)
+def _sectioned(entries, fetched=100, stale=2000):
+    data = document(*[m for m, _ in entries], fetched=fetched, stale=stale)
+    for row, (_, section) in zip(data["catalog"]["config"]["models"], entries):
+        if section:
+            row["section"] = section
+    return data
+
+
+def test_fresh_sections_decide_the_fold(profile):
+    write(profile, _sectioned([("claude-opus-5-5", "main"), ("claude-opus-4-8", "overflow"),
+                               ("claude-sonnet-4-6", "overflow")]))
+    resolved = catalog.resolve_catalog(FALLBACK, bundled_overflow=())
     assert resolved.source == "local_cache"
     assert resolved.models == ("claude-sonnet-5", "claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6")
     assert resolved.overflow == ("claude-opus-4-8", "claude-sonnet-4-6")
 
 
-def test_no_overflow_without_a_fresh_catalog(profile):
-    data = document("claude-opus-4-8", stale=500)
-    data["catalog"]["config"]["models"][0]["section"] = "overflow"
-    write(profile, data)
-    resolved = catalog.resolve_catalog(FALLBACK)
-    assert resolved == catalog.ModelCatalog(FALLBACK, "bundled")
-    assert resolved.overflow == ()
+def test_bundled_table_folds_without_any_catalog(profile):
+    resolved = catalog.resolve_catalog((*FALLBACK, "claude-opus-5"), bundled_overflow=("claude-opus-5",))
+    assert resolved.source == "bundled"
+    assert resolved.overflow == ("claude-opus-5",)
+
+
+def test_stale_catalog_only_folds_existing_candidates(profile):
+    write(profile, _sectioned([("claude-sonnet-5", "overflow"), ("claude-new-9", "overflow")], stale=500))
+    resolved = catalog.resolve_catalog(FALLBACK, bundled_overflow=())
+    assert resolved.models == FALLBACK  # a stale cache never adds candidates
+    assert resolved.overflow == ("claude-sonnet-5",)
+
+
+def test_fresh_main_overrides_the_bundled_table_but_stale_main_does_not(profile):
+    write(profile, _sectioned([("claude-opus-5", "main")]))
+    fresh = catalog.resolve_catalog((*FALLBACK, "claude-opus-5"), bundled_overflow=("claude-opus-5",))
+    assert fresh.overflow == ()
+    write(profile, _sectioned([("claude-opus-5", "main")], stale=500))
+    stale = catalog.resolve_catalog((*FALLBACK, "claude-opus-5"), bundled_overflow=("claude-opus-5",))
+    assert stale.overflow == ("claude-opus-5",)
+
+
+def test_future_or_inverted_catalog_windows_are_ignored(profile):
+    write(profile, _sectioned([("claude-sonnet-5", "overflow")], fetched=5000, stale=9000))
+    assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()).overflow == ()
+    write(profile, _sectioned([("claude-sonnet-5", "overflow")], fetched=900, stale=800))
+    assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()).overflow == ()
