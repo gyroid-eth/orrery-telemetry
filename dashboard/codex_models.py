@@ -20,6 +20,10 @@ DEFAULT_MODELS = (
     DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
     "gpt-5.6-luna", "gpt-6-luna",
 )
+# Listed models shown under NEW AGENT's "more models" fold. A fixed table (a product
+# call), not a version comparison; the default is never folded, and models the
+# catalog hides (`visibility` other than "list") never reach this list at all.
+BUNDLED_OVERFLOW = ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
 ALIASES = {"sol": "gpt-6-sol", "luna": "gpt-6-luna",
            "astra": "gpt-6-astra", "terra": "gpt-5.6-terra"}
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
@@ -28,6 +32,7 @@ MODEL_RE = re.compile(r"gpt-[a-z0-9]+(?:[._-][a-z0-9]+)*")
 MAX_BYTES = 2 * 1024 * 1024
 MAX_MODELS = 256
 CACHE_TTL_SECONDS = 300  # Codex CLI rust-v0.154.0 models-manager default.
+MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is still read.
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class ModelCatalog:
     source: str
     efforts: dict[str, EffortPolicy]
     error: str = ""
+    overflow: tuple[str, ...] = ()
 
 
 def is_model_id(value: object) -> bool:
@@ -87,7 +93,13 @@ def normalize_model(raw: str = "") -> str:
 
 
 def _cache_open_path(path: Path) -> Path | None:
-    """Return a cache path safe to open without arbitrary symlink following."""
+    """Return a cache path safe to open without arbitrary symlink following.
+
+    The launcher links each child home's entries to its parent's home, so a
+    Codex grandchild sees a chain (grandchild -> child -> original). Every hop
+    but the last must be a launcher-owned child home entry; the chain is
+    bounded and a revisited link is rejected.
+    """
     if not path.is_symlink():
         return path
     runtime_raw = os.environ.get("AGENTSTACK_RUNTIME_DIR", "").strip()
@@ -97,19 +109,35 @@ def _cache_open_path(path: Path) -> Path | None:
     if not runtime.is_absolute():
         return None
     child_root = runtime / "child-agents"
-    home = path.parent
-    if home.parent != child_root or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None:
-        return None
-    try:
-        target = Path(os.readlink(path))
-    except OSError:
-        return None
-    if not target.is_absolute() or target.name != "models_cache.json":
-        return None
-    return target
+    real_child_root = Path(os.path.realpath(child_root))
+    current, seen = path, set()
+    for _ in range(MAX_CACHE_LINK_HOPS):
+        home = current.parent
+        if (current.name != "models_cache.json" or home.parent != child_root
+                or re.fullmatch(r"[A-Za-z0-9_.-]+\.codex-home", home.name) is None
+                or current in seen):
+            return None
+        # The name check is textual; a home that is itself a symlink (or whose
+        # real location is elsewhere) would lead the chain outside child-agents.
+        if home.is_symlink() or Path(os.path.realpath(home)) != real_child_root / home.name:
+            return None
+        seen.add(current)
+        try:
+            target = Path(os.readlink(current))
+        except OSError:
+            return None
+        if not target.is_absolute() or target.name != "models_cache.json":
+            return None
+        if not target.is_symlink():
+            return target
+        current = target
+    return None
 
 
-def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
+def _read_cache(path: Path, now: float,
+                hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
+    """Listed models' effort policies; `hidden_out` receives the models a valid
+    snapshot explicitly hides (a row with a visibility other than "list")."""
     try:
         open_path = _cache_open_path(path)
         if open_path is None:
@@ -145,10 +173,13 @@ def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
         if not isinstance(rows, list) or not rows or len(rows) > MAX_MODELS:
             return {}
         policies: dict[str, EffortPolicy] = {}
+        hidden: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
                 return {}
             if row.get("visibility") != "list":
+                if "visibility" in row and is_model_id(row.get("slug")):
+                    hidden.add(row["slug"])
                 continue
             model = row.get("slug")
             levels = row.get("supported_reasoning_levels")
@@ -164,18 +195,21 @@ def _read_cache(path: Path, now: float) -> dict[str, EffortPolicy]:
             if model in policies and policies[model] != policy:
                 return {}  # Conflicting duplicate metadata is not a trustworthy snapshot.
             policies[model] = policy
+        if hidden_out is not None:
+            hidden_out.update(hidden - set(policies))
         return policies
     except (OSError, ValueError, UnicodeError, RecursionError, OverflowError):
         return {}
 
 
-def discover_models(now: float | None = None) -> dict[str, EffortPolicy]:
+def discover_models(now: float | None = None,
+                    hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
     """Read one observed-schema cache; do not identify the current account."""
     try:
         root = Path(os.environ.get("CODEX_HOME", "").strip() or "~/.codex").expanduser()
         if not root.is_absolute():
             return {}
-        return _read_cache(root / "models_cache.json", time.time() if now is None else now)
+        return _read_cache(root / "models_cache.json", time.time() if now is None else now, hidden_out)
     except (OSError, RuntimeError, ValueError):
         return {}
 
@@ -185,11 +219,20 @@ def resolve_catalog(now: float | None = None) -> ModelCatalog:
         allowed = _allow_list()
     except ValueError as exc:
         return ModelCatalog((), "override", {}, str(exc))
-    discovered = discover_models(now)
+    hidden: set[str] = set()
+    discovered = discover_models(now, hidden)
     policies = {**BUNDLED_EFFORTS, **discovered}
-    models = allowed if allowed is not None else tuple(dict.fromkeys((*DEFAULT_MODELS, *discovered)))
+    # A fresh catalog that hides a bundled candidate removes it from the menu.
+    # The default stays: it is the launcher's fixed contract. An explicit
+    # allow-list is the operator's own menu and wins over the catalog.
+    bundled = tuple(model for model in DEFAULT_MODELS if model == DEFAULT_MODEL or model not in hidden)
+    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *discovered)))
     source = "override" if allowed is not None else ("local_cache" if discovered else "bundled")
-    return ModelCatalog(models, source, policies)
+    # An explicit allow-list is the operator's own menu and is not folded,
+    # matching the Claude provider.
+    overflow = () if allowed is not None else tuple(
+        model for model in models if model in BUNDLED_OVERFLOW and model != DEFAULT_MODEL)
+    return ModelCatalog(models, source, policies, overflow=overflow)
 
 
 def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = None) -> str:
@@ -216,6 +259,7 @@ def provider_catalog() -> dict:
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": list(catalog.models), "default_model": DEFAULT_MODEL,
         "model_source": catalog.source, "model_error": catalog.error,
+        "overflow_models": list(catalog.overflow),
         "efforts": list(_STANDARD), "effort_default": DEFAULT_EFFORT,
         "model_efforts": {model: list(catalog.efforts[model].supported) if model in catalog.efforts else [] for model in catalog.models},
         "model_effort_defaults": {model: catalog.efforts[model].default if model in catalog.efforts else "" for model in catalog.models},

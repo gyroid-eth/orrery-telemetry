@@ -187,7 +187,7 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6-sol",
-        "model_source": "override", "model_error": "",
+        "model_source": "override", "model_error": "", "overflow_models": [],
         "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
         "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
@@ -201,6 +201,17 @@ def test_spawn_names_uses_current_codex_defaults(monkeypatch, tmp_path):
         "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
         "gpt-5.6-luna", "gpt-6-luna",
     ]
+
+
+def test_spawn_names_folds_older_codex_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    codex = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "codex")
+    assert codex["overflow_models"] == ["gpt-5.6-sol", "gpt-5.6-luna"]
+    assert codex["default_model"] not in codex["overflow_models"]
+    assert set(codex["overflow_models"]) <= set(codex["models"])
 
 
 @pytest.fixture(autouse=True)
