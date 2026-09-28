@@ -17,8 +17,13 @@ with. The lifecycle is:
    ``<agent>.claude-launch.<session_id>.json``. A later /clear in the same
    process gets a new session id and is bound the same way.
 3. dashboard ``do_resume`` looks up the record for the exact session id it is
-   about to resume (``claude --resume`` keeps the id). No record means the
-   conversation was not started with --chrome.
+   about to resume (``claude --resume`` keeps the id) and passes its launch id
+   on, so a /clear after the resume is bound to the same launch.
+4. The policy text carries a launch-id marker, so the transcript itself shows
+   that a conversation was started with --chrome. A conversation with the
+   marker but no bound record (the SessionStart write failed) is not mistaken
+   for one started without --chrome: resume binds it from the launch's record,
+   or stops when that record is gone.
 
 The deviceId is a selection policy the child is told to follow, not a
 technical binding: Claude Code has no flag that pins Claude in Chrome to one
@@ -27,7 +32,7 @@ compaction) because a resumed transcript alone may carry an older selection.
 
 Usage:
   claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1>
-  claude_chrome_policy.py prompt <device|""> <standalone 0|1>
+  claude_chrome_policy.py prompt <device|""> <standalone 0|1> <launch_id>
   claude_chrome_policy.py session <dir> <agent> <session_id> <launch_id|"">
 """
 from __future__ import annotations
@@ -73,7 +78,16 @@ def session_path(directory: str, agent: str, session_id: str) -> str:
     return os.path.join(directory, f"{agent}.claude-launch.{session_id}.json")
 
 
-def policy_text(device: str, standalone: bool) -> str:
+MARKER = "Claude in Chrome launch id: "
+MARKER_RE = re.compile(re.escape(MARKER) + r"([A-Za-z0-9-]{8,128})")
+
+
+def policy_text(device: str, standalone: bool, launch_id: str = "") -> str:
+    marker = f" ({MARKER}{launch_id})" if launch_id else ""
+    return _policy_body(device, standalone) + marker
+
+
+def _policy_body(device: str, standalone: bool) -> str:
     report_to = "the operator" if standalone else "your parent agent"
     if device:
         return (
@@ -188,6 +202,33 @@ def prepare(directory: str, agent: str, launch_id: str, device: str,
     })
 
 
+def find_launch(directory: str, agent: str, launch_id: str) -> dict | None:
+    """Any valid record (pending or bound) of this launch, or None."""
+    _check_names(agent, launch_id)
+    pending = pending_path(directory, agent, launch_id)
+    candidates = [pending] + sorted(
+        glob.glob(os.path.join(directory, f"{agent}.claude-launch.*.json")))
+    for path in candidates:
+        try:
+            candidate = read_record(path, agent)
+        except RecordError:
+            continue
+        if candidate is not None and candidate["launch_id"] == launch_id:
+            return candidate
+    return None
+
+
+def transcript_launch_id(path: str, limit: int = 1 << 20) -> str:
+    """The launch-id marker in a transcript's first ``limit`` bytes, or ""."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    match = MARKER_RE.search(head)
+    return match.group(1) if match else ""
+
+
 def claim(directory: str, agent: str, session_id: str, launch_id: str) -> dict | None:
     """Bind this session to its launch; return the record or None.
 
@@ -200,25 +241,13 @@ def claim(directory: str, agent: str, session_id: str, launch_id: str) -> dict |
         return state
     if not launch_id:
         return None
-    _check_names(agent, launch_id)
-    source = None
-    pending = pending_path(directory, agent, launch_id)
-    candidates = [pending] + sorted(
-        glob.glob(os.path.join(directory, f"{agent}.claude-launch.*.json")))
-    for path in candidates:
-        try:
-            candidate = read_record(path, agent)
-        except RecordError:
-            continue
-        if candidate is not None and candidate["launch_id"] == launch_id:
-            source = candidate
-            break
+    source = find_launch(directory, agent, launch_id)
     if source is None:
         raise RecordError("no launch record for this session's launch id")
     state = {**source, "session_id": session_id}
     _write(session_path(directory, agent, session_id), state)
     try:
-        os.unlink(pending)
+        os.unlink(pending_path(directory, agent, launch_id))
     except OSError:
         pass
     return state
@@ -233,10 +262,12 @@ def main(argv: list[str]) -> int:
         if command == "prepare" and len(args) == 5:
             prepare(args[0], args[1], args[2], args[3], args[4] == "1")
             return 0
-        if command == "prompt" and len(args) == 2:
+        if command == "prompt" and len(args) == 3:
             if not valid_device(args[0]):
                 raise RecordError("invalid deviceId")
-            sys.stdout.write(policy_text(args[0], args[1] == "1"))
+            if not TOKEN_RE.fullmatch(args[2]):
+                raise RecordError("invalid launch id")
+            sys.stdout.write(policy_text(args[0], args[1] == "1", args[2]))
             return 0
         if command == "session" and len(args) == 4:
             # A session-start hook must never fail the session; a bad record
@@ -248,16 +279,20 @@ def main(argv: list[str]) -> int:
                         return 0
                     raise RecordError("the session id is unknown")
                 state = claim(directory, agent, session_id, launch_id)
-            except RecordError as exc:
+            except (RecordError, OSError) as exc:
+                # Includes a failed write while binding: the model must still
+                # hear "no browser", not silence.
+                reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
                 print(
                     "Browser: this session's Claude in Chrome launch record is "
-                    f"invalid ({exc}), so the target browser is unknown. Use no "
-                    "browser tool, and report this to your parent agent or the "
-                    "operator."
+                    f"invalid or could not be saved ({reason}), so the target "
+                    "browser is unknown. Use no browser tool, and report this to "
+                    "your parent agent or the operator."
                 )
                 return 0
             if state is not None:
-                print(policy_text(state["chrome_device"], state["standalone"]))
+                print(policy_text(state["chrome_device"], state["standalone"],
+                                  state["launch_id"]))
             return 0
     except (OSError, RecordError) as exc:
         print(f"claude_chrome_policy: {command}: {exc}", file=sys.stderr)

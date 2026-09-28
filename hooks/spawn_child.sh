@@ -1540,7 +1540,8 @@ claude_chrome_prompt_block() {
     [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
     local text
     text="$(python3 "$HOOKS_DIR/claude_chrome_policy.py" prompt \
-        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)")" || return 1
+        "$CLAUDE_CHILD_CHROME_DEVICE" "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" \
+        "$CLAUDE_CHROME_LAUNCH_ID")" || return 1
     printf '\n\n%s' "$text"
 }
 
@@ -1549,18 +1550,30 @@ claude_chrome_prompt_block() {
 # earlier conversations under the same name are never touched, so a failed
 # launch cannot change what they resume with. The child's first SessionStart
 # binds the pending record to its session id via AGENTSTACK_CLAUDE_LAUNCH_ID.
+# A launch that fails removes its own pending record (the failure traps call
+# discard_claude_launch_record); records of other launches are never touched.
 CLAUDE_CHROME_TMUX_ENV=()
+CLAUDE_CHROME_LAUNCH_ID=""
+CLAUDE_CHROME_PENDING_RECORD=""
 prepare_claude_launch_record() {
     CLAUDE_CHROME_TMUX_ENV=()
     [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
     local launch_id
     launch_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
+    CLAUDE_CHROME_LAUNCH_ID="$launch_id"
+    CLAUDE_CHROME_PENDING_RECORD="$CHILD_STATE_DIR/$CHILD_NAME.claude-launch.pending-$launch_id.json"
     mkdir -p "$CHILD_STATE_DIR" || return 1
     chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || true
     python3 "$HOOKS_DIR/claude_chrome_policy.py" prepare "$CHILD_STATE_DIR" "$CHILD_NAME" \
         "$launch_id" "$CLAUDE_CHILD_CHROME_DEVICE" \
         "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" || return 1
     CLAUDE_CHROME_TMUX_ENV=(-e "AGENTSTACK_CLAUDE_LAUNCH_ID=$launch_id")
+}
+
+discard_claude_launch_record() {
+    if [[ -n "$CLAUDE_CHROME_PENDING_RECORD" ]]; then
+        rm -f -- "$CLAUDE_CHROME_PENDING_RECORD" 2>/dev/null || true
+    fi
 }
 
 build_codex_mail_task_prompt() {
@@ -1665,6 +1678,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$PRE_REGISTERED_TOKEN_CREATED" == true ]]; then
             rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
         fi
+        discard_claude_launch_record
         cleanup_worktree
         if [[ -f "$MANAGED_FILE" ]]; then
             python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
@@ -2462,6 +2476,7 @@ print(json.dumps({'project_key': sys.argv[1], 'agent_name': sys.argv[2]}))
     fi
     # worktree も作っていれば撤去
     cleanup_worktree
+    discard_claude_launch_record
     rm -f "${CHILD_TOKEN_FILE:-}" "$CHILD_STATE_DIR/${CHILD_NAME:-}.json"
     if [[ -n "${CHILD_NAME:-}" && -f "$MANAGED_FILE" ]]; then
         python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true

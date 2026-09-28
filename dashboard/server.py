@@ -2577,30 +2577,47 @@ def _claude_chrome_policy_module():
     raise RuntimeError("claude_chrome_policy.py is unavailable")
 
 
-def _claude_child_chrome(session: str, sid: str) -> tuple[bool, str, str]:
-    """Return (``--chrome`` requested, deviceId, error) for one Claude resume.
+def _claude_child_chrome(session: str, sid: str,
+                         transcript: str = "") -> tuple[bool, str, str]:
+    """Return (``--chrome`` requested, launch id, error) for one Claude resume.
 
     The record is bound to the conversation (session id), not only to the
     agent name, so a later launch under the same name cannot change what this
-    conversation resumes with. No record means it was not started with
-    ``--claude-chrome``, and the resume command stays unchanged. A record that
-    exists but cannot be validated stops the resume: resuming without it could
-    leave a session with the user's default Chrome integration and no known
-    target browser."""
+    conversation resumes with. Without a bound record, the transcript's
+    launch-id marker tells a conversation started with ``--claude-chrome``
+    (whose SessionStart could not save the binding) apart from one started
+    without it; the former resumes from its launch's record, or stops when
+    that record is gone. A record that exists but cannot be validated stops
+    the resume: resuming without it could leave a session with the user's
+    default Chrome integration and no known target browser."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", session or ""):
         return False, "", ""
     directory = os.path.join(RUNTIME_DIR, "child-agents")
     path = os.path.join(directory, f"{session}.claude-launch.{sid}.json")
-    if not os.path.lexists(path):
-        return False, "", ""
     try:
         policy = _claude_chrome_policy_module()
-        state = policy.session_record(directory, session, sid)
+    except Exception as exc:  # noqa: BLE001
+        if os.path.lexists(path):
+            return False, "", f"Claude in Chrome launch record is invalid: {exc}"
+        return False, "", ""
+    try:
+        if os.path.lexists(path):
+            state = policy.session_record(directory, session, sid)
+        else:
+            launch_id = policy.transcript_launch_id(transcript) if transcript else ""
+            if not launch_id:
+                return False, "", ""
+            state = policy.find_launch(directory, session, launch_id)
+            if state is None:
+                return False, "", (
+                    "Claude in Chrome launch record is invalid: this conversation "
+                    "was started with --claude-chrome but its launch record is gone"
+                )
     except Exception as exc:  # noqa: BLE001 - any failure is fail-closed
         return False, "", f"Claude in Chrome launch record is invalid: {exc}"
     if state is None:
         return False, "", ""
-    return True, state["chrome_device"], ""
+    return True, state["launch_id"], ""
 
 
 def do_resume(session: str) -> dict:
@@ -2672,11 +2689,19 @@ def do_resume(session: str) -> dict:
     # A child started with --claude-chrome gets --chrome back on resume. Its
     # browser policy is repeated by session-start-reminder.sh from the same
     # launch record, so the resumed model re-checks the target browser.
-    chrome, _chrome_device, chrome_error = _claude_child_chrome(session, sid)
+    chrome, chrome_launch_id, chrome_error = _claude_child_chrome(session, sid, path)
     if chrome_error:
         return {"ok": False, "error": chrome_error}
     if chrome:
-        inner += ' --chrome'
+        # The launch id lets the SessionStart hook bind this session, and a
+        # later /clear in it, to the same launch record.
+        inner = (
+            'export PATH="$HOME/.local/bin:$PATH"; '
+            f'export AGENT_NAME={session}; '
+            f'export AGENTSTACK_RUNTIME_DIR={shlex.quote(RUNTIME_DIR)}; '
+            f'export AGENTSTACK_CLAUDE_LAUNCH_ID={shlex.quote(chrome_launch_id)}; '
+            f'exec {ABS_CLAUDE} --resume {sid} -n {session} --chrome'
+        )
 
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が

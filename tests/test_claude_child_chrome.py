@@ -333,6 +333,8 @@ def test_policy_reaches_every_first_prompt(tmp_path, mode):
     assert "not a technical lock" in log
     report_to = "the operator" if mode == "standalone" else "your parent agent"
     assert f"report it to {report_to}" in log
+    # The transcript itself shows the launch (see do_resume).
+    assert f"(Claude in Chrome launch id: {_launch_id(env)})" in log
 
 
 def test_without_a_device_the_child_holds_all_browser_actions(tmp_path):
@@ -402,6 +404,9 @@ def test_a_later_launch_never_changes_an_earlier_conversation(tmp_path, second):
     policy = _load_policy()
     state = policy.session_record(str(_state_dir(env)), "Reused", SID)
     assert state["chrome_device"] == "win-original"
+    if second == "failed-chrome":
+        # The failed launch removed its own pending record, nothing else.
+        assert _records(env, "Reused") == [_state_dir(env) / f"Reused.claude-launch.{SID}.json"]
     if second == "chrome":
         assert "deviceId mac-after" in _bind(env, "Reused", OTHER_SID)
         assert policy.session_record(str(_state_dir(env)), "Reused", SID)["chrome_device"] == "win-original"
@@ -471,6 +476,19 @@ def test_session_binding_resume_clear_and_bad_records(tmp_path):
     assert "0600" in _policy("session", d, "A", OTHER_SID, "").stdout
 
 
+def test_a_failed_binding_write_still_says_no_browser(tmp_path):
+    d = tmp_path / "state"
+    assert _policy("prepare", str(d), "A", LAUNCH, "dev-1", "0").returncode == 0
+    d.chmod(0o500)
+    try:
+        out = _policy("session", str(d), "A", SID, LAUNCH)
+    finally:
+        d.chmod(0o700)
+    assert out.returncode == 0
+    assert "could not be saved" in out.stdout
+    assert "Use no browser tool" in out.stdout
+
+
 def test_a_record_renamed_to_another_session_is_rejected(tmp_path):
     d = str(tmp_path)
     assert _policy("prepare", d, "A", LAUNCH, "dev-1", "0").returncode == 0
@@ -516,9 +534,9 @@ def _bound_record(tmp_path, name="ResumeChild", session_id=SID, device="win-brav
     return pathlib.Path(d) / f"{name}.claude-launch.{session_id}.json"
 
 
-def _resume(monkeypatch, tmp_path, session="ResumeChild"):
+def _resume(monkeypatch, tmp_path, session="ResumeChild", transcript_text=""):
     transcript = tmp_path / f"{SID}.jsonl"
-    transcript.write_text("", encoding="utf-8")
+    transcript.write_text(transcript_text, encoding="utf-8")
     claude = tmp_path / "claude"
     claude.write_text("", encoding="utf-8")
     launched = []
@@ -544,7 +562,42 @@ def test_resume_without_a_record_is_unchanged(monkeypatch, tmp_path):
 def test_resume_of_a_chrome_child_adds_chrome(monkeypatch, tmp_path):
     _bound_record(tmp_path)
     _result, launched = _resume(monkeypatch, tmp_path)
-    assert launched[0][-1].endswith(f"--resume {SID} -n ResumeChild --chrome")
+    inner = launched[0][-1]
+    assert inner.endswith(f"--resume {SID} -n ResumeChild --chrome")
+    assert f"export AGENTSTACK_CLAUDE_LAUNCH_ID={LAUNCH}; " in inner
+    assert f"export AGENTSTACK_RUNTIME_DIR={tmp_path / 'runtime'}; " in inner
+
+
+def test_clear_after_resume_stays_bound_to_the_launch(monkeypatch, tmp_path):
+    """resume -> /clear (new session id) -> resume of the cleared session."""
+    _bound_record(tmp_path)
+    _result, launched = _resume(monkeypatch, tmp_path)
+    launch_id = launched[0][-1].split("AGENTSTACK_CLAUDE_LAUNCH_ID=", 1)[1].split(";", 1)[0]
+    d = str(tmp_path / "runtime" / "child-agents")
+    # The resumed process's SessionStart after /clear:
+    out = _policy("session", d, "ResumeChild", OTHER_SID, launch_id).stdout
+    assert "deviceId win-brave" in out
+    state = _load_policy().session_record(d, "ResumeChild", OTHER_SID)
+    assert state["launch_id"] == LAUNCH
+
+
+MARKED = f'{{"type":"user","message":"... (Claude in Chrome launch id: {LAUNCH})"}}\n'
+
+
+def test_unbound_marked_conversation_resumes_from_its_launch_record(monkeypatch, tmp_path):
+    d = str(tmp_path / "runtime" / "child-agents")
+    assert _policy("prepare", d, "ResumeChild", LAUNCH, "win-brave", "0").returncode == 0
+    _result, launched = _resume(monkeypatch, tmp_path, transcript_text=MARKED)
+    inner = launched[0][-1]
+    assert inner.endswith("--chrome")
+    assert f"AGENTSTACK_CLAUDE_LAUNCH_ID={LAUNCH}" in inner
+
+
+def test_unbound_marked_conversation_without_any_record_stops(monkeypatch, tmp_path):
+    result, launched = _resume(monkeypatch, tmp_path, transcript_text=MARKED)
+    assert launched == []
+    assert result["ok"] is False
+    assert "started with --claude-chrome but its launch record is gone" in result["error"]
 
 
 def test_resume_ignores_records_of_other_conversations(monkeypatch, tmp_path):
