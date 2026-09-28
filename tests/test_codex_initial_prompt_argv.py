@@ -279,14 +279,33 @@ def test_a_dialog_phrase_quoted_in_the_task_sends_no_keys(tmp_path, phrase):
 @pytest.mark.parametrize("phrase", [
     "Do you trust the contents of this directory?", "Use existing model", "Press enter to continue",
 ])
-def test_a_dialog_phrase_on_its_own_line_in_the_answer_sends_no_keys(tmp_path, phrase):
-    # Codex's answer renders as "• ..." and indented continuation lines; a
-    # phrase inside a sentence of it is no dialog either.
+def test_a_dialog_phrase_quoted_in_a_sentence_of_the_answer_sends_no_keys(tmp_path, phrase):
     answer = STARTED.replace("• Working (1s • esc to interrupt)",
                              f"• The phrase \"{phrase}\" appears in dialogs.")
     result, keys, _ = _watch(tmp_path, [answer])
     assert "STATUS=0" in result.stdout
     assert keys == []
+
+
+@pytest.mark.parametrize("phrase", [
+    "Do you trust the contents of this directory?", "Use existing model", "Press enter to continue",
+    "1. Trust and continue",
+])
+def test_a_dialog_phrase_on_its_own_line_of_the_answer_sends_no_keys(tmp_path, phrase):
+    # The answer puts the phrase on a line of its own, exactly as a dialog
+    # would; it is still transcript, above the composer.
+    answer = STARTED.replace("• Working (1s • esc to interrupt)",
+                             f"• The menu label is:\n\n  {phrase}\n\n• Working (2s • esc to interrupt)")
+    result, keys, _ = _watch(tmp_path, [answer])
+    assert "STATUS=0 VERIFIED=true" in result.stdout
+    assert keys == []
+
+
+def test_a_trust_dialog_below_a_provisional_composer_is_answered(tmp_path):
+    # Whatever is drawn after the last composer marker is a candidate dialog.
+    result, keys, _ = _watch(tmp_path, [PROVISIONAL + "\n" + TRUST, STARTED])
+    assert "STATUS=0" in result.stdout
+    assert keys == ["send-keys -t Child C-m"]
 
 
 def test_a_real_trust_dialog_over_the_task_is_still_answered(tmp_path):

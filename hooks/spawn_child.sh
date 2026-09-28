@@ -1277,11 +1277,19 @@ codex_task_on_screen() {
 # With the task on screen from the first frame, a dialog phrase anywhere in the
 # pane is no longer evidence of a dialog: the task itself, or Codex's answer,
 # may quote "Do you trust ...", "Use existing model" or "Press enter to
-# continue". So only whole lines laid out as a dialog count (a numbered option
-# row, a lone option, the dialog's own footer), and lines that are part of the
-# task text are set aside first.
+# continue", on a line of their own. So three things must hold: the line is
+# laid out as a dialog element (a numbered option row, a lone option, the
+# dialog's own footer); it is not part of the task text; and it is not above
+# the conversation's composer. A dialog is drawn in place of the composer, while
+# the transcript (task and answers) sits above it, so only what follows the
+# last composer marker ("Ask Codex to do anything", "? for shortcuts", "esc to
+# interrupt") is considered.
 codex_startup_screen() {
     local pane_text="$1" prompt_text="$2" task_key line key rest=""
+    pane_text="$(printf '%s\n' "$pane_text" | awk '
+        /Ask Codex to do anything|\? for shortcuts|esc to interrupt/ { buf = ""; next }
+        { buf = buf $0 "\n" }
+        END { printf "%s", buf }')"
     task_key="$(injection_match_key "$prompt_text")"
     while IFS= read -r line; do
         key="$(injection_match_key "$line")"
