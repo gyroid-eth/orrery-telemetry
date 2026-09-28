@@ -243,7 +243,9 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=10,
+        # Without a history-binding receipt the launcher's watch runs all its
+        # polls (each starts the status helper); allow for a loaded machine.
+        timeout=60,
         check=False,
     )
 
@@ -392,7 +394,9 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=10,
+        # Without a history-binding receipt the launcher's watch runs all its
+        # polls (each starts the status helper); allow for a loaded machine.
+        timeout=60,
         check=False,
     )
 
