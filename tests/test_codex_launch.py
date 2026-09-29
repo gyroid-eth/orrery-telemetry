@@ -72,7 +72,7 @@ def _run_bash(script: str, env: dict[str, str] | None = None,
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
-    return subprocess.run(
+    result = subprocess.run(
         ["bash", "-c", script],
         cwd=_ROOT,
         env=run_env,
@@ -81,6 +81,25 @@ def _run_bash(script: str, env: dict[str, str] | None = None,
         stderr=subprocess.PIPE,
         check=check,
     )
+    # An extracted function that calls a helper the test did not extract fails
+    # with "command not found", which a guard in an `if` silently reads as false.
+    assert "command not found" not in result.stderr, result.stderr
+    return result
+
+
+# Everything claude_accept_trust_dialog needs, in one place, so a new guard it
+# calls cannot be left out of the extraction.
+def _claude_trust_helpers() -> str:
+    return "\n".join(_extract(name) for name in (
+        "pane_nonblank_tail",
+        "pane_normalize_nbsp",
+        "claude_trust_dialog_present",
+        "claude_user_prompt_present",
+        "claude_choice_block_kind",
+        "claude_trust_screen_to_answer",
+        "claude_unknown_choice_present",
+        "claude_accept_trust_dialog",
+    ))
 
 
 def _ready(pane: str) -> bool:
@@ -542,7 +561,7 @@ tmux() {
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
     ready = _extract("pane_nonblank_tail") + "\n" + _extract("pane_normalize_nbsp") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
-    trust = _extract("claude_trust_dialog_present") + "\n" + _extract("claude_user_prompt_present") + "\n" + _extract("claude_trust_screen_to_answer") + "\n" + _extract("claude_accept_trust_dialog")
+    trust = _claude_trust_helpers()
 
     gated = _run_bash(
         ready + '\nclaude_pane_ready "$PANE"\n',
@@ -1042,17 +1061,7 @@ def _accept_with_screens(screens: list[str]) -> str:
         "SCREENS=(" + " ".join(f'"$SCREEN_{i}"' for i in range(len(screens))) + ")\n"
         + "\n".join(stub_lines)
         + "\n"
-        + _extract("pane_normalize_nbsp")
-        + "\n"
-        + _extract("claude_trust_dialog_present")
-        + "\n"
-        + _extract("claude_user_prompt_present")
-        + "\n"
-        + _extract("claude_trust_screen_to_answer")
-        + "\n"
-
-        + "\n"
-        + _extract("claude_accept_trust_dialog")
+        + _claude_trust_helpers()
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
     )
     return _run_bash(script, env).stdout

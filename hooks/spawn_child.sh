@@ -1095,30 +1095,94 @@ claude_pane_ready() {
     return 1
 }
 
-# The trust dialog is on screen and nothing the launcher must not answer is:
-# no user question and no choice rows other than the trust dialog's own. A
-# trust line left higher on the screen does not make an unknown choice screen
-# below it a trust dialog.
-claude_trust_screen_to_answer() {
-    claude_trust_dialog_present "$1" \
-        && ! claude_user_prompt_present "$1" \
-        && ! claude_unknown_choice_present "$1"
+# Classifies the bottom-most active choice on the screen, by structure rather
+# than by listing words. Prints one of:
+#   trust  -- the active choice is Claude's trust dialog and nothing else
+#   other  -- some other choice is active (never answered by the launcher)
+#   none   -- no active choice (a ready prompt, startup output, ...)
+# The active choice is the lowest selected row ("❯ <text>") together with the
+# rows aligned to its text column directly above and below it (Claude draws
+# unselected options at that column). It is the trust dialog only when its
+# options are exactly "Yes, I trust this folder" and "No, exit" and nothing but
+# the confirm footer follows it. The old wording ("Do you trust ...", plain
+# Yes / No rows, no cursor) counts only when nothing but those rows and the
+# footer follows the question. A trust line left higher on the screen never
+# makes a later, different choice a trust dialog.
+claude_choice_block_kind() {
+    printf '%s\n' "$1" | pane_normalize_nbsp | LC_ALL=C awk '
+        function trim(t) { sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t); return t }
+        function unnumber(t) { sub(/^[0-9]+\.[[:space:]]*/, "", t); return t }
+        function footer(t) { return t ~ /Enter to confirm/ || t ~ /Esc to / }
+        function lead(t,   k) { k = match(t, /[^ ]/); return k ? k : 0 }
+        { line[NR] = $0 }
+        END {
+            n = NR
+            while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--
+            glyph = "\342\235\257"   # U+276F, the selection cursor
+            sel = 0
+            for (i = n; i >= 1; i--) {
+                c = index(line[i], glyph)
+                if (c == 0 || substr(line[i], 1, c - 1) !~ /^ *$/) continue
+                rest = substr(line[i], c + 3)
+                if (rest !~ /[^[:space:]]/ || rest ~ /^[[:space:]]*Try "/) continue
+                sel = i; break
+            }
+            if (sel == 0) {
+                q = 0
+                for (i = n; i >= 1; i--) if (line[i] ~ /Do you trust/) { q = i; break }
+                if (q == 0) {
+                    for (i = 1; i <= n; i++) if (line[i] ~ /Enter to confirm/) { print "other"; exit }
+                    print "none"; exit
+                }
+                opts = 0
+                for (i = q + 1; i <= n; i++) {
+                    t = unnumber(trim(line[i]))
+                    if (t == "" || footer(t)) continue
+                    if (t != "Yes" && t != "No") { print "other"; exit }
+                    opts++
+                }
+                print (opts > 0 ? "trust" : "none"); exit
+            }
+            rest = substr(line[sel], c + 3)
+            textcol = c + 1 + (match(rest, /[^ ]/) - 1)
+            first = sel; last = sel
+            for (i = sel - 1; i >= 1 && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i--) first = i
+            for (i = sel + 1; i <= n && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i++) last = i
+            count = 0; yes = 0; no = 0; unknown = 0
+            for (i = first; i <= last; i++) {
+                t = (i == sel) ? rest : line[i]
+                t = unnumber(trim(t))
+                count++
+                if (t == "Yes, I trust this folder") yes++
+                else if (t == "No, exit") no++
+                else unknown++
+            }
+            trailing = 0
+            for (i = last + 1; i <= n; i++) {
+                t = trim(line[i])
+                if (t == "" || footer(t)) continue
+                trailing++
+            }
+            if (count < 2) {
+                # A single row with text is an input line, not a choice,
+                # unless a confirm footer says otherwise.
+                for (i = sel; i <= n; i++) if (line[i] ~ /Enter to confirm/) { print "other"; exit }
+                print "none"; exit
+            }
+            if (yes == 1 && no == 1 && unknown == 0 && trailing == 0) print "trust"
+            else print "other"
+        }'
 }
 
-# A choice screen near the bottom whose options are not the trust dialog's:
-# a selected option row other than "Yes, I trust this folder" / "No, exit", or
-# the "Enter to confirm" footer without the trust dialog's option on screen.
+# The active choice is the trust dialog and no user question is on screen.
+claude_trust_screen_to_answer() {
+    [[ "$(claude_choice_block_kind "$1")" == trust ]] \
+        && ! claude_user_prompt_present "$1"
+}
+
+# The active choice is something other than the trust dialog.
 claude_unknown_choice_present() {
-    local last_lines rows
-    last_lines="$(printf '%s' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
-    rows="$(printf '%s\n' "$last_lines" \
-        | grep -E '^[[:space:]]*❯[[:space:]]*(No|Yes|[0-9]+\.)([[:space:]]|,|$)' || true)"
-    if [[ -n "$rows" ]] && printf '%s\n' "$rows" \
-        | grep -vqE '❯[[:space:]]*([0-9]+\.[[:space:]]*)?(Yes, I trust this folder|No, exit)'; then
-        return 0
-    fi
-    printf '%s' "$last_lines" | grep -qiF "Enter to confirm" \
-        && ! printf '%s' "$last_lines" | grep -qF "Yes, I trust this folder"
+    [[ "$(claude_choice_block_kind "$1")" == other ]]
 }
 
 claude_accept_trust_dialog() {
@@ -1149,7 +1213,7 @@ claude_accept_trust_dialog() {
             pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
         fi
         if claude_trust_screen_to_answer "$pane_text" \
-            && printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
+            && printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '^[[:space:]]*❯[[:space:]]*([0-9]+\.[[:space:]]*)?Yes, I trust'; then
             echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
             tmux send-keys -t "$session_name" C-m
         else
@@ -1174,17 +1238,6 @@ claude_user_prompt_present() {
     printf '%s' "$text" | grep -qiF "Claude in Chrome extension detected" && return 0
     printf '%s' "$text" | grep -qiF "keep browser tools off" \
         && printf '%s' "$text" | grep -qiF "use my browser"
-}
-
-# Any other choice screen near the bottom (a selected option row, or the
-# "Enter to confirm" footer). Nothing but the trust dialog is ever answered;
-# a choice screen that stays up is recorded and the launch stops.
-claude_choice_screen_present() {
-    local last_lines
-    last_lines="$(printf '%s' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
-    printf '%s' "$last_lines" | grep -qiF "Enter to confirm" && return 0
-    printf '%s' "$last_lines" \
-        | grep -qE '^[[:space:]]*❯[[:space:]]*(No|Yes|[0-9]+\.)([[:space:]]|,|$)'
 }
 
 # Diagnostics only: the last 40 non-blank lines, blank lines anywhere removed.
@@ -1225,7 +1278,7 @@ CLAUDE_READY_WAITED=0
 # the trust dialog.
 wait_for_claude_ready() {
     local session_name="$1" log_prefix="$2"
-    local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last
+    local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last choice_kind
     # Each failure records the screen first and prints its short reason and
     # what to do last: the dashboard shows only the tail of the launcher log.
     while [[ $waited -lt $CLAUDE_READY_WAIT_MAX ]]; do
@@ -1241,8 +1294,8 @@ wait_for_claude_ready() {
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
             return 1
         fi
-        if claude_trust_dialog_present "$pane_text" \
-            && ! claude_unknown_choice_present "$pane_text"; then
+        choice_kind="$(claude_choice_block_kind "$pane_text")"
+        if [[ "$choice_kind" == trust ]]; then
             trust_attempts=$((trust_attempts + 1))
             if ! claude_accept_trust_dialog \
                 "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then
@@ -1255,7 +1308,7 @@ wait_for_claude_ready() {
             continue
         fi
         state=starting
-        if claude_choice_screen_present "$pane_text"; then
+        if [[ "$choice_kind" == other ]]; then
             state=choice
             [[ $choice_since -lt 0 ]] && choice_since=$waited
             if [[ $((waited - choice_since)) -ge $CLAUDE_CHOICE_WAIT_MAX ]]; then

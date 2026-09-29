@@ -203,6 +203,29 @@ def test_a_leftover_trust_line_does_not_make_an_unknown_choice_a_trust_dialog(tm
     assert "trust dialog persisted" not in result.stderr
 
 
+# PinkMendeleev's probes on 0f04cdb: an earlier trust dialog (old or new
+# wording) is still visible, and a different choice is the active one below it.
+OTHER_CHOICE = "Settings prompt\n  \u276f Allow\n    Deny\n  Enter to confirm\n"
+STALE_NEW_TRUST = ("Previous screen (accepted):\nQuick safety check\n    No, exit\n"
+                   "  \u276f Yes, I trust this folder\n\n" + OTHER_CHOICE)
+STALE_OLD_TRUST = "Previous: Do you trust the files in this folder?\n" + OTHER_CHOICE
+
+
+@pytest.mark.parametrize("screens", [
+    [STALE_NEW_TRUST],
+    [STALE_OLD_TRUST],
+    # The poll saw the real trust dialog; the helper's own capture already
+    # shows the stale dialog with the new choice below it.
+    [TRUST_NEW_SELECTED, STALE_NEW_TRUST],
+], ids=["new-trust-remnant", "old-trust-remnant", "after-recapture"])
+def test_only_the_active_choice_decides_and_a_trust_remnant_gets_no_key(tmp_path, screens):
+    result, calls, polls, incidents = _launch(tmp_path, screens)
+    assert result.returncode != 0
+    assert _keys_with_screens(tmp_path) == []
+    assert "choice screen ORRERY does not recognise for 10s" in result.stderr
+    assert "|   \u276f Allow" in incidents
+
+
 def test_a_trust_dialog_with_a_confirm_footer_is_still_accepted(tmp_path):
     trust = ("Quick safety check\n"
              "    No, exit\n"
