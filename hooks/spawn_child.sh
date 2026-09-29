@@ -1657,8 +1657,37 @@ codex_trust_screen_up() {
 # task or an answer could quote the line, but either one on screen already
 # means a turn has begun, and no key is ever sent because of it.
 codex_turn_running_on_screen() {
-    printf '%s\n' "$1" | pane_normalize_nbsp | pane_nonblank_tail 6 \
-        | grep -qE '\(([0-9]+h )?([0-9]+m )?[0-9]+s • esc to interrupt\)[[:space:]]*$'
+    # The last 6 non-blank lines: on a real 0.158 screen the status line sits
+    # 7 lines above the bottom, blank lines included. Codex may append more
+    # after the parenthesis ("... esc to interrupt) · 2 background terminals").
+    printf '%s\n' "$1" | pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 6 \
+        | grep -qE '\(([0-9]+h )?([0-9]+m )?[0-9]+s • esc to interrupt\)'
+}
+
+# Whether Codex shows a finished turn for this task: the end of the task text
+# (whitespace ignored, so Codex's wrapping does not matter), a reply line
+# ("• ...") somewhere after it, and an idle composer at the bottom with no
+# trust screen and no turn running. A short task ("reply OK") is over before
+# the next poll, so the running line alone is never seen (WSL, 2026-09-29).
+# Like the running line, this only stops the waiting: it sends no key and is
+# not taken as proof of the start.
+codex_turn_finished_on_screen() {
+    local pane="$1" prompt="$2" region tail_key flat after utf8_locale
+    region="$(printf '%s\n' "$pane" | pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 6)"
+    printf '%s' "$region" | grep -qE 'esc to interrupt' && return 1
+    printf '%s' "$region" | grep -qE '^[[:space:]]*›[[:space:]]*Ask Codex to do anything[[:space:]]*$' || return 1
+    codex_trust_screen_up "$pane" && return 1
+    utf8_locale="$(injection_utf8_locale)"
+    if [[ -n "$utf8_locale" ]]; then
+        local LC_ALL="$utf8_locale"
+    fi
+    tail_key="$(printf '%s' "${prompt: -24}" | tr -d '[:space:]')"
+    [[ -n "$tail_key" ]] || return 1
+    # Lines joined by \001 so a line start survives the whitespace removal.
+    flat="$(printf '%s' "$pane" | pane_normalize_nbsp | tr '\n' '\001' | tr -d '[:space:]')"
+    [[ "$flat" == *"$tail_key"* ]] || return 1
+    after="${flat##*"$tail_key"}"
+    [[ "$after" == *$'\001•'* ]]
 }
 
 # Watch a cold-started Codex child until its first task has started.
@@ -1669,8 +1698,8 @@ codex_turn_running_on_screen() {
 # optional: without it the watch answers a late trust screen and ends with
 # "start not confirmed", leaving the child running. Without a receipt it ends
 # as soon as a turn is visibly running (codex_turn_running_on_screen, seen and
-# still unbound one poll later): past that point there is no trust screen left
-# to answer, and waiting out the full bound only delayed every Codex spawn by
+# still unbound one poll later) or visibly over (codex_turn_finished_on_screen):
+# past that point there is no trust screen left to answer, and waiting out the full bound only delayed every Codex spawn by
 # 90 s where the binding is not installed (WSL, 2026-09-29). Nothing is typed
 # into the composer and nothing is resent.
 # Returns 0 when the task has started, 1 when the trust screen could not be
@@ -1709,20 +1738,30 @@ codex_watch_initial_task() {
                 ;;
         esac
         [[ "$bound" == true ]] && continue
+        # A trust screen on the current screen comes first, whatever was seen
+        # before: it is answered and the early end starts over.
+        if codex_trust_screen_up "$pane_text"; then
+            turn_seen=false
+            trust_attempts=$((trust_attempts + 1))
+            codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
+            sleep 3
+            continue
+        fi
         if [[ "$turn_seen" == true ]]; then
             local running_screen
             running_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
-            spawn_note "Codex started ($session_name); its first turn is running on screen after ${waited}s. First-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $running_screen"
+            spawn_note "Codex started ($session_name); a running first turn was seen on screen one poll before ${waited}s, and no trust screen is up now. First-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $running_screen"
             return 3
         fi
         if codex_turn_running_on_screen "$pane_text"; then
             turn_seen=true
             continue
         fi
-        if codex_trust_screen_up "$pane_text"; then
-            trust_attempts=$((trust_attempts + 1))
-            codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
-            sleep 3
+        if codex_turn_finished_on_screen "$pane_text" "$prompt_text"; then
+            local finished_screen
+            finished_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
+            spawn_note "Codex started ($session_name); its first turn has already finished on screen after ${waited}s. First-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $finished_screen"
+            return 3
         fi
     done
     local last_screen

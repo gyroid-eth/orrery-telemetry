@@ -146,7 +146,7 @@ def _extract(func: str) -> str:
 def _launcher_functions() -> str:
     names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
              "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_turn_running_on_screen",
-             "codex_watch_initial_task")
+             "injection_utf8_locale", "codex_turn_finished_on_screen", "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
@@ -225,7 +225,7 @@ def test_without_a_binding_the_start_is_unknown_not_a_failure(tmp_path):
     result, keys, notes = _watch(tmp_path, [PROVISIONAL, PROVISIONAL, TRUST, STARTED])
     assert "STATUS=3 VERIFIED=false" in result.stdout
     assert keys == ["send-keys -t Child C-m"]
-    assert "Codex started (Child); its first turn is running on screen" in notes
+    assert "Codex started (Child); a running first turn was seen on screen" in notes
     assert "First-task confirmation unknown" in notes
     assert "WARNING" not in notes
 
@@ -233,7 +233,7 @@ def test_without_a_binding_the_start_is_unknown_not_a_failure(tmp_path):
 def _waited(notes: str) -> int:
     import re
 
-    return int(re.search(r"after (\d+)s", notes).group(1))
+    return int(re.search(r"(?:after|before) (\d+)s", notes).group(1))
 
 
 def test_without_a_receipt_a_running_turn_ends_the_wait_early(tmp_path):
@@ -382,3 +382,67 @@ def test_prompt_file_is_private_and_oversized_tasks_fail_visibly(tmp_path):
     assert oct((tmp_path / "state").stat().st_mode & 0o777) == "0o700"
     assert "BIG_FAIL" in result.stdout
     assert "passed as one command-line argument" in result.stderr
+
+
+# --- real Codex 0.158 frames captured on WSL (2026-09-28) ---------------------
+FIXTURES = pathlib.Path(__file__).with_name("fixtures")
+RUNNING = (FIXTURES / "codex-0.158-running-frame.txt").read_text(encoding="utf-8")
+FINISHED = (FIXTURES / "codex-0.158-finished-frame.txt").read_text(encoding="utf-8")
+FINISHED_TASK = ("You are OrangeMendeleev, a standalone agent with no parent. Start it immediately:\n\n"
+                 "最終確認2です。STARTED とだけ答えて待機してください。")
+
+
+def test_the_real_running_frame_ends_the_wait_early(tmp_path):
+    # The status line is 7 lines above the bottom, blank lines included.
+    result, keys, notes = _watch(tmp_path, [RUNNING])
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "a running first turn was seen on screen" in notes
+    assert _waited(notes) <= 12
+
+
+def test_a_status_line_with_more_after_it_still_counts(tmp_path):
+    screen = RUNNING.replace("(1s • esc to interrupt)", "(1s • esc to interrupt) · 2 background terminals")
+    result, keys, notes = _watch(tmp_path, [screen])
+    assert _waited(notes) <= 12 and keys == []
+
+
+def test_a_short_turn_already_over_ends_the_wait_at_once(tmp_path):
+    # "Reply STARTED" is done before the next poll: reply, time, idle composer.
+    result, keys, notes = _watch(tmp_path, [FINISHED], prompt=FINISHED_TASK)
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "its first turn has already finished on screen" in notes
+    assert _waited(notes) <= 6
+
+
+def test_a_trust_screen_after_a_running_line_is_answered_first(tmp_path):
+    result, keys, notes = _watch(tmp_path, [RUNNING, TRUST, PROVISIONAL])
+    assert keys == ["send-keys -t Child C-m"]
+    # The trust screen reset the early end: nothing ran after it, so the
+    # watch ran to its bound instead of ending on the old running line.
+    assert "a running first turn was seen" not in notes
+    assert "first-task confirmation unknown" in notes
+
+
+def _finished(screen: str, prompt: str) -> int:
+    body = ("\n".join(_extract(n) for n in ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
+                                           "codex_trust_screen_up", "injection_utf8_locale",
+                                           "codex_turn_finished_on_screen"))
+            + '\ncodex_turn_finished_on_screen "$SCREEN" "$PROMPT"\n')
+    return subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, SCREEN=screen, PROMPT=prompt),
+                          capture_output=True, text=True, timeout=10).returncode
+
+
+def test_the_finished_turn_needs_the_task_a_reply_after_it_and_an_idle_composer():
+    assert _finished(FINISHED, FINISHED_TASK) == 0
+    # Another task on screen: not this launch's turn.
+    assert _finished(FINISHED, "Reply with the current date and nothing else.") != 0
+    # Still running, or no reply below the task yet.
+    assert _finished(RUNNING, PROMPT) != 0
+    no_reply = FINISHED.replace("• STARTED", "")
+    assert _finished(no_reply, FINISHED_TASK) != 0
+    # A bullet inside the task itself is not a reply.
+    bulleted = "Do these:\n• one\n• two"
+    screen = "› Do these:\n  • one\n  • two\n\n" + PROVISIONAL
+    assert _finished(screen, bulleted) != 0
+    # A trust screen up: never "finished".
+    assert _finished(FINISHED.replace("› Ask Codex to do anything", "") + TRUST, FINISHED_TASK) != 0
