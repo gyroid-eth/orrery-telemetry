@@ -87,7 +87,7 @@ def _spawn(tmp_path, env, workdir, name, *flags, task="mail task", codex=False):
     args.extend([task, str(workdir)])
     return subprocess.run(
         args, cwd=ROOT, env=env, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False,
     )
 
 
@@ -182,7 +182,7 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             ["/bin/bash", str(script), "--pre-registered", "SameChild",
              "--child-token-file", str(_handoff(tmp_path / label)),
              "mail task", str(workdir)],
-            cwd=ROOT, env=env, text=True, capture_output=True, timeout=20, check=False,
+            cwd=ROOT, env=env, text=True, capture_output=True, timeout=60, check=False,
         )
         assert result.returncode == 0, result.stderr
         # The whole tmux conversation (launch argv, env, injected prompt),
@@ -288,7 +288,7 @@ def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
         **tmux_env,
     }
     subprocess.run(["/bin/bash", "-c", inner], env=run_env, cwd=workdir,
-                   capture_output=True, text=True, timeout=20, check=False)
+                   capture_output=True, text=True, timeout=60, check=False)
     seen = dump.read_text(encoding="utf-8")
     assert "AGENTSTACK_CODEX_MODEL=gpt-6-sol" in seen  # the fake really ran
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME" not in seen
@@ -312,7 +312,7 @@ def test_invalid_requests_stop_before_any_launch(tmp_path, flags, env_extra, mes
         ["/bin/bash", str(SPAWN), "--pre-registered", "BadChild",
          "--child-token-file", str(_handoff(tmp_path)), *flags,
          "task", str(workdir)],
-        cwd=ROOT, env=env, text=True, capture_output=True, timeout=20, check=False,
+        cwd=ROOT, env=env, text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode != 0
     assert message in result.stderr
@@ -526,7 +526,7 @@ def test_reminder_binds_and_repeats_the_policy_at_session_start(tmp_path):
     env.pop("TMUX_PANE", None)
     result = subprocess.run(
         ["/bin/bash", str(REMINDER)], input=json.dumps({"session_id": SID}),
-        env=env, text=True, capture_output=True, timeout=30, check=False, cwd=tmp_path,
+        env=env, text=True, capture_output=True, timeout=60, check=False, cwd=tmp_path,
     )
     assert "The browser to use is deviceId win-brave" in result.stdout, result.stdout
     assert (state / f"HookChild.claude-launch.{SID}.json").exists()

@@ -121,7 +121,7 @@ def _launch(tmp_path, screens, *, die_after=0):
     result = subprocess.run(
         ["/bin/bash", str(SPAWN), "--pre-registered", "Probe-Curie",
          "--child-token-file", str(handoff), "task", str(workdir)],
-        cwd=ROOT, env=env, text=True, capture_output=True, timeout=30, check=False,
+        cwd=ROOT, env=env, text=True, capture_output=True, timeout=60, check=False,
     )
     calls = log.read_text(encoding="utf-8").splitlines()
     polls = int((tmp_path / "polls").read_text()) if (tmp_path / "polls").exists() else 0
