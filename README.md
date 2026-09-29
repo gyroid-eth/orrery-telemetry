@@ -8,6 +8,10 @@ Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を
 
 **まずデモで体験する**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) は、本物の dashboard を台本データで動かした公開デモです。agent が起動し、通信を交わし、child を作って終えるまでを 4 分でループ再生し、字幕が「いま何が起きているか」を説明します。インストールせずに、実際に近い画面でどんな体験が得られるかを掴めます。ここを 1 周見てから、以下に進んでください。
 
+**紹介動画**: 実際に複数の agent を動かしている様子は、紹介動画「Orrery」で見られます。
+
+[![紹介動画「Orrery」（YouTube）](https://i.ytimg.com/vi/JXoa93TQolU/hqdefault.jpg)](https://youtu.be/JXoa93TQolU)
+
 ## 誰のためのものか
 
 - **対象は chat ではなく coding agent を使う人**: ChatGPT のような chat ではなく、Claude Code や Codex のように、指示を受けて自律的にコードを書き、ファイルを変え、command を実行する agent を、すでに手元で動かしている人向けです。terminal からでも、Claude Desktop や ChatGPT app のような desktop app からでも構いません

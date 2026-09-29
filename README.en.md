@@ -8,6 +8,10 @@ Run several coding agents from different vendors, such as Claude Code, Codex CLI
 
 **Start with the demo**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) is the real dashboard driven by scripted data. It loops through agents starting, exchanging messages, spawning a child and finishing, in four minutes, with captions saying what is happening. Nothing to install; it gives you a feel for the experience on a screen close to the real thing. Watch it once through before continuing.
 
+**Introduction video**: to see several agents actually at work, watch the introduction video "Orrery".
+
+[![Introduction video "Orrery" (YouTube)](https://i.ytimg.com/vi/JXoa93TQolU/hqdefault.jpg)](https://youtu.be/JXoa93TQolU)
+
 ## Who this is for
 
 - **People who run coding agents, not chat**: not chat in the ChatGPT sense, but agents like Claude Code or Codex that take an instruction, write code, change files, and run commands on their own. It does not matter whether you drive them from a terminal or from a desktop app such as Claude Desktop or the ChatGPT app.
