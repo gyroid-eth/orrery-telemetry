@@ -205,7 +205,10 @@ import time  # noqa: E402
 HANGS = '#!/bin/sh\nif [ "$1" = --version ]; then echo "$1" >> "$PROBE_LOG"; sleep 30; fi\necho "  --ask-for-approval <POLICY>"\n'
 
 
-def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=2, budget=None):
+# Probe limits in these tests leave room for the login shell each probe
+# starts (it runs the way the child will): 2-3s lost to shell start-up on a
+# busy machine (MintHooke, review of 0c87e5e).
+def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=5, budget=None):
     """prime_codex_bin, then the approval probe and resolve_codex_bin, as one
     spawn runs them; returns (rc, stdout lines, stderr, seconds)."""
     home = tmp_path / "home"
@@ -244,17 +247,21 @@ def test_an_unresponsive_saved_codex_is_probed_once_per_spawn(tmp_path):
     assert f"CODEX={good}" in lines
     assert (tmp_path / "probes").read_text().count("--version") == 1
     assert err.count(f"({bad})") == 1  # one skip note, from env.sh
-    assert seconds < 2 + 6, seconds  # one 2s timeout, plus shells starting
+    # The probe count is the proof; the time bound only catches a runaway
+    # (four 5s timeouts plus shells) with room for a loaded machine.
+    assert seconds < 18, seconds
 
 
 def test_all_probes_share_one_budget(tmp_path):
     dirs = [_script(tmp_path / f"slow{i}" / "codex", HANGS).parent for i in range(5)]
     good = _script(tmp_path / "good" / "codex", WORKS)
-    rc, lines, err, seconds = _spawn_resolution(tmp_path, path_dirs=[*dirs, good.parent], timeout=2, budget=3)
-    # Five 2-second timeouts would take 10s; the 3-second budget stops them.
-    assert seconds < 3 + 6, seconds
+    rc, lines, err, seconds = _spawn_resolution(tmp_path, path_dirs=[*dirs, good.parent], timeout=5, budget=8)
+    # Five 5-second timeouts would take 25s; the 8-second budget stops after
+    # at most two probes. The count is the proof; the time bound only catches
+    # a runaway.
     assert "budget for trying codex candidates is spent" in err
     assert (tmp_path / "probes").read_text().count("--version") <= 2
+    assert seconds < 20, seconds
     assert rc == 0 and "CODEX=" in "".join(lines)  # resolve reports, it does not hang
 
 
@@ -300,3 +307,21 @@ def test_the_start_watch_ends_by_its_launcher_deadline_after_a_slow_start(tmp_pa
     end = int(result.stdout.split("END=")[1])
     assert end <= 105 + 3
     assert (tmp_path / "polls").read_text().count("poll") <= 2
+
+
+def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
+    """Pink's reproduction (review of 0c87e5e): a profile that behaves
+    differently without CLAUDECODE=1 (here: exits 23) must see the same
+    guard in the probe as in the child's session."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bash_profile").write_text(
+        '[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 23\n', encoding="utf-8")
+    codex = _script(tmp_path / "bin" / "codex", WORKS)
+    script = "CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
+    result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    # The same guard values as the child's tmux session.
+    text = SPAWN.read_text(encoding="utf-8")
+    assert text.count('TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1"') == 2

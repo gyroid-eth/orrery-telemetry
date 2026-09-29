@@ -866,8 +866,12 @@ CHILD_SHELL="$(resolve_child_shell)" || exit 1
 # judged under the PATH it will run with. Probing with the launcher's own PATH
 # rejected a codex whose `#!/usr/bin/env node` finds node only there (2026-09-29).
 CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+# The probe's login shell also gets the guard variables the child's session
+# has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
+# the reserved-identity marker, must behave as it will for the child.
 run_like_codex_child() {
-    "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
+    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
+        "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
 }
 CODEX_PROBE_RUNNER=run_like_codex_child
 # The latest point, in seconds of this launcher's run, at which the Codex start
