@@ -123,7 +123,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    npm install -g @openai/codex@latest
    ```
    ログインは `claude`（起動後に `/login`）と `codex login` です。表示された URL を Windows 側のブラウザで開いて認可します。
-   Windows 側にも Codex を入れている場合、Ubuntu の PATH には Windows の `codex`（`/mnt/c/...`）も見えますが、これは Ubuntu の中では動きません。installer はそれを候補から外し、Ubuntu の中に入れた `codex`（`--version` に答えるもの）を選びます。以前の install で Windows の `codex` が保存されていても、再実行すると選び直します。`agentstack-doctor` が `warn: Codex launcher binary ... cannot start Codex` と出したら、Ubuntu の中に Codex を入れてから installer を再実行してください。
+   Windows 側にも Codex を入れている場合、Ubuntu の PATH には Windows の `codex`（`/mnt/c/...`）も見えますが、これは Ubuntu の中では動きません。installer はそれを候補から外し、Ubuntu の中に入れた `codex`（`--version` に答えるもの）を選びます。agent が `/delegate` で Codex の子を起動するときも同じ規則で選び、agent の shell に `AGENTSTACK_CODEX_BIN` が無ければ、installer が `~/.agentstack/env.sh` に保存した値を使います。以前の install で Windows の `codex` が保存されていても、再実行すると選び直します。`agentstack-doctor` が `warn: Codex launcher binary ... cannot start Codex` と出したら、Ubuntu の中に Codex を入れてから installer を再実行してください。
    以前から Ubuntu に Codex が入っている場合も、`npm install -g @openai/codex@latest` で最新にしてください。古い版では GPT-6 系のモデルで起動した子が API に拒否されます（WSL で 0.153.4 は拒否、0.158.0 は応答）。
 7. **agent を起動する**（Ubuntu の中）。上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal（`wt.exe`、Windows 11 なら標準搭載）の新しいタブを開いて tmux に attach します。Windows Terminal が無い場合は Microsoft Store から入れてください。
 

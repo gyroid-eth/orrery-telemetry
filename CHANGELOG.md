@@ -10,6 +10,10 @@
 
 ## 未リリース
 
+### WSL で、agent が起動した Codex の子が Windows の codex を使って即終了していました
+
+dashboard から起動した agent が `/delegate` で Codex の子を作ると、spawn_child.sh が PATH の先頭にある Windows の `codex`（`/mnt/c/.../npm/codex`）を選び、`Missing optional dependency @openai/codex-linux-x64` で数秒で終わっていました。agent の shell には `AGENTSTACK_CODEX_BIN` が無く、PATH の検索に頼っていたためです。spawn_child.sh は、環境の `AGENTSTACK_CODEX_BIN`、次に installer が `~/.agentstack/env.sh` に保存した値（1行だけ読み、実行はしません）、最後に検索の順で探し、installer と同じ規則（WSL では `/mnt` 配下を除く、`--version` に答えるものだけ）で使えるものを選びます。使えない候補は理由を表示して飛ばし、見つからなければ試したものと理由を示して止まります。
+
 ### Linux（WSL）で ORRERY Mail の通知が最大30秒遅れていました
 
 Linux の fswatch（inotify）は、新しくできたフォルダの watch を後から足すため、その前に書かれた signal を通知しません。受信者のフォルダは配送のたびに消えて次の1通で作り直されるので、WSL ではほとんどの通知が30秒ごとの回復 scan を待っていました。Linux では回復 scan を2秒にしました（macOS は30秒のまま。`AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL` で変えられます）。同じ message の再試行間隔は30秒のままです。あわせて、配送の lease を取った直後にもう一度配送済みかを確かめ、前の配送と入れ違いで同じ通知が二重に送られる隙間をふさぎました。また、書きかけで JSON として読めない signal を、件名なしの通知として送って消していたのをやめ、次の scan で読み直すようにしました。
