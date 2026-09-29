@@ -7508,14 +7508,16 @@ def _tmux_observed(args: list[str]) -> str | None:
     """
     try:
         out = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5)
-    except FileNotFoundError:
-        return ""  # no tmux at all: no agent can be running in it
-    except Exception:  # noqa: BLE001 - timeout and the like: unknown
+    except Exception:  # noqa: BLE001 - tmux missing now, timeout...: unknown
         return None
     if out.returncode == 0:
         return out.stdout
     err = (out.stderr or "").lower()
-    if "no server running" in err or "error connecting" in err:
+    # Only "there is no server" is a measurement of nothing running. A socket
+    # that exists but cannot be opened (permission denied, ...) is not.
+    if err.startswith("no server running on ") or (
+        err.startswith("error connecting to ") and "(no such file or directory)" in err
+    ):
         return ""
     return None
 
@@ -7593,8 +7595,8 @@ def _wsl_anchor_launch():
     handed = {"on": False}
     try:
         controller.wake.set()
-        controller.settled(since, anchor.READY_TIMEOUT_SECONDS + 15)
-        yield (token, handed)
+        status = controller.settled(since, anchor.READY_TIMEOUT_SECONDS + 15)
+        yield (token, handed, status)
     finally:
         if not handed["on"]:
             anchor.release_reservation(controller.dir, token)
@@ -7614,15 +7616,29 @@ def do_spawn_held(payload: dict) -> dict:
     """do_spawn, with WSL held from before the launch until it settles."""
     with _wsl_anchor_launch() as reservation:
         result = do_spawn(payload)
-        if reservation and result.get("pending") and result.get("name"):
-            token, handed = reservation
+        if not reservation:
+            return result
+        token, handed, status = reservation
+        state = (status or {}).get("state")
+        if state in ("holding", "unknown", "releasing"):
+            result["wsl_hold"] = {"ok": True, "state": state}
+        else:
+            # The launch still runs (a window may be open), but nothing is
+            # known to keep WSL for it: say so instead of reporting success.
+            result["wsl_hold"] = {
+                "ok": False,
+                "state": state or "timeout",
+                "error": (status or {}).get("error") or "the WSL hold did not start in time",
+                "hint": "keep an Ubuntu window open until this agent has finished",
+            }
+        name = str(result.get("child_name") or result.get("name") or "")
+        if result.get("pending") and name:
             # An asynchronous launch settles later: _spawn_launch_record
             # releases the reservation then (or it expires).
-            _WSL_ANCHOR_ASYNC[str(result["name"])] = token
+            _WSL_ANCHOR_ASYNC[name] = token
             handed["on"] = True
-            state = _SPAWN_LAUNCHES.get(str(result["name"]), {}).get("state")
-            if state and state != "launching":
-                _wsl_anchor_settle(str(result["name"]))
+            if _SPAWN_LAUNCHES.get(name, {}).get("state") not in (None, "launching"):
+                _wsl_anchor_settle(name)
         return result
 
 

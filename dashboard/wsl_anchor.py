@@ -443,6 +443,15 @@ class Controller:
             if pages:
                 reasons["pages"] = pages
             if known:
+                # An agent seen before counts until its death is confirmed,
+                # whatever tmux now says (a tmux that lost its server, a
+                # process moved out of its pane).
+                current = {int(entry[0]) for entry in pids}
+                kept = [entry for entry in self.last_pids
+                        if int(entry[0]) not in current and process_state(int(entry[0]), entry[1]) != "dead"]
+                if kept:
+                    pids = pids + kept
+                    reasons["agents"] = len(pids)
                 self.last_pids = pids
             else:
                 # Cannot see the agents: keep the last confirmed ones and hold.
@@ -511,17 +520,28 @@ class Controller:
             self.wake.clear()
 
     def settled(self, since: float, timeout: float) -> dict:
-        """Wait until a tick after `since` reports holding or a failure."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = _read_json(self.dir / "status.json")
-            if float(status.get("updated") or 0) >= since and status.get("state") in (
-                "holding", "unknown", "failed", "error",
-            ):
-                return status
-            self.wake.set()
-            time.sleep(0.2)
-        return _read_json(self.dir / "status.json")
+        return wait_settled(self.dir, since, timeout, self.wake.set)
+
+
+SETTLED_STATES = ("holding", "unknown", "failed", "error")
+
+
+def wait_settled(directory: pathlib.Path, since: float, timeout: float, nudge=None) -> dict:
+    """The first status written at or after `since` that holds or has failed.
+
+    An older status says nothing about this launch, so it is never returned:
+    on timeout the answer is {"state": "timeout"}.
+    """
+    deadline = time.time() + timeout
+    while True:
+        status = _read_json(directory / "status.json")
+        if float(status.get("updated") or 0) >= since and status.get("state") in SETTLED_STATES:
+            return status
+        if time.time() >= deadline:
+            return {"state": "timeout", "error": "the WSL hold did not start in time"}
+        if nudge:
+            nudge()
+        time.sleep(0.2)
 
 
 def fresh_leases(directory: pathlib.Path, now: float | None = None) -> int:
@@ -537,10 +557,39 @@ def fresh_reservations(directory: pathlib.Path, now: float | None = None) -> int
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[0] == "hold":
         return hold(pathlib.Path(argv[1]), argv[2])
+    if len(argv) in (3, 5) and argv[0] == "reserve":
+        # For shell launchers: reserve under work.lock, then wait for a
+        # decision the controller made after it. Exit 0 when held, 1 when
+        # the hold is not established (with the reason on stderr).
+        directory, token = pathlib.Path(argv[1]), argv[2]
+        wait = float(argv[4]) if len(argv) == 5 and argv[3] == "--wait" else 0.0
+        since = time.time()
+        try:
+            reserve(directory, token)
+        except (OSError, ValueError) as exc:
+            print(f"WSL hold: cannot reserve this launch: {exc}", file=sys.stderr)
+            return 1
+        if wait <= 0:
+            return 0
+        status = _read_json(directory / "status.json")
+        if not status or time.time() - float(status.get("updated") or 0) > 3 * TICK_SECONDS:
+            print("WSL hold: the dashboard is not running, so nothing keeps WSL for this agent;"
+                  " keep this window open", file=sys.stderr)
+            return 1
+        status = wait_settled(directory, since, wait)
+        if status.get("state") in ("holding", "unknown"):
+            return 0
+        print(f"WSL hold: not established ({status.get('state')}: {status.get('error') or 'no reason given'});"
+              " keep this window open", file=sys.stderr)
+        return 1
+    if len(argv) == 3 and argv[0] == "release":
+        release_reservation(pathlib.Path(argv[1]), argv[2])
+        return 0
     if len(argv) == 1 and argv[0] == "status":
         print(json.dumps(_read_json(state_dir() / "status.json"), sort_keys=True))
         return 0
-    print("usage: wsl_anchor.py hold STATE_DIR NONCE | status", file=sys.stderr)
+    print("usage: wsl_anchor.py hold STATE_DIR NONCE | reserve STATE_DIR TOKEN [--wait S]"
+          " | release STATE_DIR TOKEN | status", file=sys.stderr)
     return 2
 
 

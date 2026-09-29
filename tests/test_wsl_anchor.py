@@ -438,9 +438,17 @@ def test_work_that_cannot_be_observed_is_unknown_not_empty(monkeypatch):
     monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
     sep = server.SEP
     # No tmux server: nothing can be running in it (known, empty).
+    for err in ("no server running on /tmp/tmux-1000/default\n",
+                "error connecting to /tmp/tmux-1000/default (No such file or directory)\n"):
+        monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
+            "returncode": 1, "stdout": "", "stderr": err}}))
+        assert server._wsl_anchor_work() == ({"agents": 0}, [], True)
+    # A socket that cannot be opened, or tmux missing right now: unknown.
     monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
-        "returncode": 1, "stdout": "", "stderr": "no server running on /tmp/tmux-1000/default"}}))
-    assert server._wsl_anchor_work() == ({"agents": 0}, [], True)
+        "returncode": 1, "stdout": "", "stderr": "error connecting to /tmp/tmux-1000/default (Permission denied)\n"}}))
+    assert server._wsl_anchor_work()[2] is False
+    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": FileNotFoundError("tmux")}))
+    assert server._wsl_anchor_work()[2] is False
     # tmux fails or hangs: unknown.
     monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
         "returncode": 1, "stdout": "", "stderr": "lost server"}}))
@@ -460,10 +468,12 @@ class FakeController:
         self.wake = __import__("threading").Event()
         self.settled_calls = []
 
+    answer = {"state": "holding"}
+
     def settled(self, since, timeout):
         # The reservation exists before the controller is asked to decide.
         self.settled_calls.append(wsl_anchor.fresh_reservations(self.dir))
-        return {"state": "holding"}
+        return self.answer
 
 
 def test_a_dashboard_launch_is_reserved_before_it_starts_and_released_after(tmp_path, monkeypatch):
@@ -477,7 +487,8 @@ def test_a_dashboard_launch_is_reserved_before_it_starts_and_released_after(tmp_
         return {"ok": True, "name": "RedCurie"}
 
     monkeypatch.setattr(server, "do_spawn", sync_spawn)
-    assert server.do_spawn_held({})["ok"]
+    result = server.do_spawn_held({})
+    assert result["ok"] and result["wsl_hold"] == {"ok": True, "state": "holding"}
     assert fake.settled_calls == [1] and seen == [1]
     assert wsl_anchor.fresh_reservations(tmp_path) == 0
     # A failed launch releases it too.
@@ -486,21 +497,80 @@ def test_a_dashboard_launch_is_reserved_before_it_starts_and_released_after(tmp_
     assert wsl_anchor.fresh_reservations(tmp_path) == 0
 
 
-def test_an_async_launch_keeps_its_reservation_until_it_settles(tmp_path, monkeypatch):
-    fake = FakeController(tmp_path)
-    monkeypatch.setitem(server._WSL_ANCHOR, "controller", fake)
+def test_a_hold_that_did_not_start_is_reported_with_the_launch(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setattr(server, "do_spawn", lambda payload: {"ok": True, "child_name": "RedCurie"})
+    for answer in ({"state": "failed", "error": "powershell.exe is not reachable"},
+                   {"state": "timeout", "error": "the WSL hold did not start in time"}):
+        fake = FakeController(tmp_path)
+        fake.answer = answer
+        monkeypatch.setitem(server._WSL_ANCHOR, "controller", fake)
+        hold = server.do_spawn_held({})["wsl_hold"]
+        assert hold["ok"] is False and hold["state"] == answer["state"]
+        assert answer["error"] in hold["error"] and "Ubuntu window" in hold["hint"]
 
-    def async_spawn(payload):
-        server._spawn_launch_record("BlueBohr", {"pending": True})
-        return {"ok": True, "pending": True, "name": "BlueBohr"}
 
-    monkeypatch.setattr(server, "do_spawn", async_spawn)
-    server.do_spawn_held({"async": True})
-    assert wsl_anchor.fresh_reservations(tmp_path) == 1
-    server._spawn_launch_record("BlueBohr", {"ok": True})
-    assert wsl_anchor.fresh_reservations(tmp_path) == 0
-    server._SPAWN_LAUNCHES.pop("BlueBohr", None)
+def test_a_status_from_before_the_launch_is_not_its_answer(tmp_path):
+    wsl_anchor._write_json(tmp_path / "status.json", {"state": "holding", "updated": time.time() - 30})
+    assert wsl_anchor.wait_settled(tmp_path, time.time(), 0.3)["state"] == "timeout"
+    since = time.time()
+    wsl_anchor._write_json(tmp_path / "status.json", {"state": "failed", "error": "x", "updated": since + 0.01})
+    assert wsl_anchor.wait_settled(tmp_path, since, 1)["state"] == "failed"
+
+
+def test_a_real_async_launch_keeps_its_reservation_until_it_settles(tmp_path, monkeypatch):
+    """The real do_spawn: only Mail, Popen and the launcher are stand-ins."""
+    import threading
+    from types import SimpleNamespace
+    from unittest import mock
+
+    fake = FakeController(tmp_path / "state")
+    launcher = _script(tmp_path / "spawn_child.sh", "exit 0\n")
+    release, done = threading.Event(), threading.Event()
+
+    class Proc:
+        pid = 4321
+
+        def wait(self, timeout=None):
+            release.wait(5)
+            return 0
+
+        def poll(self):
+            return 0 if release.is_set() else None
+
+    def mcp(method, args, timeout=15):
+        if method == "register_agent":
+            return {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "fake"}}
+        return {"ok": True, "data": {}}
+
+    real_record = server._spawn_launch_record
+
+    def record(name, result):
+        real_record(name, result)
+        if not result.get("pending"):
+            done.set()
+
+    monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setitem(server._WSL_ANCHOR, "controller", fake)
+    with mock.patch.multiple(server, SPAWN_SCRIPT=str(launcher), RUNTIME_DIR=str(tmp_path / "runtime"),
+                             HERE=str(tmp_path), ANNOT_PATH=str(tmp_path / "annotations.json"),
+                             LEGACY_ANNOT_PATH=str(tmp_path / "legacy.json")), \
+            mock.patch.object(server, "_project_key", return_value="/project"), \
+            mock.patch.object(server, "_spawn_name_status", return_value="available"), \
+            mock.patch.object(server, "_mcp_call", side_effect=mcp), \
+            mock.patch.object(server.subprocess, "Popen", return_value=Proc()), \
+            mock.patch.object(server.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")), \
+            mock.patch.object(server, "_spawn_launch_record", side_effect=record), \
+            mock.patch.dict(server._SPAWN_LAUNCHES, {}, clear=True):
+        result = server.do_spawn_held({"standalone": True, "name": "QuietCurie", "task": "work",
+                                       "dir": str(tmp_path), "async": True})
+        assert result.get("pending") is True and result.get("child_name") == "QuietCurie", result
+        assert fake.settled_calls == [1]
+        # The launcher is still running: the reservation must still be there.
+        assert wsl_anchor.fresh_reservations(fake.dir) == 1
+        release.set()
+        assert done.wait(10)
+    assert wsl_anchor.fresh_reservations(fake.dir) == 0
 
 
 def test_page_lease_endpoint(tmp_path, monkeypatch):
@@ -517,12 +587,92 @@ def test_page_lease_endpoint(tmp_path, monkeypatch):
 
 
 def test_shell_launchers_reserve_before_starting():
-    lib = (ROOT / "bin" / "lib" / "agentstack-launch.sh").read_text(encoding="utf-8")
-    assert "ags_wsl_reserve_launch()" in lib and "wsl-anchor/reservations" in lib
     for name, marker in (("agent-start", 'SESSION="pending-$$"'), ("agent-start-codex", 'SESSION="codex-pending-$$"')):
         text = (ROOT / "bin" / name).read_text(encoding="utf-8")
         assert text.index("ags_wsl_reserve_launch agent-start") > text.index(marker)
         assert text.index("ags_wsl_reserve_launch agent-start") < text.index("new-session")
+
+
+def _reserve_cli(state, *extra):
+    return subprocess.run([sys.executable, str(ANCHOR), "reserve", str(state), "tok-1", *extra],
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_reserve_cli_waits_for_the_controller_and_reports_failures(tmp_path):
+    import threading
+
+    # No dashboard: say so at once, keep the reservation.
+    result = _reserve_cli(tmp_path, "--wait", "5")
+    assert result.returncode == 1 and "dashboard is not running" in result.stderr
+    assert wsl_anchor.fresh_reservations(tmp_path) == 1
+    # A controller that decides after the reservation: held.
+    wsl_anchor._write_json(tmp_path / "status.json", {"state": "idle", "updated": time.time()})
+    timer = threading.Timer(0.5, lambda: wsl_anchor._write_json(
+        tmp_path / "status.json", {"state": "holding", "updated": time.time()}))
+    timer.start()
+    assert _reserve_cli(tmp_path, "--wait", "5").returncode == 0
+    timer.join()
+    # A controller that cannot hold: the reason is shown.
+    wsl_anchor._write_json(tmp_path / "status.json", {"state": "idle", "updated": time.time()})
+    timer = threading.Timer(0.5, lambda: wsl_anchor._write_json(
+        tmp_path / "status.json", {"state": "failed", "error": "interop off", "updated": time.time()}))
+    timer.start()
+    result = _reserve_cli(tmp_path, "--wait", "5")
+    timer.join()
+    assert result.returncode == 1 and "interop off" in result.stderr
+    # A reservation waits for a decision in progress (same lock).
+    with wsl_anchor._locked(tmp_path):
+        proc = subprocess.Popen([sys.executable, str(ANCHOR), "reserve", str(tmp_path), "tok-2"])
+        time.sleep(0.5)
+        assert proc.poll() is None
+    assert proc.wait(timeout=10) == 0
+    # An unwritable state directory is reported, not ignored.
+    blocked = tmp_path / "file"
+    blocked.write_text("x")
+    result = _reserve_cli(blocked / "sub")
+    assert result.returncode == 1 and "cannot reserve" in result.stderr
+
+
+def test_the_shell_helper_uses_the_cli_and_never_blocks_the_launch(tmp_path):
+    proc_version = tmp_path / "version"
+    proc_version.write_text("Linux version 6.6 (microsoft-standard-WSL2)\n")
+    lib = ROOT / "bin" / "lib" / "agentstack-launch.sh"
+    script = f"set -euo pipefail\nAGS_PROG=agent-start\n. {shlex.quote(str(lib))}\nags_wsl_reserve_launch agent-start\necho launched\n"
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "AGS_WSL_PROC_VERSION": str(proc_version),
+           "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"), "AGENTSTACK_PYTHON": sys.executable,
+           "AGENTSTACK_WSL_ANCHOR_HELPER": str(ANCHOR), "AGS_WSL_RESERVE_WAIT": "2"}
+    result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout.strip() == "launched"
+    assert "dashboard is not running" in result.stderr and "continuing without a WSL hold" in result.stderr
+    assert wsl_anchor.fresh_reservations(tmp_path / "runtime" / "wsl-anchor") == 1
+    # Off, or outside WSL: nothing happens.
+    for extra in ({"AGENTSTACK_WSL_ANCHOR": "0"}, {"AGS_WSL_PROC_VERSION": str(tmp_path / "none")}):
+        other = tmp_path / ("r" + next(iter(extra.values()))[-4:])
+        result = subprocess.run(["/bin/bash", "-c", script], env={**env, **extra, "AGENTSTACK_RUNTIME_DIR": str(other)},
+                                capture_output=True, text=True, timeout=30)
+        assert result.stdout.strip() == "launched" and result.stderr == ""
+        assert not other.exists()
+
+
+def test_a_known_agent_counts_until_its_death_is_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setattr(wsl_anchor, "READY_TIMEOUT_SECONDS", 1e9)
+    clock, starter = Clock(), LocalStarter()
+    work = {"now": ({"agents": 1}, [[4321, 99]], True)}
+    controller = _controller(tmp_path, lambda: work["now"], starter, clock)
+    states = {"v": "alive"}
+    monkeypatch.setattr(wsl_anchor, "process_state", lambda pid, ticks: states["v"])
+    try:
+        controller.tick()
+        # tmux says nothing runs, but the process is still there.
+        work["now"] = ({"agents": 0}, [], True)
+        clock.now += wsl_anchor.GRACE_SECONDS + 5
+        status = controller.tick()
+        assert status["state"] == "holding" and status["reasons"] == {"agents": 1}
+        states["v"] = "dead"
+        clock.now += 5
+        assert controller.tick()["state"] == "releasing"
+    finally:
+        starter.stop()
 
 
 def test_the_page_renews_its_lease_only_while_visible():

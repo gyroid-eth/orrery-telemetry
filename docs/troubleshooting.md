@@ -160,7 +160,7 @@ WSL は、Windows 側の最後の client（`wsl.exe`、Windows Terminal の Ubun
 **dashboard は、agent が働いている間だけ WSL を動かし続けます。** 仕事があるあいだ、Windows 側に隠れた `wsl.exe` を1つ持ち、仕事が無くなるとそれを自分で終わらせます。そのあとは WSL の既定どおり、窓が1つも無ければ約15秒で止まります。利用者が `wsl --shutdown` を打つ必要はなく、Windows の `.wslconfig` も変更しません。
 
 - **保持する間**: agent の process（claude / codex / antigravity）が tmux の中で動いている間。承認待ち・返答待ちでも process が生きていれば保持します
-- **起動中**: dashboard の NEW AGENT と `agent-start` / `agent-start-codex` は、起動を始める前に予約を置きます。dashboard は保持が始まる（または失敗が分かる）のを待ってから起動します。予約は起動が済むと外れ、残っても3分で失効します
+- **起動中**: dashboard の NEW AGENT と `agent-start` / `agent-start-codex` は、起動を始める前に予約を置き、保持が始まるか失敗が分かるまで待ってから起動します。保持が始まらなかったときは、起動は続けたうえで理由を表示します（dashboard は応答の `wsl_hold`、shell は `WSL hold: ...` の行）。その場合は agent が終わるまで Ubuntu の窓を1つ開けておいてください。予約は起動が済むと外れ、残っても3分で失効します
 - **画面を見ている間**: dashboard のページ（cockpit の中に表示されたものを含む）が表示されている間は保持します。ページが隠れる・閉じると外れます
 - **保持しないもの**: dashboard・Mail・watcher・anchor 自身と、tmux の control client。cockpit は誰も見ていなくても全 session に記録用の接続を持つので、これを数えると WSL が止まらなくなります
 - **確かめられないとき**: tmux や ps が答えないときは「全部終わった」とは扱わず、最後に確認できた agent のために保持を続けます。header には `WSL kept · state unknown` と出ます
