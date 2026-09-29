@@ -1097,9 +1097,14 @@ claude_pane_ready() {
 
 # Classifies the bottom-most active choice on the screen, by structure rather
 # than by listing words. Prints one of:
-#   trust  -- the active choice is Claude's trust dialog and nothing else
-#   other  -- some other choice is active (never answered by the launcher)
-#   none   -- no active choice (a ready prompt, startup output, ...)
+#   trust-yes -- the active choice is Claude's trust dialog, "Yes" selected
+#   trust-no  -- the active choice is Claude's trust dialog, "No" selected
+#   trust-old -- the old trust wording (no cursor; Enter accepts)
+#   other     -- some other choice is active (never answered by the launcher)
+#   none      -- no active choice (a ready prompt, startup output, ...)
+# The selected row comes from the same active block, never from a match
+# anywhere on the screen: an earlier dialog left above can show its own
+# selected "Yes" row while the current one has "No" selected.
 # The active choice is the lowest selected row ("❯ <text>") together with the
 # rows aligned to its text column directly above and below it (Claude draws
 # unselected options at that column). It is the trust dialog only when its
@@ -1141,20 +1146,20 @@ claude_choice_block_kind() {
                     if (t != "Yes" && t != "No") { print "other"; exit }
                     opts++
                 }
-                print (opts > 0 ? "trust" : "none"); exit
+                print (opts > 0 ? "trust-old" : "none"); exit
             }
             rest = substr(line[sel], c + 3)
             textcol = c + 1 + (match(rest, /[^ ]/) - 1)
             first = sel; last = sel
             for (i = sel - 1; i >= 1 && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i--) first = i
             for (i = sel + 1; i <= n && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i++) last = i
-            count = 0; yes = 0; no = 0; unknown = 0
+            count = 0; yes = 0; no = 0; unknown = 0; picked = ""
             for (i = first; i <= last; i++) {
                 t = (i == sel) ? rest : line[i]
                 t = unnumber(trim(t))
                 count++
-                if (t == "Yes, I trust this folder") yes++
-                else if (t == "No, exit") no++
+                if (t == "Yes, I trust this folder") { yes++; if (i == sel) picked = "yes" }
+                else if (t == "No, exit") { no++; if (i == sel) picked = "no" }
                 else unknown++
             }
             trailing = 0
@@ -1169,14 +1174,14 @@ claude_choice_block_kind() {
                 for (i = sel; i <= n; i++) if (line[i] ~ /Enter to confirm/) { print "other"; exit }
                 print "none"; exit
             }
-            if (yes == 1 && no == 1 && unknown == 0 && trailing == 0) print "trust"
+            if (yes == 1 && no == 1 && unknown == 0 && trailing == 0) print "trust-" picked
             else print "other"
         }'
 }
 
 # The active choice is the trust dialog and no user question is on screen.
 claude_trust_screen_to_answer() {
-    [[ "$(claude_choice_block_kind "$1")" == trust ]] \
+    [[ "$(claude_choice_block_kind "$1")" == trust-* ]] \
         && ! claude_user_prompt_present "$1"
 }
 
@@ -1194,35 +1199,39 @@ claude_accept_trust_dialog() {
         echo "[$log_prefix] Claude trust dialog persisted after ${max_attempts} attempts; aborting" >&2
         return 1
     fi
-    local pane_text
+    local pane_text kind
     pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
     # Decide from the screen captured just before any key. The one the caller
     # saw may already be gone: Claude can replace the trust dialog with the
     # user's one-time Chrome question, and a key sent now would answer it.
-    if ! claude_trust_screen_to_answer "$pane_text"; then
+    # Which row is selected is read from the active dialog only.
+    kind="$(claude_choice_block_kind "$pane_text")"
+    if [[ "$kind" != trust-* ]] || claude_user_prompt_present "$pane_text"; then
         echo "[$log_prefix] Claude trust dialog is no longer on screen; not pressing a key (${attempt}/${max_attempts})" >&2
         return 0
     fi
-    if printf '%s' "$pane_text" | grep -q "Yes, I trust this folder"; then
-        # New dialog: the default row is "No, exit", so a bare Enter ends the
-        # child (observed 2026-09-03: the session lived 4 seconds). Move to the
-        # Yes row and confirm it is selected before confirming.
-        if ! printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
-            tmux send-keys -t "$session_name" Down
-            sleep 1
-            pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        fi
-        if claude_trust_screen_to_answer "$pane_text" \
-            && printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '^[[:space:]]*❯[[:space:]]*([0-9]+\.[[:space:]]*)?Yes, I trust'; then
-            echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
-            tmux send-keys -t "$session_name" C-m
-        else
-            echo "[$log_prefix] Claude trust dialog detected but the Yes row is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
-        fi
+    if [[ "$kind" == trust-old ]]; then
+        echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
         return 0
     fi
-    echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
-    tmux send-keys -t "$session_name" C-m
+    # New dialog: the default row is "No, exit", so a bare Enter ends the
+    # child (observed 2026-09-03: the session lived 4 seconds). Move to the
+    # Yes row and confirm, from a fresh capture, that it is selected.
+    if [[ "$kind" == trust-no ]]; then
+        tmux send-keys -t "$session_name" Down
+        sleep 1
+        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        kind="$(claude_choice_block_kind "$pane_text")"
+        claude_user_prompt_present "$pane_text" && kind=other
+    fi
+    if [[ "$kind" == trust-yes ]]; then
+        echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
+    else
+        echo "[$log_prefix] Claude trust dialog detected but the Yes row is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
+    fi
+    return 0
 }
 
 # Claude Code asks some questions once, for the user rather than for the child.
@@ -1295,7 +1304,7 @@ wait_for_claude_ready() {
             return 1
         fi
         choice_kind="$(claude_choice_block_kind "$pane_text")"
-        if [[ "$choice_kind" == trust ]]; then
+        if [[ "$choice_kind" == trust-* ]]; then
             trust_attempts=$((trust_attempts + 1))
             if ! claude_accept_trust_dialog \
                 "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then

@@ -226,6 +226,32 @@ def test_only_the_active_choice_decides_and_a_trust_remnant_gets_no_key(tmp_path
     assert "|   \u276f Allow" in incidents
 
 
+# MintHooke / Pink on 059a84f: an earlier dialog with "Yes" selected is still
+# visible above the current one, where "No, exit" is selected.
+OLD_YES_ABOVE = "Quick safety check\n    No, exit\n  \u276f Yes, I trust this folder\n\n"
+CURRENT_NO = OLD_YES_ABOVE + TRUST_NEW_UNSELECTED + "  Enter to confirm \u00b7 Esc to exit\n"
+CURRENT_YES = OLD_YES_ABOVE + TRUST_NEW_SELECTED + "  Enter to confirm \u00b7 Esc to exit\n"
+
+
+def test_the_selected_row_is_read_from_the_active_dialog_only(tmp_path):
+    # Poll (1) and the helper (2) see "No" selected below an old selected
+    # "Yes": the helper must press Down, and Enter only once the capture after
+    # it (3) shows "Yes" selected in the active dialog.
+    result, calls, polls, incidents = _launch(tmp_path, [CURRENT_NO, CURRENT_NO, CURRENT_YES, READY])
+    assert result.returncode == 0, result.stderr
+    assert _keys_with_screens(tmp_path)[:2] == [
+        "screen=2 -t Probe-Curie Down", "screen=3 -t Probe-Curie C-m"]
+
+
+def test_no_enter_while_the_active_dialog_still_has_no_selected(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [CURRENT_NO])
+    assert result.returncode != 0
+    keys = _keys_with_screens(tmp_path)
+    assert keys and all(k.endswith(" Down") for k in keys), keys
+    assert "Yes row is not selected; not pressing Enter" in result.stderr
+    assert "selecting 'Yes, I trust this folder'" not in result.stderr
+
+
 def test_a_trust_dialog_with_a_confirm_footer_is_still_accepted(tmp_path):
     trust = ("Quick safety check\n"
              "    No, exit\n"
