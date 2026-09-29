@@ -231,6 +231,15 @@ The dashboard waits up to 120 seconds for the launcher's own readiness / early-d
 
 For Codex, also check `AGENTSTACK_CODEX_MODELS` against the requested model and the effort allowlist.
 
+## A Claude child stops during startup (readiness)
+
+A Claude child gets its task only once its screen accepts input. On any other screen the launcher stops without entering the task. It records the reason and the screen (up to 40 non-blank lines) on stderr and in `AGENTSTACK_RUNTIME_DIR/spawn_incidents.log`. While it waits, it reports progress on stderr every 10 seconds.
+
+- **`one-time question about Claude in Chrome`**: Claude Code shows "Claude in Chrome extension detected" and asks the user for the default browser setting (for example, on the first start after installing the extension). The answer may become the default for every later Claude session (whether it is saved has not been confirmed). The launcher therefore stops at once without pressing a key. Open `claude` once in a normal terminal and answer it yourself, or choose with `/chrome`, then launch the child again.
+- **`choice screen ORRERY does not recognise`**: an unknown choice screen stayed up for 10 seconds. No key was sent. Check the screen in the incidents log; if it is expected, answer it once in a normal `claude` session, then launch the child again.
+- **`Claude readiness timeout (60s)`**: the screen did not accept input within 60 seconds. Use the screen in the incidents log and the progress lines to tell a slow start from a screen the launcher does not recognise.
+- The launcher presses keys only to accept the trust dialog.
+
 ## Whether a Codex child's first task started is unknown
 
 A Codex child's first task is passed as its launch argument, `codex -- "<task>"`, not pasted into the screen (on Codex 0.158 a task pasted during startup sometimes never started a turn; a race with the startup screens is the leading hypothesis). The task is never resent.

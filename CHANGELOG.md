@@ -28,6 +28,10 @@ Codex 0.153〜0.157 の trust 画面（「Trust this folder?」「1. Trust and c
 
 ## 2026.09.27
 
+### Claude の子が、利用者向けの質問画面に答えずに止まるようにしました
+
+Claude Code が「Claude in Chrome extension detected」とブラウザ操作の既定を尋ねる画面では、launcher はキーを押さずにすぐ止まり、「通常の `claude` で自分で答えるか `/chrome` で決めてから、もう一度起動する」よう案内します。答えが利用者の今後の既定になる可能性があるためです。これまでは何も押さずに 60 秒待ってから、理由を示さずに失敗していました。未知の選択画面は 10 秒で止めます。失敗時の画面（空行を除いた最大 40 行）を `spawn_incidents.log` にも残し、待機中は 10 秒ごとに経過を出します。pre-registered と legacy の両方の起動経路が、同じ待機処理を使うようにしました。
+
 ### bound proxy の親でも /delegate できるように説明を直し、古い managed block を doctor が見つけるようにしました
 
 WSL で、bound proxy の Codex の親が「proxy に register_agent などが無い」ことを理由に /delegate を止めていました。子の登録は shell の `agentstack-preregister-child` が別の identity として行うので、親の proxy にそれらのツールが無いのは正常です。delegate skill と managed block（Codex / Claude）で、「自分の再登録の禁止」と「子の事前登録」を分けて書きました。standalone の起動 prompt にも「登録済み。自分を再登録せず、起動の儀式として inbox を読まない。子を起動するのは可」と明記しました。

@@ -6,7 +6,6 @@ import pathlib
 import stat
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
@@ -80,7 +79,6 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     })
     pathlib.Path(env["HOME"]).mkdir()
 
-    started = time.monotonic()
     result = subprocess.run(
         [
             "/bin/bash", str(SPAWN),
@@ -90,15 +88,20 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
             "read the inbox", str(workdir),
         ],
         cwd=ROOT, env=env, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+        # Generous: this only guards against a hang. Whether the launcher
+        # waited out its readiness timeout is measured in polls below, since
+        # `sleep` is faked and wall time only reflects machine load.
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
         check=False,
     )
-    elapsed = time.monotonic() - started
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Fresh-Curie"
-    assert elapsed < 5
     assert "Claude trust dialog detected" in result.stderr
     calls = tmux_log.read_text(encoding="utf-8").splitlines()
     assert sum(call.endswith(" C-m") for call in calls) >= 2
-    assert any(call.startswith("capture-pane") for call in calls)
+    # Waiting out the 60s timeout would take 30 polls of 2s; accepting the
+    # trust dialog and seeing the prompt takes about five (deterministic:
+    # sleep is faked), so 10 leaves room without hiding a wait-out.
+    polls = [call for call in calls if call.startswith("capture-pane") and " -S " not in f" {call} "]
+    assert 1 <= len(polls) <= 10, calls
