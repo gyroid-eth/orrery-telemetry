@@ -153,22 +153,25 @@ systemctl --user daemon-reload
 
 systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
-### WSL2 では最後のシェルを閉じると service が消える
+### WSL2 で Ubuntu の窓を閉じたとき
 
-WSL2 は開いているセッションが無くなると distro の VM ごと停止し、`nohup` で立てた Mail と dashboard は一緒に消えます。加えて、ユーザーに linger が無いと最後のログアウトで systemd user manager も終了します。常駐させたいなら両方を設定します（Ubuntu 26.04 / WSL 2.7 で確認）:
+**Windows Terminal など、デスクトップの窓から起こしたものは、窓を全部閉じても動き続けます。** tmux の agent、dashboard、Mail は止まりません（WSL 2.7.13 で確認: 窓を全部閉じたあと90秒以上 Running のまま）。起動元の窓が Windows 側に `wslhost.exe` を残し、それが WSL を動かし続けるためです。そのあいだ WSL はメモリを使い続けます。
 
-```bash
-# WSL 内: ログアウト後も systemd --user を残す
-loginctl enable-linger "$USER"
+使い終わって WSL を止めたいときは、PowerShell で次を実行します。これは ORRERY の Ubuntu だけでなく、**動いているすべての distro と WSL の VM をすぐに止めます**。agent が作業していないことに加え、他の distro を含む WSL 上の作業を保存・終了してから実行してください。tmux の agent・dashboard・Mail もすべて止まります。
+
+```powershell
+wsl --shutdown
 ```
 
-```ini
-# Windows 側 %UserProfile%\.wslconfig: セッションが無くても VM を止めない
-[wsl2]
-vmIdleTimeout=-1
-```
+次に Ubuntu を開いたら、Mail は起動1分後に timer が立て直します。dashboard は `install.sh` を再実行して立て直します。
 
-設定後は `wsl --shutdown` で一度止めてから開き直します。Mail は起動 1 分後に timer が立て、dashboard は `install.sh` の再実行で立て直します。
+**例外: Windows の SSH サーバー経由でだけ使う場合。** Windows の SSH サーバーに接続し、そこから `wsl.exe` で起こしたものは、ssh の接続が切れると Windows 側の `wslhost.exe` が片付けられます。他に WSL を使っているものが無ければ、WSL は最後の接続が切れてから約15秒で止まり、agent と dashboard も止まります（WSL 2.7.13・既定の設定で確認）。この使い方のときは、作業中は Windows 側で Ubuntu の窓を1つ開けておいてください。WSL の中で動かした sshd に直接接続する場合は確かめていません。
+
+補足:
+
+- ログアウト後も systemd user manager（Mail の timer と watcher）を残すには、WSL の中で `loginctl enable-linger "$USER"` を設定しておきます
+- 以前この節で勧めていた `.wslconfig` の `[wsl2] vmIdleTimeout=-1` は、この使い方では不要です。これは distro が止まった後も WSL の VM を動かし続ける設定です。以前の案内で入れた場合は、その行を消し、上の注意のとおり一度 `wsl --shutdown` すると外れます
+- 未検証（仮説）: systemd の user service として起動したものは、窓の子孫ではないので `wslhost.exe` を残さず、窓を全部閉じると止まるはずです。今の installer は WSL では dashboard を nohup で起動するので、通常はこれに当たりません
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 
