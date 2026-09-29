@@ -8,7 +8,19 @@
 
 ---
 
-## 未リリース
+## 2026.09.29
+
+### Claude の子が、利用者向けの質問画面に答えずに60秒待って失敗していました（#110）
+
+Claude の子の起動直後に、1回限りの質問（「Claude in Chrome extension detected」など）が出ると、準備完了の判定がこの画面を認識できず、何も押さないまま60秒待って失敗していました。この答えは利用者の今後の既定になりうるので、launcher は答えません。質問画面を検出したらキーを送らずにすぐ止め、「通常の端末で `claude` を一度開いて答えてから、もう一度起動してください」と案内し、失敗の時点の画面を記録に残します。trust の画面は、いま選ばれている選択肢を画面の構造から読み、trust のときだけキーを送ります。
+
+### bound proxy の親が /delegate を断っていました。古い managed block も検出します（#113）
+
+dashboard から起動した Codex の親が、自分の接続（bound proxy）に `register_agent` などの道具が無いことを理由に、`/delegate` を断っていました。子の登録は shell の helper（`agentstack-preregister-child`）が別の identity として行うので、親の接続にそれらが無いのは正常です。delegate の skill、managed block、起動の案内をそのように書き直しました。あわせて、`~/.codex/AGENTS.md` や project の `CLAUDE.md` に古い managed block が残っていると、doctor と installer が知らせ、更新のコマンドを示すようにしました（これまでは block があるだけで `ok` でした）。
+
+### dashboard の肖像の来歴を、実際のとおりに記録しました（#114）
+
+dashboard の肖像（`portraits_64`・`portraits_pixel`）は、作者が画像生成で文章だけから作ったドット絵です。Wikimedia Commons の写真ではありません。これまでの記録は Commons の写真だと説明していたので、`docs/third-party.md` と各 manifest、公開デモの説明を実際のとおりに直しました。画像そのものは変えていません。ドット絵は repo と同じ条件で配布します。
 
 ### WSL で、agent が起動した Codex の子が Windows の codex を使って即終了していました
 
