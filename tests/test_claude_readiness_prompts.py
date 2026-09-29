@@ -37,6 +37,8 @@ CHROME_PROMPT = """\
 """
 TRUST_OLD = "Do you trust the files in this folder?\n  Yes\n  No\n"
 READY = "\n❯ \n"
+TRUST_NEW_UNSELECTED = "Quick safety check\n  \u276f No, exit\n    Yes, I trust this folder\n"
+TRUST_NEW_SELECTED = "Quick safety check\n    No, exit\n  \u276f Yes, I trust this folder\n"
 UNKNOWN_CHOICE = """\
   Something new to decide
   ❯ 1. Option A
@@ -79,10 +81,14 @@ def _launch(tmp_path, screens, *, die_after=0):
         "    n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n"
         "    if [[ \" $* \" != *' -S '* ]]; then n=$((n + 1)); echo $n > \"$count_file\"; fi\n"
         "    if [[ \"$FAKE_DIE_AFTER\" -gt 0 && $n -ge \"$FAKE_DIE_AFTER\" ]]; then rm -f \"$FAKE_DIR/alive\"; fi\n"
+        "    [[ -f \"$FAKE_DIR/alive\" ]] || exit 1  # a dead session has nothing to capture\n"
         "    last=$(ls \"$FAKE_DIR/screens\" | sort -n | tail -1)\n"
         "    i=$(( n < 1 ? 1 : (n > last ? last : n) ))\n"
         "    cat \"$FAKE_DIR/screens/$i\" ;;\n"
         "  has-session) [[ -f \"$FAKE_DIR/alive\" ]] ;;\n"
+        "  send-keys)\n"
+        "    n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n"
+        "    printf 'screen=%s %s\\n' \"$n\" \"${*:2}\" >> \"$FAKE_DIR/keys\" ;;\n"
         "  kill-session) rm -f \"$FAKE_DIR/alive\" ;;\n"
         "  display-message) printf 'ParentAgent\\n' ;;\n"
         "esac\n",
@@ -123,6 +129,12 @@ def _launch(tmp_path, screens, *, die_after=0):
     return result, calls, polls, incidents.read_text(encoding="utf-8") if incidents.exists() else ""
 
 
+def _keys_with_screens(tmp_path):
+    """Each key the launcher sent, with the index of the screen then shown."""
+    keys = tmp_path / "keys"
+    return keys.read_text(encoding="utf-8").splitlines() if keys.exists() else []
+
+
 def _keys(calls):
     return [c for c in calls if c.startswith("send-keys")]
 
@@ -143,14 +155,36 @@ def test_chrome_question_stops_at_once_without_any_key(tmp_path):
     assert any(c.startswith("kill-session") for c in calls)
 
 
-def test_chrome_question_after_the_trust_dialog_gets_no_key_either(tmp_path):
+def test_chrome_question_replacing_the_trust_dialog_gets_no_key(tmp_path):
+    """The wait loop saw the trust dialog, but by the time the trust helper
+    captured again the Chrome question was up: no key may be sent."""
     result, calls, polls, incidents = _launch(tmp_path, [TRUST_OLD, CHROME_PROMPT])
     assert result.returncode != 0
-    keys = _keys(calls)
-    assert keys == ["send-keys -t Probe-Curie C-m"]  # the trust dialog only
-    assert "Claude trust dialog detected" in result.stderr
+    assert _keys_with_screens(tmp_path) == []
+    assert "trust dialog is no longer on screen; not pressing a key" in result.stderr
     assert "one-time question about Claude in Chrome" in result.stderr
-    assert "❯ No, keep browser tools off" in incidents
+    assert "\u276f No, keep browser tools off" in incidents
+
+
+@pytest.mark.parametrize("trust", ["old", "new"])
+def test_trust_keys_land_only_on_trust_screens(tmp_path, trust):
+    # Poll 1 and the helper's own capture (2) show the trust dialog; then the
+    # Chrome question. Every key must be sent while screen 2 is up.
+    screen = TRUST_OLD if trust == "old" else TRUST_NEW_SELECTED
+    result, calls, polls, incidents = _launch(tmp_path, [screen, screen, CHROME_PROMPT])
+    assert result.returncode != 0
+    assert _keys_with_screens(tmp_path) == ["screen=2 -t Probe-Curie C-m"]
+    assert "one-time question about Claude in Chrome" in result.stderr
+
+
+def test_new_trust_dialog_that_turns_into_the_question_after_down_gets_no_enter(tmp_path):
+    # The Yes row is not selected: Down goes to the trust screen (2); the
+    # capture after it shows the Chrome question (3), so Enter is not sent.
+    result, calls, polls, incidents = _launch(
+        tmp_path, [TRUST_NEW_UNSELECTED, TRUST_NEW_UNSELECTED, CHROME_PROMPT])
+    assert result.returncode != 0
+    assert _keys_with_screens(tmp_path) == ["screen=2 -t Probe-Curie Down"]
+    assert "Yes row is not selected; not pressing Enter" in result.stderr
 
 
 def test_chrome_question_is_recognised_by_its_options_alone(tmp_path):
@@ -172,6 +206,27 @@ def test_unrecognised_choice_screen_stops_after_ten_seconds(tmp_path):
     assert "|   ❯ 1. Option A" in incidents
 
 
+@pytest.mark.parametrize("ready_cue", ["\u276f \n", "? for shortcuts\n"])
+def test_choice_screen_wins_over_ready_cues_left_on_screen(tmp_path, ready_cue):
+    """A dialog with the empty input row or the shortcuts footer still visible
+    is a choice screen: no task is pasted and nothing is confirmed."""
+    result, calls, polls, incidents = _launch(tmp_path, [UNKNOWN_CHOICE + ready_cue])
+    assert result.returncode != 0
+    assert _keys_with_screens(tmp_path) == []
+    assert not any(c.startswith(("paste-buffer", "load-buffer")) for c in calls)
+    assert "choice screen ORRERY does not recognise for 10s" in result.stderr
+
+
+def test_failure_record_drops_interior_blank_lines(tmp_path):
+    screen = "IMPORTANT HEADING\n" + "\n" * 45 + "last detail\n"
+    result, calls, polls, incidents = _launch(tmp_path, [screen])
+    assert result.returncode != 0
+    assert "| IMPORTANT HEADING" in incidents
+    assert "| last detail" in incidents
+    assert "\n    | \n" not in incidents
+    assert "IMPORTANT HEADING" in result.stderr
+
+
 def test_timeout_records_the_screen_and_reports_progress(tmp_path):
     result, calls, polls, incidents = _launch(tmp_path, [LOADING])
     assert result.returncode != 0
@@ -187,12 +242,29 @@ def test_timeout_records_the_screen_and_reports_progress(tmp_path):
 
 
 def test_dead_session_records_its_last_screen(tmp_path):
+    # Poll 1 sees the screen; from poll 2 the session is gone and every
+    # capture fails, so the record must fall back to the last screen seen.
     result, calls, _polls, incidents = _launch(tmp_path, [LOADING], die_after=2)
     assert result.returncode != 0
     assert "died after" in result.stderr
     assert "Aborting: Claude terminated before readiness." in result.stderr
     assert "Claude terminated before readiness (Probe-Curie)" in incidents
     assert "|   loading plugins" in incidents
+
+
+@pytest.mark.parametrize("screen, guidance", [
+    (CHROME_PROMPT, "answer it yourself (or choose with /chrome), then launch the child again."),
+    (UNKNOWN_CHOICE, "answer it once in a normal 'claude' session, then launch the child again."),
+    (LOADING, "refusing to inject the task into an unknown screen state."),
+])
+def test_guidance_survives_the_dashboard_tail(tmp_path, screen, guidance):
+    """The dashboard shows the last 1000 characters of the launcher's output
+    (dashboard/server.py); the long screen record must not push the reason
+    and what to do out of it."""
+    context = "".join(f"  startup context line {i:02d} with some width to it\n" for i in range(40))
+    result, calls, polls, incidents = _launch(tmp_path, [context + screen])
+    assert result.returncode != 0
+    assert guidance in result.stderr[-1000:]
 
 
 def test_ready_screen_is_still_ready(tmp_path):

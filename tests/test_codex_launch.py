@@ -542,7 +542,7 @@ tmux() {
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
     ready = _extract("pane_nonblank_tail") + "\n" + _extract("pane_normalize_nbsp") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
-    trust = _extract("claude_accept_trust_dialog")
+    trust = _extract("claude_trust_dialog_present") + "\n" + _extract("claude_user_prompt_present") + "\n" + _extract("claude_trust_screen_to_answer") + "\n" + _extract("claude_accept_trust_dialog")
 
     gated = _run_bash(
         ready + '\nclaude_pane_ready "$PANE"\n',
@@ -556,8 +556,11 @@ def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
     )
     assert prompt.returncode == 0
 
+    # The helper decides from its own capture, so the stub shows the dialog.
     accepted = _run_bash(
-        trust + "\ntmux() { printf '%s\\n' \"$*\"; }\n"
+        trust + "\ntmux() { case \"$1\" in capture-pane) printf '%s\\n' "
+        "'Do you trust the files in this folder?' '  Yes' '  No' ;; "
+        "*) printf '%s\\n' \"$*\" ;; esac; }\n"
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
     )
     assert accepted.returncode == 0
@@ -1040,6 +1043,14 @@ def _accept_with_screens(screens: list[str]) -> str:
         + "\n".join(stub_lines)
         + "\n"
         + _extract("pane_normalize_nbsp")
+        + "\n"
+        + _extract("claude_trust_dialog_present")
+        + "\n"
+        + _extract("claude_user_prompt_present")
+        + "\n"
+        + _extract("claude_trust_screen_to_answer")
+        + "\n"
+
         + "\n"
         + _extract("claude_accept_trust_dialog")
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"

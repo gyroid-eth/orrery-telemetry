@@ -1095,6 +1095,11 @@ claude_pane_ready() {
     return 1
 }
 
+# The trust dialog is on screen and nothing the launcher must not answer is.
+claude_trust_screen_to_answer() {
+    claude_trust_dialog_present "$1" && ! claude_user_prompt_present "$1"
+}
+
 claude_accept_trust_dialog() {
     local session_name="$1"
     local attempt="$2"
@@ -1106,6 +1111,13 @@ claude_accept_trust_dialog() {
     fi
     local pane_text
     pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+    # Decide from the screen captured just before any key. The one the caller
+    # saw may already be gone: Claude can replace the trust dialog with the
+    # user's one-time Chrome question, and a key sent now would answer it.
+    if ! claude_trust_screen_to_answer "$pane_text"; then
+        echo "[$log_prefix] Claude trust dialog is no longer on screen; not pressing a key (${attempt}/${max_attempts})" >&2
+        return 0
+    fi
     if printf '%s' "$pane_text" | grep -q "Yes, I trust this folder"; then
         # New dialog: the default row is "No, exit", so a bare Enter ends the
         # child (observed 2026-09-03: the session lived 4 seconds). Move to the
@@ -1115,7 +1127,8 @@ claude_accept_trust_dialog() {
             sleep 1
             pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
         fi
-        if printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
+        if claude_trust_screen_to_answer "$pane_text" \
+            && printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
             echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
             tmux send-keys -t "$session_name" C-m
         else
@@ -1153,14 +1166,21 @@ claude_choice_screen_present() {
         | grep -qE '^[[:space:]]*❯[[:space:]]*(No|Yes|[0-9]+\.)([[:space:]]|,|$)'
 }
 
-# Last 40 non-blank lines of the screen with some scrollback. capture-pane pads
-# to the window height, so a plain tail can hold only blank lines.
+# Diagnostics only: the last 40 non-blank lines, blank lines anywhere removed.
+# capture-pane pads to the window height and a dialog can sit above a run of
+# blank rows, so a plain tail may hold only blank lines. Readiness checks keep
+# using pane_nonblank_tail, which preserves the screen's own layout.
+pane_diagnostic_lines() {
+    pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 40 || true
+}
+
+# The screen with some scrollback, for the failure record.
 claude_failure_screen() {
     local session_name="$1" fallback="$2" screen
     screen="$(tmux capture-pane -t "$session_name" -p -S -60 2>/dev/null \
-        | pane_normalize_nbsp | pane_nonblank_tail 40)"
+        | pane_diagnostic_lines)"
     if [[ -z "$screen" ]]; then
-        screen="$(printf '%s' "$fallback" | pane_normalize_nbsp | pane_nonblank_tail 40)"
+        screen="$(printf '%s' "$fallback" | pane_diagnostic_lines)"
     fi
     printf '%s' "$screen"
 }
@@ -1184,59 +1204,64 @@ CLAUDE_READY_WAITED=0
 # the trust dialog.
 wait_for_claude_ready() {
     local session_name="$1" log_prefix="$2"
-    local waited=0 pane_text="" trust_attempts=0 trust_max=5 choice_since=-1 state last
+    local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last
+    # Each failure records the screen first and prints its short reason and
+    # what to do last: the dashboard shows only the tail of the launcher log.
     while [[ $waited -lt $CLAUDE_READY_WAIT_MAX ]]; do
         sleep 2
         waited=$((waited + 2))
         CLAUDE_READY_WAITED=$waited
         pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)
+        # Keep the last screen actually seen: once the session is gone, the
+        # capture fails and would leave an empty record.
+        [[ -n "$pane_text" ]] && last_seen="$pane_text"
+        if claude_user_prompt_present "$pane_text"; then
+            claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
+            echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
+            return 1
+        fi
         if claude_trust_dialog_present "$pane_text"; then
             trust_attempts=$((trust_attempts + 1))
             if ! claude_accept_trust_dialog \
                 "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then
+                claude_record_failure "$session_name" "Claude trust dialog persisted" "$last_seen"
                 echo "[$log_prefix] Aborting: unable to accept the Claude trust dialog." >&2
-                claude_record_failure "$session_name" "Claude trust dialog persisted" "$pane_text"
                 return 1
             fi
             choice_since=-1
             sleep 1
             continue
         fi
-        if claude_user_prompt_present "$pane_text"; then
-            echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
-            claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$pane_text"
-            return 1
-        fi
-        if claude_pane_ready "$pane_text"; then
-            return 0
-        fi
-        if ! tmux has-session -t "=$session_name" 2>/dev/null; then
-            echo "[$log_prefix] Claude session '$session_name' died after ${waited}s; last pane output:" >&2
-            printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 40 >&2
-            echo "[$log_prefix] Aborting: Claude terminated before readiness." >&2
-            claude_record_failure "$session_name" "Claude terminated before readiness" "$pane_text"
-            return 1
-        fi
         state=starting
         if claude_choice_screen_present "$pane_text"; then
             state=choice
             [[ $choice_since -lt 0 ]] && choice_since=$waited
             if [[ $((waited - choice_since)) -ge $CLAUDE_CHOICE_WAIT_MAX ]]; then
+                claude_record_failure "$session_name" "Claude showed an unrecognised choice screen; not answered by the launcher" "$last_seen"
                 echo "[$log_prefix] Aborting: Claude has shown a choice screen ORRERY does not recognise for ${CLAUDE_CHOICE_WAIT_MAX}s. No key was sent. If it is expected, answer it once in a normal 'claude' session, then launch the child again." >&2
-                claude_record_failure "$session_name" "Claude showed an unrecognised choice screen; not answered by the launcher" "$pane_text"
                 return 1
             fi
         else
             choice_since=-1
+            # A choice screen wins over the weak ready cues (an empty input row
+            # or the shortcuts footer can stay visible under a dialog).
+            if claude_pane_ready "$pane_text"; then
+                return 0
+            fi
+        fi
+        if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+            claude_record_failure "$session_name" "Claude terminated before readiness" "$last_seen"
+            echo "[$log_prefix] Claude session '$session_name' died after ${waited}s (last screen above and in $SPAWN_INCIDENT_LOG)." >&2
+            echo "[$log_prefix] Aborting: Claude terminated before readiness." >&2
+            return 1
         fi
         if [[ $((waited % CLAUDE_PROGRESS_EVERY)) -eq 0 ]]; then
             last="$(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 1 | cut -c1-120)"
             echo "[$log_prefix] Waiting for Claude (${waited}s): ${state}; last line: ${last:-<empty>}" >&2
         fi
     done
+    claude_record_failure "$session_name" "Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s)" "$last_seen"
     echo "[$log_prefix] Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
-    printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 40 >&2
-    claude_record_failure "$session_name" "Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s)" "$pane_text"
     return 1
 }
 
