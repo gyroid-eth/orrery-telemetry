@@ -1665,18 +1665,17 @@ codex_turn_running_on_screen() {
 }
 
 # Whether Codex shows a reply to this task: the end of the task text
-# (whitespace ignored, so Codex's wrapping does not matter), a reply line
-# ("• ...") somewhere after it, and an idle composer at the bottom with no
-# trust screen and no status line. A short task ("reply OK") is over before
-# the next poll, and while a reply streams Codex hides its status line, so the
-# running line alone is often never seen (WSL, 2026-09-29). A long reply
-# pushes the task off the visible screen, so the task and the reply are looked
-# for in `history` (the pane with its scrollback) when given; the composer and
-# the trust screen are judged on the visible screen only. Like the running
-# line, this only stops the waiting: it sends no key and is not taken as proof
-# of the start.
+# (whitespace ignored), a reply line ("• ...") somewhere after it, and an idle
+# composer at the bottom with no trust screen and no status line. A short
+# task ("reply OK") is over before the next poll, and while a reply streams
+# Codex hides its status line, so the running line alone is often never seen
+# (WSL, 2026-09-29). Known limits: the task's end must be on the visible
+# screen (a long reply pushes it off; on WSL a capture with -S -300 held no
+# more than the 24 visible lines), and a task end wrapped across two lines is
+# not matched; the wait then runs to its bound as before. Like the running line, this only stops the waiting:
+# it sends no key and is not taken as proof of the start.
 codex_turn_finished_on_screen() {
-    local pane="$1" prompt="$2" history="${3:-$1}" region tail_key flat after utf8_locale
+    local pane="$1" prompt="$2" region tail_key flat after utf8_locale
     region="$(printf '%s\n' "$pane" | pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 6)"
     printf '%s' "$region" | grep -qE 'esc to interrupt' && return 1
     printf '%s' "$region" | grep -qE '^[[:space:]]*›[[:space:]]*Ask Codex to do anything[[:space:]]*$' || return 1
@@ -1688,7 +1687,7 @@ codex_turn_finished_on_screen() {
     tail_key="$(printf '%s' "${prompt: -24}" | tr -d '[:space:]')"
     [[ -n "$tail_key" ]] || return 1
     # Lines joined by \001 so a line start survives the whitespace removal.
-    flat="$(printf '%s' "$history" | pane_normalize_nbsp | tr '\n' '\001' | tr -d '[:space:]')"
+    flat="$(printf '%s' "$pane" | pane_normalize_nbsp | tr '\n' '\001' | tr -d '[:space:]')"
     [[ "$flat" == *"$tail_key"* ]] || return 1
     after="${flat##*"$tail_key"}"
     [[ "$after" == *$'\001•'* ]]
@@ -1761,9 +1760,7 @@ codex_watch_initial_task() {
             turn_seen=true
             continue
         fi
-        local history_text
-        history_text="$(tmux capture-pane -t "$session_name" -p -S -300 2>/dev/null || true)"
-        if codex_turn_finished_on_screen "$pane_text" "$prompt_text" "$history_text"; then
+        if codex_turn_finished_on_screen "$pane_text" "$prompt_text"; then
             local finished_screen
             finished_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
             spawn_note "Codex started ($session_name); a reply to its first task is on screen after ${waited}s. First-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $finished_screen"

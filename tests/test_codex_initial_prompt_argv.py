@@ -168,8 +168,7 @@ STARTED = ("\n› You are Child, a standalone agent with no parent. Start it imm
            "  reply STARTED\n\n• Working (1s • esc to interrupt)\n\n› Ask Codex to do anything\n")
 
 
-def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, alive=True, prompt=PROMPT,
-           histories: list[str] | None = None):
+def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, alive=True, prompt=PROMPT):
     """Run codex_watch_initial_task with tmux replaying `screens` and the rollout
     helper replaying `statuses` (each list's last entry repeats)."""
     statuses = statuses or ["unknown"]
@@ -177,9 +176,6 @@ def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, aliv
         (tmp_path / f"screen{i}").write_text(screen, encoding="utf-8")
     for i, status in enumerate(statuses):
         (tmp_path / f"status{i}").write_text(status, encoding="utf-8")
-    # With scrollback (`-S`), a history may stand in for the visible screen.
-    for i, history in enumerate(histories or []):
-        (tmp_path / f"history{i}").write_text(history, encoding="utf-8")
     calls = tmp_path / "calls"
     script = (
         # The screen moves on only at a poll boundary (`sleep 3`), so the extra
@@ -192,8 +188,7 @@ def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, aliv
         "    capture-pane)\n"
         '      local idx; idx="$(cat "$DIR/idx")"\n'
         '      if [[ -f "$DIR/advance" ]] && (( idx + 1 < SCREENS )); then idx=$((idx + 1)); printf %s "$idx" > "$DIR/idx"; fi\n'
-        '      rm -f "$DIR/advance"\n'
-        '      if [[ "$*" == *" -S "* && -f "$DIR/history$idx" ]]; then cat "$DIR/history$idx"; else cat "$DIR/screen$idx"; fi ;;\n'
+        '      rm -f "$DIR/advance"; cat "$DIR/screen$idx" ;;\n'
         "    has-session) " + ("return 0" if alive else "return 1") + " ;;\n"
         "  esac\n"
         "}\n"
@@ -454,35 +449,11 @@ def test_the_finished_turn_needs_the_task_a_reply_after_it_and_an_idle_composer(
 
 
 STREAMING = (FIXTURES / "codex-0.158-streaming-frame.txt").read_text(encoding="utf-8")
-SCROLLED = (FIXTURES / "codex-0.158-streaming-scrolled-frame.txt").read_text(encoding="utf-8")
 LONG_TASK = "Start it immediately:\n\n1〜200 の素数を1行ずつ理由つきで書き出してください"
 
 
 def test_a_streaming_reply_ends_the_wait_even_without_the_status_line():
     # While a reply streams, Codex hides "Working (...)": reply lines and an
     # idle-looking composer are what the screen shows (real frame, 2026-09-29).
+    # The note therefore says a reply is on screen, not that the turn is over.
     assert _finished(STREAMING, LONG_TASK) == 0
-
-
-def test_a_task_pushed_off_screen_is_found_in_the_scrollback():
-    # A long reply scrolls the task out of view; the visible screen alone
-    # cannot tell, the pane with its scrollback can.
-    assert _finished(SCROLLED, LONG_TASK) != 0
-    body = ("\n".join(_extract(n) for n in ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
-                                           "codex_trust_screen_up", "injection_utf8_locale",
-                                           "codex_turn_finished_on_screen"))
-            + '\ncodex_turn_finished_on_screen "$SCREEN" "$PROMPT" "$HISTORY"\n')
-    history = STREAMING + SCROLLED
-    result = subprocess.run(["/bin/bash", "-c", body],
-                            env=dict(os.environ, SCREEN=SCROLLED, PROMPT=LONG_TASK, HISTORY=history),
-                            capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0
-
-
-def test_a_long_reply_missed_by_every_poll_still_ends_the_wait(tmp_path):
-    # The case measured at 90.3 s: every poll lands after the status line has
-    # gone and after the task has scrolled away.
-    result, keys, notes = _watch(tmp_path, [SCROLLED], prompt=LONG_TASK, histories=[STREAMING + SCROLLED])
-    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
-    assert "a reply to its first task is on screen" in notes
-    assert _waited(notes) <= 6
