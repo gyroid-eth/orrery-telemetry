@@ -8,6 +8,10 @@ Run several coding agents from different vendors, such as Claude Code, Codex CLI
 
 **Start with the demo**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) is the real dashboard driven by scripted data. It loops through agents starting, exchanging messages, spawning a child and finishing, in four minutes, with captions saying what is happening. Nothing to install; it gives you a feel for the experience on a screen close to the real thing. Watch it once through before continuing.
 
+**Introduction video**: to see several agents actually at work, watch the introduction video "Orrery".
+
+[![Introduction video "Orrery" (YouTube)](https://i.ytimg.com/vi/JXoa93TQolU/hqdefault.jpg)](https://youtu.be/JXoa93TQolU)
+
 ## Who this is for
 
 - **People who run coding agents, not chat**: not chat in the ChatGPT sense, but agents like Claude Code or Codex that take an instruction, write code, change files, and run commands on their own. It does not matter whether you drive them from a terminal or from a desktop app such as Claude Desktop or the ChatGPT app.
@@ -114,6 +118,14 @@ Type `/log` and the agent writes one Markdown file under `logs/` summarizing wha
 
 Where the skills live and how they are wired is covered in [Launchers and identity](docs/launchers.en.md#skills-2-and-file-reservations).
 
+## Using it with Obsidian
+
+When you use an Obsidian vault as the place where agents work, their work logs, paper notes, and tasks become Markdown notes as they are, and you only need to read them in the Daily Note and on a Kanban board. ORRERY Telemetry works without Obsidian; this is one useful way to work.
+
+![Typing /adddone to an agent adds the finished task to "Done today" in the Obsidian Daily Note](docs/img/obsidian-daily.gif)
+
+See [Using it with Obsidian](docs/obsidian.en.md) for how to set it up, and [orrery-demo-vault](https://github.com/gyroid-eth/orrery-demo-vault) for a vault you can try right away.
+
 ## What you see
 
 ### DECK
@@ -168,6 +180,7 @@ The Japanese documentation is canonical. The main guides have English versions.
 | [Codex App integration](docs/codex-app.en.md) | Putting Codex Desktop root tasks / subagents on the same dashboard |
 | [Google Antigravity / Gemini provider](docs/antigravity.en.md) | Installing the optional provider and its limits |
 | [Dashboard](docs/dashboard.en.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, embed |
+| [Using it with Obsidian](docs/obsidian.en.md) | Keep work logs, paper notes, and tasks in a vault and read them in the Daily Note and on Kanban |
 | [API reference](docs/api.en.md) | Every route, query / request fields, response schemas |
 | [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
 | [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, authentication |
