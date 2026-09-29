@@ -255,7 +255,8 @@ def test_the_printed_update_command_updates_the_checked_install(tmp_path, instal
     (other_home / "claude").mkdir(parents=True)
     (other_home / "codex" / "AGENTS.md").write_text("WRONG TEMPLATE\n")
     (other_home / "claude" / "CLAUDE.md").write_text("WRONG TEMPLATE\n")
-    shell_env = {**env, "AGENTSTACK_HOME": str(other_home)}
+    shell_env = {**env, "AGENTSTACK_HOME": str(other_home),
+                 "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX}
     ran = subprocess.run(["/bin/bash", "-c", command], env=shell_env,
                          text=True, capture_output=True, check=False)
     assert ran.returncode == 0, ran.stderr
