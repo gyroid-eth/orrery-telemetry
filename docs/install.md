@@ -25,7 +25,7 @@
 - Ghostty: click-to-jump と window title。iTerm2、Terminal.app、`none` へ fallback。ただし既存ウィンドウの前面化は Ghostty のみで、iTerm2 と Terminal.app では jump のたびに新しいウィンドウが開きます
 - Obsidian: `/log` の vault / Daily Note 統合と、vault 内 Output item を開く link。`/log` の Obsidian モードは `AGENTSTACK_OBSIDIAN_APP` を設定して初めて有効になります（installer は設定しません）。未設定なら `/log` はローカルの `logs/` に書き、dashboard は generic project log を非リンク項目として表示します
 
-macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使う実装です。Ubuntu 24.04 / tmux 3.4 では install、dashboard、Codex agent が動いたという利用報告があり、そこで見つかった tmux 3.4 の separator escape（[#26](https://github.com/gyroid-eth/orrery-telemetry/issues/26)）と Codex 履歴の transcript 選択（[#27](https://github.com/gyroid-eth/orrery-telemetry/issues/27)）は修正済みです。`systemd --user` での常駐登録は作者側で未検証です（CI は `systemctl` をスタブにした unit 生成テストのみ）。WSL2（Ubuntu 26.04 / WSL 2.7）では install、Mail、dashboard、`agent-start`、`/delegate` の子、dashboard からの jump（Windows Terminal のタブで attach / resume）まで実機で確認しています。最後のシェルを閉じると VM ごと止まる点は [troubleshooting](troubleshooting.md) の WSL2 節を参照してください。Windows native は対象外です。
+macOS では launchd の `gui/$UID` domain への実際の bootstrap 成否で常駐経路を選びます。画面スリープ中や SSH 専用環境などで bootstrap できない場合は、dashboard server の終了を検知して再起動する supervised background mode に自動で切り替えます。Linux では systemd user service、利用できなければ同じ supervised background mode を使う実装です。Ubuntu 24.04 / tmux 3.4 では install、dashboard、Codex agent が動いたという利用報告があり、そこで見つかった tmux 3.4 の separator escape（[#26](https://github.com/gyroid-eth/orrery-telemetry/issues/26)）と Codex 履歴の transcript 選択（[#27](https://github.com/gyroid-eth/orrery-telemetry/issues/27)）は修正済みです。`systemd --user` での常駐登録は作者側で未検証です（CI は `systemctl` をスタブにした unit 生成テストのみ）。WSL2（Ubuntu 26.04 / WSL 2.7）では install、Mail、dashboard、`agent-start`、`/delegate` の子、dashboard からの jump（Windows Terminal のタブで attach / resume）まで実機で確認しています。Ubuntu の窓を全部閉じても agent が働いている間は WSL を止めない仕組みは [troubleshooting](troubleshooting.md) の WSL2 節を参照してください。Windows native は対象外です。
 
 installer は冒頭で OS、Python、必須 command、ORRERY Mail endpoint（既定 `127.0.0.1:18765`・state root `~/.agentstack/mail`）、install directory の書込権限をまとめて検査します。endpoint が使用中でも、既存の `install-state.json` があれば上書き更新として扱います。新規 install で使用中の場合も socket の所有者を推測して停止せず、health response と canonical database を確認できた場合だけ既存 service を再利用します。無関係または解決不能な listener なら、最初の書き込み前に停止します。
 
@@ -127,7 +127,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    以前から Ubuntu に Codex が入っている場合も、`npm install -g @openai/codex@latest` で最新にしてください。古い版では GPT-6 系のモデルで起動した子が API に拒否されます（WSL で 0.153.4 は拒否、0.158.0 は応答）。
 7. **agent を起動する**（Ubuntu の中）。上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal（`wt.exe`、Windows 11 なら標準搭載）の新しいタブを開いて tmux に attach します。Windows Terminal が無い場合は Microsoft Store から入れてください。
 
-**閉じてはいけない窓。** Ubuntu の窓を全部閉じると WSL2 は VM ごと止まり、Mail と dashboard も消えます。常駐させたいときは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-では最後のシェルを閉じると-service-が消える) の `loginctl enable-linger` と `.wslconfig` の `vmIdleTimeout=-1` を設定してください。
+**Ubuntu の窓を閉じても、agent が働いている間は止まりません。** WSL は既定では、Ubuntu の窓を全部閉じると約15秒後に distro を止めます。dashboard は agent が働いている間だけ隠れた `wsl.exe` を1つ持って WSL を動かし続け、仕事が終わると手放します。`wsl --shutdown` は要らず、Windows の設定も変えません。header に `WSL kept · 2 agents` のように理由が出ます。詳細と、以前の版が `.wslconfig` に入れた設定の外し方は [troubleshooting の WSL2 節](troubleshooting.md#wsl2-で-ubuntu-の窓を全部閉じると-agent-が止まる)。
 
 ## 非対話で入れる（`--assume-yes`）
 

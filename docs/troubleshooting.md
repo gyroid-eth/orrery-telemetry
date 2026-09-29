@@ -153,22 +153,25 @@ systemctl --user daemon-reload
 
 systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
-### WSL2 では最後のシェルを閉じると service が消える
+### WSL2 で Ubuntu の窓を全部閉じると agent が止まる
 
-WSL2 は開いているセッションが無くなると distro の VM ごと停止し、`nohup` で立てた Mail と dashboard は一緒に消えます。加えて、ユーザーに linger が無いと最後のログアウトで systemd user manager も終了します。常駐させたいなら両方を設定します（Ubuntu 26.04 / WSL 2.7 で確認）:
+WSL は、Windows 側の最後の client（`wsl.exe`、Windows Terminal の Ubuntu タブ）が終わると、既定では約15秒後に distro を停止します。中で tmux・dashboard・agent が動いていても止まり、Mail・dashboard・全 agent が一緒に消えます（WSL 2.7.13 で確認: 最後の窓を閉じて13〜16秒後に停止）。`[wsl2] vmIdleTimeout=-1` が止めないのは VM だけで、linger や systemd でも distro は維持されません。
 
-```bash
-# WSL 内: ログアウト後も systemd --user を残す
-loginctl enable-linger "$USER"
-```
+**dashboard は、agent が働いている間だけ WSL を動かし続けます。** 仕事があるあいだ、Windows 側に隠れた `wsl.exe` を1つ持ち、仕事が無くなるとそれを自分で終わらせます。そのあとは WSL の既定どおり、窓が1つも無ければ約15秒で止まります。利用者が `wsl --shutdown` を打つ必要はなく、Windows の `.wslconfig` も変更しません。
 
-```ini
-# Windows 側 %UserProfile%\.wslconfig: セッションが無くても VM を止めない
-[wsl2]
-vmIdleTimeout=-1
-```
+- **保持する間**: agent の process（claude / codex / antigravity）が tmux の中で動いている間。承認待ち・返答待ちでも process が生きていれば保持します
+- **起動中**: dashboard の NEW AGENT と `agent-start` / `agent-start-codex` は、起動を始める前に予約を置き、保持が始まるか失敗が分かるまで待ってから起動します。保持が始まらなかったときは、起動は続けたうえで理由を表示します（dashboard は応答の `wsl_hold`、shell は `WSL hold: ...` の行）。その場合は agent が終わるまで Ubuntu の窓を1つ開けておいてください。予約は起動が済むと外れ、残っても3分で失効します
+- **画面を見ている間**: dashboard のページ（cockpit の中に表示されたものを含む）が表示されている間は保持します。ページが隠れる・閉じると外れます
+- **保持しないもの**: dashboard・Mail・watcher・anchor 自身と、tmux の control client。cockpit は誰も見ていなくても全 session に記録用の接続を持つので、これを数えると WSL が止まらなくなります
+- **確かめられないとき**: tmux や ps が答えないときは「全部終わった」とは扱わず、最後に確認できた agent のために保持を続けます。header には `WSL kept · state unknown` と出ます
+- **解除**: 上のどれも無い状態が60秒続いたら、保持をやめます。保持しているあいだは header に `WSL kept · 2 agents` のように理由を出し、解除までの60秒は `WSL hold ends in 42s`、解除後は表示を消します。保持をやめても、他の窓やプログラムが WSL を使っていれば WSL は止まりません
+- **状態の鮮度**: 保持の状態が30秒以上更新されないと、header は `WSL status stale` を出します
+- **故障時**: 隠れた `wsl.exe` が早く終わったら、dashboard が数秒のうちに起動し直します（失敗が3回続いたら5分待ってから再試行）。起動できないときは header に `WSL not kept` と理由を出します。この間は Ubuntu の窓を1つ開けておいてください。dashboard が落ちても、anchor は最後に知らされた agent の process が生きている間は保持を続けます
+- **止まったあとの再開**: WSL が止まると dashboard も止まります。Windows Terminal で Ubuntu を開き、いつもの手順で dashboard を起動してください
+- **確認**: `agentstack-doctor` が保持の状態（理由・Windows 側の PID・更新時刻）を出します
+- **やめる**: `--no-wsl-anchor`（または `AGENTSTACK_WSL_ANCHOR=0`）で install します。選択は `env.sh` に残り、`--wsl-anchor` で戻せます
 
-設定後は `wsl --shutdown` で一度止めてから開き直します。Mail は起動 1 分後に timer が立て、dashboard は `install.sh` の再実行で立て直します。
+以前の版の installer や手作業で、`.wslconfig` に `[general] instanceIdleTimeout=-1` を入れた場合、全 distro が `wsl --shutdown` まで止まらなくなります。今は不要です。`agentstack-doctor` がこれを見つけると、外し方（その行を消して、agent が動いていないときに一度 `wsl --shutdown`）を案内します。`[wsl2] vmIdleTimeout=-1` も同様で、distro が止まっても VM は動き続け、メモリを使い続けることがあります（上限の既定は物理メモリの50%）。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 

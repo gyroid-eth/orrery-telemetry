@@ -50,6 +50,9 @@ CHILD_RESUME_RETENTION_DAYS_SETTING="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-}
 # command worked from a shell (2026-09-08). Resolve it here, in the operator's
 # shell, and persist it: explicit > installed env.sh > `command -v codex`.
 CODEX_BIN_SETTING="${AGENTSTACK_CODEX_BIN:-}"
+# WSL only: whether the dashboard keeps the distro running while agents work
+# (dashboard/wsl_anchor.py). Same lifecycle: explicit > installed env.sh > 1.
+WSL_ANCHOR_SETTING="${AGENTSTACK_WSL_ANCHOR:-}"
 # Dashboard-only settings with the same lifecycle: read at install, persisted
 # into env.sh and the service definition, inherited on re-install.
 PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
@@ -121,6 +124,11 @@ Options:
                          Keep normal-finished Codex child resume credentials
                          for this many days (default: existing env.sh, else 30;
                          0 restores full deletion)
+  --no-wsl-anchor        WSL only: do not keep the distro running while agents
+                         work (default: keep it, so closing every Ubuntu window
+                         does not stop them, and let WSL stop by itself once
+                         they are done; remembered in env.sh, --wsl-anchor
+                         turns it back on). Nothing is written to Windows.
   -h, --help             Show this help
 
 --assume-yes is not --force: validation and safety errors remain fatal. It must
@@ -217,6 +225,14 @@ while [[ $# -gt 0 ]]; do
       CODEX_BIN_SETTING="$2"
       shift 2
       ;;
+    --no-wsl-anchor)
+      WSL_ANCHOR_SETTING=0
+      shift
+      ;;
+    --wsl-anchor)
+      WSL_ANCHOR_SETTING=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -274,6 +290,17 @@ fi
 if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
   CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "$WSL_ANCHOR_SETTING" ]]; then
+  WSL_ANCHOR_SETTING="$(agentstack_installed_env_value AGENTSTACK_WSL_ANCHOR "$INSTALL_DIR/env.sh")"
+fi
+WSL_ANCHOR_SETTING="${WSL_ANCHOR_SETTING:-1}"
+case "$WSL_ANCHOR_SETTING" in
+  0|1) ;;
+  *)
+    echo "error: AGENTSTACK_WSL_ANCHOR must be 0 or 1 (got: $WSL_ANCHOR_SETTING)" >&2
+    exit 2
+    ;;
+esac
 # --- codex launcher resolution (tests extract from here to the end marker) ---
 # Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
 # there is the Windows npm shim: run by the Linux node it dies at once with
@@ -1546,6 +1573,8 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/wslconfig.py" ]] || die "missing scripts/lib/wslconfig.py"
+  [[ -f "$REPO_ROOT/dashboard/wsl_anchor.py" ]] || die "missing dashboard/wsl_anchor.py"
   [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
     die "missing scripts/lib/agentstack-persistent-launcher.sh"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
@@ -1696,6 +1725,22 @@ detect_service_kind() {
   fi
   echo "nohup"
 }
+
+# WSL: closing every Ubuntu window used to stop the distro about 15 s later,
+# and every agent with it. The dashboard now keeps the distro running while
+# agents work and lets it stop by itself afterwards (dashboard/wsl_anchor.py).
+# The installer only records the choice; it never edits the Windows
+# .wslconfig (`agentstack-doctor` explains an instanceIdleTimeout=-1 set there
+# earlier, which keeps every distro running until `wsl --shutdown`).
+report_wsl_anchor() {
+  running_under_wsl || return 0
+  if [[ "$WSL_ANCHOR_SETTING" == "1" ]]; then
+    say "WSL: the dashboard keeps WSL running while agents work, and lets it stop by itself when they are done (--no-wsl-anchor to turn off)"
+  else
+    say "WSL: keeping WSL running for agents is off (AGENTSTACK_WSL_ANCHOR=0); closing every Ubuntu window stops the agents about 15 s later"
+  fi
+}
+
 
 create_layout() {
   plan "create install layout under $INSTALL_DIR"
@@ -1893,6 +1938,7 @@ install_payload() {
     cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
     cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
+    cp "$SCRIPT_DIR/lib/wslconfig.py" "$BIN_DIR/lib/wslconfig.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
@@ -2254,6 +2300,7 @@ values = {
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
+    "AGENTSTACK_WSL_ANCHOR": "$WSL_ANCHOR_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
@@ -3924,6 +3971,7 @@ main() {
   # update, and they need the autostart most.
   enable_mail_autostart
   enable_mail_watcher
+  report_wsl_anchor
   safe_merge_claude_mcp
   safe_merge_settings
   safe_managed_doc_setups

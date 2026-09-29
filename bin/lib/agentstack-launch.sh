@@ -35,6 +35,30 @@ ags_resolve_tmux() {
   command -v tmux 2>/dev/null || true
 }
 
+# WSL: reserve this launch with the dashboard's anchor (dashboard/wsl_anchor.py)
+# and wait until WSL is held for it, so closing the window that started it does
+# not stop the agent. The reservation is made under the same lock as the
+# anchor's decisions and expires by itself after a few minutes; by then the
+# running agent is what holds. When the hold cannot be established the reason
+# is printed and the launch goes on: the window keeps WSL up meanwhile.
+# No-op outside WSL or when the anchor is off.
+AGS_WSL_PROC_VERSION="${AGS_WSL_PROC_VERSION:-/proc/version}"
+ags_wsl_reserve_launch() {
+  [[ -r "$AGS_WSL_PROC_VERSION" ]] && grep -qi microsoft "$AGS_WSL_PROC_VERSION" 2>/dev/null || return 0
+  [[ "${AGENTSTACK_WSL_ANCHOR:-1}" != "0" ]] || return 0
+  local home="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+  local state="${AGENTSTACK_RUNTIME_DIR:-$home/runtime}/wsl-anchor"
+  local helper="${AGENTSTACK_WSL_ANCHOR_HELPER:-$home/dashboard/wsl_anchor.py}"
+  local python="${AGENTSTACK_PYTHON:-python3}"
+  if [[ ! -f "$helper" ]]; then
+    printf '%s: WSL hold: %s is missing; keep this window open while the agent works\n' "$AGS_PROG" "$helper" >&2
+    return 0
+  fi
+  "$python" "$helper" reserve "$state" "$1-$$" --wait "${AGS_WSL_RESERVE_WAIT:-40}" || \
+    printf '%s: continuing without a WSL hold\n' "$AGS_PROG" >&2
+  return 0
+}
+
 ags_abspath() { (cd "$1" 2>/dev/null && pwd) || return 1; }
 
 # fzf one-level directory navigator rooted at $AGENTSTACK_BASE_DIR.

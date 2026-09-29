@@ -832,6 +832,77 @@ if tmux info >/dev/null 2>&1; then
   fi
 fi
 
+# --- WSL anchor (tests extract from here to the end marker) ---
+# Under WSL the dashboard keeps the distro running while agents work and lets
+# it stop by itself afterwards (dashboard/wsl_anchor.py). Doctor shows what it
+# is doing, and explains idle settings in the Windows .wslconfig that keep
+# WSL up regardless (an earlier ORRERY build wrote instanceIdleTimeout=-1).
+report_wsl_anchor() {
+  running_under_wsl || return 0
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "warn: WSL anchor not checked: needs Python 3.11+"
+    return 0
+  fi
+  local status_file="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}/wsl-anchor/status.json"
+  if [[ "${AGENTSTACK_WSL_ANCHOR:-1}" == "0" ]]; then
+    echo "note: WSL anchor is off (AGENTSTACK_WSL_ANCHOR=0); closing every Ubuntu window stops the dashboard and agents about 15 s later"
+  else
+    "$PYTHON_BIN" - "$status_file" <<'PYANCHOR'
+import json, sys, time
+try:
+    s = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("warn: WSL anchor: no status yet (" + sys.argv[1] + "); is the dashboard running? Until it is, closing every Ubuntu window stops the agents")
+    raise SystemExit
+age = int(time.time() - float(s.get("updated") or 0))
+reasons = ", ".join(f"{k} {v}" for k, v in sorted((s.get("reasons") or {}).items())) or "nothing"
+state = s.get("state")
+if age > 60:
+    print(f"warn: WSL anchor: status is {age} s old; the dashboard is not updating it (is it running?)")
+elif state == "failed":
+    print(f"warn: WSL anchor: cannot keep WSL running for the agents: {s.get('error') or 'unknown error'}")
+    print("      keep an Ubuntu window open while agents work; the dashboard retries on its own")
+elif state == "error":
+    print(f"warn: WSL anchor: the hold check fails: {s.get('error') or 'unknown error'}; the anchor keeps its last hold")
+elif state == "unknown":
+    print("warn: WSL anchor: cannot tell which agents run (tmux or ps did not answer); keeping WSL for the agents last seen")
+elif state == "holding":
+    print(f"ok: WSL anchor: keeping WSL running for {reasons} (Windows wsl.exe PID {s.get('windows_pid') or '?'}); WSL stops by itself after they finish")
+elif state == "releasing":
+    print(f"ok: WSL anchor: no agent running; releasing WSL in {s.get('grace_seconds_left', 0)} s")
+else:
+    print("ok: WSL anchor: idle (nothing to keep; WSL stops by itself when no window is open)")
+PYANCHOR
+  fi
+  local config parsed
+  if ! config="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" path 2>/dev/null)"; then
+    echo "note: Windows .wslconfig not checked: cannot find the Windows user folder (cmd.exe or wslpath unavailable)"
+    return 0
+  fi
+  if ! parsed="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" read "$config" 2>/dev/null)"; then
+    echo "note: Windows .wslconfig not checked: cannot read $config"
+    return 0
+  fi
+  "$PYTHON_BIN" - "$config" "$parsed" <<'PYCONFIG'
+import json, sys
+config, parsed = sys.argv[1], json.loads(sys.argv[2])
+fix = f"to undo: delete that line from {config} (in PowerShell: notepad $env:USERPROFILE\\.wslconfig), then run 'wsl --shutdown' once when no agent is working"
+inst, vm = parsed["instanceIdleTimeout"], parsed["vmIdleTimeout"]
+if inst["state"] == "set" and inst["value"] < 0:
+    print(f"note: {config} has [general] instanceIdleTimeout={inst['value']}: every distro keeps running until 'wsl --shutdown'. ORRERY no longer needs it")
+    print(f"      {fix}")
+if vm["state"] == "set" and vm["value"] < 0:
+    print(f"note: {config} has [wsl2] vmIdleTimeout={vm['value']}: the WSL VM keeps running (and can keep using memory) after every distro stops. ORRERY does not need it")
+    print(f"      {fix}")
+for name, entry in (("instanceIdleTimeout", inst), ("vmIdleTimeout", vm)):
+    if entry["state"] == "unknown":
+        print(f"note: {config}: cannot tell how WSL reads {name} ({entry['value']}); left as is")
+PYCONFIG
+}
+# --- end WSL anchor ---
+
+report_wsl_anchor
+
 # --- paste-ready environment report -------------------------------------------
 # Every defect this project has had so far came from a difference between the
 # reporter's machine and the developer's, and each one cost several rounds of

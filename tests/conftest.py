@@ -30,6 +30,8 @@ from _env_isolation import (
     REAL_USER_INSTRUCTION_FILES,
     digest_files,
     is_inherited_stack_variable,
+    real_windows_wslconfig,
+    running_under_wsl,
 )
 
 # Labels this machine's own services use. The mail service is the one the
@@ -76,6 +78,38 @@ def _no_inherited_agentstack_env():
         yield
     finally:
         os.environ.update(inherited)
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_suite_leaves_real_wslconfig_alone(tmp_path_factory):
+    """Under WSL, keep the suite away from Windows.
+
+    A dashboard started by a test would start the WSL anchor, which runs
+    `powershell.exe` to start a hidden `wsl.exe`; doctor runs `cmd.exe`. Both
+    come from the Windows PATH that WSL appends, and many tests strip
+    AGENTSTACK_* (so an opt-out variable would not reach them) but keep PATH.
+    Failing stand-ins go in front of it; tests of those steps put their own
+    fakes ahead of these. The digest check catches a .wslconfig change any
+    other way.
+    """
+    if not running_under_wsl():
+        yield
+        return
+    real = real_windows_wslconfig()
+    before = digest_files([real]) if real else {}
+    shim = tmp_path_factory.mktemp("no-windows-interop")
+    for tool in ("cmd.exe", "powershell.exe", "wsl.exe"):
+        fake = shim / tool
+        fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake.chmod(0o755)
+    saved = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{shim}{os.pathsep}{saved}"
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = saved
+    if real and digest_files([real]) != before:
+        pytest.fail(f"the test run modified the real {real}", pytrace=False)
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_user_instructions_alone():
