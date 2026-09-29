@@ -125,6 +125,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    ログインは `claude`（起動後に `/login`）と `codex login` です。表示された URL を Windows 側のブラウザで開いて認可します。
    Windows 側にも Codex を入れている場合、Ubuntu の PATH には Windows の `codex`（`/mnt/c/...`）も見えますが、これは Ubuntu の中では動きません。installer はそれを候補から外し、Ubuntu の中に入れた `codex`（`--version` に答えるもの）を選びます。agent が `/delegate` で Codex の子を起動するときも同じ規則で選び、agent の shell に `AGENTSTACK_CODEX_BIN` が無ければ、installer が `~/.agentstack/env.sh` に保存した値を使います。以前の install で Windows の `codex` が保存されていても、再実行すると選び直します。`agentstack-doctor` が `warn: Codex launcher binary ... cannot start Codex` と出したら、Ubuntu の中に Codex を入れてから installer を再実行してください。
    以前から Ubuntu に Codex が入っている場合も、`npm install -g @openai/codex@latest` で最新にしてください。古い版では GPT-6 系のモデルで起動した子が API に拒否されます（WSL で 0.153.4 は拒否、0.158.0 は応答）。
+   Codex の子を使うなら、installer の後で [history binding を入れて `/hooks` で一度承認](#codex-を使う場合-history-binding-を入れて-hooks-で一度承認する) してください。しないと、Codex の起動が最大で約90秒待たされることがあります。
 7. **agent を起動する**（Ubuntu の中）。上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal（`wt.exe`、Windows 11 なら標準搭載）の新しいタブを開いて tmux に attach します。Windows Terminal が無い場合は Microsoft Store から入れてください。
 
 **窓を閉じても動き続けます。** Ubuntu の窓を全部閉じても、tmux の agent と dashboard は動き続けます。使い終わって WSL を止めるときは、PowerShell で `wsl --shutdown` を実行します。これは他の distro も含めて WSL 全体をすぐに止めるので、agent と WSL 上の他の作業を保存・終了してから実行してください。Windows の SSH サーバー経由でだけ使う場合は、最後の接続が切れると約15秒で止まります。詳しくは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-で-ubuntu-の窓を閉じたとき) を参照してください。
@@ -228,6 +229,40 @@ url = "http://127.0.0.1:18765/mcp"
 ```
 
 key は `[mcp_servers.orrery-mail]` に固定します。
+
+### Codex を使う場合: history binding を入れて `/hooks` で一度承認する
+
+Codex の子を起動すると、launcher は子が最初の task を始めたことを、その起動の Codex の記録（rollout）で確かめます。この確認には、Codex の history binding（任意の plugin）が起動時に残す receipt が要ります。**入れていないと、Codex の起動が最大で約90秒待たされることがあります**（短い応答が画面に出れば待機を早く終えることがありますが、それは receipt による開始の確認とは違い、長い応答では90秒待つことがあります）。receipt が出る状態にすると、WSL の実機で短い task も長い task も約7秒で確定しました。
+
+macOS・WSL（Ubuntu の中）とも、手順は同じです。
+
+1. integration を入れる（repository の checkout で）。
+
+   ```bash
+   . "$HOME/.agentstack/env.sh"
+   ./scripts/install-codex-app-integration.sh \
+     --project-key "$AGENTSTACK_PROJECT_KEY" \
+     --agent-mail-url "$AGENTSTACK_MCP_URL"
+   ```
+
+   codex は、core の installer が `~/.agentstack/env.sh` に保存したものを使います（WSL で Windows 側の `codex` は選びません）。macOS 以外では Bridge の常駐 service は入れず、`Bridge service: not installed` と表示します。Codex の子の history binding には、常駐 service は要りません。
+2. installer が選んだ codex で Codex を起動し、`/hooks` を開く。installer は最後に、そのためのコマンドを `Next: start Codex with the codex this installer used:` の次の行に表示します。通常は次と同じです。
+
+   ```bash
+   "$AGENTSTACK_CODEX_BIN" -C "$AGENTSTACK_PROJECT_KEY"
+   ```
+
+   素の `codex` は使わないでください。WSL では PATH の先頭に Windows 側の `codex` があることが多く、それは Ubuntu の中では動きません。`/hooks` を開くと、`⚠ 6 hooks need review` のように、確認が要る hooks が表示されます。
+
+   ![承認前の /hooks](images/codex-hooks-review.png)
+
+3. 内容を確かめてから承認する（`t` ですべてを trust）。SessionStart・UserPromptSubmit・PostToolUse が Active になります。
+
+   ![承認後の /hooks](images/codex-hooks-after-trust.png)
+
+4. その `codex` を終了する。承認は、この後に起動した Codex から効きます。すでに動いている Codex の子には効きません。
+
+`agentstack-doctor` は、history binding の plugin が入っているか、有効かを表示します。hooks の承認状態までは読めないので、そこは `/hooks` で確かめてください。詳しくは [Codex App 統合](codex-app.md) を参照してください。
 
 ### Managed instruction helper
 

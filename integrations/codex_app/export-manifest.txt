@@ -2,6 +2,8 @@
 dashboard/providers/__init__.py
 dashboard/providers/base.py
 dashboard/providers/codex_app.py
+hooks/codex-bin.sh
+hooks/project-context.sh
 integrations/codex_app/README.md
 integrations/codex_app/env.sh.sample
 integrations/codex_app/export-manifest.txt
@@ -20,6 +22,7 @@ scripts/install-codex-app-integration.sh
 scripts/run-codex-app-bridge.sh
 scripts/uninstall-codex-app-integration.sh
 tests/fixtures/codex-app-snapshot.json
+tests/test_codex_app_integration_codex_bin.py
 tests/test_codex_app_packaging.py
 tests/test_codex_app_plugin_hooks.py
 tests/test_codex_app_runtime_provider.py

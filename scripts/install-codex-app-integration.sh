@@ -26,7 +26,10 @@ RETRY_MAX_BACKOFF="${AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS:-300}"
 RESTART_DELAY="${AGENTSTACK_CODEX_APP_RESTART_DELAY:-5}"
 SKIP_GIT_CHECK="${AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK:-0}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
-CODEX_BIN="${AGENTSTACK_CODEX_BINARY:-$(command -v codex 2>/dev/null || true)}"
+# Explicit (--codex-bin, or AGENTSTACK_CODEX_BINARY as before) is used as given
+# and must work; otherwise resolve_codex_bin below picks one by the core
+# installer's rules.
+CODEX_BIN="${AGENTSTACK_CODEX_BINARY:-}"
 
 usage() {
   cat <<'EOF'
@@ -38,6 +41,7 @@ marketplace snapshot, and an optional persistent Bridge service.
 Options:
   --dry-run                 Validate and print actions without writing
   --no-service              Render but do not start launchd or background service
+                            (the default outside macOS, where there is no launchd)
   --no-plugin               Build but do not register/install the Codex plugin
   --refresh-plugin-only     Refresh an existing enabled plugin without changing Bridge state
   --install-dir PATH        Default: ~/.agentstack/integrations/codex_app
@@ -56,7 +60,10 @@ Options:
                             Registration retry backoff cap; default: 300
   --skip-git-check          Explicitly allow resume outside a trusted git repo
   --python-bin PATH         Python executable
-  --codex-bin PATH          Codex executable
+  --codex-bin PATH          Codex executable (default: AGENTSTACK_CODEX_BIN, else
+                            the one the core installer saved in env.sh, else the
+                            first usable codex on PATH; under WSL a Windows
+                            install under /mnt is skipped)
   -h, --help                Show this help
 EOF
 }
@@ -106,7 +113,15 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 
 say_hook_approval_guidance() {
-  say "Next: in Codex, open /hooks and review/approve the AgentStack lifecycle hooks."
+  # Run the codex chosen above, not whatever `codex` is first on PATH: on WSL
+  # that is often the Windows install, which cannot run inside Ubuntu.
+  say "Next: start Codex with the codex this installer used:"
+  if [[ -n "$PROJECT_KEY" ]]; then
+    say "  $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$PROJECT_KEY")"
+  else
+    say "  $(printf '%q' "$CODEX_BIN")"
+  fi
+  say "then open /hooks and review/approve the AgentStack lifecycle hooks."
   say "Then start a new Codex process before checking history binding; existing processes may not refire SessionStart."
 }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -115,6 +130,66 @@ plan() {
     say "DRY-RUN would $*"
   else
     say "$*"
+  fi
+}
+
+# Codex candidate rules shared with the core installer, doctor and
+# spawn_child.sh (hooks/codex-bin.sh: under WSL a codex under /mnt is the
+# Windows npm shim and cannot run; any candidate must answer --version), and
+# the env.sh reader (hooks/project-context.sh). Both only define functions.
+# shellcheck disable=SC1091
+. "$REPO_ROOT/hooks/codex-bin.sh"
+# shellcheck disable=SC1091
+. "$REPO_ROOT/hooks/project-context.sh"
+
+# The codex this integration registers the plugin with and records in its
+# env.sh. On WSL, `command -v codex` found the Windows npm shim first on PATH,
+# and the install failed with "Missing optional dependency
+# @openai/codex-linux-x64" although the core installer had saved a working
+# codex in ~/.agentstack/env.sh (2026-09-29). Order: explicit (--codex-bin or
+# AGENTSTACK_CODEX_BINARY; checked the same way and never replaced),
+# AGENTSTACK_CODEX_BIN,
+# the value the core installer saved, then the first usable codex on PATH and
+# the usual per-user Node prefixes. A rejected candidate is reported with why.
+resolve_codex_bin() {
+  local candidate source problem
+  codex_probe_budget_start
+  if [[ -n "$CODEX_BIN" ]]; then
+    # Same check as every other candidate, but never replaced: an explicit
+    # codex that cannot run stops the install before anything is written.
+    problem="$(codex_bin_problem "$CODEX_BIN")"
+    [[ -z "$problem" ]] || die "codex $CODEX_BIN cannot be used: $problem"
+    return 0
+  fi
+  for source in environment env.sh; do
+    if [[ "$source" == environment ]]; then
+      candidate="${AGENTSTACK_CODEX_BIN:-}"
+    else
+      candidate="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
+    fi
+    [[ -n "$candidate" ]] || continue
+    [[ "$CODEX_JUDGED" != *":$candidate:"* ]] || continue
+    CODEX_JUDGED="$CODEX_JUDGED$candidate:"
+    problem="$(codex_bin_problem "$candidate")"
+    if [[ -z "$problem" ]]; then
+      CODEX_BIN="$candidate"
+      return 0
+    fi
+    warn "skipping AGENTSTACK_CODEX_BIN from $source ($candidate): $problem"
+  done
+  local nvm extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+  for nvm in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+    [[ -d "$nvm" ]] && extra="$extra:$nvm"
+  done
+  CODEX_BIN="$(find_usable_codex_bin_in "$PATH:$extra")"
+}
+
+# launchd exists only on macOS. Elsewhere (WSL, Linux) the Bridge service is
+# not installed unless asked for, instead of stopping the install.
+default_service_mode() {
+  if [[ "$NO_SERVICE" != true && "$(uname -s)" != "Darwin" ]]; then
+    NO_SERVICE=true
+    say "Bridge service: not installed (launchd is macOS-only; this is the same as --no-service)"
   fi
 }
 
@@ -160,13 +235,11 @@ validate() {
      "$HTTP_BEARER_MODE" == "disabled" ]] || \
     die "AGENTSTACK_MAIL_HTTP_BEARER_MODE must be auto, enabled, or disabled"
   if [[ "$NO_PLUGIN" != true ]]; then
+    [[ -n "$CODEX_BIN" ]] || die "no usable codex found (reasons above, if any candidate was found); install Codex where this shell can run it (in WSL: npm install -g @openai/codex under your Linux user), or pass --codex-bin"
     [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
   fi
   if [[ ! -f "$MAIL_ENV" ]]; then
     warn "bearer reference does not exist yet: $MAIL_ENV"
-  fi
-  if [[ "$NO_SERVICE" != true && "$(uname -s)" != "Darwin" ]]; then
-    die "launchd install is supported only on macOS; use --no-service"
   fi
 }
 
@@ -678,6 +751,7 @@ PY
 }
 
 main() {
+  resolve_codex_bin
   if [[ "$REFRESH_PLUGIN_ONLY" == true ]]; then
     refresh_plugin_only
     return
@@ -686,6 +760,8 @@ main() {
   say "install dir: $INSTALL_DIR"
   say "runtime dir: $RUNTIME_DIR"
   say "project key: $PROJECT_KEY"
+  say "codex: ${CODEX_BIN:-(none found)}"
+  default_service_mode
   validate
   copy_payload
   write_env
@@ -701,7 +777,7 @@ main() {
     case "$SERVICE_KIND" in
       launchd) say "Service mode: launchd" ;;
       nohup) say "Service mode: supervised background (pidfile $BACKGROUND_PIDFILE)" ;;
-      disabled) say "Service mode: disabled (--no-service)" ;;
+      disabled) say "Service mode: disabled (no launchd service; the Bridge is not needed for Codex history binding)" ;;
       *)
         say "Service mode: manual"
         say "Manual supervised start:"

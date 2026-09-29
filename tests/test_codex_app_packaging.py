@@ -204,6 +204,9 @@ def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
     command.write_text(
         "#!/usr/bin/env python3\n"
         "import os, pathlib, sys\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        "    print('codex-cli 0.0.0-fake')\n"
+        "    raise SystemExit(0)\n"
         "log = pathlib.Path(os.environ['AGENTSTACK_TEST_CODEX_LOG'])\n"
         "with log.open('a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
