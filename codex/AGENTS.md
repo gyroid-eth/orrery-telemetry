@@ -11,7 +11,7 @@ down the list or add a second registration or authentication ritual.
 | Priority | Connection state | What to do |
 | --- | --- | --- |
 | 1 | The canonical embedded task explicitly says that registration is already complete and that no ritual is required | Start the task immediately. Do not call `ensure_project`, `register_agent`, `agentstack-reregister`, or `fetch_inbox` merely as a startup ritual. Use the connection already provided only when the task actually requires communication. |
-| 2 | The provided tool descriptions and argument schemas show a bound ORRERY proxy | Use those proxy tools exactly as described. Do not run the helper, register again, or read a token file. Do not add caller identity, project, or token fields that the schema does not accept. |
+| 2 | The provided tool descriptions and argument schemas show a bound ORRERY proxy | Use those proxy tools exactly as described. Do not run `agentstack-reregister` for yourself, register yourself again, or read a token file. Do not add caller identity, project, or token fields that the schema does not accept. (Pre-registering a **child** with `agentstack-preregister-child` is a different identity and stays allowed; see the delegate skill.) |
 | 3 | The connection is confirmed raw/direct and SessionStart explicitly says the shell registered the existing identity | Do not register again. Authenticate the model's separate raw MCP tool session using the raw procedure below. |
 | 4 | The connection is confirmed raw/direct and an existing identity needs recovery | Resolve the existing name, then run the token-safe helper once. Never escape a failure by creating an alias or a new token. |
 | 5 | The connection is confirmed raw/direct and this is a genuinely new, unregistered session | Follow the new raw registration procedure below. Do not reuse this route for a known or reserved identity. |
@@ -133,9 +133,14 @@ to generate it. Never use this route to work around an identity conflict.
   injection; or a newly written watcher. Those paths bypass authentication,
   read/ack semantics, wake delivery, and the configured project identity.
 - Delegation is one instance of the rule. Use the `delegate` skill and its
-  documented pre-registration flow. If its ORRERY Mail tools are unavailable,
-  report that failure and stop the delegation attempt. Do not substitute a
-  built-in child, direct-mode launcher, or other improvised workflow.
+  documented pre-registration flow. The child is registered by the shell helper
+  `agentstack-preregister-child` as a separate identity; that is not
+  re-registering yourself, and it does not need `register_agent`,
+  `ensure_project` or contact tools on your connection. A bound proxy without
+  them is normal. If the helper, the launcher or your own send/fetch connection
+  fails, report that exact failure and stop the delegation attempt. Do not
+  substitute a built-in child, direct-mode launcher, or other improvised
+  workflow.
 
 ## File reservations — REQUIRED before editing (Codex is not auto-guarded)
 

@@ -24,6 +24,12 @@ Codex 0.153〜0.157 の trust 画面（「Trust this folder?」「1. Trust and c
 
 ## 2026.09.27
 
+### bound proxy の親でも /delegate できるように説明を直し、古い managed block を doctor が見つけるようにしました
+
+WSL で、bound proxy の Codex の親が「proxy に register_agent などが無い」ことを理由に /delegate を止めていました。子の登録は shell の `agentstack-preregister-child` が別の identity として行うので、親の proxy にそれらのツールが無いのは正常です。delegate skill と managed block（Codex / Claude）で、「自分の再登録の禁止」と「子の事前登録」を分けて書きました。standalone の起動 prompt にも「登録済み。自分を再登録せず、起動の儀式として inbox を読まない。子を起動するのは可」と明記しました。
+
+`agentstack-codex-setup --check` / `agentstack-claude-setup --check` を追加しました。marker 間の文面を、インストール済みの template と比べます。doctor と installer の最後が同じ検査を使います。これまでの doctor は開始 marker があるだけで `ok` を出していたため、WSL に残っていた古い block（proxy の経路を導入する前の版）も `ok` と表示していました。一致しない場合は、更新コマンドを表示します。
+
 ### Claude の子に Claude in Chrome（ブラウザ操作）を明示して渡せるようにしました
 
 `spawn_child.sh --claude-chrome` / `--claude-chrome-device <deviceId>`、`/delegate` の同名フラグ、NEW AGENT の「Explicitly enable Claude in Chrome」で、Claude の子を `--chrome` 付きで起動します。指定しない子の起動コマンドは従来と同じ（inherit）で、Chrome を使えるかは利用者の Claude 設定で決まります。deviceId は子への選択ポリシーで、技術的な隔離ではありません。子は `list_connected_browsers` で接続を確かめて `select_browser` が成功してから自分のタブで操作し、見つからないときは止まって報告します。指定した子は warm pool を使わず cold start します。保証する範囲は新規の cold 起動です。dashboard からの resume は補助機能で、その会話（session ID）の記録があれば `--chrome` とブラウザの選び方を復元し、記録が壊れていれば止めます。記録が無ければ従来どおり再開します（指定したブラウザの復元は保証しません）。公式 docs では WSL は非対応です。Claude Code 2.1.283 のアカウント接続で WSL から Windows のブラウザを操作できたことを 1 台で確認しています。詳細は [docs/delegation.md](docs/delegation.md#claude-child-とブラウザ操作claude-in-chrome)。

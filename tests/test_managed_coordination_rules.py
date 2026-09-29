@@ -248,3 +248,40 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
     assert "/fixture/canonical-project" in generated
     assert str(tmp_path / "installed-agentstack") in generated
     assert "__AGENTSTACK_" not in generated
+
+
+def test_own_reregistration_and_child_preregistration_are_told_apart():
+    """2026-09-29 (WSL): a Codex parent on a bound proxy read "Do not run the
+    helper" and "if its ORRERY Mail tools are unavailable, stop" and refused to
+    delegate because its proxy had no register_agent / ensure_project / contact
+    tools. Another parent, reading the same skill, used the preregistration
+    helper and succeeded. The helper registers a separate identity; the rules
+    against re-registering are about the agent's own identity."""
+    skill = _read("skills/delegate/SKILL.md")
+    assert "### Who does what" in skill
+    assert "not a re-registration of\nyourself" in skill
+    assert "is the normal case and is **not** a reason to\nstop" in skill
+    assert "does not use your proxy" in skill
+    # The model is never asked to call the registration tools itself.
+    frontmatter = skill.split("---", 2)[1]
+    assert "mcp__orrery-mail__register_agent" not in frontmatter
+    assert "mcp__orrery-mail__ensure_project" not in frontmatter
+    assert "If the required ORRERY Mail tools or preregistration helper are unavailable" not in skill
+    assert "treat the inbox task as canonical" not in skill
+    for path in ("codex/AGENTS.md", "claude/CLAUDE.md"):
+        text = _read(path)
+        assert "Do not run the helper, register again" not in text, path
+        assert "Do not run `agentstack-reregister` for yourself" in text, path
+        assert "Pre-registering a **child** with `agentstack-preregister-child`" in text, path
+        assert "that is not\n  re-registering yourself" in text or "that is not re-registering yourself" in text.replace("\n  ", " "), path
+        assert "A bound proxy without them is normal." in text.replace("\n  ", " "), path
+    codex = _read("codex/AGENTS.md")
+    assert "If its ORRERY Mail tools are unavailable" not in codex
+
+
+def test_standalone_prompt_says_registration_is_done_but_children_are_allowed():
+    spawn = _read("hooks/spawn_child.sh")
+    phrase = ("do not re-register yourself (no agentstack-reregister), and do not "
+              "fetch the inbox as a startup ritual. Starting child agents of your "
+              "own later is allowed.")
+    assert spawn.count(phrase) == 2  # Codex and Claude standalone prompts
