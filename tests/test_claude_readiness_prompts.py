@@ -187,6 +187,32 @@ def test_new_trust_dialog_that_turns_into_the_question_after_down_gets_no_enter(
     assert "Yes row is not selected; not pressing Enter" in result.stderr
 
 
+def test_a_leftover_trust_line_does_not_make_an_unknown_choice_a_trust_dialog(tmp_path):
+    """A trust line still visible higher up, an unknown No/Yes choice below:
+    the choice screen wins, no key is sent, and it stops after 10s."""
+    screen = ("Do you trust the files in this folder?\n"
+              "  (accepted)\n\n"
+              "  Something new to decide\n"
+              "  \u276f No\n"
+              "    Yes\n"
+              "  Enter to confirm \u00b7 Esc to cancel\n")
+    result, calls, polls, incidents = _launch(tmp_path, [screen])
+    assert result.returncode != 0
+    assert _keys_with_screens(tmp_path) == []
+    assert "choice screen ORRERY does not recognise for 10s" in result.stderr
+    assert "trust dialog persisted" not in result.stderr
+
+
+def test_a_trust_dialog_with_a_confirm_footer_is_still_accepted(tmp_path):
+    trust = ("Quick safety check\n"
+             "    No, exit\n"
+             "  \u276f Yes, I trust this folder\n"
+             "  Enter to confirm \u00b7 Esc to exit\n")
+    result, calls, polls, incidents = _launch(tmp_path, [trust, trust, READY])
+    assert result.returncode == 0, result.stderr
+    assert _keys_with_screens(tmp_path)[0] == "screen=2 -t Probe-Curie C-m"
+
+
 def test_chrome_question_is_recognised_by_its_options_alone(tmp_path):
     options_only = CHROME_PROMPT.replace("Claude in Chrome extension detected", "Browser tools")
     result, calls, _polls, _incidents = _launch(tmp_path, [options_only])

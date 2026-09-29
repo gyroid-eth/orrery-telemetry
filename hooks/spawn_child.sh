@@ -1095,9 +1095,30 @@ claude_pane_ready() {
     return 1
 }
 
-# The trust dialog is on screen and nothing the launcher must not answer is.
+# The trust dialog is on screen and nothing the launcher must not answer is:
+# no user question and no choice rows other than the trust dialog's own. A
+# trust line left higher on the screen does not make an unknown choice screen
+# below it a trust dialog.
 claude_trust_screen_to_answer() {
-    claude_trust_dialog_present "$1" && ! claude_user_prompt_present "$1"
+    claude_trust_dialog_present "$1" \
+        && ! claude_user_prompt_present "$1" \
+        && ! claude_unknown_choice_present "$1"
+}
+
+# A choice screen near the bottom whose options are not the trust dialog's:
+# a selected option row other than "Yes, I trust this folder" / "No, exit", or
+# the "Enter to confirm" footer without the trust dialog's option on screen.
+claude_unknown_choice_present() {
+    local last_lines rows
+    last_lines="$(printf '%s' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
+    rows="$(printf '%s\n' "$last_lines" \
+        | grep -E '^[[:space:]]*❯[[:space:]]*(No|Yes|[0-9]+\.)([[:space:]]|,|$)' || true)"
+    if [[ -n "$rows" ]] && printf '%s\n' "$rows" \
+        | grep -vqE '❯[[:space:]]*([0-9]+\.[[:space:]]*)?(Yes, I trust this folder|No, exit)'; then
+        return 0
+    fi
+    printf '%s' "$last_lines" | grep -qiF "Enter to confirm" \
+        && ! printf '%s' "$last_lines" | grep -qF "Yes, I trust this folder"
 }
 
 claude_accept_trust_dialog() {
@@ -1220,7 +1241,8 @@ wait_for_claude_ready() {
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
             return 1
         fi
-        if claude_trust_dialog_present "$pane_text"; then
+        if claude_trust_dialog_present "$pane_text" \
+            && ! claude_unknown_choice_present "$pane_text"; then
             trust_attempts=$((trust_attempts + 1))
             if ! claude_accept_trust_dialog \
                 "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then
