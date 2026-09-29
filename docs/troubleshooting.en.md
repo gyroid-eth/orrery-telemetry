@@ -142,20 +142,17 @@ In environments without systemd user support and on WSL, the installer falls bac
 
 By default WSL stops a distro about 15 seconds after its last Windows-side client (`wsl.exe`, a Windows Terminal Ubuntu tab) exits, even while tmux, the dashboard and agents are running inside it; Mail, the dashboard and every agent go with it (checked on WSL 2.7.13: stopped 13-16 s after the last window closed). `[wsl2] vmIdleTimeout=-1` only keeps the VM, and neither linger nor systemd keeps the distro.
 
-**By default the installer adds these two lines to the Windows `%USERPROFILE%\.wslconfig`.** With them set, closing every Ubuntu window no longer stops the agents (checked on the same machine: still Running more than 80 s after the windows closed).
+**The dashboard keeps WSL running while agents work, and only then.** While there is work it keeps one hidden `wsl.exe` on the Windows side and ends it by itself once the work is gone; WSL then stops as usual, about 15 seconds after the last window closes. Nobody has to run `wsl --shutdown`, and the Windows `.wslconfig` is not changed.
 
-```ini
-[general]
-instanceIdleTimeout=-1
-```
+- **Held while**: an agent process (claude / codex / antigravity) runs in tmux, including one waiting for approval or a reply; a dashboard launch has not settled; the cockpit has a pane open (a tmux control client, or a fresh lease under `~/.agentstack/runtime/wsl-anchor/leases/`)
+- **Not counted**: the dashboard, Mail, the watcher and the anchor itself; counting them would keep WSL up forever
+- **Release**: after 60 seconds with none of the above. While held, the header shows why (`WSL kept · 2 agents`); during the 60 seconds it shows `WSL idle · stops in 42s`; afterwards it disappears
+- **Failures**: if the hidden `wsl.exe` ends early, the dashboard starts it again within seconds (after three failures in a row it waits five minutes). If it cannot, the header shows `WSL not kept` with the reason; keep one Ubuntu window open meanwhile. If the dashboard dies, the anchor keeps holding while the agent processes it last heard about are alive
+- **After WSL stops**: the dashboard stops with it. Open Ubuntu in Windows Terminal and start the dashboard as usual
+- **Checking**: `agentstack-doctor` shows the state (reasons, Windows PID, last update)
+- **Turning it off**: install with `--no-wsl-anchor` (or `AGENTSTACK_WSL_ANCHOR=0`). The choice is kept in `env.sh`; `--wsl-anchor` turns it back on
 
-- The rest of the file is kept. A missing `[general]` section is added; an existing one only gets the key. The original is saved to `~/.agentstack/backups/<timestamp>/wslconfig` first. The file is written as UTF-8 without a BOM, with CRLF line endings
-- An existing `instanceIdleTimeout` is reported and never changed (a value other than `-1` gets a warning that WSL still stops after that many ms)
-- **It takes effect after WSL restarts.** The installer does not run `wsl --shutdown`, because that stops every running agent. Run `wsl --shutdown` from PowerShell when no agent is working, then reopen Ubuntu
-- To leave the file alone, install with `--no-wsl-keep-alive` (or `AGENTSTACK_WSL_KEEP_ALIVE=0`). The choice is kept in `env.sh` and honored on re-install; `--wsl-keep-alive` turns it back on
-- Under WSL, `agentstack-doctor` reads the value and warns with the fix when it is missing
-
-To set it by hand, put the same two lines in `%USERPROFILE%\.wslconfig`, run `wsl --shutdown` and reopen. The Mail timer restarts Mail one minute after boot; bring the dashboard back by re-running `install.sh`. To keep the systemd user manager after a WSL restart, also run `loginctl enable-linger "$USER"` inside WSL as before.
+If an earlier installer build or a manual edit put `[general] instanceIdleTimeout=-1` in `.wslconfig`, every distro runs until `wsl --shutdown`. It is no longer needed; `agentstack-doctor` points it out with how to undo it (delete that line, then run `wsl --shutdown` once when no agent is working). The same goes for `[wsl2] vmIdleTimeout=-1`: the VM keeps running after the distros stop and can keep using memory (the default cap is 50% of physical memory).
 
 If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
 

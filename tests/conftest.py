@@ -81,13 +81,15 @@ def _no_inherited_agentstack_env():
 
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_wslconfig_alone(tmp_path_factory):
-    """Under WSL, keep installer rehearsals away from the Windows .wslconfig.
+    """Under WSL, keep the suite away from Windows.
 
-    The installer finds it through `cmd.exe` on the Windows PATH that WSL
-    appends. Many rehearsals strip AGENTSTACK_* (so an opt-out variable would
-    not reach them) but keep PATH, so a failing `cmd.exe` is put in front of
-    it; tests of that step supply their own fake ahead of this one. The digest
-    check catches any path this misses.
+    A dashboard started by a test would start the WSL anchor, which runs
+    `powershell.exe` to start a hidden `wsl.exe`; doctor runs `cmd.exe`. Both
+    come from the Windows PATH that WSL appends, and many tests strip
+    AGENTSTACK_* (so an opt-out variable would not reach them) but keep PATH.
+    Failing stand-ins go in front of it; tests of those steps put their own
+    fakes ahead of these. The digest check catches a .wslconfig change any
+    other way.
     """
     if not running_under_wsl():
         yield
@@ -95,9 +97,10 @@ def _the_suite_leaves_real_wslconfig_alone(tmp_path_factory):
     real = real_windows_wslconfig()
     before = digest_files([real]) if real else {}
     shim = tmp_path_factory.mktemp("no-windows-interop")
-    fake = shim / "cmd.exe"
-    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-    fake.chmod(0o755)
+    for tool in ("cmd.exe", "powershell.exe", "wsl.exe"):
+        fake = shim / tool
+        fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake.chmod(0o755)
     saved = os.environ.get("PATH", "")
     os.environ["PATH"] = f"{shim}{os.pathsep}{saved}"
     try:

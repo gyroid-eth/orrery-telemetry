@@ -5650,6 +5650,8 @@ def _spawn_launch_record(name: str, result: dict) -> None:
     else:
         state = "failed"
     now = time.time()
+    if state == "launching":
+        _wsl_anchor_wake()  # hold before the launch settles, not a tick later
     with _SPAWN_LAUNCHES_LOCK:
         for stale in [k for k, v in _SPAWN_LAUNCHES.items()
                       if now - v["ts"] > _SPAWN_LAUNCH_RETENTION]:
@@ -7246,6 +7248,13 @@ class Handler(BaseHTTPRequestHandler):
                 json.dumps(payload, ensure_ascii=False).encode(),
                 "application/json; charset=utf-8",
             )
+        elif path == "/api/wsl-anchor":
+            payload = wsl_anchor_status()
+            self._send(
+                200,
+                json.dumps(payload, ensure_ascii=False).encode(),
+                "application/json; charset=utf-8",
+            )
         elif path == "/api/mail-watcher-health":
             payload = mail_watcher_health()
             self._send(
@@ -7477,6 +7486,88 @@ def _start_child_resume_maintenance() -> None:
     ).start()
 
 
+def _wsl_anchor_module():
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import wsl_anchor  # noqa: PLC0415
+
+    return wsl_anchor
+
+
+_WSL_ANCHOR: dict = {"controller": None}
+
+
+def _wsl_anchor_work() -> tuple[dict, list]:
+    """What keeps the distro running now (see dashboard/wsl_anchor.py).
+
+    A live claude / codex / antigravity process in any pane of any tmux
+    session except infra and warm-up pools. Only the process's exit ends it,
+    so an agent waiting for approval or a reply keeps holding. The dashboard,
+    Mail and the watcher are not work.
+    """
+    anchor = _wsl_anchor_module()
+    tree = _process_tree_snapshot()
+    pids: list = []
+    seen: set[int] = set()
+    fmt = SEP.join(["#{session_name}", "#{pane_pid}"])
+    for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
+        parts = _split_tmux_fields(line)
+        if len(parts) < 2 or parts[0] in INFRA_NAMES or parts[0] in WARMUP_NAMES:
+            continue
+        for program in ("claude", "codex", "antigravity"):
+            pid = _agent_process_pid(parts[1], tree, program)
+            if pid and pid not in seen:
+                seen.add(pid)
+                pids.append([pid, anchor.process_start_ticks(pid)])
+                break
+    with _SPAWN_LAUNCHES_LOCK:
+        launching = sum(1 for v in _SPAWN_LAUNCHES.values() if v["state"] == "launching")
+    viewers = sum(
+        1 for mode in _tmux(["list-clients", "-F", "#{client_control_mode}"]).split()
+        if mode == "1"
+    )
+    viewers += anchor.fresh_leases(anchor.state_dir())
+    return {"agents": len(pids), "launching": launching, "cockpit": viewers}, pids
+
+
+def wsl_anchor_status() -> dict:
+    """Header / doctor view. Only meaningful under WSL with the anchor on."""
+    if not _is_wsl():
+        return {"ok": True, "state": "unsupported"}
+    anchor = _wsl_anchor_module()
+    if not anchor.enabled():
+        return {"ok": True, "state": "disabled"}
+    if _WSL_ANCHOR["controller"] is None:
+        return {"ok": True, "state": "stopped"}
+    status = anchor._read_json(anchor.state_dir() / "status.json")
+    return {"ok": True, **status} if status else {"ok": True, "state": "starting"}
+
+
+def _wsl_anchor_wake() -> None:
+    controller = _WSL_ANCHOR["controller"]
+    if controller is not None:
+        controller.wake.set()
+
+
+def _start_wsl_anchor() -> None:
+    """Under WSL, hold the distro while agents work; let it stop afterwards."""
+    if not _is_wsl() or not _wsl_distro():
+        return
+    anchor = _wsl_anchor_module()
+    if not anchor.enabled():
+        return
+    directory = anchor.state_dir()
+    script = os.path.join(HERE, "wsl_anchor.py")
+    controller = anchor.Controller(
+        _wsl_anchor_work,
+        directory,
+        _wsl_distro(),
+        lambda nonce: [sys.executable, script, "hold", str(directory), nonce],
+    )
+    _WSL_ANCHOR["controller"] = controller
+    threading.Thread(target=controller.run_forever, name="wsl-anchor", daemon=True).start()
+
+
 JS_ERROR_LOG = os.path.join(HERE, "logs", "js-errors.log")
 
 
@@ -7513,6 +7604,7 @@ def _log_js_error(body: dict) -> dict:
 def main():
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
+    _start_wsl_anchor()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     try:

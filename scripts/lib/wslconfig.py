@@ -1,180 +1,153 @@
 #!/usr/bin/env python3
-"""Read and set `[general] instanceIdleTimeout` in a Windows `.wslconfig`.
+"""Read the WSL idle settings from a Windows `.wslconfig`, read-only.
 
-WSL stops a distro 15 seconds after its last Windows-side client (wsl.exe,
-a Windows Terminal tab) exits, whatever is still running inside it: tmux, the
-dashboard and every agent go with it. `[wsl2] vmIdleTimeout` keeps only the
-VM; linger and systemd keep nothing. `instanceIdleTimeout=-1` is what keeps
-the distro (checked on WSL 2.7.13, 2026-09-29: without it the distro stopped
-13-16 s after the last client closed; with it, it stayed running).
+ORRERY no longer writes this file: the dashboard keeps the distro running
+while agents work (dashboard/wsl_anchor.py). An earlier install, or the user,
+may have set
 
+  [general] instanceIdleTimeout=-1   every distro runs until `wsl --shutdown`
+  [wsl2]    vmIdleTimeout=-1         the WSL VM (and its memory) never idles out
+
+and doctor explains them. Only a small, explicit subset of the syntax is
+understood, and anything outside it is reported as `unknown` rather than
+guessed: a value is an integer in the int32 range with an optional `#`
+comment; a section header is `[name]` with no spaces inside; the same key
+twice in a section is ambiguous. Names are matched exactly as WSL documents
+them (`general`, `instanceIdleTimeout`, ...).
+
+  wslconfig.py path
+      Prints the Linux path of the Windows %USERPROFILE%\.wslconfig (exit 1
+      when Windows interop cannot tell).
   wslconfig.py read PATH
-      Prints `unset`, `ok <value>` (negative: never stop) or
-      `other <value>` (any other value, stops after that many ms).
-  wslconfig.py ensure PATH --backup-dir DIR [--dry-run]
-      Adds `instanceIdleTimeout=-1` under `[general]` unless the key is
-      already there. Prints `created`, `added <backup>` or `present <value>`
-      (the value is never changed). With --dry-run prints `would-create`,
-      `would-add` or `present <value>` and writes nothing.
-
-Everything else in the file is kept as it was. The file is written as UTF-8
-without a BOM with CRLF line endings, the form Windows editors produce. A file
-that is not UTF-8 is left alone (exit 3), since rewriting it could lose text.
+      Prints JSON: {"instanceIdleTimeout": {"state": S, "value": V},
+                    "vmIdleTimeout": {...}} where S is `unset`, `set`
+      (V is the integer) or `unknown` (V is the reason).
 """
 
 from __future__ import annotations
 
-import argparse
-import datetime as _dt
-import os
+import json
 import pathlib
 import re
+import subprocess
 import sys
-import tempfile
 
-SECTION = "general"
-KEY = "instanceIdleTimeout"
-VALUE = "-1"
+KEYS = {("general", "instanceIdleTimeout"), ("wsl2", "vmIdleTimeout")}
+INT32 = (-(2**31), 2**31 - 1)
 
-_SECTION_RE = re.compile(r"^\s*\[\s*([^\]]*?)\s*\]\s*(?:[#;].*)?$")
-_KEY_RE = re.compile(r"^\s*([^=#;\s][^=]*?)\s*=\s*(.*?)\s*$")
-
-
-class NotUtf8(Exception):
-    pass
+_SECTION = re.compile(r"^\[([A-Za-z][A-Za-z0-9._-]*)\]\s*(?:#.*)?$")
+_ENTRY = re.compile(r"^([A-Za-z][A-Za-z0-9._]*)\s*=\s*(.*?)\s*$")
+_INTEGER = re.compile(r"^-?[0-9]+$")
 
 
-def _read_lines(path: pathlib.Path) -> list[str] | None:
-    try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        return None
+def _decode(data: bytes) -> str | None:
     if data.startswith(b"\xef\xbb\xbf"):
         data = data[3:]
     try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise NotUtf8(str(exc)) from exc
-    return text.splitlines()
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
-def _find(lines: list[str]) -> tuple[int | None, int | None, str | None]:
-    """Return (index of the [general] header, insertion index, existing value).
+def parse(text: str) -> dict:
+    seen: dict[str, list[tuple[int, str]]] = {key: [] for _, key in KEYS}
+    problems: dict[str, str] = {}
+    bad_header = None
+    section = None
+    lowered = {(s.lower(), k.lower()): k for s, k in KEYS}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            match = _SECTION.match(line)
+            section = match.group(1) if match else None
+            if not match and bad_header is None:
+                bad_header = f"line {number}: unrecognised section header {line!r}"
+            continue
+        match = _ENTRY.match(line)
+        if not match or section is None:
+            continue
+        key = match.group(1)
+        if (section, key) in KEYS:
+            seen[key].append((number, match.group(2)))
+        elif (section.lower(), key.lower()) in lowered:
+            name = lowered[(section.lower(), key.lower())]
+            problems.setdefault(name, f"line {number}: written as [{section}] {key}")
+    found: dict[str, dict] = {}
+    for _, key in KEYS:
+        entries = seen[key]
+        if len(entries) > 1:
+            found[key] = {"state": "unknown", "value": f"{key} appears {len(entries)} times"}
+        elif key in problems:
+            found[key] = {"state": "unknown", "value": problems[key]}
+        elif entries:
+            number, raw = entries[0]
+            value = raw.split("#", 1)[0].strip()
+            if _INTEGER.match(value) and INT32[0] <= int(value) <= INT32[1]:
+                found[key] = {"state": "set", "value": int(value)}
+            else:
+                found[key] = {"state": "unknown", "value": f"line {number}: {key}={raw} is not a plain integer"}
+        elif bad_header:
+            found[key] = {"state": "unknown", "value": bad_header}
+        else:
+            found[key] = {"state": "unset", "value": None}
+    return found
 
-    Section and key names are compared case-insensitively, so a key someone
-    wrote as `instanceidletimeout` counts as present and is left alone.
+
+def read(path: pathlib.Path) -> dict:
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return parse("")
+    text = _decode(data)
+    if text is None:
+        return {key: {"state": "unknown", "value": "not UTF-8 text"} for _, key in KEYS}
+    return parse(text)
+
+
+def windows_profile(cmd: str = "cmd.exe", wslpath: str = "wslpath") -> pathlib.Path | None:
+    """%USERPROFILE% as a Linux path, or None.
+
+    `set USERPROFILE` prints the value without re-reading it as a command
+    (a profile path with `&` in it stays one value), `/u` makes cmd write
+    UTF-16LE whatever the console code page is (a Japanese user name comes
+    through intact), and `/d` skips AutoRun commands.
     """
-    header = None
-    insert = None
-    current = None
-    in_first = False
-    for index, line in enumerate(lines):
-        match = _SECTION_RE.match(line)
-        if match:
-            current = match.group(1).lower()
-            in_first = current == SECTION and header is None
-            if in_first:
-                header = index
-                insert = index + 1
-            continue
-        if current != SECTION:
-            continue
-        match = _KEY_RE.match(line)
-        if match and match.group(1).lower() == KEY.lower():
-            value = re.split(r"\s+[#;]", match.group(2), maxsplit=1)[0].strip()
-            return header, insert, value
-        if in_first and line.strip():
-            # Right after the section's last non-blank line, so the blank
-            # lines before the next section stay where they were.
-            insert = index + 1
-    return header, insert, None
-
-
-def classify(value: str | None) -> str:
-    if value is None:
-        return "unset"
     try:
-        number = int(value, 0)
-    except ValueError:
-        return f"other {value}"
-    return f"ok {value}" if number < 0 else f"other {value}"
-
-
-def _write(path: pathlib.Path, lines: list[str]) -> None:
-    payload = ("\r\n".join(lines) + "\r\n").encode("utf-8")
-    fd, tmp = tempfile.mkstemp(prefix=".wslconfig.", dir=str(path.parent))
+        out = subprocess.run([cmd, "/d", "/u", "/c", "set USERPROFILE"], cwd="/",
+                             capture_output=True, timeout=15).stdout
+        text = out.decode("utf-16-le")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        return None
+    value = next((line[len("USERPROFILE="):] for line in text.splitlines()
+                  if line.upper().startswith("USERPROFILE=")), "").strip()
+    if not value:
+        return None
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _backup(path: pathlib.Path, backup_root: pathlib.Path) -> pathlib.Path:
-    stamp = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
-    backup_dir = backup_root / stamp
-    counter = 1
-    while (backup_dir / "wslconfig").exists():
-        backup_dir = backup_root / f"{stamp}.{counter}"
-        counter += 1
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    target = backup_dir / "wslconfig"
-    target.write_bytes(path.read_bytes())
-    return target
-
-
-def ensure(path: pathlib.Path, backup_root: pathlib.Path, dry_run: bool) -> str:
-    lines = _read_lines(path)
-    if lines is None:
-        if dry_run:
-            return "would-create"
-        _write(path, [f"[{SECTION}]", f"{KEY}={VALUE}"])
-        return "created"
-    header, insert, value = _find(lines)
-    if value is not None:
-        return f"present {value}"
-    if dry_run:
-        return "would-add"
-    backup = _backup(path, backup_root)
-    if header is None:
-        while lines and not lines[-1].strip():
-            lines.pop()
-        if lines:
-            lines.append("")
-        lines += [f"[{SECTION}]", f"{KEY}={VALUE}"]
-    else:
-        lines.insert(insert, f"{KEY}={VALUE}")
-    _write(path, lines)
-    return f"added {backup}"
+        result = subprocess.run([wslpath, "-u", value], capture_output=True, timeout=15)
+        linux = result.stdout.decode("utf-8").strip()
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        return None
+    if result.returncode != 0 or not linux or not pathlib.Path(linux).is_dir():
+        return None
+    return pathlib.Path(linux)
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    read = sub.add_parser("read")
-    read.add_argument("path")
-    put = sub.add_parser("ensure")
-    put.add_argument("path")
-    put.add_argument("--backup-dir", required=True)
-    put.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args(argv)
-    path = pathlib.Path(args.path)
+    if argv == ["path"]:
+        profile = windows_profile()
+        if profile is None:
+            return 1
+        print(profile / ".wslconfig")
+        return 0
+    if len(argv) != 2 or argv[0] != "read":
+        print("usage: wslconfig.py path | read PATH", file=sys.stderr)
+        return 2
     try:
-        if args.command == "read":
-            lines = _read_lines(path)
-            print(classify(None if lines is None else _find(lines)[2]))
-        else:
-            print(ensure(path, pathlib.Path(args.backup_dir), args.dry_run))
-    except NotUtf8 as exc:
-        print(f"{path} is not UTF-8 text ({exc}); left unchanged", file=sys.stderr)
-        return 3
+        print(json.dumps(read(pathlib.Path(argv[1])), sort_keys=True))
     except OSError as exc:
-        print(f"{path}: {exc}", file=sys.stderr)
+        print(f"{argv[1]}: {exc}", file=sys.stderr)
         return 1
     return 0
 

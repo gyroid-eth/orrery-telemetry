@@ -832,61 +832,72 @@ if tmux info >/dev/null 2>&1; then
   fi
 fi
 
-# --- WSL keep-alive (tests extract from here to the end marker) ---
-# Same rule as scripts/install.sh "WSL keep-alive": without
-# `[general] instanceIdleTimeout=-1` in the Windows %USERPROFILE%\.wslconfig,
-# WSL stops the distro about 15 s after the last Ubuntu window closes, and the
-# dashboard and every agent with it.
-windows_wslconfig_path() {
-  local profile
-  command -v cmd.exe >/dev/null 2>&1 || return 1
-  command -v wslpath >/dev/null 2>&1 || return 1
-  profile="$(cd / && cmd.exe /c echo %USERPROFILE% 2>/dev/null | head -n 1 | tr -d '\r')" || return 1
-  profile="${profile%"${profile##*[![:space:]]}"}"
-  [[ -n "$profile" && "$profile" != *%USERPROFILE%* ]] || return 1
-  profile="$(wslpath -u "$profile" 2>/dev/null)" || return 1
-  [[ -n "$profile" && -d "$profile" ]] || return 1
-  printf '%s/.wslconfig\n' "$profile"
-}
-
-report_wsl_keep_alive() {
+# --- WSL anchor (tests extract from here to the end marker) ---
+# Under WSL the dashboard keeps the distro running while agents work and lets
+# it stop by itself afterwards (dashboard/wsl_anchor.py). Doctor shows what it
+# is doing, and explains idle settings in the Windows .wslconfig that keep
+# WSL up regardless (an earlier ORRERY build wrote instanceIdleTimeout=-1).
+report_wsl_anchor() {
   running_under_wsl || return 0
-  local fix="fix: on Windows add '[general]' and 'instanceIdleTimeout=-1' to %USERPROFILE%\\.wslconfig (or re-run ./scripts/install.sh), then run 'wsl --shutdown' from PowerShell when no agent is working"
-  local config state
-  if ! config="$(windows_wslconfig_path)"; then
-    echo "warn: WSL keep-alive not checked: cannot find the Windows user folder (cmd.exe or wslpath unavailable)"
-    echo "      $fix"
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "warn: WSL anchor not checked: needs Python 3.11+"
     return 0
   fi
-  if [[ ! -x "$PYTHON_BIN" || ! -f "$SCRIPT_DIR/lib/wslconfig.py" ]]; then
-    echo "warn: WSL keep-alive not checked: needs Python 3.11+ and $SCRIPT_DIR/lib/wslconfig.py"
+  local status_file="${AGENTSTACK_RUNTIME_DIR:-$INSTALL_DIR/runtime}/wsl-anchor/status.json"
+  if [[ "${AGENTSTACK_WSL_ANCHOR:-1}" == "0" ]]; then
+    echo "note: WSL anchor is off (AGENTSTACK_WSL_ANCHOR=0); closing every Ubuntu window stops the dashboard and agents about 15 s later"
+  else
+    "$PYTHON_BIN" - "$status_file" <<'PYANCHOR'
+import json, sys, time
+try:
+    s = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("warn: WSL anchor: no status yet (" + sys.argv[1] + "); is the dashboard running? Until it is, closing every Ubuntu window stops the agents")
+    raise SystemExit
+age = int(time.time() - float(s.get("updated") or 0))
+reasons = ", ".join(f"{k} {v}" for k, v in sorted((s.get("reasons") or {}).items())) or "nothing"
+state = s.get("state")
+if age > 60:
+    print(f"warn: WSL anchor: status is {age} s old; the dashboard is not updating it (is it running?)")
+elif state == "failed":
+    print(f"warn: WSL anchor: cannot keep WSL running for the agents: {s.get('error') or 'unknown error'}")
+    print("      keep an Ubuntu window open while agents work; the dashboard retries on its own")
+elif state == "holding":
+    print(f"ok: WSL anchor: keeping WSL running for {reasons} (Windows wsl.exe PID {s.get('windows_pid') or '?'}); WSL stops by itself after they finish")
+elif state == "releasing":
+    print(f"ok: WSL anchor: no agent running; releasing WSL in {s.get('grace_seconds_left', 0)} s")
+else:
+    print("ok: WSL anchor: idle (nothing to keep; WSL stops by itself when no window is open)")
+PYANCHOR
+  fi
+  local config parsed
+  if ! config="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" path 2>/dev/null)"; then
+    echo "note: Windows .wslconfig not checked: cannot find the Windows user folder (cmd.exe or wslpath unavailable)"
     return 0
   fi
-  if ! state="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" read "$config" 2>/dev/null)"; then
-    echo "warn: WSL keep-alive not checked: cannot read $config as UTF-8 text"
+  if ! parsed="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" read "$config" 2>/dev/null)"; then
+    echo "note: Windows .wslconfig not checked: cannot read $config"
     return 0
   fi
-  case "$state" in
-    ok\ *)
-      echo "ok: WSL keep-alive ($config has instanceIdleTimeout=${state#ok }; takes effect from the WSL start after it was set)"
-      ;;
-    other\ *)
-      echo "warn: WSL keep-alive: WSL stops the dashboard and agents ${state#other } ms after the last Ubuntu window closes ($config has instanceIdleTimeout=${state#other })"
-      echo "      fix: set instanceIdleTimeout=-1 under [general] in that file, then run 'wsl --shutdown' from PowerShell when no agent is working"
-      ;;
-    *)
-      if [[ "${AGENTSTACK_WSL_KEEP_ALIVE:-1}" == "0" ]]; then
-        echo "note: WSL keep-alive is off (AGENTSTACK_WSL_KEEP_ALIVE=0); closing every Ubuntu window stops the dashboard and agents about 15 s later"
-      else
-        echo "warn: WSL keep-alive: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes: $config has no [general] instanceIdleTimeout"
-        echo "      $fix"
-      fi
-      ;;
-  esac
+  "$PYTHON_BIN" - "$config" "$parsed" <<'PYCONFIG'
+import json, sys
+config, parsed = sys.argv[1], json.loads(sys.argv[2])
+fix = f"to undo: delete that line from {config} (in PowerShell: notepad $env:USERPROFILE\\.wslconfig), then run 'wsl --shutdown' once when no agent is working"
+inst, vm = parsed["instanceIdleTimeout"], parsed["vmIdleTimeout"]
+if inst["state"] == "set" and inst["value"] < 0:
+    print(f"note: {config} has [general] instanceIdleTimeout={inst['value']}: every distro keeps running until 'wsl --shutdown'. ORRERY no longer needs it")
+    print(f"      {fix}")
+if vm["state"] == "set" and vm["value"] < 0:
+    print(f"note: {config} has [wsl2] vmIdleTimeout={vm['value']}: the WSL VM keeps running (and can keep using memory) after every distro stops. ORRERY does not need it")
+    print(f"      {fix}")
+for name, entry in (("instanceIdleTimeout", inst), ("vmIdleTimeout", vm)):
+    if entry["state"] == "unknown":
+        print(f"note: {config}: cannot tell how WSL reads {name} ({entry['value']}); left as is")
+PYCONFIG
 }
-# --- end WSL keep-alive ---
+# --- end WSL anchor ---
 
-report_wsl_keep_alive
+report_wsl_anchor
 
 # --- paste-ready environment report -------------------------------------------
 # Every defect this project has had so far came from a difference between the

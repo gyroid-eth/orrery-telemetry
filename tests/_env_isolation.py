@@ -55,23 +55,20 @@ def running_under_wsl() -> bool:
 def real_windows_wslconfig() -> Path | None:
     """The real Windows %USERPROFILE%\\.wslconfig when the suite runs in WSL.
 
-    The installer adds `[general] instanceIdleTimeout=-1` to it; the suite must
-    never do that to the machine it runs on.
+    Nothing in the product writes it any more; the suite still checks that no
+    test does. Never raises: an undecodable or missing profile is None.
     """
     if not running_under_wsl():
         return None
-    import subprocess
+    import importlib.util
 
+    spec = importlib.util.spec_from_file_location(
+        "_wslconfig_for_tests", Path(__file__).resolve().parents[1] / "scripts" / "lib" / "wslconfig.py"
+    )
+    module = importlib.util.module_from_spec(spec)
     try:
-        profile = subprocess.run(
-            ["cmd.exe", "/c", "echo", "%USERPROFILE%"],
-            cwd="/", capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if not profile or "%USERPROFILE%" in profile:
-            return None
-        path = subprocess.run(
-            ["wslpath", "-u", profile], capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+        spec.loader.exec_module(module)
+        profile = module.windows_profile()
+    except Exception:  # noqa: BLE001 - the guard must install whatever happens
         return None
-    return Path(path) / ".wslconfig" if path else None
+    return profile / ".wslconfig" if profile else None
