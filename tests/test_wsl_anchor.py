@@ -313,6 +313,23 @@ def test_a_failed_start_is_reported_and_retries_are_bounded(tmp_path):
     assert len(starter.calls) == wsl_anchor.MAX_START_FAILURES + 1
 
 
+def test_the_windows_pid_is_shown_even_when_ready_came_late(tmp_path, monkeypatch):
+    monkeypatch.setattr(wsl_anchor, "READY_TIMEOUT_SECONDS", 0)  # ready "times out"
+    clock, starter = Clock(), LocalStarter()
+    controller = _controller(tmp_path, lambda: ({"agents": 1}, [], True), starter, clock)
+    try:
+        controller.tick()
+        assert _wait(lambda: wsl_anchor.anchor_running(tmp_path))
+        clock.now += 5
+        status = controller.tick()
+        assert status["state"] == "holding" and status["windows_pid"] == 4242
+        # A new dashboard finds the same client on record.
+        fresh = _controller(tmp_path, lambda: ({"agents": 1}, [], True), starter, clock)
+        assert fresh.tick()["windows_pid"] == 4242
+    finally:
+        starter.stop()
+
+
 def test_an_anchor_that_never_reports_ready_is_a_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(wsl_anchor, "READY_TIMEOUT_SECONDS", 0)
     clock = Clock()

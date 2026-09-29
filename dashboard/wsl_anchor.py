@@ -418,14 +418,19 @@ class Controller:
             return
         nonce = uuid.uuid4().hex
         pid, error = self.starter(self.distro, self.anchor_argv(nonce))
-        if pid is not None and not error and self._ready(nonce):
+        if pid is not None:
+            # Keep it even if ready comes late: the client exists, and the
+            # status must say which Windows process holds WSL.
             self.windows_pid = pid
+            _write_json(self.dir / "client.json", {"windows_pid": pid, "nonce": nonce, "started": time.time()})
+        if pid is not None and not error and self._ready(nonce):
             self.failures = 0
             self.error = ""
             return
         self.failures += 1
         self.last_failure = self.clock()
         self.error = error or "the anchor did not report ready"
+        print(f"wsl-anchor: start failed ({self.failures}): {self.error}", file=sys.stderr, flush=True)
 
     def tick(self) -> dict:
         # Observing and deciding happen under work.lock, so a launch reserved
@@ -477,6 +482,12 @@ class Controller:
             self.error = ""
         if not running:
             self.windows_pid = None
+        elif self.windows_pid is None:
+            # Started by an earlier dashboard, or ready came after a timeout:
+            # the client that started the running anchor is on record.
+            client = _read_json(self.dir / "client.json")
+            if client.get("nonce") and client.get("nonce") == _read_json(self.dir / "anchor.json").get("nonce"):
+                self.windows_pid = client.get("windows_pid")
         if holding and running:
             if "unknown" in reasons:
                 state = "unknown"
