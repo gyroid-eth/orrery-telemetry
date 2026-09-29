@@ -11,7 +11,7 @@ Start with:
 git -C /path/to/orrery-telemetry status --short
 ```
 
-The core doctor checks the install footprint, required commands, managed blocks, managed agent names, tmux mouse support, tmux global identity environment, dashboard endpoint, and service-manager state. Use `git status` to inspect repository-side changes.
+The core doctor checks the install footprint, required commands, managed blocks (not only that the markers exist, but that the text matches the installed template; if not, it prints the command that updates it), managed agent names, tmux mouse support, tmux global identity environment, dashboard endpoint, and service-manager state. Use `git status` to inspect repository-side changes.
 
 The dashboard treats a correct JSON response from `/api/version` as canonical evidence of what is actually being served and reports it separately from launchd / systemd registration and execution. If the endpoint responds but the manager is not running it, the mode is `unmanaged-background`. Check mail-watcher health separately at `/api/mail-watcher-health`.
 
@@ -230,6 +230,15 @@ Update the repo and re-run `bash scripts/install.sh`; from then on takeover succ
 The dashboard waits up to 120 seconds for the launcher's own readiness / early-death verdict, then probes the exact tmux session after the launcher succeeds. A launchd-minimal PATH often lacks `~/.local/bin`, so the spawn path prepends it.
 
 For Codex, also check `AGENTSTACK_CODEX_MODELS` against the requested model and the effort allowlist.
+
+## A Claude child stops during startup (readiness)
+
+A Claude child gets its task only once its screen accepts input. On any other screen the launcher stops without entering the task. It records the reason and the screen (up to 40 non-blank lines) on stderr and in `AGENTSTACK_RUNTIME_DIR/spawn_incidents.log`. While it waits, it reports progress on stderr every 10 seconds.
+
+- **`one-time question about Claude in Chrome`**: Claude Code shows "Claude in Chrome extension detected" and asks the user for the default browser setting (for example, on the first start after installing the extension). The answer may become the default for every later Claude session (whether it is saved has not been confirmed). The launcher therefore stops at once without pressing a key. Open `claude` once in a normal terminal and answer it yourself, or choose with `/chrome`, then launch the child again.
+- **`choice screen ORRERY does not recognise`**: an unknown choice screen stayed up for 10 seconds. No key was sent. Check the screen in the incidents log; if it is expected, answer it once in a normal `claude` session, then launch the child again.
+- **`Claude readiness timeout (60s)`**: the screen did not accept input within 60 seconds. Use the screen in the incidents log and the progress lines to tell a slow start from a screen the launcher does not recognise.
+- The launcher presses keys only to accept the trust dialog.
 
 ## Whether a Codex child's first task started is unknown
 

@@ -1162,6 +1162,101 @@ claude_pane_ready() {
     return 1
 }
 
+# Classifies the bottom-most active choice on the screen, by structure rather
+# than by listing words. Prints one of:
+#   trust-yes -- the active choice is Claude's trust dialog, "Yes" selected
+#   trust-no  -- the active choice is Claude's trust dialog, "No" selected
+#   trust-old -- the old trust wording (no cursor; Enter accepts)
+#   other     -- some other choice is active (never answered by the launcher)
+#   none      -- no active choice (a ready prompt, startup output, ...)
+# The selected row comes from the same active block, never from a match
+# anywhere on the screen: an earlier dialog left above can show its own
+# selected "Yes" row while the current one has "No" selected.
+# The active choice is the lowest selected row ("❯ <text>") together with the
+# rows aligned to its text column directly above and below it (Claude draws
+# unselected options at that column). It is the trust dialog only when its
+# options are exactly "Yes, I trust this folder" and "No, exit" and nothing but
+# the confirm footer follows it. The old wording ("Do you trust ...", plain
+# Yes / No rows, no cursor) counts only when nothing but those rows and the
+# footer follows the question. A trust line left higher on the screen never
+# makes a later, different choice a trust dialog.
+claude_choice_block_kind() {
+    printf '%s\n' "$1" | pane_normalize_nbsp | LC_ALL=C awk '
+        function trim(t) { sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t); return t }
+        function unnumber(t) { sub(/^[0-9]+\.[[:space:]]*/, "", t); return t }
+        function footer(t) { return t ~ /Enter to confirm/ || t ~ /Esc to / }
+        function lead(t,   k) { k = match(t, /[^ ]/); return k ? k : 0 }
+        { line[NR] = $0 }
+        END {
+            n = NR
+            while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--
+            glyph = "\342\235\257"   # U+276F, the selection cursor
+            sel = 0
+            for (i = n; i >= 1; i--) {
+                c = index(line[i], glyph)
+                if (c == 0 || substr(line[i], 1, c - 1) !~ /^ *$/) continue
+                rest = substr(line[i], c + 3)
+                if (rest !~ /[^[:space:]]/ || rest ~ /^[[:space:]]*Try "/) continue
+                sel = i; break
+            }
+            if (sel == 0) {
+                q = 0
+                for (i = n; i >= 1; i--) if (line[i] ~ /Do you trust/) { q = i; break }
+                if (q == 0) {
+                    for (i = 1; i <= n; i++) if (line[i] ~ /Enter to confirm/) { print "other"; exit }
+                    print "none"; exit
+                }
+                opts = 0
+                for (i = q + 1; i <= n; i++) {
+                    t = unnumber(trim(line[i]))
+                    if (t == "" || footer(t)) continue
+                    if (t != "Yes" && t != "No") { print "other"; exit }
+                    opts++
+                }
+                print (opts > 0 ? "trust-old" : "none"); exit
+            }
+            rest = substr(line[sel], c + 3)
+            textcol = c + 1 + (match(rest, /[^ ]/) - 1)
+            first = sel; last = sel
+            for (i = sel - 1; i >= 1 && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i--) first = i
+            for (i = sel + 1; i <= n && line[i] !~ /^[[:space:]]*$/ && index(line[i], glyph) == 0 && lead(line[i]) == textcol; i++) last = i
+            count = 0; yes = 0; no = 0; unknown = 0; picked = ""
+            for (i = first; i <= last; i++) {
+                t = (i == sel) ? rest : line[i]
+                t = unnumber(trim(t))
+                count++
+                if (t == "Yes, I trust this folder") { yes++; if (i == sel) picked = "yes" }
+                else if (t == "No, exit") { no++; if (i == sel) picked = "no" }
+                else unknown++
+            }
+            trailing = 0
+            for (i = last + 1; i <= n; i++) {
+                t = trim(line[i])
+                if (t == "" || footer(t)) continue
+                trailing++
+            }
+            if (count < 2) {
+                # A single row with text is an input line, not a choice,
+                # unless a confirm footer says otherwise.
+                for (i = sel; i <= n; i++) if (line[i] ~ /Enter to confirm/) { print "other"; exit }
+                print "none"; exit
+            }
+            if (yes == 1 && no == 1 && unknown == 0 && trailing == 0) print "trust-" picked
+            else print "other"
+        }'
+}
+
+# The active choice is the trust dialog and no user question is on screen.
+claude_trust_screen_to_answer() {
+    [[ "$(claude_choice_block_kind "$1")" == trust-* ]] \
+        && ! claude_user_prompt_present "$1"
+}
+
+# The active choice is something other than the trust dialog.
+claude_unknown_choice_present() {
+    [[ "$(claude_choice_block_kind "$1")" == other ]]
+}
+
 claude_accept_trust_dialog() {
     local session_name="$1"
     local attempt="$2"
@@ -1171,27 +1266,154 @@ claude_accept_trust_dialog() {
         echo "[$log_prefix] Claude trust dialog persisted after ${max_attempts} attempts; aborting" >&2
         return 1
     fi
-    local pane_text
+    local pane_text kind
     pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-    if printf '%s' "$pane_text" | grep -q "Yes, I trust this folder"; then
-        # New dialog: the default row is "No, exit", so a bare Enter ends the
-        # child (observed 2026-09-03: the session lived 4 seconds). Move to the
-        # Yes row and confirm it is selected before confirming.
-        if ! printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
-            tmux send-keys -t "$session_name" Down
-            sleep 1
-            pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        fi
-        if printf '%s' "$pane_text" | pane_normalize_nbsp | grep -qE '❯[[:space:]]*Yes, I trust'; then
-            echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
-            tmux send-keys -t "$session_name" C-m
-        else
-            echo "[$log_prefix] Claude trust dialog detected but the Yes row is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
-        fi
+    # Decide from the screen captured just before any key. The one the caller
+    # saw may already be gone: Claude can replace the trust dialog with the
+    # user's one-time Chrome question, and a key sent now would answer it.
+    # Which row is selected is read from the active dialog only.
+    kind="$(claude_choice_block_kind "$pane_text")"
+    if [[ "$kind" != trust-* ]] || claude_user_prompt_present "$pane_text"; then
+        echo "[$log_prefix] Claude trust dialog is no longer on screen; not pressing a key (${attempt}/${max_attempts})" >&2
         return 0
     fi
-    echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
-    tmux send-keys -t "$session_name" C-m
+    if [[ "$kind" == trust-old ]]; then
+        echo "[$log_prefix] Claude trust dialog detected; accepting with C-m (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
+        return 0
+    fi
+    # New dialog: the default row is "No, exit", so a bare Enter ends the
+    # child (observed 2026-09-03: the session lived 4 seconds). Move to the
+    # Yes row and confirm, from a fresh capture, that it is selected.
+    if [[ "$kind" == trust-no ]]; then
+        tmux send-keys -t "$session_name" Down
+        sleep 1
+        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
+        kind="$(claude_choice_block_kind "$pane_text")"
+        claude_user_prompt_present "$pane_text" && kind=other
+    fi
+    if [[ "$kind" == trust-yes ]]; then
+        echo "[$log_prefix] Claude trust dialog detected; selecting 'Yes, I trust this folder' (${attempt}/${max_attempts})" >&2
+        tmux send-keys -t "$session_name" C-m
+    else
+        echo "[$log_prefix] Claude trust dialog detected but the Yes row is not selected; not pressing Enter (${attempt}/${max_attempts})" >&2
+    fi
+    return 0
+}
+
+# Claude Code asks some questions once, for the user rather than for the child.
+# "Claude in Chrome extension detected" (first start after the extension was
+# installed) decides the user's default browser setting, so answering it --
+# even with its default "No" or Esc -- may change every later Claude session,
+# the parent's included. The launcher never answers it: it stops at once, saves
+# the screen and tells the operator to answer it themselves. Two cues are
+# required so a wording change is not mistaken for another screen.
+claude_user_prompt_present() {
+    local text
+    text="$(printf '%s' "$1" | pane_normalize_nbsp)"
+    printf '%s' "$text" | grep -qiF "Claude in Chrome extension detected" && return 0
+    printf '%s' "$text" | grep -qiF "keep browser tools off" \
+        && printf '%s' "$text" | grep -qiF "use my browser"
+}
+
+# Diagnostics only: the last 40 non-blank lines, blank lines anywhere removed.
+# capture-pane pads to the window height and a dialog can sit above a run of
+# blank rows, so a plain tail may hold only blank lines. Readiness checks keep
+# using pane_nonblank_tail, which preserves the screen's own layout.
+pane_diagnostic_lines() {
+    pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 40 || true
+}
+
+# The screen with some scrollback, for the failure record.
+claude_failure_screen() {
+    local session_name="$1" fallback="$2" screen
+    screen="$(tmux capture-pane -t "$session_name" -p -S -60 2>/dev/null \
+        | pane_diagnostic_lines)"
+    if [[ -z "$screen" ]]; then
+        screen="$(printf '%s' "$fallback" | pane_diagnostic_lines)"
+    fi
+    printf '%s' "$screen"
+}
+
+# Writes the reason and the screen to stderr and to the incidents log, so the
+# screen survives the cleanup that removes the session.
+claude_record_failure() {
+    local session_name="$1" reason="$2" fallback="$3" screen
+    screen="$(claude_failure_screen "$session_name" "$fallback")"
+    spawn_note "$reason ($session_name). Last screen (up to 40 non-blank lines):
+$(printf '%s\n' "${screen:-<empty>}" | sed 's/^/    | /')"
+}
+
+CLAUDE_READY_WAIT_MAX=60
+CLAUDE_CHOICE_WAIT_MAX=10
+CLAUDE_PROGRESS_EVERY=10
+CLAUDE_READY_WAITED=0
+
+# Waits until the Claude REPL accepts input. Returns 0 when ready; otherwise
+# reports why, saves the screen and returns 1. Keys are sent only to accept
+# the trust dialog.
+wait_for_claude_ready() {
+    local session_name="$1" log_prefix="$2"
+    local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last choice_kind
+    # Each failure records the screen first and prints its short reason and
+    # what to do last: the dashboard shows only the tail of the launcher log.
+    while [[ $waited -lt $CLAUDE_READY_WAIT_MAX ]]; do
+        sleep 2
+        waited=$((waited + 2))
+        CLAUDE_READY_WAITED=$waited
+        pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)
+        # Keep the last screen actually seen: once the session is gone, the
+        # capture fails and would leave an empty record.
+        [[ -n "$pane_text" ]] && last_seen="$pane_text"
+        if claude_user_prompt_present "$pane_text"; then
+            claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
+            echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
+            return 1
+        fi
+        choice_kind="$(claude_choice_block_kind "$pane_text")"
+        if [[ "$choice_kind" == trust-* ]]; then
+            trust_attempts=$((trust_attempts + 1))
+            if ! claude_accept_trust_dialog \
+                "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then
+                claude_record_failure "$session_name" "Claude trust dialog persisted" "$last_seen"
+                echo "[$log_prefix] Aborting: unable to accept the Claude trust dialog." >&2
+                return 1
+            fi
+            choice_since=-1
+            sleep 1
+            continue
+        fi
+        state=starting
+        if [[ "$choice_kind" == other ]]; then
+            state=choice
+            [[ $choice_since -lt 0 ]] && choice_since=$waited
+            if [[ $((waited - choice_since)) -ge $CLAUDE_CHOICE_WAIT_MAX ]]; then
+                claude_record_failure "$session_name" "Claude showed an unrecognised choice screen; not answered by the launcher" "$last_seen"
+                echo "[$log_prefix] Aborting: Claude has shown a choice screen ORRERY does not recognise for ${CLAUDE_CHOICE_WAIT_MAX}s. No key was sent. If it is expected, answer it once in a normal 'claude' session, then launch the child again." >&2
+                return 1
+            fi
+        else
+            choice_since=-1
+            # A choice screen wins over the weak ready cues (an empty input row
+            # or the shortcuts footer can stay visible under a dialog).
+            if claude_pane_ready "$pane_text"; then
+                return 0
+            fi
+        fi
+        if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+            claude_record_failure "$session_name" "Claude terminated before readiness" "$last_seen"
+            echo "[$log_prefix] Claude session '$session_name' died after ${waited}s (last screen above and in $SPAWN_INCIDENT_LOG)." >&2
+            echo "[$log_prefix] Aborting: Claude terminated before readiness." >&2
+            return 1
+        fi
+        if [[ $((waited % CLAUDE_PROGRESS_EVERY)) -eq 0 ]]; then
+            last="$(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 1 | cut -c1-120)"
+            echo "[$log_prefix] Waiting for Claude (${waited}s): ${state}; last line: ${last:-<empty>}" >&2
+        fi
+    done
+    claude_record_failure "$session_name" "Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s)" "$last_seen"
+    echo "[$log_prefix] Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
+    return 1
 }
 
 # Record prompt-delivery evidence outside the launcher's stderr. Dashboard and
@@ -2066,7 +2288,7 @@ PY
             echo "[spawn_child/pre-reg] No MCP proxy available; Codex child uses the shared ORRERY Mail endpoint" >&2
         fi
         if [[ "$STANDALONE" == true ]]; then
-            CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+            CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
@@ -2206,46 +2428,7 @@ ${TASK}"
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
-            WAITED=0
-            READY=false
-            CLAUDE_EXITED=false
-            TRUST_FAILED=false
-            TRUST_ATTEMPTS=0
-            TRUST_MAX=5
-            while [[ $WAITED -lt 60 ]]; do
-                sleep 2
-                WAITED=$((WAITED + 2))
-                PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-                if claude_trust_dialog_present "$PANE_TEXT"; then
-                    TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-                    if ! claude_accept_trust_dialog \
-                        "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
-                        TRUST_FAILED=true
-                        break
-                    fi
-                    sleep 1
-                    continue
-                fi
-                if claude_pane_ready "$PANE_TEXT"; then
-                    READY=true
-                    break
-                fi
-                if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-                    echo "[spawn_child/pre-reg] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-                    printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-                    CLAUDE_EXITED=true
-                    break
-                fi
-            done
-            if [[ "$TRUST_FAILED" == true ]]; then
-                echo "[spawn_child/pre-reg] Aborting: unable to accept the Claude trust dialog." >&2
-                exit 1
-            elif [[ "$CLAUDE_EXITED" == true ]]; then
-                echo "[spawn_child/pre-reg] Aborting: Claude terminated before readiness." >&2
-                exit 1
-            elif [[ "$READY" != true ]]; then
-                echo "[spawn_child/pre-reg] Claude readiness timeout (60s); refusing to inject the task into an unknown screen state." >&2
-                printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+            if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child/pre-reg"; then
                 exit 1
             fi
             sleep 1
@@ -2256,7 +2439,7 @@ ${TASK}"
             exit 1
         fi
         if [[ "$STANDALONE" == true ]]; then
-            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
@@ -2982,51 +3165,11 @@ else
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機
     echo "[spawn_child] Waiting for Claude REPL..." >&2
-    WAITED=0
-    WAIT_MAX=60
-    READY=false
-    CLAUDE_EXITED=false
-    TRUST_FAILED=false
-    TRUST_ATTEMPTS=0
-    TRUST_MAX=5
-    while [[ $WAITED -lt $WAIT_MAX ]]; do
-        sleep 2
-        WAITED=$((WAITED + 2))
-        PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-        if claude_trust_dialog_present "$PANE_TEXT"; then
-            TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-            if ! claude_accept_trust_dialog \
-                "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
-                TRUST_FAILED=true
-                break
-            fi
-            sleep 1
-            continue
-        fi
-        if claude_pane_ready "$PANE_TEXT"; then
-            READY=true
-            break
-        fi
-        if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-            echo "[spawn_child] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-            CLAUDE_EXITED=true
-            break
-        fi
-    done
-    if [[ "$TRUST_FAILED" == true ]]; then
-        echo "[spawn_child] Aborting: unable to accept the Claude trust dialog." >&2
-        exit 1
-    elif [[ "$CLAUDE_EXITED" == true ]]; then
-        echo "[spawn_child] Aborting: Claude terminated before readiness." >&2
-        exit 1
-    elif [[ "$READY" != true ]]; then
-        echo "[spawn_child] Claude readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
-        printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+    if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child"; then
         exit 1
     fi
     sleep 1
-    echo "[spawn_child] Waited ${WAITED}s (+1s); injecting prompt" >&2
+    echo "[spawn_child] Waited ${CLAUDE_READY_WAITED}s (+1s); injecting prompt" >&2
 
     CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
     if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then

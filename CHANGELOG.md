@@ -14,6 +14,10 @@
 
 dashboard から起動した agent が `/delegate` で Codex の子を作ると、spawn_child.sh が PATH の先頭にある Windows の `codex`（`/mnt/c/.../npm/codex`）を選び、`Missing optional dependency @openai/codex-linux-x64` で数秒で終わっていました。agent の shell には `AGENTSTACK_CODEX_BIN` が無く、PATH の検索に頼っていたためです。spawn_child.sh は、環境の `AGENTSTACK_CODEX_BIN`、次に installer が `~/.agentstack/env.sh` に保存した値（1行だけ読み、実行はしません）、最後に検索の順で探し、installer と同じ規則（WSL では `/mnt` 配下を除く、`--version` に答えるものだけ）で使えるものを選びます。使えない候補は理由を表示して飛ばし、見つからなければ試したものと理由を示して止まります。
 
+### Linux（WSL）で ORRERY Mail の通知が最大30秒遅れていました
+
+Linux の fswatch（inotify）は、新しくできたフォルダの watch を後から足すため、その前に書かれた signal を通知しません。受信者のフォルダは配送のたびに消えて次の1通で作り直されるので、WSL ではほとんどの通知が30秒ごとの回復 scan を待っていました。Linux では回復 scan を2秒にしました（macOS は30秒のまま。`AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL` で変えられます）。同じ message の再試行間隔は30秒のままです。あわせて、配送の lease を取った直後にもう一度配送済みかを確かめ、前の配送と入れ違いで同じ通知が二重に送られる隙間をふさぎました。また、書きかけで JSON として読めない signal を、件名なしの通知として送って消していたのをやめ、次の scan で読み直すようにしました。
+
 ### Codex の子の最初の task を、起動引数で渡すようにしました
 
 Codex の子の最初の task を、画面に貼り付けて送信する代わりに、Codex の公式の `[PROMPT]` 引数（`codex -- "<task>"`）で渡します。WSL で、Codex 0.158 の子が8回に1回、貼り付けた task で turn を始めないまま待っていました。Codex 0.158 は起動途中にも入力欄を描き、確認画面の前に入力を捨てる処理を持つため、貼り付けと画面の切り替わりの競争が最も有力な仮説です（原因は断定できていません）。そこで task を端末経由で渡すこと自体をやめました。task は 0600 のファイルを通して子の shell が読み、1つの引数として渡すので、shell のコマンドとして解釈されることはありません。task が始まったかは、画面の文字ではなく、この起動の Codex の記録（rollout）で確かめます。これは Codex の history binding（任意）が receipt を残した場合だけで、無い環境では最大90秒見張ったあと「確認できない」と残して子はそのままにします（失敗ではなく、再送もしません。その間 spawn の確定は待たされます）。見張りのあいだ launcher がキーを送るのは、実画面で確かめた形の trust 画面だけで、会話の中に出てきた同じ文言や、形を確かめていない model・sign-in の画面には応じません。Claude の子と resume は変わりません。
@@ -27,6 +31,16 @@ WSL の PATH には Windows の PATH（`/mnt/c/...`）が混ざるため、insta
 Codex 0.153〜0.157 の trust 画面（「Trust this folder?」「1. Trust and continue / 2. Quit」）を trust 画面と見分けられず、入力できる状態と誤認して、指示を貼ったまま送らずに止まっていました。新旧どちらの文言も trust 画面として扱い、新しい画面では「Trust and continue」が選ばれているときだけ Enter で受けます。「Quit」が選ばれていれば一度上に移して確かめ、移らなければ Enter を押しません。ラベルが折り返された画面や、読み取れなかった画面でも Enter を押さず、Enter を無条件に押すのは旧い画面と確かめられたときだけです。
 
 ## 2026.09.27
+
+### Claude の子が、利用者向けの質問画面に答えずに止まるようにしました
+
+Claude Code が「Claude in Chrome extension detected」とブラウザ操作の既定を尋ねる画面では、launcher はキーを押さずにすぐ止まり、「通常の `claude` で自分で答えるか `/chrome` で決めてから、もう一度起動する」よう案内します。答えが利用者の今後の既定になる可能性があるためです。これまでは何も押さずに 60 秒待ってから、理由を示さずに失敗していました。未知の選択画面は 10 秒で止めます。失敗時の画面（空行を除いた最大 40 行）を `spawn_incidents.log` にも残し、待機中は 10 秒ごとに経過を出します。pre-registered と legacy の両方の起動経路が、同じ待機処理を使うようにしました。
+
+### bound proxy の親でも /delegate できるように説明を直し、古い managed block を doctor が見つけるようにしました
+
+WSL で、bound proxy の Codex の親が「proxy に register_agent などが無い」ことを理由に /delegate を止めていました。子の登録は shell の `agentstack-preregister-child` が別の identity として行うので、親の proxy にそれらのツールが無いのは正常です。delegate skill と managed block（Codex / Claude）で、「自分の再登録の禁止」と「子の事前登録」を分けて書きました。standalone の起動 prompt にも「登録済み。自分を再登録せず、起動の儀式として inbox を読まない。子を起動するのは可」と明記しました。
+
+`agentstack-codex-setup --check` / `agentstack-claude-setup --check` を追加しました。marker 間の文面を、インストール済みの template と比べます。doctor と installer の最後が同じ検査を使います。これまでの doctor は開始 marker があるだけで `ok` を出していたため、WSL に残っていた古い block（proxy の経路を導入する前の版）も `ok` と表示していました。一致しない場合は、更新コマンドを表示します。
 
 ### Claude の子に Claude in Chrome（ブラウザ操作）を明示して渡せるようにしました
 

@@ -241,6 +241,13 @@ The helpers used by Tier 1 to preview / merge can also run independently.
 ~/.agentstack/bin/agentstack-claude-setup
 ```
 
+`--check` compares the block already in each target with the block the installed template renders now, and changes nothing. It reports `ok` only when the text between the markers matches; otherwise it says whether the block differs (older instructions, or edited by hand), is missing, or has broken markers, and prints the exact command that updates it, with the resolved `CODEX_HOME` / scope. Text outside the markers is not compared. `agentstack-doctor` and the end of the installer use this same check. When you skip the managed setup, the installer ends with `Runtime updated; managed instructions differ` and those commands: agents started after that still read the old block until you run them.
+
+```bash
+~/.agentstack/bin/agentstack-codex-setup --check
+~/.agentstack/bin/agentstack-claude-setup --check
+```
+
 Use `--uninstall` on each helper to remove only its block. Codex targets `$CODEX_HOME/AGENTS.md`; Claude targets the `CLAUDE.md` selected by `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both`. Existing content outside the markers is preserved.
 
 ## ORRERY Mail service handling

@@ -238,7 +238,15 @@ Tier 1 が preview / merge に使う helper は単独でも実行できます。
 ~/.agentstack/bin/agentstack-claude-setup --print
 ```
 
-`--print` は placeholder を解決した block と対象を表示するだけで変更しません。引数なしでは既存 file を backup し、marker 間の ORRERY Telemetry block だけを install / update します。
+`--print` は placeholder を解決した block と対象を表示するだけで変更しません。
+
+`--check` は、対象にすでにある block と、インストール済みの template が今 render する block を比べます。何も変更しません。marker の間の文面が一致するときだけ `ok` を出します。一致しないときは、違う（古い指示、または手で編集した）・無い・marker が壊れている、のどれかを示し、解決済みの `CODEX_HOME` や scope を含む更新コマンドを表示します。marker の外の文面は比べません。`agentstack-doctor` と installer の最後も、同じ検査を使います。managed setup を skip したときは、installer が最後に `Runtime updated; managed instructions differ` とそのコマンドを出します。コマンドを実行するまで、その後に起動した agent は古い block を読みます。
+
+```bash
+~/.agentstack/bin/agentstack-codex-setup --check
+~/.agentstack/bin/agentstack-claude-setup --check
+```
+引数なしでは既存 file を backup し、marker 間の ORRERY Telemetry block だけを install / update します。
 
 ```bash
 ~/.agentstack/bin/agentstack-codex-setup

@@ -369,13 +369,18 @@ else
        "read their own token. Re-run scripts/install.sh to install it."
 fi
 
-warn_managed_block() {
-  local label="$1" target="$2" marker="$3"
-  if [[ -f "$target" ]] && grep -Fq "$marker" "$target"; then
-    echo "ok: $label managed block in $target"
-  else
-    echo "warn: $label managed block not found in $target"
+# Compare each managed block with what the installed template renders today,
+# through the setup script's own --check (the same comparison the installer's
+# summary uses). A begin marker alone no longer counts as ok: an old block kept
+# agents on superseded instructions while doctor reported it healthy.
+check_managed_block() {
+  local label="$1" script="$INSTALL_DIR/bin/$2"
+  shift 2
+  if [[ ! -x "$script" ]]; then
+    echo "warn: cannot check $label managed block: $script is missing; re-run scripts/install.sh"
+    return 0
   fi
+  env "$@" AGENTSTACK_HOME="$INSTALL_DIR" "$script" --check || true
 }
 
 # Keep binary resolution aligned with hooks/spawn_child.sh:find_codex_bin.
@@ -630,40 +635,15 @@ PYPLUGIN
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_LAUNCHER_BIN="$(resolve_launcher_codex_bin)"
 report_codex_history_binding_prereqs "$CODEX_LAUNCHER_BIN" "$CODEX_HOME"
-warn_managed_block "Codex AGENTS.md" "$CODEX_HOME/AGENTS.md" \
-  "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->"
+check_managed_block "Codex AGENTS.md" agentstack-codex-setup CODEX_HOME="$CODEX_HOME"
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-$INSTALL_DIR/worktrees}"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 CLAUDE_SCOPE="${AGENTSTACK_CLAUDE_MD_SCOPE:-project}"
-case "$CLAUDE_SCOPE" in
-  project)
-    if [[ -n "$PROJECT_KEY" ]]; then
-      warn_managed_block "Claude CLAUDE.md" "$PROJECT_KEY/CLAUDE.md" \
-        "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->"
-    else
-      echo "warn: AGENTSTACK_PROJECT_KEY unset; cannot check project CLAUDE.md"
-    fi
-    ;;
-  global)
-    warn_managed_block "Claude CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" \
-      "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->"
-    ;;
-  both)
-    if [[ -n "$PROJECT_KEY" ]]; then
-      warn_managed_block "Claude project CLAUDE.md" "$PROJECT_KEY/CLAUDE.md" \
-        "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->"
-    else
-      echo "warn: AGENTSTACK_PROJECT_KEY unset; cannot check project CLAUDE.md"
-    fi
-    warn_managed_block "Claude global CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" \
-      "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->"
-    ;;
-  *)
-    echo "warn: invalid AGENTSTACK_CLAUDE_MD_SCOPE=$CLAUDE_SCOPE; cannot check CLAUDE.md"
-    ;;
-esac
+check_managed_block "Claude CLAUDE.md" agentstack-claude-setup \
+  AGENTSTACK_CLAUDE_MD_SCOPE="$CLAUDE_SCOPE" CLAUDE_HOME="$CLAUDE_HOME" \
+  AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
 
 report_orphan_worktrees() {
   local root="$WORKTREE_ROOT" registered_names worktree name orphan_count=0

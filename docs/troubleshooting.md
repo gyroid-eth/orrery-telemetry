@@ -11,7 +11,7 @@
 git -C /path/to/orrery-telemetry status --short
 ```
 
-core doctor は install footprint、必須 command、managed block、managed agent 名、tmux mouse、tmux global identity env、dashboard endpoint と service manager の状態を検査します。repository 側は `git status` で変更を確認します。
+core doctor は install footprint、必須 command、managed block（marker があるかだけでなく、インストール済みの template と文面が一致するか。一致しなければ更新コマンドを表示）、managed agent 名、tmux mouse、tmux global identity env、dashboard endpoint と service manager の状態を検査します。repository 側は `git status` で変更を確認します。
 
 dashboard は `/api/version` の正しい JSON response を「実際に配信中」の正本として判定し、launchd / systemd の登録・実行状態とは別に報告します。endpoint が応答していて manager が実行していなければ `unmanaged-background` です。mail-watcher health は `/api/mail-watcher-health` で別に確認してください。
 
@@ -245,6 +245,15 @@ repo を更新して `bash scripts/install.sh` を再実行すれば、以後の
 dashboard は launcher 自身の readiness / early-death verdict を最大120秒待ち、その launcher が成功した後に exact tmux session を probe します。launchd の最小 PATH では `~/.local/bin` が欠けやすいため、spawn path はこれを先頭へ補います。
 
 Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-list も確認してください。
+
+## Claude の子が起動の途中で止まる（readiness）
+
+Claude の子は、入力を受け付ける画面になってから task を渡します。それ以外の画面では、launcher は task を入れずに止まります。そのとき、理由と画面（空行を除いた最大 40 行）を stderr と `AGENTSTACK_RUNTIME_DIR/spawn_incidents.log` に残します。待っている間は、10 秒ごとに経過を stderr に出します。
+
+- **`one-time question about Claude in Chrome`**: Claude Code が「Claude in Chrome extension detected」と、ブラウザ操作の既定を利用者に尋ねています（拡張を入れた後の最初の起動などで出ます）。その答えは、今後のすべての Claude セッションの既定になる可能性があります（保存されるかどうかは確認していません）。そのため、launcher はキーを押さずにすぐ止まります。通常の端末で `claude` を一度開いて自分で答えるか、`/chrome` で決めてから、もう一度起動してください。
+- **`choice screen ORRERY does not recognise`**: 未知の選択画面が 10 秒続きました。キーは送っていません。incidents.log の画面を確かめ、想定どおりの画面なら通常の `claude` で一度答えてから、もう一度起動してください。
+- **`Claude readiness timeout (60s)`**: 60 秒たっても入力を受け付ける画面になりませんでした。incidents.log の画面と、10 秒ごとの経過で、起動が遅いのか、画面を認識できていないのかを見分けてください。
+- launcher がキーを押すのは、trust dialog を受理するときだけです。
 
 ## Codex の子の最初の task が始まったか分からない
 

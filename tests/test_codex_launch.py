@@ -72,7 +72,7 @@ def _run_bash(script: str, env: dict[str, str] | None = None,
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
-    return subprocess.run(
+    result = subprocess.run(
         ["bash", "-c", script],
         cwd=_ROOT,
         env=run_env,
@@ -81,6 +81,25 @@ def _run_bash(script: str, env: dict[str, str] | None = None,
         stderr=subprocess.PIPE,
         check=check,
     )
+    # An extracted function that calls a helper the test did not extract fails
+    # with "command not found", which a guard in an `if` silently reads as false.
+    assert "command not found" not in result.stderr, result.stderr
+    return result
+
+
+# Everything claude_accept_trust_dialog needs, in one place, so a new guard it
+# calls cannot be left out of the extraction.
+def _claude_trust_helpers() -> str:
+    return "\n".join(_extract(name) for name in (
+        "pane_nonblank_tail",
+        "pane_normalize_nbsp",
+        "claude_trust_dialog_present",
+        "claude_user_prompt_present",
+        "claude_choice_block_kind",
+        "claude_trust_screen_to_answer",
+        "claude_unknown_choice_present",
+        "claude_accept_trust_dialog",
+    ))
 
 
 def _ready(pane: str) -> bool:
@@ -538,13 +557,15 @@ tmux() {
     watch = _extract("codex_watch_initial_task")
     assert "trust_max=10" in watch and "codex_accept_trust_dialog" in watch
     assert text.count('codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT"') == 2
-    # Claude keeps its two trust-gate paths.
-    assert text.count('TRUST_FAILED=true') == 2
+    # Claude: both paths share one wait, which keeps the trust gate.
+    claude_wait = _extract("wait_for_claude_ready")
+    assert "trust_max=5" in claude_wait and "claude_accept_trust_dialog" in claude_wait
+    assert text.count('if ! wait_for_claude_ready "$CHILD_NAME"') == 2
 
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
     ready = _extract("pane_nonblank_tail") + "\n" + _extract("pane_normalize_nbsp") + "\n" + _extract("claude_trust_dialog_present") + "\n" + _extract("claude_pane_ready")
-    trust = _extract("claude_accept_trust_dialog")
+    trust = _claude_trust_helpers()
 
     gated = _run_bash(
         ready + '\nclaude_pane_ready "$PANE"\n',
@@ -558,8 +579,11 @@ def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
     )
     assert prompt.returncode == 0
 
+    # The helper decides from its own capture, so the stub shows the dialog.
     accepted = _run_bash(
-        trust + "\ntmux() { printf '%s\\n' \"$*\"; }\n"
+        trust + "\ntmux() { case \"$1\" in capture-pane) printf '%s\\n' "
+        "'Do you trust the files in this folder?' '  Yes' '  No' ;; "
+        "*) printf '%s\\n' \"$*\" ;; esac; }\n"
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
     )
     assert accepted.returncode == 0
@@ -571,8 +595,11 @@ def test_readiness_timeouts_fail_instead_of_injecting_into_unknown_ui():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "injecting prompt anyway" not in text
     # Claude only: a cold Codex task is its argv and is never injected.
-    assert text.count("refusing to inject the task into an unknown screen state") == 2
-    assert text.count("claude_accept_trust_dialog") == 3  # definition + 2 paths
+    # Both Claude paths go through the one shared wait.
+    assert text.count("refusing to inject the task into an unknown screen state") == 1
+    assert "refusing to inject" in _extract("wait_for_claude_ready")
+    assert text.count("claude_accept_trust_dialog") == 2  # definition + shared wait
+    assert text.count('if ! wait_for_claude_ready "$CHILD_NAME"') == 2
 
 
 def test_prompt_injection_is_verified_in_every_launch_path():
@@ -1035,9 +1062,7 @@ def _accept_with_screens(screens: list[str]) -> str:
         "SCREENS=(" + " ".join(f'"$SCREEN_{i}"' for i in range(len(screens))) + ")\n"
         + "\n".join(stub_lines)
         + "\n"
-        + _extract("pane_normalize_nbsp")
-        + "\n"
-        + _extract("claude_accept_trust_dialog")
+        + _claude_trust_helpers()
         + "\nclaude_accept_trust_dialog Child 1 5 test-prefix\n"
     )
     return _run_bash(script, env).stdout
@@ -1072,8 +1097,8 @@ def test_codex_polls_capture_the_visible_screen_only():
     # so the launcher pressed Enter on every poll and never reached readiness.
     text = _SPAWN.read_text(encoding="utf-8")
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
-    # Two Claude polls plus the shared Codex watch.
-    assert text.count('PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)') == 2
+    # The shared Claude wait plus the shared Codex watch.
+    assert 'pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)' in _extract("wait_for_claude_ready")
     assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
 
 
