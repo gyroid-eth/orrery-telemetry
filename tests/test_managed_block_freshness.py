@@ -155,6 +155,8 @@ def test_a_missing_template_is_not_reported_as_compared(tmp_path, install):
     assert result.returncode == 1
     assert result.stdout.startswith("warn: cannot check Codex AGENTS.md managed block")
     assert "template not found" in result.stdout
+    assert "restore the install with scripts/install.sh" in result.stdout
+    assert f"AGENTSTACK_HOME={install} " in result.stdout
 
 
 def test_check_writes_nothing(tmp_path, install):
@@ -188,6 +190,8 @@ def test_claude_check_without_a_project_key_says_it_cannot_check(tmp_path, insta
     assert result.returncode == 1
     assert result.stdout.startswith("warn: cannot check Claude CLAUDE.md managed block:")
     assert "AGENTSTACK_PROJECT_KEY is required" in result.stdout
+    assert "set AGENTSTACK_PROJECT_KEY (or AGENTSTACK_CLAUDE_MD_SCOPE=global / both)" in result.stdout
+    assert "agentstack-claude-setup --check" in result.stdout
 
 
 # --------------------------------------------------------------------------- #

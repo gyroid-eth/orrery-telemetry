@@ -117,14 +117,14 @@ if [[ "$mode" == "check" ]]; then
   [[ "$SCOPE" == "project" ]] || update="$update CLAUDE_HOME=$(ags_managed_block_quote "$CLAUDE_HOME")"
   update="$update $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
   if ! TARGETS_RAW="$(resolve_targets 2>&1)"; then
-    echo "warn: cannot check Claude CLAUDE.md managed block: ${TARGETS_RAW#"$PROG: "}"
+    echo "warn: cannot check Claude CLAUDE.md managed block: ${TARGETS_RAW#"$PROG: "}; set AGENTSTACK_PROJECT_KEY (or AGENTSTACK_CLAUDE_MD_SCOPE=global / both) and run: $update --check"
     exit 1
   fi
   status=0
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
     if [[ ! -f "$TEMPLATE" ]]; then
-      ags_managed_block_report "Claude CLAUDE.md" "$target" "template not found: $TEMPLATE" "$update" || status=1
+      ags_managed_block_report "Claude CLAUDE.md" "$target" "template-missing:$TEMPLATE" "$update" || status=1
       continue
     fi
     state="$(ags_managed_block_state "$target" "$BEGIN" "$END" "$(render_block)")"

@@ -69,7 +69,7 @@ if [[ "$mode" == "check" ]]; then
   # would render the default install's template into this file.
   update="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") CODEX_HOME=$(ags_managed_block_quote "$CODEX_HOME") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
   if [[ ! -f "$TEMPLATE" ]]; then
-    ags_managed_block_report "Codex AGENTS.md" "$TARGET" "template not found: $TEMPLATE" "$update"
+    ags_managed_block_report "Codex AGENTS.md" "$TARGET" "template-missing:$TEMPLATE" "$update"
     exit 1
   fi
   state="$(ags_managed_block_state "$TARGET" "$BEGIN" "$END" "$(render_block)")"

@@ -66,6 +66,10 @@ ags_managed_block_report() {
     malformed:*)
       echo "warn: $label managed block in $target is malformed (${state#malformed:}); fix the markers by hand, then run: $update"
       ;;
+    template-missing:*)
+      # Re-running the setup would not help: the template itself is gone.
+      echo "warn: cannot check $label managed block in $target: template not found (${state#template-missing:}); restore the install with scripts/install.sh, then run: $update --check"
+      ;;
     *)
       echo "warn: cannot check $label managed block in $target: $state"
       ;;
