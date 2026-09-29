@@ -232,7 +232,7 @@ key は `[mcp_servers.orrery-mail]` に固定します。
 
 ### Codex を使う場合: history binding を入れて `/hooks` で一度承認する
 
-Codex の子を起動すると、launcher は子が最初の task を始めたことを、その起動の Codex の記録（rollout）で確かめます。この確認には、Codex の history binding（任意の plugin）が起動時に残す receipt が要ります。**入れていないと、Codex の起動が最大で約90秒待たされることがあります**（短い応答なら画面から早めに確定しますが、長い応答では90秒待つことがあります）。receipt が出る状態にすると、WSL の実機で短い task も長い task も約7秒で確定しました。
+Codex の子を起動すると、launcher は子が最初の task を始めたことを、その起動の Codex の記録（rollout）で確かめます。この確認には、Codex の history binding（任意の plugin）が起動時に残す receipt が要ります。**入れていないと、Codex の起動が最大で約90秒待たされることがあります**（短い応答が画面に出れば待機を早く終えることがありますが、それは receipt による開始の確認とは違い、長い応答では90秒待つことがあります）。receipt が出る状態にすると、WSL の実機で短い task も長い task も約7秒で確定しました。
 
 macOS・WSL（Ubuntu の中）とも、手順は同じです。
 
@@ -246,7 +246,13 @@ macOS・WSL（Ubuntu の中）とも、手順は同じです。
    ```
 
    codex は、core の installer が `~/.agentstack/env.sh` に保存したものを使います（WSL で Windows 側の `codex` は選びません）。macOS 以外では Bridge の常駐 service は入れず、`Bridge service: not installed` と表示します。Codex の子の history binding には、常駐 service は要りません。
-2. project の directory で `codex` を起動し、`/hooks` を開く。`⚠ 6 hooks need review` のように、確認が要る hooks が表示されます。
+2. installer が選んだ codex で Codex を起動し、`/hooks` を開く。installer は最後に、そのためのコマンドを `Next: start Codex with the codex this installer used:` の次の行に表示します。通常は次と同じです。
+
+   ```bash
+   "$AGENTSTACK_CODEX_BIN" -C "$AGENTSTACK_PROJECT_KEY"
+   ```
+
+   素の `codex` は使わないでください。WSL では PATH の先頭に Windows 側の `codex` があることが多く、それは Ubuntu の中では動きません。`/hooks` を開くと、`⚠ 6 hooks need review` のように、確認が要る hooks が表示されます。
 
    ![承認前の /hooks](images/codex-hooks-review.png)
 

@@ -228,7 +228,7 @@ The key is fixed as `[mcp_servers.orrery-mail]`.
 
 ### Using Codex: install the history binding and approve it once in `/hooks`
 
-When a Codex child starts, the launcher confirms that the child began its first task from that launch's Codex record (rollout). This needs the receipt that the Codex history binding (an optional plugin) leaves at startup. **Without it, starting a Codex child can wait up to about 90 seconds** (a short reply is confirmed early from the screen, but a long reply can still wait the full 90 seconds). With the receipt in place, both short and long tasks were confirmed in about 7 seconds on a real WSL machine.
+When a Codex child starts, the launcher confirms that the child began its first task from that launch's Codex record (rollout). This needs the receipt that the Codex history binding (an optional plugin) leaves at startup. **Without it, starting a Codex child can wait up to about 90 seconds** (a short reply on screen may end the wait early, but that is not the receipt's confirmation of the start, and a long reply can still wait the full 90 seconds). With the receipt in place, both short and long tasks were confirmed in about 7 seconds on a real WSL machine.
 
 The steps are the same on macOS and on WSL (inside Ubuntu).
 
@@ -242,7 +242,13 @@ The steps are the same on macOS and on WSL (inside Ubuntu).
    ```
 
    It uses the codex the core installer saved in `~/.agentstack/env.sh` (on WSL it never picks the Windows `codex`). Outside macOS it does not install the resident Bridge service and prints `Bridge service: not installed`; the history binding for Codex children does not need that service.
-2. Start `codex` in the project directory and open `/hooks`. Hooks that need review are listed, for example `⚠ 6 hooks need review`.
+2. Start Codex with the codex the installer chose, and open `/hooks`. At the end the installer prints the command for this on the line after `Next: start Codex with the codex this installer used:`. Normally it is:
+
+   ```bash
+   "$AGENTSTACK_CODEX_BIN" -C "$AGENTSTACK_PROJECT_KEY"
+   ```
+
+   Do not use a bare `codex`: on WSL the first `codex` on PATH is often the Windows install, which cannot run inside Ubuntu. `/hooks` lists the hooks that need review, for example `⚠ 6 hooks need review`.
 
    ![/hooks before approval](images/codex-hooks-review.png)
 

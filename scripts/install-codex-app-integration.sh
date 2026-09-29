@@ -113,7 +113,15 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 
 say_hook_approval_guidance() {
-  say "Next: in Codex, open /hooks and review/approve the AgentStack lifecycle hooks."
+  # Run the codex chosen above, not whatever `codex` is first on PATH: on WSL
+  # that is often the Windows install, which cannot run inside Ubuntu.
+  say "Next: start Codex with the codex this installer used:"
+  if [[ -n "$PROJECT_KEY" ]]; then
+    say "  $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$PROJECT_KEY")"
+  else
+    say "  $(printf '%q' "$CODEX_BIN")"
+  fi
+  say "then open /hooks and review/approve the AgentStack lifecycle hooks."
   say "Then start a new Codex process before checking history binding; existing processes may not refire SessionStart."
 }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -139,19 +147,18 @@ plan() {
 # and the install failed with "Missing optional dependency
 # @openai/codex-linux-x64" although the core installer had saved a working
 # codex in ~/.agentstack/env.sh (2026-09-29). Order: explicit (--codex-bin or
-# AGENTSTACK_CODEX_BINARY; never replaced), AGENTSTACK_CODEX_BIN,
+# AGENTSTACK_CODEX_BINARY; checked the same way and never replaced),
+# AGENTSTACK_CODEX_BIN,
 # the value the core installer saved, then the first usable codex on PATH and
 # the usual per-user Node prefixes. A rejected candidate is reported with why.
 resolve_codex_bin() {
   local candidate source problem
   codex_probe_budget_start
   if [[ -n "$CODEX_BIN" ]]; then
-    # The operator's choice is not second-guessed by a --version probe (the
-    # plugin commands below fail loudly if it cannot run); only the Windows
-    # shim, which can never run here, is refused.
-    if running_under_wsl && [[ "$CODEX_BIN" == "$WSL_WINDOWS_MOUNT_ROOT"/?/* ]]; then
-      die "codex $CODEX_BIN cannot be used: it is a Windows install under $WSL_WINDOWS_MOUNT_ROOT (install Codex inside WSL; the Windows npm shim cannot run here)"
-    fi
+    # Same check as every other candidate, but never replaced: an explicit
+    # codex that cannot run stops the install before anything is written.
+    problem="$(codex_bin_problem "$CODEX_BIN")"
+    [[ -z "$problem" ]] || die "codex $CODEX_BIN cannot be used: $problem"
     return 0
   fi
   for source in environment env.sh; do

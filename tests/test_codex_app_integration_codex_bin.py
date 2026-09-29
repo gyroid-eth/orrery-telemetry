@@ -123,3 +123,16 @@ def test_outside_macos_the_service_is_off_by_default(tmp_path):
     assert "launchd is macOS-only" in result.stdout
     result = _resolve(tmp_path, path_dirs=[good.parent], uname="Darwin", wsl=False)
     assert _value(result, "NO_SERVICE") == "false"
+
+
+def test_an_explicit_codex_that_does_not_answer_stops_before_anything_is_written(tmp_path):
+    broken = _codex(tmp_path / "bin" / "codex", works=False)
+    result = _resolve(tmp_path, path_dirs=[], explicit=str(broken), wsl=False)
+    assert result.returncode != 0
+    assert f"codex {broken} cannot be used: '{broken} --version' did not succeed" in result.stderr
+
+
+def test_the_hook_guidance_names_the_chosen_codex():
+    text = INSTALLER.read_text(encoding="utf-8")
+    guidance = text[text.index("say_hook_approval_guidance() {"):text.index("\n}\n", text.index("say_hook_approval_guidance() {"))]
+    assert 'printf \'%q\' "$CODEX_BIN"' in guidance and "-C" in guidance
