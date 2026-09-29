@@ -39,9 +39,15 @@ ORRERY Telemetry は Obsidian が無くても使えます。このページは�
 いまの vault に足すときは、demo vault から次をコピーします。
 
 1. `.claude/skills/log`・`addtodo`・`adddone` を、自分の vault の `.claude/skills/` に
-2. `30_Templates/Daily Note.md` を、自分の Daily Note のテンプレートに（`05_Agents` と `01_Planning` のフォルダ名は、自分の vault に合わせて書き換える）
-3. `CLAUDE.md`（Codex を使うなら `AGENTS.md`）に、ログとタスクの置き場を書く
-4. Obsidian のコミュニティプラグイン Dataview・Kanban・Templater を入れる（完了時刻を自動で付けたいときは、demo vault の Task Done At も）
+2. `30_Templates/Daily Note.md` を、自分の Daily Note のテンプレートに
+3. **フォルダ名を 1 か所に揃える**: demo vault の置き場（ログは `05_Agents/`、Daily Note は `02_DailyNotes/`、Kanban ボードは `01_Planning/`）と違うフォルダを使うなら、次の 3 つを同じ名前に書き換える
+   - Daily Note のテンプレートの Dataview（`FROM "05_Agents"`・`FROM "01_Planning"`）
+   - コピーした 3 つの `SKILL.md`: `log` のログの作成先・Daily Note の場所・開くリンク、`addtodo`・`adddone` のボードを探すフォルダ
+   - `CLAUDE.md` に書くログとタスクの置き場
+
+   どこか 1 つでも違うと、agent が書く場所と Daily Note が見る場所が食い違います
+4. `CLAUDE.md` に、ログとタスクの置き場と `/addtodo`・`/adddone` のことを書く。**Codex も使うなら** `AGENTS.md` に、demo vault の `AGENTS.md` にある 2 つを、自分のパスに合わせて取り込む: ログの形（`05_Agents/LOG_… .md` と見出しの構成）と、「タスクに追加して／完了にして」と頼まれたら `addtodo`・`adddone` の `SKILL.md` を読んでその手順どおりにする、という指示（Codex は Claude Code の `/` の skill を自分では呼ばないため）。既存の決まりを全部置き換える必要はありません
+5. Obsidian のコミュニティプラグイン Dataview・Kanban・Templater を入れる（完了時刻を自動で付けたいときは、demo vault の Task Done At も）
 
 agent は vault のフォルダで起動します（`cd <vault> && claude`）。demo vault では、agent は vault の `CLAUDE.md` と skill の決まりに従って `05_Agents/` にログを書きます（下の実例で確認）。vault の skill を使わず、ORRERY Telemetry に同梱の `/log` で vault に書きたい場合は、[設定の Skill](configuration.md#skill) にある `AGENTSTACK_OBSIDIAN_APP` を使います。
 
@@ -58,8 +64,8 @@ demo vault を Windows のフォルダに置き、Windows の Obsidian で開い
 
 - **Mac**: vault は普段の場所（例 `~/Documents/MyVault`）に置き、その中で agent を起動します
 - **Windows**: vault は Windows のフォルダ（例 `C:\Users\<あなた>\Documents\MyVault`）に置き、Windows の Obsidian で開きます。agent は WSL2 の中で、そのフォルダを `/mnt/c/Users/<あなた>/Documents/MyVault` として使います（`wslpath -u 'C:\Users\...'` で変換できる）
-- **digest-paper の作業中のもの**（下書き・図・レビュー）は、WSL 側の `~/.agentstack/addons/digest-paper/runs/` に置かれます。vault に書かれるのは、完成したノートと、その確認の記録（`evidence/`）だけです
-- **dashboard の Output**: dashboard の card の Output は、project の `logs/` にある `LOG_*.md` を並べます（[設定](configuration.md)）。demo vault のように `05_Agents/` にログを書く vault では、Output ではなく Obsidian の Daily Note で見ます
+- **digest-paper の作業中のもの**（下書き・レビュー）は、既定では WSL 側の `~/.agentstack/addons/digest-paper/runs/` に置かれます。vault には、完成した一式（ノート `note.md`、採用した図 `assets/`、確認の記録 `evidence/`）が保存されます
+- **dashboard の Output**: dashboard の card の Output は、既定では project の `logs/` にある `LOG_*.md` のうち、frontmatter の `agent:` がその agent のものを並べます。demo vault の標準の設定（`05_Agents/` に書き、`agent:` を付けない）では、ログは Output ではなく Obsidian の Daily Note で見ます。Output にも出したい場合は、走査先（`AGENTSTACK_DELIVERABLE_ROOTS`）とログの `agent:` を設定します（[設定の Output / deliverables](configuration.md#output--deliverables)）
 
 ## 関連文書
 

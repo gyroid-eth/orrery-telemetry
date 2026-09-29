@@ -39,9 +39,15 @@ Download it, open it in Obsidian, and follow `00_Inbox/はじめに.md` from the
 To add this to the vault you already use, copy these from the demo vault.
 
 1. `.claude/skills/log`, `addtodo`, and `adddone` into your vault's `.claude/skills/`
-2. `30_Templates/Daily Note.md` into your Daily Note template (change the folder names `05_Agents` and `01_Planning` to match your vault)
-3. Write where logs and tasks go in `CLAUDE.md` (and `AGENTS.md` if you use Codex)
-4. Install the Obsidian community plugins Dataview, Kanban, and Templater (and Task Done At from the demo vault if you want the done time added automatically)
+2. `30_Templates/Daily Note.md` into your Daily Note template
+3. **Use the same folder names everywhere**: if you use folders other than the demo vault's (logs in `05_Agents/`, Daily Notes in `02_DailyNotes/`, Kanban boards in `01_Planning/`), change these three to the same names
+   - The Dataview queries in the Daily Note template (`FROM "05_Agents"`, `FROM "01_Planning"`)
+   - The three copied `SKILL.md` files: in `log`, where the log is created, where the Daily Note is, and the link that opens it; in `addtodo` and `adddone`, the folder searched for boards
+   - Where logs and tasks go, as written in `CLAUDE.md`
+
+   If any one of them differs, the place the agent writes to and the place the Daily Note reads from no longer match
+4. In `CLAUDE.md`, write where logs and tasks go and mention `/addtodo` and `/adddone`. **If you also use Codex**, bring two things from the demo vault's `AGENTS.md` into your `AGENTS.md`, adjusted to your paths: the log format (`05_Agents/LOG_… .md` and its headings), and the instruction to read the `addtodo` / `adddone` `SKILL.md` and follow it when asked to add or finish a task (Codex does not call Claude Code's `/` skills by itself). You do not need to replace your existing rules
+5. Install the Obsidian community plugins Dataview, Kanban, and Templater (and Task Done At from the demo vault if you want the done time added automatically)
 
 Start the agent in the vault folder (`cd <vault> && claude`). In the demo vault, the agent follows the vault's `CLAUDE.md` and skills and writes logs to `05_Agents/` (confirmed in the example below). To write into the vault with the `/log` bundled with ORRERY Telemetry instead of the vault's skill, use `AGENTSTACK_OBSIDIAN_APP` in [Configuration: Skill](configuration.en.md#skill).
 
@@ -58,8 +64,8 @@ We put the demo vault in a Windows folder, opened it in Obsidian on Windows, and
 
 - **Mac**: keep the vault where you usually do (for example `~/Documents/MyVault`) and start agents inside it
 - **Windows**: keep the vault in a Windows folder (for example `C:\Users\<you>\Documents\MyVault`) and open it in Obsidian on Windows. Agents inside WSL2 use that folder as `/mnt/c/Users/<you>/Documents/MyVault` (`wslpath -u 'C:\Users\...'` converts it)
-- **digest-paper's work in progress** (drafts, figures, reviews) stays on the WSL side in `~/.agentstack/addons/digest-paper/runs/`. Only the finished note and its check record (`evidence/`) are written to the vault
-- **The dashboard's Output**: a dashboard card's Output lists `LOG_*.md` in the project's `logs/` ([Configuration](configuration.en.md)). In a vault that writes logs to `05_Agents/`, like the demo vault, read them in the Obsidian Daily Note rather than in Output
+- **digest-paper's work in progress** (drafts, reviews) stays by default on the WSL side in `~/.agentstack/addons/digest-paper/runs/`. The vault receives the finished bundle: the note (`note.md`), the figures it uses (`assets/`), and the check record (`evidence/`)
+- **The dashboard's Output**: by default, a dashboard card's Output lists the `LOG_*.md` files in the project's `logs/` whose frontmatter `agent:` names that agent. With the demo vault's standard setup (logs in `05_Agents/`, no `agent:`), read logs in the Obsidian Daily Note rather than in Output. To show them in Output too, set the scan roots (`AGENTSTACK_DELIVERABLE_ROOTS`) and add `agent:` to the logs ([Configuration: Output / deliverables](configuration.en.md#output--deliverables))
 
 ## Related documents
 
