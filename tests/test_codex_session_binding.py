@@ -1934,3 +1934,122 @@ def test_deck_badges_are_only_wired_in_the_card_renderer() -> None:
     assert "— NO HISTORY" in card
     assert html.count("? UNBOUND") == 1
     assert html.count("— NO HISTORY") == 1
+
+
+# --- #125: a dashboard-spawned child (registered as "codex-cli") resumes
+# through the bootstrap, which prepares with `--program codex`. -----------------
+
+
+def _bound_codex_cli_child(env: dict) -> dict:
+    """Bind one child launch whose registration spelled the program codex-cli."""
+
+    registration = {**env["registration"], "program": "codex-cli"}
+    launch_path, launch_id = prepare_mod.prepare(
+        env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(env, launch_path, launch_id) == "bound"
+    receipt_path = env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["program"] == "codex-cli"
+    return receipt
+
+
+def test_codex_cli_child_resumes_with_the_bootstrap_program_spelling(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+
+    # The same arguments agentstack-codex-bootstrap passes: --program codex.
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    assert launch["launch_id"] == launch_id
+    assert launch["launch_kind"] == "resume"
+    assert launch["fallback_launch_id"] == receipt["launch_id"]
+    assert launch["fallback_receipt_id"] == receipt["receipt_id"]
+
+
+def test_resume_check_only_accepts_the_other_spelling_and_writes_nothing(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    receipt_path = runtime / "session_index" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+    receipt_before = receipt_path.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "hooks" / "prepare-codex-session-binding.py"),
+            "--check-only",
+            "--runtime-dir", str(runtime),
+            "--agent-id", str(AGENT_ID),
+            "--agent-name", AGENT,
+            "--project-key", binding_env["registration"]["project_key"],
+            "--program", "codex",
+            "--launch-kind", "resume",
+            "--launch-origin", "child",
+            "--codex-mcp-profile", "orrery-only",
+            "--resume-session-id", SESSION_ID,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert launch_path.read_bytes() == launch_before
+    assert receipt_path.read_bytes() == receipt_before
+    assert prepare_mod.check_resume(
+        runtime,
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    ) == (receipt["launch_id"], receipt["receipt_id"])
+
+
+def test_resume_check_only_refuses_a_mismatch_without_writing(
+    binding_env: dict,
+) -> None:
+    _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+
+    with pytest.raises(ValueError, match="does not match a verified prior receipt"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "codex"},
+            resume_session_id="11111111-2222-3333-4444-555555555555",
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    # Another program family is still refused.
+    with pytest.raises(ValueError, match="not for Codex CLI"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "claude-code"},
+            resume_session_id=SESSION_ID,
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    assert launch_path.read_bytes() == launch_before
