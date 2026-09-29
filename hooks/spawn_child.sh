@@ -1127,6 +1127,119 @@ claude_accept_trust_dialog() {
     tmux send-keys -t "$session_name" C-m
 }
 
+# Claude Code asks some questions once, for the user rather than for the child.
+# "Claude in Chrome extension detected" (first start after the extension was
+# installed) decides the user's default browser setting, so answering it --
+# even with its default "No" or Esc -- may change every later Claude session,
+# the parent's included. The launcher never answers it: it stops at once, saves
+# the screen and tells the operator to answer it themselves. Two cues are
+# required so a wording change is not mistaken for another screen.
+claude_user_prompt_present() {
+    local text
+    text="$(printf '%s' "$1" | pane_normalize_nbsp)"
+    printf '%s' "$text" | grep -qiF "Claude in Chrome extension detected" && return 0
+    printf '%s' "$text" | grep -qiF "keep browser tools off" \
+        && printf '%s' "$text" | grep -qiF "use my browser"
+}
+
+# Any other choice screen near the bottom (a selected option row, or the
+# "Enter to confirm" footer). Nothing but the trust dialog is ever answered;
+# a choice screen that stays up is recorded and the launch stops.
+claude_choice_screen_present() {
+    local last_lines
+    last_lines="$(printf '%s' "$1" | pane_normalize_nbsp | pane_nonblank_tail 12)"
+    printf '%s' "$last_lines" | grep -qiF "Enter to confirm" && return 0
+    printf '%s' "$last_lines" \
+        | grep -qE '^[[:space:]]*❯[[:space:]]*(No|Yes|[0-9]+\.)([[:space:]]|,|$)'
+}
+
+# Last 40 non-blank lines of the screen with some scrollback. capture-pane pads
+# to the window height, so a plain tail can hold only blank lines.
+claude_failure_screen() {
+    local session_name="$1" fallback="$2" screen
+    screen="$(tmux capture-pane -t "$session_name" -p -S -60 2>/dev/null \
+        | pane_normalize_nbsp | pane_nonblank_tail 40)"
+    if [[ -z "$screen" ]]; then
+        screen="$(printf '%s' "$fallback" | pane_normalize_nbsp | pane_nonblank_tail 40)"
+    fi
+    printf '%s' "$screen"
+}
+
+# Writes the reason and the screen to stderr and to the incidents log, so the
+# screen survives the cleanup that removes the session.
+claude_record_failure() {
+    local session_name="$1" reason="$2" fallback="$3" screen
+    screen="$(claude_failure_screen "$session_name" "$fallback")"
+    spawn_note "$reason ($session_name). Last screen (up to 40 non-blank lines):
+$(printf '%s\n' "${screen:-<empty>}" | sed 's/^/    | /')"
+}
+
+CLAUDE_READY_WAIT_MAX=60
+CLAUDE_CHOICE_WAIT_MAX=10
+CLAUDE_PROGRESS_EVERY=10
+CLAUDE_READY_WAITED=0
+
+# Waits until the Claude REPL accepts input. Returns 0 when ready; otherwise
+# reports why, saves the screen and returns 1. Keys are sent only to accept
+# the trust dialog.
+wait_for_claude_ready() {
+    local session_name="$1" log_prefix="$2"
+    local waited=0 pane_text="" trust_attempts=0 trust_max=5 choice_since=-1 state last
+    while [[ $waited -lt $CLAUDE_READY_WAIT_MAX ]]; do
+        sleep 2
+        waited=$((waited + 2))
+        CLAUDE_READY_WAITED=$waited
+        pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)
+        if claude_trust_dialog_present "$pane_text"; then
+            trust_attempts=$((trust_attempts + 1))
+            if ! claude_accept_trust_dialog \
+                "$session_name" "$trust_attempts" "$trust_max" "$log_prefix"; then
+                echo "[$log_prefix] Aborting: unable to accept the Claude trust dialog." >&2
+                claude_record_failure "$session_name" "Claude trust dialog persisted" "$pane_text"
+                return 1
+            fi
+            choice_since=-1
+            sleep 1
+            continue
+        fi
+        if claude_user_prompt_present "$pane_text"; then
+            echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
+            claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$pane_text"
+            return 1
+        fi
+        if claude_pane_ready "$pane_text"; then
+            return 0
+        fi
+        if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+            echo "[$log_prefix] Claude session '$session_name' died after ${waited}s; last pane output:" >&2
+            printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 40 >&2
+            echo "[$log_prefix] Aborting: Claude terminated before readiness." >&2
+            claude_record_failure "$session_name" "Claude terminated before readiness" "$pane_text"
+            return 1
+        fi
+        state=starting
+        if claude_choice_screen_present "$pane_text"; then
+            state=choice
+            [[ $choice_since -lt 0 ]] && choice_since=$waited
+            if [[ $((waited - choice_since)) -ge $CLAUDE_CHOICE_WAIT_MAX ]]; then
+                echo "[$log_prefix] Aborting: Claude has shown a choice screen ORRERY does not recognise for ${CLAUDE_CHOICE_WAIT_MAX}s. No key was sent. If it is expected, answer it once in a normal 'claude' session, then launch the child again." >&2
+                claude_record_failure "$session_name" "Claude showed an unrecognised choice screen; not answered by the launcher" "$pane_text"
+                return 1
+            fi
+        else
+            choice_since=-1
+        fi
+        if [[ $((waited % CLAUDE_PROGRESS_EVERY)) -eq 0 ]]; then
+            last="$(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 1 | cut -c1-120)"
+            echo "[$log_prefix] Waiting for Claude (${waited}s): ${state}; last line: ${last:-<empty>}" >&2
+        fi
+    done
+    echo "[$log_prefix] Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
+    printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 40 >&2
+    claude_record_failure "$session_name" "Claude readiness timeout (${CLAUDE_READY_WAIT_MAX}s)" "$pane_text"
+    return 1
+}
+
 # Record prompt-delivery evidence outside the launcher's stderr. Dashboard and
 # hook callers commonly trim command output, so stderr alone is not durable
 # enough for a child that started successfully but never received its task.
@@ -2134,46 +2247,7 @@ ${TASK}"
             PRE_REGISTERED_SESSION_STARTED=true
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
-            WAITED=0
-            READY=false
-            CLAUDE_EXITED=false
-            TRUST_FAILED=false
-            TRUST_ATTEMPTS=0
-            TRUST_MAX=5
-            while [[ $WAITED -lt 60 ]]; do
-                sleep 2
-                WAITED=$((WAITED + 2))
-                PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-                if claude_trust_dialog_present "$PANE_TEXT"; then
-                    TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-                    if ! claude_accept_trust_dialog \
-                        "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child/pre-reg"; then
-                        TRUST_FAILED=true
-                        break
-                    fi
-                    sleep 1
-                    continue
-                fi
-                if claude_pane_ready "$PANE_TEXT"; then
-                    READY=true
-                    break
-                fi
-                if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-                    echo "[spawn_child/pre-reg] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-                    printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-                    CLAUDE_EXITED=true
-                    break
-                fi
-            done
-            if [[ "$TRUST_FAILED" == true ]]; then
-                echo "[spawn_child/pre-reg] Aborting: unable to accept the Claude trust dialog." >&2
-                exit 1
-            elif [[ "$CLAUDE_EXITED" == true ]]; then
-                echo "[spawn_child/pre-reg] Aborting: Claude terminated before readiness." >&2
-                exit 1
-            elif [[ "$READY" != true ]]; then
-                echo "[spawn_child/pre-reg] Claude readiness timeout (60s); refusing to inject the task into an unknown screen state." >&2
-                printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+            if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child/pre-reg"; then
                 exit 1
             fi
             sleep 1
@@ -2909,51 +2983,11 @@ else
     SPAWN_TRAP_SESSION="$CHILD_NAME"
     # Claude REPL起動待機
     echo "[spawn_child] Waiting for Claude REPL..." >&2
-    WAITED=0
-    WAIT_MAX=60
-    READY=false
-    CLAUDE_EXITED=false
-    TRUST_FAILED=false
-    TRUST_ATTEMPTS=0
-    TRUST_MAX=5
-    while [[ $WAITED -lt $WAIT_MAX ]]; do
-        sleep 2
-        WAITED=$((WAITED + 2))
-        PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)
-        if claude_trust_dialog_present "$PANE_TEXT"; then
-            TRUST_ATTEMPTS=$((TRUST_ATTEMPTS + 1))
-            if ! claude_accept_trust_dialog \
-                "$CHILD_NAME" "$TRUST_ATTEMPTS" "$TRUST_MAX" "spawn_child"; then
-                TRUST_FAILED=true
-                break
-            fi
-            sleep 1
-            continue
-        fi
-        if claude_pane_ready "$PANE_TEXT"; then
-            READY=true
-            break
-        fi
-        if ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-            echo "[spawn_child] Claude session '$CHILD_NAME' died after ${WAITED}s; last pane output:" >&2
-            printf '%s\n' "$PANE_TEXT" | tail -15 >&2
-            CLAUDE_EXITED=true
-            break
-        fi
-    done
-    if [[ "$TRUST_FAILED" == true ]]; then
-        echo "[spawn_child] Aborting: unable to accept the Claude trust dialog." >&2
-        exit 1
-    elif [[ "$CLAUDE_EXITED" == true ]]; then
-        echo "[spawn_child] Aborting: Claude terminated before readiness." >&2
-        exit 1
-    elif [[ "$READY" != true ]]; then
-        echo "[spawn_child] Claude readiness timeout (${WAIT_MAX}s); refusing to inject the task into an unknown screen state." >&2
-        printf '%s\n' "$PANE_TEXT" | tail -15 >&2
+    if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child"; then
         exit 1
     fi
     sleep 1
-    echo "[spawn_child] Waited ${WAITED}s (+1s); injecting prompt" >&2
+    echo "[spawn_child] Waited ${CLAUDE_READY_WAITED}s (+1s); injecting prompt" >&2
 
     CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
     if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then

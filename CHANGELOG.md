@@ -24,6 +24,10 @@ Codex 0.153〜0.157 の trust 画面（「Trust this folder?」「1. Trust and c
 
 ## 2026.09.27
 
+### Claude の子が、利用者向けの質問画面に答えずに止まるようにしました
+
+Claude Code が「Claude in Chrome extension detected」とブラウザ操作の既定を尋ねる画面では、launcher はキーを押さずにすぐ止まり、「通常の `claude` で自分で答えるか `/chrome` で決めてから、もう一度起動する」よう案内します。答えが利用者の今後の既定になる可能性があるためです。これまでは何も押さずに 60 秒待ってから、理由を示さずに失敗していました。未知の選択画面は 10 秒で止めます。失敗時の画面（空行を除いた最大 40 行）を `spawn_incidents.log` にも残し、待機中は 10 秒ごとに経過を出します。pre-registered と legacy の両方の起動経路が、同じ待機処理を使うようにしました。
+
 ### Claude の子に Claude in Chrome（ブラウザ操作）を明示して渡せるようにしました
 
 `spawn_child.sh --claude-chrome` / `--claude-chrome-device <deviceId>`、`/delegate` の同名フラグ、NEW AGENT の「Explicitly enable Claude in Chrome」で、Claude の子を `--chrome` 付きで起動します。指定しない子の起動コマンドは従来と同じ（inherit）で、Chrome を使えるかは利用者の Claude 設定で決まります。deviceId は子への選択ポリシーで、技術的な隔離ではありません。子は `list_connected_browsers` で接続を確かめて `select_browser` が成功してから自分のタブで操作し、見つからないときは止まって報告します。指定した子は warm pool を使わず cold start します。保証する範囲は新規の cold 起動です。dashboard からの resume は補助機能で、その会話（session ID）の記録があれば `--chrome` とブラウザの選び方を復元し、記録が壊れていれば止めます。記録が無ければ従来どおり再開します（指定したブラウザの復元は保証しません）。公式 docs では WSL は非対応です。Claude Code 2.1.283 のアカウント接続で WSL から Windows のブラウザを操作できたことを 1 台で確認しています。詳細は [docs/delegation.md](docs/delegation.md#claude-child-とブラウザ操作claude-in-chrome)。

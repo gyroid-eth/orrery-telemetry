@@ -534,8 +534,10 @@ tmux() {
     watch = _extract("codex_watch_initial_task")
     assert "trust_max=10" in watch and "codex_accept_trust_dialog" in watch
     assert text.count('codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT"') == 2
-    # Claude keeps its two trust-gate paths.
-    assert text.count('TRUST_FAILED=true') == 2
+    # Claude: both paths share one wait, which keeps the trust gate.
+    claude_wait = _extract("wait_for_claude_ready")
+    assert "trust_max=5" in claude_wait and "claude_accept_trust_dialog" in claude_wait
+    assert text.count('if ! wait_for_claude_ready "$CHILD_NAME"') == 2
 
 
 def test_claude_fresh_directory_trust_gate_is_not_mistaken_for_readiness():
@@ -567,8 +569,11 @@ def test_readiness_timeouts_fail_instead_of_injecting_into_unknown_ui():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "injecting prompt anyway" not in text
     # Claude only: a cold Codex task is its argv and is never injected.
-    assert text.count("refusing to inject the task into an unknown screen state") == 2
-    assert text.count("claude_accept_trust_dialog") == 3  # definition + 2 paths
+    # Both Claude paths go through the one shared wait.
+    assert text.count("refusing to inject the task into an unknown screen state") == 1
+    assert "refusing to inject" in _extract("wait_for_claude_ready")
+    assert text.count("claude_accept_trust_dialog") == 2  # definition + shared wait
+    assert text.count('if ! wait_for_claude_ready "$CHILD_NAME"') == 2
 
 
 def test_prompt_injection_is_verified_in_every_launch_path():
@@ -1071,8 +1076,8 @@ def test_codex_polls_capture_the_visible_screen_only():
     # so the launcher pressed Enter on every poll and never reached readiness.
     text = _SPAWN.read_text(encoding="utf-8")
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
-    # Two Claude polls plus the shared Codex watch.
-    assert text.count('PANE_TEXT=$(tmux capture-pane -t "$CHILD_NAME" -p 2>/dev/null || true)') == 2
+    # The shared Claude wait plus the shared Codex watch.
+    assert 'pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)' in _extract("wait_for_claude_ready")
     assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
 
 
