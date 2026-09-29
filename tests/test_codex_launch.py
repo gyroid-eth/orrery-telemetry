@@ -117,8 +117,10 @@ def _codex_stub(tmpdir: pathlib.Path, help_text: str) -> None:
 
 
 def _codex_lookup() -> str:
-    """The binary lookup codex_approval_flags depends on."""
-    return _extract("codex_search_path") + "\n" + _extract("find_codex_bin") + "\n"
+    """The binary lookup codex_approval_flags depends on, with the candidate
+    rules it sources from hooks/codex-bin.sh."""
+    lib = (_SPAWN.parent / "codex-bin.sh").read_text(encoding="utf-8")
+    return lib + "\n" + _extract("codex_search_path") + "\n" + _extract("find_codex_bin") + "\n"
 
 
 def _flags(help_text: str) -> str:
@@ -208,7 +210,9 @@ def test_a_codex_that_cannot_answer_help_still_pins_the_policy():
     operator's policy had turned off."""
     result = _flags_with_broken_codex(exit_code=1)
     assert result.stdout.strip() == "--ask-for-approval never"
-    assert "pinning --ask-for-approval never" in result.stderr
+    # A codex that cannot answer --version is not used at all (it would not
+    # start a child either); the policy is pinned as for a missing one.
+    assert "skipping codex" in result.stderr
     # The operator's policy still wins over the product default.
     result = _flags_with_broken_codex(
         exit_code=1, env={"AGENTSTACK_CODEX_CHILD_APPROVAL": "on-request"}
@@ -701,10 +705,7 @@ def test_codex_binary_is_found_under_per_user_node_prefixes():
         fake = prefix / "codex"
         fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         fake.chmod(0o755)
-        script = (
-            f"{_extract('codex_search_path')}\n{_extract('find_codex_bin')}\n"
-            f"{_extract('resolve_codex_bin')}\nresolve_codex_bin\n"
-        )
+        script = f"{_codex_lookup()}\n{_extract('resolve_codex_bin')}\nresolve_codex_bin\n"
         found = _run_bash(script, {"HOME": str(home), "PATH": "/usr/bin:/bin",
                                    "AGENTSTACK_CODEX_BIN": ""})
         assert found.returncode == 0, found.stderr
@@ -720,7 +721,7 @@ def test_codex_binary_is_found_under_per_user_node_prefixes():
         missing = _run_bash(script, {"HOME": str(home / "empty"), "PATH": "/usr/bin:/bin",
                                      "AGENTSTACK_CODEX_BIN": ""})
         assert missing.returncode == 1
-        assert "Codex CLI not found" in missing.stderr
+        assert "no usable Codex CLI found" in missing.stderr
 
 
 def test_injection_verifier_accepts_the_prompt_tail_when_the_head_scrolled_off():

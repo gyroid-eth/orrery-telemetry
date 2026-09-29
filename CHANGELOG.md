@@ -10,6 +10,10 @@
 
 ## 未リリース
 
+### WSL で、agent が起動した Codex の子が Windows の codex を使って即終了していました
+
+dashboard から起動した agent が `/delegate` で Codex の子を作ると、spawn_child.sh が PATH の先頭にある Windows の `codex`（`/mnt/c/.../npm/codex`）を選び、`Missing optional dependency @openai/codex-linux-x64` で数秒で終わっていました。agent の shell には `AGENTSTACK_CODEX_BIN` が無く、PATH の検索に頼っていたためです。spawn_child.sh は、環境の `AGENTSTACK_CODEX_BIN`、次に installer が `~/.agentstack/env.sh` に保存した値（1行だけ読み、実行はしません）、最後に検索の順で探し、installer と同じ規則（WSL では `/mnt` 配下を除く、`--version` に答えるものだけ）で使えるものを選びます。使えない候補は理由を表示して飛ばし、見つからなければ試したものと理由を示して止まります。
+
 ### Codex の子の最初の task を、起動引数で渡すようにしました
 
 Codex の子の最初の task を、画面に貼り付けて送信する代わりに、Codex の公式の `[PROMPT]` 引数（`codex -- "<task>"`）で渡します。WSL で、Codex 0.158 の子が8回に1回、貼り付けた task で turn を始めないまま待っていました。Codex 0.158 は起動途中にも入力欄を描き、確認画面の前に入力を捨てる処理を持つため、貼り付けと画面の切り替わりの競争が最も有力な仮説です（原因は断定できていません）。そこで task を端末経由で渡すこと自体をやめました。task は 0600 のファイルを通して子の shell が読み、1つの引数として渡すので、shell のコマンドとして解釈されることはありません。task が始まったかは、画面の文字ではなく、この起動の Codex の記録（rollout）で確かめます。これは Codex の history binding（任意）が receipt を残した場合だけで、無い環境では最大90秒見張ったあと「確認できない」と残して子はそのままにします（失敗ではなく、再送もしません。その間 spawn の確定は待たされます）。見張りのあいだ launcher がキーを送るのは、実画面で確かめた形の trust 画面だけで、会話の中に出てきた同じ文言や、形を確かめていない model・sign-in の画面には応じません。Claude の子と resume は変わりません。

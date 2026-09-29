@@ -865,6 +865,18 @@ CHILD_SHELL="$(resolve_child_shell)" || exit 1
 # on a host where `codex` worked from every shell (2026-09-08, nodebrew). The
 # installer now persists AGENTSTACK_CODEX_BIN; this is the fallback for
 # installs that predate it and for hosts where the setting is empty.
+# Codex candidate rules, and the env.sh reader (both define functions only).
+# shellcheck disable=SC1090
+[[ -f "$HOOKS_DIR/codex-bin.sh" ]] && . "$HOOKS_DIR/codex-bin.sh"
+# shellcheck disable=SC1090
+[[ -f "$HOOKS_DIR/project-context.sh" ]] && . "$HOOKS_DIR/project-context.sh"
+# An older hooks dir without codex-bin.sh keeps the previous rules (executable,
+# first on the search path) instead of treating every candidate as usable.
+if ! declare -F codex_bin_problem >/dev/null; then
+    codex_bin_problem() { [[ -x "$1" ]] || echo "it is not executable"; }
+    find_usable_codex_bin_in() { PATH="$1" command -v codex 2>/dev/null || true; }
+fi
+
 codex_search_path() {
     local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
@@ -875,22 +887,39 @@ codex_search_path() {
     printf '%s\n' "$PATH:$extra"
 }
 
+# The codex a Codex child runs: AGENTSTACK_CODEX_BIN from the environment,
+# else the one the installer saved in env.sh (read as one line, not sourced),
+# else the first usable one on the search path. A candidate that cannot run
+# (see hooks/codex-bin.sh: a Windows install under /mnt on WSL, or no answer to
+# --version) is skipped with its reason on stderr. An agent's own shell often
+# lacks AGENTSTACK_CODEX_BIN, and on WSL its PATH starts with /mnt/c, so the
+# old PATH fallback picked the Windows npm shim (2026-09-29).
 find_codex_bin() {
-    local codex_bin="${AGENTSTACK_CODEX_BIN:-}"
-    if [[ -n "$codex_bin" && ! -x "$codex_bin" ]]; then
-        codex_bin=""
-    fi
-    if [[ -z "$codex_bin" ]]; then
-        codex_bin="$(PATH="$(codex_search_path)" command -v codex 2>/dev/null || true)"
-    fi
-    printf '%s\n' "$codex_bin"
+    local codex_bin source problem
+    for source in environment env.sh; do
+        if [[ "$source" == environment ]]; then
+            codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+        elif declare -F agentstack_installed_env_value >/dev/null; then
+            codex_bin="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
+        else
+            codex_bin=""
+        fi
+        [[ -n "$codex_bin" ]] || continue
+        problem="$(codex_bin_problem "$codex_bin")"
+        if [[ -z "$problem" ]]; then
+            printf '%s\n' "$codex_bin"
+            return 0
+        fi
+        echo "note: skipping AGENTSTACK_CODEX_BIN from $source ($codex_bin): $problem" >&2
+    done
+    find_usable_codex_bin_in "$(codex_search_path)"
 }
 
 resolve_codex_bin() {
     local codex_bin
     codex_bin="$(find_codex_bin)"
-    if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
-        echo "Error: Codex CLI not found; set AGENTSTACK_CODEX_BIN to an executable path" >&2
+    if [[ -z "$codex_bin" ]]; then
+        echo "Error: no usable Codex CLI found (reasons above, if any candidate was found). Install Codex where this shell can run it, or set AGENTSTACK_CODEX_BIN to its path (on WSL, a codex under /mnt is the Windows install and cannot run here)." >&2
         return 1
     fi
     printf '%s\n' "$codex_bin"
