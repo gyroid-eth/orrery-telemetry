@@ -117,7 +117,10 @@ if [[ "$mode" == "check" ]]; then
   [[ "$SCOPE" == "project" ]] || update="$update CLAUDE_HOME=$(ags_managed_block_quote "$CLAUDE_HOME")"
   update="$update $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
   if ! TARGETS_RAW="$(resolve_targets 2>&1)"; then
-    echo "warn: cannot check Claude CLAUDE.md managed block: ${TARGETS_RAW#"$PROG: "}; set AGENTSTACK_PROJECT_KEY (or AGENTSTACK_CLAUDE_MD_SCOPE=global / both) and run: $update --check"
+    # Leave the unresolved key and scope out of the suggested command, so
+    # the values the user sets next are the ones that take effect.
+    retry="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG") --check"
+    echo "warn: cannot check Claude CLAUDE.md managed block: ${TARGETS_RAW#"$PROG: "}; export AGENTSTACK_PROJECT_KEY=<project path> (or AGENTSTACK_CLAUDE_MD_SCOPE=global), then run: $retry"
     exit 1
   fi
   status=0

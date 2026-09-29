@@ -190,8 +190,18 @@ def test_claude_check_without_a_project_key_says_it_cannot_check(tmp_path, insta
     assert result.returncode == 1
     assert result.stdout.startswith("warn: cannot check Claude CLAUDE.md managed block:")
     assert "AGENTSTACK_PROJECT_KEY is required" in result.stdout
-    assert "set AGENTSTACK_PROJECT_KEY (or AGENTSTACK_CLAUDE_MD_SCOPE=global / both)" in result.stdout
-    assert "agentstack-claude-setup --check" in result.stdout
+    assert "export AGENTSTACK_PROJECT_KEY=<project path> (or AGENTSTACK_CLAUDE_MD_SCOPE=global)" in result.stdout
+    retry = result.stdout.split("then run: ", 1)[1].strip()
+    assert "AGENTSTACK_PROJECT_KEY" not in retry and "AGENTSTACK_CLAUDE_MD_SCOPE" not in retry
+    # The suggested command honours what the user sets next.
+    project = tmp_path / "later-project"
+    project.mkdir()
+    for extra in ({"AGENTSTACK_PROJECT_KEY": str(project)},
+                  {"AGENTSTACK_CLAUDE_MD_SCOPE": "global", "CLAUDE_HOME": str(tmp_path / "claude")}):
+        ran = subprocess.run(["/bin/bash", "-c", retry], env={**env, **extra},
+                             text=True, capture_output=True, check=False)
+        assert "cannot check" not in ran.stdout, (extra, ran.stdout)
+        assert "managed block not found in" in ran.stdout, (extra, ran.stdout)
 
 
 # --------------------------------------------------------------------------- #
