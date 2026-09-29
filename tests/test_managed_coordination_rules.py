@@ -285,3 +285,10 @@ def test_standalone_prompt_says_registration_is_done_but_children_are_allowed():
               "fetch the inbox as a startup ritual. Starting child agents of your "
               "own later is allowed.")
     assert spawn.count(phrase) == 2  # Codex and Claude standalone prompts
+
+
+def test_delegate_skill_says_what_to_do_when_contact_policy_is_unknown():
+    skill = _read("skills/delegate/SKILL.md")
+    assert "you usually **cannot confirm** either side's policy" in skill
+    assert "**Unknown (the usual case), or both open:** proceed with the spawn." in skill
+    assert "Do not change your own or the child's `contact_policy` on your own" in skill

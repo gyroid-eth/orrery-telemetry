@@ -111,7 +111,9 @@ apply_target() {
 # would be worse: a resolver failure would become a silent successful no-op.
 if [[ "$mode" == "check" ]]; then
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agentstack-managed-block.sh"
-  update="AGENTSTACK_CLAUDE_MD_SCOPE=$(ags_managed_block_quote "$SCOPE") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY")"
+  # Name the install that was checked: without AGENTSTACK_HOME the command
+  # would render the default install's template into this file.
+  update="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") AGENTSTACK_CLAUDE_MD_SCOPE=$(ags_managed_block_quote "$SCOPE") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY")"
   [[ "$SCOPE" == "project" ]] || update="$update CLAUDE_HOME=$(ags_managed_block_quote "$CLAUDE_HOME")"
   update="$update $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
   if ! TARGETS_RAW="$(resolve_targets 2>&1)"; then

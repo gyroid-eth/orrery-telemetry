@@ -167,7 +167,10 @@ substitute.
    The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
    For a Codex child, pass `--program "codex" --model "<formal gpt-* ID>"`, using the full model id the user's shorthand expands to (see "How to read the arguments"). Do not pass `--name` just because the user typed a word you do not recognize.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
-4. Ensure the child can send its completion report to the parent. The stack registration helper sets the child's `contact_policy` to `open` by default (an environment override can change that). Only if either side uses a restrictive contact policy, complete a contact handshake or approval before spawning, with the contact tools you have or through the operator. Missing contact tools are not a reason to stop when both sides are open.
+4. Contact policy. The registration helper sets the child's `contact_policy` to `open` by default, but that is best effort and an environment override can change it, and `whois` does not show policies. So you usually **cannot confirm** either side's policy before spawning. That is not a reason to stop:
+   - **You know a side is restrictive** (the user or operator said so, or an earlier message to or from this child was rejected by contact policy): complete a contact handshake or approval before spawning, with the contact tools you have or through the operator.
+   - **Unknown (the usual case), or both open:** proceed with the spawn. Missing contact tools are not a reason to stop.
+   - **A message is actually rejected by contact policy** (the child reports it cannot reach you, or your send fails with a contact-policy error): report that exact error to the operator and resolve it through a handshake or approval. Do not change your own or the child's `contact_policy` on your own, and do not switch to another transport.
 5. Reserve file paths if the task edits shared resources.
 6. Write the complete task to a mode `0600` temporary file without shell interpolation. A quoted heredoc delimiter keeps backticks and `$()` literal:
 

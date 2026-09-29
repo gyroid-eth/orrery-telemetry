@@ -94,6 +94,7 @@ def test_the_old_helper_first_block_is_reported_with_the_update_command(tmp_path
     out = result.stdout
     assert out.startswith("warn: Codex AGENTS.md managed block in ")
     assert "differs from the installed template" in out
+    assert f"AGENTSTACK_HOME={install} " in out
     assert f"CODEX_HOME={tmp_path / 'codex'}" in out
     assert f"AGENTSTACK_PROJECT_KEY={PROJECT}" in out
     assert f"{install}/bin/agentstack-codex-setup" in out
@@ -178,6 +179,7 @@ def test_claude_check_per_scope(tmp_path, install):
     assert stale.returncode == 1
     assert "differs from the installed template" in stale.stdout
     assert "AGENTSTACK_CLAUDE_MD_SCOPE=project" in stale.stdout
+    assert f"AGENTSTACK_HOME={install} " in stale.stdout
 
 
 def test_claude_check_without_a_project_key_says_it_cannot_check(tmp_path, install):
@@ -234,3 +236,29 @@ def test_doctor_and_install_no_longer_trust_the_begin_marker_alone():
     install = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "report_managed_instructions" in install
     assert '--check' in install
+
+
+@pytest.mark.parametrize("script, env_extra", [
+    ("agentstack-codex-setup", {}),
+    ("agentstack-claude-setup", {"AGENTSTACK_CLAUDE_MD_SCOPE": "global"}),
+])
+def test_the_printed_update_command_updates_the_checked_install(tmp_path, install, script, env_extra):
+    """Run the command --check prints, from a shell whose AGENTSTACK_HOME
+    points elsewhere (the default install): the block must come from the
+    checked install's template, and --check must then report it current."""
+    env = _env(tmp_path, install, CLAUDE_HOME=str(tmp_path / "claude"), **env_extra)
+    first = _run(install, script, env, "--check")
+    assert first.returncode == 1
+    command = first.stdout.split("with: ", 1)[1].strip()
+    other_home = tmp_path / "default-install"
+    (other_home / "codex").mkdir(parents=True)
+    (other_home / "claude").mkdir(parents=True)
+    (other_home / "codex" / "AGENTS.md").write_text("WRONG TEMPLATE\n")
+    (other_home / "claude" / "CLAUDE.md").write_text("WRONG TEMPLATE\n")
+    shell_env = {**env, "AGENTSTACK_HOME": str(other_home)}
+    ran = subprocess.run(["/bin/bash", "-c", command], env=shell_env,
+                         text=True, capture_output=True, check=False)
+    assert ran.returncode == 0, ran.stderr
+    again = _run(install, script, env, "--check")
+    assert again.returncode == 0, again.stdout
+    assert "WRONG TEMPLATE" not in (tmp_path / ("codex/AGENTS.md" if "codex" in script else "claude/CLAUDE.md")).read_text()

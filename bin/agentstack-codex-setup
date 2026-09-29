@@ -65,7 +65,9 @@ fi
 
 if [[ "$mode" == "check" ]]; then
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agentstack-managed-block.sh"
-  update="CODEX_HOME=$(ags_managed_block_quote "$CODEX_HOME") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
+  # Name the install that was checked: without AGENTSTACK_HOME the command
+  # would render the default install's template into this file.
+  update="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") CODEX_HOME=$(ags_managed_block_quote "$CODEX_HOME") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
   if [[ ! -f "$TEMPLATE" ]]; then
     ags_managed_block_report "Codex AGENTS.md" "$TARGET" "template not found: $TEMPLATE" "$update"
     exit 1
