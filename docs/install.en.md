@@ -121,6 +121,7 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    Log in with `claude` (then `/login`) and `codex login`. Open the URL each prints in a Windows browser to authorize.
    If Codex is also installed on the Windows side, Ubuntu's PATH shows that Windows `codex` (`/mnt/c/...`) too, and it cannot run inside Ubuntu. The installer skips it and chooses the `codex` installed inside Ubuntu (one that answers `--version`); an agent starting a Codex child with `/delegate` follows the same rules and, when its shell has no `AGENTSTACK_CODEX_BIN`, uses the value the installer saved in `~/.agentstack/env.sh`; re-running it also replaces a Windows `codex` saved by an earlier install. If `agentstack-doctor` prints `warn: Codex launcher binary ... cannot start Codex`, install Codex inside Ubuntu and re-run the installer.
    If Codex was already installed in Ubuntu, update it too with `npm install -g @openai/codex@latest`: with an old release, a child started on a GPT-6 model is rejected by the API (on WSL, 0.153.4 was rejected and 0.158.0 answered).
+   If you will use Codex children, after the installer [install the history binding and approve it once in `/hooks`](#using-codex-install-the-history-binding-and-approve-it-once-in-hooks). Without it, starting a Codex child can wait up to about 90 seconds.
 7. **Start an agent** (inside Ubuntu). Use the same commands as in "Starting the first agent" above. The dashboard's jump opens a new Windows Terminal (`wt.exe`, preinstalled on Windows 11) tab attached to the tmux session. If Windows Terminal is missing, install it from the Microsoft Store.
 
 **Closing the windows does not stop anything.** After every Ubuntu window is closed, the agents in tmux and the dashboard keep running. When you are done and want WSL to stop, run `wsl --shutdown` in PowerShell. It stops all of WSL at once, other distros included, so first save and close the agents' work and anything else running in WSL. If you use WSL only through the Windows SSH server, it stops about 15 seconds after the last connection closes. See the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-closing-the-ubuntu-windows).
@@ -224,6 +225,34 @@ url = "http://127.0.0.1:18765/mcp"
 ```
 
 The key is fixed as `[mcp_servers.orrery-mail]`.
+
+### Using Codex: install the history binding and approve it once in `/hooks`
+
+When a Codex child starts, the launcher confirms that the child began its first task from that launch's Codex record (rollout). This needs the receipt that the Codex history binding (an optional plugin) leaves at startup. **Without it, starting a Codex child can wait up to about 90 seconds** (a short reply is confirmed early from the screen, but a long reply can still wait the full 90 seconds). With the receipt in place, both short and long tasks were confirmed in about 7 seconds on a real WSL machine.
+
+The steps are the same on macOS and on WSL (inside Ubuntu).
+
+1. Install the integration (from the repository checkout).
+
+   ```bash
+   . "$HOME/.agentstack/env.sh"
+   ./scripts/install-codex-app-integration.sh \
+     --project-key "$AGENTSTACK_PROJECT_KEY" \
+     --agent-mail-url "$AGENTSTACK_MCP_URL"
+   ```
+
+   It uses the codex the core installer saved in `~/.agentstack/env.sh` (on WSL it never picks the Windows `codex`). Outside macOS it does not install the resident Bridge service and prints `Bridge service: not installed`; the history binding for Codex children does not need that service.
+2. Start `codex` in the project directory and open `/hooks`. Hooks that need review are listed, for example `⚠ 6 hooks need review`.
+
+   ![/hooks before approval](images/codex-hooks-review.png)
+
+3. Check them, then approve (`t` trusts all). SessionStart, UserPromptSubmit and PostToolUse become Active.
+
+   ![/hooks after approval](images/codex-hooks-after-trust.png)
+
+4. Quit that `codex`. The approval applies to Codex processes started afterwards, not to Codex children already running.
+
+`agentstack-doctor` shows whether the history binding plugin is installed and enabled. It cannot read whether the hooks are approved, so check that in `/hooks`. For details see [Codex App integration](codex-app.en.md).
 
 ### Managed instruction helper
 

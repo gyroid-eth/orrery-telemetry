@@ -95,7 +95,7 @@ Primary options:
 | --- | --- |
 | `--install-dir PATH` | Location for integration source and manifest |
 | `--runtime-dir PATH` | Location for the private socket, bindings, snapshot, delivery database, and logs |
-| `--no-service` | Start neither launchd nor supervised background. Required outside macOS |
+| `--no-service` | Start neither launchd nor supervised background. The default outside macOS (no service is installed even without it) |
 | `--no-plugin` | Build the marketplace without registering the Codex plugin |
 | `--refresh-plugin-only` | Reinstall only an existing enabled Codex plugin from the deployed payload, without changing Bridge state |
 | `--wake-limit COUNT` | Cold-wake limit per root task per hour |
