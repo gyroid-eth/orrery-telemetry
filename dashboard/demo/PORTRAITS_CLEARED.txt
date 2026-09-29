@@ -1,9 +1,12 @@
-# Surnames whose Wikimedia Commons portrait is verified public domain.
-# build.sh refuses any cast surname not on this list. Re-verify with the
-# Commons API before adding one; do not add a surname because the file
-# happens to exist in portraits_64/.
+# Surnames approved for the public demo. build.sh refuses any cast surname
+# not on this list, so adding a face to the published site is a decision
+# rather than a side effect of the file existing in portraits_64/.
 #
-# Excluded on purpose (not public domain): Bell (CC0), Einstein (?), Euler (?), Feynman (?), Franklin (CC BY-SA 4.0), Guericke (?), Linnaeus (?), Pauling (CC BY-SA 2.0), Ramanujan (CC BY 4.0)
+# The bundled portraits are the author's own ChatGPT-generated pixel art, not
+# third-party photographs (see PORTRAITS.txt and docs/third-party.md). An
+# earlier version of this list claimed each surname had a verified
+# public-domain Wikimedia Commons photograph; that described images this
+# repository has never shipped.
 Archimedes
 Arrhenius
 Bohr

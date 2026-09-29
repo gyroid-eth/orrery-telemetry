@@ -93,12 +93,12 @@ while IFS= read -r sci; do
   [ -n "$sci" ] || continue
   [ -f "$DASH/portraits_64/$sci.png" ] || {
     echo "missing portrait: $sci" >&2; exit 1; }
-  # The licence check used to live in someone's head, and that is where it
-  # failed: a story added an agent whose Commons portrait is CC BY-SA, the
-  # build shipped it, and only a screenshot showed anything was wrong.
+  # Which faces go on the public site is decided in PORTRAITS_CLEARED.txt,
+  # not by whatever happens to exist in portraits_64/: the check used to live
+  # in someone's head, and only a screenshot showed when it had slipped.
   grep -qx "$sci" "$HERE/PORTRAITS_CLEARED.txt" || {
     echo "portrait not cleared for publication: $sci" >&2
-    echo "  verify its Commons licence, then add it to PORTRAITS_CLEARED.txt" >&2
+    echo "  check its provenance in docs/third-party.md, then add it to PORTRAITS_CLEARED.txt" >&2
     exit 1; }
   cp "$DASH/portraits_64/$sci.png" "$OUT/portraits_64/"
   n=$((n + 1))
