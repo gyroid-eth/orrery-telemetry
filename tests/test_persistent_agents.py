@@ -2160,7 +2160,7 @@ def test_worker_saturation_waits_before_lease_and_rechecks_completed_state(tmp_p
         "set -euo pipefail\n"
         "SIGNAL=$1\nCALLS=$2\nACQUIRED=$3\nDELIVERED=$4\n"
         "MAX_WORKERS=1\nNOTIFY_MIN_IMPORTANCE=low\n"
-        "read_signal_meta() { printf '12\\nOperator\\nsubject\\nnormal\\n0\\n\\n0\\n'; }\n"
+        "read_signal_meta() { printf 'ok\\n12\\nOperator\\nsubject\\nnormal\\n0\\n\\n0\\n'; }\n"
         "importance_at_least() { return 0; }\n"
         "state_should_attempt() {\n"
         "  local count=0\n"
