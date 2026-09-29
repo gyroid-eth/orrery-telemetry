@@ -145,7 +145,8 @@ def _extract(func: str) -> str:
 
 def _launcher_functions() -> str:
     names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
-             "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_watch_initial_task")
+             "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_turn_running_on_screen",
+             "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
@@ -224,8 +225,60 @@ def test_without_a_binding_the_start_is_unknown_not_a_failure(tmp_path):
     result, keys, notes = _watch(tmp_path, [PROVISIONAL, PROVISIONAL, TRUST, STARTED])
     assert "STATUS=3 VERIFIED=false" in result.stdout
     assert keys == ["send-keys -t Child C-m"]
-    assert "Codex started (Child); first-task confirmation unknown" in notes
+    assert "Codex started (Child); its first turn is running on screen" in notes
+    assert "First-task confirmation unknown" in notes
     assert "WARNING" not in notes
+
+
+def _waited(notes: str) -> int:
+    import re
+
+    return int(re.search(r"after (\d+)s", notes).group(1))
+
+
+def test_without_a_receipt_a_running_turn_ends_the_wait_early(tmp_path):
+    # Where the history binding is not installed, every Codex spawn used to
+    # wait the full 90 s bound (WSL, 2026-09-29). A visibly running turn ends
+    # it one poll later; still no key and no success claimed.
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL, STARTED])
+    assert "STATUS=3 VERIFIED=false" in result.stdout
+    assert keys == []
+    assert _waited(notes) <= 12
+
+
+def test_without_a_receipt_and_no_running_turn_the_full_bound_still_applies(tmp_path):
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL])
+    assert "STATUS=3" in result.stdout
+    assert "Codex started (Child); first-task confirmation unknown" in notes
+
+
+def test_a_bound_session_waits_for_its_rollout_even_with_a_running_turn(tmp_path):
+    result, keys, notes = _watch(tmp_path, [STARTED], ["bound"])
+    assert "STATUS=3" in result.stdout and keys == []
+    assert "WARNING: first task not yet recorded (Child)" in notes
+
+
+def test_the_rollout_still_confirms_when_it_arrives_with_the_turn(tmp_path):
+    result, keys, notes = _watch(tmp_path, [STARTED], ["unknown", "started"])
+    assert "STATUS=0 VERIFIED=true" in result.stdout
+    assert "recorded in this launch's rollout" in notes
+
+
+def test_the_running_turn_line_must_be_at_the_bottom():
+    body = (_extract("pane_nonblank_tail") + _extract("pane_normalize_nbsp")
+            + _extract("codex_turn_running_on_screen") + '\ncodex_turn_running_on_screen "$SCREEN"\n')
+
+    def check(screen):
+        return subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, SCREEN=screen),
+                              capture_output=True, text=True, timeout=10).returncode
+
+    assert check(STARTED) == 0
+    assert check(STARTED.replace("(1s •", "(1m 05s •")) == 0
+    assert check(PROVISIONAL) != 0
+    assert check(TRUST) != 0
+    # Quoted high up in a long conversation, with an idle composer below.
+    quoted = "• Working (1s • esc to interrupt)\n" + "\n".join(f"line {i}" for i in range(12)) + PROVISIONAL
+    assert check(quoted) != 0
 
 
 def test_a_task_on_screen_is_not_a_success_without_the_rollout(tmp_path):

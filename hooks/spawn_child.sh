@@ -1651,21 +1651,35 @@ codex_trust_screen_up() {
     return 1
 }
 
+# Whether Codex shows a turn in progress: its status line "<verb> (<elapsed> •
+# esc to interrupt)" among the last lines of the pane, where the composer and
+# its status live. Used only to stop waiting, never as proof of the start: the
+# task or an answer could quote the line, but either one on screen already
+# means a turn has begun, and no key is ever sent because of it.
+codex_turn_running_on_screen() {
+    printf '%s\n' "$1" | pane_normalize_nbsp | pane_nonblank_tail 6 \
+        | grep -qE '\(([0-9]+h )?([0-9]+m )?[0-9]+s • esc to interrupt\)[[:space:]]*$'
+}
+
 # Watch a cold-started Codex child until its first task has started.
 # Success comes only from this launch's rollout (codex_initial_task_status),
 # never from the screen. Until this launch's session binding is verified, a
 # trust screen identified by its whole layout (codex_trust_screen_up) is
 # answered; once it is verified, no more keys are sent. The history binding is
-# optional: without it the watch still runs its full bound, answering a late
-# trust screen, and ends with "start not confirmed", leaving the child running. Nothing is typed into
-# the composer and nothing is resent.
+# optional: without it the watch answers a late trust screen and ends with
+# "start not confirmed", leaving the child running. Without a receipt it ends
+# as soon as a turn is visibly running (codex_turn_running_on_screen, seen and
+# still unbound one poll later): past that point there is no trust screen left
+# to answer, and waiting out the full bound only delayed every Codex spawn by
+# 90 s where the binding is not installed (WSL, 2026-09-29). Nothing is typed
+# into the composer and nothing is resent.
 # Returns 0 when the task has started, 1 when the trust screen could not be
 # accepted, 2 when the session died, 3 when the start could not be confirmed
 # in time (the child is left running; the caller only records a diagnostic).
 codex_watch_initial_task() {
     local session_name="$1" prompt_text="$2" log_prefix="$3" launch_path="$4" launch_id="$5"
     local waited=0 wait_max=90 trust_attempts=0 trust_max=10 pane_text
-    local status=unknown bound=false
+    local status=unknown bound=false turn_seen=false
     # Counted polls and wall-clock time both end the watch: the dialog handlers
     # sleep too, and the dashboard signals a launcher after 120s, whose exit
     # trap would then remove the child this watch means to leave running. So
@@ -1695,6 +1709,16 @@ codex_watch_initial_task() {
                 ;;
         esac
         [[ "$bound" == true ]] && continue
+        if [[ "$turn_seen" == true ]]; then
+            local running_screen
+            running_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
+            spawn_note "Codex started ($session_name); its first turn is running on screen after ${waited}s. First-task confirmation unknown: no verified session binding receipt for this launch (the Codex history binding is optional; see agentstack-doctor). The task was passed as its [PROMPT] argument and is not resent. Last screen: $running_screen"
+            return 3
+        fi
+        if codex_turn_running_on_screen "$pane_text"; then
+            turn_seen=true
+            continue
+        fi
         if codex_trust_screen_up "$pane_text"; then
             trust_attempts=$((trust_attempts + 1))
             codex_accept_trust_dialog "$session_name" "$trust_attempts" "$trust_max" "$log_prefix" || return 1
