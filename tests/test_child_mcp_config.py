@@ -664,7 +664,9 @@ def test_launcher_passes_the_config_to_claude_only_when_present():
     # --strict-mcp-config keeps the child on its own proxy. Without it the child
     # also inherits the user's top-level mcpServers, ends up talking to a second
     # copy of ORRERY Mail, and carries a standing authentication notice.
-    assert text.count("--strict-mcp-config") == 2
+    assert text.count("--strict-mcp-config") == 1
+    # ...in the one builder that both Claude launch paths call.
+    assert text.count('"$(claude_child_launch_command)"') == 2
 
 
 def _extract_install_fn(func: str) -> str:

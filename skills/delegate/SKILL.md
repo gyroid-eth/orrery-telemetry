@@ -43,6 +43,7 @@ If the child runs outside the project directory, explicitly tell it to use `$PRO
 /delegate "<task>" --model <model-name> [--effort <level>]
 /delegate "<task>" --worktree
 /delegate "<task>" --worktree --worktree-base <rev>
+/delegate "<task>" --claude-chrome-device <deviceId>
 ```
 
 ### How to read the arguments
@@ -58,6 +59,8 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
 | `--codex-mcp inherit` | Keep the user's configured MCP servers and plugins in a Codex child (the default) |
 | `--codex-mcp orrery-only` | Keep authenticated ORRERY Mail and the session-binding plugin, and disable other inherited MCP servers and plugins |
+| `--claude-chrome` | Start a Claude child with `--chrome` (Claude in Chrome). Claude children only |
+| `--claude-chrome-device <deviceId>` | Same, and tell the child which connected browser to use |
 | anything else | part of the task text |
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
@@ -183,6 +186,8 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
 ```
 
 When the user selected `/delegate --codex-mcp orrery-only`, add the same `--codex-mcp orrery-only` to that launcher command. Omit it for the backward-compatible `inherit` default.
+
+When the user selected `/delegate --claude-chrome` or `--claude-chrome-device <deviceId>` for a Claude child, add the same flag to the launcher command. Never pick a deviceId yourself: pass only the one the user gave. Without either flag the launch is unchanged and the child inherits the user's Claude settings. The deviceId is an instruction the child follows, not a lock on other browsers; see docs/delegation.en.md.
 
 `spawn_child.sh --embed-task` requires `--pre-registered`, and `--task-file` takes precedence over a positional task. The launcher reads the file before starting tmux, adds the child and parent names, spawn time, project key, and completion-report instruction, then injects the same canonical prompt into Claude or Codex. It warns on stderr not to send task mail.
 
