@@ -43,3 +43,35 @@ def digest_files(paths) -> dict[Path, str | None]:
         except FileNotFoundError:
             digests[path] = None
     return digests
+
+
+def running_under_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text(errors="replace").lower()
+    except OSError:
+        return False
+
+
+def real_windows_wslconfig() -> Path | None:
+    """The real Windows %USERPROFILE%\\.wslconfig when the suite runs in WSL.
+
+    The installer adds `[general] instanceIdleTimeout=-1` to it; the suite must
+    never do that to the machine it runs on.
+    """
+    if not running_under_wsl():
+        return None
+    import subprocess
+
+    try:
+        profile = subprocess.run(
+            ["cmd.exe", "/c", "echo", "%USERPROFILE%"],
+            cwd="/", capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if not profile or "%USERPROFILE%" in profile:
+            return None
+        path = subprocess.run(
+            ["wslpath", "-u", profile], capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(path) / ".wslconfig" if path else None

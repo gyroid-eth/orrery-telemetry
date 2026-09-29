@@ -50,6 +50,9 @@ CHILD_RESUME_RETENTION_DAYS_SETTING="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-}
 # command worked from a shell (2026-09-08). Resolve it here, in the operator's
 # shell, and persist it: explicit > installed env.sh > `command -v codex`.
 CODEX_BIN_SETTING="${AGENTSTACK_CODEX_BIN:-}"
+# WSL only: whether to set `[general] instanceIdleTimeout=-1` in the Windows
+# %USERPROFILE%\.wslconfig. Same lifecycle: explicit > installed env.sh > 1.
+WSL_KEEP_ALIVE_SETTING="${AGENTSTACK_WSL_KEEP_ALIVE:-}"
 # Dashboard-only settings with the same lifecycle: read at install, persisted
 # into env.sh and the service definition, inherited on re-install.
 PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
@@ -121,6 +124,11 @@ Options:
                          Keep normal-finished Codex child resume credentials
                          for this many days (default: existing env.sh, else 30;
                          0 restores full deletion)
+  --no-wsl-keep-alive    WSL only: do not add [general] instanceIdleTimeout=-1
+                         to the Windows %USERPROFILE%\.wslconfig (default: add
+                         it, so closing every Ubuntu window does not stop the
+                         distro and the agents in it; remembered in env.sh,
+                         --wsl-keep-alive turns it back on)
   -h, --help             Show this help
 
 --assume-yes is not --force: validation and safety errors remain fatal. It must
@@ -217,6 +225,14 @@ while [[ $# -gt 0 ]]; do
       CODEX_BIN_SETTING="$2"
       shift 2
       ;;
+    --no-wsl-keep-alive)
+      WSL_KEEP_ALIVE_SETTING=0
+      shift
+      ;;
+    --wsl-keep-alive)
+      WSL_KEEP_ALIVE_SETTING=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -274,6 +290,17 @@ fi
 if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
   CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
 fi
+if [[ -z "$WSL_KEEP_ALIVE_SETTING" ]]; then
+  WSL_KEEP_ALIVE_SETTING="$(agentstack_installed_env_value AGENTSTACK_WSL_KEEP_ALIVE "$INSTALL_DIR/env.sh")"
+fi
+WSL_KEEP_ALIVE_SETTING="${WSL_KEEP_ALIVE_SETTING:-1}"
+case "$WSL_KEEP_ALIVE_SETTING" in
+  0|1) ;;
+  *)
+    echo "error: AGENTSTACK_WSL_KEEP_ALIVE must be 0 or 1 (got: $WSL_KEEP_ALIVE_SETTING)" >&2
+    exit 2
+    ;;
+esac
 # --- codex launcher resolution (tests extract from here to the end marker) ---
 # Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
 # there is the Windows npm shim: run by the Linux node it dies at once with
@@ -1546,6 +1573,7 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/wslconfig.py" ]] || die "missing scripts/lib/wslconfig.py"
   [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
     die "missing scripts/lib/agentstack-persistent-launcher.sh"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
@@ -1696,6 +1724,80 @@ detect_service_kind() {
   fi
   echo "nohup"
 }
+
+# --- WSL keep-alive (tests extract from here to the end marker) ---
+# WSL stops a distro about 15 s after its last Windows-side client (wsl.exe,
+# a Windows Terminal tab) exits, even with tmux, the dashboard and agents
+# running inside: closing every Ubuntu window stopped all of them. Neither
+# `[wsl2] vmIdleTimeout=-1` (the VM only), linger nor systemd prevents it;
+# `[general] instanceIdleTimeout=-1` in the Windows %USERPROFILE%\.wslconfig
+# does (checked on WSL 2.7.13, 2026-09-29). WSL reads the file when it starts,
+# and applying it needs `wsl --shutdown`, which would stop every agent running
+# now, so the installer only writes it and says when it takes effect.
+WSL_KEEP_ALIVE_NOTE=""
+WSL_KEEP_ALIVE_MANUAL="on Windows add '[general]' and 'instanceIdleTimeout=-1' to %USERPROFILE%\\.wslconfig, then run 'wsl --shutdown' from PowerShell when no agent is working"
+WSL_KEEP_ALIVE_RESTART="takes effect from the next WSL start: run 'wsl --shutdown' from PowerShell when no agent is working (the installer does not, since it would stop every running agent)"
+
+windows_wslconfig_path() {
+  local profile
+  command -v cmd.exe >/dev/null 2>&1 || return 1
+  command -v wslpath >/dev/null 2>&1 || return 1
+  # cmd.exe complains on stderr when started from a WSL (UNC) directory, so
+  # start it from /. An unset variable comes back verbatim as %USERPROFILE%.
+  profile="$(cd / && cmd.exe /c echo %USERPROFILE% 2>/dev/null | head -n 1 | tr -d '\r')" || return 1
+  profile="${profile%"${profile##*[![:space:]]}"}"
+  [[ -n "$profile" && "$profile" != *%USERPROFILE%* ]] || return 1
+  profile="$(wslpath -u "$profile" 2>/dev/null)" || return 1
+  [[ -n "$profile" && -d "$profile" ]] || return 1
+  printf '%s/.wslconfig\n' "$profile"
+}
+
+ensure_wsl_keep_alive() {
+  running_under_wsl || return 0
+  if [[ "$WSL_KEEP_ALIVE_SETTING" != "1" ]]; then
+    say "WSL keep-alive: off (AGENTSTACK_WSL_KEEP_ALIVE=0); closing every Ubuntu window stops the dashboard and the agents"
+    return 0
+  fi
+  local config result rc=0
+  if ! config="$(windows_wslconfig_path)"; then
+    warn "WSL keep-alive: could not find the Windows user folder (cmd.exe or wslpath unavailable); $WSL_KEEP_ALIVE_MANUAL"
+    WSL_KEEP_ALIVE_NOTE="not set; $WSL_KEEP_ALIVE_MANUAL"
+    return 0
+  fi
+  local args=(ensure "$config" --backup-dir "$BACKUPS_DIR")
+  if [[ "$DRY_RUN" == true ]]; then
+    args+=(--dry-run)
+  fi
+  result="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" "${args[@]}")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    warn "WSL keep-alive: $config was not changed; $WSL_KEEP_ALIVE_MANUAL"
+    WSL_KEEP_ALIVE_NOTE="not set; $WSL_KEEP_ALIVE_MANUAL"
+    return 0
+  fi
+  case "$result" in
+    would-create)
+      plan "create $config with [general] instanceIdleTimeout=-1"
+      ;;
+    would-add)
+      plan "add [general] instanceIdleTimeout=-1 to $config (backup under $BACKUPS_DIR)"
+      ;;
+    created)
+      say "WSL keep-alive: created $config with [general] instanceIdleTimeout=-1"
+      WSL_KEEP_ALIVE_NOTE="$WSL_KEEP_ALIVE_RESTART"
+      ;;
+    added\ *)
+      say "WSL keep-alive: added [general] instanceIdleTimeout=-1 to $config (backup: ${result#added })"
+      WSL_KEEP_ALIVE_NOTE="$WSL_KEEP_ALIVE_RESTART"
+      ;;
+    present\ -*)
+      say "WSL keep-alive: $config already has instanceIdleTimeout=${result#present }; left as is"
+      ;;
+    present\ *)
+      warn "WSL keep-alive: $config already has instanceIdleTimeout=${result#present }; left as is, so WSL still stops the agents that many ms after the last Ubuntu window closes (set it to -1 to keep them running)"
+      ;;
+  esac
+}
+# --- end WSL keep-alive ---
 
 create_layout() {
   plan "create install layout under $INSTALL_DIR"
@@ -1893,6 +1995,7 @@ install_payload() {
     cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
     cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
+    cp "$SCRIPT_DIR/lib/wslconfig.py" "$BIN_DIR/lib/wslconfig.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
@@ -2254,6 +2357,7 @@ values = {
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
+    "AGENTSTACK_WSL_KEEP_ALIVE": "$WSL_KEEP_ALIVE_SETTING",
     "AGENTSTACK_PORTRAITS_DIR": "$PORTRAITS_DIR_SETTING",
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
@@ -3924,6 +4028,7 @@ main() {
   # update, and they need the autostart most.
   enable_mail_autostart
   enable_mail_watcher
+  ensure_wsl_keep_alive
   safe_merge_claude_mcp
   safe_merge_settings
   safe_managed_doc_setups
@@ -3941,6 +4046,9 @@ main() {
     say "Verify operation: $BIN_DIR/agentstack-selftest"
     if [[ "$SERVICE_FALLBACK_USED" == true ]]; then
       say "Service mode: supervised background (launchd/systemd unavailable)"
+    fi
+    if [[ -n "$WSL_KEEP_ALIVE_NOTE" ]]; then
+      say "WSL keep-alive: $WSL_KEEP_ALIVE_NOTE"
     fi
     if [[ "$SERVICE_HEALTHY" != true ]]; then
       say "Dashboard was not started. Manual supervised start:"

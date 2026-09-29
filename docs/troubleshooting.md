@@ -153,22 +153,24 @@ systemctl --user daemon-reload
 
 systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
-### WSL2 では最後のシェルを閉じると service が消える
+### WSL2 で Ubuntu の窓を全部閉じると agent が止まる
 
-WSL2 は開いているセッションが無くなると distro の VM ごと停止し、`nohup` で立てた Mail と dashboard は一緒に消えます。加えて、ユーザーに linger が無いと最後のログアウトで systemd user manager も終了します。常駐させたいなら両方を設定します（Ubuntu 26.04 / WSL 2.7 で確認）:
+WSL は、Windows 側の最後の client（`wsl.exe`、Windows Terminal の Ubuntu タブ）が終わると、既定では約15秒後に distro を停止します。中で tmux・dashboard・agent が動いていても止まり、Mail・dashboard・全 agent が一緒に消えます（WSL 2.7.13 で確認: 最後の窓を閉じて13〜16秒後に停止）。`[wsl2] vmIdleTimeout=-1` が止めないのは VM だけで、linger や systemd でも distro は維持されません。
 
-```bash
-# WSL 内: ログアウト後も systemd --user を残す
-loginctl enable-linger "$USER"
-```
+**installer は既定で、Windows の `%USERPROFILE%\.wslconfig` に次の2行を入れます。** 設定済みなら、Ubuntu の窓を全部閉じても agent は止まりません（同じ機体で、窓を閉じたあと80秒以上 Running が続くことを確認）。
 
 ```ini
-# Windows 側 %UserProfile%\.wslconfig: セッションが無くても VM を止めない
-[wsl2]
-vmIdleTimeout=-1
+[general]
+instanceIdleTimeout=-1
 ```
 
-設定後は `wsl --shutdown` で一度止めてから開き直します。Mail は起動 1 分後に timer が立て、dashboard は `install.sh` の再実行で立て直します。
+- 既存の内容はそのまま残し、`[general]` が無ければ足し、あればその中に鍵だけ足します。書く前に元のファイルを `~/.agentstack/backups/<日時>/wslconfig` に保存します。UTF-8（BOM なし）・CRLF で書きます
+- すでに `instanceIdleTimeout` があれば値は変えずに報告します（`-1` 以外なら、その ms 後に止まる旨を warning で出します）
+- **反映には WSL の再起動が要ります。** installer は `wsl --shutdown` を実行しません（動いている agent を全部止めるため）。作業中の agent が無いときに PowerShell で `wsl --shutdown` を実行し、Ubuntu を開き直すと有効になります
+- 入れたくないときは `--no-wsl-keep-alive`（または `AGENTSTACK_WSL_KEEP_ALIVE=0`）で install します。この選択は `env.sh` に残り、再 install でも守られます。`--wsl-keep-alive` で戻せます
+- `agentstack-doctor` は WSL でこの値を読み、未設定なら warning と直し方を出します
+
+手で設定する場合も同じ2行を `%USERPROFILE%\.wslconfig` に書き、`wsl --shutdown` のあと開き直します。Mail は起動1分後に timer が立て、dashboard は `install.sh` の再実行で立て直します。WSL の再起動後に systemd user manager を残すには、従来どおり WSL 内で `loginctl enable-linger "$USER"` も設定しておきます。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 

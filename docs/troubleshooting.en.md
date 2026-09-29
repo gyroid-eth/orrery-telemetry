@@ -138,22 +138,24 @@ systemctl --user daemon-reload
 
 In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
 
-### On WSL2 the services vanish when the last shell closes
+### On WSL2, closing every Ubuntu window stops the agents
 
-WSL2 stops the distro's VM once no session is open, taking the `nohup`-started Mail and dashboard with it. On top of that, without linger the systemd user manager exits at the last logout. To keep them resident, set both (checked on Ubuntu 26.04 / WSL 2.7):
+By default WSL stops a distro about 15 seconds after its last Windows-side client (`wsl.exe`, a Windows Terminal Ubuntu tab) exits, even while tmux, the dashboard and agents are running inside it; Mail, the dashboard and every agent go with it (checked on WSL 2.7.13: stopped 13-16 s after the last window closed). `[wsl2] vmIdleTimeout=-1` only keeps the VM, and neither linger nor systemd keeps the distro.
 
-```bash
-# inside WSL: keep systemd --user alive after logout
-loginctl enable-linger "$USER"
-```
+**By default the installer adds these two lines to the Windows `%USERPROFILE%\.wslconfig`.** With them set, closing every Ubuntu window no longer stops the agents (checked on the same machine: still Running more than 80 s after the windows closed).
 
 ```ini
-# Windows side, %UserProfile%\.wslconfig: do not stop the VM when idle
-[wsl2]
-vmIdleTimeout=-1
+[general]
+instanceIdleTimeout=-1
 ```
 
-Then run `wsl --shutdown` once and reopen. The Mail timer restarts Mail one minute after boot; bring the dashboard back by re-running `install.sh`.
+- The rest of the file is kept. A missing `[general]` section is added; an existing one only gets the key. The original is saved to `~/.agentstack/backups/<timestamp>/wslconfig` first. The file is written as UTF-8 without a BOM, with CRLF line endings
+- An existing `instanceIdleTimeout` is reported and never changed (a value other than `-1` gets a warning that WSL still stops after that many ms)
+- **It takes effect after WSL restarts.** The installer does not run `wsl --shutdown`, because that stops every running agent. Run `wsl --shutdown` from PowerShell when no agent is working, then reopen Ubuntu
+- To leave the file alone, install with `--no-wsl-keep-alive` (or `AGENTSTACK_WSL_KEEP_ALIVE=0`). The choice is kept in `env.sh` and honored on re-install; `--wsl-keep-alive` turns it back on
+- Under WSL, `agentstack-doctor` reads the value and warns with the fix when it is missing
+
+To set it by hand, put the same two lines in `%USERPROFILE%\.wslconfig`, run `wsl --shutdown` and reopen. The Mail timer restarts Mail one minute after boot; bring the dashboard back by re-running `install.sh`. To keep the systemd user manager after a WSL restart, also run `loginctl enable-linger "$USER"` inside WSL as before.
 
 If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
 

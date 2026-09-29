@@ -832,6 +832,62 @@ if tmux info >/dev/null 2>&1; then
   fi
 fi
 
+# --- WSL keep-alive (tests extract from here to the end marker) ---
+# Same rule as scripts/install.sh "WSL keep-alive": without
+# `[general] instanceIdleTimeout=-1` in the Windows %USERPROFILE%\.wslconfig,
+# WSL stops the distro about 15 s after the last Ubuntu window closes, and the
+# dashboard and every agent with it.
+windows_wslconfig_path() {
+  local profile
+  command -v cmd.exe >/dev/null 2>&1 || return 1
+  command -v wslpath >/dev/null 2>&1 || return 1
+  profile="$(cd / && cmd.exe /c echo %USERPROFILE% 2>/dev/null | head -n 1 | tr -d '\r')" || return 1
+  profile="${profile%"${profile##*[![:space:]]}"}"
+  [[ -n "$profile" && "$profile" != *%USERPROFILE%* ]] || return 1
+  profile="$(wslpath -u "$profile" 2>/dev/null)" || return 1
+  [[ -n "$profile" && -d "$profile" ]] || return 1
+  printf '%s/.wslconfig\n' "$profile"
+}
+
+report_wsl_keep_alive() {
+  running_under_wsl || return 0
+  local fix="fix: on Windows add '[general]' and 'instanceIdleTimeout=-1' to %USERPROFILE%\\.wslconfig (or re-run ./scripts/install.sh), then run 'wsl --shutdown' from PowerShell when no agent is working"
+  local config state
+  if ! config="$(windows_wslconfig_path)"; then
+    echo "warn: WSL keep-alive not checked: cannot find the Windows user folder (cmd.exe or wslpath unavailable)"
+    echo "      $fix"
+    return 0
+  fi
+  if [[ ! -x "$PYTHON_BIN" || ! -f "$SCRIPT_DIR/lib/wslconfig.py" ]]; then
+    echo "warn: WSL keep-alive not checked: needs Python 3.11+ and $SCRIPT_DIR/lib/wslconfig.py"
+    return 0
+  fi
+  if ! state="$("$PYTHON_BIN" "$SCRIPT_DIR/lib/wslconfig.py" read "$config" 2>/dev/null)"; then
+    echo "warn: WSL keep-alive not checked: cannot read $config as UTF-8 text"
+    return 0
+  fi
+  case "$state" in
+    ok\ *)
+      echo "ok: WSL keep-alive ($config has instanceIdleTimeout=${state#ok }; takes effect from the WSL start after it was set)"
+      ;;
+    other\ *)
+      echo "warn: WSL stops the dashboard and agents ${state#other } ms after the last Ubuntu window closes ($config has instanceIdleTimeout=${state#other })"
+      echo "      fix: set instanceIdleTimeout=-1 under [general] in that file, then run 'wsl --shutdown' from PowerShell when no agent is working"
+      ;;
+    *)
+      if [[ "${AGENTSTACK_WSL_KEEP_ALIVE:-1}" == "0" ]]; then
+        echo "note: WSL keep-alive is off (AGENTSTACK_WSL_KEEP_ALIVE=0); closing every Ubuntu window stops the dashboard and agents about 15 s later"
+      else
+        echo "warn: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes: $config has no [general] instanceIdleTimeout"
+        echo "      $fix"
+      fi
+      ;;
+  esac
+}
+# --- end WSL keep-alive ---
+
+report_wsl_keep_alive
+
 # --- paste-ready environment report -------------------------------------------
 # Every defect this project has had so far came from a difference between the
 # reporter's machine and the developer's, and each one cost several rounds of
