@@ -36,6 +36,28 @@ jobs:
           tests/test_dashboard_quotas.py tests/test_dashboard_quota_http.py
           tests/test_dashboard_quota_adapters.py tests/test_codex_models.py
 
+  watcher-linux:
+    # The Mail watcher is the one component that behaves differently on Linux:
+    # fswatch there is inotify, which reports a signal in a brand-new recipient
+    # folder late or not at all. Only the watcher's tests run here, with the
+    # real fswatch; the full suite stays on macOS (see the tests job).
+    runs-on: ubuntu-latest
+    name: mail watcher (Linux)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install fswatch
+        run: sudo apt-get update && sudo apt-get install -y fswatch
+      - run: python -m pip install pytest pytest-timeout
+      - name: Run watcher tests
+        run: |
+          set -euo pipefail
+          fswatch --version | head -n 1
+          # -s keeps the measured delivery latencies in the log.
+          PYTHONPATH=. python -m pytest -q -s tests/test_mail_watcher_recovery_scan.py tests/test_notify_importance_filter.py
+
   tests:
     # 対応 OS は macOS（README「対応環境」）。ubuntu で回すと launchd / launchctl /
     # mailctl の rehearsal が環境不在で落ち、対応外の失敗と本物の回帰が混ざる。
