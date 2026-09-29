@@ -265,7 +265,7 @@ def _doctor(tmp_path, *, content: bytes | None, setting: str | None = None):
 def test_doctor_warns_with_the_fix_when_unset(tmp_path):
     result = _doctor(tmp_path, content=b"[wsl2]\r\nvmIdleTimeout=-1\r\n")
     assert result.returncode == 0, result.stderr
-    assert "warn: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes" in result.stdout
+    assert "warn: WSL keep-alive: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes" in result.stdout
     assert "instanceIdleTimeout=-1" in result.stdout and "wsl --shutdown" in result.stdout
 
 
@@ -274,7 +274,7 @@ def test_doctor_ok_when_set_and_note_when_opted_out(tmp_path):
     assert "ok: WSL keep-alive" in result.stdout
     assert "warn:" not in result.stdout
     result = _doctor(tmp_path / "other", content=b"[general]\r\ninstanceIdleTimeout=15000\r\n")
-    assert "warn: WSL stops the dashboard and agents 15000 ms" in result.stdout
+    assert "warn: WSL keep-alive: WSL stops the dashboard and agents 15000 ms" in result.stdout
     result = _doctor(tmp_path / "off", content=None, setting="0")
     assert "note: WSL keep-alive is off" in result.stdout
     assert "warn:" not in result.stdout

@@ -871,14 +871,14 @@ report_wsl_keep_alive() {
       echo "ok: WSL keep-alive ($config has instanceIdleTimeout=${state#ok }; takes effect from the WSL start after it was set)"
       ;;
     other\ *)
-      echo "warn: WSL stops the dashboard and agents ${state#other } ms after the last Ubuntu window closes ($config has instanceIdleTimeout=${state#other })"
+      echo "warn: WSL keep-alive: WSL stops the dashboard and agents ${state#other } ms after the last Ubuntu window closes ($config has instanceIdleTimeout=${state#other })"
       echo "      fix: set instanceIdleTimeout=-1 under [general] in that file, then run 'wsl --shutdown' from PowerShell when no agent is working"
       ;;
     *)
       if [[ "${AGENTSTACK_WSL_KEEP_ALIVE:-1}" == "0" ]]; then
         echo "note: WSL keep-alive is off (AGENTSTACK_WSL_KEEP_ALIVE=0); closing every Ubuntu window stops the dashboard and agents about 15 s later"
       else
-        echo "warn: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes: $config has no [general] instanceIdleTimeout"
+        echo "warn: WSL keep-alive: WSL stops the dashboard and agents about 15 s after the last Ubuntu window closes: $config has no [general] instanceIdleTimeout"
         echo "      $fix"
       fi
       ;;
