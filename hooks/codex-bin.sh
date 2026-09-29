@@ -8,9 +8,22 @@
 # answers `--version` within a short time. These are the same rules as
 # scripts/install.sh ("codex launcher resolution") and scripts/doctor.sh.
 #
-# Sourcing defines functions and two settings only; it runs nothing.
+# Sourcing defines functions and two settings only; it runs nothing. A caller
+# that runs codex under another PATH sets CODEX_PROBE_RUNNER to a command that
+# runs its arguments that way, so the probe sees what the launch will see.
 WSL_WINDOWS_MOUNT_ROOT=/mnt
 CODEX_VERSION_TIMEOUT_SECONDS=10
+# All probes of one resolution share this many seconds (codex_probe_budget_start);
+# each probe gets at most what is left. A candidate is judged once per
+# resolution: CODEX_JUDGED holds ":path:" for every path already probed.
+CODEX_PROBE_BUDGET_SECONDS=15
+CODEX_PROBE_DEADLINE=""
+CODEX_JUDGED=":"
+
+codex_probe_budget_start() {
+  CODEX_PROBE_DEADLINE=$((SECONDS + CODEX_PROBE_BUDGET_SECONDS))
+  CODEX_JUDGED=":"
+}
 
 running_under_wsl() {
   [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
@@ -19,16 +32,23 @@ running_under_wsl() {
 # Succeeds when `$1 --version` exits 0 within the timeout (portable: no
 # coreutils `timeout` on macOS).
 codex_version_answers() {
-  local bin="$1" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
-  "$bin" --version </dev/null >/dev/null 2>&1 &
+  local bin="$1" pid secs="$CODEX_VERSION_TIMEOUT_SECONDS" end
+  if [[ -n "$CODEX_PROBE_DEADLINE" ]] && (( CODEX_PROBE_DEADLINE - SECONDS < secs )); then
+    secs=$((CODEX_PROBE_DEADLINE - SECONDS))
+  fi
+  (( secs >= 1 )) || return 1
+  # Wall-clock, not a count of sleeps: the limit holds whatever `sleep` does.
+  end=$((SECONDS + secs))
+  # CODEX_PROBE_RUNNER, when set, runs the candidate the way the launcher will
+  # (spawn_child.sh: the child's login shell and PATH setup).
+  ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >/dev/null 2>&1 &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    if [[ "$tick" -ge "$limit" ]]; then
+    if (( SECONDS >= end )); then
       codex_probe_stop "$pid"
       return 1
     fi
     sleep 0.1
-    tick=$((tick + 1))
   done
   wait "$pid"
 }
@@ -123,6 +143,10 @@ codex_bin_problem() {
     echo "it is not executable"
     return 0
   fi
+  if [[ -n "$CODEX_PROBE_DEADLINE" ]] && (( SECONDS >= CODEX_PROBE_DEADLINE )); then
+    echo "not probed: the ${CODEX_PROBE_BUDGET_SECONDS}s budget for trying codex candidates is spent"
+    return 0
+  fi
   if ! codex_version_answers "$bin"; then
     echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
   fi
@@ -139,6 +163,9 @@ find_usable_codex_bin_in() {
     seen="$seen$dir:"
     candidate="$dir/codex"
     [[ -f "$candidate" || -L "$candidate" ]] || continue
+    # Already judged in this resolution (say, the env.sh value): not again.
+    [[ "$CODEX_JUDGED" != *":$candidate:"* ]] || continue
+    CODEX_JUDGED="$CODEX_JUDGED$candidate:"
     problem="$(codex_bin_problem "$candidate")"
     if [[ -z "$problem" ]]; then
       printf '%s\n' "$candidate"

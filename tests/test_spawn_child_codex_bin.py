@@ -42,7 +42,15 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
     return path
 
 
-def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, lib=True):
+def _runner() -> str:
+    """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
+    text = SPAWN.read_text(encoding="utf-8")
+    start = text.index("CODEX_CHILD_PATH_SETUP=")
+    end = text.index("CODEX_PROBE_RUNNER=run_like_codex_child\n", start) + len("CODEX_PROBE_RUNNER=run_like_codex_child\n")
+    return text[start:end]
+
+
+def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, lib=True, runner=True):
     """Run resolve_codex_bin as spawn_child.sh defines it; returns (rc, stdout, stderr)."""
     home = tmp_path / "home"
     (home / ".agentstack").mkdir(parents=True, exist_ok=True)
@@ -54,11 +62,12 @@ def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, li
     loader = text[start:text.index("codex_search_path() {", start)]
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks') if lib else str(tmp_path / 'old-hooks'))}\n"
+        + ("CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         + loader
         # Stub the platform after the library is loaded; /mnt cannot exist on macOS CI.
         + ("running_under_wsl() { return 0; }\n" if wsl else "running_under_wsl() { return 1; }\n")
         + f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(tmp_path / 'mnt'))}\n"
-        + "CODEX_VERSION_TIMEOUT_SECONDS=5\n"
+        + "CODEX_VERSION_TIMEOUT_SECONDS=10\n"
         + _extract("codex_search_path") + _extract("find_codex_bin") + _extract("resolve_codex_bin")
         + "resolve_codex_bin\n"
     )
@@ -161,3 +170,133 @@ def test_spawn_child_sources_the_library_before_it_resolves_codex():
     loader = text.index('. "$HOOKS_DIR/codex-bin.sh"')
     assert loader < text.index("\nfind_codex_bin() {")
     assert re.search(r"^codex_bin_problem\(\) \{", LIB.read_text(encoding="utf-8"), re.M)
+
+
+def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
+    """Pink's reproduction (review of 55cd037): the launcher's PATH is minimal,
+    and ~/.local/bin holds both codex (`#!/usr/bin/env node`) and node. The child
+    runs codex from a login shell with ~/.local/bin in front, so it works there;
+    a probe under the launcher's own PATH could not find node and rejected it."""
+    local_bin = tmp_path / "home" / ".local" / "bin"
+    _script(local_bin / "node", "#!/bin/sh\necho v22.0.0\n")
+    codex = _script(local_bin / "codex", "#!/usr/bin/env node\n")
+    rc, out, err = _resolve(tmp_path, path_dirs=[])
+    assert rc == 0, err
+    assert out == str(codex)
+    # Probing with the launcher's PATH instead would reject it.
+    rc, _, err = _resolve(tmp_path, path_dirs=[], runner=False)
+    assert rc == 1 and "--version' did not succeed" in err
+
+
+def test_both_codex_launches_use_the_one_path_setup():
+    text = SPAWN.read_text(encoding="utf-8")
+    assert text.count("\'\"$CODEX_CHILD_PATH_SETUP\"\';") == 2
+    runner = text[text.index("run_like_codex_child() {"):text.index("CODEX_PROBE_RUNNER=run_like_codex_child")]
+    assert '"$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"' in runner
+    # The approval probe (--help) goes through the same runner.
+    approval = text[text.index("codex_approval_flags() {"):]
+    assert '${CODEX_PROBE_RUNNER:-} "$codex_bin" --help' in approval[:approval.index("\n}\n")]
+
+
+# --- one resolution per spawn, bounded in time ----------------------------------
+
+import time  # noqa: E402
+
+HANGS = '#!/bin/sh\nif [ "$1" = --version ]; then echo "$1" >> "$PROBE_LOG"; sleep 30; fi\necho "  --ask-for-approval <POLICY>"\n'
+
+
+def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=2, budget=None):
+    """prime_codex_bin, then the approval probe and resolve_codex_bin, as one
+    spawn runs them; returns (rc, stdout lines, stderr, seconds)."""
+    home = tmp_path / "home"
+    (home / ".agentstack").mkdir(parents=True, exist_ok=True)
+    if installed is not None:
+        (home / ".agentstack" / "env.sh").write_text(
+            f"export AGENTSTACK_CODEX_BIN={shlex.quote(installed)}\n", encoding="utf-8")
+    text = SPAWN.read_text(encoding="utf-8")
+    start = text.index("# Codex candidate rules, and the env.sh reader")
+    loader = text[start:text.index("codex_search_path() {", start)]
+    script = (
+        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + _runner() + loader
+        + "running_under_wsl() { return 1; }\n"
+        + f"CODEX_VERSION_TIMEOUT_SECONDS={timeout}\n"
+        + (f"CODEX_PROBE_BUDGET_SECONDS={budget}\n" if budget is not None else "")
+        + _extract("codex_search_path") + _extract("find_codex_bin") + _extract("prime_codex_bin")
+        + _extract("resolve_codex_bin") + _extract("codex_approval_flags")
+        + "prime_codex_bin\nprintf 'APPROVAL=%s\\n' \"$(codex_approval_flags)\"\n"
+        + "printf 'CODEX=%s\\n' \"$(resolve_codex_bin)\"\n"
+    )
+    env = {"HOME": str(home), "PATH": ":".join(str(d) for d in path_dirs) + ":/usr/bin:/bin",
+           "PROBE_LOG": str(tmp_path / "probes")}
+    started = time.monotonic()
+    result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True, timeout=120)
+    return result.returncode, result.stdout.splitlines(), result.stderr, time.monotonic() - started
+
+
+def test_an_unresponsive_saved_codex_is_probed_once_per_spawn(tmp_path):
+    # MintHooke's case: the same hanging codex saved in env.sh and first on
+    # PATH, a working one after it. Before, approval and resolve each probed it
+    # from both sources: four timeouts.
+    bad = _script(tmp_path / "bad" / "codex", HANGS)
+    good = _script(tmp_path / "good" / "codex", WORKS)
+    rc, lines, err, seconds = _spawn_resolution(tmp_path, path_dirs=[bad.parent, good.parent], installed=str(bad))
+    assert rc == 0, err
+    assert f"CODEX={good}" in lines
+    assert (tmp_path / "probes").read_text().count("--version") == 1
+    assert err.count(f"({bad})") == 1  # one skip note, from env.sh
+    assert seconds < 2 + 6, seconds  # one 2s timeout, plus shells starting
+
+
+def test_all_probes_share_one_budget(tmp_path):
+    dirs = [_script(tmp_path / f"slow{i}" / "codex", HANGS).parent for i in range(5)]
+    good = _script(tmp_path / "good" / "codex", WORKS)
+    rc, lines, err, seconds = _spawn_resolution(tmp_path, path_dirs=[*dirs, good.parent], timeout=2, budget=3)
+    # Five 2-second timeouts would take 10s; the 3-second budget stops them.
+    assert seconds < 3 + 6, seconds
+    assert "budget for trying codex candidates is spent" in err
+    assert (tmp_path / "probes").read_text().count("--version") <= 2
+    assert rc == 0 and "CODEX=" in "".join(lines)  # resolve reports, it does not hang
+
+
+def test_the_budgets_fit_inside_the_dashboard_launcher_limit():
+    """In numbers: the dashboard signals a launcher after 120s
+    (dashboard/server.py _SPAWN_READINESS_TIMEOUT_SECONDS), and its exit trap
+    then removes the child. The codex resolution is bounded by its budget, and
+    the start watch ends by CODEX_WATCH_END_BY seconds of the launcher's run
+    whatever preceded it, leaving room for its last poll (3s) and note."""
+    lib = LIB.read_text(encoding="utf-8")
+    spawn = SPAWN.read_text(encoding="utf-8")
+    server = (ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
+    dashboard_limit = int(re.search(r"^_SPAWN_READINESS_TIMEOUT_SECONDS = (\d+)", server, re.M).group(1))
+    budget = int(re.search(r"^CODEX_PROBE_BUDGET_SECONDS=(\d+)", lib, re.M).group(1))
+    per_probe = int(re.search(r"^CODEX_VERSION_TIMEOUT_SECONDS=(\d+)", lib, re.M).group(1))
+    watch_end = int(re.search(r"^CODEX_WATCH_END_BY=(\d+)", spawn, re.M).group(1))
+    poll = 3
+    assert per_probe <= budget
+    assert budget < watch_end
+    assert watch_end + poll + 5 <= dashboard_limit
+
+
+def test_the_start_watch_ends_by_its_launcher_deadline_after_a_slow_start(tmp_path):
+    # The launcher has already run 100s (slow registration, probes): the watch
+    # may only use what is left before CODEX_WATCH_END_BY, not its full 90s.
+    names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_screen_up", "codex_watch_initial_task")
+    functions = "".join(_extract(name) for name in names)
+    script = (
+        "CODEX_WATCH_END_BY=105\nINJECTION_VERIFIED=false\n"
+        f"POLLS={shlex.quote(str(tmp_path / 'polls'))}\n"
+        "tmux() { :; }\n"
+        "codex_session_alive() { return 0; }\n"
+        "codex_initial_task_status() { echo unknown; }\n"
+        "spawn_note() { :; }\n"
+        # Each poll's sleep advances the launcher clock by what it sleeps.
+        'sleep() { [[ "$1" == 3 ]] && echo poll >> "$POLLS"; SECONDS=$((SECONDS + ${1%%.*})); }\n'
+        + functions
+        + "SECONDS=100\nstatus=0; codex_watch_initial_task Child task test /l id || status=$?\n"
+        'echo "STATUS=$status END=$SECONDS"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert "STATUS=3" in result.stdout, result.stdout + result.stderr
+    end = int(result.stdout.split("END=")[1])
+    assert end <= 105 + 3
+    assert (tmp_path / "polls").read_text().count("poll") <= 2

@@ -859,6 +859,22 @@ resolve_child_shell() {
 }
 CHILD_SHELL="$(resolve_child_shell)" || exit 1
 
+# How a Codex child's shell sets PATH before it runs codex: a login shell of
+# CHILD_SHELL (the user's profile may add nvm, nodebrew, ...) and ~/.local/bin in
+# front. Both Codex launch commands splice in this one string, and the codex
+# probes (--version, --help) run through run_like_codex_child, so a candidate is
+# judged under the PATH it will run with. Probing with the launcher's own PATH
+# rejected a codex whose `#!/usr/bin/env node` finds node only there (2026-09-29).
+CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+run_like_codex_child() {
+    "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
+}
+CODEX_PROBE_RUNNER=run_like_codex_child
+# The latest point, in seconds of this launcher's run, at which the Codex start
+# watch ends: the dashboard signals a launcher after 120s, and a poll plus the
+# final note need a few seconds after the deadline.
+CODEX_WATCH_END_BY=105
+
 # Per-user Node prefixes where `npm install -g @openai/codex` lands. The
 # dashboard runs under launchd / systemd with the minimal AGENTSTACK_PATH, so
 # without this list a NEW AGENT Codex spawn failed with "Codex CLI not found"
@@ -894,8 +910,18 @@ codex_search_path() {
 # --version) is skipped with its reason on stderr. An agent's own shell often
 # lacks AGENTSTACK_CODEX_BIN, and on WSL its PATH starts with /mnt/c, so the
 # old PATH fallback picked the Windows npm shim (2026-09-29).
+#
+# One spawn resolves once: prime_codex_bin runs in the launcher's own shell
+# before the approval probe and the launch, and both reuse its answer. Each
+# path is probed at most once, and all probes share one time budget, so an
+# unresponsive saved codex cannot eat the dashboard's 120 seconds.
 find_codex_bin() {
+    if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
+        printf '%s\n' "$CODEX_BIN_RESOLVED"
+        return 0
+    fi
     local codex_bin source problem
+    declare -F codex_probe_budget_start >/dev/null && codex_probe_budget_start
     for source in environment env.sh; do
         if [[ "$source" == environment ]]; then
             codex_bin="${AGENTSTACK_CODEX_BIN:-}"
@@ -905,6 +931,8 @@ find_codex_bin() {
             codex_bin=""
         fi
         [[ -n "$codex_bin" ]] || continue
+        [[ "${CODEX_JUDGED:-:}" != *":$codex_bin:"* ]] || continue
+        CODEX_JUDGED="${CODEX_JUDGED:-:}$codex_bin:"
         problem="$(codex_bin_problem "$codex_bin")"
         if [[ -z "$problem" ]]; then
             printf '%s\n' "$codex_bin"
@@ -913,6 +941,12 @@ find_codex_bin() {
         echo "note: skipping AGENTSTACK_CODEX_BIN from $source ($codex_bin): $problem" >&2
     done
     find_usable_codex_bin_in "$(codex_search_path)"
+}
+
+prime_codex_bin() {
+    [[ -n "${CODEX_BIN_PRIMED:-}" ]] && return 0
+    CODEX_BIN_RESOLVED="$(find_codex_bin)"
+    CODEX_BIN_PRIMED=1
 }
 
 resolve_codex_bin() {
@@ -934,7 +968,7 @@ codex_approval_flags() {
         return 0
     fi
     local status=0
-    help_text="$("$codex_bin" --help 2>/dev/null)" || status=$?
+    help_text="$(${CODEX_PROBE_RUNNER:-} "$codex_bin" --help 2>/dev/null)" || status=$?
     if [[ "$status" -ne 0 || -z "$help_text" ]]; then
         # The binary is on the path but could not answer. That says nothing
         # about which flags it takes, so it must not be read as "neither flag":
@@ -1408,8 +1442,12 @@ codex_watch_initial_task() {
     local status=unknown bound=false
     # Counted polls and wall-clock time both end the watch: the dialog handlers
     # sleep too, and the dashboard signals a launcher after 120s, whose exit
-    # trap would then remove the child this watch means to leave running.
+    # trap would then remove the child this watch means to leave running. So
+    # the watch also ends by CODEX_WATCH_END_BY seconds of this launcher's run,
+    # whatever came before it (registration, the codex probe budget, ...).
     local deadline=$((SECONDS + wait_max))
+    local end_by="${CODEX_WATCH_END_BY:-105}"
+    (( deadline > end_by )) && deadline=$end_by
     while (( waited < wait_max && SECONDS < deadline )); do
         sleep 3
         waited=$((waited + 3))
@@ -1975,6 +2013,7 @@ PY
     # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
     # kill-session`): without it, exiting this session can cascade-kill the whole
     # tmux server. Requires tmux >= 3.0.
+    prime_codex_bin
     TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
@@ -2041,7 +2080,7 @@ ${TASK}"
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
-                export PATH="$HOME/.local/bin:$PATH";
+                '"$CODEX_CHILD_PATH_SETUP"';
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
@@ -2808,6 +2847,7 @@ declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$WORK_DIR
 # shell exit hooks (e.g. a ~/.zshrc zshexit / bash trap that runs `tmux
 # kill-session`): without it, exiting this session can cascade-kill the tmux
 # server. Requires tmux >= 3.0.
+prime_codex_bin
 TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
@@ -2870,7 +2910,7 @@ if [[ "$USE_CODEX" == true ]]; then
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
-                export PATH="$HOME/.local/bin:$PATH";
+                '"$CODEX_CHILD_PATH_SETUP"';
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.
