@@ -127,7 +127,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    以前から Ubuntu に Codex が入っている場合も、`npm install -g @openai/codex@latest` で最新にしてください。古い版では GPT-6 系のモデルで起動した子が API に拒否されます（WSL で 0.153.4 は拒否、0.158.0 は応答）。
 7. **agent を起動する**（Ubuntu の中）。上の「最初の agent を起動する」と同じコマンドを打ちます。dashboard の jump は Windows Terminal（`wt.exe`、Windows 11 なら標準搭載）の新しいタブを開いて tmux に attach します。Windows Terminal が無い場合は Microsoft Store から入れてください。
 
-**窓を閉じても動き続けます。** Ubuntu の窓を全部閉じても、tmux の agent と dashboard は動き続けます。使い終わってメモリを返すときは、agent が作業していないことを確かめてから、PowerShell で `wsl --shutdown` を実行します。ssh からだけ使う場合は、最後の接続が切れると約15秒で止まります。詳しくは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-で-ubuntu-の窓を閉じたとき) を参照してください。
+**窓を閉じても動き続けます。** Ubuntu の窓を全部閉じても、tmux の agent と dashboard は動き続けます。使い終わって WSL を止めるときは、PowerShell で `wsl --shutdown` を実行します。これは他の distro も含めて WSL 全体をすぐに止めるので、agent と WSL 上の他の作業を保存・終了してから実行してください。Windows の SSH サーバー経由でだけ使う場合は、最後の接続が切れると約15秒で止まります。詳しくは [troubleshooting の WSL2 節](troubleshooting.md#wsl2-で-ubuntu-の窓を閉じたとき) を参照してください。
 
 ## 非対話で入れる（`--assume-yes`）
 

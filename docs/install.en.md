@@ -123,7 +123,7 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    If Codex was already installed in Ubuntu, update it too with `npm install -g @openai/codex@latest`: with an old release, a child started on a GPT-6 model is rejected by the API (on WSL, 0.153.4 was rejected and 0.158.0 answered).
 7. **Start an agent** (inside Ubuntu). Use the same commands as in "Starting the first agent" above. The dashboard's jump opens a new Windows Terminal (`wt.exe`, preinstalled on Windows 11) tab attached to the tmux session. If Windows Terminal is missing, install it from the Microsoft Store.
 
-**Closing the windows does not stop anything.** After every Ubuntu window is closed, the agents in tmux and the dashboard keep running. When you are done and want the memory back, make sure no agent is working and run `wsl --shutdown` in PowerShell. If you use WSL only over ssh, it stops about 15 seconds after the last connection closes. See the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-closing-the-ubuntu-windows).
+**Closing the windows does not stop anything.** After every Ubuntu window is closed, the agents in tmux and the dashboard keep running. When you are done and want WSL to stop, run `wsl --shutdown` in PowerShell. It stops all of WSL at once, other distros included, so first save and close the agents' work and anything else running in WSL. If you use WSL only through the Windows SSH server, it stops about 15 seconds after the last connection closes. See the [WSL2 section of troubleshooting](troubleshooting.en.md#on-wsl2-closing-the-ubuntu-windows).
 
 ## Non-interactive installation (`--assume-yes`)
 
