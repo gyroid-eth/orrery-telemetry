@@ -8,6 +8,19 @@
 
 ---
 
+## 2026.09.30
+
+### WSL で、Codex の子の起動の確定に毎回約90秒かかっていました（#117・#120）
+
+Codex の子は、task が始まったことを Codex の記録（receipt）で確かめてから起動を確定します。WSL では Codex の連携（lifecycle hooks）が入っていないことが多く、receipt が無いので、launcher が上限の90秒まで見張ってから「確認できない」と確定していました。子は動いていましたが、spawn の完了と次の操作がその間待たされました。
+
+- **連携を入れれば約7秒になります（根本の対処）。** `scripts/install-codex-app-integration.sh` が WSL でも動くようにしました。これまでは PATH の先頭にある Windows 側の `codex`（`/mnt/c/...`）を拾っていたので、core の installer と同じ規則（WSL では `/mnt` 配下を除き、`--version` に答えるものだけ）で選びます。macOS 以外では launchd の service を作らない `--no-service` が既定です。入れた後に Codex で一度 `/hooks` を開き、AgentStack の hooks を承認してください。手順と画面は [docs/codex-app.md](docs/codex-app.md) にあります。承認の後、長い task でも起動の確定は約7秒でした（実機で 7.1〜7.3 秒）
+- **連携が無い環境でも、短い task は早く確定します。** receipt が無いとき、子の画面に Codex の実行中の表示か応答の表示が出たら、そこで確定します（93秒 → 約10秒）。長い応答の途中で task の文面が画面の外に出ると、これまでどおり90秒待つことがあります（#118 で追跡中）
+
+### WSL で窓を閉じたときの説明を、実測に合わせました（#116）
+
+docs は「Windows Terminal を閉じると WSL が止まり、agent も止まる」と説明していましたが、これは ssh から起こした場合だけでした。デスクトップ（Windows Terminal など）から起こした tmux や dashboard は、窓を閉じても動き続けます。止めるには `wsl --shutdown` を使いますが、これはすべての distro を止めるので、その範囲も書き添えました。
+
 ## 2026.09.29
 
 ### Claude の子が、利用者向けの質問画面に答えずに60秒待って失敗していました（#110）
