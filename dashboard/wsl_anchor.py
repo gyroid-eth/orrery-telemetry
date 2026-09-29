@@ -18,17 +18,26 @@ real machine: a hidden `wsl.exe` started through interop with
 Work, for the 10/1 scope:
 - a live agent process (claude / codex / antigravity) in a tmux session,
   including one waiting for approval or a reply: only its exit ends it;
-- a dashboard launch that has not settled yet;
-- a cockpit viewer: a tmux control-mode client (`tmux -CC`), or a fresh
-  lease file under `<state>/leases/` (touched at least every LEASE_SECONDS).
+- a launch reservation under `<state>/reservations/`, made before a launch
+  starts (dashboard NEW AGENT, agent-start) and removed when it settles, or
+  expired after RESERVATION_SECONDS;
+- a visible ORRERY page (the dashboard, also inside the cockpit): the page
+  renews a lease under `<state>/leases/` while it is shown and drops it when
+  it is closed. A tmux control-mode client is not a viewer: the cockpit keeps
+  a recorder attached to every session whether or not anyone looks.
 The dashboard, Mail, the watcher and the anchor itself are never work, or the
 distro would never stop.
+
+When the work cannot be observed (tmux or ps fails, a file cannot be read),
+the last confirmed hold stands and the header says the state is unknown:
+losing live work is worse than keeping WSL up a little longer.
 
 Files under the state directory (`$AGENTSTACK_RUNTIME_DIR/wsl-anchor`):
 - `lock`        held (flock) by the running anchor for its whole life
 - `anchor.json` written by the anchor once it holds the lock (ready)
 - `wanted.json` written by the controller every tick: hold, lease end, pids
 - `status.json` the controller's view, for the header and doctor
+- `work.lock`   serialises a reservation against the controller's decision
 """
 
 from __future__ import annotations
@@ -53,6 +62,10 @@ GRACE_SECONDS = 60.0
 # dashboard dies, the anchor still holds while the recorded agents live.
 LEASE_SECONDS = 90.0
 READY_TIMEOUT_SECONDS = 20.0
+# A launch reservation that nobody removed (the launcher died) stops counting.
+RESERVATION_SECONDS = 180.0
+# A page lease is renewed every ~15 s while the page is visible.
+PAGE_LEASE_SECONDS = 45.0
 MAX_START_FAILURES = 3
 RETRY_AFTER_FAILURE_SECONDS = 300.0
 ANCHOR_POLL_SECONDS = 2.0
@@ -98,10 +111,106 @@ def process_start_ticks(pid: int) -> int | None:
         return None
 
 
+def process_state(pid: int, start_ticks: int | None) -> str:
+    """`alive`, `dead` (gone, or the PID now belongs to another process) or
+    `unknown` (/proc could not be read for another reason)."""
+    try:
+        raw = pathlib.Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, ProcessLookupError):
+        return "dead"
+    except (OSError, ValueError):
+        return "unknown"
+    try:
+        current = int(raw[raw.rindex(")") + 2:].split()[19])
+    except (ValueError, IndexError):
+        return "unknown"
+    if start_ticks is not None and current != start_ticks:
+        return "dead"
+    return "alive"
+
+
 def process_matches(pid: int, start_ticks: int | None) -> bool:
     """The same process is still alive: a recycled PID has another start time."""
-    current = process_start_ticks(pid)
-    return current is not None and (start_ticks is None or current == start_ticks)
+    return process_state(pid, start_ticks) == "alive"
+
+
+def _read_json_checked(path: pathlib.Path) -> dict | None:
+    """The JSON object in path, or None when it cannot be read or parsed."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _locked(directory: pathlib.Path):
+    """Exclusive flock on work.lock, as a context manager."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def guard():
+        directory.mkdir(parents=True, exist_ok=True)
+        fd = os.open(directory / "work.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    return guard()
+
+
+_TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+
+
+def reserve(directory: pathlib.Path, token: str) -> None:
+    """Record a launch that is about to start. Taken under work.lock, so a
+    controller deciding to release either sees it or has already released."""
+    if not _TOKEN.match(token):
+        raise ValueError(f"bad reservation token {token!r}")
+    with _locked(directory):
+        (directory / "reservations").mkdir(parents=True, exist_ok=True)
+        (directory / "reservations" / token).touch()
+
+
+def release_reservation(directory: pathlib.Path, token: str) -> None:
+    if not _TOKEN.match(token):
+        return
+    try:
+        (directory / "reservations" / token).unlink()
+    except OSError:
+        pass
+
+
+def _fresh(folder: pathlib.Path, ttl: float, now: float) -> int:
+    count = 0
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if now - entry.stat().st_mtime < ttl:
+                count += 1
+        except OSError:
+            continue
+    return count
+
+
+def touch_page_lease(directory: pathlib.Path, token: str, release: bool = False) -> bool:
+    if not _TOKEN.match(token):
+        return False
+    folder = directory / "leases"
+    if release:
+        try:
+            (folder / token).unlink()
+        except OSError:
+            pass
+        return True
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / token).touch()
+    return True
 
 
 def anchor_running(directory: pathlib.Path) -> bool:
@@ -135,8 +244,8 @@ def keep_holding(wanted: dict, now: float) -> bool:
             pid, ticks = int(entry[0]), entry[1]
         except (TypeError, ValueError, IndexError):
             continue
-        if process_matches(pid, ticks if isinstance(ticks, int) else None):
-            return True
+        if process_state(pid, ticks if isinstance(ticks, int) else None) != "dead":
+            return True  # alive, or cannot tell: never end work we cannot see
     return False
 
 
@@ -155,8 +264,16 @@ def hold(directory: pathlib.Path, nonce: str, poll: float = ANCHOR_POLL_SECONDS)
         "start_ticks": process_start_ticks(os.getpid()),
         "started": time.time(),
     })
+    # Until the controller's wishes can be read, hold for one lease.
+    last_good: dict = {"hold": True, "until": time.time() + LEASE_SECONDS, "pids": []}
     try:
-        while keep_holding(_read_json(directory / "wanted.json"), time.time()):
+        while True:
+            wanted = _read_json_checked(directory / "wanted.json")
+            if wanted is not None:
+                last_good = wanted
+            # An unreadable file keeps the last wishes; their lease still ends.
+            if not keep_holding(last_good, time.time()):
+                break
             time.sleep(poll)
     finally:
         if _read_json(ready).get("nonce") == nonce:
@@ -263,9 +380,10 @@ def start_windows_client(distro: str, argv: list[str], timeout: float = 30.0) ->
 class Controller:
     """Decides whether to hold, keeps one anchor while it should, reports why.
 
-    `work` returns (reasons, pids): reasons is a dict of counts such as
-    {"agents": 2, "launching": 1, "cockpit": 1}; pids is a list of
-    [pid, start_ticks] for the live agent processes.
+    `work` returns (reasons, pids, known): reasons is a dict of counts such
+    as {"agents": 2, "launching": 1}; pids is a list of [pid, start_ticks]
+    for the live agent processes; known is False when they could not be
+    observed. Launch reservations and page leases are counted here.
     """
 
     def __init__(self, work, directory: pathlib.Path, distro: str, anchor_argv,
@@ -282,6 +400,7 @@ class Controller:
         self.last_failure = 0.0
         self.error = ""
         self.windows_pid: int | None = None
+        self.last_pids: list = []
         self.wake = threading.Event()
 
     def _ready(self, nonce: str) -> bool:
@@ -309,20 +428,37 @@ class Controller:
         self.error = error or "the anchor did not report ready"
 
     def tick(self) -> dict:
-        now = self.clock()
-        reasons, pids = self.work()
-        reasons = {key: int(value) for key, value in reasons.items() if value}
-        if reasons:
-            self.last_busy = now
-        grace = self.last_busy is not None and now - self.last_busy < GRACE_SECONDS
-        holding = bool(reasons) or grace
-        _write_json(self.dir / "wanted.json", {
-            "hold": holding,
-            "until": now + LEASE_SECONDS if holding else now,
-            "pids": pids,
-            "reasons": reasons,
-            "updated": now,
-        })
+        # Observing and deciding happen under work.lock, so a launch reserved
+        # meanwhile is either counted here or reserved after this decision
+        # (and then wakes the controller, which starts a new anchor).
+        with _locked(self.dir):
+            now = self.clock()
+            reasons, pids, known = self.work()
+            reasons = {key: int(value) for key, value in reasons.items() if value}
+            real_now = time.time()  # file mtimes are wall-clock
+            launching = fresh_reservations(self.dir, real_now)
+            if launching:
+                reasons["launching"] = reasons.get("launching", 0) + launching
+            pages = fresh_leases(self.dir, real_now)
+            if pages:
+                reasons["pages"] = pages
+            if known:
+                self.last_pids = pids
+            else:
+                # Cannot see the agents: keep the last confirmed ones and hold.
+                reasons["unknown"] = 1
+                pids = self.last_pids
+            if reasons:
+                self.last_busy = now
+            grace = self.last_busy is not None and now - self.last_busy < GRACE_SECONDS
+            holding = bool(reasons) or grace
+            _write_json(self.dir / "wanted.json", {
+                "hold": holding,
+                "until": now + LEASE_SECONDS if holding else now,
+                "pids": pids,
+                "reasons": reasons,
+                "updated": now,
+            })
         running = anchor_running(self.dir)
         if holding and not running:
             self._start()
@@ -333,7 +469,10 @@ class Controller:
         if not running:
             self.windows_pid = None
         if holding and running:
-            state = "holding" if reasons else "releasing"
+            if "unknown" in reasons:
+                state = "unknown"
+            else:
+                state = "holding" if reasons else "releasing"
         elif holding:
             state = "failed"
         else:
@@ -360,25 +499,39 @@ class Controller:
                 self.tick()
             except Exception as exc:  # noqa: BLE001 - never kill the dashboard
                 print(f"wsl-anchor: tick failed: {exc}", file=sys.stderr, flush=True)
+                try:
+                    # Say so; the anchor keeps its last lease and known agents.
+                    _write_json(self.dir / "status.json", {
+                        "state": "error", "error": f"{type(exc).__name__}: {exc}",
+                        "reasons": {}, "updated": time.time(),
+                    })
+                except OSError:
+                    pass
             self.wake.wait(TICK_SECONDS)
             self.wake.clear()
 
+    def settled(self, since: float, timeout: float) -> dict:
+        """Wait until a tick after `since` reports holding or a failure."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status = _read_json(self.dir / "status.json")
+            if float(status.get("updated") or 0) >= since and status.get("state") in (
+                "holding", "unknown", "failed", "error",
+            ):
+                return status
+            self.wake.set()
+            time.sleep(0.2)
+        return _read_json(self.dir / "status.json")
+
 
 def fresh_leases(directory: pathlib.Path, now: float | None = None) -> int:
-    """Viewer leases (e.g. a cockpit page) touched within LEASE_SECONDS."""
-    now = time.time() if now is None else now
-    count = 0
-    try:
-        entries = list((directory / "leases").iterdir())
-    except OSError:
-        return 0
-    for entry in entries:
-        try:
-            if now - entry.stat().st_mtime < LEASE_SECONDS:
-                count += 1
-        except OSError:
-            continue
-    return count
+    """Visible ORRERY pages: leases renewed within PAGE_LEASE_SECONDS."""
+    return _fresh(directory / "leases", PAGE_LEASE_SECONDS, time.time() if now is None else now)
+
+
+def fresh_reservations(directory: pathlib.Path, now: float | None = None) -> int:
+    """Launches that have not settled, up to RESERVATION_SECONDS old."""
+    return _fresh(directory / "reservations", RESERVATION_SECONDS, time.time() if now is None else now)
 
 
 def main(argv: list[str]) -> int:

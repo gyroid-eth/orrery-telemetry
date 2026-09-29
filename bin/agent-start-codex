@@ -46,6 +46,7 @@ unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENT
   AGENTSTACK_CODEX_LAUNCH_KIND 2>/dev/null || true
 
 SESSION="codex-pending-$$"
+declare -F ags_wsl_reserve_launch >/dev/null && ags_wsl_reserve_launch agent-start
 
 # Assemble codex flags. OPENAI_API_KEY is stripped because Codex uses ChatGPT
 # OAuth; an API key present in the environment overrides and breaks it.

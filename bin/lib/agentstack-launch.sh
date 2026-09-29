@@ -35,6 +35,18 @@ ags_resolve_tmux() {
   command -v tmux 2>/dev/null || true
 }
 
+# WSL: a launch reservation keeps the distro held by the dashboard's anchor
+# while this agent starts (dashboard/wsl_anchor.py), even if the window that
+# started it closes before the agent process is up. It expires by itself after
+# a few minutes; by then the running agent is what holds. No-op elsewhere or
+# when the anchor is off.
+ags_wsl_reserve_launch() {
+  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null || return 0
+  [[ "${AGENTSTACK_WSL_ANCHOR:-1}" != "0" ]] || return 0
+  local dir="${AGENTSTACK_RUNTIME_DIR:-${AGENTSTACK_HOME:-$HOME/.agentstack}/runtime}/wsl-anchor/reservations"
+  mkdir -p "$dir" 2>/dev/null && : > "$dir/$1-$$" 2>/dev/null || true
+}
+
 ags_abspath() { (cd "$1" 2>/dev/null && pwd) || return 1; }
 
 # fzf one-level directory navigator rooted at $AGENTSTACK_BASE_DIR.

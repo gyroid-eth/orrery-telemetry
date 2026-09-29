@@ -862,6 +862,10 @@ if age > 60:
 elif state == "failed":
     print(f"warn: WSL anchor: cannot keep WSL running for the agents: {s.get('error') or 'unknown error'}")
     print("      keep an Ubuntu window open while agents work; the dashboard retries on its own")
+elif state == "error":
+    print(f"warn: WSL anchor: the hold check fails: {s.get('error') or 'unknown error'}; the anchor keeps its last hold")
+elif state == "unknown":
+    print("warn: WSL anchor: cannot tell which agents run (tmux or ps did not answer); keeping WSL for the agents last seen")
 elif state == "holding":
     print(f"ok: WSL anchor: keeping WSL running for {reasons} (Windows wsl.exe PID {s.get('windows_pid') or '?'}); WSL stops by itself after they finish")
 elif state == "releasing":

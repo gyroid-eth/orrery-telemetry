@@ -159,9 +159,13 @@ WSL は、Windows 側の最後の client（`wsl.exe`、Windows Terminal の Ubun
 
 **dashboard は、agent が働いている間だけ WSL を動かし続けます。** 仕事があるあいだ、Windows 側に隠れた `wsl.exe` を1つ持ち、仕事が無くなるとそれを自分で終わらせます。そのあとは WSL の既定どおり、窓が1つも無ければ約15秒で止まります。利用者が `wsl --shutdown` を打つ必要はなく、Windows の `.wslconfig` も変更しません。
 
-- **保持する間**: agent の process（claude / codex / antigravity）が tmux の中で動いている間。承認待ち・返答待ちでも process が生きていれば保持します。dashboard からの起動が済むまでの間と、cockpit が pane を開いている間（tmux の control client、または `~/.agentstack/runtime/wsl-anchor/leases/` の新しい lease）も保持します
-- **保持しないもの**: dashboard・Mail・watcher・anchor 自身。これを数えると WSL が止まらなくなるためです
-- **解除**: 上のどれも無い状態が60秒続いたら、保持をやめます。保持しているあいだは header に `WSL kept · 2 agents` のように理由を出し、解除までの60秒は `WSL idle · stops in 42s`、解除後は表示を消します
+- **保持する間**: agent の process（claude / codex / antigravity）が tmux の中で動いている間。承認待ち・返答待ちでも process が生きていれば保持します
+- **起動中**: dashboard の NEW AGENT と `agent-start` / `agent-start-codex` は、起動を始める前に予約を置きます。dashboard は保持が始まる（または失敗が分かる）のを待ってから起動します。予約は起動が済むと外れ、残っても3分で失効します
+- **画面を見ている間**: dashboard のページ（cockpit の中に表示されたものを含む）が表示されている間は保持します。ページが隠れる・閉じると外れます
+- **保持しないもの**: dashboard・Mail・watcher・anchor 自身と、tmux の control client。cockpit は誰も見ていなくても全 session に記録用の接続を持つので、これを数えると WSL が止まらなくなります
+- **確かめられないとき**: tmux や ps が答えないときは「全部終わった」とは扱わず、最後に確認できた agent のために保持を続けます。header には `WSL kept · state unknown` と出ます
+- **解除**: 上のどれも無い状態が60秒続いたら、保持をやめます。保持しているあいだは header に `WSL kept · 2 agents` のように理由を出し、解除までの60秒は `WSL hold ends in 42s`、解除後は表示を消します。保持をやめても、他の窓やプログラムが WSL を使っていれば WSL は止まりません
+- **状態の鮮度**: 保持の状態が30秒以上更新されないと、header は `WSL status stale` を出します
 - **故障時**: 隠れた `wsl.exe` が早く終わったら、dashboard が数秒のうちに起動し直します（失敗が3回続いたら5分待ってから再試行）。起動できないときは header に `WSL not kept` と理由を出します。この間は Ubuntu の窓を1つ開けておいてください。dashboard が落ちても、anchor は最後に知らされた agent の process が生きている間は保持を続けます
 - **止まったあとの再開**: WSL が止まると dashboard も止まります。Windows Terminal で Ubuntu を開き、いつもの手順で dashboard を起動してください
 - **確認**: `agentstack-doctor` が保持の状態（理由・Windows 側の PID・更新時刻）を出します

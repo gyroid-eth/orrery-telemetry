@@ -36909,17 +36909,29 @@ function wslAnchorView(d){
   const why=[];
   if(r.agents) why.push(r.agents+(r.agents===1?' agent':' agents'));
   if(r.launching) why.push(r.launching+' starting');
-  if(r.cockpit) why.push('cockpit open');
-  switch(d&&d.state){
+  if(r.pages) why.push('page open');
+  const state=d&&d.state;
+  // A status nobody renewed says nothing about now.
+  if(['holding','releasing','unknown','failed'].includes(state)&&d.age>30){
+    return {show:true,status:'red',label:'WSL status stale',
+      title:'The dashboard has not updated the WSL hold for '+d.age+'s. Keep an Ubuntu window open while agents work.'};
+  }
+  switch(state){
     case 'holding':
       return {show:true,status:'green',label:'WSL kept · '+(why.join(' · ')||'working'),
-        title:'ORRERY keeps WSL running while agents work, so closing the Ubuntu windows does not stop them. It lets WSL stop by itself when they are done.'};
+        title:'ORRERY keeps WSL running while agents work, so closing the Ubuntu windows does not stop them. It lets go when they are done.'};
     case 'releasing':
-      return {show:true,status:'yellow',label:'WSL idle · stops in '+(d.grace_seconds_left||0)+'s',
-        title:'No agent is running. ORRERY stops keeping WSL after a short wait; WSL then stops by itself once no window is open.'};
+      return {show:true,status:'yellow',label:'WSL hold ends in '+(d.grace_seconds_left||0)+'s',
+        title:'No agent is running. ORRERY stops keeping WSL after a short wait. WSL itself stops only if no window or other program still uses it.'};
+    case 'unknown':
+      return {show:true,status:'yellow',label:'WSL kept · state unknown',
+        title:'Could not read which agents are running (tmux or ps did not answer). WSL stays kept for the agents last seen until it can tell.'};
     case 'failed':
       return {show:true,status:'red',label:'WSL not kept',
         title:'Could not keep WSL running: '+(d.error||'unknown error')+'. Keep an Ubuntu window open while agents work.'};
+    case 'error':
+      return {show:true,status:'red',label:'WSL hold error',
+        title:'The WSL hold check failed: '+(d.error||'unknown error')+'. Keep an Ubuntu window open while agents work.'};
     default:
       return {show:false,status:'unknown',label:'WSL',title:'WSL'};
   }
@@ -36939,6 +36951,20 @@ async function wslAnchorTick(){
 }
 wslAnchorTick();
 setInterval(()=>{ if(document.hidden||netSuspended)return; wslAnchorTick(); },5000);
+// While this page is shown, it counts as ORRERY being used (WSL only; the
+// server ignores it elsewhere). Hidden or closed, the lease lapses or goes.
+const WSL_PAGE_ID=Math.random().toString(36).slice(2,14);
+function wslPageLease(release){
+  try{
+    fetch('/api/wsl-anchor/lease',{method:'POST',keepalive:true,
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:WSL_PAGE_ID,release:!!release})}).catch(()=>{});
+  }catch(e){}
+}
+if(!document.hidden) wslPageLease(false);
+setInterval(()=>{ if(!document.hidden) wslPageLease(false); },15000);
+document.addEventListener('visibilitychange',()=>wslPageLease(document.hidden));
+window.addEventListener('pagehide',()=>wslPageLease(true));
 
 // ── account usage left (GET /api/quotas) ───────────────────────
 // The quota layer (dashboard/quotas, contributed in #31) answers with one

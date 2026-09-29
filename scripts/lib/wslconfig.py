@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the WSL idle settings from a Windows `.wslconfig`, read-only.
+r"""Read the WSL idle settings from a Windows `.wslconfig`, read-only.
 
 ORRERY no longer writes this file: the dashboard keeps the distro running
 while agents work (dashboard/wsl_anchor.py). An earlier install, or the user,
@@ -37,7 +37,9 @@ INT32 = (-(2**31), 2**31 - 1)
 
 _SECTION = re.compile(r"^\[([A-Za-z][A-Za-z0-9._-]*)\]\s*(?:#.*)?$")
 _ENTRY = re.compile(r"^([A-Za-z][A-Za-z0-9._]*)\s*=\s*(.*?)\s*$")
-_INTEGER = re.compile(r"^-?[0-9]+$")
+# WSL reads the value with strtol(base 0): a leading 0 means octal, so only
+# plain decimals are taken as known; `010`, `-08` and the like are unknown.
+_INTEGER = re.compile(r"^-?(0|[1-9][0-9]*)$")
 
 
 def _decode(data: bytes) -> str | None:

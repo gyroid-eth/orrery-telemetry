@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
 import importlib.util
 import json
 import logging
@@ -5650,8 +5651,6 @@ def _spawn_launch_record(name: str, result: dict) -> None:
     else:
         state = "failed"
     now = time.time()
-    if state == "launching":
-        _wsl_anchor_wake()  # hold before the launch settles, not a tick later
     with _SPAWN_LAUNCHES_LOCK:
         for stale in [k for k, v in _SPAWN_LAUNCHES.items()
                       if now - v["ts"] > _SPAWN_LAUNCH_RETENTION]:
@@ -5663,6 +5662,8 @@ def _spawn_launch_record(name: str, result: dict) -> None:
             "state": state,
             "result": result,
         }
+    if state != "launching":
+        _wsl_anchor_settle(name)
 
 
 def spawn_launch_status(name: str) -> dict:
@@ -7269,7 +7270,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path not in ("/api/jump", "/api/kill", "/api/exit",
                         "/api/annotate", "/api/spawn", "/api/reactivate",
-                        "/api/jserr"):
+                        "/api/jserr", "/api/wsl-anchor/lease"):
             self._send(404, b"not found", "text/plain")
             return
 
@@ -7340,7 +7341,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/jserr":
             result = _log_js_error(body)
         elif path == "/api/spawn":
-            result = do_spawn(body)
+            result = do_spawn_held(body)
+        elif path == "/api/wsl-anchor/lease":
+            result = wsl_anchor_page_lease(body)
         elif path == "/api/reactivate":
             result = do_reactivate(session)
         else:
@@ -7497,37 +7500,59 @@ def _wsl_anchor_module():
 _WSL_ANCHOR: dict = {"controller": None}
 
 
-def _wsl_anchor_work() -> tuple[dict, list]:
+def _tmux_observed(args: list[str]) -> str | None:
+    """tmux output, "" when no server runs (nothing to see), None on failure.
+
+    `_tmux` returns "" for both, and a failed observation must not read as
+    "every agent has exited".
+    """
+    try:
+        out = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5)
+    except FileNotFoundError:
+        return ""  # no tmux at all: no agent can be running in it
+    except Exception:  # noqa: BLE001 - timeout and the like: unknown
+        return None
+    if out.returncode == 0:
+        return out.stdout
+    err = (out.stderr or "").lower()
+    if "no server running" in err or "error connecting" in err:
+        return ""
+    return None
+
+
+def _wsl_anchor_work() -> tuple[dict, list, bool]:
     """What keeps the distro running now (see dashboard/wsl_anchor.py).
 
     A live claude / codex / antigravity process in any pane of any tmux
     session except infra and warm-up pools. Only the process's exit ends it,
     so an agent waiting for approval or a reply keeps holding. The dashboard,
-    Mail and the watcher are not work.
+    Mail, the watcher and tmux control clients (the cockpit's recorders
+    attach to every session whether anyone looks or not) are not work.
+    Launch reservations and page leases are counted by the controller.
+    Returns known=False when tmux or ps could not be read.
     """
     anchor = _wsl_anchor_module()
+    fmt = SEP.join(["#{session_name}", "#{pane_pid}"])
+    panes = _tmux_observed(["list-panes", "-a", "-F", fmt])
+    if panes is None:
+        return {}, [], False
+    rows = [parts for parts in (_split_tmux_fields(line) for line in panes.splitlines())
+            if len(parts) >= 2 and parts[0] not in INFRA_NAMES and parts[0] not in WARMUP_NAMES]
+    if not rows:
+        return {"agents": 0}, [], True
     tree = _process_tree_snapshot()
+    if tree is None:
+        return {}, [], False
     pids: list = []
     seen: set[int] = set()
-    fmt = SEP.join(["#{session_name}", "#{pane_pid}"])
-    for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
-        parts = _split_tmux_fields(line)
-        if len(parts) < 2 or parts[0] in INFRA_NAMES or parts[0] in WARMUP_NAMES:
-            continue
+    for parts in rows:
         for program in ("claude", "codex", "antigravity"):
             pid = _agent_process_pid(parts[1], tree, program)
             if pid and pid not in seen:
                 seen.add(pid)
                 pids.append([pid, anchor.process_start_ticks(pid)])
                 break
-    with _SPAWN_LAUNCHES_LOCK:
-        launching = sum(1 for v in _SPAWN_LAUNCHES.values() if v["state"] == "launching")
-    viewers = sum(
-        1 for mode in _tmux(["list-clients", "-F", "#{client_control_mode}"]).split()
-        if mode == "1"
-    )
-    viewers += anchor.fresh_leases(anchor.state_dir())
-    return {"agents": len(pids), "launching": launching, "cockpit": viewers}, pids
+    return {"agents": len(pids)}, pids, True
 
 
 def wsl_anchor_status() -> dict:
@@ -7540,13 +7565,77 @@ def wsl_anchor_status() -> dict:
     if _WSL_ANCHOR["controller"] is None:
         return {"ok": True, "state": "stopped"}
     status = anchor._read_json(anchor.state_dir() / "status.json")
-    return {"ok": True, **status} if status else {"ok": True, "state": "starting"}
+    if not status:
+        return {"ok": True, "state": "starting"}
+    # The header must not keep showing an old "kept" when ticks stopped.
+    age = max(0, round(time.time() - float(status.get("updated") or 0)))
+    return {"ok": True, **status, "age": age}
 
 
-def _wsl_anchor_wake() -> None:
+@contextlib.contextmanager
+def _wsl_anchor_launch():
+    """Hold WSL for a launch before it starts, until it settles.
+
+    Under WSL with the anchor on: reserve, then wait (bounded) until the
+    controller has either an anchor holding or a reported failure, so the
+    launch never runs with nothing keeping the distro. Yields the
+    reservation token (None when not applicable); the caller may hand it on
+    to an asynchronous launch instead of releasing it here.
+    """
     controller = _WSL_ANCHOR["controller"]
-    if controller is not None:
+    if controller is None:
+        yield None
+        return
+    anchor = _wsl_anchor_module()
+    token = f"spawn-{secrets.token_hex(6)}"
+    since = time.time()
+    anchor.reserve(controller.dir, token)
+    handed = {"on": False}
+    try:
         controller.wake.set()
+        controller.settled(since, anchor.READY_TIMEOUT_SECONDS + 15)
+        yield (token, handed)
+    finally:
+        if not handed["on"]:
+            anchor.release_reservation(controller.dir, token)
+
+
+_WSL_ANCHOR_ASYNC: dict[str, str] = {}
+
+
+def _wsl_anchor_settle(name: str) -> None:
+    token = _WSL_ANCHOR_ASYNC.pop(name, None)
+    controller = _WSL_ANCHOR["controller"]
+    if token and controller is not None:
+        _wsl_anchor_module().release_reservation(controller.dir, token)
+
+
+def do_spawn_held(payload: dict) -> dict:
+    """do_spawn, with WSL held from before the launch until it settles."""
+    with _wsl_anchor_launch() as reservation:
+        result = do_spawn(payload)
+        if reservation and result.get("pending") and result.get("name"):
+            token, handed = reservation
+            # An asynchronous launch settles later: _spawn_launch_record
+            # releases the reservation then (or it expires).
+            _WSL_ANCHOR_ASYNC[str(result["name"])] = token
+            handed["on"] = True
+            state = _SPAWN_LAUNCHES.get(str(result["name"]), {}).get("state")
+            if state and state != "launching":
+                _wsl_anchor_settle(str(result["name"]))
+        return result
+
+
+def wsl_anchor_page_lease(body: dict) -> dict:
+    """A visible ORRERY page renews its lease; closing it drops the lease."""
+    controller = _WSL_ANCHOR["controller"]
+    if controller is None:
+        return {"ok": True, "active": False}
+    token = str(body.get("id") or "")
+    ok = _wsl_anchor_module().touch_page_lease(controller.dir, f"page-{token}", bool(body.get("release")))
+    if ok and not body.get("release"):
+        controller.wake.set()
+    return {"ok": ok, "active": True} if ok else {"ok": False, "error": "bad lease id"}
 
 
 def _start_wsl_anchor() -> None:

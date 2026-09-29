@@ -144,9 +144,13 @@ By default WSL stops a distro about 15 seconds after its last Windows-side clien
 
 **The dashboard keeps WSL running while agents work, and only then.** While there is work it keeps one hidden `wsl.exe` on the Windows side and ends it by itself once the work is gone; WSL then stops as usual, about 15 seconds after the last window closes. Nobody has to run `wsl --shutdown`, and the Windows `.wslconfig` is not changed.
 
-- **Held while**: an agent process (claude / codex / antigravity) runs in tmux, including one waiting for approval or a reply; a dashboard launch has not settled; the cockpit has a pane open (a tmux control client, or a fresh lease under `~/.agentstack/runtime/wsl-anchor/leases/`)
-- **Not counted**: the dashboard, Mail, the watcher and the anchor itself; counting them would keep WSL up forever
-- **Release**: after 60 seconds with none of the above. While held, the header shows why (`WSL kept · 2 agents`); during the 60 seconds it shows `WSL idle · stops in 42s`; afterwards it disappears
+- **Held while**: an agent process (claude / codex / antigravity) runs in tmux, including one waiting for approval or a reply
+- **While starting**: the dashboard's NEW AGENT and `agent-start` / `agent-start-codex` put a reservation down before they start. The dashboard waits until the hold is in place (or has visibly failed) before launching. A reservation goes when the launch settles and expires after three minutes at the latest
+- **While a page is shown**: a visible dashboard page (also inside the cockpit) holds; hiding or closing it lets go
+- **Not counted**: the dashboard, Mail, the watcher, the anchor itself and tmux control clients. The cockpit keeps a recorder attached to every session whether anyone looks or not, so counting those would keep WSL up forever
+- **When it cannot tell**: if tmux or ps does not answer, that is not read as "everything exited"; the hold stays for the agents last seen, and the header says `WSL kept · state unknown`
+- **Release**: after 60 seconds with none of the above. While held, the header shows why (`WSL kept · 2 agents`); during the 60 seconds it shows `WSL hold ends in 42s`; afterwards it disappears. Ending the hold does not stop WSL while another window or program still uses it
+- **Freshness**: if the hold state has not been updated for 30 seconds, the header shows `WSL status stale`
 - **Failures**: if the hidden `wsl.exe` ends early, the dashboard starts it again within seconds (after three failures in a row it waits five minutes). If it cannot, the header shows `WSL not kept` with the reason; keep one Ubuntu window open meanwhile. If the dashboard dies, the anchor keeps holding while the agent processes it last heard about are alive
 - **After WSL stops**: the dashboard stops with it. Open Ubuntu in Windows Terminal and start the dashboard as usual
 - **Checking**: `agentstack-doctor` shows the state (reasons, Windows PID, last update)
