@@ -138,22 +138,25 @@ systemctl --user daemon-reload
 
 In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
 
-### On WSL2 the services vanish when the last shell closes
+### On WSL2, closing the Ubuntu windows
 
-WSL2 stops the distro's VM once no session is open, taking the `nohup`-started Mail and dashboard with it. On top of that, without linger the systemd user manager exits at the last logout. To keep them resident, set both (checked on Ubuntu 26.04 / WSL 2.7):
+**What you start from a desktop window (Windows Terminal and the like) keeps running after every window is closed.** Agents in tmux, the dashboard and Mail do not stop (checked on WSL 2.7.13: still Running more than 90 seconds after the last window closed). The window that started them leaves a `wslhost.exe` on the Windows side, and that keeps WSL running. Meanwhile WSL keeps using memory.
 
-```bash
-# inside WSL: keep systemd --user alive after logout
-loginctl enable-linger "$USER"
+When you are done and want the memory back, make sure no agent is working, then run this in PowerShell. It stops the agents in tmux, the dashboard and Mail too.
+
+```powershell
+wsl --shutdown
 ```
 
-```ini
-# Windows side, %UserProfile%\.wslconfig: do not stop the VM when idle
-[wsl2]
-vmIdleTimeout=-1
-```
+The next time Ubuntu opens, the Mail timer brings Mail back one minute after boot; bring the dashboard back by re-running `install.sh`.
 
-Then run `wsl --shutdown` once and reopen. The Mail timer restarts Mail one minute after boot; bring the dashboard back by re-running `install.sh`.
+**The exception: using WSL only over ssh.** What you start after coming in over ssh is cleaned up together with its `wslhost.exe` when the ssh connection ends. WSL then stops about 15 seconds after the last connection closes, and the agents and the dashboard stop with it (also checked on WSL 2.7.13). If you use WSL only over ssh, keep one Ubuntu window open on the Windows side while agents work.
+
+Notes:
+
+- To keep the systemd user manager (the Mail timer and watcher) after logout, run `loginctl enable-linger "$USER"` inside WSL
+- `[wsl2] vmIdleTimeout=-1` in `.wslconfig`, which this section used to recommend, is not needed. It keeps the VM running after the distros stop, so the memory is not returned. To drop it, delete that line and run `wsl --shutdown` once
+- Not verified (hypothesis): something started as a systemd user service is not a descendant of a window, so it leaves no `wslhost.exe` and should stop when every window closes. The installer currently starts the dashboard with nohup on WSL, so this does not normally apply
 
 If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
 
