@@ -31,7 +31,7 @@ If the child runs outside the project directory, explicitly tell it to use `$PRO
 - Do not use `create_agent_identity` for delegate children.
 - Delegate children are registered by the preregistration helper (`agentstack-preregister-child`, section 3), which calls `ensure_project` and `register_agent(name=<Adjective-Scientist>, program=...)` itself. You do not call those tools. The name has no `cc-` or `cx-` prefix; the program type is recorded in `program`.
 - Generate names through the stack picker (`bin/lib/agentstack-register.sh` or `spawn_child.sh`) so the suffix matches a bundled dashboard scientist portrait.
-- After spawning, verify the tmux session name, dashboard entry, and inbox-read startup all refer to the registered child name.
+- After spawning, verify that the name the helper returned, the tmux session name and the dashboard entry all match, and later that the completion message comes from that name. A child started with `--embed-task` does not read its inbox at startup, so there is no startup fetch to check.
 
 ## Usage
 

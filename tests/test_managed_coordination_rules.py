@@ -292,3 +292,9 @@ def test_delegate_skill_says_what_to_do_when_contact_policy_is_unknown():
     assert "you usually **cannot confirm** either side's policy" in skill
     assert "**Unknown (the usual case), or both open:** proceed with the spawn." in skill
     assert "Do not change your own or the child's `contact_policy` on your own" in skill
+
+
+def test_delegate_naming_checklist_does_not_expect_a_startup_inbox_read():
+    skill = _read("skills/delegate/SKILL.md")
+    assert "inbox-read startup" not in skill
+    assert "there is no startup fetch to check" in skill
