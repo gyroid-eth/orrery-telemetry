@@ -1,7 +1,7 @@
 ---
 name: delegate
 description: Delegate a bounded task to a child Claude or Codex agent, prepare risk-aware instructions, spawn the child, annotate it in the dashboard, monitor progress, and verify completion.
-allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__orrery-mail__send_message, mcp__orrery-mail__fetch_inbox, mcp__orrery-mail__register_agent, mcp__orrery-mail__ensure_project, mcp__orrery-mail__set_contact_policy, mcp__orrery-mail__macro_contact_handshake, mcp__orrery-mail__respond_contact, mcp__orrery-mail__file_reservation_paths, mcp__orrery-mail__release_file_reservations, mcp__orrery-mail__renew_file_reservations
+allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__orrery-mail__send_message, mcp__orrery-mail__fetch_inbox, mcp__orrery-mail__set_contact_policy, mcp__orrery-mail__macro_contact_handshake, mcp__orrery-mail__respond_contact, mcp__orrery-mail__file_reservation_paths, mcp__orrery-mail__release_file_reservations, mcp__orrery-mail__renew_file_reservations
 user-invocable: true
 ---
 
@@ -23,15 +23,15 @@ Use these variables instead of hard-coded personal paths:
 - `AGENTSTACK_SPAWN_SCRIPT`, defaulting to `${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}`
 - `AGENTSTACK_RUNTIME_DIR`, used by monitor state
 
-If the child runs outside the project directory, explicitly tell it to use `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY` for `ensure_project`, `register_agent`, `fetch_inbox`, and completion messages. Do not let the child infer the project from its current working directory.
+If the child runs outside the project directory, explicitly tell it to use `$PROJECT_KEY` or `$AGENTSTACK_PROJECT_KEY` wherever an ORRERY Mail call takes a project key, and in its completion message. Do not let the child infer the project from its current working directory. (A child launched with `--embed-task` is already registered and does not call `ensure_project` or `register_agent` at all.)
 `AGENTSTACK_PROJECT_KEY` must be set before spawning. It is the ORRERY Mail project identity and may be different from the code worktree or the child's current working directory.
 
 ## Naming Rules
 
 - Do not use `create_agent_identity` for delegate children.
-- Delegate children must be explicitly registered with `register_agent(name=<Adjective-Scientist>, program=...)`. The name has no `cc-` or `cx-` prefix; the program type is recorded in `program`.
+- Delegate children are registered by the preregistration helper (`agentstack-preregister-child`, section 3), which calls `ensure_project` and `register_agent(name=<Adjective-Scientist>, program=...)` itself. You do not call those tools. The name has no `cc-` or `cx-` prefix; the program type is recorded in `program`.
 - Generate names through the stack picker (`bin/lib/agentstack-register.sh` or `spawn_child.sh`) so the suffix matches a bundled dashboard scientist portrait.
-- After spawning, verify the tmux session name, dashboard entry, and inbox-read startup all refer to the registered child name.
+- After spawning, verify that the name the helper returned, the tmux session name and the dashboard entry all match, and later that the completion message comes from that name. A child started with `--embed-task` does not read its inbox at startup, so there is no startup fetch to check.
 
 ## Usage
 
@@ -120,11 +120,28 @@ Use generic task examples such as code review, API migration, test-suite repair,
 
 ## 3. Register, Open Contact, Reserve, And Spawn
 
-Preferred flow: do the coordination through MCP tools first, then let `spawn_child.sh` create the tmux session.
+### Who does what
+
+Registering a child is a separate identity's lifecycle, not a re-registration of
+yourself. The rules against running a helper, registering again or reading a
+token file are about **your own** identity; they never forbid pre-registering a
+child.
+
+| Operation | Route |
+| --- | --- |
+| Your own messages, `whois` and reservations | The ORRERY Mail connection you were given. With a bound proxy, use its tools exactly as their schema says; do not add caller identity, project or token fields |
+| Registering the new child identity | The shell helper `agentstack-preregister-child` (below). It registers the child with its own new token inside the helper; you never see or pass a token, and it does not use your proxy |
+| Starting the child | `spawn_child.sh --pre-registered <name> --child-token-file ... --embed-task --task-file ...` |
+| Re-registering yourself | Never as part of delegation. If your own proxy fails, report that; do not switch to a helper or raw tools for yourself |
+| Contact approval for a restrictive policy | Only when it is actually needed (step 4), through the contact tools you have or the operator |
+
+**What this skill needs:** a shell (for the helper and the launcher) and your
+own send/fetch connection. A bound proxy that has no `register_agent`,
+`ensure_project` or contact tools is the normal case and is **not** a reason to
+stop: the helper does the registration.
 
 This is the canonical flow, not one option among interchangeable transports.
-If the required ORRERY Mail tools or preregistration helper are unavailable, use
-only the documented registration recovery path. If it cannot restore the flow,
+If the preregistration helper or the launcher is missing or fails,
 report the exact failure and stop delegation. Do not inspect mailbox files or
 the ORRERY Mail database, start an ad hoc watcher/poll loop, inject the task into
 tmux, use a built-in child tool, or invoke the launcher's direct mode as a
@@ -150,7 +167,10 @@ substitute.
    The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
    For a Codex child, pass `--program "codex" --model "<formal gpt-* ID>"`, using the full model id the user's shorthand expands to (see "How to read the arguments"). Do not pass `--name` just because the user typed a word you do not recognize.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
-4. Ensure the child can send its completion report to the parent. The stack registration helper sets the child's `contact_policy` to `open` by default. If either side uses a restrictive contact policy, complete a contact handshake or approval before spawning.
+4. Contact policy. The registration helper sets the child's `contact_policy` to `open` by default, but that is best effort and an environment override can change it, and `whois` does not show policies. So you usually **cannot confirm** either side's policy before spawning. That is not a reason to stop:
+   - **You know a side is restrictive** (the user or operator said so, or an earlier message to or from this child was rejected by contact policy): complete a contact handshake or approval before spawning, with the contact tools you have or through the operator.
+   - **Unknown (the usual case), or both open:** proceed with the spawn. Missing contact tools are not a reason to stop.
+   - **A message is actually rejected by contact policy** (the child reports it cannot reach you, or your send fails with a contact-policy error): report that exact error to the operator and resolve it through a handshake or approval. Do not change your own or the child's `contact_policy` on your own, and do not switch to another transport.
 5. Reserve file paths if the task edits shared resources.
 6. Write the complete task to a mode `0600` temporary file without shell interpolation. A quoted heredoc delimiter keeps backticks and `$()` literal:
 
@@ -360,7 +380,7 @@ Codex children differ from Claude Code children in a few operational details:
 - Codex may use a different REPL prompt, so monitor logic must avoid treating a visible input prompt as proof of completion.
 - Instructions, follow-ups and corrections go to the child over `send_message`, never by typing into its pane: keystrokes can land in the input box without submitting, nothing records that they arrived, and a human then has to press Enter for you. The only pane keystroke the parent sends is `/compact` (section 6), as text and `C-m` in separate calls.
 - Codex may be sandboxed differently from Claude Code; include test commands and allowed paths explicitly in the task.
-- The child must still read its inbox and treat the inbox task as canonical.
+- With `--embed-task` (this skill's flow) the launch prompt is the canonical task, exactly as for a Claude child: there is no startup inbox ritual. The child reads its inbox later only when it is told a message is waiting, or when the task needs it. Reservations taken through your proxy belong to you; a child that edits files takes its own.
 
 ## 9. Shared Resource Coordination
 

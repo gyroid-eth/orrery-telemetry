@@ -1532,13 +1532,18 @@ def test_d12_selected_parity_source_order_exposes_external_application_seam() ->
             re.escape('state_should_attempt "$agent_name" "$msg_key"'), handler
         )
     ]
-    assert len(should_attempts) == 2
+    # Before the worker wait, after it, and once more after the lease: a
+    # previous worker can record success and free the lease in between.
+    assert len(should_attempts) == 3
     worker_wait = handler.index(
         'while [ "$(jobs -p 2>/dev/null | wc -l | tr -d \' \')" -ge "$MAX_WORKERS" ]'
     )
     acquire = handler.index('acquire_delivery_lease "$agent_name" "$msg_key"')
     worker = handler.index('deliver_worker "$signal_file" "$agent_name" "$msg_key"')
-    assert should_attempts[0] < worker_wait < should_attempts[1] < acquire < worker
+    assert (
+        should_attempts[0] < worker_wait < should_attempts[1] < acquire
+        < should_attempts[2] < worker
+    )
     delivery = _extract_shell_function(source, "deliver_worker")
     submit = delivery.index('tmux send-keys -t "$session_name" C-m')
     success = delivery.index(

@@ -2216,7 +2216,7 @@ PY
             echo "[spawn_child/pre-reg] No MCP proxy available; Codex child uses the shared ORRERY Mail endpoint" >&2
         fi
         if [[ "$STANDALONE" == true ]]; then
-            CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+            CODEX_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
@@ -2367,7 +2367,7 @@ ${TASK}"
             exit 1
         fi
         if [[ "$STANDALONE" == true ]]; then
-            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved; do not register another identity. This prompt is the canonical task. Start it immediately:
+            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
 
 ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then

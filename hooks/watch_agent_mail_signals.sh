@@ -49,8 +49,25 @@ importance_at_least() {
 STATE_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 STATE_FILE="${STATE_DIR}/notify-state.json"
 LEASE_DIR="${STATE_DIR}/notify-locks"
-SCAN_INTERVAL=30      # periodic scan で取りこぼし救済
-RETRY_COOLDOWN=30     # 同一 (agent, msg) の再試行間隔
+# periodic scan で取りこぼし救済。Linux の fswatch（inotify）は再帰 watch を自前で
+# 足すので、新しくできた受信者フォルダの watch が付く前に書かれた signal は通知
+# されない（inotify(7) の既知の制約）。フォルダは配送のたびに消えて次の1通で作り
+# 直されるため、WSL ではほぼ毎回この scan 待ち（30秒）になっていた（2026-09-29）。
+# Linux では scan を2秒にして救済を早める。macOS（FSEvents）は従来どおり30秒。
+# 上書きは AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL（1 以上の整数秒）。
+case "$(uname -s 2>/dev/null || true)" in
+    Linux) SCAN_INTERVAL_DEFAULT=2 ;;
+    *) SCAN_INTERVAL_DEFAULT=30 ;;
+esac
+SCAN_INTERVAL="${AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL:-$SCAN_INTERVAL_DEFAULT}"
+case "$SCAN_INTERVAL" in
+    ''|*[!0-9]*) SCAN_INTERVAL="$SCAN_INTERVAL_DEFAULT" ;;
+esac
+SCAN_INTERVAL=$((10#$SCAN_INTERVAL))  # "08" は8進数として読まない
+if (( SCAN_INTERVAL < 1 )); then
+    SCAN_INTERVAL="$SCAN_INTERVAL_DEFAULT"
+fi
+RETRY_COOLDOWN=30     # 同一 (agent, msg) の再試行間隔（scan 間隔とは別。短い scan でも変えない）
 # 2026-05-22 JollyTesla hang 根治: tmux 呼び出しは server stall 時に同期ブロック
 # し、単一スレッドの本体ループ全体を凍結させる (本日 game2 で2回 hang)。全 tmux
 # 呼び出しを run_to で時間制限し、配送本体は background worker に切り離す。
@@ -90,6 +107,10 @@ run_to() {
     return "$rc"
 }
 
+# 1行目は ok / invalid。Mail server は signal を直接 write_text するので、書きかけ
+# （空や途中で切れた JSON）を読むことがある。それを空の metadata として配送すると
+# 件名なしの通知を1回送って success にし、signal を消してしまう。invalid なら
+# 呼び出し側は何も記録せず signal を残し、次の scan で読み直す。
 read_signal_meta() {
     python3 - "$1" <<'PY'
 import json, os, sys
@@ -97,10 +118,16 @@ path = sys.argv[1]
 try:
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
+    st = os.stat(path)
 except Exception:
-    data = {}
+    data = None
+if not isinstance(data, dict) or not isinstance(data.get("message") or {}, dict):
+    # Still print every line the caller reads: a short read would fail under
+    # the watcher's set -e and end the whole watcher.
+    print("invalid" + "\n" * 8, end="")
+    raise SystemExit(0)
 msg = data.get("message") or {}
-st = os.stat(path)
+print("ok")
 print(msg.get("id") or "")
 print(msg.get("from") or "unknown")
 print((msg.get("subject") or "(no subject)")[:80])
@@ -341,8 +368,9 @@ handle_signal_file() {
     # signal は server-owned dirty bit。client は rename/delete しない。
     # 重複処理防止は state_should_attempt + acquire_delivery_lease で行う。
     # bash 3.2 (macOS system) 互換: mapfile を使わず逐次 read する。
-    local msg_id from subject importance mtime body_snippet body_truncated msg_key
+    local meta_status msg_id from subject importance mtime body_snippet body_truncated msg_key
     {
+        IFS= read -r meta_status
         IFS= read -r msg_id
         IFS= read -r from
         IFS= read -r subject
@@ -351,6 +379,10 @@ handle_signal_file() {
         IFS= read -r body_snippet
         IFS= read -r body_truncated
     } < <(read_signal_meta "$signal_file")
+    if [[ "${meta_status:-}" != "ok" ]]; then
+        # 書きかけか壊れた signal。記録も削除もせず、次の scan に回す。
+        return 0
+    fi
     msg_id="${msg_id:-}"
     from="${from:-unknown}"
     subject="${subject:-(no subject)}"
@@ -392,6 +424,13 @@ handle_signal_file() {
     state_should_attempt "$agent_name" "$msg_key" || return 0
     local lease_owner
     lease_owner=$(acquire_delivery_lease "$agent_name" "$msg_key") || return 0
+    # 直前の確認から lease 取得までの間に、前の worker が success を書いて lease を
+    # 手放していることがある。その lease を取ると同じ msg の worker がもう1つ走るので、
+    # 取った後にもう一度確かめ、不要なら自分の lease を返して終える。
+    if ! state_should_attempt "$agent_name" "$msg_key"; then
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
+    fi
 
     log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
 
@@ -551,14 +590,14 @@ process_existing_signals() {
 }
 
 if command -v fswatch &>/dev/null; then
-    log "Starting fswatch on $SIGNALS_DIR"
+    log "Starting fswatch on $SIGNALS_DIR (recovery scan every ${SCAN_INTERVAL}s)"
     process_existing_signals
     WATCH_FIFO="$(mktemp -u "/tmp/orrery-mail-fswatch.XXXXXX")"
     mkfifo "$WATCH_FIFO"
     fswatch -r --event Created --event Updated "$SIGNALS_DIR" > "$WATCH_FIFO" &
     WATCH_BACKEND_PID=$!
-    # fswatch + 30 秒ごとの periodic scan の二段構え。fswatch イベント
-    # 取りこぼし時の救済 + state cooldown 経過後の再試行を担う。
+    # fswatch + periodic scan（SCAN_INTERVAL 秒、Linux 2 / macOS 30）の二段構え。
+    # fswatch イベント取りこぼし時の救済 + state cooldown 経過後の再試行を担う。
     exec 3<>"$WATCH_FIFO"
     last_scan=$(date +%s)
     while true; do

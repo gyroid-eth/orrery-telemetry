@@ -11,7 +11,7 @@ Start with:
 git -C /path/to/orrery-telemetry status --short
 ```
 
-The core doctor checks the install footprint, required commands, managed blocks, managed agent names, tmux mouse support, tmux global identity environment, dashboard endpoint, and service-manager state. Use `git status` to inspect repository-side changes.
+The core doctor checks the install footprint, required commands, managed blocks (not only that the markers exist, but that the text matches the installed template; if not, it prints the command that updates it), managed agent names, tmux mouse support, tmux global identity environment, dashboard endpoint, and service-manager state. Use `git status` to inspect repository-side changes.
 
 The dashboard treats a correct JSON response from `/api/version` as canonical evidence of what is actually being served and reports it separately from launchd / systemd registration and execution. If the endpoint responds but the manager is not running it, the mode is `unmanaged-background`. Check mail-watcher health separately at `/api/mail-watcher-health`.
 

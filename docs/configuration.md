@@ -225,10 +225,13 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/orrery-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
 | `AGENTSTACK_MAIL_WATCHER_HEARTBEAT` | pidfile と同じ directory の `heartbeat` | process command を取得できない環境で使う watcher heartbeat |
 | `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE` | `low`（＝全通） | 通知として**割り込ませる**下限。`low` \| `normal` \| `high` \| `urgent` |
+| `AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL` | Linux `2`、macOS `30` | watcher が signal を見直す回復 scan の間隔（秒、1 以上の整数）。同じ message の再試行間隔（30秒）とは別 |
 | `AGENTSTACK_REREGISTER_PROGRAM` | `codex` | `agentstack-reregister` の第2引数を省略した場合の program |
 | `AGENTSTACK_REREGISTER_MODEL` | program ごとの既定 | `agentstack-reregister` の第3引数を省略した場合の model label |
 
 通知は相手の入力欄に直接タイプされます。子を何体も走らせていると、人間が親と会話している最中に進捗報告が挟まって話が細切れになります。`AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high` にすると、`normal` 以下は割り込まなくなります。**メールが消えるわけではありません。** signal はそのまま残り、次に `fetch_inbox` を呼べば普通に読めます。奪うのは割り込む権利であって、届く権利ではありません。完了報告を確実に受け取りたい場合は、子に `importance="high"` で送らせてください（`/delegate` の既定はそうなっています）。
+
+watcher は fswatch のイベントで signal を拾い、取りこぼしを回復 scan で拾います。Linux（WSL を含む）の fswatch は inotify の再帰 watch を自分で足すため、新しくできた受信者フォルダの watch が付く前に書かれた signal は通知されません（inotify(7) の既知の制約）。受信者フォルダは配送のたびに消えて次の1通で作り直されるので、以前は WSL でほとんどの通知が30秒ごとの scan を待っていました。Linux では回復 scan を2秒にしているため、この場合も数秒で届きます。macOS（FSEvents）は30秒のままです。同じ message の再試行間隔は、scan の間隔にかかわらず30秒です。書きかけで JSON として読めない signal は、配送も記録もせずに残し、次の scan で読み直します。
 
 `AGENTSTACK_MCP_PROXY` が欠けても spawn 自体は継続しますが、child は shared endpoint へ fallback し、自分の owner token を明示して認証する必要があります。通常は path を差し替えるより `./scripts/install.sh` を再実行して proxy payload を復旧してください。
 
