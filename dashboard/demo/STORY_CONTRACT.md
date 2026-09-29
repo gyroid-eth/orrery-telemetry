@@ -54,9 +54,10 @@ provider, program, task, retired: true, ago: 5400 }` where `ago` is seconds
 before now.
 
 **The surname must have a portrait.** `dashboard/portraits_64/` holds the
-available ones, and `build.sh` fails if a cast surname has no file. Every
-portrait shipped must be public domain — see `PORTRAITS.txt`. If a surname
-you want is not there, pick another; do not add image files.
+available ones, and `build.sh` fails if a cast surname has no file or is not
+listed in `PORTRAITS_CLEARED.txt`. The portraits are the author's own
+ChatGPT-generated pixel art — see `PORTRAITS.txt`. If a surname you want is
+not there, pick another; do not add image files.
 
 ### states — waiting on a human
 
