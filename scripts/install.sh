@@ -1896,6 +1896,7 @@ install_payload() {
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
+    cp "$REPO_ROOT/bin/lib/agentstack-managed-block.sh" "$BIN_DIR/lib/agentstack-managed-block.sh"
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
@@ -2180,6 +2181,35 @@ safe_managed_doc_setups() {
   fi
   run_managed_setup "Codex AGENTS.md" "agentstack-codex-setup"
   run_managed_setup "Claude CLAUDE.md" "agentstack-claude-setup"
+}
+
+# The runtime is updated at this point, but the managed blocks in the user's
+# AGENTS.md / CLAUDE.md change only when the managed setup was applied. Say
+# which of them still differ from the installed templates, with the command
+# that updates each, instead of a generic recommendation that reads as done.
+# Same comparison as agentstack-doctor (the setup scripts' --check).
+report_managed_instructions() {
+  local label script out status all_current=true
+  local -a lines=()
+  for script in agentstack-codex-setup agentstack-claude-setup; do
+    status=0
+    out="$(AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" \
+      "$BIN_DIR/$script" --check 2>&1)" || status=$?
+    [[ "$status" -eq 0 ]] || all_current=false
+    while IFS= read -r label; do
+      [[ -n "$label" ]] && lines+=("$label")
+    done <<MANAGED_CHECK
+$out
+MANAGED_CHECK
+  done
+  if [[ "$all_current" == true ]]; then
+    say "Managed instructions: current (Codex AGENTS.md and Claude CLAUDE.md match the installed templates)"
+    return 0
+  fi
+  say "Runtime updated; managed instructions differ. Agents started now still read the old block:"
+  for label in ${lines[@]+"${lines[@]}"}; do
+    say "  $label"
+  done
 }
 
 write_env_file() {
@@ -3919,10 +3949,7 @@ main() {
       say "  echo \$! > $RUNTIME_DIR/dashboard.pid"
     fi
     if [[ "$TIER" != "tier0" ]]; then
-      say "Recommended managed setup:"
-      say "  hooks/settings.json via Tier1 settings merge"
-      say "  $BIN_DIR/agentstack-codex-setup    (managed block in ~/.codex/AGENTS.md)"
-      say "  $BIN_DIR/agentstack-claude-setup   (managed block in project/global CLAUDE.md)"
+      report_managed_instructions
     fi
   fi
 }

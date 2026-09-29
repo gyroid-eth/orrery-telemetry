@@ -10,6 +10,9 @@
 #
 #   agentstack-codex-setup            install / update the managed block
 #   agentstack-codex-setup --print    print the resolved block, change nothing
+#   agentstack-codex-setup --check    compare the installed block with the
+#                                     installed template, change nothing
+#                                     (exit 0 only when it matches)
 #   agentstack-codex-setup --uninstall remove the managed block
 #
 # Env:
@@ -39,9 +42,10 @@ END="<!-- <<< claude-agent-stack -->"
 mode="install"
 case "${1:-}" in
   --print) mode="print" ;;
+  --check) mode="check" ;;
   --uninstall) mode="uninstall" ;;
   "" ) ;;
-  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+  *) die "unknown argument: $1 (use --print, --check or --uninstall)" ;;
 esac
 
 # Build the managed block (markers + template with placeholders substituted).
@@ -57,6 +61,20 @@ render_block() {
 if [[ "$mode" == "print" ]]; then
   render_block
   exit 0
+fi
+
+if [[ "$mode" == "check" ]]; then
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agentstack-managed-block.sh"
+  # Name the install that was checked: without AGENTSTACK_HOME the command
+  # would render the default install's template into this file.
+  update="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") CODEX_HOME=$(ags_managed_block_quote "$CODEX_HOME") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
+  if [[ ! -f "$TEMPLATE" ]]; then
+    ags_managed_block_report "Codex AGENTS.md" "$TARGET" "template-missing:$TEMPLATE" "$update"
+    exit 1
+  fi
+  state="$(ags_managed_block_state "$TARGET" "$BEGIN" "$END" "$(render_block)")"
+  ags_managed_block_report "Codex AGENTS.md" "$TARGET" "$state" "$update"
+  exit $?
 fi
 
 # Read current target (may not exist yet), strip any existing managed block.

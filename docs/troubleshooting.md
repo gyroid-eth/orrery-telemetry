@@ -11,7 +11,7 @@
 git -C /path/to/orrery-telemetry status --short
 ```
 
-core doctor は install footprint、必須 command、managed block、managed agent 名、tmux mouse、tmux global identity env、dashboard endpoint と service manager の状態を検査します。repository 側は `git status` で変更を確認します。
+core doctor は install footprint、必須 command、managed block（marker があるかだけでなく、インストール済みの template と文面が一致するか。一致しなければ更新コマンドを表示）、managed agent 名、tmux mouse、tmux global identity env、dashboard endpoint と service manager の状態を検査します。repository 側は `git status` で変更を確認します。
 
 dashboard は `/api/version` の正しい JSON response を「実際に配信中」の正本として判定し、launchd / systemd の登録・実行状態とは別に報告します。endpoint が応答していて manager が実行していなければ `unmanaged-background` です。mail-watcher health は `/api/mail-watcher-health` で別に確認してください。
 

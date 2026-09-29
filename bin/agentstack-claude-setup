@@ -4,6 +4,9 @@
 #
 #   agentstack-claude-setup             install / update the managed block
 #   agentstack-claude-setup --print     print the resolved block, change nothing
+#   agentstack-claude-setup --check     compare each target's block with the
+#                                       installed template, change nothing
+#                                       (exit 0 only when all match)
 #   agentstack-claude-setup --uninstall remove the managed block
 #
 # Env:
@@ -33,9 +36,10 @@ END="<!-- <<< claude-agent-stack -->"
 mode="install"
 case "${1:-}" in
   --print) mode="print" ;;
+  --check) mode="check" ;;
   --uninstall) mode="uninstall" ;;
   "" ) ;;
-  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+  *) die "unknown argument: $1 (use --print, --check or --uninstall)" ;;
 esac
 
 render_block() {
@@ -105,6 +109,35 @@ apply_target() {
 # Command substitution *does* propagate the status, so resolve here and fail
 # where the caller can see why. Making the expansion nounset-safe on its own
 # would be worse: a resolver failure would become a silent successful no-op.
+if [[ "$mode" == "check" ]]; then
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agentstack-managed-block.sh"
+  # Name the install that was checked: without AGENTSTACK_HOME the command
+  # would render the default install's template into this file.
+  update="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") AGENTSTACK_CLAUDE_MD_SCOPE=$(ags_managed_block_quote "$SCOPE") AGENTSTACK_PROJECT_KEY=$(ags_managed_block_quote "$PROJECT_KEY")"
+  [[ "$SCOPE" == "project" ]] || update="$update CLAUDE_HOME=$(ags_managed_block_quote "$CLAUDE_HOME")"
+  update="$update $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG")"
+  if ! TARGETS_RAW="$(resolve_targets 2>&1)"; then
+    # Leave the unresolved key and scope out of the suggested command, so
+    # the values the user sets next are the ones that take effect.
+    retry="AGENTSTACK_HOME=$(ags_managed_block_quote "$AGENTSTACK_HOME") $(ags_managed_block_quote "$AGENTSTACK_HOME/bin/$PROG") --check"
+    echo "warn: cannot check Claude CLAUDE.md managed block: ${TARGETS_RAW#"$PROG: "}; export AGENTSTACK_PROJECT_KEY=<project path> (or AGENTSTACK_CLAUDE_MD_SCOPE=global), then run: $retry"
+    exit 1
+  fi
+  status=0
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    if [[ ! -f "$TEMPLATE" ]]; then
+      ags_managed_block_report "Claude CLAUDE.md" "$target" "template-missing:$TEMPLATE" "$update" || status=1
+      continue
+    fi
+    state="$(ags_managed_block_state "$target" "$BEGIN" "$END" "$(render_block)")"
+    ags_managed_block_report "Claude CLAUDE.md" "$target" "$state" "$update" || status=1
+  done <<CHECK_TARGETS
+$TARGETS_RAW
+CHECK_TARGETS
+  exit "$status"
+fi
+
 TARGETS_RAW="$(resolve_targets)" || exit $?
 TARGETS=()
 while IFS= read -r target; do
