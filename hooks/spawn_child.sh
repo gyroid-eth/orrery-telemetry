@@ -477,7 +477,7 @@ if binding_path is not None:
         and binding["agent_id"] > 0
         and binding.get("agent_name") == agent_name
         and binding.get("project_key") == project_key
-        and binding.get("program") in {"codex", "codex-cli"}
+        and binding.get("program") in {"codex", "codex-cli", "claude", "claude-code"}
     ):
         state.update(agent_id=binding["agent_id"], program=binding["program"])
 with open(state_tmp, "x", encoding="utf-8") as f:
@@ -636,6 +636,15 @@ prepare_codex_child_resume_state() {
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
         --mcp-profile "$mcp_profile"
+}
+
+prepare_claude_child_resume_state() {
+    local agent_name="$1"
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    [[ -f "$helper" ]] || return 1
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
+        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
+        --project-key "$PROJECT_KEY"
 }
 
 # Start one launch expectation from a registration receipt. Output is
@@ -2042,8 +2051,8 @@ state = {
     "project_key": project_key,
     "registration_token": token,
 }
-if program == "codex" and agent_id is not None:
-    state.update(agent_id=agent_id, program="codex")
+if program in {"codex", "codex-cli", "claude", "claude-code"} and agent_id is not None:
+    state.update(agent_id=agent_id, program=program)
 with open(state_tmp, "x", encoding="utf-8") as handle:
     json.dump(state, handle)
     handle.flush()
@@ -2296,6 +2305,11 @@ PY
         fi
         if ! prepare_codex_child_resume_state "$CHILD_NAME" "$CODEX_MCP_PROFILE"; then
             echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
+            exit 1
+        fi
+    else
+        if ! prepare_claude_child_resume_state "$CHILD_NAME"; then
+            echo "Error: verified Claude child registration metadata is unavailable for $CHILD_NAME" >&2
             exit 1
         fi
     fi
@@ -2980,6 +2994,11 @@ PY
     fi
 }
 trap cleanup_on_failure EXIT
+if [[ "$USE_CODEX" != true ]] && ! prepare_claude_child_resume_state "$CHILD_NAME"; then
+    echo "Error: could not prepare retained Claude child state for $CHILD_NAME" >&2
+    exit 1
+fi
+
 
 # --- 2b. リソース予約 ---
 if [[ -n "$RESOURCES" ]]; then

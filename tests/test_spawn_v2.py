@@ -433,6 +433,7 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
         return {
             "ok": True,
             "data": {
+                "id": 73,
                 "name": "Zesty-Curie",
                 "registration_token": "server-child-token",
             } if method == "register_agent" else {},
@@ -483,6 +484,7 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
         return {
             "ok": True,
             "data": {
+                "id": 73,
                 "name": "QuietCurie",
                 "registration_token": "server-child-token",
             } if method == "register_agent" else {},

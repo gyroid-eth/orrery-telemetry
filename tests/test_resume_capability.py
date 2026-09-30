@@ -440,6 +440,15 @@ def test_claude_display_defers_scan_then_reuses_mtime_keyed_result(
     claude = tmp_path / "claude"
     claude.write_text("", encoding="utf-8")
 
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    token = runtime / f"agent_token_{name}"
+    token.write_text("fixture-owner-token", encoding="utf-8")
+    token.chmod(0o600)
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "_claude_registration", lambda _n: {
+        "agent_id": 73, "agent_name": name, "project_key": str(project), "program": "claude-code",
+    })
     monkeypatch.setattr(server, "CLAUDE_PROJECTS", str(transcript_dir.parent))
     monkeypatch.setattr(server, "ABS_CLAUDE", str(claude))
     monkeypatch.setattr(server, "_terminal_adapter", lambda: "fixture")
@@ -522,6 +531,16 @@ def test_claude_failed_full_verification_is_cached_as_no_history(
     monkeypatch, tmp_path
 ):
     name = "RetiredClaude"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    token = runtime / f"agent_token_{name}"
+    token.write_text("fixture-owner-token", encoding="utf-8")
+    token.chmod(0o600)
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "_claude_registration", lambda _n: {
+        "agent_id": 73, "agent_name": name, "project_key": str(tmp_path), "program": "claude-code",
+    })
+
     transcript_dir = tmp_path / "claude-projects" / "fixture"
     transcript_dir.mkdir(parents=True)
     (transcript_dir / "00000000-0000-0000-0000-000000000001.jsonl").write_text(

@@ -98,9 +98,9 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 に child-owned state を持ちます。
 
-pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を検証し、CLI の起動と fresh launch expectation の作成が成功した後にだけ一時 handoff を消費します。token を transcript、command-line argument、dashboard response に表示しません。
+pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Claude / Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を検証します。Claude は canonical state の保存時、Codex は CLI の起動と fresh launch expectation の作成が成功した後に一時 handoff を消費します。token を transcript、command-line argument、dashboard response に表示しません。
 
-`agentstack-preregister-child` は Codex の正式な登録応答を、一時 handoff だけでなく上記の canonical token と child state にも mode `0600` で保存します。そのため `spawn_child.sh --pre-registered <name> --codex ...` は `--child-token-file` を省略しても、同じ登録に由来する token・数値 ID・name・project・program から fresh expectation を作れます。canonical token が無くても完全な child state からは復元できますが、token-only の旧 state、破損 metadata、project/name/provider の不一致、token と state の世代不一致は推測で補いません。`agentstack-preregister-child` を同じ project で再実行するか、一時 token と対応する `.binding.json` を `--child-token-file` で渡す必要があります。登録済み Codex child は fresh expectation を永続化できなければ CLI 起動前に停止します。
+`agentstack-preregister-child` は Claude / Codex の正式な登録応答を、一時 handoff だけでなく上記の canonical token と child state にも mode `0600` で保存します。そのため `spawn_child.sh --pre-registered <name> --codex ...` は `--child-token-file` を省略しても、同じ登録に由来する token・数値 ID・name・project・program から fresh expectation を作れます。canonical token が無くても完全な child state からは復元できますが、token-only の旧 state、破損 metadata、project/name/provider の不一致、token と state の世代不一致は推測で補いません。`agentstack-preregister-child` を同じ project で再実行するか、一時 token と対応する `.binding.json` を `--child-token-file` で渡す必要があります。登録済み Codex child は fresh expectation を永続化できなければ CLI 起動前に停止します。
 
 `/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
 
@@ -134,6 +134,12 @@ CLAUDECODE=1
 を設定します。interactive shell の exit hook が tmux server 全体を連鎖 kill する事故を防ぐ guard です。
 
 値は session 作成時の `tmux new-session -e` で設定し、他 session の identity と混ざらないよう tmux server global environment には置きません。
+
+## dashboard からの Claude resume
+
+Claude の子も正常終了後、state と owner credential を既定30日、mode `0600` で保持します。dashboard は元の project・数値 ID・name・program と credential の一致、保持期限・権限を検証します。子専用 Mail proxy config を再生成し、保存済み credential 付きで同じ identity を再登録、`unretire_agent` で受信を復帰させてから端末を起動します。子では resume 中の保持状態を期限切れ purge から保護し、CLI の終了時に再び cleanup します。top-level も既存 owner token があれば同じ再登録・unretire を行います。
+
+credential が旧版の cleanup で消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。別名への登録や credential の自動発行は行いません。必要な復旧は operator が [Persistent-agent enrollment and startup](persistent-agents.md) に従って行います。Mail の再登録・unretire、子専用 proxy の復元に失敗しても Claude は起動しません。
 
 ## Codex 固有の起動
 

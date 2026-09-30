@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private Codex-child resume material and regenerated-home lifecycle.
+"""Private Claude/Codex child resume material and regenerated-home lifecycle.
 
 The retained state contains an owner credential and is therefore deliberately
 kept outside the dashboard API.  This module is shared by fresh child launches,
@@ -27,9 +27,34 @@ from typing import Any
 SCHEMA_VERSION = 1
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 CODEX_PROGRAMS = {"codex", "codex-cli"}
+CLAUDE_PROGRAMS = {"claude", "claude-code"}
 MCP_PROFILES = {"inherit", "orrery-only"}
 MAX_STATE_BYTES = 65536
 MAX_TOKEN_BYTES = 4096
+
+
+def _provider(program: object) -> str | None:
+    if isinstance(program, str):
+        if program in CODEX_PROGRAMS:
+            return "codex"
+        if program in CLAUDE_PROGRAMS:
+            return "claude"
+    return None
+
+
+def _retained_shape(state: dict[str, Any]) -> bool:
+    provider = _provider(state.get("program"))
+    return (
+        provider is not None
+        and state.get("schema_version") == SCHEMA_VERSION
+        and state.get("launch_origin") == "child"
+        and state.get("provider") == provider
+        and (
+            provider != "codex"
+            or (isinstance(state.get("codex_mcp_profile"), str)
+                and state["codex_mcp_profile"] in MCP_PROFILES)
+        )
+    )
 
 
 class ResumeStateError(ValueError):
@@ -82,7 +107,7 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _read_private(path: Path, label: str, limit: int) -> bytes:
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -109,19 +134,19 @@ def _read_private(path: Path, label: str, limit: int) -> bytes:
 
 def _load_state(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(_read_private(path, "Codex child state", MAX_STATE_BYTES))
+        value = json.loads(_read_private(path, "child state", MAX_STATE_BYTES))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResumeStateError(
-            "config_unrestorable", "Codex child state is invalid"
+            "config_unrestorable", "child state is invalid"
         ) from exc
     if not isinstance(value, dict):
-        raise ResumeStateError("config_unrestorable", "Codex child state is invalid")
+        raise ResumeStateError("config_unrestorable", "child state is invalid")
     return value
 
 
 def _paths(runtime_dir: Path, agent_name: str) -> tuple[Path, Path, Path, Path, Path]:
     if not SAFE_NAME.fullmatch(agent_name):
-        raise ResumeStateError("invalid_identity", "Codex child identity is unsafe")
+        raise ResumeStateError("invalid_identity", "child identity is unsafe")
     state_dir = runtime_dir / "child-agents"
     key = re.sub(r"[^A-Za-z0-9_.-]", "_", agent_name)
     return (
@@ -170,21 +195,21 @@ def _validate_identity(
         or not isinstance(state.get("project_key"), str)
         or not state["project_key"]
         or not isinstance(actual_program, str)
-        or actual_program not in CODEX_PROGRAMS
+        or _provider(actual_program) is None
         or (agent_id is not None and state["agent_id"] != agent_id)
         or (project_key is not None and state["project_key"] != project_key)
         or (
             program is not None
-            and (not isinstance(program, str) or program not in CODEX_PROGRAMS)
+            and (_provider(program) is None or _provider(program) != _provider(actual_program))
         )
     ):
         raise ResumeStateError(
-            "identity_mismatch", "Codex child state belongs to another registration"
+            "identity_mismatch", "child state belongs to another registration"
         )
 
 
 def prepare_active_state(
-    runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str
+    runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit"
 ) -> dict[str, Any]:
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     if mcp_profile not in MCP_PROFILES:
@@ -195,11 +220,11 @@ def prepare_active_state(
         state_token = state.get("registration_token")
         try:
             canonical = _read_private(
-                token_path, "canonical Codex child credential", MAX_TOKEN_BYTES
+                token_path, "canonical child credential", MAX_TOKEN_BYTES
             ).decode("utf-8").strip()
         except UnicodeDecodeError as exc:
             raise ResumeStateError(
-                "credential_missing", "canonical Codex child credential is invalid"
+                "credential_missing", "canonical child credential is invalid"
             ) from exc
         if (
             not isinstance(state_token, str)
@@ -212,16 +237,19 @@ def prepare_active_state(
         ):
             raise ResumeStateError(
                 "identity_mismatch",
-                "Codex child state and credential are from different registrations",
+                "child state and credential are from different registrations",
             )
         state.update(
             schema_version=SCHEMA_VERSION,
             launch_origin="child",
-            provider="codex",
-            codex_mcp_profile=mcp_profile,
+            provider=_provider(state["program"]),
             retired_at=None,
             resume_expires_at=None,
         )
+        if state["provider"] == "codex":
+            state["codex_mcp_profile"] = mcp_profile
+        else:
+            state.pop("codex_mcp_profile", None)
         state.pop("resume_in_progress_at", None)
         _atomic_json(state_path, state)
         tombstone = runtime_dir / "child-resume-tombstones" / f"{state['agent_id']}.json"
@@ -236,7 +264,7 @@ def mark_retired(
     retention_days: int,
     now: datetime | None = None,
 ) -> bool:
-    """Mark a valid Codex child retained. Return False for legacy/non-Codex state."""
+    """Mark a valid Claude/Codex child retained. Return False for legacy/unsupported state."""
 
     if retention_days < 0:
         raise ValueError("retention days must be a non-negative integer")
@@ -249,18 +277,12 @@ def mark_retired(
             _validate_identity(state, agent_name=agent_name)
         except ResumeStateError:
             return False
-        if (
-            state.get("schema_version") != SCHEMA_VERSION
-            or state.get("launch_origin") != "child"
-            or state.get("provider") != "codex"
-            or not isinstance(state.get("codex_mcp_profile"), str)
-            or state.get("codex_mcp_profile") not in MCP_PROFILES
-        ):
+        if not _retained_shape(state):
             return False
         state_token = state.get("registration_token")
         try:
             canonical = _read_private(
-                token_path, "canonical Codex child credential", MAX_TOKEN_BYTES
+                token_path, "canonical child credential", MAX_TOKEN_BYTES
             ).decode("utf-8").strip()
         except (ResumeStateError, UnicodeDecodeError):
             return False
@@ -290,10 +312,10 @@ def begin_resume(
     agent_id: int,
     project_key: str,
     program: str,
-    mcp_profile: str,
+    mcp_profile: str = "inherit",
     now: datetime | None = None,
 ) -> None:
-    """Protect a validated retained credential from expiry while Codex runs."""
+    """Protect a validated retained credential from expiry while the resumed child runs."""
 
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     with _AgentLock(lock_path, exclusive=True):
@@ -306,42 +328,42 @@ def begin_resume(
             program=program,
         )
         if (
-            state.get("schema_version") != SCHEMA_VERSION
-            or state.get("launch_origin") != "child"
-            or state.get("provider") != "codex"
-            or state.get("codex_mcp_profile") != mcp_profile
-            or mcp_profile not in MCP_PROFILES
+            not _retained_shape(state)
+            or (state.get("provider") == "codex" and (
+                state.get("codex_mcp_profile") != mcp_profile
+                or mcp_profile not in MCP_PROFILES
+            ))
             or state.get("resume_in_progress_at") is not None
         ):
             raise ResumeStateError(
-                "config_unrestorable", "Codex child resume state is not ready"
+                "config_unrestorable", "child resume state is not ready"
             )
         _parse_timestamp(state.get("retired_at"), "retired_at")
         expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
         current = _utc_now(now)
         if current >= expires_at:
             raise ResumeStateError(
-                "retention_expired", "Codex child resume retention has expired"
+                "retention_expired", "child resume retention has expired"
             )
         state_token = state.get("registration_token")
         try:
             canonical = _read_private(
-                token_path, "canonical Codex child credential", MAX_TOKEN_BYTES
+                token_path, "canonical child credential", MAX_TOKEN_BYTES
             ).decode("utf-8").strip()
         except UnicodeDecodeError as exc:
             raise ResumeStateError(
-                "credential_missing", "canonical Codex child credential is invalid"
+                "credential_missing", "canonical child credential is invalid"
             ) from exc
         if not isinstance(state_token, str) or not state_token or not canonical:
             raise ResumeStateError(
-                "credential_missing", "retained Codex child credential is unavailable"
+                "credential_missing", "retained child credential is unavailable"
             )
         if not hmac.compare_digest(
             canonical.encode("utf-8"), state_token.encode("utf-8")
         ):
             raise ResumeStateError(
                 "identity_mismatch",
-                "Codex child state and credential are from different registrations",
+                "child state and credential are from different registrations",
             )
         state["resume_in_progress_at"] = _timestamp(current)
         _atomic_json(state_path, state)
@@ -354,7 +376,7 @@ def cancel_resume(
     agent_id: int,
     project_key: str,
 ) -> None:
-    """Restore the retained state when bootstrap fails before Codex exec."""
+    """Restore the retained state when bootstrap fails before CLI exec."""
 
     state_path, _token, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     with _AgentLock(lock_path, exclusive=True):
@@ -397,7 +419,7 @@ def inspect_retained(
             ):
                 raise ResumeStateError(tombstone["reason"], "resume material removed")
         raise ResumeStateError(
-            "credential_missing", "retained Codex child state is unavailable"
+            "credential_missing", "retained child state is unavailable"
         )
     with _AgentLock(lock_path, exclusive=False):
         state = _load_state(state_path)
@@ -409,44 +431,40 @@ def inspect_retained(
             program=program,
         )
         if (
-            state.get("schema_version") != SCHEMA_VERSION
-            or state.get("launch_origin") != "child"
-            or state.get("provider") != "codex"
-            or not isinstance(state.get("codex_mcp_profile"), str)
-            or state.get("codex_mcp_profile") not in MCP_PROFILES
+            not _retained_shape(state)
         ):
             raise ResumeStateError(
-                "config_unrestorable", "Codex child resume state is incomplete"
+                "config_unrestorable", "child resume state is incomplete"
             )
         if state.get("resume_in_progress_at") is not None:
             raise ResumeStateError(
-                "config_unrestorable", "Codex child resume is already in progress"
+                "config_unrestorable", "child resume is already in progress"
             )
         _parse_timestamp(state.get("retired_at"), "retired_at")
         expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
         if _utc_now(now) >= expires_at:
             raise ResumeStateError(
-                "retention_expired", "Codex child resume retention has expired"
+                "retention_expired", "child resume retention has expired"
             )
         state_token = state.get("registration_token")
         try:
             canonical = _read_private(
-                token_path, "canonical Codex child credential", MAX_TOKEN_BYTES
+                token_path, "canonical child credential", MAX_TOKEN_BYTES
             ).decode("utf-8").strip()
         except UnicodeDecodeError as exc:
             raise ResumeStateError(
-                "credential_missing", "canonical Codex child credential is invalid"
+                "credential_missing", "canonical child credential is invalid"
             ) from exc
         if not isinstance(state_token, str) or not state_token or not canonical:
             raise ResumeStateError(
-                "credential_missing", "retained Codex child credential is unavailable"
+                "credential_missing", "retained child credential is unavailable"
             )
         if not hmac.compare_digest(
             canonical.encode("utf-8"), state_token.encode("utf-8")
         ):
             raise ResumeStateError(
                 "identity_mismatch",
-                "Codex child state and credential are from different registrations",
+                "child state and credential are from different registrations",
             )
         return state
 
@@ -490,7 +508,7 @@ def purge_one(
             state is None
             or state.get("schema_version") != SCHEMA_VERSION
             or state.get("launch_origin") != "child"
-            or state.get("provider") != "codex"
+            or state.get("provider") != _provider(state.get("program"))
             or state.get("resume_in_progress_at") is not None
         ):
             return False
@@ -508,7 +526,7 @@ def purge_one(
                 "schema_version": SCHEMA_VERSION,
                 "reason": reason,
                 "purged_at": _timestamp(_utc_now()),
-                "provider": "codex",
+                "provider": state["provider"],
                 "agent_id": state["agent_id"],
                 "agent_name": agent_name,
                 "project_key": state["project_key"],
@@ -728,7 +746,7 @@ def _build_home_unlocked(
         raise ValueError("invalid child identity or MCP profile")
     if not source.is_dir() or not runner.is_file() or not os.access(runner, os.X_OK):
         raise ValueError("current Codex home or MCP proxy is unavailable")
-    _read_private(token_file, "canonical Codex child credential", MAX_TOKEN_BYTES)
+    _read_private(token_file, "canonical child credential", MAX_TOKEN_BYTES)
     if home.resolve() == source.resolve():
         raise ValueError("generated and source Codex homes must differ")
 
@@ -946,7 +964,7 @@ def main() -> int:
     active.add_argument("--runtime-dir", required=True)
     active.add_argument("--agent-name", required=True)
     active.add_argument("--project-key", required=True)
-    active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), required=True)
+    active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
     retired = sub.add_parser("mark-retired")
     retired.add_argument("--runtime-dir", required=True)
     retired.add_argument("--agent-name", required=True)
@@ -957,7 +975,7 @@ def main() -> int:
     begin.add_argument("--agent-id", type=int, required=True)
     begin.add_argument("--project-key", required=True)
     begin.add_argument("--program", required=True)
-    begin.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), required=True)
+    begin.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
     cancel = sub.add_parser("cancel-resume")
     cancel.add_argument("--runtime-dir", required=True)
     cancel.add_argument("--agent-name", required=True)
@@ -1035,7 +1053,7 @@ def main() -> int:
                 if not purge_one(runtime, args.agent_name, reason="purged"):
                     raise ResumeStateError(
                         "credential_missing",
-                        "no retained Codex child resume material matched this identity",
+                        "no retained child resume material matched this identity",
                     )
                 print(args.agent_name)
         elif args.command == "discard-generated":

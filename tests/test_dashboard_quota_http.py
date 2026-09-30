@@ -125,7 +125,7 @@ def test_non_quota_routes_are_delegated_to_underlying_dashboard():
 
     assert not worker.is_alive()
     assert payload["name"] == "orrery-telemetry"
-    assert payload["api"] == 2
+    assert payload["api"] == 3
 
 
 def test_optional_provider_server_still_serves_the_quota_route(monkeypatch):

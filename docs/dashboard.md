@@ -22,7 +22,7 @@ dashboard は既定で `http://127.0.0.1:8770/` に公開されます。tmux、O
 | 親子関係を見る | [NETWORK](#network) に切り替える。parent と child は spawn edge で結ばれ、node をクリックすると個別の詳細 panel が開きます。 |
 | エージェント同士が何を話したか読む | NETWORK の communication edge をクリックする。右側の mail drawer に、その2者間の subject、importance、時刻、本文が表示されます。[mail 設定がない場合](#edge-と-mail)は `NOT CONFIGURED` になります。 |
 | 複数のエージェントをまとめて操作する | NETWORK 上部の `Select` を有効にし、node をクリックするか空白部分を矩形 drag する。選択後に画面下部へ出る action bar で、running / finished agent は `Exit N`、2人以上は `Replay N` を選べます。EXIT は同じ button をもう一度押す二段確認です。 |
-| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出します。card の `RESUME READY`、または古い Claude row の `RESUME · VERIFY` から復元できます。後者は詳細 panel の `VERIFY & RESUME` を1回押すと検証から resume まで続けます。NETWORK の `Select` は、事前検証済みの `resume_capability: ready` の gone / retired node だけを `Resume N` に数えます。resume には検証済み transcript、元の cwd、対応 CLI、terminal adapter が必要で、Codex child では provenance・正式登録・credential・復元可能な設定も必要です。 |
+| 終了したエージェントを resume する | tmux 型の Claude / Codex CLI agent では、DECK の history を `30d` か `all` にするか、NETWORK の `ALL` で過去 agent を出します。card の `RESUME READY`、または古い Claude row の `RESUME · VERIFY` から復元できます。後者は詳細 panel の `VERIFY & RESUME` を1回押すと検証から resume まで続けます。NETWORK の `Select` は、事前検証済みの `resume_capability: ready` の gone / retired node だけを `Resume N` に数えます。resume には検証済み transcript、元の cwd、対応 CLI、本人 credential が必要です。窓を開く場合は terminal adapter も必要で、Codex child では provenance・正式登録・credential・復元可能な設定も必要です。 |
 | 終わったエージェントを見る | NETWORK の time window を `ALL` にするか、DECK の history を `7d` / `30d` / `all` に切り替える。既定の `live` は running と finished だけで、`7d` / `30d` はその期間に活動した `gone` / `retired` card を、`all` は登録された全 agent を表示します。[完了後の見え方](#child-完了後の表示)も参照してください。 |
 
 NETWORK は選択中の time window 外にある node を表示しないことがあります。現在の graph に見えないことだけでは task failure を意味しないため、`ALL`、DECK の history `all`、親へ届く完了報告を確認してください。
@@ -135,7 +135,7 @@ running と finished の境目は、pane の先頭 process 名ではなく proce
 - resume は `finished` / `gone` のどちらも transcript から新しい session を作る同じ経路です。`finished` は先に husk を kill してから乗ります
 - `finished` の実用上の違いは、DECK の既定表示に残ること、`OPEN TMUX` で最後の画面と cwd を見に行けることの 2 点です
 - husk は待機中の shell 1 個なので、溜めても memory 負荷にはなりません。溜まって困るのは DECK の見通しの方で、retire / kill で片付けます
-- 逆に「tmux は生きているのに `retired`」もあります。親が完了報告を受けてすぐ soft-retire した child や、24 時間無活動で ORRERY Mail に retire された常駐 agent がこれで、NETWORK では薄く描かれ、**受信だけが黙って拒否されます**（送信と自分の inbox 読みは通る）。`OPEN TMUX` も resume も retired フラグには触りません。戻すのは `POST /api/reactivate`（body `{"session": "<name>"}`）で、tmux が生きていることを確かめてから ORRERY Mail の `unretire_agent` を呼びます。自動では戻しません
+- 逆に「tmux は生きているのに `retired`」もあります。親が完了報告を受けてすぐ soft-retire した child や、24 時間無活動で ORRERY Mail に retire された常駐 agent がこれで、NETWORK では薄く描かれ、**受信だけが黙って拒否されます**（送信と自分の inbox 読みは通る）。`OPEN TMUX` は retired フラグには触りません。Claude / Codex の resume は CLI 起動前に unretire します。稼働中の agent の受信だけを戻すのは `POST /api/reactivate`（body `{"session": "<name>"}`）で、tmux が生きていることを確かめてから ORRERY Mail の `unretire_agent` を呼びます。自動では戻しません
 
 ### 検索
 
@@ -155,9 +155,11 @@ card と詳細 panel は backend の `resume_capability` を表示します。�
 
 KILL の可否は frontend の見た目だけで決めず、server の `build_agents()` category を再検証します。attached client がある session では UI が KILL button を隠し、API を直接呼んでも server が `refusing to kill (detach first)` で hard refusal します。
 
+Claude / Codex resume は `AGENTSTACK_AUTO_OPEN_CHILD` に従います。`0` なら窓を開かず detached tmux で会話を再開し、roster に現れます。後から Open tmux や cockpit で開けます。未設定 / `1` は自動表示します。API では `POST /api/jump` の boolean `open` が設定より優先します（`false` は detached、`true` は窓を開く）。Claude は保存済み credential の検証と Mail の受信復帰を済ませてから session を作ります。credential 欠落、期限切れ、purge、認証・unretire の失敗では起動しません。top-level Claude も既存 owner token を使います。
+
 ### Child 完了後の表示
 
-正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire します。Claude child は runtime credential / state を削除します。Codex child は home、proxy runtime、旧 MCP config を削除し、再開用 state / canonical credential を既定30日だけ保持します。その command の終了に伴い tmux session も閉じます。
+正常な completion flow では、`/delegate` で起動した child が終了前に ORRERY Mail の完了報告を親へ送ります。親はその報告を読み、成果物を検証してから利用者へ結果を返します。child の REPL が終了した後は launcher の cleanup が reservation を解放し、remote identity を soft-retire します。Claude / Codex child は生成した MCP config と runtime を削除し、再開用 state / canonical credential を0600で既定30日保持します。Codex は分離 home も削除します。その command の終了に伴い tmux session も閉じます。
 
 保持期間内の `RESUME READY` は、古い home を復元する操作ではありません。dashboard は現在の source Codex home と保存済み profile から新しい home / proxy を作り、credential 付き再登録と fresh binding expectation の保存に成功してから、Codex exec の直前に identity を unretire します。期限切れまたは明示 purge 後は固定理由を表示して fail-closed します。期限切れ private material は dashboard の hourly maintenance が削除するため、dashboard が停止中なら物理削除は次の起動まで遅れることがあります。
 
