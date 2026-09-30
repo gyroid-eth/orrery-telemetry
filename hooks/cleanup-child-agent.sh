@@ -216,6 +216,13 @@ if [[ -n "$retire_args" ]]; then
     call_mcp "retire_agent" "$retire_args" > /dev/null 2>&1 || true
 fi
 
+# A resumed top-level Claude (owner token, no child state) only gives back the
+# retirement its resume undid. Its token is not child material to retain or
+# delete, and it was never in the managed list.
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" == "1" ]]; then
+    exit 0
+fi
+
 python3 - "$MANAGED_FILE" "$AGENT_NAME" <<'PYEOF' 2>/dev/null || true
 import pathlib
 import sys

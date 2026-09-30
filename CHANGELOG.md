@@ -34,6 +34,10 @@ resume した Claude の SessionStart hook は shell から再登録しますが
 
 `resume_capability: ready` は会話だけの resume でも出るため、resume した体が Mail を使えるかは `/api/jump` を実行した後の応答でしか分かりませんでした。`/api/agents` / `/api/graph` の resume できる Claude row（`ready` / `verification_required`）に `resume_mode` を追加し、`mail`（owner を認証して unretire する。できなければ起動しない）か `conversation_only`（Mail に触れない。`mail_reason` 付き）かを resume の前に出します。`/api/jump` も Mail まで戻した場合に `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていません。利用側が頼る field を足したため `/api/version` の `api` を5にしました。
 
+### token だけの Claude を resume して exit すると、Mail の row が active のまま残っていました（#143）
+
+子の state が無く owner token だけを持つ Claude を resume すると、resume は Mail の row を unretire しますが、exit の後に retired へ戻す処理がありませんでした（子の state を持つ体だけが cleanup で戻っていました）。resume の前に retired だった体は、CLI の終了後に reservation を解放し、同じ token で再 retire します。token は削除せず次の resume に残します。元から active だった体は retire しません。
+
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）
