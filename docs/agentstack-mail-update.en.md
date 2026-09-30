@@ -87,8 +87,11 @@ steps 1 to 4.
    written.
 2. **Verify it offline.** A snapshot of the shared database is taken with the
    SQLite backup API into `/tmp/orrery-mail-verify.*` (mode 700), and the
-   candidate is started on a free loopback port in an empty process
-   environment. The scratch service env comes from the same function as the
+   candidate is started on a free loopback port (fixed with
+   `AGENTSTACK_MAIL_UPDATE_VERIFY_PORT`) in an empty process environment. If
+   that port is in use, or is the running Mail's own port, nothing is started
+   and the result is `not-switched`, so that whatever answers there is never
+   read as the candidate. The scratch service env comes from the same function as the
    production render, so database, archive, signals and management socket all
    point into the scratch directory. `health_check` on both `/mcp` and `/api`
    must return the scratch database, the startup DDL must not have removed an

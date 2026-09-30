@@ -77,7 +77,10 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
    commit から build します（不完全なら止まる）。新しい render を書きます。
 2. **offline で検証する。** SQLite の backup API で共有 database の snapshot を
    `/tmp/orrery-mail-verify.*`（mode 700）に取り、空の process 環境で
-   candidate を空き loopback port に起動します。scratch の service env は
+   candidate を空き loopback port（`AGENTSTACK_MAIL_UPDATE_VERIFY_PORT` で固定可）に
+   起動します。その port が使用中か、稼働中の Mail の port と同じなら、何も起動せず
+   `not-switched` で終わります。そこにいる何かの health を candidate のものと
+   読まないためです。scratch の service env は
    本番の render と同じ関数から作るので、database・archive・signals・管理
    socket はすべて scratch を指します。`/mcp` と `/api` の両方の `health_check`
    が scratch の database を返すこと、起動時の DDL が既存の table と column を

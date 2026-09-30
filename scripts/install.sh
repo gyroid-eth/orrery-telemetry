@@ -2978,6 +2978,18 @@ if command == "free-port":
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         print(probe.getsockname()[1])
+elif command == "port-free":
+    # 0 only when a connect is refused: something answering, or a probe that
+    # cannot tell, is never treated as free.
+    try:
+        with socket.create_connection(("127.0.0.1", int(args[0])), timeout=0.5):
+            pass
+    except ConnectionRefusedError:
+        raise SystemExit(0)
+    except OSError as exc:
+        print(f"could not probe port {args[0]}: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(1)
 elif command == "snapshot":
     live, target, schema_file = args
     backup(live, target)
@@ -3070,8 +3082,19 @@ verify_native_mail_candidate_offline() {
   chmod 700 "$scratch"
   mkdir -p "$scratch/state/archive" "$scratch/state/signals" "$scratch/home"
   log_copy="$NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log"
-  if ! port="$(mail_update_helper free-port)"; then
+  local live_port
+  IFS='|' read -r _ live_port _ <<< "$parts"
+  port="${AGENTSTACK_MAIL_UPDATE_VERIFY_PORT:-}"
+  if [[ -n "$port" && ! "$port" =~ ^[1-9][0-9]{0,4}$ ]]; then
+    MAIL_UPDATE_REASON="AGENTSTACK_MAIL_UPDATE_VERIFY_PORT is not a port number: $port"
+  elif [[ -n "$port" && "$port" == "$live_port" ]]; then
+    MAIL_UPDATE_REASON="the scratch port $port is the live ORRERY Mail port; choose another AGENTSTACK_MAIL_UPDATE_VERIFY_PORT"
+  elif [[ -z "$port" ]] && ! port="$(mail_update_helper free-port)"; then
     MAIL_UPDATE_REASON="could not pick a scratch port"
+  elif ! mail_update_helper port-free "$port" 2>/dev/null; then
+    # Never start next to, or probe as ours, whatever holds the port: its
+    # health answer would be read as the candidate's.
+    MAIL_UPDATE_REASON="the scratch port $port is in use; nothing was started on it"
   elif ! mail_update_helper snapshot "$MAIL_DB" "$scratch/state/storage.sqlite3" "$scratch/schema.json" 2> "$scratch/snapshot.err"; then
     MAIL_UPDATE_REASON="could not snapshot $MAIL_DB: $(tail -n 1 "$scratch/snapshot.err")"
   elif ! emit_native_mail_env "$scratch/service.env" 127.0.0.1 "$port" "$path" "$scratch/state" "$scratch/mgmt.sock"; then

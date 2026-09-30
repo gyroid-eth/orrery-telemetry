@@ -15,6 +15,7 @@ import pathlib
 import sqlite3
 import secrets
 import shlex
+import socket
 import subprocess
 import sys
 import urllib.request
@@ -223,8 +224,13 @@ def test_update_switches_the_running_build_and_keeps_state(tmp_path):
             subject="before the switch", body_md="sent to the old build",
         )
 
-        updated = stack.install("fixture-new", "--update-mail")
+        scratch_port = _free_port()
+        updated = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(scratch_port)},
+        )
         assert updated.returncode == 0, updated.stdout + updated.stderr
+        assert f"on scratch port {scratch_port}" in updated.stdout
         assert "candidate verified offline" in updated.stdout
         assert "ORRERY Mail switched from fixture-old to fixture-new" in updated.stdout
         new_render = stack.render_of("fixture-new")
@@ -511,4 +517,49 @@ def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp
         assert stack.runner() == new_runner
         _wait_health(stack.mail_url)
     finally:
+        stack.teardown()
+
+
+def test_update_never_uses_an_occupied_scratch_port_or_the_live_one(tmp_path):
+    """The scratch server gets a port of its own or the update does not run.
+
+    Whatever already holds the chosen port could answer health_check, and that
+    answer must never be read as the candidate's; the live Mail port is the
+    extreme case of the same mistake.
+    """
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    occupant = socket.socket()
+    try:
+        _, old_render = _first_install(stack)
+        pid_before = stack.pid()
+        occupant.bind(("127.0.0.1", 0))
+        occupant.listen(16)
+        busy = occupant.getsockname()[1]
+
+        refused = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(busy)},
+        )
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert f"the scratch port {busy} is in use; nothing was started on it" in refused.stderr
+        assert "ORRERY Mail update not-switched" in refused.stderr
+
+        live = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(stack.mail_port)},
+        )
+        assert live.returncode == 1, live.stdout + live.stderr
+        assert "is the live ORRERY Mail port" in live.stderr
+
+        # Neither run stopped Mail, took a backup, or disturbed the occupant.
+        assert stack.pid() == pid_before
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert not (stack.service_root / "backups").exists()
+        with socket.create_connection(("127.0.0.1", busy), timeout=2):
+            pass
+        _wait_health(stack.mail_url)
+    finally:
+        occupant.close()
         stack.teardown()
