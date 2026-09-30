@@ -2924,10 +2924,21 @@ def schema(path):
         tables = [row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )]
-        return {
+        columns = {
             table: sorted(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
             for table in tables
         }
+        # Indexes (a UNIQUE one constrains what the previous build may write)
+        # and triggers, by their defining SQL. Automatic indexes have no SQL;
+        # they come with their table and are compared through it.
+        objects = {
+            f"{kind} {name}": sql
+            for kind, name, sql in connection.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE type IN ('index', 'trigger') AND sql IS NOT NULL"
+            )
+        }
+        return {"columns": columns, "objects": objects}
     finally:
         connection.close()
 
@@ -3001,7 +3012,14 @@ elif command == "wait-health":
     deadline = time.monotonic() + float(timeout)
     pending = list(urls)
     last = "not started"
+    started = time.monotonic()
+    next_report = started + 10
     while pending and time.monotonic() < deadline:
+        if time.monotonic() >= next_report:
+            # A silent two-minute wait invites Ctrl-C; say that it is waiting.
+            print(f"still waiting for the candidate to answer health "
+                  f"({int(time.monotonic() - started)}s of {timeout}s)", flush=True)
+            next_report += 10
         try:
             os.kill(int(pid), 0)
         except ProcessLookupError:
@@ -3026,15 +3044,26 @@ elif command == "schema-kept":
     # what the running build tolerates on rollback; a table or column that
     # disappeared is not, and that needs its own migration plan.
     schema_file, database = args
-    before = json.loads(pathlib.Path(schema_file).read_text(encoding="utf-8"))
-    after = schema(database)
+    before_all = json.loads(pathlib.Path(schema_file).read_text(encoding="utf-8"))
+    after_all = schema(database)
+    before, after = before_all["columns"], after_all["columns"]
     missing = [
         f"{table}.{column}" if column else table
         for table, columns in sorted(before.items())
         for column in ([None] if table not in after else [c for c in columns if c not in after[table]])
     ]
+    missing += sorted(
+        name for name in before_all["objects"] if name not in after_all["objects"]
+    )
+    changed = sorted(
+        name for name, sql in before_all["objects"].items()
+        if name in after_all["objects"] and after_all["objects"][name] != sql
+    )
     if missing:
         print("the candidate removed schema the running build uses: " + ", ".join(missing), file=sys.stderr)
+        raise SystemExit(1)
+    if changed:
+        print("the candidate redefined schema the running build uses: " + ", ".join(changed), file=sys.stderr)
         raise SystemExit(1)
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     try:
@@ -3049,6 +3078,7 @@ elif command == "schema-kept":
         f"{table}.{column}" for table in before if table in after
         for column in set(after[table]) - set(before[table])
     )
+    added += sorted(set(after_all["objects"]) - set(before_all["objects"]))
     print("schema additions: " + (", ".join(added) if added else "none"))
 elif command == "backup":
     live, directory, stem, keep = args
@@ -3066,24 +3096,68 @@ else:
 PY
 }
 
+# Scratch state of the offline check, global so the signal handler can reach it.
+MAIL_VERIFY_SCRATCH=""
+MAIL_VERIFY_SERVER_PID=""
+MAIL_VERIFY_HELPER_PID=""
+
+stop_mail_verify_pid() {  # stop_mail_verify_pid <pid>: TERM, wait up to 10 s, then KILL
+  local pid="$1" waited=0
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || return 0
+  while kill -0 "$pid" 2>/dev/null && (( waited < 100 )); do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+# The snapshot holds every message and every agent's registration token, and
+# the scratch server serves it on loopback without authentication. Neither may
+# outlive the check -- not on success, not on failure, not on Ctrl-C.
+cleanup_mail_verify() {
+  stop_mail_verify_pid "$MAIL_VERIFY_HELPER_PID"
+  stop_mail_verify_pid "$MAIL_VERIFY_SERVER_PID"
+  MAIL_VERIFY_HELPER_PID=""
+  MAIL_VERIFY_SERVER_PID=""
+  if [[ -n "$MAIL_VERIFY_SCRATCH" ]]; then
+    rm -rf "$MAIL_VERIFY_SCRATCH"
+    MAIL_VERIFY_SCRATCH=""
+  fi
+}
+
+mail_verify_interrupted() {
+  trap - EXIT INT TERM HUP
+  cleanup_mail_verify
+  warn "interrupted while verifying the ORRERY Mail candidate; the scratch server and snapshot were removed and the running Mail was not stopped"
+  exit 130
+}
+
 # Start the candidate on a free loopback port against a snapshot of the shared
 # database, in an empty process environment (python-decouple prefers the
 # process environment over the env file, so an inherited AGENTSTACK_MAIL_*
 # would point the scratch server at live state). Nothing here touches the
 # running service, its database file, its archive, signals or management socket.
 verify_native_mail_candidate_offline() {
-  local scratch port parts path server_pid rc=1 timeout log_copy
+  local scratch port parts path live_port rc=1 timeout log_copy
   timeout="${AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT:-120}"
   parts="$(mcp_local_server_parts)" || { MAIL_UPDATE_REASON="ORRERY Mail requires a local HTTP endpoint"; return 1; }
-  IFS='|' read -r _ _ path <<< "$parts"
+  IFS='|' read -r _ live_port path <<< "$parts"
+  log_copy="$NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log"
+  # Armed before the scratch directory exists, so no window leaves it behind.
+  trap mail_verify_interrupted INT TERM HUP
+  trap cleanup_mail_verify EXIT
   # Short on purpose: the management socket lives inside it, and a Unix socket
   # path is limited to about 100 bytes.
-  scratch="$(mktemp -d /tmp/orrery-mail-verify.XXXXXX)" || { MAIL_UPDATE_REASON="could not create a scratch directory"; return 1; }
+  if ! scratch="$(mktemp -d /tmp/orrery-mail-verify.XXXXXX)"; then
+    trap - EXIT INT TERM HUP
+    MAIL_UPDATE_REASON="could not create a scratch directory"
+    return 1
+  fi
+  MAIL_VERIFY_SCRATCH="$scratch"
   chmod 700 "$scratch"
   mkdir -p "$scratch/state/archive" "$scratch/state/signals" "$scratch/home"
-  log_copy="$NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log"
-  local live_port
-  IFS='|' read -r _ live_port _ <<< "$parts"
   port="${AGENTSTACK_MAIL_UPDATE_VERIFY_PORT:-}"
   if [[ -n "$port" && ! "$port" =~ ^[1-9][0-9]{0,4}$ ]]; then
     MAIL_UPDATE_REASON="AGENTSTACK_MAIL_UPDATE_VERIFY_PORT is not a port number: $port"
@@ -3100,24 +3174,24 @@ verify_native_mail_candidate_offline() {
   elif ! emit_native_mail_env "$scratch/service.env" 127.0.0.1 "$port" "$path" "$scratch/state" "$scratch/mgmt.sock"; then
     MAIL_UPDATE_REASON="could not render the scratch service env"
   else
-    say "verifying candidate $NATIVE_MAIL_VENV on scratch port $port"
+    say "verifying candidate $NATIVE_MAIL_VENV on scratch port $port in $scratch (waits up to ${timeout}s)"
     env -i HOME="$scratch/home" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$scratch/service.env" \
       "$NATIVE_MAIL_VENV/bin/agentstack-mail" > "$scratch/server.log" 2>&1 &
-    server_pid=$!
-    if mail_update_helper wait-health "$server_pid" "$timeout" "$scratch/state/storage.sqlite3" \
-        "http://127.0.0.1:$port$path" "http://127.0.0.1:$port/api" 2> "$scratch/probe.err"; then
+    MAIL_VERIFY_SERVER_PID=$!
+    # In the background and collected with `wait`: bash runs a trap only after
+    # a foreground command returns, so a SIGTERM would otherwise wait out the
+    # whole health timeout before anything was cleaned up.
+    mail_update_helper wait-health "$MAIL_VERIFY_SERVER_PID" "$timeout" "$scratch/state/storage.sqlite3" \
+      "http://127.0.0.1:$port$path" "http://127.0.0.1:$port/api" 2> "$scratch/probe.err" &
+    MAIL_VERIFY_HELPER_PID=$!
+    if wait "$MAIL_VERIFY_HELPER_PID"; then
       rc=0
     else
       MAIL_UPDATE_REASON="candidate failed offline verification: $(tail -n 1 "$scratch/probe.err")"
     fi
-    kill "$server_pid" 2>/dev/null || true
-    local waited=0
-    while kill -0 "$server_pid" 2>/dev/null && (( waited < 100 )); do
-      sleep 0.1
-      waited=$((waited + 1))
-    done
-    kill -KILL "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
+    MAIL_VERIFY_HELPER_PID=""
+    stop_mail_verify_pid "$MAIL_VERIFY_SERVER_PID"
+    MAIL_VERIFY_SERVER_PID=""
     if [[ "$rc" -eq 0 ]]; then
       if mail_update_helper schema-kept "$scratch/schema.json" "$scratch/state/storage.sqlite3" > "$scratch/schema.out" 2> "$scratch/schema.err"; then
         say "candidate verified offline ($(cat "$scratch/schema.out"))"
@@ -3129,9 +3203,40 @@ verify_native_mail_candidate_offline() {
     mkdir -p "$(dirname "$log_copy")"
     cp "$scratch/server.log" "$log_copy" 2>/dev/null || true
   fi
-  # The snapshot holds credentials: it never outlives the check.
-  rm -rf "$scratch"
+  cleanup_mail_verify
+  trap - EXIT INT TERM HUP
   return "$rc"
+}
+
+# From the stop until env.sh names the build that is serving, an interrupt
+# would leave a stopped Mail held down by the stop marker, or a new runner
+# that env.sh does not name (the autostart sweep and `status` then refuse it).
+# Finish the job either way before exiting: if env.sh already names the new
+# render, that is consistent and is left alone; otherwise the previous build
+# is put back, as after a failed switch.
+MAIL_UPDATE_SWITCH_ARMED=false
+
+mail_update_switch_interrupted() {
+  trap - INT TERM HUP
+  MAIL_UPDATE_SWITCH_ARMED=false
+  if [[ "$(installed_env_mail_env)" == "$NATIVE_MAIL_ENV" ]] && \
+     native_mail_serving_render "$NATIVE_MAIL_RUNNER"; then
+    warn "installer interrupted after ORRERY Mail was switched; $NATIVE_MAIL_ENV is serving and env.sh names it. Re-run install.sh to finish the rest of the install"
+    exit 130
+  fi
+  MAIL_UPDATE_REASON="the installer was interrupted during the switch"
+  rollback_native_mail
+  mail_update_use OLD
+  write_enrollment_connection_profile
+  warn "installer interrupted; ORRERY Mail was restored to $NATIVE_MAIL_ENV, which env.sh still names. Re-run install.sh --update-mail to try again"
+  exit 130
+}
+
+mail_update_disarm_switch() {
+  if [[ "$MAIL_UPDATE_SWITCH_ARMED" == true ]]; then
+    trap - INT TERM HUP
+    MAIL_UPDATE_SWITCH_ARMED=false
+  fi
 }
 
 switch_native_mail() {
@@ -3142,7 +3247,9 @@ switch_native_mail() {
   fi
   # AGENTSTACK_MAIL_UPDATE_START_GRACE bounds only the new build's start; the
   # rollback below starts the previous build with the controller's own grace.
-  if ! AGENTSTACK_MAIL_START_GRACE="${AGENTSTACK_MAIL_UPDATE_START_GRACE:-${AGENTSTACK_MAIL_START_GRACE:-180}}" \
+  local grace="${AGENTSTACK_MAIL_UPDATE_START_GRACE:-${AGENTSTACK_MAIL_START_GRACE:-180}}"
+  say "starting ORRERY Mail $NATIVE_MAIL_ENV (waits up to ${grace}s for it to answer)"
+  if ! AGENTSTACK_MAIL_START_GRACE="$grace" \
       native_mailctl "$NATIVE_MAIL_ENV" "$NATIVE_MAIL_RUNNER" start; then
     MAIL_UPDATE_REASON="the new build did not start (see $NATIVE_MAIL_LOG)"
     return 1
@@ -3216,11 +3323,15 @@ update_native_mail() {
   MAIL_UPDATE_BACKUP="$backup"
   say "backed up ORRERY Mail database to $backup"
   render_native_mail_runner
+  # Disarmed in main once env.sh names the serving build.
+  MAIL_UPDATE_SWITCH_ARMED=true
+  trap mail_update_switch_interrupted INT TERM HUP
   if switch_native_mail; then
     MAIL_UPDATE_RESULT="switched"
     say "ORRERY Mail switched from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID"
     return
   fi
+  mail_update_disarm_switch
   rollback_native_mail
   MAIL_UPDATE_RESULT="rolled-back"
   mail_update_use OLD
@@ -4581,6 +4692,7 @@ main() {
   say "ORRERY Mail requested-name handling: honored (passthrough)"
   write_enrollment_connection_profile
   write_env_file
+  mail_update_disarm_switch
   # After write_env_file: the unit runs `agentstack-mailctl start`, which reads
   # env.sh. Registering it earlier would fire RunAtLoad against a config that
   # does not exist yet. This is outside ensure_native_agentstack_mail on purpose

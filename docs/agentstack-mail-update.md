@@ -83,10 +83,13 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
    読まないためです。scratch の service env は
    本番の render と同じ関数から作るので、database・archive・signals・管理
    socket はすべて scratch を指します。`/mcp` と `/api` の両方の `health_check`
-   が scratch の database を返すこと、起動時の DDL が既存の table と column を
-   消していないこと、`PRAGMA quick_check` が `ok` であることを確かめます。
+   が scratch の database を返すこと、起動時の DDL が既存の table・column・
+   index・trigger を消したり定義し直したりしていないこと、`PRAGMA quick_check`
+   が `ok` であることを確かめます。待っている間は 10 秒ごとに経過を表示します。
    snapshot は成否に関わらず削除し、server log だけを
-   `mail-service/runtime/mail-update-verify.log` に残します。
+   `mail-service/runtime/mail-update-verify.log` に残します。検証中に Ctrl-C や
+   SIGTERM で止めても、scratch の server を止めて snapshot を消してから終わり
+   ます（終了 status 130。稼働中の Mail は止めていない）。
 3. **database を backup する。** `mail-service/backups/storage-<UTC>-before-<commit>.sqlite3`
    （mode 600）。直近 3 個を残します（`AGENTSTACK_MAIL_UPDATE_BACKUPS`）。
    自動で戻すのは build だけで、database は戻しません。backup は、新しい build
@@ -109,6 +112,7 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
 | `not-switched`（1〜3 で失敗） | 前の build。止めていない | 1 |
 | `rolled-back`（4 で失敗し 5 が成功） | 前の build。数秒〜 grace 分の停止あり | 1 |
 | rollback 失敗 | 停止中の可能性。error が状態と次の操作を示す | 1（その場で終了） |
+| 切り替え中に中断（Ctrl-C・SIGTERM・端末を閉じる） | `env.sh` がすでに新しい build を指していればそのまま、でなければ前の build に戻す | 130 |
 
 `not-switched` と `rolled-back` でも installer の残りは前の build に対して完了
 します。終了 status 1 は「頼まれた更新は起きていない」ことを示します。
@@ -144,17 +148,19 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
   は保持し、`mail_env` だけを新しい render に書き換えます。管理 socket の path
   は state root から決まるので同じです。
 - **database・archive・signals。** 同じ state root を使い続けます。新しい build の
-  起動時の DDL は追加だけを許し、既存の table か column を消す build は検証で
-  止まります。
+  起動時の DDL は追加だけを許し、既存の table・column・index・trigger を消すか
+  定義し直す build は検証で止まります。
 - **autostart。** 切り替え中は stop marker が sweep を押さえ、`start` がそれを
   外します。unit は `env.sh` を読むので、installer が `env.sh` を書き換えた時点で
   新しい render を起動するようになります。
 
 **扱わないもの。** `agentstack-mailctl` が起動した runner（pidfile が生きた
-runner を指す）だけを差し替えます。deployment を特定できない listener、
-launchd が直接 supervise する service、custom install（`--install-dir` や
-`AGENTSTACK_MAIL_*` override）は対象外か未検証です。特定できない場合は何も
-止めずに error で終わります。
+runner を指す）だけを差し替えます。deployment を特定できない listener と
+launchd が直接 supervise する service は対象外で、何も止めずに error で終わり
+ます。state root・service root・endpoint の override（`AGENTSTACK_MAIL_*`、
+`AGENTSTACK_MCP_URL`）は同じ経路で扱い、test もこれらを override して実行して
+います。既定以外の `--install-dir` も拒否はしませんが、それ自体は test して
+いません。
 
 時間の上限: 検証 server の応答待ち `AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT`
 （既定 120 秒）、新しい build の起動待ち `AGENTSTACK_MAIL_UPDATE_START_GRACE`

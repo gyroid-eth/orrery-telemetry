@@ -18,6 +18,7 @@
 2. Stop to start is the outage. Health for the new build must name the shared database, and the pidfile must name the new runner.
 3. If that does not hold, the previous render is started as it was (`rolled-back`). The previous candidate, render and runner are immutable, so what comes back is exactly what was running.
 4. `env.sh`, the autostart unit, `connections/local.json` and `install-state.json` are written **after** the switch, from whichever deployment is actually serving. After a rollback the previous deployment is recorded. That is what "restore the previous manifest" amounts to: nothing rewinds a manifest, because it is written only once the outcome is settled.
+5. An interrupt (Ctrl-C, SIGTERM, HUP) is settled like a failure before exiting. During verification, the scratch server is stopped and the snapshot deleted (the snapshot copies every message and token, so leaving it would expose them). Between the stop and writing `env.sh`, the new build is left alone if `env.sh` already names it; otherwise the previous build is put back. Long waits run in the background under `wait`, so a signal is handled at once.
 
 ### What is not lost
 
@@ -26,7 +27,7 @@
 | Live connections | Stateless HTTP, so there are no sessions. Requests during the outage are refused and recover on retry |
 | Tokens, credentials | In the database and in client-side files; neither is touched |
 | Enrollment pin | `server_instance_id` is in the database and unchanged. `expected_server_instance_id` is preserved; only `mail_env` is updated |
-| Database | Same state root. Startup DDL must be additive (verification checks for removed tables or columns, and `quick_check`). Backed up just before the switch |
+| Database | Same state root. Startup DDL must be additive (verification checks for removed or redefined tables, columns, indexes and triggers, and `quick_check`). Backed up just before the switch |
 | Archive, signals, management socket | Same paths. The verification server points entirely at scratch (its env comes from the same function as the production render) |
 | Autostart | The stop marker holds the sweep back during the switch; `start` clears it |
 

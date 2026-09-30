@@ -18,6 +18,7 @@
 2. 停止から start までが outage。新しい build の health が共有 database を返し、pidfile が新しい runner を指すことを確かめる。
 3. 確かめられなければ、前の render をそのまま start する（`rolled-back`）。前の candidate・render・runner は不変なので、戻し先は「さっきまで動いていたもの」そのもの。
 4. `env.sh`・autostart unit・`connections/local.json`・`install-state.json` は、切り替えの**後で**、実際に動いている方の deployment から書く。rollback したら前の deployment が記録される。これが「旧 manifest に戻す」の実体で、manifest を巻き戻す処理は持たない（書く前に決着させる）。
+5. 中断（Ctrl-C・SIGTERM・HUP）も失敗と同じく決着させてから終わる。検証中なら scratch の server を止めて snapshot を消す（snapshot は全 message と token の複製なので、残すと露出になる）。stop から `env.sh` を書くまでの間なら、`env.sh` が新しい build を指していればそのまま、でなければ前の build に戻す。長い待ちは background に置いて `wait` で待つので、signal はすぐに処理される。
 
 ### 失わないもの
 
@@ -26,7 +27,7 @@
 | 稼働中の接続 | stateless HTTP なので session は無い。outage 中の request は拒否され、再試行で戻る |
 | token・credential | database と client 側 file にあり、どちらも触れない |
 | enrollment の pin | `server_instance_id` は database にあり不変。`expected_server_instance_id` は保持し、`mail_env` だけ更新 |
-| database | 同じ state root。起動時 DDL は追加のみ許可（検証で既存の table・column の消失と `quick_check` を見る）。切り替え直前に backup |
+| database | 同じ state root。起動時 DDL は追加のみ許可（検証で既存の table・column・index・trigger の消失と再定義、`quick_check` を見る）。切り替え直前に backup |
 | archive・signals・管理 socket | 同じ path。検証用 server はすべて scratch を向く（本番 render と同じ関数で env を作る） |
 | autostart | stop marker で切り替え中の sweep を押さえ、`start` が外す |
 

@@ -15,10 +15,14 @@ import pathlib
 import sqlite3
 import secrets
 import shlex
+import signal
 import socket
 import subprocess
 import sys
+import time
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
@@ -563,3 +567,172 @@ def test_update_never_uses_an_occupied_scratch_port_or_the_live_one(tmp_path):
     finally:
         occupant.close()
         stack.teardown()
+
+
+def _install_until(stack: Stack, source: str, marker: str, extra: dict[str, str]):
+    """Start an --update-mail install in its own session; return it once `marker` is printed."""
+    env = {**stack.env, **extra, "AGENTSTACK_MAIL_CANDIDATE_ID": source}
+    process = subprocess.Popen(
+        ["/bin/bash", str(INSTALLER), "--assume-yes", "--update-mail"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    seen: list[str] = []
+    deadline = time.monotonic() + 80
+    assert process.stdout is not None
+    while time.monotonic() < deadline:
+        line = process.stdout.readline()
+        if not line:
+            break
+        seen.append(line)
+        if marker in line:
+            return process, seen
+    process.kill()
+    raise AssertionError(f"{marker!r} never appeared:\n" + "".join(seen))
+
+
+def _interrupt(process: subprocess.Popen, how: str) -> tuple[int, str, str]:
+    if how == "SIGINT":
+        # What Ctrl-C does: the whole foreground process group.
+        os.killpg(process.pid, signal.SIGINT)
+    else:
+        os.kill(process.pid, signal.SIGTERM)
+    out, err = process.communicate(timeout=60)
+    return process.returncode, out, err
+
+
+@pytest.mark.parametrize("how", ["SIGINT", "SIGTERM"])
+def test_an_interrupted_verification_leaves_no_snapshot_and_no_server(tmp_path, how):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    server_pid_file = tmp_path / "candidate-server.pid"
+    # A candidate server that never answers, so the installer is still
+    # waiting on it when the signal arrives.
+    _candidate(
+        stack.service_root,
+        "fixture-slow",
+        broken={"agentstack-mail": f"#!/bin/sh\necho $$ > {server_pid_file}\nexec sleep 300\n"},
+    )
+    try:
+        _, old_render = _first_install(stack)
+        pid_before = stack.pid()
+        process, seen = _install_until(stack, "fixture-slow", "verifying candidate", {})
+        scratch = pathlib.Path(seen[-1].split(" in ", 1)[1].split(" (waits", 1)[0])
+        assert scratch.name.startswith("orrery-mail-verify.")
+        assert scratch.is_dir()
+        deadline = time.monotonic() + 10
+        while not server_pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        server_pid = int(server_pid_file.read_text(encoding="utf-8"))
+
+        code, _, err = _interrupt(process, how)
+        assert code == 130, err
+        assert "the scratch server and snapshot were removed" in err
+        assert not scratch.exists()
+        try:
+            os.kill(server_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            os.kill(server_pid, signal.SIGKILL)
+            raise AssertionError("the candidate server outlived the interrupted check")
+        # The running Mail was never stopped and still owns env.sh.
+        assert stack.pid() == pid_before
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        assert not (stack.service_root / "backups").exists()
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("how", ["SIGINT", "SIGTERM"])
+def test_an_interrupted_switch_restores_the_previous_build(tmp_path, how):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    # Verifies offline, then never answers in production, so the installer is
+    # inside the switch when the signal arrives.
+    _candidate(
+        stack.service_root,
+        "fixture-hangs",
+        broken={"agentstack-mail-service": "#!/bin/sh\nexec sleep 300\n"},
+    )
+    try:
+        health, old_render = _first_install(stack)
+        process, _ = _install_until(
+            stack, "fixture-hangs", "starting ORRERY Mail",
+            {"AGENTSTACK_MAIL_UPDATE_START_GRACE": "8"},
+        )
+        code, out, err = _interrupt(process, how)
+        assert code == 130, out + err
+        assert "ORRERY Mail was restored to" in err
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        assert not (stack.service_root / "runtime" / "agentstack-mail.stopped").exists()
+        profile = json.loads(
+            (stack.home / ".agentstack" / "connections" / "local.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert profile["mail_env"] == str(old_render / "service.env")
+    finally:
+        stack.teardown()
+
+
+def _schema_helper(tmp_path: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+    script = (
+        "set -euo pipefail\n"
+        f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
+        f"eval \"$(sed -n '/^mail_update_helper()/,/^}}/p' {INSTALLER})\"\n"
+        'mail_update_helper "$@"\n'
+    )
+    return subprocess.run(
+        ["/bin/bash", "-c", script, "helper", *args],
+        text=True, capture_output=True, check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "verdict"),
+    [
+        ("ALTER TABLE agents ADD COLUMN extra TEXT", "ok"),
+        ("CREATE INDEX ix_extra ON agents(name, id)", "ok"),
+        ("DROP INDEX ux_agents_name", "removed schema the running build uses: index ux_agents_name"),
+        ("DROP TRIGGER tr_agents", "removed schema the running build uses: trigger tr_agents"),
+        (
+            "DROP INDEX ux_agents_name; CREATE UNIQUE INDEX ux_agents_name ON agents(id, name)",
+            "redefined schema the running build uses: index ux_agents_name",
+        ),
+    ],
+)
+def test_schema_check_refuses_removed_or_redefined_indexes_and_triggers(
+    tmp_path, change, verdict
+):
+    live = tmp_path / "live.sqlite3"
+    with sqlite3.connect(live) as db:
+        db.executescript(
+            "CREATE TABLE agents (id INTEGER PRIMARY KEY, name TEXT);"
+            "CREATE UNIQUE INDEX ux_agents_name ON agents(name);"
+            "CREATE TRIGGER tr_agents AFTER INSERT ON agents BEGIN SELECT 1; END;"
+        )
+    snapshot = tmp_path / "snapshot.sqlite3"
+    schema = tmp_path / "schema.json"
+    taken = _schema_helper(tmp_path, "snapshot", str(live), str(snapshot), str(schema))
+    assert taken.returncode == 0, taken.stderr
+    with sqlite3.connect(snapshot) as db:
+        db.executescript(change)
+    checked = _schema_helper(tmp_path, "schema-kept", str(schema), str(snapshot))
+    if verdict == "ok":
+        assert checked.returncode == 0, checked.stderr
+        assert checked.stdout.startswith("schema additions: ")
+    else:
+        assert checked.returncode == 1
+        assert verdict in checked.stderr

@@ -94,10 +94,14 @@ steps 1 to 4.
    read as the candidate. The scratch service env comes from the same function as the
    production render, so database, archive, signals and management socket all
    point into the scratch directory. `health_check` on both `/mcp` and `/api`
-   must return the scratch database, the startup DDL must not have removed an
-   existing table or column, and `PRAGMA quick_check` must be `ok`. The
-   snapshot is deleted whatever the outcome; only the server log is kept, at
-   `mail-service/runtime/mail-update-verify.log`.
+   must return the scratch database, the startup DDL must not have removed or
+   redefined an existing table, column, index or trigger, and
+   `PRAGMA quick_check` must be `ok`. Progress is printed every 10 s while it
+   waits. The snapshot is deleted whatever the outcome; only the server log is
+   kept, at `mail-service/runtime/mail-update-verify.log`. Interrupted during
+   verification by Ctrl-C or SIGTERM, the installer stops the scratch server and
+   deletes the snapshot before exiting (status 130; the running Mail was never
+   stopped).
 3. **Back up the database** to
    `mail-service/backups/storage-<UTC>-before-<commit>.sqlite3` (mode 600); the
    three most recent are kept (`AGENTSTACK_MAIL_UPDATE_BACKUPS`). Only the build
@@ -123,6 +127,7 @@ requested render and candidate, and the backup path.
 | `not-switched` (failed in 1 to 3) | the previous build, never stopped | 1 |
 | `rolled-back` (4 failed, 5 succeeded) | the previous build, after an outage of seconds up to the start grace | 1 |
 | rollback failed | possibly down; the error states the state and the next action | 1 (immediately) |
+| interrupted during the switch (Ctrl-C, SIGTERM, terminal closed) | left as is if `env.sh` already names the new build; otherwise the previous build is put back | 130 |
 
 With `not-switched` and `rolled-back` the rest of the install still completes
 against the previous build. Exit status 1 says that the update that was asked
@@ -163,18 +168,19 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
   new render. The management socket path is derived from the state root and
   stays the same.
 - **Database, archive, signals.** The same state root stays in use. Only
-  additive startup DDL is accepted; a build that removes an existing table or
-  column stops at verification.
+  additive startup DDL is accepted; a build that removes or redefines an
+  existing table, column, index or trigger stops at verification.
 - **Autostart.** The stop marker holds the sweep back during the switch, and
   `start` clears it. The unit reads `env.sh`, so it starts the new render as
   soon as the installer has rewritten `env.sh`.
 
 **Out of scope.** Only a runner started by `agentstack-mailctl` (the pidfile
 names a live runner) is replaced. A listener whose deployment cannot be
-identified, a service supervised directly by launchd, and custom installs
-(`--install-dir`, `AGENTSTACK_MAIL_*` overrides) are out of scope or untested.
-When the deployment cannot be identified, the run ends with an error without
-stopping anything.
+identified and a service supervised directly by launchd are out of scope; the
+run ends with an error without stopping anything. Overrides of the state root,
+service root and endpoint (`AGENTSTACK_MAIL_*`, `AGENTSTACK_MCP_URL`) take the
+same path, and the tests run with them overridden. A non-default
+`--install-dir` is not refused either, but is not itself tested.
 
 Time limits: waiting for the verification server,
 `AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT` (default 120 s); waiting for the new
