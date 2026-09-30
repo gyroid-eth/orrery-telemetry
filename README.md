@@ -118,6 +118,14 @@ Claude Code にも Codex にも、もともと「subagent」という似た仕�
 
 skill の置き場所と仕組みは [Launcher と identity](docs/launchers.md#skills2件と-file-reservation) を参照してください。
 
+## ORRERY cockpit と一緒に使う
+
+[ORRERY cockpit](https://github.com/gyroid-eth/orrery) は、agent の端末と ORRERY Telemetry を 1 つの画面にまとめた作業台です。左に agent の一覧、中央に各 agent の端末、右に ORRERY Mail と系譜を並べ、この dashboard は header の `TELEMETRY` から cockpit の中に開きます。人の判断を待っている agent が点滅して分かり、指示は端末とは別の入力欄から送れるので、何体動かしていても窓を渡り歩かずに済みます。Mac（`ORRERY.app` かブラウザ）と Windows（WSL2 とブラウザ）で使え、ORRERY Telemetry を入れたあとに足します。
+
+![ORRERY cockpit。左に agent の一覧、中央に 3 体の端末、右に系譜と ORRERY Mail](<https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_overview.png>)
+
+入れ方は cockpit の [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md) の「はじめて入れる人へ」を見てください。
+
 ## Obsidian と一緒に使う
 
 Obsidian の vault を作業場所にすると、agent の作業ログ・論文ノート・タスクがそのまま Markdown のノートになり、人は Daily Note と Kanban で見るだけで済みます。ORRERY Telemetry は Obsidian が無くても使えます。これは便利な使い方の 1 つです。
@@ -186,6 +194,8 @@ Python 3.11 以上、`git`、`tmux`、`uv` が必須で、実行時には Claude
 | [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
 | [デザイン言語](docs/design.md) | dashboard の見え方と動きの正本。UI を足す前に読む |
 | [第三者コンポーネント](docs/third-party.md) | ORRERY Mail、license、credits |
+
+端末とこの dashboard を 1 画面で使う作業台は、別の repository の [ORRERY cockpit](https://github.com/gyroid-eth/orrery) にあります。
 
 同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。
 

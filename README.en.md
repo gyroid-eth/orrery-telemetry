@@ -118,6 +118,14 @@ Type `/log` and the agent writes one Markdown file under `logs/` summarizing wha
 
 Where the skills live and how they are wired is covered in [Launchers and identity](docs/launchers.en.md#skills-2-and-file-reservations).
 
+## Using it with ORRERY cockpit
+
+[ORRERY cockpit](https://github.com/gyroid-eth/orrery) is a workbench that puts your agents' terminals and ORRERY Telemetry on one screen: the agent list on the left, each agent's terminal in the middle, ORRERY Mail and the lineage on the right, and this dashboard opens inside it from the `TELEMETRY` button in its header. Agents waiting for your decision blink, and you type instructions in an input box separate from the terminal, so however many agents you run, you do not have to hop between windows. It runs on Mac (`ORRERY.app` or a browser) and on Windows (WSL2 and a browser), and you add it after installing ORRERY Telemetry.
+
+![ORRERY cockpit: the agent list on the left, three terminals in the middle, the lineage and ORRERY Mail on the right](<https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_overview.png>)
+
+See "For first-time installers" in the cockpit's [installation guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md) to set it up.
+
 ## Using it with Obsidian
 
 When you use an Obsidian vault as the place where agents work, their work logs, paper notes, and tasks become Markdown notes as they are, and you only need to read them in the Daily Note and on a Kanban board. ORRERY Telemetry works without Obsidian; this is one useful way to work.
@@ -186,6 +194,8 @@ The Japanese documentation is canonical. The main guides have English versions.
 | [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, authentication |
 | [Design language](docs/design.en.md) | The canonical account of how the dashboard looks and moves. Read before adding UI |
 | [Third-party components](docs/third-party.md) | ORRERY Mail, licensing, credits |
+
+The workbench that uses your terminals and this dashboard on one screen lives in a separate repository, [ORRERY cockpit](https://github.com/gyroid-eth/orrery).
 
 For the internals of the bundled server see the [ORRERY Mail design document](docs/agentstack-mail.en.md), and see [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.
 

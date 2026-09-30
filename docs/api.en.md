@@ -565,7 +565,7 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 {"ok":true,"name":"WindyFermi","state":"ready","age":9.4,"error":null,"detail":null,"result":{...}}
 ```
 
-`state` is `launching / ready / failed`. A `failed` record includes `error` and `detail`, the end of the launcher log, matching synchronous spawn. Records remain for 30 minutes, and an unknown name returns 404. Omitting `name` returns every retained record. NEW AGENT in both the dashboard and ORRERY cockpit uses this path, closing the modal immediately and showing the result in a toast. Calls without `async` continue to wait for the decision as before.
+`state` is `launching / ready / failed`. A `failed` record includes `error` and `detail`, the end of the launcher log, matching synchronous spawn. Records remain for 30 minutes, and an unknown name returns 404. Omitting `name` returns every retained record. NEW AGENT in both the dashboard and [ORRERY cockpit](https://github.com/gyroid-eth/orrery) uses this path, closing the modal immediately and showing the result in a toast. Calls without `async` continue to wait for the decision as before.
 
 ## Related documentation
 
