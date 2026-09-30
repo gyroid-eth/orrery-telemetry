@@ -172,6 +172,8 @@ A root task passes only `session_id`. A subagent passes the same `session_id` an
 
 The proxy a launcher such as `spawn_child.sh` gives a child does not use the Bridge: it is bound directly to the child's name, project and token at startup. Its `lineage` is not a Codex App lineage. `parent_agent` names the ORRERY parent the launcher passed in `AGENTSTACK_PROXY_PARENT_AGENT` (`kind` is `child`); an agent with no parent, such as `--standalone`, is `kind: root` with `parent_agent: null`. The launcher also records the parent in the child's private state (`parent_agent` in `child-agents/<name>.json`), so a dashboard resume that rebuilds the proxy config passes the same parent. The launcher stops before the CLI starts when the generated proxy could not state the parent: a parent name the proxy does not accept, or no proxy prepared while the inherited Codex config enables the Bridge plugin.
 
+A proxy a launcher bound at startup also accepts arguments shaped for raw ORRERY Mail, because a conversation resumed after using raw Mail keeps calling the tools that way. `project_key`, `agent_name` and `sender_name` are ignored when they match the binding and refused with the reason when they do not. In a raw-style `whois`, `agent_name` is taken as the agent to look up. A `registration_token` or `sender_token` from the model is never used or forwarded. Any other argument outside the schema is refused with the list of accepted arguments. For this proxy `runtime_status` reports `state: bound` (the binding exists) without contacting Mail.
+
 ## Inbox notifications and cold wake
 
 Delivery paths differ between an active turn and a stopped task.

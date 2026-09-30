@@ -380,3 +380,100 @@ def test_a_standalone_direct_binding_is_still_a_root(tmp_path):
     lineage = _dispatch(proxy, "runtime_status", {})["lineage"]
     assert lineage["kind"] == "root"
     assert lineage["parent_agent"] is None
+
+
+# --- a conversation that used raw ORRERY Mail, resumed on the proxy ---------
+#
+# WSL2 report, 2026-10-01, problem 2: a conversation first run against the raw
+# orrery-mail server was resumed from the dashboard on this proxy. The model
+# kept calling the same tool names the way it had before: send_message with
+# `project_key` and `sender_name`, whois with the target in `agent_name`.
+# fetch_inbox worked; send_message failed with
+#   AgentStackProxy.send_message() got an unexpected keyword argument 'sender_name'
+# and whois refused the target as a mismatched caller identity.
+
+
+def _call(proxy, name, arguments):
+    from agentstack_codex_app.mcp_server import StdioMcpServer
+
+    return StdioMcpServer(proxy)._call_tool(name, arguments)
+
+
+def test_raw_send_message_from_the_bound_agent_is_sent(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    result = _call(proxy, "send_message", {
+        "project_key": PROJECT, "sender_name": AGENT, "to": ["Blue-Lake"],
+        "subject": "report", "body_md": "done", "sender_token": "whatever-the-model-had",
+    })
+    assert not result["isError"], result
+    sent = [arguments for tool, arguments in transport.calls if tool == "send_message"]
+    assert sent and sent[0]["sender_name"] == AGENT and sent[0]["to"] == ["Blue-Lake"]
+    # The proxy authenticates with its own credential, never one the model supplied.
+    assert sent[0]["sender_token"] == TOKEN
+
+
+def test_raw_send_message_as_someone_else_is_refused_with_the_reason(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    result = _call(proxy, "send_message", {
+        "project_key": PROJECT, "sender_name": "Blue-Lake", "to": ["Green-Castle"],
+        "subject": "s", "body_md": "b",
+    })
+    assert result["isError"]
+    text = result["content"][0]["text"]
+    assert "sender_name" in text and AGENT in text
+    assert not [tool for tool, _ in transport.calls if tool == "send_message"]
+
+
+def test_raw_whois_treats_agent_name_as_the_agent_to_look_up(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    recording = transport.__class__.__call__
+
+    def answer_with_profile(self, payload):
+        reply = recording(self, payload)
+        if payload.get("params", {}).get("name") == "whois":
+            profile = {"id": 9, "name": payload["params"]["arguments"]["agent_name"]}
+            return {"result": {"content": [{"type": "text", "text": json.dumps(profile)}]}}
+        return reply
+
+    transport.__class__ = type("ProfileTransport", (transport.__class__,), {"__call__": answer_with_profile})
+    result = _call(proxy, "whois", {
+        "project_key": PROJECT, "agent_name": "Blue-Lake",
+        "include_recent_commits": False, "commit_limit": 3,
+    })
+    assert not result["isError"], result
+    looked_up = [arguments for tool, arguments in transport.calls if tool == "whois"]
+    assert looked_up and looked_up[0]["agent_name"] == "Blue-Lake"
+
+
+def test_raw_fetch_inbox_never_forwards_a_model_supplied_token(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    result = _call(proxy, "fetch_inbox", {
+        "project_key": PROJECT, "agent_name": AGENT, "limit": 5,
+        "registration_token": "stale-token-from-history",
+    })
+    assert not result["isError"], result
+    fetched = [arguments for tool, arguments in transport.calls if tool == "fetch_inbox"]
+    assert fetched and fetched[0]["registration_token"] == TOKEN
+
+
+def test_an_unknown_argument_is_refused_with_the_accepted_list(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    result = _call(proxy, "send_message", {
+        "to": ["Blue-Lake"], "subject": "s", "body_md": "b",
+        "attachment_paths": ["/tmp/x.png"],
+    })
+    assert result["isError"]
+    text = result["content"][0]["text"]
+    assert "attachment_paths" in text
+    assert "body_md" in text and "subject" in text  # what it does accept
+    assert "unexpected keyword argument" not in text
+    assert not [tool for tool, _ in transport.calls if tool == "send_message"]
+
+
+def test_a_launcher_binding_does_not_claim_to_be_registering(tmp_path):
+    """No Bridge snapshot ever exists for a direct binding, so the state it
+    reported never changed from "registering" however long one waited."""
+    proxy, _transport = _proxy(tmp_path)
+    status = _dispatch(proxy, "runtime_status", {})
+    assert status["state"] != "registering"
+    assert status["state"] == "bound"
