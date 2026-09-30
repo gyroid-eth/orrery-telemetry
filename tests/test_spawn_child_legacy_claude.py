@@ -50,6 +50,7 @@ class FakeMail:
         self.advertises_existing_owner = advertises_existing_owner
         self.accepts_owner = accepts_owner
         self.program = program
+        self.retired = False
         mail = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -84,6 +85,12 @@ class FakeMail:
         arguments = envelope["params"]["arguments"]
         self.calls.append((name, arguments))
         profile = {"id": AGENT_ID, "name": NAME, "program": self.program, "project_id": PROJECT_ID}
+        if self.retired:
+            profile["retired_at"] = "2026-09-30T14:32:36Z"
+        if name == "unretire_agent" and arguments.get("registration_token") == TOKEN:
+            self.retired = False
+            data = {"status": "active", "agent_name": NAME, "project_key": PROJECT}
+            return {"structuredContent": data, "content": [{"type": "text", "text": json.dumps(data)}]}, None
         if name == "whois":
             if arguments.get("agent_name") != NAME or arguments.get("project_key") != PROJECT:
                 return {}, "agent not found"
@@ -257,3 +264,19 @@ def test_staging_never_promotes_a_legacy_state_without_an_authenticated_owner(tm
                                         generation="a" * 32, legacy_agent_id=AGENT_ID)
     assert json.loads(state.read_text()) == LEGACY
     assert not list(state.parent.glob(".*.registration-pending.json"))
+
+
+def test_a_legacy_child_retired_in_mail_is_adopted_and_made_active(tmp_path, mail_factory):
+    """#150 review P2-2: the three-field state says nothing about retirement,
+    so ORRERY Mail decides, after the owner is confirmed and the state moved."""
+    mail = mail_factory()
+    mail.retired = True
+    env, workdir, state, _token = _legacy_child(tmp_path, mail)
+
+    result = _spawn(env, workdir, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert [name for name, _ in mail.calls if name != "tools/list"] == [
+        "whois", "register_agent", "whois", "unretire_agent"]
+    assert not mail.retired
+    assert json.loads(state.read_text(encoding="utf-8"))["agent_id"] == AGENT_ID

@@ -578,8 +578,13 @@ def _dispatch(
     # (WSL2 report, 2026-10-01): whois names its target in `agent_name`, and
     # model-held credentials ride along. The target is not the caller, and the
     # proxy authenticates with its own token, so translate and drop first.
-    if name == "whois" and "name" not in call_arguments and "agent_name" in call_arguments:
-        call_arguments["name"] = call_arguments.pop("agent_name")
+    if name == "whois" and "agent_name" in call_arguments:
+        target = call_arguments.pop("agent_name")
+        if "name" in call_arguments and call_arguments["name"] != target:
+            raise ProxyError(
+                "whois got two different agents to look up (name and agent_name)"
+            )
+        call_arguments["name"] = target
     if name == "whois":
         for option in _RAW_WHOIS_OPTIONS:
             call_arguments.pop(option, None)

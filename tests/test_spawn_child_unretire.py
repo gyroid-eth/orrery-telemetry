@@ -52,7 +52,12 @@ class FakeMail:
                 name = envelope["params"]["name"]
                 arguments = envelope["params"]["arguments"]
                 mail.calls.append((name, arguments))
-                if name in mail.refuse or arguments.get("registration_token") != TOKEN:
+                if name == "whois" and name not in mail.refuse:
+                    data = {"id": 73, "name": arguments["agent_name"], "program": "claude-code"}
+                    if mail.retired:
+                        data["retired_at"] = "2026-09-30T14:32:36Z"
+                    result = {"structuredContent": data, "content": [{"type": "text", "text": json.dumps(data)}]}
+                elif name in mail.refuse or arguments.get("registration_token") != TOKEN:
                     result = {"isError": True, "content": [{"type": "text", "text": f"{name} refused"}]}
                 else:
                     mail.retired = name == "retire_agent"
@@ -92,7 +97,10 @@ def mail_factory():
         server.close()
 
 
-def _retained_child(tmp_path: pathlib.Path, mail: FakeMail, *, codex: bool, retired: bool = True):
+def _retained_child(tmp_path: pathlib.Path, mail: FakeMail, *, codex: bool, retired: bool = True,
+                    mail_retired: bool | None = None):
+    """A child that ran before. ``retired`` is what its local state says;
+    ``mail_retired`` what ORRERY Mail says (default: the same)."""
     from hooks import child_resume
 
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
@@ -114,8 +122,7 @@ def _retained_child(tmp_path: pathlib.Path, mail: FakeMail, *, codex: bool, reti
     if retired:
         # What cleanup-child-agent.sh leaves after the child exits.
         assert child_resume.mark_retired(runtime, NAME, retention_days=30)
-    else:
-        mail.retired = False
+    mail.retired = retired if mail_retired is None else mail_retired
     args = ["/bin/bash", str(SPAWN), "--pre-registered", NAME]
     if codex:
         args.append("--codex")
@@ -140,21 +147,75 @@ def test_relaunching_a_retired_child_makes_it_reachable_again(tmp_path, mail_fac
 
     assert result.returncode == 0, result.stderr
     assert _launched(env)
-    assert mail.tools() == ["unretire_agent"]
-    assert mail.calls[0][1] == {"project_key": PROJECT, "agent_name": NAME, "registration_token": TOKEN}
+    assert mail.tools() == ["whois", "unretire_agent"]
+    assert mail.calls[1][1] == {"project_key": PROJECT, "agent_name": NAME, "registration_token": TOKEN}
     assert not mail.retired
     assert json.loads(state.read_text())["retired_at"] is None
 
 
 @pytest.mark.parametrize("codex", [False, True], ids=["claude", "codex"])
-def test_an_active_child_is_relaunched_without_touching_mail(tmp_path, mail_factory, codex):
+def test_an_active_child_is_only_looked_up(tmp_path, mail_factory, codex):
     mail = mail_factory()
     env, args, _state = _retained_child(tmp_path, mail, codex=codex, retired=False)
 
     result = _run(args, env)
 
     assert result.returncode == 0, result.stderr
-    assert mail.tools() == []
+    assert mail.tools() == ["whois"]
+
+
+@pytest.mark.parametrize("codex", [False, True], ids=["claude", "codex"])
+def test_a_child_retired_only_in_mail_is_made_active(tmp_path, mail_factory, codex):
+    """Retired by the dashboard's retire button, a manual retire_agent, or a
+    cleanup whose state write did not happen: the local state says nothing.
+    ORRERY Mail is what refuses the parent's messages, so it decides."""
+    mail = mail_factory()
+    env, args, state = _retained_child(tmp_path, mail, codex=codex, retired=False, mail_retired=True)
+    assert json.loads(state.read_text())["retired_at"] is None
+
+    result = _run(args, env)
+
+    assert result.returncode == 0, result.stderr
+    assert mail.tools() == ["whois", "unretire_agent"]
+    assert not mail.retired
+
+
+def test_a_child_retired_only_in_its_state_is_not_unretired(tmp_path, mail_factory):
+    mail = mail_factory()
+    env, args, _state = _retained_child(tmp_path, mail, codex=False, retired=True, mail_retired=False)
+
+    result = _run(args, env)
+
+    assert result.returncode == 0, result.stderr
+    assert mail.tools() == ["whois"]
+
+
+def test_an_active_child_whose_mail_cannot_be_checked_still_starts(tmp_path, mail_factory):
+    """Nothing says it is retired; do not make Mail a new requirement to start."""
+    mail = mail_factory()
+    env, args, _state = _retained_child(tmp_path, mail, codex=False, retired=False)
+    mail.close()
+
+    result = _run(args, env)
+
+    assert result.returncode == 0, result.stderr
+    assert _launched(env)
+    assert "could not check" in result.stderr
+
+
+def test_a_failed_start_of_an_active_child_leaves_everything_as_it_was(tmp_path, mail_factory):
+    mail = mail_factory()
+    env, args, state = _retained_child(tmp_path, mail, codex=False, retired=False)
+    token = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / f"agent_token_{NAME}"
+    _executable(tmp_path / "bin" / "tmux", '#!/bin/bash\n[[ "$1" != new-session ]] || exit 1\nexit 0\n')
+    before = {path: (path.read_bytes(), path.stat().st_mode) for path in (state, token)}
+
+    result = _run(args, env)
+
+    assert result.returncode != 0
+    assert mail.tools() == ["whois"]
+    for path, saved in before.items():
+        assert (path.read_bytes(), path.stat().st_mode) == saved
 
 
 @pytest.mark.parametrize("failure", ["refused", "unreachable"])
@@ -184,7 +245,7 @@ def test_a_failed_start_retires_the_child_again(tmp_path, mail_factory):
     result = _run(args, env)
 
     assert result.returncode != 0
-    assert mail.tools() == ["unretire_agent", "retire_agent"]
+    assert mail.tools() == ["whois", "unretire_agent", "retire_agent"]
     assert mail.retired
     assert state.read_bytes() == before
 

@@ -558,9 +558,11 @@ print(f"{agent_id}\t{program}")
 PY
 }
 
-# Exit status 0 when the child's retained state says its cleanup retired it.
-# prepare-active clears the marker, so this is read before adoption.
-child_state_is_retired() {
+# What the child's state says about earlier runs, read before adoption
+# (prepare-active clears the retirement marker): "retired" when its cleanup
+# retired it, "ran" when it was launched before, nothing for a child that has
+# never run (a fresh preregistration).
+child_run_history() {
     local agent_name="$1"
     "${AGENTSTACK_PYTHON:-python3}" - "$CHILD_STATE_DIR/$agent_name.json" <<'PY' 2>/dev/null
 import json
@@ -570,18 +572,25 @@ try:
     with open(sys.argv[1], encoding="utf-8") as handle:
         state = json.load(handle)
 except (OSError, ValueError):
-    raise SystemExit(1)
-retired = state.get("retired_at") if isinstance(state, dict) else None
-raise SystemExit(0 if isinstance(retired, str) and retired else 1)
+    raise SystemExit(0)
+if not isinstance(state, dict):
+    raise SystemExit(0)
+retired = state.get("retired_at")
+if isinstance(retired, str) and retired:
+    print("retired")
+elif "launch_origin" in state or set(state) == {"agent_name", "project_key", "registration_token"}:
+    print("ran")
 PY
 }
 
-# Set a pre-registered child's Mail row active ("unretire") or back to retired
-# ("retire"), as the child itself: its owner token is read from the canonical
-# file inside Python and never appears in argv. The dashboard's resume does the
-# same pair; a relaunch that skipped it left a child nobody could message
-# (Mail refuses mail to a retired agent).
-set_preregistered_child_retired() {
+# A pre-registered child's Mail row. "status" prints retired/active from whois;
+# "unretire" / "retire" set it, as the child itself: its owner token is read
+# from the canonical file inside Python and never appears in argv. The
+# dashboard's resume does the same; a relaunch that skipped it left a child
+# nobody could message (Mail refuses mail to a retired agent). Mail, not the
+# local state, decides: a row can be retired with the state saying nothing
+# (the dashboard's retire button, an earlier-version child).
+preregistered_child_mail() {
     local agent_name="$1" token_file="$2" action="$3" bearer=""
     if legacy_http_bearer_enabled; then
         bearer="$(get_agentstack_token 2>/dev/null || true)"
@@ -597,18 +606,21 @@ from urllib.parse import urlparse
 
 action, agent_name, project_key, token_file, url = sys.argv[1:6]
 bearer = sys.stdin.read()
-expected = {"unretire": "active", "retire": "retired"}[action]
-try:
-    with open(token_file, encoding="utf-8") as handle:
-        token = handle.read().strip()
-except OSError as exc:
-    print(f"the owner credential is unavailable: {exc}", file=sys.stderr)
-    raise SystemExit(1)
+if action == "status":
+    tool, arguments = "whois", {"project_key": project_key, "agent_name": agent_name,
+                                "include_recent_commits": False}
+else:
+    try:
+        with open(token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError as exc:
+        print(f"the owner credential is unavailable: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    tool = f"{action}_agent"
+    arguments = {"project_key": project_key, "agent_name": agent_name, "registration_token": token}
 parsed = urlparse(url)
-body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-    "name": f"{action}_agent",
-    "arguments": {"project_key": project_key, "agent_name": agent_name, "registration_token": token},
-}}).encode()
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": tool, "arguments": arguments}}).encode()
 headers = {"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"}
 if bearer:
     headers["Authorization"] = f"Bearer {bearer}"
@@ -622,7 +634,7 @@ except (OSError, ValueError) as exc:
     raise SystemExit(1)
 result = reply.get("result") if isinstance(reply, dict) else None
 if not isinstance(result, dict) or reply.get("error") or result.get("isError"):
-    print(f"ORRERY Mail refused {action}_agent", file=sys.stderr)
+    print(f"ORRERY Mail refused {tool}", file=sys.stderr)
     raise SystemExit(1)
 data = result.get("structuredContent")
 if not isinstance(data, dict):
@@ -630,6 +642,13 @@ if not isinstance(data, dict):
         data = json.loads(result["content"][0]["text"])
     except (KeyError, IndexError, TypeError, ValueError):
         data = {}
+if action == "status":
+    if data.get("name") != agent_name:
+        print(f"ORRERY Mail has no profile for {agent_name}", file=sys.stderr)
+        raise SystemExit(1)
+    print("retired" if data.get("retired_at") else "active")
+    raise SystemExit(0)
+expected = {"unretire": "active", "retire": "retired"}[action]
 if (data.get("status") != expected or data.get("agent_name") != agent_name
         or data.get("project_key") != project_key):
     print(f"ORRERY Mail did not confirm {agent_name} as {expected}", file=sys.stderr)
@@ -2438,7 +2457,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         # Mail row as its cleanup left it. (A purged or newer attempt returned
         # above; its row is not ours to change.)
         if [[ "${PRE_REGISTERED_UNRETIRED:-false}" == true ]]; then
-            set_preregistered_child_retired "$CHILD_NAME" "$CHILD_TOKEN_FILE" retire \
+            preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" retire \
                 || echo "Warning: $CHILD_NAME was made active in ORRERY Mail and could not be retired again" >&2
         fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
@@ -2467,10 +2486,7 @@ PY
     trap cleanup_preregister_failure EXIT
 
     ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
-    PRE_REGISTERED_WAS_RETIRED=false
-    if child_state_is_retired "$CHILD_NAME"; then
-        PRE_REGISTERED_WAS_RETIRED=true
-    fi
+    PRE_REGISTERED_HISTORY="$(child_run_history "$CHILD_NAME")"
     REGISTRATION_PROGRAM=claude-code
     REGISTRATION_LABEL=Claude
     if [[ "$USE_CODEX" == true ]]; then
@@ -2537,16 +2553,28 @@ PY
             exit 1
         fi
     fi
-    # Its cleanup retired the child at exit. Mail refuses messages to a retired
-    # agent, so a child started as it is could not hear from its parent.
-    if [[ "$PRE_REGISTERED_WAS_RETIRED" == true ]]; then
-        if ! set_preregistered_child_retired "$CHILD_NAME" "$CHILD_TOKEN_FILE" unretire; then
+    # A child that ran before may be retired in ORRERY Mail, which refuses
+    # messages to a retired agent: started as it is, it could not hear from its
+    # parent. Mail decides; the local state only stands in when Mail cannot be
+    # asked. A fresh preregistration never ran and costs no Mail call.
+    PRE_REGISTERED_MAIL_RETIRED=false
+    if [[ -n "$PRE_REGISTERED_HISTORY" ]]; then
+        if PRE_REGISTERED_MAIL_STATUS="$(preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" status)"; then
+            [[ "$PRE_REGISTERED_MAIL_STATUS" != retired ]] || PRE_REGISTERED_MAIL_RETIRED=true
+        elif [[ "$PRE_REGISTERED_HISTORY" == retired ]]; then
+            PRE_REGISTERED_MAIL_RETIRED=true
+        else
+            echo "Warning: could not check whether $CHILD_NAME is retired in ORRERY Mail; starting it as it is." >&2
+        fi
+    fi
+    if [[ "$PRE_REGISTERED_MAIL_RETIRED" == true ]]; then
+        if ! preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" unretire; then
             echo "Error: $CHILD_NAME is retired in ORRERY Mail and could not be made active again; not starting it." >&2
             echo "  Its parent could not message it. Check that ORRERY Mail is running, or resume $CHILD_NAME from the dashboard." >&2
             exit 1
         fi
         PRE_REGISTERED_UNRETIRED=true
-        echo "[spawn_child/pre-reg] $CHILD_NAME was retired at its last exit; made it active in ORRERY Mail" >&2
+        echo "[spawn_child/pre-reg] $CHILD_NAME was retired in ORRERY Mail; made it active again" >&2
     fi
 
     # --worktree が指定されていれば worktree を作って WORK_DIR を上書き

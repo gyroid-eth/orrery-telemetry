@@ -477,3 +477,11 @@ def test_a_launcher_binding_does_not_claim_to_be_registering(tmp_path):
     status = _dispatch(proxy, "runtime_status", {})
     assert status["state"] != "registering"
     assert status["state"] == "bound"
+
+
+def test_whois_never_reads_agent_name_as_the_caller(tmp_path):
+    proxy, transport = _proxy(tmp_path)
+    result = _call(proxy, "whois", {"name": "Blue-Lake", "agent_name": "Green-Castle"})
+    assert result["isError"]
+    assert "name and agent_name" in result["content"][0]["text"]
+    assert not [tool for tool, _ in transport.calls if tool == "whois"]
