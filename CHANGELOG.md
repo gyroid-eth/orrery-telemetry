@@ -8,6 +8,21 @@
 
 ---
 
+## 2026.09.30.1
+
+### Codex の既定と「sol」を GPT-6.1 Sol にしました（#128）
+
+NEW AGENT と `/delegate` の Codex の既定、別名 `sol` を `gpt-6.1-sol` にしました。GPT-6.1 Sol は Codex CLI 0.159.0 以上でしか使えないので、使えるかどうかは、実際に子を起動する Codex CLI（`AGENTSTACK_CODEX_BIN`、子と同じ login shell と PATH で解決）の版で決めます。`~/.codex/models_cache.json` は最後に一覧を取った Codex の版で上書きされ、古い Codex の session が残っていると数分ごとに 6.1 の有無が入れ替わるので、この一覧には頼りません。CLI が古い環境では既定を `gpt-6-sol` に戻し、`agentstack-doctor` が Codex CLI の更新を促します。dashboard の API と `/delegate` は、選んだ CLI と正式なモデル ID を組で固定して起動に渡します。Gemini や Claude の起動では Codex CLI を起動しません。`python3 ~/.agentstack/dashboard/codex_models.py resolve sol` で、選ばれるモデル・CLI・版・判断の理由を確かめられます。
+
+### Codex の子の resume が必ず失敗し、失敗すると resume できなくなっていました（#127）
+
+telemetry の deck から Codex の子を resume すると、tmux の session が 1 秒ほどで消え、cockpit にも出ませんでした。resume の起動処理が program を `codex` と書いて照合し、子の記録（receipt）の `codex-cli` と一致しなかったためです。さらに、拒否の前に登録をやり直していたので、一度失敗するとその子は二度と resume できなくなっていました。照合は、照らし合わせた元の receipt の表記を基準にし、書き込まずに照合してから再登録するようにしました。resume して何も入力せずに閉じても、次の resume はできるままです。
+
+### docs
+
+- 「Obsidian と一緒に使う」のページを足しました（`docs/obsidian.md`、#119）
+- README 冒頭の GIF を今の画面で撮り直しました（#124）。紹介動画「Orrery」への案内を足し、英語の README は英語版を指します（#126・#130）
+
 ## 2026.09.30
 
 ### WSL で、Codex の子の起動の確定に毎回約90秒かかっていました（#117・#120）
