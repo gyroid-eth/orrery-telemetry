@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# Conversation-only resume must not touch ORRERY Mail or owner material.
+if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
+    exit 0
+fi
 # session-start-reminder.sh
 # SessionStart hook for startup/resume/clear/compact.
 #

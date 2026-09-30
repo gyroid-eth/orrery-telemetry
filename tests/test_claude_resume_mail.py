@@ -62,6 +62,7 @@ def resume(monkeypatch, tmp_path):
         return {"ok": True, "data": data}
 
     monkeypatch.setattr(server, "_mcp_call", call)
+    monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _tool: {"existing_agent_id"})
     private(runtime / f"agent_token_{NAME}", TOKEN)
     return runtime, registration, launches, calls
 
@@ -97,8 +98,7 @@ def test_resume_restores_mail_before_terminal_and_keeps_token_private(resume, is
         assert child_resume.purge_expired(runtime) == []
 
 
-@pytest.mark.parametrize("failure,code", [("missing", "credential_missing"), ("expired", "retention_expired"),
-                                            ("purged", "purged"), ("mismatch", "identity_mismatch"),
+@pytest.mark.parametrize("failure,code", [("purged", "purged"), ("mismatch", "identity_mismatch"),
                                             ("permissions", "credential_permission")])
 def test_unavailable_credentials_never_launch(resume, failure, code):
     runtime, registration, launches, calls = resume
@@ -137,12 +137,12 @@ def test_mail_failure_does_not_launch_and_restores_retention_marker(resume, monk
     assert "resume_in_progress_at" not in state
 
 
-def test_top_level_missing_token_does_not_launch(resume):
+def test_top_level_missing_token_resumes_conversation_without_mail(resume):
     runtime, _, launches, calls = resume
     (runtime / f"agent_token_{NAME}").unlink()
-    assert server._resume_capability(NAME, "claude", category="retired", verify_transcript=False) == "credential_missing"
-    assert server.do_resume(NAME)["resume_capability"] == "credential_missing"
-    assert not launches and not calls
+    result = server.do_resume(NAME)
+    assert result["ok"] and result["mail_reason"] == "credential_absent"
+    assert launches and not calls
 
 
 @pytest.mark.parametrize("is_child", [False, True, "legacy"])
@@ -201,7 +201,7 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
             old_state = runtime / "child-agents" / f"{NAME}.json"
             old_mcp = runtime / "child-agents" / f"{NAME}.mcp.json"
             private(old_state, json.dumps(old))
-            private(old_mcp, '{"old":"config"}')
+            private(old_mcp, '{"mcpServers":{}}')
             legacy_before = {path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
                              for path in (old_state, old_mcp, runtime / f"agent_token_{NAME}")}
         elif is_child:

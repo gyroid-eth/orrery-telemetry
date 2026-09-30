@@ -112,6 +112,11 @@ def test_resume_old_mail_has_fixed_update_diagnosis_and_new_mail_still_launches(
     if supported:
         assert result['ok'] and launches
         assert [params['name'] for _, params in rpc_calls] == ['register_agent', 'unretire_agent']
+    elif supported is False:
+        assert result['ok'] and result['resume_mode'] == 'conversation_only'
+        assert result['mail_reason'] == 'mail_schema_unsupported'
+        assert launches and not rpc_calls
+        same_material(before)
     else:
         assert not result['ok'] and result['resume_capability'] == 'config_unrestorable'
         assert result['error'] == ('Update and restart the dashboard and bundled ORRERY Mail together; '
@@ -223,7 +228,7 @@ def test_legacy_owner_authentication_failure_never_migrates_or_launches(legacy, 
     same_material(before)
 
 
-@pytest.mark.parametrize('damage', ['token_mismatch', 'missing_token', 'wrong_name', 'wrong_project', 'state_public', 'token_public', 'mcp_public', 'state_symlink', 'token_symlink', 'mcp_symlink', 'modern_incomplete', 'tombstone', 'pending'])
+@pytest.mark.parametrize('damage', ['token_mismatch', 'wrong_name', 'wrong_project', 'state_public', 'token_public', 'mcp_public', 'state_symlink', 'token_symlink', 'mcp_symlink', 'modern_incomplete', 'tombstone', 'pending'])
 def test_invalid_legacy_material_does_not_bypass_validation(legacy, damage):
     runtime, registration, launches, calls, state, config, _ = legacy
     token = runtime / ('agent_token_' + NAME)

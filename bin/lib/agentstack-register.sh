@@ -215,6 +215,7 @@ raise SystemExit(0 if has_project(root) else 1)
 }
 
 ags_mcp_call() {
+  [[ "${AGENTSTACK_MAIL_DISABLED:-0}" != "1" ]] || return 1
   local tool="$1"; shift
   local mcp_url="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
   local args_json payload

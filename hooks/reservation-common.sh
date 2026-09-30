@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# Conversation-only resume must not touch ORRERY Mail or owner material.
+if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
+    exit 0
+fi
 # Shared identity, path, project, endpoint, and authentication rules for the
 # file-reservation hooks. Keep this file compatible with macOS /bin/bash 3.2.
 

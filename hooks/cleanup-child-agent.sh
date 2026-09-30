@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# Conversation-only resume must not touch ORRERY Mail or owner material.
+if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
+    exit 0
+fi
 set -euo pipefail
 
 # A SessionEnd hook may run outside the child process and therefore inherit no
