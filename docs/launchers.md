@@ -108,6 +108,16 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 `CHILD_REGISTRATION_TOKEN` は歴史的な変数名ですが、top-level identity の再認証でも使われます。
 
+### 以前の版で作った Claude child の移行（#140）
+
+2026.09.30.3 より前の Claude child に残る `agent_name`・`project_key`・`registration_token` の3項目だけの state も、同じ正式 Claude 登録と既存 owner が確認できれば resume できます。表示時は private state と canonical token の一致を読み取りだけで検査し、移行・再登録・unretire はしません。明示 resume 時に既存 token で認証し、返った正式 ID・名前・Claude provider・project ID の一致を確認してから schema 1 に移行し、子専用 Mail proxy を再生成します。新しい identity、owner token の発行、owner 未登録 row の claim は行いません。認証失敗では起動しません。
+
+旧 state には終了時刻がないため mtime は使いません。認証した移行時点から設定した保持日数（既定30日）を1回だけ適用し、以後の正常終了は通常の保持 policy に従います。保持設定が `0` のときは旧形式の移行も拒否し、表示の polling で期限を延ばすことはありません。破損した新形式、期限切れ、purge、pending を旧形式として救済しません。
+
+移行は nonce で結び付けた private undo を持ち、起動準備に失敗した場合は旧 state / MCP config の内容・mode・mtime と元の Mail / husk 状態を戻します。purge 後や別の起動世代への古い rollback は無変更です。強制終了で `child-agents/.<name>.legacy-migration.json` が残った場合は内容全体を表示せず `generation` field だけを取り出し、operator が対象 tmux / CLI の停止を確認してから `python3 ~/.agentstack/hooks/child_resume.py finish-legacy-migration --runtime-dir <runtime> --agent-name <name> --generation <generation> --rollback` で旧 material を復元できます。
+
+移行の認証は bundled Mail の `register_agent(existing_agent_id=...)` を使い、指定した既存 ID・名前・project・program と owner token だけを照合します。通常の登録・名前の自動生成・profile 更新へは進みません。このオプションを持たない古い Mail や schema を取得できない接続では、引数を省略して登録することなく拒否します。dashboard と bundled Mail を一緒に更新して再起動してください。
+
 ## 再登録
 
 ```bash

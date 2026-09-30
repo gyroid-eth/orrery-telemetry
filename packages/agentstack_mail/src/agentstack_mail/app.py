@@ -5421,6 +5421,7 @@ def build_mcp_server() -> FastMCP:
         attachments_policy: str = "auto",
         registration_token: Optional[str] = None,
         format: Optional[str] = None,
+        existing_agent_id: Optional[int] = None,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -5460,6 +5461,10 @@ def build_mcp_server() -> FastMCP:
             Names are unique per project; passing the same name updates the profile.
         task_description : str
             Short description of current focus (shows up in directory listings).
+        existing_agent_id : Optional[int]
+            Authenticate only this already-owned identity, with exact name,
+            human project key and program. Requires its registration_token.
+            Does not create, claim, rename or update the identity or its profile.
 
         Returns
         -------
@@ -5490,6 +5495,23 @@ def build_mcp_server() -> FastMCP:
         """
         _validate_program_model(program, model)
         project = await _get_project_by_identifier(project_key)
+        if existing_agent_id is not None:
+            if type(existing_agent_id) is not int or existing_agent_id <= 0:
+                raise ValueError("existing_agent_id must be a positive integer")
+            if not name or project.human_key != project_key or not registration_token:
+                raise ValueError("Existing-owner authentication requires exact identity and owner credential")
+            # This path deliberately bypasses name generation, window identity,
+            # NULL-owner claiming and profile writes in _get_or_create_agent.
+            # Validate against one existing row; never enroll during recovery.
+            async with get_session() as session:
+                agent = await session.get(Agent, existing_agent_id)
+                if (agent is None or agent.project_id != project.id
+                        or agent.name != name or agent.program != program):
+                    raise ValueError("Existing-owner identity does not match")
+                if not agent.registration_token or not agent.registration_token.strip():
+                    raise ValueError("Existing identity has no registered owner")
+                _resolve_registration_token(agent.registration_token, registration_token)
+                return _agent_to_dict(agent)
         if settings.tools_log_enabled:
             try:
                 import importlib as _imp

@@ -2795,37 +2795,45 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     mail_restore_attempted = False
     registration = None
     child_state = None
+    legacy_generation = None
+    resume_started = False
     try:
         registration, token, child_state = _claude_resume_material(session)
+        legacy = child_state is not None and "_legacy_sha256" in child_state
         if child_state is not None:
             module = _child_resume_module()
+        if legacy:
+            # Authenticate an existing owned row before any migration writes.
+            mail_was_retired = _register_claude_resume(session, registration, token, legacy=True)
+            legacy_generation = secrets.token_hex(16)
+            child_state = module.begin_legacy_claude_migration(
+                pathlib.Path(RUNTIME_DIR), session, registration=registration, legacy=child_state,
+                generation=legacy_generation, retention_days=_legacy_claude_retention_days(),
+            )
+            resume_started = True
+        elif child_state is not None:
             module.begin_resume(
                 pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
                 project_key=registration["project_key"], program=registration["program"],
             )
-        try:
-            if child_state is not None:
-                mcp_config = _write_claude_resume_mcp_config(session, registration)
-                inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+            resume_started = True
+        if child_state is not None:
+            mcp_config = _write_claude_resume_mcp_config(session, registration)
+            inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+        if not legacy:
             mail_was_retired = _register_claude_resume(session, registration, token)
-            mail_restore_attempted = True
-            _set_claude_mail_retired(session, registration, retired=False)
-        except Exception:
-            if child_state is not None:
-                module.discard_generated(pathlib.Path(RUNTIME_DIR), session)
-                module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
-                                     agent_id=registration["agent_id"],
-                                     project_key=registration["project_key"])
-            raise
-    except _ResumeCapabilityError as exc:
-        result = {"ok": False, "error": str(exc), "resume_capability": exc.code}
-        if mail_restore_attempted and mail_was_retired:
-            _rollback_claude_mail(session, registration, result)
-        return result
-    except Exception:
+        mail_restore_attempted = True
+        _set_claude_mail_retired(session, registration, retired=False)
+    except Exception as exc:
         result = {"ok": False, "error": "Claude resume state could not be restored",
                   "resume_capability": "config_unrestorable"}
-        if mail_restore_attempted and mail_was_retired:
+        if isinstance(exc, _ResumeCapabilityError):
+            result.update(error=str(exc), resume_capability=exc.code)
+        if legacy_generation is not None or resume_started:
+            _rollback_claude_resume_local(session, registration, legacy_generation=legacy_generation,
+                                         resume_started=resume_started, result=result,
+                                         restore_mail=mail_restore_attempted and mail_was_retired)
+        if mail_restore_attempted and mail_was_retired and legacy_generation is None:
             _rollback_claude_mail(session, registration, result)
         return result
     resume_environment = {
@@ -2862,6 +2870,14 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         replace_husk=replace_husk,
     )
     if launch.get("ok"):
+        if legacy_generation is not None:
+            try:
+                finished = module.finish_legacy_claude_migration(
+                    pathlib.Path(RUNTIME_DIR), session, generation=legacy_generation, rollback=False)
+                if not finished:
+                    launch["warning"] = "Legacy Claude migration was superseded; current material was preserved"
+            except Exception:
+                launch["warning"] = "Legacy Claude migration undo remains; confirm startup before operator recovery"
         result = {
             "ok": True,
             "action": "resumed",
@@ -2874,17 +2890,10 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     result = {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
     if launch.get("rollback_errors"):
         result["rollback_errors"] = launch["rollback_errors"]
-    if child_state is not None:
-        for action in (
-            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
-            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
-                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
-        ):
-            try:
-                action()
-            except Exception:
-                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
-    if mail_was_retired:
+    if legacy_generation is not None or resume_started:
+        _rollback_claude_resume_local(session, registration, legacy_generation=legacy_generation,
+                                     resume_started=resume_started, result=result, restore_mail=mail_was_retired)
+    if mail_was_retired and legacy_generation is None:
         _rollback_claude_mail(session, registration, result)
     return result
 
@@ -3174,10 +3183,21 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
     if os.path.lexists(state_path) or os.path.lexists(tombstone):
         module = _child_resume_module()
         try:
-            state = module.inspect_retained(
-                pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
-                project_key=registration["project_key"], program=registration["program"],
-            )
+            if os.path.lexists(state_path):
+                if not hasattr(module, "inspect_legacy_claude"):
+                    raise _ResumeCapabilityError("config_unrestorable", "Child resume helper needs updating")
+                state = module.inspect_legacy_claude(
+                    pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                    project_key=registration["project_key"], program=registration["program"],
+                )
+            if state is not None:
+                _legacy_claude_retention_days()
+                registration = _legacy_claude_owned_registration(session, registration)
+            else:
+                state = module.inspect_retained(
+                    pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                    project_key=registration["project_key"], program=registration["program"],
+                )
         except module.ResumeStateError as exc:
             raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     try:
@@ -3242,20 +3262,93 @@ def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
     return str(path)
 
 
-def _register_claude_resume(session: str, registration: dict, token: str) -> bool:
+def _legacy_claude_retention_days() -> int:
+    try:
+        days = int(_env_text("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"))
+    except ValueError as exc:
+        raise _ResumeCapabilityError("config_unrestorable", "Invalid child retention setting") from exc
+    if days <= 0:
+        raise _ResumeCapabilityError("retention_expired", "Legacy child retention is disabled")
+    return days
+
+
+def _legacy_claude_owned_registration(session: str, registration: dict) -> dict:
+    """Never call registration to create or claim a legacy owner identity."""
+    try:
+        with _db() as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT a.id, a.name, a.program, p.id AS project_id, p.human_key, "
+                "(a.registration_token IS NOT NULL AND length(trim(a.registration_token)) > 0) AS has_owner "
+                "FROM agents a JOIN projects p ON a.project_id=p.id "
+                "WHERE a.id=? AND a.name=? COLLATE BINARY AND p.human_key=? COLLATE BINARY",
+                (registration["agent_id"], session, registration["project_key"]),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        raise _ResumeCapabilityError("registration_missing", "Original Claude owner registration unavailable") from None
+    if row is None:
+        raise _ResumeCapabilityError("registration_missing", "Original Claude registration does not exist")
+    if row["program"] not in {"claude", "claude-code"} or row["program"] != registration["program"]:
+        raise _ResumeCapabilityError("identity_mismatch", "Original Claude registration changed")
+    if not row["has_owner"]:
+        raise _ResumeCapabilityError("credential_missing", "Original Claude registration has no owner; refusing enrollment")
+    result = {**registration, "project_id": int(row["project_id"])}
+    if "project_id" in registration and result["project_id"] != registration["project_id"]:
+        raise _ResumeCapabilityError("identity_mismatch", "Original Claude project changed")
+    return result
+
+
+def _rollback_claude_resume_local(session: str, registration: dict, *, legacy_generation: str | None,
+                                resume_started: bool, result: dict, restore_mail: bool = False) -> None:
+    try:
+        module = _child_resume_module()
+    except Exception:
+        result.setdefault("rollback_errors", []).append("Claude resume material recovery helper unavailable")
+        return
+    if legacy_generation is not None:
+        try:
+            # An intentional purge/new attempt wins. A stale rollback is a no-op.
+            module.finish_legacy_claude_migration(
+                pathlib.Path(RUNTIME_DIR), session, generation=legacy_generation, rollback=True,
+                before_finish=(lambda: _rollback_claude_mail(session, registration, result)) if restore_mail else None,
+            )
+        except Exception:
+            result.setdefault("rollback_errors", []).append("Legacy Claude material could not be restored")
+    elif resume_started:
+        for action in (
+            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
+            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
+                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
+        ):
+            try:
+                action()
+            except Exception:
+                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
+
+
+def _register_claude_resume(session: str, registration: dict, token: str, *, legacy: bool = False) -> bool:
     """Authenticate the saved identity and capture its authoritative Mail state."""
-    registered = _mcp_call("register_agent", {
+    if legacy:
+        _legacy_claude_owned_registration(session, registration)
+    arguments = {
         "project_key": registration["project_key"], "name": session,
         "program": registration["program"], "model": registration.get("model", ""),
         "task_description": registration.get("task_description", ""),
         "registration_token": token,
-    })
+    }
+    if legacy:
+        arguments["existing_agent_id"] = registration["agent_id"]
+    registered = _mcp_call("register_agent", arguments)
     if not registered.get("ok"):
         raise _ResumeCapabilityError("credential_missing", "Claude owner authentication failed; refusing resume")
     data = registered.get("data") or {}
     if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
             or data.get("name") != session):
         raise _ResumeCapabilityError("identity_mismatch", "Claude registration changed; refusing resume")
+    if legacy and (data.get("program") != registration["program"]
+                   or type(data.get("project_id")) is not int
+                   or data["project_id"] != registration["project_id"]):
+        raise _ResumeCapabilityError("identity_mismatch", "Claude owner authentication returned another project/provider")
     return bool(data.get("retired_at"))
 
 
@@ -5913,6 +6006,10 @@ def _mcp_tool_parameters(tool: str) -> set[str] | None:
 def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
     """Call one ORRERY Mail tool, shaping arguments to its advertised schema."""
     allowed = _mcp_tool_parameters(method)
+    if (method == "register_agent" and "existing_agent_id" in args
+            and (allowed is None or "existing_agent_id" not in allowed)):
+        # This recovery guard must never be silently dropped for an older Mail.
+        return {"ok": False, "error": "ORRERY Mail needs existing-owner authentication support"}
     prepared = args if allowed is None else {
         key: value for key, value in args.items() if key in allowed
     }

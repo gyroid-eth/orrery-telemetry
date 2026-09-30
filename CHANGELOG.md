@@ -8,6 +8,14 @@
 
 ---
 
+## Unreleased
+
+### 以前の版で作った Claude child が resume できなくなっていました（#140）
+
+2026.09.30.3 が旧3項目形式の state を `identity_mismatch` と拒否していた回帰を修正しました。既存の正式 Claude 登録・owner と private token を検証し、明示 resume の token 認証が成功した後だけ同じ identity を新形式へ移行します。表示 GET は移行しません。保持期限は認証移行時点から設定日数（既定30日）、設定0では移行を拒否します。認証・起動の失敗では旧 material と元の Mail / husk を保持し、世代付き undo で古い rollback が新しい試行を消すのを防ぎます。HTTP API の field と世代3は変えていません。
+
+bundled Mail の `register_agent` に既存 owner だけを認証する optional `existing_agent_id` を追加しました。旧形式の移行はこのガードを必須とし、古い Mail では登録を呼ばず拒否します。dashboard と bundled Mail は一緒に更新・再起動してください。通常の登録と名前生成の動作は変えません。
+
 ## 2026.09.30.3
 
 ### resume も子の窓の自動表示設定に従います（#138、API 世代3）

@@ -106,6 +106,16 @@ The default `/delegate` path is `--pre-registered --embed-task --task-file <path
 
 `CHILD_REGISTRATION_TOKEN` is a historical variable name, but it is also used to reauthenticate top-level identities.
 
+### Migrating Claude children created by older releases (#140)
+
+Claude children created before 2026.09.30.3 may have a state with only `agent_name`, `project_key`, and `registration_token`. Resume accepts this known format only with an existing exact Claude registration and an already registered owner. Roster checks read the private state/canonical-token match without migrating, registering, or unretiring. An explicit resume authenticates the saved token and verifies the returned numeric ID, exact name, Claude provider, and project ID before migrating to schema 1 and regenerating the child Mail proxy. It does not issue another identity/token or claim an unowned row. Failed authentication refuses startup.
+
+The old state has no retirement timestamp, so migration never infers one from mtime. Successful owner authentication starts a one-time grace period of the configured retention days (30 by default); subsequent normal completion follows the usual retention policy. Retention `0` also refuses legacy migration. Polling never extends an expiry. Incomplete modern states, expired material, tombstones, and pending attempts do not qualify as legacy.
+
+Migration uses a private undo record tied to its nonce. Failed startup preparation restores the old state/MCP config bytes, modes, and mtimes and the original Mail/husk state. A stale rollback after purge or another attempt changes nothing. If forced interruption leaves `child-agents/.<name>.legacy-migration.json`, extract only its `generation` field without printing the record containing credentials. After the operator confirms the target tmux/CLI is stopped, restore the old material with `python3 ~/.agentstack/hooks/child_resume.py finish-legacy-migration --runtime-dir <runtime> --agent-name <name> --generation <generation> --rollback`.
+
+Migration authenticates through bundled Mail's `register_agent(existing_agent_id=...)`, checking only the exact existing ID, name, project, program, and owner token. It bypasses ordinary registration, name generation, and profile updates. An older Mail without this option, or an unavailable tool schema, refuses recovery instead of dropping the guard and registering. Update and restart the dashboard and bundled Mail together.
+
 ## Reregistration
 
 ```bash
