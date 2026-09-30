@@ -565,7 +565,7 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 {"ok":true,"name":"WindyFermi","state":"ready","age":9.4,"error":null,"detail":null,"result":{...}}
 ```
 
-`state` は `launching / ready / failed`。`failed` のとき `error` と `detail`（launcher の末尾ログ）が入り、同期 spawn が返すものと同じ内容です。記録は 30 分保持し、未知の名前は 404 です。`name` を省略すると保持中の全件を返します。dashboard と ORRERY cockpit の NEW AGENT はこの経路を使い、modal を即閉じて結果を toast で出します。`async` を付けない呼び出しは従来どおり判定まで待ちます。
+`state` は `launching / ready / failed`。`failed` のとき `error` と `detail`（launcher の末尾ログ）が入り、同期 spawn が返すものと同じ内容です。記録は 30 分保持し、未知の名前は 404 です。`name` を省略すると保持中の全件を返します。dashboard と [ORRERY cockpit](https://github.com/gyroid-eth/orrery) の NEW AGENT はこの経路を使い、modal を即閉じて結果を toast で出します。`async` を付けない呼び出しは従来どおり判定まで待ちます。
 
 ## 関連文書
 

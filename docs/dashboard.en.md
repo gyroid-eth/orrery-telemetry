@@ -211,7 +211,7 @@ Without `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT`, mail edges and the drawer
 - legend
 - node search
 - SETTINGS › NETWORK: `NODE SIZE`, `LINK DIST`, `LINK WIDTH`, `REPEL`, `CENTER`, `LINK FORCE`; sliders in the drawer opened by `SETTINGS` at the right end of the header adjust node layout
-- values are saved in `localStorage`; the same drawer's APPEARANCE switches dark / light / system (standalone only; the cockpit decides when embedded)
+- values are saved in `localStorage`; the same drawer's APPEARANCE switches dark / light / system (standalone only; the [cockpit](https://github.com/gyroid-eth/orrery) decides when embedded)
 - dense mode above 300 nodes
 
 Dense mode hides labels, annotations, provider badges, and context arcs to reduce rendering load for large graphs.
@@ -323,7 +323,7 @@ The normal install root is `~/.agentstack`; set `AGENTSTACK_WORKTREE_ROOT` when 
 
 ## Embed mode
 
-`/?embed=1` or a same-origin iframe uses embed mode with a compact header.
+`/?embed=1` or a same-origin iframe uses embed mode with a compact header. [ORRERY cockpit](https://github.com/gyroid-eth/orrery) embeds the dashboard in this mode from the `TELEMETRY` button in its header.
 
 From the parent window:
 

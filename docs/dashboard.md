@@ -234,7 +234,7 @@ NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚
 - legend
 - node search
 - SETTINGS › NETWORK: `NODE SIZE`、`LINK DIST`、`LINK WIDTH`、`REPEL`、`CENTER`、`LINK FORCE`。header 右端の `SETTINGS` で開く drawer の slider でノード同士の配置を見やすく調整
-- 値は `localStorage` に保存。同じ drawer の APPEARANCE で dark / light / system も切り替えられる（単体で開いたとき。cockpit 埋め込み時は cockpit が決める）
+- 値は `localStorage` に保存。同じ drawer の APPEARANCE で dark / light / system も切り替えられる（単体で開いたとき。[cockpit](https://github.com/gyroid-eth/orrery) に埋め込んだときは cockpit が決める）
 - 300 node 超で dense mode
 
 dense mode は label、annotation、provider badge、context arc を隠し、大規模 graph の描画負荷を抑えます。
@@ -346,7 +346,7 @@ branch: exp/<child-name>
 
 ## Embed mode
 
-`/?embed=1` または same-origin iframe では compact header の embed mode になります。
+`/?embed=1` または same-origin iframe では compact header の embed mode になります。[ORRERY cockpit](https://github.com/gyroid-eth/orrery) は、header の `TELEMETRY` からこの mode で dashboard を埋め込みます。
 
 parent window から:
 
