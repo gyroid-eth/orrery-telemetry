@@ -12,7 +12,7 @@ usage() {
 Usage: agentstack-purge-child-resume [--runtime-dir DIR] AGENT_NAME
        agentstack-purge-child-resume [--runtime-dir DIR] --expired
 
-Remove only retained Codex-child resume credentials and generated runtime
+Remove only retained Claude/Codex child resume credentials and generated runtime
 material. Session receipts and transcripts are not removed.
 EOF
 }

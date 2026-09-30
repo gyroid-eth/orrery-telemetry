@@ -68,15 +68,19 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
     return hooks
 
 
-def _handoff(tmp_path: pathlib.Path) -> pathlib.Path:
+def _handoff(tmp_path: pathlib.Path, name="SameChild") -> pathlib.Path:
     handoff = tmp_path / f"child-token-{len(list(tmp_path.glob('child-token-*')))}"
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
+    binding = handoff.with_name(handoff.name + ".binding.json")
+    binding.write_text(json.dumps({"agent_id": 73, "agent_name": name,
+                                   "project_key": "/shared/project", "program": "claude-code"}), encoding="utf-8")
+    binding.chmod(0o600)
     return handoff
 
 
 def _spawn(tmp_path, env, workdir, name, *flags, task="mail task", codex=False):
-    handoff = _codex_handoff(tmp_path, name) if codex else _handoff(tmp_path)
+    handoff = _codex_handoff(tmp_path, name) if codex else _handoff(tmp_path, name)
     args = [
         "/bin/bash", str(SPAWN), "--pre-registered", name,
         "--child-token-file", str(handoff),
@@ -548,6 +552,17 @@ def _resume(monkeypatch, tmp_path, session="ResumeChild", transcript_text=""):
     claude = tmp_path / "claude"
     claude.write_text("", encoding="utf-8")
     launched = []
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    token = runtime / f"agent_token_{session}"
+    token.write_text("fixture-owner-token", encoding="utf-8")
+    token.chmod(0o600)
+    registration = {"agent_id": 73, "agent_name": session, "project_key": "/fixture/project", "program": "claude-code"}
+    monkeypatch.setattr(server, "_claude_registration", lambda _n: registration)
+    monkeypatch.setattr(server, "_mcp_call", lambda method, args: {
+        "ok": True, "data": {"id": 73, "name": session} if method == "register_agent"
+        else {"status": "active", "agent_name": session, "project_key": registration["project_key"]},
+    })
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr(server, "HOOKS_DIR", str(ROOT / "hooks"))
     monkeypatch.setattr(server, "ABS_CLAUDE", str(claude))
@@ -555,7 +570,7 @@ def _resume(monkeypatch, tmp_path, session="ResumeChild", transcript_text=""):
     monkeypatch.setattr(server, "_transcript_path", lambda _n: str(transcript))
     monkeypatch.setattr(server, "_transcript_cwd", lambda _p: str(tmp_path))
     monkeypatch.setattr(
-        server, "_open_terminal_tmux",
+        server, "_launch_claude_resume_tmux",
         lambda argv, **_k: launched.append(argv) or {"ok": False, "error": "test"},
     )
     result = server.do_resume(session)

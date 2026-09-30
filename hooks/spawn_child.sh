@@ -411,135 +411,28 @@ child_token_file_path() {
     printf '%s/agent_token_%s\n' "$RUNTIME_DIR" "$key"
 }
 
-# Copy a child token from a 0600 file into the durable per-child runtime files.
-# The secret is read inside Python and never appears in a process argv or tmux
-# environment.  A dashboard handoff is one-shot, so its source is unlinked only
-# after both durable files have been atomically installed.
-adopt_child_token_file() {
-    local agent_name="$1" project_key="$2" source_file="$3"
-    local consume_source="${4:-false}" binding_source="${5:-}" token_file state_file
-    token_file="$(child_token_file_path "$agent_name")" || return 1
-    state_file="$CHILD_STATE_DIR/$agent_name.json"
-    python3 - "$agent_name" "$project_key" "$source_file" "$token_file" \
-        "$state_file" "$consume_source" "$binding_source" <<'PY'
-import json
-import os
-import pathlib
-import stat
-import sys
-
-agent_name, project_key, source, token_file, state_file, consume, binding_source = sys.argv[1:8]
-source_path = pathlib.Path(source)
-token_path = pathlib.Path(token_file)
-state_path = pathlib.Path(state_file)
-flags = os.O_RDONLY
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-fd = os.open(source_path, flags)
-try:
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError("token handoff is not a regular file")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise PermissionError("token handoff permissions must be 0600")
-    registration_token = os.read(fd, 4097).decode("utf-8").strip()
-finally:
-    os.close(fd)
-if not registration_token or len(registration_token) > 4096:
-    raise ValueError("token handoff is empty or too large")
-
-token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-os.chmod(token_path.parent, 0o700)
-state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-os.chmod(state_path.parent, 0o700)
-
-token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
-state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
-with open(token_tmp, "x", encoding="utf-8") as f:
-    f.write(registration_token)
-    f.flush()
-    os.fsync(f.fileno())
-os.chmod(token_tmp, 0o600)
-state = {
-    "agent_name": agent_name,
-    "project_key": project_key,
-    "registration_token": registration_token,
-}
-binding_path = pathlib.Path(binding_source) if binding_source else None
-if binding_path is not None:
-    try:
-        binding = json.loads(binding_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        binding = None
-    if (
-        isinstance(binding, dict)
-        and type(binding.get("agent_id")) is int
-        and binding["agent_id"] > 0
-        and binding.get("agent_name") == agent_name
-        and binding.get("project_key") == project_key
-        and binding.get("program") in {"codex", "codex-cli"}
-    ):
-        state.update(agent_id=binding["agent_id"], program=binding["program"])
-with open(state_tmp, "x", encoding="utf-8") as f:
-    json.dump(state, f)
-    f.flush()
-    os.fsync(f.fileno())
-os.chmod(state_tmp, 0o600)
-os.replace(token_tmp, token_path)
-os.replace(state_tmp, state_path)
-os.chmod(token_path, 0o600)
-os.chmod(state_path, 0o600)
-if consume == "true" and source_path != token_path:
-    try:
-        source_path.unlink()
-    except Exception:
-        token_path.unlink(missing_ok=True)
-        state_path.unlink(missing_ok=True)
-        raise
-    if binding_path is not None:
-        try:
-            binding_path.unlink(missing_ok=True)
-        except OSError:
-            # The non-secret sidecar has already been validated and copied
-            # into child state. Its cleanup must not destroy a successfully
-            # adopted owner token.
-            pass
-print(token_path)
-PY
+# Stage only formally verified credentials; the undo record protects existing
+# canonical material until startup succeeds. Never consume a failed handoff.
+stage_child_registration() {
+    local agent_name="$1" program="$2" source_file="${3:-}"
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    [[ -f "$helper" ]] || return 1
+    local source_args=()
+    if [[ -n "$source_file" ]]; then
+        source_args=(--source "$source_file" --binding "${source_file}.binding.json")
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" stage-registration \
+        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
+        --project-key "$PROJECT_KEY" --program "$program" --generation "$CHILD_REGISTRATION_GENERATION" ${source_args[@]+"${source_args[@]}"}
 }
 
-# Restore the canonical token file from an existing 0600 state file without
-# exposing the token to the shell.  This is compatibility-only; new dashboard
-# spawns always arrive through adopt_child_token_file's one-shot path.
-restore_child_token_file_from_state() {
-    local agent_name="$1" state_file token_file
-    state_file="$CHILD_STATE_DIR/$agent_name.json"
-    token_file="$(child_token_file_path "$agent_name")" || return 1
-    [[ -f "$state_file" ]] || return 1
-    python3 - "$state_file" "$token_file" <<'PY'
-import json
-import os
-import pathlib
-import stat
-import sys
-
-state_path = pathlib.Path(sys.argv[1])
-token_path = pathlib.Path(sys.argv[2])
-if stat.S_IMODE(state_path.stat().st_mode) & 0o077:
-    raise PermissionError("child state permissions must be 0600")
-data = json.loads(state_path.read_text(encoding="utf-8"))
-token = data.get("registration_token")
-if not isinstance(token, str) or not token:
-    raise ValueError("child state has no registration token")
-token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
-with open(tmp, "x", encoding="utf-8") as handle:
-    handle.write(token)
-os.chmod(tmp, 0o600)
-os.replace(tmp, token_path)
-os.chmod(token_path, 0o600)
-print(token_path)
-PY
+finish_child_registration() {
+    local agent_name="$1" rollback="${2:-false}"
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    local rollback_args=()
+    [[ "$rollback" != true ]] || rollback_args=(--rollback)
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" finish-registration \
+        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" --generation "$CHILD_REGISTRATION_GENERATION" ${rollback_args[@]+"${rollback_args[@]}"}
 }
 
 # Verify that a Codex token and its formal registration metadata belong to the
@@ -631,11 +524,28 @@ prepare_codex_child_resume_state() {
     local agent_name="$1" mcp_profile="$2"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
     [[ -f "$helper" ]] || return 1
+    local generation_args=()
+    if [[ -n "${CHILD_REGISTRATION_GENERATION:-}" ]]; then
+        generation_args=(--generation "$CHILD_REGISTRATION_GENERATION")
+    fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
-        --mcp-profile "$mcp_profile"
+        --mcp-profile "$mcp_profile" --program codex ${generation_args[@]+"${generation_args[@]}"}
+}
+
+prepare_claude_child_resume_state() {
+    local agent_name="$1"
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    [[ -f "$helper" ]] || return 1
+    local generation_args=()
+    if [[ -n "${CHILD_REGISTRATION_GENERATION:-}" ]]; then
+        generation_args=(--generation "$CHILD_REGISTRATION_GENERATION")
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
+        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
+        --project-key "$PROJECT_KEY" --program claude-code ${generation_args[@]+"${generation_args[@]}"}
 }
 
 # Start one launch expectation from a registration receipt. Output is
@@ -2042,8 +1952,8 @@ state = {
     "project_key": project_key,
     "registration_token": token,
 }
-if program == "codex" and agent_id is not None:
-    state.update(agent_id=agent_id, program="codex")
+if program in {"codex", "codex-cli", "claude", "claude-code"} and agent_id is not None:
+    state.update(agent_id=agent_id, program=program)
 with open(state_tmp, "x", encoding="utf-8") as handle:
     json.dump(state, handle)
     handle.flush()
@@ -2207,28 +2117,39 @@ if [[ -n "$PRE_REGISTERED" ]]; then
 
     # Pre-registered children must use their own token. Never inherit the
     # caller's ambient CHILD_REGISTRATION_TOKEN here; that may be the parent's
-    # owner token. Adopt the 0600 one-shot into durable child-owned files and
-    # unlink the handoff only after both writes succeed.
-    PRE_REGISTERED_TOKEN_CREATED=false
+    # owner token. Validate before adoption, retain the original canonical pair
+    # until startup succeeds, and only then consume the handoff.
+    CHILD_REGISTRATION_GENERATION="$("${AGENTSTACK_PYTHON:-python3}" -c 'import secrets; print(secrets.token_hex(16))')" || exit 1
+    PRE_REGISTERED_ADOPTION_PENDING=false
     PRE_REGISTERED_HANDOFF_TO_CONSUME=""
     PRE_REGISTERED_BINDING_TO_CONSUME=""
     PRE_REGISTERED_SESSION_STARTED=false
     PRE_REGISTERED_SUCCESS=false
+    PRE_REGISTERED_MANAGED_ADDED=false
     cleanup_preregister_failure() {
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
         warn_if_uninjected
         rm -f "${CODEX_PROMPT_FILE:-}"
+        if [[ "$PRE_REGISTERED_ADOPTION_PENDING" == true ]]; then
+            local finish_status=0
+            finish_child_registration "$CHILD_NAME" true || finish_status=$?
+            if [[ "$finish_status" == 3 ]]; then
+                # Purged/replaced by another attempt. None of its shared
+                # credentials, session, registry or worktree belongs to us.
+                return
+            elif [[ "$finish_status" != 0 ]]; then
+                echo "Error: child registration rollback failed; private undo record retained" >&2
+                return
+            fi
+        fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
         fi
-        if [[ "$PRE_REGISTERED_TOKEN_CREATED" == true ]]; then
-            rm -f "$CHILD_TOKEN_FILE" "$CHILD_STATE_DIR/$CHILD_NAME.json"
-        fi
         discard_claude_launch_record
         cleanup_worktree
-        if [[ -f "$MANAGED_FILE" ]]; then
+        if [[ "$PRE_REGISTERED_MANAGED_ADDED" == true && -f "$MANAGED_FILE" ]]; then
             python3 - "$MANAGED_FILE" "$CHILD_NAME" <<'PY' 2>/dev/null || true
 import pathlib
 import sys
@@ -2248,40 +2169,24 @@ PY
     }
     trap cleanup_preregister_failure EXIT
 
-    if [[ -n "$CHILD_TOKEN_FILE" ]]; then
-        ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
-        CONSUME_ONE_SHOT=true
-        if [[ "$USE_CODEX" == true ]]; then
-            # Keep the source until formal metadata validation, prepare, and
-            # child startup have all succeeded. Failure leaves the one-shot as
-            # the token-safe recovery credential instead of consuming it early.
-            CONSUME_ONE_SHOT=false
-        fi
-        if ! CHILD_TOKEN_FILE="$(
-            adopt_child_token_file "$CHILD_NAME" "$PROJECT_KEY" \
-                "$ONE_SHOT_TOKEN_FILE" "$CONSUME_ONE_SHOT" \
-                "${ONE_SHOT_TOKEN_FILE}.binding.json"
-        )"; then
-            echo "Error: --child-token-file is unreadable, insecure, or empty: $ONE_SHOT_TOKEN_FILE" >&2
-            exit 1
-        fi
-        PRE_REGISTERED_TOKEN_CREATED=true
-        if [[ "$USE_CODEX" == true && "$ONE_SHOT_TOKEN_FILE" != "$CHILD_TOKEN_FILE" ]]; then
-            PRE_REGISTERED_HANDOFF_TO_CONSUME="$ONE_SHOT_TOKEN_FILE"
-            PRE_REGISTERED_BINDING_TO_CONSUME="${ONE_SHOT_TOKEN_FILE}.binding.json"
-        fi
-    else
-        CHILD_TOKEN_FILE="$(child_token_file_path "$CHILD_NAME")"
-        if [[ "$USE_CODEX" != true && ! -s "$CHILD_TOKEN_FILE" ]]; then
-            if ! CHILD_TOKEN_FILE="$(
-                restore_child_token_file_from_state "$CHILD_NAME"
-            )"; then
-                echo "Error: pre-registered child token is required for $CHILD_NAME" >&2
-                echo "  Generate/register the child with a child-owned token, then pass --child-token-file <path>." >&2
-                echo "  Existing state fallback: $CHILD_STATE_DIR/$CHILD_NAME.json" >&2
-                exit 1
-            fi
-        fi
+    ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
+    REGISTRATION_PROGRAM=claude-code
+    REGISTRATION_LABEL=Claude
+    if [[ "$USE_CODEX" == true ]]; then
+        REGISTRATION_PROGRAM=codex
+        REGISTRATION_LABEL=Codex
+    fi
+    if ! CHILD_TOKEN_FILE="$(stage_child_registration "$CHILD_NAME" "$REGISTRATION_PROGRAM" "$ONE_SHOT_TOKEN_FILE")"; then
+        echo "Error: canonical $REGISTRATION_LABEL registration metadata is missing, invalid, or does not match the child token for $CHILD_NAME" >&2
+        echo "  Preserve the credential and supply its matching formal .binding.json receipt before retrying." >&2
+        echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+        echo "  A legacy token-only runtime entry cannot be promoted to a verified child registration." >&2
+        exit 1
+    fi
+    PRE_REGISTERED_ADOPTION_PENDING=true
+    if [[ -n "$ONE_SHOT_TOKEN_FILE" && "$ONE_SHOT_TOKEN_FILE" != "$CHILD_TOKEN_FILE" ]]; then
+        PRE_REGISTERED_HANDOFF_TO_CONSUME="$ONE_SHOT_TOKEN_FILE"
+        PRE_REGISTERED_BINDING_TO_CONSUME="${ONE_SHOT_TOKEN_FILE}.binding.json"
     fi
 
     if [[ "$USE_CODEX" == true ]]; then
@@ -2296,6 +2201,11 @@ PY
         fi
         if ! prepare_codex_child_resume_state "$CHILD_NAME" "$CODEX_MCP_PROFILE"; then
             echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
+            exit 1
+        fi
+    else
+        if ! prepare_claude_child_resume_state "$CHILD_NAME"; then
+            echo "Error: verified Claude child registration metadata is unavailable for $CHILD_NAME" >&2
             exit 1
         fi
     fi
@@ -2313,6 +2223,7 @@ PY
     if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then
         mkdir -p "$(dirname "$MANAGED_FILE")"
         echo "$CHILD_NAME" >> "$MANAGED_FILE"
+        PRE_REGISTERED_MANAGED_ADDED=true
     fi
 
     # Warn (do not block) if the child's workdir is a macOS privacy-protected
@@ -2554,14 +2465,14 @@ ${TASK}"
         echo "[spawn_child/pre-reg] cleanup: git -C $WORKTREE_SOURCE worktree remove $WORKTREE_DIR && git -C $WORKTREE_SOURCE branch -D exp/${CHILD_NAME}" >&2
     fi
 
+    if ! finish_child_registration "$CHILD_NAME"; then
+        echo "Error: could not finalize child registration; handoff preserved" >&2
+        exit 1
+    fi
+    PRE_REGISTERED_ADOPTION_PENDING=false
     if [[ -n "$PRE_REGISTERED_HANDOFF_TO_CONSUME" ]]; then
-        if ! rm -f -- "$PRE_REGISTERED_HANDOFF_TO_CONSUME"; then
-            echo "Error: could not consume the successful child token handoff" >&2
-            exit 1
-        fi
-        if [[ -n "$PRE_REGISTERED_BINDING_TO_CONSUME" ]]; then
-            rm -f -- "$PRE_REGISTERED_BINDING_TO_CONSUME" 2>/dev/null || true
-        fi
+        rm -f -- "$PRE_REGISTERED_HANDOFF_TO_CONSUME" "$PRE_REGISTERED_BINDING_TO_CONSUME" \
+            || echo "Warning: successful child handoff cleanup failed; private handoff remains" >&2
     fi
     PRE_REGISTERED_SUCCESS=true
     echo "$CHILD_NAME"
@@ -2980,6 +2891,11 @@ PY
     fi
 }
 trap cleanup_on_failure EXIT
+if [[ "$USE_CODEX" != true ]] && ! prepare_claude_child_resume_state "$CHILD_NAME"; then
+    echo "Error: could not prepare retained Claude child state for $CHILD_NAME" >&2
+    exit 1
+fi
+
 
 # --- 2b. リソース予約 ---
 if [[ -n "$RESOURCES" ]]; then

@@ -8,6 +8,16 @@
 
 ---
 
+## Unreleased
+
+### resume も子の窓の自動表示設定に従います（#138、API 世代3）
+
+`AGENTSTACK_AUTO_OPEN_CHILD=0` の Claude / Codex resume は detached tmux で実行し、OS の窓を開きません。未設定 / `1` は従来どおりです。`POST /api/jump` に boolean `open` を明示すると設定より優先します。後から Open tmux や cockpit で開けます。この利用側 field を追加したため `/api/version` の `api` を3にしました。
+
+### Claude の resume 後に Mail を送受信できるようにしました（#135・#136）
+
+正常終了した Claude の子も、Codex と同じく再開用 state と owner credential を既定30日、0600で保持します。dashboard の Claude resume は保存済みの正式 ID と credential を検証し、子専用 Mail proxy config を再生成、同じ identity の再登録・unretire を完了してから起動します。top-level も既存 token で復帰します。credential 欠落、期限切れ、purge、認証や unretire の失敗では起動しません。incoming receipt の provider 不一致や metadata 不備を保存前に拒否し、起動失敗でも既存 credential を保持します。undo は起動ごとの nonce で照合し、purge 後の再試行を旧 launcher の cleanup が消しません。Claude の起動準備が失敗した場合は元の husk と Mail の状態を戻し、元から active だった identity を retire しません。Codex の top-level resume で unretire を飛ばしていた箇所も直しました。履歴は保持・purge の対象外です。
+
 ## 2026.09.30.2
 
 ### Codex を子としてしか使わない環境で、正常終了した子の会話の記録が消えていました（#133）

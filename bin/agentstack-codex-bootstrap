@@ -380,7 +380,7 @@ fi
 # Resume keeps the remote row retired until both credential-backed
 # registration and a fresh binding expectation have succeeded.  This is the
 # final bootstrap operation before the caller's `&& codex resume ...`.
-if [[ "$CODEX_LAUNCH_KIND" == "resume" && "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
+if [[ "$CODEX_LAUNCH_KIND" == "resume" ]]; then
   if ! UNRETIRE_RESULT="$(
     ags_mcp_call "unretire_agent" \
       "project_key=$PROJECT_KEY" "agent_name=$AGENT_NAME"

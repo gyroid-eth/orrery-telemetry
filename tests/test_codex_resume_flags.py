@@ -215,7 +215,7 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     monkeypatch.setattr(server, "_codex_registration", lambda _name: registration)
     monkeypatch.setattr(
         server,
-        "_open_terminal_tmux",
+        "_launch_resume_tmux",
         lambda args, **kwargs: launched.append(args) or {"ok": True, "adapter": "fixture"},
     )
     return server._do_resume_codex(AGENT), launched

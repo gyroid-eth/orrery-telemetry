@@ -225,8 +225,8 @@ path.write_text("\n".join(line for line in lines if line != name) + "\n", encodi
 PYEOF
 
 # The generated home contains only rebuildable config/proxy runtime and is
-# never reused.  A valid Codex child keeps its private owner credential and
-# schema-tagged state for the configured resume window; all other children and
+# never reused.  A valid Claude/Codex child keeps its private owner credential and
+# schema-tagged state for the configured resume window; unsupported children and
 # a retention setting of 0 keep the historical full-delete behavior.
 rm -f "$MCP_CONFIG_FILE"
 if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then

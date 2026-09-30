@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
 import stat
 import subprocess
@@ -58,6 +59,11 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     handoff = tmp_path / "child-token"
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
+    binding = handoff.with_name(handoff.name + ".binding.json")
+    binding.write_text(json.dumps({"agent_id": 73, "agent_name": "Fresh-Curie",
+                                   "project_key": "/shared/project", "program": "claude-code"}), encoding="utf-8")
+    binding.chmod(0o600)
+
 
     env = os.environ.copy()
     env.update({

@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":2}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":3}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -417,7 +417,13 @@ request:
 {"session":"WindyFermi"}
 ```
 
+`open` は任意の boolean です。`false` は OS の窓を開かず detached tmux で resume、`true` は窓を開きます。省略時、Claude / Codex resume は `AGENTSTACK_AUTO_OPEN_CHILD` に従います（`0` は detached、未設定 / `1` は窓を開く）。明示した `open` が設定より優先します。稼働中の session に `open: false` を渡すと attach せず、そのままにします。環境設定は resume 時の自動表示だけに適用され、手動の Open tmux は使えます。detached resume には terminal adapter は不要です。この field は API 世代3から使えます。
+
 response は `{ok, session, actions}` です。既存 tmux session は configured terminal で open / focus します。session が無い場合と finished husk を transcript から復元する場合は、GET row と同じ判定を server が再検査します。表示が `verification_required` だった Claude row も、この1回の request 内で full 検証して `ready` になれば、そのまま resume します。Codex child は fresh home を生成し、credential 付き再登録と fresh binding expectation を作成した後、Codex exec の直前に unretire します。拒否時は HTTP 400 で `{"ok":false,"error":"...","resume_capability":"provenance_missing"}` のように確定した固定 reason code を返し、husk の kill や terminal 起動は行いません。bootstrap / unretire が失敗した場合も Codex は起動せず、生成した home / config だけを片付けます。
+
+Claude は保存済み owner credential で同じ project・数値 ID・name・program の登録を検証し、credential 付き再登録と unretire が成功してから端末を起動します。Claude child の state / credential も既定30日保持し、resume 時は子専用 Mail proxy config を再生成します。top-level Claude は既存 owner token を使います。旧 cleanup で credential が消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。認証・unretire の失敗でも端末を開きません。credential を自動発行したり別名で登録したりはしません。Codex top-level resume も unretire の対象です。
+
+Claude の起動準備が失敗した場合、元の husk を残し、元が retired だった Mail を再 retire します。元から active の identity は retire しません。復元にも失敗した場合は `rollback_errors` を返し、成功したようには報告しません。CLI は tmux と窓の準備が成功するまで待機します。
 
 ## POST `/api/exit`
 

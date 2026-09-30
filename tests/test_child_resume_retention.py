@@ -332,8 +332,9 @@ def test_expiry_maintenance_does_not_purge_a_resumed_child_in_progress(
 
 
 @pytest.mark.parametrize("unretire_succeeds", [True, False])
+@pytest.mark.parametrize("origin", ["child", "standalone"])
 def test_resume_bootstrap_preserves_child_provenance_before_unretire(
-    tmp_path: Path, unretire_succeeds: bool
+    tmp_path: Path, unretire_succeeds: bool, origin: str
 ) -> None:
     install_home = tmp_path / "agentstack"
     bindir = install_home / "bin"
@@ -352,8 +353,10 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
         "  printf '%s\\n' \"$1\" >> \"$FAKE_MCP_CALL_LOG\"\n"
         "  if [[ \"$1\" == unretire_agent ]]; then\n"
         "    grep -q '\"launch_kind\":\"resume\"' \"$AGENTSTACK_RUNTIME_DIR/codex_launches/73.json\" || return 1\n"
-        "    grep -q '\"launch_origin\":\"child\"' \"$AGENTSTACK_RUNTIME_DIR/codex_launches/73.json\" || return 1\n"
-        "    grep -q '\"resume_in_progress_at\":' \"$AGENTSTACK_RUNTIME_DIR/child-agents/RetainedCodex.json\" || return 1\n"
+        "    grep -q '\"launch_origin\":\"'\"$AGENTSTACK_CODEX_LAUNCH_ORIGIN\"'\"' \"$AGENTSTACK_RUNTIME_DIR/codex_launches/73.json\" || return 1\n"
+        "    if [[ \"$AGENTSTACK_CODEX_LAUNCH_ORIGIN\" == child ]]; then\n"
+        "      grep -q '\"resume_in_progress_at\":' \"$AGENTSTACK_RUNTIME_DIR/child-agents/RetainedCodex.json\" || return 1\n"
+        "    fi\n"
         "    [[ \"${FAIL_UNRETIRE:-0}\" != 1 ]] || return 1\n"
         "  fi\n"
         "  printf '{\"result\":{\"structuredContent\":{\"id\":1}}}\\n'\n"
@@ -377,6 +380,12 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
     )
     _private(runtime / f"agent_token_{AGENT}", TOKEN)
     _seed_bound_child_receipt(runtime, PROJECT, tmp_path / "prior-rollout.jsonl")
+    if origin == "standalone":
+        receipt_path = runtime / "session_index" / f"{AGENT_ID}.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["launch_origin"] = "standalone"
+        receipt.pop("codex_mcp_profile", None)
+        _private(receipt_path, json.dumps(receipt))
     result = subprocess.run(
         [
             "/bin/bash",
@@ -393,7 +402,8 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
             "AGENTSTACK_RESERVED_IDENTITY": "1",
             "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
             "AGENTSTACK_CODEX_RESUME_SESSION_ID": SESSION_ID,
-            "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
+            "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only" if origin == "child" else "",
+            "AGENTSTACK_CODEX_LAUNCH_ORIGIN": origin,
             "AGENT_NAME": AGENT,
             "FAKE_MCP_CALL_LOG": str(call_log),
             "FAIL_UNRETIRE": "0" if unretire_succeeds else "1",
@@ -410,13 +420,14 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
             encoding="utf-8"
         )
     )
-    assert launch["launch_origin"] == "child"
-    assert launch["codex_mcp_profile"] == "orrery-only"
+    assert launch["launch_origin"] == origin
+    if origin == "child":
+        assert launch["codex_mcp_profile"] == "orrery-only"
     assert launch["resume_session_id"] == SESSION_ID
     assert launch["fallback_launch_id"] == "prior-launch"
     assert call_log.read_text(encoding="utf-8").splitlines()[-1] == "unretire_agent"
     state = json.loads(state_file.read_text(encoding="utf-8"))
-    if unretire_succeeds:
+    if unretire_succeeds and origin == "child":
         assert state["resume_in_progress_at"].endswith("Z")
     else:
         assert "resume_in_progress_at" not in state
@@ -885,3 +896,26 @@ def test_real_resume_command_can_cleanup_and_resume_again(
     second_unretire = methods.index("unretire_agent", first_retire + 1)
     second_retire = methods.index("retire_agent", first_retire + 1)
     assert second_register < second_unretire < second_retire
+
+
+def test_explicit_purge_also_removes_a_private_preregistration_undo_record(tmp_path):
+    from hooks import child_resume
+    runtime = tmp_path / 'runtime'
+    name = 'PendingOwner'
+    token = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    state.parent.mkdir(parents=True)
+    token.write_text('owner-token')
+    token.chmod(0o600)
+    state.write_text(json.dumps({'agent_id': 73, 'agent_name': name, 'project_key': '/shared/project',
+                                'program': 'claude-code', 'registration_token': 'owner-token'}))
+    state.chmod(0o600)
+    child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code', generation='a' * 32)
+    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code', generation='a' * 32)
+    pending = state.parent / ('.' + name + '.registration-pending.json')
+    assert pending.exists() and pending.stat().st_mode & 0o777 == 0o600
+    assert child_resume.purge_one(runtime, name, reason='purged')
+    assert not pending.exists() and not token.exists()
+    # An intentional purge cannot be undone by the failed launch's later cleanup.
+    child_resume.finish_registration(runtime, name, generation='a' * 32, rollback=True)
+    assert not token.exists() and not state.exists()

@@ -43,7 +43,7 @@ ags_mcp_call() {
           name=*)
             returned_name="${arg#name=}"
             [[ -n "${FAKE_RETURNED_NAME:-}" ]] && returned_name="$FAKE_RETURNED_NAME"
-            printf '{"name":"%s"}\n' "$returned_name"
+            printf '{"id":73,"name":"%s"}\n' "$returned_name"
             ;;
         esac
       done
@@ -52,6 +52,7 @@ ags_mcp_call() {
   esac
 }
 ags_mcp_has_error() { return 1; }
+ags_extract_agent_id() { python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))'; }
 ags_extract_agent_name() { python3 -c 'import json,sys; print(json.load(sys.stdin).get("name",""))'; }
 ags_extract_registration_token() { printf '\n'; }
 ags_store_registration_token() { :; }

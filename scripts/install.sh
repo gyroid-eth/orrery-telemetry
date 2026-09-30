@@ -118,7 +118,7 @@ Options:
                          on top of project, spawn dirs/roots, install dir,
                          worktrees, ~/.claude and ~/.codex (default: none)
   --child-resume-retention-days DAYS
-                         Keep normal-finished Codex child resume credentials
+                         Keep normal-finished Claude/Codex child resume credentials
                          for this many days (default: existing env.sh, else 30;
                          0 restores full deletion)
   -h, --help             Show this help
@@ -3878,7 +3878,7 @@ main() {
   say "codex network: $CODEX_NETWORK_SETTING"
   say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
-  say "Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"
+  say "Claude/Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"
   validate_assume_yes
   if ! run_preflight; then
     exit 1

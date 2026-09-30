@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import shlex
@@ -100,6 +101,11 @@ def test_spawn_keeps_detached_session_and_propagates_observer_policy(
     _fake_terminals(tmp_path / "terminal-bin", env, log)
     child = "QuietCurie"
     handoff = _codex_handoff(tmp_path, child)
+    if not codex:
+        binding = handoff.with_name(handoff.name + ".binding.json")
+        receipt = json.loads(binding.read_text())
+        receipt["program"] = "claude-code"
+        binding.write_text(json.dumps(receipt))
     task = tmp_path / "task.md"
     task.write_text("Report completion without changing files.")
     args = ["/bin/bash", str(SPAWN), "--pre-registered", child,

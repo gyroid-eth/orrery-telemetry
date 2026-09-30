@@ -754,10 +754,10 @@ for path in root.glob("*.json") if root.is_dir() else ():
 PY
 )"
   if [[ -n "$expired" ]]; then
-    echo "warn: expired Codex child resume material awaits maintenance purge: $(printf '%s' "$expired" | paste -sd, -)" >&2
+    echo "warn: expired child resume material awaits maintenance purge: $(printf '%s' "$expired" | paste -sd, -)" >&2
     echo "      doctor reports only; run agentstack-purge-child-resume --expired or keep the dashboard running" >&2
   else
-    echo "ok: no expired Codex child resume material awaiting purge"
+    echo "ok: no expired child resume material awaiting purge"
   fi
 }
 

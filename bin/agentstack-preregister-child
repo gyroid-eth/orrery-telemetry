@@ -255,11 +255,11 @@ PY
 # that non-secret registration receipt beside the one-shot token so
 # spawn_child.sh can consume both without querying by name later. Also persist
 # the same formal receipt with the canonical runtime token for the documented
-# no-argument launch path. Codex launchers fail closed when either copy is
+# no-argument launch path. Claude/Codex launchers fail closed when either copy is
 # unavailable; preregistration must therefore not report success without both.
-if [[ "$program" == "codex" || "$program" == "codex-cli" ]]; then
+if [[ "$program" == "codex" || "$program" == "codex-cli" || "$program" == "claude" || "$program" == "claude-code" ]]; then
   [[ "$registered_id" =~ ^[1-9][0-9]*$ ]] \
-    || die "register_agent returned no positive numeric id for Codex child $registered"
+    || die "register_agent returned no positive numeric id for child $registered"
   binding_file="${token_file_out}.binding.json"
   if ! "${AGENTSTACK_PYTHON:-python3}" - "$binding_file" "$registered_id" "$registered" "$project_key" "$program" <<'PY'
 import json
@@ -285,11 +285,11 @@ os.replace(temporary, path)
 os.chmod(path, 0o600)
 PY
   then
-    die "could not persist the one-shot Codex registration binding"
+    die "could not persist the one-shot child registration binding"
   fi
   persist_codex_registration_state \
     "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
-    || die "could not persist canonical Codex registration token and metadata"
+    || die "could not persist canonical child registration token and metadata"
 else
   ags_store_registration_token "$registered" "$effective_token" || true
 fi

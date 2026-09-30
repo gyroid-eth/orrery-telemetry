@@ -387,14 +387,18 @@ def _adopt_child_handoff(
 
     spawn = (ROOT / "hooks" / "spawn_child.sh").read_text(encoding="utf-8")
     start = spawn.index("child_token_file_path() {")
-    end = spawn.index("\n# Restore the canonical token file", start)
+    end = spawn.index("\n# Verify that a Codex token", start)
     sidecar = token.with_name(token.name + ".binding.json")
     script = (
         f'RUNTIME_DIR="{runtime}"\n'
+        f'HOOKS_DIR="{ROOT / "hooks"}"\n'
+        f'PROJECT_KEY="{project_key}"\n'
         'CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"\n'
+        'CHILD_REGISTRATION_GENERATION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
         + spawn[start:end]
-        + f'\nadopt_child_token_file "{agent_name}" "{project_key}" '
-        f'"{token}" true "{sidecar}"\n'
+        + f'\nstage_child_registration "{agent_name}" codex "{token}"\n'
+        + f'finish_child_registration "{agent_name}"\n'
+        + f'rm -f "{token}" "{sidecar}"\n'
     )
     adopted = subprocess.run(
         ["bash", "-c", script], text=True, capture_output=True, check=False

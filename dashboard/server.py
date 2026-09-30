@@ -2155,6 +2155,112 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
         return {"ok": False, "error": f"{adapter} launch failed: {e}"}
 
 
+def _resume_opens_terminal(open_terminal: bool | None = None) -> bool:
+    return open_terminal if open_terminal is not None else _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1") != "0"
+
+
+def _launch_resume_tmux(tmux_args: list[str], title: str, open_terminal: bool | None = None) -> dict:
+    if _resume_opens_terminal(open_terminal):
+        return _open_terminal_tmux(tmux_args, title=title)
+    # -A would attach to an existing session and block the HTTP request.
+    detached = ["-d" if arg == "-A" else arg for arg in tmux_args]
+    try:
+        result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *detached],
+                                capture_output=True, text=True, timeout=8)
+    except Exception as exc:
+        return {"ok": False, "error": f"detached tmux launch failed: {exc}"}
+    if result.returncode:
+        return {"ok": False, "error": (result.stderr or result.stdout or "detached tmux launch failed").strip()}
+    return {"ok": True, "adapter": "detached"}
+
+
+def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
+                             open_terminal: bool | None, replace_husk: bool) -> dict:
+    """Prepare a gated replacement, preserving the old shell until startup commits."""
+    generation = secrets.token_hex(12)
+    staging = f"{title}.resume-{generation}"
+    backup = f"{title}.husk-{generation}"
+    channel = f"agentstack-resume-{generation}"
+    old_id = new_id = None
+    old_renamed = False
+    creation_attempted = False
+    control_env = {key: value for key, value in os.environ.items() if key not in {"TMUX", "TMUX_PANE"}}
+
+    def tmux(*args):
+        result = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=8, env=control_env)
+        if result.returncode:
+            raise RuntimeError("tmux resume preparation failed")
+        return result.stdout.strip()
+
+    try:
+        if replace_husk:
+            listing = tmux("list-sessions", "-F", "#{session_name}\t#{session_id}")
+            old_id = next((row.split("\t", 1)[1] for row in listing.splitlines()
+                           if row.startswith(title + "\t")), None)
+            if old_id is None or not re.fullmatch(r"\$\d+", old_id):
+                raise RuntimeError("Existing Claude shell could not be identified")
+        staged = list(tmux_args)
+        staged[staged.index("-s") + 1] = staging
+        staged = ["-d" if arg == "-A" else arg for arg in staged]
+        staged[2:2] = ["-P", "-F", "#{session_id}"]
+        wait_bin = shlex.quote(shutil.which("tmux") or "tmux")
+        staged[-1] = f"{wait_bin} wait-for {shlex.quote(channel)} || exit $?; " + staged[-1]
+        creation_attempted = True
+        result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *staged],
+                                capture_output=True, text=True, timeout=8)
+        if result.returncode:
+            raise RuntimeError("Detached Claude tmux preparation failed")
+        new_id = result.stdout.strip()
+        if not re.fullmatch(r"\$\d+", new_id):
+            # A successful creation has a unique name even if its receipt is malformed.
+            new_id = f"={staging}"
+            raise RuntimeError("New Claude session could not be identified")
+        adapter = "detached"
+        if _resume_opens_terminal(open_terminal):
+            opened = _open_terminal_tmux(["tmux", "attach-session", "-t", new_id], title=title)
+            if not opened.get("ok"):
+                raise RuntimeError("Claude terminal window could not be opened")
+            adapter = opened.get("adapter")
+        if old_id is not None:
+            tmux("rename-session", "-t", old_id, backup)
+            old_renamed = True
+        tmux("rename-session", "-t", new_id, title)
+        tmux("wait-for", "-S", channel)
+    except Exception as exc:
+        errors = []
+        if new_id is not None:
+            try:
+                tmux("kill-session", "-t", new_id)
+            except Exception:
+                errors.append("Prepared Claude session could not be removed")
+        elif creation_attempted:
+            # The tmux request can time out after creating the gated session.
+            # Its unique name is safe to clean even when no receipt was returned.
+            try:
+                subprocess.run(["tmux", "kill-session", "-t", f"={staging}"],
+                               capture_output=True, text=True, timeout=8, env=control_env)
+            except Exception:
+                errors.append("Prepared Claude session cleanup could not be confirmed")
+        if old_renamed:
+            try:
+                tmux("rename-session", "-t", old_id, title)
+            except Exception:
+                errors.append(f"Original shell remains in {backup}; its name could not be restored")
+        answer = {"ok": False, "error": str(exc)}
+        if errors:
+            answer["rollback_errors"] = errors
+        return answer
+    # Startup is now committed. Failure to dispose the old shell must not
+    # turn a running CLI into a reported failed launch or retire its identity.
+    answer = {"ok": True, "adapter": adapter}
+    if old_id is not None:
+        try:
+            tmux("kill-session", "-t", old_id)
+        except Exception:
+            answer["warning"] = f"Original shell retained in {backup}"
+    return answer
+
+
 def _focus_existing_terminal(session: str) -> bool:
     if _terminal_adapter() != "ghostty":
         return False
@@ -2602,13 +2708,13 @@ def _claude_child_chrome(session: str, sid: str) -> tuple[bool, str, str]:
     return True, state["launch_id"], ""
 
 
-def do_resume(session: str) -> dict:
+def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False) -> dict:
     """retire 済み / 過去セッションを tmux 再開する。
 
     Claude は `claude --resume <sid>`、Codex は `codex resume <sid>`。
     transcript ファイル名/メタ = sessionId、`cwd` = 元の作業ディレクトリ。
-    対応端末で `tmux new-session -A` し、その中で resume。セッション名=
-    エージェント名に揃える(identity 整合)。
+    Claude は detached tmux で CLI を待機させ、起動準備の成功後に解放する。
+    セッション名はエージェント名に揃える(identity 整合)。
 
     ※ codex agent は ~/.claude/projects/ に自分の transcript を持たないため
       Claude 用 _transcript_path の selfref 探索だと「その名前を最も多く参照
@@ -2626,7 +2732,7 @@ def do_resume(session: str) -> dict:
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
-        return _do_resume_codex(session)
+        return _do_resume_codex(session) if open_terminal is None else _do_resume_codex(session, open_terminal=open_terminal)
     if not program.startswith("claude"):
         return {
             "ok": False,
@@ -2645,7 +2751,7 @@ def do_resume(session: str) -> dict:
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
     if not os.path.exists(ABS_CLAUDE):
         return {"ok": False, "error": "claude CLI が見つかりません"}
-    # 端末adapter経由で tmux new-session(-A=あれば attach)。
+    # Claude tmux is prepared detached; an optional terminal attaches afterward.
     #
     # 重要: claude を「単一文字列」で tmux に渡すと tmux は `/bin/sh -c`
     # で実行し ~/.zshrc を読まない → ~/.local/bin が PATH に入らず
@@ -2666,7 +2772,7 @@ def do_resume(session: str) -> dict:
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={session}; '
-        f'exec {ABS_CLAUDE} --resume {sid} -n {session}'
+        f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session}'
     )
     # A child started with --claude-chrome gets --chrome back on resume. Its
     # browser policy is repeated by session-start-reminder.sh from the same
@@ -2682,25 +2788,105 @@ def do_resume(session: str) -> dict:
             f'export AGENT_NAME={session}; '
             f'export AGENTSTACK_RUNTIME_DIR={shlex.quote(RUNTIME_DIR)}; '
             f'export AGENTSTACK_CLAUDE_LAUNCH_ID={shlex.quote(chrome_launch_id)}; '
-            f'exec {ABS_CLAUDE} --resume {sid} -n {session} --chrome'
+            f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session} --chrome'
         )
+
+    mail_was_retired = False
+    mail_restore_attempted = False
+    registration = None
+    child_state = None
+    try:
+        registration, token, child_state = _claude_resume_material(session)
+        if child_state is not None:
+            module = _child_resume_module()
+            module.begin_resume(
+                pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                project_key=registration["project_key"], program=registration["program"],
+            )
+        try:
+            if child_state is not None:
+                mcp_config = _write_claude_resume_mcp_config(session, registration)
+                inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+            mail_was_retired = _register_claude_resume(session, registration, token)
+            mail_restore_attempted = True
+            _set_claude_mail_retired(session, registration, retired=False)
+        except Exception:
+            if child_state is not None:
+                module.discard_generated(pathlib.Path(RUNTIME_DIR), session)
+                module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
+                                     agent_id=registration["agent_id"],
+                                     project_key=registration["project_key"])
+            raise
+    except _ResumeCapabilityError as exc:
+        result = {"ok": False, "error": str(exc), "resume_capability": exc.code}
+        if mail_restore_attempted and mail_was_retired:
+            _rollback_claude_mail(session, registration, result)
+        return result
+    except Exception:
+        result = {"ok": False, "error": "Claude resume state could not be restored",
+                  "resume_capability": "config_unrestorable"}
+        if mail_restore_attempted and mail_was_retired:
+            _rollback_claude_mail(session, registration, result)
+        return result
+    resume_environment = {
+        "AGENT_NAME": session, "AGENTSTACK_RESERVED_IDENTITY": "1", "CLAUDECODE": "1",
+        "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
+        "AGENTSTACK_HOME": os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE),
+        "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
+        "AGENTSTACK_PROJECT_KEY": registration["project_key"],
+        "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
+        "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH,
+        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
+        "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": _env_text("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"),
+    }
+    if os.environ.get("AGENTSTACK_PYTHON", "").strip():
+        resume_environment["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
+    inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG AGENTSTACK_CLAUDE_LAUNCH_ID; '
+             + "".join(f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()) + inner)
+    if child_state is not None:
+        inner = inner.replace(f"exec {shlex.quote(ABS_CLAUDE)}", shlex.quote(ABS_CLAUDE), 1)
+        cleanup = os.path.join(HOOKS_DIR, "cleanup-child-agent.sh")
+        inner += (f'; CLAUDE_STATUS=$?; /bin/bash {shlex.quote(cleanup)}; '
+                  'CLEANUP_STATUS=$?; [[ "$CLAUDE_STATUS" -ne 0 ]] && exit "$CLAUDE_STATUS"; '
+                  'exit "$CLEANUP_STATUS"')
 
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が
     # 誤爆する(2026-06-02 調査)。dashboard が tmux 内から再起動された場合に備え剥がす。
-    launch = _open_terminal_tmux(
+    launch = _launch_claude_resume_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
+         *[arg for key, value in resume_environment.items() for arg in ("-e", f"{key}={value}")],
          _login_shell(), "-lic", inner],
         title=session,
+        open_terminal=open_terminal,
+        replace_husk=replace_husk,
     )
     if launch.get("ok"):
-        return {
+        result = {
             "ok": True,
             "action": "resumed",
             "detail": f"会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
-    return {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
+        if launch.get("warning"):
+            result["warning"] = launch["warning"]
+        return result
+    result = {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
+    if launch.get("rollback_errors"):
+        result["rollback_errors"] = launch["rollback_errors"]
+    if child_state is not None:
+        for action in (
+            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
+            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
+                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
+        ):
+            try:
+                action()
+            except Exception:
+                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
+    if mail_was_retired:
+        _rollback_claude_mail(session, registration, result)
+    return result
 
 
 def _codex_meta(path: str) -> tuple[str | None, str | None]:
@@ -2824,7 +3010,7 @@ def _child_resume_module():
     path = _child_resume_helper_path()
     if not path:
         raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child resume helper is unavailable"
+            "config_unrestorable", "Child resume helper is unavailable"
         )
     cached = _CHILD_RESUME_MODULES.get(path)
     if cached is not None:
@@ -2832,21 +3018,21 @@ def _child_resume_module():
     spec = importlib.util.spec_from_file_location("agentstack_child_resume", path)
     if spec is None or spec.loader is None:
         raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child resume helper cannot be loaded"
+            "config_unrestorable", "Child resume helper cannot be loaded"
         )
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
     except Exception as exc:
         raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child resume helper cannot be loaded"
+            "config_unrestorable", "Child resume helper cannot be loaded"
         ) from exc
     if not all(
         hasattr(module, name)
         for name in ("ResumeStateError", "inspect_retained", "purge_expired")
     ):
         raise _ResumeCapabilityError(
-            "config_unrestorable", "Codex child resume helper is incomplete"
+            "config_unrestorable", "Child resume helper is incomplete"
         )
     _CHILD_RESUME_MODULES[path] = module
     return module
@@ -2974,6 +3160,123 @@ def _validate_codex_standalone_credential(session: str) -> None:
         )
 
 
+def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
+    """Validate retained child state or an existing top-level owner credential."""
+    if not _valid(session):
+        raise _ResumeCapabilityError("invalid_identity", "Unsafe Claude identity")
+    registration = _claude_registration(session)
+    if registration is None:
+        raise _ResumeCapabilityError("registration_missing", "Claude registration unavailable")
+    state_path = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")
+    tombstone = os.path.join(RUNTIME_DIR, "child-resume-tombstones",
+                             f"{registration['agent_id']}.json")
+    state = None
+    if os.path.lexists(state_path) or os.path.lexists(tombstone):
+        module = _child_resume_module()
+        try:
+            state = module.inspect_retained(
+                pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                project_key=registration["project_key"], program=registration["program"],
+            )
+        except module.ResumeStateError as exc:
+            raise _ResumeCapabilityError(exc.code, str(exc)) from exc
+    try:
+        raw = _read_private_regular(os.path.join(RUNTIME_DIR, f"agent_token_{session}"),
+                                    "Claude owner credential", 4096)
+        token = raw.decode("utf-8").strip() if isinstance(raw, bytes) else raw.strip()
+    except _PrivateFileError as exc:
+        code = "credential_permission" if exc.reason in {"ownership", "permissions", "changed", "type"} else "credential_missing"
+        raise _ResumeCapabilityError(code, "Claude owner credential unavailable") from exc
+    except UnicodeDecodeError as exc:
+        raise _ResumeCapabilityError("credential_missing", "Invalid Claude credential") from exc
+    if not token:
+        raise _ResumeCapabilityError("credential_missing", "Claude owner credential is empty")
+    if state is not None and not secrets.compare_digest(token.encode(), state["registration_token"].encode()):
+        raise _ResumeCapabilityError("identity_mismatch", "Claude credential changed during validation")
+    if state is not None:
+        if not os.path.isfile(os.path.join(HOOKS_DIR, "cleanup-child-agent.sh")):
+            raise _ResumeCapabilityError("config_unrestorable", "Child cleanup helper unavailable")
+        runner = _claude_resume_proxy_runner()
+        if not os.path.isfile(runner) or not os.access(runner, os.X_OK):
+            raise _ResumeCapabilityError("config_unrestorable", "Child Mail proxy unavailable")
+    return registration, token, state
+
+
+def _claude_resume_proxy_runner() -> str:
+    install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
+    return os.environ.get("AGENTSTACK_MCP_PROXY") or os.path.join(
+        install_home, "integrations", "codex_app", "plugin", "scripts", "run-mcp.sh")
+
+
+def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
+    """Regenerate the same child-owned proxy routing used on fresh spawn."""
+    proxy = {"command": _claude_resume_proxy_runner(), "args": [], "env": {
+        "AGENTSTACK_PROXY_AGENT_NAME": session,
+        "AGENTSTACK_PROXY_TOKEN_FILE": os.path.join(RUNTIME_DIR, f"agent_token_{session}"),
+        "AGENTSTACK_PROXY_PROGRAM": "claude-code",
+        "AGENTSTACK_PROJECT_KEY": registration["project_key"],
+        "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
+        "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH,
+        "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
+        "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
+    }}
+    if os.environ.get("AGENTSTACK_PYTHON", "").strip():
+        proxy["env"]["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
+    names = {"orrery-mail"}
+    # Override existing direct Mail names as fresh child startup does.
+    try:
+        with open(_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"), encoding="utf-8") as handle:
+            settings = json.load(handle)
+        scopes = [settings.get("mcpServers")]
+        projects = settings.get("projects")
+        if isinstance(projects, dict):
+            scopes += [value.get("mcpServers") for value in projects.values() if isinstance(value, dict)]
+        for scope in scopes:
+            if isinstance(scope, dict):
+                names.update(name for name in scope if name.replace("-", "").replace("_", "").lower()
+                             in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"})
+    except (OSError, ValueError, AttributeError):
+        pass
+    path = pathlib.Path(RUNTIME_DIR) / "child-agents" / f"{session}.mcp.json"
+    _child_resume_module()._atomic_json(path, {"mcpServers": {name: proxy for name in sorted(names)}})
+    return str(path)
+
+
+def _register_claude_resume(session: str, registration: dict, token: str) -> bool:
+    """Authenticate the saved identity and capture its authoritative Mail state."""
+    registered = _mcp_call("register_agent", {
+        "project_key": registration["project_key"], "name": session,
+        "program": registration["program"], "model": registration.get("model", ""),
+        "task_description": registration.get("task_description", ""),
+        "registration_token": token,
+    })
+    if not registered.get("ok"):
+        raise _ResumeCapabilityError("credential_missing", "Claude owner authentication failed; refusing resume")
+    data = registered.get("data") or {}
+    if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
+            or data.get("name") != session):
+        raise _ResumeCapabilityError("identity_mismatch", "Claude registration changed; refusing resume")
+    return bool(data.get("retired_at"))
+
+
+def _set_claude_mail_retired(session: str, registration: dict, *, retired: bool) -> None:
+    active = _mcp_call("retire_agent" if retired else "unretire_agent", {
+        "project_key": registration["project_key"], "agent_name": session,
+    })
+    data = active.get("data") or {}
+    if (not active.get("ok") or data.get("status") != ("retired" if retired else "active")
+            or data.get("agent_name") != session
+            or data.get("project_key") != registration["project_key"]):
+        raise _ResumeCapabilityError("config_unrestorable", "Claude Mail could not be unretired; refusing resume")
+
+
+def _rollback_claude_mail(session: str, registration: dict, result: dict) -> None:
+    try:
+        _set_claude_mail_retired(session, registration, retired=True)
+    except Exception:
+        result.setdefault("rollback_errors", []).append("Claude Mail retirement could not be restored")
+
+
 RESUME_CAPABILITY_MESSAGES = {
     "ready": "Resume prerequisites are verified.",
     "verification_required": (
@@ -2990,10 +3293,10 @@ RESUME_CAPABILITY_MESSAGES = {
     "provenance_missing": (
         "This Codex row predates child provenance and cannot be resumed safely."
     ),
-    "credential_missing": "The retained child credential is unavailable or invalid.",
-    "credential_permission": "The retained child credential permissions are unsafe.",
-    "identity_mismatch": "The retained child identity does not match this row.",
-    "config_unrestorable": "The child Codex configuration cannot be restored safely.",
+    "credential_missing": "The saved owner credential is unavailable or invalid.",
+    "credential_permission": "The saved owner credential permissions are unsafe.",
+    "identity_mismatch": "The saved identity does not match this row.",
+    "config_unrestorable": "The resume configuration or Mail restoration could not be completed safely.",
     "retention_expired": "The child resume retention period has expired.",
     "purged": "The retained child resume material was explicitly purged.",
 }
@@ -3133,6 +3436,7 @@ def _resume_capability(
     *,
     category: str,
     verify_transcript: bool = True,
+    open_terminal: bool | None = None,
 ) -> str:
     """Return the fixed reason code shared by every dashboard resume surface.
 
@@ -3156,10 +3460,15 @@ def _resume_capability(
         or normalized_program in _CODEX_PROGRAMS
     ):
         return "unsupported_provider"
-    if _terminal_adapter() == "none":
+    if _resume_opens_terminal(open_terminal) and _terminal_adapter() == "none":
         return "terminal_unavailable"
 
     if normalized_program.startswith("claude"):
+        if not verify_transcript:
+            try:
+                _claude_resume_material(session)
+            except _ResumeCapabilityError as exc:
+                return exc.code
         if verify_transcript:
             path = _transcript_path(session)
         else:
@@ -3177,6 +3486,10 @@ def _resume_capability(
             return "cwd_missing"
         if not os.path.exists(ABS_CLAUDE):
             return "cli_missing"
+        try:
+            _claude_resume_material(session)
+        except _ResumeCapabilityError as exc:
+            return exc.code
         return "ready"
 
     path = _codex_transcript_path(session)
@@ -3355,7 +3668,7 @@ def _rebuild_codex_child_home(
         )
 
 
-def _do_resume_codex(session: str) -> dict:
+def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict:
     """Codex agent を `codex resume <sid>` で tmux 再開する。
 
     rollout は ~/.codex/sessions/.../rollout-*.jsonl。session_meta.payload の
@@ -3496,7 +3809,7 @@ def _do_resume_codex(session: str) -> dict:
         for key, value in resume_environment.items()
         for argument in ("-e", f"{key}={value}")
     ]
-    launch = _open_terminal_tmux(
+    launch = _launch_resume_tmux(
         [
             "tmux",
             "new-session",
@@ -3511,6 +3824,7 @@ def _do_resume_codex(session: str) -> dict:
             inner,
         ],
         title=session,
+        open_terminal=open_terminal,
     )
     if launch.get("ok"):
         detail = f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})"
@@ -3563,8 +3877,8 @@ def _block_text(content) -> list[tuple[str, str]]:
     return rows
 
 
-def _codex_registration(session: str) -> dict | None:
-    """Return this project's numeric Codex CLI registration for ``session``."""
+def _resume_registration(session: str, programs: set[str]) -> dict | None:
+    """Return the exact project registration, never an alias or another provider."""
 
     project_key = _project_key()
     if not project_key or not os.path.isfile(DB_PATH):
@@ -3572,8 +3886,9 @@ def _codex_registration(session: str) -> dict | None:
     try:
         with _db() as con:
             con.row_factory = sqlite3.Row
+            profile_columns = ", a.model, a.task_description" if "claude" in programs else ""
             row = con.execute(
-                "SELECT a.id, a.program FROM agents a "
+                f"SELECT a.id, a.program{profile_columns} FROM agents a "
                 "JOIN projects p ON a.project_id=p.id "
                 "WHERE a.name=? AND p.human_key=? "
                 "ORDER BY a.last_active_ts DESC LIMIT 1",
@@ -3582,14 +3897,24 @@ def _codex_registration(session: str) -> dict | None:
     except sqlite3.Error:
         return None
     program = (row["program"] or "") if row else ""
-    if not row or program not in {"codex", "codex-cli"}:
+    if not row or program not in programs:
         return None
     return {
         "agent_id": int(row["id"]),
         "agent_name": session,
         "project_key": project_key,
         "program": program,
+        "model": (row["model"] or "") if "model" in row.keys() else "",
+        "task_description": (row["task_description"] or "") if "task_description" in row.keys() else "",
     }
+
+
+def _codex_registration(session: str) -> dict | None:
+    return _resume_registration(session, {"codex", "codex-cli"})
+
+
+def _claude_registration(session: str) -> dict | None:
+    return _resume_registration(session, {"claude", "claude-code"})
 
 
 def _verified_codex_index(
@@ -4991,7 +5316,7 @@ def _ttyd_cleanup() -> None:
         _ttyd_kill(rec)
 
 
-def do_jump(session: str) -> dict:
+def do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
     # Codex App lives outside tmux and its provider owns the safe activation
@@ -5000,17 +5325,15 @@ def do_jump(session: str) -> dict:
     program = _agent_program(session)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
+    preference = {} if open_terminal is None else {"open_terminal": open_terminal}
     has_session = _has_session(session)
     if not has_session:
         # tmux セッションが無い = retire済み/過去セッション(gone)。
         # UI の表示時点を信用せず、同じ capability を API 境界で再検査する。
-        capability = _resume_capability(session, program, category="gone")
+        capability = _resume_capability(session, program, category="gone", **preference)
         if capability != "ready":
             return _resume_unavailable(capability)
-        return do_resume(session)
-
-    if _terminal_adapter() == "none":
-        return _terminal_unsupported()
+        return do_resume(session, **preference)
 
     # tmux セッションは在るが、claude が死んで「素の zsh 残骸(husk)」だけが
     # 残っている場合がある(= category 'finished')。この husk に attach しても
@@ -5038,14 +5361,21 @@ def do_jump(session: str) -> dict:
         # prerequisites fail, refuse the action but leave the shell intact:
         # attaching would report false success, while killing it would discard
         # the last recoverable artifact.
-        capability = _resume_capability(session, program, category="finished")
+        capability = _resume_capability(session, program, category="finished", **preference)
         if capability != "ready":
             return _resume_unavailable(capability)
+        if program.startswith("claude"):
+            return do_resume(session, replace_husk=True, **preference)
         subprocess.run(
             ["tmux", "kill-session", "-t", f"={session}"],
             capture_output=True,
         )
-        return do_resume(session)
+        return do_resume(session, **preference)
+
+    if open_terminal is False:
+        return {"ok": True, "action": "already_running", "terminal": "detached"}
+    if _terminal_adapter() == "none":
+        return _terminal_unsupported()
 
     # 1) Ghostty adapter では既存ウィンドウの前面化を試みる。
     if _focus_existing_terminal(session):
@@ -6188,11 +6518,11 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         result.update(extra)
         return result
 
-    if provider == "codex" and (
+    if provider in {"claude", "codex"} and (
         type(registered_agent_id) is not int or registered_agent_id <= 0
     ):
         return retained_registration_error(
-            "register_agent returned no positive numeric id for Codex binding")
+            "register_agent returned no positive numeric id for child binding")
 
     # Registration defaults are contact-gated on ORRERY Mail. Match the
     # normal launcher path and open the new child before delivering its task.
@@ -6363,7 +6693,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)
-        if provider == "codex":
+        if provider in {"claude", "codex"}:
             binding_file = f"{token_file}.binding.json"
             binding_fd = os.open(binding_file, open_flags, 0o600)
             with os.fdopen(binding_fd, "w") as f:
@@ -7043,7 +7373,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 2}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 3}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
@@ -7369,7 +7699,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         session = body.get("session", "")
         if path == "/api/jump":
-            result = do_jump(session)
+            if "open" in body and type(body["open"]) is not bool:
+                result = {"ok": False, "error": "open must be a boolean"}
+            elif "open" in body:
+                result = do_jump(session, open_terminal=body["open"])
+            else:
+                result = do_jump(session)
         elif path == "/api/exit":
             result = do_exit(session)
         elif path == "/api/annotate":
