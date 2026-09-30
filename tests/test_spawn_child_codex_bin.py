@@ -463,3 +463,45 @@ def test_gemini_collision_check_does_not_execute_codex(tmp_path, monkeypatch):
         assert not marker.exists(), "Gemini's model collision check must not start Codex"
     finally:
         models._VERSION_CACHE.clear()
+
+
+@pytest.mark.parametrize("version, expected", [("0.158.0", "gpt-6-sol"),
+                                              ("0.159.1", "gpt-6.1-sol")])
+def test_dry_run_real_policy_uses_no_temporary_files(tmp_path, monkeypatch, version, expected):
+    from dashboard import codex_models as models, server
+    home = tmp_path / "home"
+    home.mkdir()
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    tools = tmp_path / "bin"
+    marker = tmp_path / "mktemp-called"
+    _script(tools / "mktemp", "#!/bin/sh\necho called > " + shlex.quote(str(marker)) + "\nexit 71\n")
+    broken = _script(tools / "broken-codex", "#!/bin/sh\necho 'codex-cli 9.9.9'\nexit 1\n")
+    binary = _script(home / ".local" / "bin" / "codex", "#!/bin/sh\necho 'codex-cli " + version + "'\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tools) + ":/usr/bin:/bin")
+    monkeypatch.setenv("TMPDIR", str(temporary))
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_HOME", str(home / ".agentstack"))
+    monkeypatch.setenv("AGENTSTACK_HOOKS_DIR", str(ROOT / "hooks"))
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(broken))
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.setattr(server, "_project_key", lambda: "/project")
+    def forbidden(*a, **k):
+        pytest.fail("preview attempted Mail or agent launch")
+    monkeypatch.setattr(server, "_mcp_call", forbidden)
+    monkeypatch.setattr(server, "_suggest_any_spawn_name", forbidden)
+    before = sorted(tmp_path.rglob("*"))
+    models._VERSION_CACHE.clear()
+    try:
+        result = server.do_spawn({"standalone": True, "task": "dry", "provider": "codex",
+                                  "dir": str(home), "dry_run": True})
+        assert result["ok"] is True and result["dry_run"] is True
+        assert result["model"] == expected
+        assert result["launcher_env"]["AGENTSTACK_CODEX_BIN"] == str(binary)
+        assert models.resolve_launcher().version == tuple(map(int, version.split(".")))
+        assert not marker.exists() and list(temporary.iterdir()) == []
+        assert sorted(tmp_path.rglob("*")) == before
+    finally:
+        models._VERSION_CACHE.clear()
