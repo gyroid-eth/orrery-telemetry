@@ -229,6 +229,9 @@ PYEOF
 # schema-tagged state for the configured resume window; all other children and
 # a retention setting of 0 keep the historical full-delete behavior.
 rm -f "$MCP_CONFIG_FILE"
+if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
+    echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2
+fi
 rm -rf "$CODEX_HOME_DIR"
 case "$CHILD_RESUME_RETENTION_DAYS" in
     ''|*[!0-9]*)

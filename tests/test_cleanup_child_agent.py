@@ -104,6 +104,36 @@ def test_cleanup_with_argument_still_cleans_named_child(tmp_path: Path) -> None:
     assert not any(path.exists() for path in artifacts)
 
 
+def test_cleanup_warns_before_deleting_real_codex_sessions(tmp_path: Path) -> None:
+    agent_name, env, artifacts = _arrange_child_state(tmp_path)
+    sessions = artifacts[-1] / "sessions"
+    sessions.mkdir()
+    (sessions / "rollout.jsonl").write_text("legacy transcript\n", encoding="utf-8")
+    result = subprocess.run(
+        ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "WARNING: deleting unshared Codex sessions" in result.stderr
+    assert str(sessions) in result.stderr and "conversation history may be lost" in result.stderr
+    assert not artifacts[-1].exists()
+
+
+def test_cleanup_keeps_symlinked_codex_sessions_without_warning(tmp_path: Path) -> None:
+    agent_name, env, artifacts = _arrange_child_state(tmp_path)
+    shared = tmp_path / "source-codex" / "sessions"
+    shared.mkdir(parents=True)
+    transcript = shared / "rollout.jsonl"
+    transcript.write_text("shared transcript\n", encoding="utf-8")
+    (artifacts[-1] / "sessions").symlink_to(shared, target_is_directory=True)
+    result = subprocess.run(
+        ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "deleting unshared Codex sessions" not in result.stderr
+    assert not artifacts[-1].exists()
+    assert transcript.read_text() == "shared transcript\n"
+
+
 def test_cleanup_with_entry_environment_still_cleans_child(tmp_path: Path) -> None:
     agent_name, env, artifacts = _arrange_child_state(tmp_path)
     env["AGENT_NAME"] = agent_name
