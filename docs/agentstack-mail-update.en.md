@@ -10,6 +10,14 @@ nothing the installer writes reads it, but a machine that once used it may
 still carry its units and pointer file, so the pre-flight below checks for
 them instead of assuming they are gone.
 
+**Start with `--update-mail`.** With `--update-mail` the installer replaces
+the running Mail with this checkout's build (see
+"[Replacing the build with `--update-mail`](#replacing-the-build-with---update-mail)"
+below). It builds the candidate, verifies it on a scratch port and backs up the
+database while the running Mail keeps serving, then switches, and puts the
+previous build back if the new one does not answer. The manual procedure below
+is for layouts `--update-mail` refuses, and for checking what each stage does.
+
 **Scope.** The commands assume the default layout: install dir `~/.agentstack`,
 no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. A
 custom install is out of scope: the values this document reads from `env.sh`
@@ -27,8 +35,13 @@ pre-flight (step 0) and the offline verification (step 3) were then re-run
 exactly as written here against the installed service, and the stop
 conditions of steps 2 and 3 were exercised in a harmless bash control with
 stubbed `uv`, `git` and `lsof`, including a stale value left in the parent shell, a failing `git`, and a missing or failing `lsof`. Steps 4 to 7 as written here follow that live run
-but have not been re-executed as a whole. The rollback section is read from
-the installer's source and has not been executed.
+but have not been re-executed as a whole. The manual rollback in the rollback
+section is read from the installer's source and has not been executed.
+`--update-mail` is exercised by tests that start real servers on a temporary
+HOME, a temporary state root and free ports (`tests/test_install_mail_update.py`):
+the switch, going back to the previous build, the automatic rollback when the
+new build does not answer, and not stopping anything when offline verification
+fails. It has not yet been run on a live machine.
 
 ## What the installer does, and does not do
 
@@ -41,16 +54,120 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
   `env.sh` and the service is **not** touched. If the port is occupied but the
   occupant does not answer as ORRERY Mail, or serves a different database, the
   run stops with an error. This adoption path is every ordinary re-run, which
-  is why a re-run alone never switches the Mail build. The dashboard's
-  `/api/version` reports the package version, not the build behind the port.
+  is why a re-run alone never switches the Mail build. When the running build
+  differs from this checkout's, a re-run says so with a `notice:` and points at
+  `--update-mail` (it stays quiet when the package tree is identical in both
+  commits). The dashboard's `/api/version` reports the package version, not the
+  build behind the port.
 - **Nothing answers.** The installer provisions a candidate for the checkout's
   exact commit (an absent candidate is built; an existing but incomplete one
   stops the run), renders a service env, starts the service through
   `agentstack-mailctl`, points `env.sh` and the autostart unit at the render,
   and checks that the served database is the shared one.
 
-An update is therefore "stop the old service, then run the installer", with
-the autostart unit held back so it cannot restart the old build in between.
+A manual update is therefore "stop the old service, then run the installer",
+with the autostart unit held back so it cannot restart the old build in
+between. `--update-mail` performs the step between those two paths inside the
+installer.
+
+## Replacing the build with `--update-mail`
+
+```bash
+./scripts/install.sh --update-mail --dry-run   # show the plan only
+./scripts/install.sh --update-mail
+```
+
+Once the adoption path has identified the running deployment, and this
+checkout's candidate (`candidates/<commit>/venv`) differs from it, the
+installer proceeds in this order. The running Mail keeps serving through
+steps 1 to 4.
+
+1. **Prepare the candidate.** A complete one is reused; an absent one is built
+   from a clean commit (an incomplete one stops the run). A new render is
+   written.
+2. **Verify it offline.** A snapshot of the shared database is taken with the
+   SQLite backup API into `/tmp/orrery-mail-verify.*` (mode 700), and the
+   candidate is started on a free loopback port in an empty process
+   environment. The scratch service env comes from the same function as the
+   production render, so database, archive, signals and management socket all
+   point into the scratch directory. `health_check` on both `/mcp` and `/api`
+   must return the scratch database, the startup DDL must not have removed an
+   existing table or column, and `PRAGMA quick_check` must be `ok`. The
+   snapshot is deleted whatever the outcome; only the server log is kept, at
+   `mail-service/runtime/mail-update-verify.log`.
+3. **Back up the database** to
+   `mail-service/backups/storage-<UTC>-before-<commit>.sqlite3` (mode 600); the
+   three most recent are kept (`AGENTSTACK_MAIL_UPDATE_BACKUPS`). Only the build
+   is rolled back automatically, never the database. The backup is for a person
+   to use if the new build turns out to have damaged data.
+4. **Switch.** `agentstack-mailctl stop` stops the previous runner (its stop
+   marker holds the autostart sweep back), and `agentstack-mailctl start` runs
+   the new render. Health on the endpoint must name the shared database and the
+   pidfile must name the new runner.
+5. **Put it back if it does not answer.** The new runner is stopped, the
+   previous render is started again, and the same checks are made. The previous
+   candidate, render and runner are immutable and were never rewritten.
+
+`env.sh`, the autostart unit, `connections/local.json` and
+`install-state.json` are then written from whichever deployment is actually
+serving. `agent_mail.update` in `install-state.json` records the result
+(`switched`, `rolled-back`, `not-switched`), the reason, the previous and
+requested render and candidate, and the backup path.
+
+| Result | Mail | Exit status |
+| --- | --- | --- |
+| `switched` | the new build | 0 |
+| `not-switched` (failed in 1 to 3) | the previous build, never stopped | 1 |
+| `rolled-back` (4 failed, 5 succeeded) | the previous build, after an outage of seconds up to the start grace | 1 |
+| rollback failed | possibly down; the error states the state and the next action | 1 (immediately) |
+
+With `not-switched` and `rolled-back` the rest of the install still completes
+against the previous build. Exit status 1 says that the update that was asked
+for did not happen.
+
+**Going back to the previous build.** Pin the previous candidate and run the
+same operation. Its render comes from the same inputs, has the same path, and
+is reused as it is.
+
+```bash
+AGENTSTACK_MAIL_CANDIDATE_ID=<previous commit> \
+AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous commit>/venv \
+  ./scripts/install.sh --update-mail
+```
+
+**What is and is not affected.**
+
+- **Connections.** The server uses stateless HTTP, so a switch loses no
+  session. Requests that arrive between the stop and the new server answering
+  (12 s in the earlier manual run) are refused and recover when the client
+  retries.
+- **Tokens and credentials.** Agent tokens live in the shared database, and the
+  client-side files (`~/.agentstack/runtime` and the like) are not touched. A
+  build change does not change them.
+- **Enrollment.** `server_instance_id` is stored in the database's
+  `mail_instances`, so it keeps its value. `expected_server_instance_id` in
+  `connections/local.json` is preserved and only `mail_env` is rewritten to the
+  new render. The management socket path is derived from the state root and
+  stays the same.
+- **Database, archive, signals.** The same state root stays in use. Only
+  additive startup DDL is accepted; a build that removes an existing table or
+  column stops at verification.
+- **Autostart.** The stop marker holds the sweep back during the switch, and
+  `start` clears it. The unit reads `env.sh`, so it starts the new render as
+  soon as the installer has rewritten `env.sh`.
+
+**Out of scope.** Only a runner started by `agentstack-mailctl` (the pidfile
+names a live runner) is replaced. A listener whose deployment cannot be
+identified, a service supervised directly by launchd, and custom installs
+(`--install-dir`, `AGENTSTACK_MAIL_*` overrides) are out of scope or untested.
+When the deployment cannot be identified, the run ends with an error without
+stopping anything.
+
+Time limits: waiting for the verification server,
+`AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT` (default 120 s); waiting for the new
+build to start, `AGENTSTACK_MAIL_UPDATE_START_GRACE` (default: the
+controller's `AGENTSTACK_MAIL_START_GRACE`, 180 s). The rollback start waits
+with the controller's default grace.
 
 ## Layout
 
@@ -378,6 +495,9 @@ pre-flight has also been checked under `zsh`.
    deployment note.
 
 ## Rollback
+
+Going back with `--update-mail` and the previous candidate pinned is the route
+the tests exercise (section above). What follows is the manual route.
 
 **Read from the installer's source; not executed.** Treat it as a plan to
 verify on a scratch install before relying on it.

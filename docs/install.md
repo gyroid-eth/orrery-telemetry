@@ -164,6 +164,7 @@ CI や script から入れる場合、既定のままだと 4 つの承認（Cla
 --codex-network MODE    Codex child の sandbox network（on | off、既定 on）
 --codex-add-dirs PATHS  Codex child に追加で書込を許す root（`:` 区切り）
 --retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
+--update-mail           稼働中の ORRERY Mail をこの checkout の build に差し替える（検証・backup・失敗時は前の build に戻す。docs/agentstack-mail-update.md）
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 
@@ -374,6 +375,8 @@ installer は payload と `VERSION` を更新し、service を再登録して、
 dry-run の冒頭に、決まった project key・port・label prefix・terminal・MCP URL が表示されます。
 
 `env.sh` を shell の起動時に読み込んでいる場合、その shell の `AGENTSTACK_*` は「明示した値」として扱われます。別の shell で入れ直した後は、新しい shell を開くか `env.sh` を読み直してから launcher や installer を使ってください。
+
+稼働中の ORRERY Mail の build はそのまま使い続け、この checkout の build と違えば `notice:` で知らせます。build も差し替えるときは `--update-mail` を付けます。candidate の検証と database の backup を Mail を止めずに済ませてから切り替え、新しい build が応答しなければ前の build に戻します（[agentstack-mail-update.md](agentstack-mail-update.md#--update-mail-による差し替え)）。
 
 **in-place upgrade 中も ORRERY Mail server は稼働させたまま**にしてください。稼働 listener から解決した実 DB path は filesystem の候補探索より優先されます。ORRERY Mail を先に止めると候補探索へフォールバックし、複数の DB がある環境では誤選択を避けるため installer が停止します。
 
