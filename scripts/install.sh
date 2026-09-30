@@ -30,6 +30,8 @@ PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
+# The Obsidian vault the dashboard falls back to and links Output items into.
+VAULT_SETTING="${AGENTSTACK_VAULT:-}"
 # NEW AGENT launch-directory presets. Resolved below: explicit > installed env.sh > empty.
 SPAWN_DIRS_SETTING="${AGENTSTACK_SPAWN_DIRS:-}"
 SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
@@ -105,7 +107,8 @@ Options:
   --reset-settings       Do not inherit settings from the existing env.sh:
                          anything not given explicitly goes back to its
                          default. The project key, protected roots and the
-                         ORRERY Mail state/service roots are still inherited.
+                         ORRERY Mail state/service roots and management
+                         socket are still inherited.
                          AGENTSTACK_RESET_SETTINGS=1 does the same.
   --spawn-dirs PATHS     ':'-separated NEW AGENT launch-directory presets
                          (absolute or ~; default: existing env.sh, else ~)
@@ -282,6 +285,7 @@ fi
 DELIVERABLE_ROOTS="$(setting AGENTSTACK_DELIVERABLE_ROOTS "$DELIVERABLE_ROOTS")"
 LANG_SETTING="$(setting AGENTSTACK_LANG "$LANG_SETTING")"
 MURMUR_SETTING="$(setting AGENTSTACK_MURMUR "$MURMUR_SETTING")"
+VAULT_SETTING="$(setting AGENTSTACK_VAULT "$VAULT_SETTING")"
 AUTO_OPEN_CHILD_SETTING="$(setting AGENTSTACK_AUTO_OPEN_CHILD "$AUTO_OPEN_CHILD_SETTING")"
 SPAWN_DIRS_SETTING="$(setting AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING")"
 SPAWN_ROOTS_SETTING="$(setting AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING")"
@@ -497,16 +501,17 @@ BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
 CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
-CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
+CLAUDE_JSON="$(setting AGENTSTACK_CLAUDE_JSON "${AGENTSTACK_CLAUDE_JSON:-}" "$HOME/.claude.json")"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
-MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
-DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-$RUNTIME_DIR/dashboard.log}"
-DASHBOARD_LOG_MAX_BYTES="${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-5242880}"
-DASHBOARD_LOG_BACKUPS="${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-3}"
-DASHBOARD_RESTART_DELAY="${AGENTSTACK_DASHBOARD_RESTART_DELAY:-5}"
+MANAGED_AGENTS_FILE="$(setting AGENTSTACK_MANAGED_AGENTS_FILE \
+  "${AGENTSTACK_MANAGED_AGENTS_FILE:-}" "$RUNTIME_DIR/managed_agents.txt")"
+DASHBOARD_LOG="$(setting AGENTSTACK_DASHBOARD_LOG "${AGENTSTACK_DASHBOARD_LOG:-}" "$RUNTIME_DIR/dashboard.log")"
+DASHBOARD_LOG_MAX_BYTES="$(setting AGENTSTACK_DASHBOARD_LOG_MAX_BYTES "${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-}" 5242880)"
+DASHBOARD_LOG_BACKUPS="$(setting AGENTSTACK_DASHBOARD_LOG_BACKUPS "${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-}" 3)"
+DASHBOARD_RESTART_DELAY="$(setting AGENTSTACK_DASHBOARD_RESTART_DELAY "${AGENTSTACK_DASHBOARD_RESTART_DELAY:-}" 5)"
 LABEL="$LABEL_PREFIX.agentdashboard"
 URL="http://127.0.0.1:$PORT/"
 ACTIVE_SERVICE_KIND=""
@@ -583,7 +588,14 @@ NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
 NATIVE_MAIL_DEPLOYMENT="$(dirname "$NATIVE_MAIL_ENV")/deployment.json"
 NATIVE_MAIL_PIDFILE="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.pid"
 NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
+# Empty means "derive it from the state root" (below). A socket the previous
+# install recorded belongs with that install's state root, so it is inherited
+# like the roots (even under --reset-settings), unless the state root itself was
+# given explicitly: a socket derived for another root would be shared by two.
 NATIVE_MAIL_MANAGEMENT_SOCKET="${AGENTSTACK_MAIL_MANAGEMENT_SOCKET:-}"
+if [[ -z "$NATIVE_MAIL_MANAGEMENT_SOCKET" && -z "${AGENTSTACK_MAIL_STATE_ROOT:-}" ]]; then
+  NATIVE_MAIL_MANAGEMENT_SOCKET="$(agentstack_installed_env_value AGENTSTACK_MAIL_MANAGEMENT_SOCKET "$INSTALL_DIR/env.sh")"
+fi
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected ORRERY Mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
 PREFLIGHT_ERRORS=()
@@ -2303,7 +2315,7 @@ values = {
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
-    "AGENTSTACK_VAULT": "",
+    "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
     "AGENTSTACK_PATH": "$PATH_VALUE",
 }
@@ -3355,7 +3367,7 @@ repl = {
     "__DASHBOARD_LOG_BACKUPS__": "$DASHBOARD_LOG_BACKUPS",
     "__DASHBOARD_RESTART_DELAY__": "$DASHBOARD_RESTART_DELAY",
     "__MANAGED_AGENTS_FILE__": "$MANAGED_AGENTS_FILE",
-    "__VAULT__": "",
+    "__VAULT__": "$VAULT_SETTING",
     "__PATH__": "$PATH_VALUE",
 }
 text = src.read_text(encoding="utf-8")
@@ -3428,7 +3440,7 @@ env = {
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
-    "AGENTSTACK_VAULT": "",
+    "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "PATH": "$PATH_VALUE",
 }
 def esc(v):

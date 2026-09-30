@@ -12,7 +12,7 @@
 
 ### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
 
-`git pull && ./scripts/install.sh` を環境変数のない端末で実行すると、port・label prefix・terminal・MCP URL・service の `PATH`・Python・ORRERY Mail の state root（DB の場所）・`LANG` / `MURMUR` / `DELIVERABLE_ROOTS` などが既定値に戻り、dashboard が別の port・別の launchd label で登録し直されていました。installer はすべての設定を「明示した値（option・環境変数）> 前回の `env.sh` > 既定値」の順で決めるようにしました。既定値に戻すには `--reset-settings`（`AGENTSTACK_RESET_SETTINGS=1`）を使います。project key・protected roots・Mail の state / service root はデータの置き場所なので reset でも引き継ぎます。前回記録した Python が無くなっていた場合は通知して探し直します。dry-run の冒頭に port・label prefix・terminal・MCP URL を表示します。
+`git pull && ./scripts/install.sh` を環境変数のない端末で実行すると、port・label prefix・terminal・MCP URL・service の `PATH`・Python・ORRERY Mail の state root（DB の場所）・`LANG` / `MURMUR` / `DELIVERABLE_ROOTS`・`AGENTSTACK_VAULT` などが既定値に戻り、dashboard が別の port・別の launchd label で登録し直されていました。installer はすべての設定を「明示した値（option・環境変数）> 前回の `env.sh` > 既定値」の順で決めるようにしました。`AGENTSTACK_VAULT` は明示しても env.sh・service に空で書かれていたので、明示した値も届くようにしました。`AGENTSTACK_CLAUDE_JSON`・`AGENTSTACK_MANAGED_AGENTS_FILE`・dashboard の log と再起動の設定・Mail の management socket も引き継ぎます。既定値に戻すには `--reset-settings`（`AGENTSTACK_RESET_SETTINGS=1`）を使います。project key・protected roots・Mail の state / service root と management socket はデータの置き場所なので reset でも引き継ぎます。前回記録した Python が無くなっていた場合は通知して探し直します。dry-run の冒頭に port・label prefix・terminal・MCP URL を表示します。
 
 ### launcher が、明示した project key を install 時の値で上書きしていました（#33）
 
