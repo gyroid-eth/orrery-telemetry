@@ -501,9 +501,19 @@ def _version_binary(tmp_path, body):
     return binary
 
 
+def _configure_version_binary(monkeypatch, binary):
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    if os.name == "nt":
+        # Windows cannot execute a shebang fixture. Run it with the native
+        # Python executable while keeping the real Popen/timeout/cache behavior.
+        real_popen = models.subprocess.Popen
+        monkeypatch.setattr(models.subprocess, "Popen",
+                            lambda args, **kwargs: real_popen([sys.executable, *args], **kwargs))
+
+
 def test_version_probe_is_cached_and_invalidated_on_binary_replacement(monkeypatch, tmp_path):
     binary = _version_binary(tmp_path, "print('codex-cli 0.159.1')\n")
-    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    _configure_version_binary(monkeypatch, binary)
     models._VERSION_CACHE.clear()
     assert _real_cli_version() == (0, 159, 1)
     with monkeypatch.context() as m:
@@ -526,7 +536,7 @@ def test_version_probe_is_cached_and_invalidated_on_binary_replacement(monkeypat
                                   "import time; time.sleep(30)"])
 def test_failed_version_probe_is_bounded_cached_and_uses_catalog(monkeypatch, tmp_path, body):
     binary = _version_binary(tmp_path, body + "\n")
-    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    _configure_version_binary(monkeypatch, binary)
     monkeypatch.setattr(models, "CLI_VERSION_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(models, "cli_version", _real_cli_version)
     models._VERSION_CACHE.clear()
