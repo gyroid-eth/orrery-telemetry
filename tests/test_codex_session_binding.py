@@ -2015,7 +2015,8 @@ def test_resume_check_only_accepts_the_other_spelling_and_writes_nothing(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
+    # The verified receipt's spelling, which the bootstrap then keeps.
+    assert result.stdout == "codex-cli\n"
     assert launch_path.read_bytes() == launch_before
     assert receipt_path.read_bytes() == receipt_before
     assert prepare_mod.check_resume(
@@ -2024,7 +2025,7 @@ def test_resume_check_only_accepts_the_other_spelling_and_writes_nothing(
         resume_session_id=SESSION_ID,
         launch_origin="child",
         codex_mcp_profile="orrery-only",
-    ) == (receipt["launch_id"], receipt["receipt_id"])
+    ) == (receipt["launch_id"], receipt["receipt_id"], "codex-cli")
 
 
 def test_resume_check_only_refuses_a_mismatch_without_writing(
@@ -2053,3 +2054,65 @@ def test_resume_check_only_refuses_a_mismatch_without_writing(
             codex_mcp_profile="orrery-only",
         )
     assert launch_path.read_bytes() == launch_before
+
+
+@pytest.mark.parametrize("original", ["codex-cli", "codex"])
+def test_resume_closed_before_first_input_stays_resumable(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch, original: str
+) -> None:
+    """#125 acceptance: resume, close before any prompt (no new SessionStart
+    receipt), and the next dashboard resume is still ready."""
+
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "macos")
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (original, AGENT_ID)
+        )
+    registration = {**binding_env["registration"], "program": original}
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    # This fixture carries no retained child credential, so the capability
+    # stops at that later gate; what matters is that the history gate before
+    # it (the one that failed in #125 with no_history) passes before and after.
+    before = server._resume_capability(AGENT, original, category="retired")
+    assert before != "no_history"
+
+    # The bootstrap's check does not know the spelling in advance ...
+    *_nonces, program = prepare_mod.check_resume(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    )
+    assert program == original
+    # ... and re-registers and prepares under the verified receipt's spelling.
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (program, AGENT_ID)
+        )
+    prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": program},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    # No SessionStart(resume) arrives: the prior receipt stays authoritative.
+    state = server._codex_history_binding(AGENT, now=250.0)
+    assert state["history_binding"] == "bound", state
+    after = server._resume_capability(AGENT, program, category="retired")
+    assert after == before
+    assert after != "no_history"

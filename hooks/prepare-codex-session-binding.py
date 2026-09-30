@@ -95,7 +95,20 @@ def _resume_fallback(
     launch_origin: str | None,
     codex_mcp_profile: str | None,
 ) -> tuple[str, str] | None:
-    """Return the exact prior receipt nonces for this resume target.
+    verified = _verified_resume_receipt(
+        runtime_dir, registration, resume_session_id, launch_origin, codex_mcp_profile
+    )
+    return None if verified is None else (verified[0], verified[1])
+
+
+def _verified_resume_receipt(
+    runtime_dir: Path,
+    registration: dict[str, Any],
+    resume_session_id: str,
+    launch_origin: str | None,
+    codex_mcp_profile: str | None,
+) -> tuple[str, str, str] | None:
+    """Return the exact prior receipt nonces and program for this resume target.
 
     This runs under the agent launch lock.  Merely finding an old index is not
     enough: its registered identity, requested session id, and rollout header
@@ -154,7 +167,7 @@ def _resume_fallback(
         == resume_session_id
     ):
         return None
-    return launch_id, receipt_id
+    return launch_id, receipt_id, receipt["program"]
 
 
 def check_resume(
@@ -164,12 +177,17 @@ def check_resume(
     resume_session_id: str,
     launch_origin: str | None = None,
     codex_mcp_profile: str | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Verify a resume target without writing anything.
 
     The bootstrap calls this before it re-registers the identity, so a resume
     that cannot be bound is refused while the retained registration, receipt,
     and child state are still exactly as the last run left them.
+
+    Returns the prior receipt's launch id, receipt id, and program spelling.
+    The caller re-registers and prepares the new launch under that same
+    spelling: the dashboard matches a receipt to the registration exactly, so
+    changing the spelling would orphan the receipt until a new one is written.
     """
 
     agent_id = registration.get("agent_id")
@@ -188,7 +206,7 @@ def check_resume(
         if lock_path.exists():
             descriptor = os.open(lock_path, os.O_RDWR)
             fcntl.flock(descriptor, fcntl.LOCK_SH)
-        fallback = _resume_fallback(
+        verified = _verified_resume_receipt(
             runtime_dir,
             registration,
             resume_session_id,
@@ -198,9 +216,9 @@ def check_resume(
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    if fallback is None:
+    if verified is None:
         raise ValueError("resume target does not match a verified prior receipt")
-    return fallback
+    return verified
 
 
 def prepare(
@@ -320,7 +338,7 @@ def main() -> int:
     parser.add_argument(
         "--check-only",
         action="store_true",
-        help="verify a resume target against its prior receipt and write nothing",
+        help="verify a resume target against its prior receipt, write nothing, and print the receipt's program",
     )
     args = parser.parse_args()
     if args.check_only:
@@ -328,7 +346,7 @@ def main() -> int:
             print("prepare-codex-session-binding: --check-only is for a resume launch", file=os.sys.stderr)
             return 1
         try:
-            check_resume(
+            _launch_id, _receipt_id, receipt_program = check_resume(
                 Path(args.runtime_dir).expanduser(),
                 _registration(args),
                 resume_session_id=args.resume_session_id,
@@ -338,6 +356,7 @@ def main() -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"prepare-codex-session-binding: {exc}", file=os.sys.stderr)
             return 1
+        print(receipt_program)
         return 0
     try:
         launch_path, launch_id = prepare(

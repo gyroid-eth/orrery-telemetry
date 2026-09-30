@@ -358,7 +358,9 @@ if __name__ == "__main__":
     sys.exit(_main())
 
 
-def _bootstrap_resume_fixture(tmp_path, *, receipt_session_id):
+def _bootstrap_resume_fixture(
+    tmp_path, *, receipt_session_id, state_program="codex-cli", receipt_program="codex-cli"
+):
     """A retained codex-cli child plus a bootstrap whose registration is spied on."""
 
     import json
@@ -373,16 +375,15 @@ def _bootstrap_resume_fixture(tmp_path, *, receipt_session_id):
     hooks.mkdir()
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
-    shutil.copy2(
-        pathlib.Path(__file__).resolve().parents[1]
-        / "hooks"
-        / "prepare-codex-session-binding.py",
-        hooks,
-    )
+    for helper in ("prepare-codex-session-binding.py", "child_resume.py"):
+        shutil.copy2(
+            pathlib.Path(__file__).resolve().parents[1] / "hooks" / helper, hooks
+        )
     marker = tmp_path / "registered"
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
-        "ags_mcp_call() { return 0; }\n"
+        "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
+        "ags_mcp_has_error() { return 1; }\n"
         "ags_start_mail_watcher() { :; }\n"
         "ags_register_session() {\n"
         f"  printf '%s\\n' \"$2\" >> '{marker}'\n"
@@ -406,12 +407,19 @@ def _bootstrap_resume_fixture(tmp_path, *, receipt_session_id):
                 "agent_id": 73,
                 "agent_name": "BoundCodex",
                 "project_key": project,
-                "program": "codex-cli",
+                "program": state_program,
                 "codex_mcp_profile": "orrery-only",
+                "registration_token": "owner-token",
+                "retired_at": "2026-09-21T00:00:00Z",
+                "resume_expires_at": "2999-09-21T00:00:00Z",
             }
         ),
         encoding="utf-8",
     )
+    state.chmod(0o600)
+    token = runtime / "agent_token_BoundCodex"
+    token.write_text("owner-token", encoding="utf-8")
+    token.chmod(0o600)
     transcript = tmp_path / "rollout.jsonl"
     transcript.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": receipt_session_id}})
@@ -425,7 +433,7 @@ def _bootstrap_resume_fixture(tmp_path, *, receipt_session_id):
                 "schema_version": 2,
                 "binding_kind": "self",
                 "provider": "codex",
-                "program": "codex-cli",
+                "program": receipt_program,
                 "agent_id": 73,
                 "agent_name": "BoundCodex",
                 "project_key": project,
@@ -455,6 +463,7 @@ def _bootstrap_resume_fixture(tmp_path, *, receipt_session_id):
         "AGENTSTACK_CODEX_RESUME_SESSION_ID": session_id,
         "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
         "AGENT_NAME": "BoundCodex",
+        "AGENTSTACK_PYTHON": sys.executable,
         "TMUX": "",
     }
     return script, env, marker, state, receipt
@@ -480,19 +489,43 @@ def test_refused_child_resume_does_not_re_register_or_touch_the_receipt(tmp_path
     assert not (receipt.parent.parent / "codex_launches" / "73.json").exists()
 
 
-def test_codex_cli_child_resume_passes_the_check_and_registers(tmp_path):
-    """#125: the codex-cli receipt matches the bootstrap's resume arguments."""
+import pytest  # noqa: E402
 
-    script, env, marker, _state, _receipt = _bootstrap_resume_fixture(
-        tmp_path, receipt_session_id="01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+
+@pytest.mark.parametrize(
+    ("state_program", "receipt_program"),
+    [("codex-cli", "codex-cli"), ("codex", "codex"), ("codex-cli", "codex")],
+)
+def test_child_resume_keeps_the_verified_receipt_spelling_end_to_end(
+    tmp_path, state_program, receipt_program
+):
+    """#125: the whole bootstrap succeeds and keeps the receipt's spelling.
+
+    Registration, the fresh launch expectation, and the resume state all use
+    the program recorded in the verified prior receipt, including the existing
+    mixed case where the child state says codex-cli but the receipt says codex.
+    """
+
+    import json
+
+    script, env, marker, state, _receipt = _bootstrap_resume_fixture(
+        tmp_path,
+        receipt_session_id="01d13f58-8e1a-7777-a3d8-e2ba243cdb49",
+        state_program=state_program,
+        receipt_program=receipt_program,
     )
 
-    subprocess.run(
+    result = subprocess.run(
         ["bash", "-c", script], env=env, text=True, capture_output=True, check=False
     )
 
     stderr = (tmp_path / "stderr").read_text(encoding="utf-8")
-    assert "does not match" not in stderr
-    assert marker.read_text(encoding="utf-8").split() == ["codex"]
-    launch = (marker.parent / "runtime" / "codex_launches" / "73.json")
-    assert launch.exists(), stderr
+    assert result.stdout.strip() == "0", stderr
+    assert marker.read_text(encoding="utf-8").split() == [receipt_program]
+    launch = json.loads(
+        (tmp_path / "runtime" / "codex_launches" / "73.json").read_text(encoding="utf-8")
+    )
+    assert launch["program"] == receipt_program
+    assert launch["launch_kind"] == "resume"
+    assert launch["fallback_receipt_id"] == "prior-receipt"
+    assert json.loads(state.read_text(encoding="utf-8"))["resume_in_progress_at"]
