@@ -210,9 +210,12 @@ def _run_root_claude_substitution(*, collision: bool):
     fake_claude.chmod(0o755)
     (libdir / "agentstack-launch.sh").write_text(
         'ags_die() { printf "%s: %s\\n" "$AGS_PROG" "$*" >&2; exit 1; }\n'
+        'ags_parse_top_level_args() { AGS_LAUNCH_DIR="${1:-}"; AGS_LAUNCH_DRY_RUN=false; }\n'
         "ags_load_env() { :; }\n"
         'ags_resolve_tmux() { printf "%s\\n" "$FAKE_TMUX"; }\n'
-        'ags_choose_dir() { printf "%s\\n" "$1"; }\n',
+        'ags_choose_dir() { printf "%s\\n" "$1"; }\n'
+        'ags_choose_top_level_dir() { ags_choose_dir "$AGS_LAUNCH_DIR"; }\n'
+        "ags_prepare_top_level_launch() { :; }\n",
         encoding="utf-8",
     )
     (libdir / "agentstack-register.sh").write_text(

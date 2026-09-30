@@ -11,10 +11,12 @@ export PATH="$HOME/.agentstack/bin:$PATH"
 
 agent-start ~/code/my-project
 agent-start-codex ~/code/my-project
+agent-start-gemini ~/code/my-project
 ```
 
 - `agent-start`: Claude Code
 - `agent-start-codex`: Codex CLI
+- `agent-start-gemini`: Antigravity CLI
 
 directory 引数を省略すると、`fzf` があれば `AGENTSTACK_BASE_DIR` 以下を選択できます。なければ現在 directory を使います。
 
@@ -24,6 +26,16 @@ agent-start
 ```
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
+
+## top-level の project 選択
+
+3つの top-level launcher は登録前に、選ばれた project、その選択元、作業 directory、reservation の保護範囲を表示します。project の優先順位は `--project-key KEY`、起動 shell の `AGENTSTACK_PROJECT_KEY`、起動 shell の `PROJECT_KEY`、install 済み `env.sh` の順です。repository を見て project を自動変更せず、`AGENTSTACK_PROTECTED_ROOTS` も自動では書き換えません。
+
+```bash
+agent-start-codex --project-key shared-vault ~/code/my-project
+```
+
+既存 tmux server が別の project 値を持っていても、`--project-key` で選んだ値は新しい session に明示的に渡されます。付け忘れを防ぎたい場合は `AGENTSTACK_REQUIRE_EXPLICIT_PROJECT_KEY=1` を設定すると、`--project-key` の無い top-level 起動は登録前に停止して指定方法を表示します。この opt-in は `agent-start`、`agent-start-codex`、`agent-start-gemini` だけに適用され、child、resume、Dashboard の NEW AGENT には適用されません。
 
 ## tmux session
 

@@ -143,6 +143,7 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | 環境変数 | 既定値 | 意味 |
 | --- | --- | --- |
 | `AGENTSTACK_BASE_DIR` | `$HOME` | `fzf` picker root |
+| `AGENTSTACK_REQUIRE_EXPLICIT_PROJECT_KEY` | `0` | `1` で top-level launcher に `--project-key` を必須化。child / resume / Dashboard spawn には適用しない |
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Claude CLI |
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude 登録 model label |
 | `AGENTSTACK_CODEX_BIN` | install 時に operator の shell で解決した、`--version` に答える `codex`（WSL では `/mnt/<drive>/` 配下の Windows 版を除く。`--codex-bin` で明示可） | Codex CLI。dashboard は launchd / systemd の最小 PATH で動くので、nvm / nodebrew / `~/.npm-global` の codex はこの値で届く |
