@@ -126,7 +126,7 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 通常の `install.sh` は稼働中の Mail を採用し、Mail の build は切り替えません。既存 owner 認証 option が無いことを取得済み schema で確認できた旧形式の子、canonical token が実際に無い Claude、検証済み保持期限切れの Claude は、端末と会話だけを再開できます。対応した Mail と有効な credential がある場合は、従来の認証・移行・unretire を完了してから再開します。
 
-会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。
+会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。resume の前にどちらになるかは、`/api/agents` / `/api/graph` の row の `resume_mode`（`mail` / `conversation_only`）で分かります。
 
 この mode は空の `--strict-mcp-config` と `--settings '{"disableAllHooks":true}'` を使い、通常の user/project/plugin の MCP と hook を止めます。他の MCP と hook もこの起動では使えません。専用 `AGENTSTACK_MAIL_DISABLED=1` を tmux session に設定し、製品の自動登録・cleanup・reservation hook と watcher 通知を止めます。state/token は移行・削除・上書きせず、Mail の登録、claim、unretire、retire を行いません。通知 signal は既読化せず残します。古い Mail で普通の登録を代用して本人確認することもありません。
 

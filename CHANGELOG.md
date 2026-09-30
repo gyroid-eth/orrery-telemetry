@@ -30,6 +30,11 @@
 
 resume した Claude の SessionStart hook は shell から再登録しますが、model を受け取っていなかったため、登録済みの model（例: `opus-5.5`）を `claude-code`、または tmux server の環境に残った別の agent の model で上書きしていました。resume は登録済みの model をその session に渡し、再登録でも変えません。
 
+
+
+### resume の前に、Mail まで戻るのか会話だけなのかが分かるようにしました（#145、API 世代5）
+
+`resume_capability: ready` は会話だけの resume でも出るため、resume した体が Mail を使えるかは `/api/jump` を実行した後の応答でしか分かりませんでした。`/api/agents` / `/api/graph` の resume できる Claude row（`ready` / `verification_required`）に `resume_mode` を追加し、`mail`（owner を認証して unretire する。できなければ起動しない）か `conversation_only`（Mail に触れない。`mail_reason` 付き）かを resume の前に出します。`/api/jump` も Mail まで戻した場合に `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていません。利用側が頼る field を足したため `/api/version` の `api` を5にしました。
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）

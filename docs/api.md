@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":4}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":5}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -217,6 +217,8 @@ response:
 会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。
 
 API 世代4からの追加 field です。GET `/api/agents` / `/api/graph` の Claude row にも `mail_status` / `mail_reason` / `mail_message` を表示します。field が無い旧 client/row の Mail 到達性は未報告であり、認証成功を保証しません。明示 purge は拒否のまま、保持期限切れの Claude は安全性検査後に会話だけ再開可能です。Codex の期限切れ拒否は変わりません。
+
+API 世代5からの追加 field です。resume できる（`ready` または `verification_required`）終了済み Claude row には、resume の前に `resume_mode` を出します。`mail` は、resume が owner を認証して Mail の row を unretire すること（できなければ起動せずに拒否し、会話だけの再開に切り替えないこと）を、`conversation_only` は Mail に触れずに会話だけを再開することを示し、このときは `mail_status: unavailable` と `mail_reason` / `mail_message` も付きます。`/api/jump` の応答の `resume_mode` はこの見込みと同じ値で、Mail まで戻した Claude の resume も `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていないので、`ready` で resume を許す利用側はそのまま動きます。Codex row と、resume できない row・稼働中の row には `resume_mode` を出しません。
 
 ## GET `/api/graph`
 
