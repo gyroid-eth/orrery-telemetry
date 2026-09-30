@@ -8,9 +8,9 @@ Run several coding agents from different vendors, such as Claude Code, Codex CLI
 
 **Start with the demo**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) is the real dashboard driven by scripted data. It loops through agents starting, exchanging messages, spawning a child and finishing, in four minutes, with captions saying what is happening. Nothing to install; it gives you a feel for the experience on a screen close to the real thing. Watch it once through before continuing.
 
-**Introduction video**: "Orrery" (90 s, in Japanese) is an illustrated explainer of the idea behind ORRERY: agents talk to each other directly, so you no longer relay between AIs. It does not show the actual screens.
+**Introduction video**: "Orrery" (90 s) is an illustrated explainer of the idea behind ORRERY: agents talk to each other directly, so you no longer relay between AIs. It does not show the actual screens. A [Japanese version](https://youtu.be/JXoa93TQolU) is also available.
 
-[![Introduction video "Orrery" (YouTube)](https://i.ytimg.com/vi/JXoa93TQolU/hqdefault.jpg)](https://youtu.be/JXoa93TQolU)
+[![Introduction video "Orrery" (YouTube)](https://i.ytimg.com/vi/Jpc1ad7c90k/hqdefault.jpg)](https://youtu.be/Jpc1ad7c90k)
 
 ## Who this is for
 
