@@ -226,8 +226,9 @@ PYEOF
 
 # The generated home contains only rebuildable config/proxy runtime and is
 # never reused.  A valid Claude/Codex child keeps its private owner credential and
-# schema-tagged state for the configured resume window; unsupported children and
-# a retention setting of 0 keep the historical full-delete behavior.
+# schema-tagged state for the configured resume window. Known legacy material
+# stays unchanged until explicit authenticated migration; unsupported children
+# and a retention setting of 0 keep the historical full-delete behavior.
 rm -f "$MCP_CONFIG_FILE"
 if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
     echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2

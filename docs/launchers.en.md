@@ -118,6 +118,8 @@ Migration authenticates through bundled Mail's `register_agent(existing_agent_id
 
 This refusal returns `config_unrestorable` and a fixed message asking you to update and restart the dashboard and bundled ORRERY Mail. It does not mean the token is missing. If Mail supports the guard but owner authentication fails, resume still returns `credential_missing` without showing the raw authentication error.
 
+Exiting before migration also preserves the private known three-field state and matching canonical token, including their bytes, modes, and mtimes. Generated MCP config is removed as usual. Cleanup does not guess a formal ID, provider, or retention timestamp; later explicit resume authenticates the owner and migrates. No expiry is inferred before that migration. Invalid legacy permissions, name, token match, or pending checks return an error and preserve the state/token instead of deleting them. Retention `0` remains an explicit opt-out that deletes legacy state/token on exit.
+
 ## Reregistration
 
 ```bash

@@ -16,6 +16,8 @@
 
 bundled Mail の `register_agent` に既存 owner だけを認証する optional `existing_agent_id` を追加しました。旧形式の移行はこのガードを必須とし、古い Mail では登録を呼ばず拒否します。dashboard と bundled Mail は一緒に更新・再起動してください。通常の登録と名前生成の動作は変えません。
 
+旧形式の子を exit した際に cleanup が state と token を削除する回帰も修正しました。private な旧3項目 state と一致する token を元のまま保持し、明示 resume で認証して移行します。旧 material の検証エラーでは削除に進まず、保持設定0だけは従来の opt-out に従います。
+
 ## 2026.09.30.3
 
 ### resume も子の窓の自動表示設定に従います（#138、API 世代3）

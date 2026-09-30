@@ -120,6 +120,8 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 この拒否は `config_unrestorable` と、dashboard / bundled ORRERY Mail の更新・再起動が必要だと分かる固定メッセージを返します。token の欠落を意味しません。Mail が対応済みで実際の owner 認証が失敗した場合は、従来どおり `credential_missing` を返し、認証エラーの生の内容は表示しません。
 
+旧形式のまま exit しても、cleanup は private な既知3項目 state と一致する canonical token の内容・mode・mtime をそのまま保持します。生成した MCP config は通常どおり削除します。exit では正式 ID・provider・保持時刻を推測して追加せず、後の明示 resume で owner を認証して移行します。その前には保持期限を自動で推測しません。旧 material の権限・名前・token の一致や pending 検査に失敗した場合も、削除に進まずエラーを返して state/token を残します。保持設定 `0` は明示的な opt-out として exit 時に旧 state/token も削除します。
+
 ## 再登録
 
 ```bash

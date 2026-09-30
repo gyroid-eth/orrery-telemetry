@@ -494,7 +494,7 @@ def mark_retired(
     retention_days: int,
     now: datetime | None = None,
 ) -> bool:
-    """Mark a valid Claude/Codex child retained. Return False for legacy/unsupported state."""
+    """Retain modern children, or preserve known legacy material without migration."""
 
     if retention_days < 0:
         raise ValueError("retention days must be a non-negative integer")
@@ -504,6 +504,32 @@ def mark_retired(
     with _AgentLock(lock_path, exclusive=True):
         try:
             state = _load_state(state_path)
+        except ResumeStateError:
+            # Existing unsafe/unreadable material is not permission to delete
+            # its credential. The cleanup caller already preserves on error.
+            if state_path.exists() or state_path.is_symlink():
+                raise
+            return False
+        if set(state) == {"agent_name", "project_key", "registration_token"}:
+            if (state["agent_name"] != agent_name or not isinstance(state["project_key"], str)
+                    or not state["project_key"].strip()):
+                raise ResumeStateError("identity_mismatch", "Legacy cleanup identity is invalid")
+            pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+            if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
+                raise ResumeStateError("config_unrestorable", "Legacy cleanup has a pending registration/migration")
+            try:
+                canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+            except UnicodeDecodeError as exc:
+                raise ResumeStateError("credential_missing", "canonical child credential is invalid") from exc
+            token = state["registration_token"]
+            if not isinstance(token, str) or not token or not canonical:
+                raise ResumeStateError("credential_missing", "Legacy cleanup credential is unavailable")
+            if not hmac.compare_digest(token.encode(), canonical.encode()):
+                raise ResumeStateError("identity_mismatch", "Legacy cleanup credential and state disagree")
+            # No ID/provider/timestamps are guessed here. Explicit resume
+            # authenticates the formal owner before migrating these same bytes.
+            return True
+        try:
             _validate_identity(state, agent_name=agent_name)
         except ResumeStateError:
             return False
