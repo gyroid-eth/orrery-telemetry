@@ -22,7 +22,7 @@ def _read(rel: str) -> str:
 def _default_mail_port() -> str:
     # explicit > previous env.sh > this default (hooks/project-context.sh).
     match = re.search(
-        r'^MCP_URL="\$\(setting AGENTSTACK_MCP_URL "\$MCP_URL" http://127\.0\.0\.1:(\d+)/mcp\)"$',
+        r'^resolve_setting MCP_URL AGENTSTACK_MCP_URL http://127\.0\.0\.1:(\d+)/mcp kept$',
         INSTALLER,
         re.M,
     )

@@ -241,7 +241,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     # Resolved to a codex that runs (tests/test_install_codex_bin.py covers the rules).
     assert 'CODEX_BIN_SETTING="$(find_usable_codex_bin)"' in installer_text
     assert installer_text.count('"AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING"') >= 3
-    assert '"__CODEX_BIN__": "$CODEX_BIN_SETTING"' in installer_text
+    assert '__CODEX_BIN__ "$CODEX_BIN_SETTING"' in installer_text
     assert plist["EnvironmentVariables"]["AGENTSTACK_PORTRAITS_DIR"] == "__PORTRAITS_DIR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CUSTOM_PORTRAITS"] == "__CUSTOM_PORTRAITS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CLAUDE_MODELS"] == "__CLAUDE_MODELS__"

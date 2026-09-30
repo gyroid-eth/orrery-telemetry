@@ -86,7 +86,36 @@ def _write_env_sh_like_the_installer(home: pathlib.Path, values: dict[str, str])
     )
 
 
-def _previous_install(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, str]]:
+# The installer variable behind each env.sh name the fixture sets as a choice.
+_CHOSEN_NAMES = {
+    "PORT": "AGENTSTACK_PORT",
+    "LABEL_PREFIX": "AGENTSTACK_LABEL_PREFIX",
+    "MAIL_LAUNCHD_LABEL_SETTING": "AGENTSTACK_MAIL_LAUNCHD_LABEL",
+    "TERMINAL": "AGENTSTACK_TERMINAL",
+    "MCP_URL": "AGENTSTACK_MCP_URL",
+    "PATH_VALUE": "AGENTSTACK_PATH",
+    "PYTHON_BIN": "AGENTSTACK_PYTHON",
+    "LANG_SETTING": "AGENTSTACK_LANG",
+    "MURMUR_SETTING": "AGENTSTACK_MURMUR",
+    "DELIVERABLE_ROOTS": "AGENTSTACK_DELIVERABLE_ROOTS",
+    "VAULT_SETTING": "AGENTSTACK_VAULT",
+    "CODEX_ADD_DIRS_SETTING": "AGENTSTACK_CODEX_ADD_DIRS",
+    "MANAGED_AGENTS_FILE": "AGENTSTACK_MANAGED_AGENTS_FILE",
+    "DASHBOARD_LOG": "AGENTSTACK_DASHBOARD_LOG",
+    "DASHBOARD_LOG_MAX_BYTES": "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES",
+    "DASHBOARD_LOG_BACKUPS": "AGENTSTACK_DASHBOARD_LOG_BACKUPS",
+    "DASHBOARD_RESTART_DELAY": "AGENTSTACK_DASHBOARD_RESTART_DELAY",
+}
+
+
+def _previous_install(
+    tmp_path: pathlib.Path, *, not_chosen: tuple[str, ...] = (), **override: str
+) -> tuple[pathlib.Path, dict[str, str]]:
+    """env.sh as the installer writes it after a run that chose these values.
+
+    ``not_chosen`` names installer variables whose value env.sh records but the
+    user never chose (a default written out); ``override`` replaces values.
+    """
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -116,7 +145,12 @@ def _previous_install(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, s
         "DASHBOARD_LOG_BACKUPS": "7",
         "DASHBOARD_RESTART_DELAY": "11",
         "NATIVE_MAIL_MANAGEMENT_SOCKET": str(tmp_path / "mail.sock"),
+        "CODEX_ADD_DIRS_SETTING": str(tmp_path / "secret"),
+        **override,
     }
+    chosen["CHOSEN_SETTINGS"] = " ".join(
+        name for variable, name in _CHOSEN_NAMES.items() if variable not in not_chosen
+    )
     _write_env_sh_like_the_installer(home, chosen)
     return home, chosen
 
@@ -159,39 +193,37 @@ def test_reinstall_without_environment_keeps_every_non_default_setting(tmp_path)
 
 
 def _resolve_like_the_installer(
-    home: pathlib.Path, *outputs: str, env: dict[str, str] | None = None, **explicit: str
+    home: pathlib.Path,
+    *outputs: str,
+    args: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
 ) -> list[str]:
-    """Run the installer's own resolution block and print the resolved values.
+    """Run the installer itself, options and all, up to preflight; print values.
 
-    For values the dry-run summary does not show. ``explicit`` sets the shell
-    variables an option would set (for example LABEL_PREFIX for --label-prefix);
-    ``env`` sets environment variables the block reads directly.
+    For values the dry-run summary does not show. Everything before preflight
+    runs unchanged except where the script finds its own directory.
     """
     text = INSTALLER.read_text(encoding="utf-8")
-    start = text.index('PROJECT_CONTEXT_LIB="$REPO_ROOT/hooks/project-context.sh"')
-    end = text.index('PREFLIGHT_OS=""')
-    variables = {
-        "RESET_SETTINGS": "0", "PORT": "", "LABEL_PREFIX": "", "TERMINAL": "",
-        "MCP_URL": "", "PATH_VALUE": "", "DELIVERABLE_ROOTS": "", "LANG_SETTING": "",
-        "MURMUR_SETTING": "", "VAULT_SETTING": "", "PROJECT_KEY": "",
-        **explicit,
-    }
-    probe = (
-        f"REPO_ROOT={shlex.quote(str(ROOT))}\n"
-        f"INSTALL_DIR={shlex.quote(str(home / '.agentstack'))}\n"
-        + "".join(f"{name}={shlex.quote(value)}\n" for name, value in variables.items())
-        + text[start:end]
-        + "".join(f'printf "%s\\n" "${name}"\n' for name in outputs)
+    locate = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+    assert text.count(locate) == 1
+    head = text[: text.index('PREFLIGHT_OS=""')].replace(
+        locate, f"SCRIPT_DIR={shlex.quote(str(ROOT / 'scripts'))}"
     )
+    probe = head + "".join(f'printf "%s\\n" "${name}"\n' for name in outputs)
     # No codex on PATH: the codex probe in the same block has nothing to run.
     result = subprocess.run(
-        ["bash", "-c", probe],
+        ["bash", "-c", probe, "install.sh", *args],
         env=_scrubbed_env(home, PATH="/usr/bin:/bin", **(env or {})),
         text=True,
         capture_output=True,
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.splitlines()
+
+
+def _chosen(home: pathlib.Path, **kwargs) -> set[str]:
+    (line,) = _resolve_like_the_installer(home, "CHOSEN_SETTINGS", **kwargs)
+    return set(line.split())
 
 
 def test_reinstall_resolves_the_settings_the_summary_does_not_show(tmp_path):
@@ -211,10 +243,12 @@ def test_reinstall_resolves_the_settings_the_summary_does_not_show(tmp_path):
         chosen["NATIVE_MAIL_STATE_ROOT"],
         chosen["NATIVE_MAIL_SERVICE_ROOT"],
     ]
+    # What was chosen before is still a choice, and recorded as one again.
+    assert _chosen(home) == set(chosen["CHOSEN_SETTINGS"].split())
 
 
 _USER_PATHS = (
-    "VAULT_SETTING", "CLAUDE_JSON", "MANAGED_AGENTS_FILE", "DASHBOARD_LOG",
+    "VAULT_SETTING", "MANAGED_AGENTS_FILE", "DASHBOARD_LOG",
     "DASHBOARD_LOG_MAX_BYTES", "DASHBOARD_LOG_BACKUPS", "DASHBOARD_RESTART_DELAY",
     "NATIVE_MAIL_MANAGEMENT_SOCKET",
 )
@@ -229,7 +263,7 @@ def test_vault_and_dashboard_settings_are_inherited(tmp_path):
 def test_explicit_vault_and_dashboard_settings_win(tmp_path):
     home, _ = _previous_install(tmp_path)
     explicit = {
-        "AGENTSTACK_CLAUDE_JSON": "/explicit/claude.json",
+        "AGENTSTACK_VAULT": "/explicit/vault",
         "AGENTSTACK_MANAGED_AGENTS_FILE": "/explicit/managed.txt",
         "AGENTSTACK_DASHBOARD_LOG": "/explicit/dashboard.log",
         "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "2",
@@ -237,18 +271,14 @@ def test_explicit_vault_and_dashboard_settings_win(tmp_path):
         "AGENTSTACK_DASHBOARD_RESTART_DELAY": "6",
         "AGENTSTACK_MAIL_MANAGEMENT_SOCKET": "/explicit/mail.sock",
     }
-    # VAULT_SETTING is what AGENTSTACK_VAULT sets at the top of the installer.
-    assert _resolve_like_the_installer(
-        home, *_USER_PATHS, env=explicit, VAULT_SETTING="/explicit/vault"
-    ) == ["/explicit/vault", *explicit.values()]
+    assert _resolve_like_the_installer(home, *_USER_PATHS, env=explicit) == list(explicit.values())
 
 
 def test_reset_clears_vault_and_dashboard_settings_but_not_the_mail_socket(tmp_path):
     home, chosen = _previous_install(tmp_path)
     runtime = home / ".agentstack" / "runtime"
-    assert _resolve_like_the_installer(home, *_USER_PATHS, RESET_SETTINGS="1") == [
+    assert _resolve_like_the_installer(home, *_USER_PATHS, args=("--reset-settings",)) == [
         "",
-        str(home / ".claude.json"),
         f"{runtime}/managed_agents.txt",
         f"{runtime}/dashboard.log",
         "5242880",
@@ -268,40 +298,223 @@ def test_an_explicit_mail_state_root_does_not_inherit_the_old_socket(tmp_path):
     ) == [""]
 
 
-def test_the_vault_reaches_env_sh_and_both_service_definitions():
-    text = INSTALLER.read_text(encoding="utf-8")
-    assert '"AGENTSTACK_VAULT": ""' not in text and '"__VAULT__": ""' not in text
-    assert text.count('"AGENTSTACK_VAULT": "$VAULT_SETTING"') == 2
-    assert text.count('"__VAULT__": "$VAULT_SETTING"') == 1
-    agentctl = (ROOT / "dashboard" / "agentctl.sh").read_text(encoding="utf-8")
-    assert 'export AGENTSTACK_VAULT="$VAULT"' in agentctl
-
-
 def test_an_explicit_prefix_derives_the_mail_label_again(tmp_path):
     home, _ = _previous_install(tmp_path)
     assert _resolve_like_the_installer(
-        home, "MAIL_LAUNCHD_LABEL_SETTING", LABEL_PREFIX="org.agentstack.test.other"
+        home, "MAIL_LAUNCHD_LABEL_SETTING", args=("--label-prefix", "org.agentstack.test.other")
     ) == ["org.agentstack.test.other.mail-service"]
     # Back to the default prefix: back to the historical (empty) mail label.
     assert _resolve_like_the_installer(
-        home, "MAIL_LAUNCHD_LABEL_SETTING", LABEL_PREFIX="org.agentstack"
+        home, "MAIL_LAUNCHD_LABEL_SETTING", args=("--label-prefix", "org.agentstack")
     ) == [""]
 
 
-def test_reset_keeps_mail_roots_but_not_preferences(tmp_path):
+# --- review of PR #146 --------------------------------------------------------
+
+
+_MAIL_IDENTITY = (
+    "LABEL_PREFIX", "MAIL_LAUNCHD_LABEL_SETTING", "MCP_URL",
+    "NATIVE_MAIL_STATE_ROOT", "NATIVE_MAIL_SERVICE_ROOT", "NATIVE_MAIL_MANAGEMENT_SOCKET",
+)
+
+
+def test_p1_reset_keeps_the_mail_service_with_its_state(tmp_path):
+    """--reset-settings kept the Mail state but put the Mail label and URL back.
+
+    The old job then stayed registered under the old label, and a second Mail
+    server was provisioned under the default label and URL for the same
+    database. What the running services are called stays with where their
+    data lives; the port (the same job, replaced in place) does not.
+    """
+    home, chosen = _previous_install(tmp_path)
+    assert _resolve_like_the_installer(
+        home, *_MAIL_IDENTITY, "PORT", "LANG_SETTING", args=("--reset-settings",)
+    ) == [*(chosen[name] for name in _MAIL_IDENTITY), "8770", ""]
+
+
+def test_p1_reset_dry_run_plans_the_same_services(tmp_path):
+    home, chosen = _previous_install(tmp_path)
+    result = _dry_run(home, "--reset-settings")
+    out = result.stdout
+    assert result.returncode == 0, out + result.stderr
+    assert "label prefix: org.agentstack.test.inherit\n" in out
+    assert "ORRERY Mail MCP URL: http://127.0.0.1:1/mcp" in out
+    assert "org.agentstack.test.inherit.agentdashboard.service" in out
+    assert "org.agentstack.test.inherit.mail.timer" in out
+    assert "http://127.0.0.1:18765" not in out
+    assert "org.agentstack.agentdashboard" not in out
+    assert "dashboard port: 8770" in out
+
+
+def test_p1_the_mail_identity_still_changes_when_given_explicitly(tmp_path):
+    home, _ = _previous_install(tmp_path)
+    assert _resolve_like_the_installer(
+        home, "LABEL_PREFIX", "MAIL_LAUNCHD_LABEL_SETTING", "MCP_URL",
+        args=("--reset-settings", "--label-prefix", "org.agentstack.test.moved"),
+        env={"AGENTSTACK_MCP_URL": "http://127.0.0.1:2/mcp"},
+    ) == [
+        "org.agentstack.test.moved",
+        "org.agentstack.test.moved.mail-service",
+        "http://127.0.0.1:2/mcp",
+    ]
+
+
+def test_p2_1_an_explicit_empty_value_clears_only_that_setting(tmp_path):
     home, chosen = _previous_install(tmp_path)
     assert _resolve_like_the_installer(
         home,
-        "PATH_VALUE", "LANG_SETTING", "MAIL_LAUNCHD_LABEL_SETTING",
-        "NATIVE_MAIL_STATE_ROOT", "NATIVE_MAIL_SERVICE_ROOT",
-        RESET_SETTINGS="1",
+        "VAULT_SETTING", "DELIVERABLE_ROOTS", "CODEX_ADD_DIRS_SETTING", "PORT",
+        "LANG_SETTING", "TERMINAL",
+        args=("--codex-add-dirs", ""),
+        env={"AGENTSTACK_VAULT": "", "AGENTSTACK_DELIVERABLE_ROOTS": "", "AGENTSTACK_PORT": ""},
+    ) == ["", "", "", "8770", "ja", "none"]
+    # A cleared setting is back to its default, so it is no longer a choice.
+    remaining = _chosen(
+        home,
+        args=("--codex-add-dirs", ""),
+        env={"AGENTSTACK_VAULT": "", "AGENTSTACK_DELIVERABLE_ROOTS": "", "AGENTSTACK_PORT": ""},
+    )
+    assert remaining == set(chosen["CHOSEN_SETTINGS"].split()) - {
+        "AGENTSTACK_VAULT", "AGENTSTACK_DELIVERABLE_ROOTS", "AGENTSTACK_CODEX_ADD_DIRS",
+        "AGENTSTACK_PORT",
+    }
+
+
+def test_p2_1_clearing_the_codex_add_dirs_reaches_the_summary(tmp_path):
+    home, chosen = _previous_install(tmp_path)
+    result = _dry_run(home, "--codex-add-dirs", "")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "codex add dirs: (none beyond" in result.stdout
+    assert chosen["CODEX_ADD_DIRS_SETTING"] not in result.stdout
+
+
+def test_p2_2_a_default_env_sh_wrote_out_is_not_pinned(tmp_path):
+    """A written-out default follows the current default on the next install."""
+    home, _ = _previous_install(
+        tmp_path,
+        not_chosen=("PATH_VALUE", "PYTHON_BIN", "DASHBOARD_LOG_MAX_BYTES"),
+        PATH_VALUE="/an/older/default/bin:/usr/bin:/bin",
+        DASHBOARD_LOG_MAX_BYTES="1048576",
+    )
+    assert _resolve_like_the_installer(
+        home, "PATH_VALUE", "PYTHON_INHERITED", "DASHBOARD_LOG_MAX_BYTES", "PORT"
     ) == [
         "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "",
-        "",
-        chosen["NATIVE_MAIL_STATE_ROOT"],
-        chosen["NATIVE_MAIL_SERVICE_ROOT"],
+        "5242880",
+        "19876",
     ]
+
+
+def test_p2_2_only_explicit_values_are_recorded_as_choices(tmp_path):
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    home.mkdir()
+    project.mkdir()
+    assert _chosen(home, args=("--project-key", str(project))) == set()
+    assert _chosen(
+        home, args=("--project-key", str(project), "--port", "19000"),
+        env={"AGENTSTACK_PYTHON": sys.executable},
+    ) == {"AGENTSTACK_PORT", "AGENTSTACK_PYTHON"}
+
+
+def test_p2_2_an_env_sh_from_before_the_record_keeps_what_differs_from_defaults(tmp_path):
+    """env.sh written by 2026.09.30.4 and earlier has no record of choices."""
+    home = tmp_path / "home"
+    (home / ".agentstack").mkdir(parents=True)
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={tmp_path}\n"
+        "export AGENTSTACK_PORT=19876\n"
+        "export AGENTSTACK_CODEX_CHILD_APPROVAL=never\n"
+        "export AGENTSTACK_DASHBOARD_LOG_MAX_BYTES=5242880\n"
+        "export AGENTSTACK_PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/codex/bin\n"
+        f"export AGENTSTACK_PYTHON={sys.executable}\n",
+        encoding="utf-8",
+    )
+    assert _resolve_like_the_installer(
+        home, "PORT", "PATH_VALUE", "PYTHON_INHERITED", "CHOSEN_SETTINGS"
+    ) == [
+        "19876",
+        # PATH and Python were always resolved by the installer: never a choice
+        # it can recognise, so they are resolved again.
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "",
+        "AGENTSTACK_PORT",
+    ]
+
+
+def test_p2_2_values_echoed_from_a_sourced_env_sh_are_not_new_choices(tmp_path):
+    """cockpit's update.sh (and a shell profile) export every env.sh value."""
+    home, chosen = _previous_install(tmp_path, not_chosen=("PATH_VALUE",))
+    env_sh = (home / ".agentstack" / "env.sh").read_text(encoding="utf-8")
+    echoed = {}
+    for line in env_sh.splitlines():
+        if line.startswith("export "):
+            name, _, raw = line[len("export "):].partition("=")
+            (value,) = shlex.split(raw) or [""]
+            echoed[name] = value
+    assert _resolve_like_the_installer(
+        home, "PATH_VALUE", "PORT", env=echoed
+    ) == ["/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "19876"]
+    assert _chosen(home, env=echoed) == set(chosen["CHOSEN_SETTINGS"].split())
+    # Under --reset-settings an echo is not a request to keep the value.
+    assert _resolve_like_the_installer(
+        home, "PORT", "LANG_SETTING", "LABEL_PREFIX", args=("--reset-settings",), env=echoed
+    ) == ["8770", "", chosen["LABEL_PREFIX"]]
+    # An option typed on the command line is a request, echo or not.
+    assert _resolve_like_the_installer(
+        home, "PORT", args=("--reset-settings", "--port", "19876"), env=echoed
+    ) == ["19876"]
+
+
+def test_p2_3_the_launchd_plist_escapes_every_value(tmp_path):
+    import plistlib
+
+    text = INSTALLER.read_text(encoding="utf-8")
+    function = text[text.index("render_launchd_plist() {"):text.index("render_systemd_unit() {")]
+    awkward = f'{tmp_path}/Research & Notes "quoted" <angled>'
+    values = {
+        "DRY_RUN": "false", "PYTHON_BIN": sys.executable, "REPO_ROOT": str(ROOT),
+        "LABEL": "org.agentstack.test.plist.agentdashboard",
+        "LABEL_PREFIX": "org.agentstack.test.plist", "VAULT_SETTING": awkward,
+        "PROJECT_KEY": awkward, "CODEX_CHILD_CONFIG_OVERLAY_SETTING": awkward,
+    }
+    script = (
+        "plan() { :; }\n"
+        + "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items())
+        + function
+        + "render_launchd_plist\n"
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env=_scrubbed_env(home, AGENTSTACK_CLAUDE_MODELS="a&b"),
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    plist = home / "Library" / "LaunchAgents" / "org.agentstack.test.plist.agentdashboard.plist"
+    with plist.open("rb") as handle:
+        document = plistlib.load(handle)
+    variables = document["EnvironmentVariables"]
+    assert variables["AGENTSTACK_VAULT"] == awkward
+    assert variables["AGENTSTACK_PROJECT_KEY"] == awkward
+    assert variables["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == awkward
+    # Escaped once, not twice.
+    assert variables["AGENTSTACK_CLAUDE_MODELS"] == "a&b"
+    if shutil.which("plutil"):
+        lint = subprocess.run(["plutil", "-lint", str(plist)], capture_output=True, text=True)
+        assert lint.returncode == 0, lint.stdout + lint.stderr
+
+
+def test_p2_4_the_claude_json_override_is_not_inherited(tmp_path):
+    """A one-off sandbox path must not keep receiving the MCP entry."""
+    home, chosen = _previous_install(tmp_path, CLAUDE_JSON=str(tmp_path / "sandbox.json"))
+    assert _resolve_like_the_installer(home, "CLAUDE_JSON") == [str(home / ".claude.json")]
+    assert _resolve_like_the_installer(
+        home, "CLAUDE_JSON", env={"AGENTSTACK_CLAUDE_JSON": "/explicit.json"}
+    ) == ["/explicit.json"]
 
 
 def test_explicit_options_and_environment_win_over_env_sh(tmp_path):
@@ -322,7 +535,7 @@ def test_explicit_options_and_environment_win_over_env_sh(tmp_path):
     assert "label prefix: org.agentstack.test.explicit" in out
     assert "terminal: ghostty" in out
     assert "ORRERY Mail MCP URL: http://127.0.0.1:2/mcp" in out
-    assert "; from the existing env.sh)" not in out
+    # AGENTSTACK_PYTHON equals what env.sh recorded: an echo, not a new choice.
     assert "org.agentstack.test.explicit.agentdashboard.service" in out
     assert "org.agentstack.test.inherit" not in out
 
@@ -338,11 +551,12 @@ def test_reset_settings_returns_to_defaults_but_keeps_project_and_mail_state(tmp
         assert result.returncode == 0, out + result.stderr
         assert "settings: reset (not inherited from the existing env.sh)" in out
         assert "dashboard port: 8770" in out
-        assert "label prefix: org.agentstack\n" in out
         assert "terminal: auto" in out
-        assert "ORRERY Mail MCP URL: http://127.0.0.1:18765/mcp" in out
         assert "; from the existing env.sh)" not in out
-        # Where the data lives is not a preference: still inherited.
+        # Where the data lives, and what its services are called, is not a
+        # preference: still inherited.
+        assert "label prefix: org.agentstack.test.inherit\n" in out
+        assert "ORRERY Mail MCP URL: http://127.0.0.1:1/mcp" in out
         assert f"project key: {chosen['PROJECT_KEY']}" in out
         assert chosen["NATIVE_MAIL_STATE_ROOT"] in out
 
@@ -398,6 +612,10 @@ _DERIVED = {
     "AGENTSTACK_SKILLS_DIR",  # install dir
     "AGENTSTACK_RUNTIME_DIR",  # install dir
     "AGENTSTACK_PERSISTENT_PROFILES_DIR",  # install dir
+    "AGENTSTACK_CHOSEN_SETTINGS",  # the record of which settings were chosen
+    # A sandbox override for tests and trials, not a setting (review P2-4): a
+    # later plain install writes the real ~/.claude.json again.
+    "AGENTSTACK_CLAUDE_JSON",
 }
 
 

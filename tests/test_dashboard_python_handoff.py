@@ -18,7 +18,7 @@ def test_launchd_exports_installer_selected_python_to_dashboard_children():
 
     installer = INSTALLER.read_text(encoding="utf-8")
     assert 'PYTHON_BIN="${AGENTSTACK_PYTHON:-}"' in installer
-    assert '"__PYTHON__": "$PYTHON_BIN"' in installer
+    assert '__PYTHON__ "$PYTHON_BIN"' in installer
 
 
 def test_systemd_unit_exports_installer_selected_python_to_dashboard_children():
