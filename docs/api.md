@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":3}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":4}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -213,6 +213,10 @@ response:
 実際の row には pane title、state、elapsed、context、attach、latest message などの表示用 field も含まれます。frontend は未知 field を無視します。
 
 各 row の `resume_capability` は backend が判定した固定 reason code です。事前検証済みなら `ready` です。終了済み Claude row に exact index も transcript directory mtime と一致する確定済み cache もない場合、表示 API は transcript を全読みせず `verification_required` を返します。この code は NETWORK の一括 resume 対象にはなりませんが、DECK の action から `/api/jump` を1回呼ぶと full 検証し、`ready` なら同じ request で resume まで続けます。確定結果は directory mtime が変わるまで再利用します。稼働中など resume が不要な row は `not_required`、確認できない provider は `unsupported_provider`、履歴・cwd・CLI・正式登録・Codex launch provenance・credential・設定の検査に失敗した row はそれぞれ `no_history`、`cwd_missing`、`cli_missing`、`registration_missing`、`provenance_missing`、`credential_missing` / `credential_permission`、`identity_mismatch`、`config_unrestorable` になります。Codex の provenance は製品起動の `child` または `standalone` だけを受け入れ、origin 不明の旧 row は fail-closed です。期限切れの retained material は `retention_expired`、明示 purge 後は `purged` です。DECK / NETWORK 間の表示値は短期 cache されますが、`/api/jump` はそれを使わず操作直前に再検査します。
+
+会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。
+
+API 世代4からの追加 field です。GET `/api/agents` / `/api/graph` の Claude row にも `mail_status` / `mail_reason` / `mail_message` を表示します。field が無い旧 client/row の Mail 到達性は未報告であり、認証成功を保証しません。明示 purge は拒否のまま、保持期限切れの Claude は安全性検査後に会話だけ再開可能です。Codex の期限切れ拒否は変わりません。
 
 ## GET `/api/graph`
 
@@ -424,6 +428,8 @@ response は `{ok, session, actions}` です。既存 tmux session は configure
 Claude は保存済み owner credential で同じ project・数値 ID・name・program の登録を検証し、credential 付き再登録と unretire が成功してから端末を起動します。Claude child の state / credential も既定30日保持し、resume 時は子専用 Mail proxy config を再生成します。top-level Claude は既存 owner token を使います。旧 cleanup で credential が消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。認証・unretire の失敗でも端末を開きません。credential を自動発行したり別名で登録したりはしません。Codex top-level resume も unretire の対象です。
 
 Claude の起動準備が失敗した場合、元の husk を残し、元が retired だった Mail を再 retire します。元から active の identity は retire しません。復元にも失敗した場合は `rollback_errors` を返し、成功したようには報告しません。CLI は tmux と窓の準備が成功するまで待機します。
+
+旧3項目形式の Claude child は、private token と既存の正式 owner 登録が検証できれば `ready` になります。表示 GET は読み取りだけです。実際の認証・同じ identity の新形式への移行は明示 resume 時に行い、認証失敗では起動しません（[移行条件・保持期限・失敗時の復元](launchers.md)）。
 
 ## POST `/api/exit`
 

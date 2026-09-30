@@ -106,6 +106,28 @@ The default `/delegate` path is `--pre-registered --embed-task --task-file <path
 
 `CHILD_REGISTRATION_TOKEN` is a historical variable name, but it is also used to reauthenticate top-level identities.
 
+### Migrating Claude children created by older releases (#140)
+
+Claude children created before 2026.09.30.3 may have a state with only `agent_name`, `project_key`, and `registration_token`. Resume accepts this known format only with an existing exact Claude registration and an already registered owner. Roster checks read the private state/canonical-token match without migrating, registering, or unretiring. An explicit resume authenticates the saved token and verifies the returned numeric ID, exact name, Claude provider, and project ID before migrating to schema 1 and regenerating the child Mail proxy. It does not issue another identity/token or claim an unowned row. Failed authentication refuses startup.
+
+The old state has no retirement timestamp, so migration never infers one from mtime. Successful owner authentication starts a one-time grace period of the configured retention days (30 by default); subsequent normal completion follows the usual retention policy. Retention `0` also refuses legacy migration. Polling never extends an expiry. Incomplete modern states, expired material, tombstones, and pending attempts do not qualify as legacy.
+
+Migration uses a private undo record tied to its nonce. Failed startup preparation restores the old state/MCP config bytes, modes, and mtimes and the original Mail/husk state. A stale rollback after purge or another attempt changes nothing. If forced interruption leaves `child-agents/.<name>.legacy-migration.json`, extract only its `generation` field without printing the record containing credentials. After the operator confirms the target tmux/CLI is stopped, restore the old material with `python3 ~/.agentstack/hooks/child_resume.py finish-legacy-migration --runtime-dir <runtime> --agent-name <name> --generation <generation> --rollback`.
+
+Migration authenticates through bundled Mail's `register_agent(existing_agent_id=...)`, checking only the exact existing ID, name, project, program and owner token. Ordinary registration, name generation and profile updates do not run. An unavailable schema refuses with `config_unrestorable` and update/restart guidance; supported Mail rejecting authentication still returns `credential_missing`. A retrieved schema confirming older Mail selects the conversation-only mode below.
+
+Exiting before migration also preserves the private known three-field state and matching canonical token, including their bytes, modes, and mtimes. Generated MCP config is removed as usual. Cleanup does not guess a formal ID, provider, or retention timestamp; later explicit resume authenticates the owner and migrates. No expiry is inferred before that migration. Invalid legacy permissions, name, token match, or pending checks return an error and preserve the state/token instead of deleting them. Retention `0` remains an explicit opt-out that deletes legacy state/token on exit.
+
+### Resuming a Claude conversation when Mail cannot be restored
+
+A normal `install.sh` update adopts the running Mail deployment without switching its build. A legacy child whose retrieved schema confirms the existing-owner option is absent, a Claude agent whose canonical token file is actually missing, or an agent with safely verified expired retention can resume its terminal and conversation. With supported Mail and valid credentials, the full authentication, migration and unretire path remains in use.
+
+Conversation-only resume returns `resume_mode: conversation_only`, `mail_status: unavailable`, a fixed `mail_reason` (`credential_absent` / `retention_expired` / `mail_schema_unsupported`), and `mail_message` stating that this agent cannot send or receive ORRERY Mail. The DECK chip, NETWORK label/details and an initial terminal line show the warning. `resume_capability: ready` verifies conversation-resume prerequisites; it does not prove successful Mail owner authentication.
+
+This mode uses an empty `--strict-mcp-config` and `--settings '{"disableAllHooks":true}'` to suppress ordinary user/project/plugin MCP and hooks. Other MCP servers and hooks are also unavailable for this launch. A tmux-session `AGENTSTACK_MAIL_DISABLED=1` prevents product automatic registration, cleanup, reservation hooks and watcher notifications. State/token files are not migrated, removed or overwritten, and Mail registration, claim, unretire and retire do not run. Notification signals remain unread. Ordinary registration is never substituted for existing-owner authentication on older Mail.
+
+Before classifying absence or expiry, existing material is checked for UID, mode, regular-file type, identity, token agreement and pending attempts. Empty/invalid tokens, authentication rejection, mismatch, unsafe files/symlinks, corrupt state/config, another identity, pending attempts and explicit purge refuse startup. A failed schema request is not evidence of older Mail. Resuming an expired conversation does not renew Mail retention. Restoring Mail requires the [Mail update procedure](agentstack-mail-update.md) or an operator credential-recovery decision; do not substitute registration or enrollment from the conversation.
+
 ## Reregistration
 
 ```bash

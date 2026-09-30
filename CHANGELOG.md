@@ -8,6 +8,18 @@
 
 ---
 
+## Unreleased
+
+### 以前の版で作った Claude child が resume できなくなっていました（#140）
+
+2026.09.30.3 が旧3項目形式の state を `identity_mismatch` と拒否していた回帰を修正しました。既存の正式 Claude 登録・owner と private token を検証し、明示 resume の token 認証が成功した後だけ同じ identity を新形式へ移行します。表示 GET は移行しません。保持期限は認証移行時点から設定日数（既定30日）、設定0では移行を拒否します。認証・起動の失敗では旧 material と元の Mail / husk を保持し、世代付き undo で古い rollback が新しい試行を消すのを防ぎます。会話だけの再開と Mail 不可の表示 field を追加したため API 世代は4です。
+
+bundled Mail の `register_agent` に既存 owner だけを認証する optional `existing_agent_id` を追加しました。旧形式の移行はこのガードを必須とし、古い Mail では登録を代用せず、会話だけ再開します。Mail まで復帰するには dashboard と bundled Mail を一緒に更新・再起動してください。通常の登録と名前生成の動作は変えません。
+
+旧形式の子を exit した際に cleanup が state と token を削除する回帰も修正しました。private な旧3項目 state と一致する token を元のまま保持し、明示 resume で認証して移行します。旧 material の検証エラーでは削除に進まず、保持設定0だけは従来の opt-out に従います。
+
+通常の更新が稼働中の古い Mail を採用する環境でも、以前できていた Claude の会話 resume を戻しました。実 token 欠落・検証済み期限切れ・schema で確認した旧 Mail では、Mail を遮断して会話だけ再開し、応答・DECK・NETWORK・端末に Mail 不可と固定 reason を表示します。既存 material の安全性と identity/pending を先に検査し、認証拒否・不一致・unsafe・破損・明示 purge・schema 取得失敗は拒否します。対応した Mail では認証付きの完全な復帰を維持します。追加 field のため API 世代を4へ上げ、既存 `ok` / `action` / `detail` / `resume_capability` は保持します。
+
 ## 2026.09.30.3
 
 ### resume も子の窓の自動表示設定に従います（#138、API 世代3）

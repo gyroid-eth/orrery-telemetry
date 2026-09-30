@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":3}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":4}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -213,6 +213,10 @@ Response:
 Actual rows also include display fields such as pane title, state, elapsed, context, attach, and latest message. The frontend ignores unknown fields.
 
 Each row's `resume_capability` is a fixed reason code decided by the backend. A pre-verified row is `ready`. When a finished Claude row has neither an exact index nor a confirmed cache entry matching the transcript-directory mtime, display APIs return `verification_required` without reading every transcript. This code is excluded from NETWORK bulk resume, but one `/api/jump` call from the DECK action performs the full check and continues through resume in the same request if it becomes `ready`. The confirmed result is reused until the directory mtime changes. A live row that needs no resume is `not_required`; an unconfirmed provider is `unsupported_provider`; failures to verify history, cwd, CLI, formal registration, Codex launch provenance, credential, identity, or configuration are `no_history`, `cwd_missing`, `cli_missing`, `registration_missing`, `provenance_missing`, `credential_missing` / `credential_permission`, `identity_mismatch`, and `config_unrestorable`, respectively. Codex provenance accepts only product-launched `child` or `standalone`; older rows with unknown origin fail closed. Expired retained material reports `retention_expired`; an explicitly purged entry reports `purged`. DECK and NETWORK share a short display cache, but `/api/jump` bypasses it and rechecks immediately before acting.
+
+Conversation-only resume returns `resume_mode: conversation_only`, `mail_status: unavailable`, a fixed `mail_reason` (`credential_absent` / `retention_expired` / `mail_schema_unsupported`), and `mail_message` stating that this agent cannot send or receive ORRERY Mail. The DECK chip, NETWORK label/details and an initial terminal line show the warning. `resume_capability: ready` verifies conversation-resume prerequisites; it does not prove successful Mail owner authentication.
+
+API generation 4 adds these fields. GET `/api/agents` and `/api/graph` Claude rows also carry `mail_status`, `mail_reason` and `mail_message`. Missing fields mean Mail reachability is unreported, not authenticated. Explicit purge still refuses; safely validated expired Claude material permits conversation-only resume. Codex expiry refusal is unchanged.
 
 ## GET `/api/graph`
 
@@ -424,6 +428,8 @@ The response is `{ok, session, actions}`. An existing tmux session is opened / f
 Claude verifies its saved owner credential against the original project, numeric ID, name, and program, then completes credential-backed registration and unretire before opening a terminal. Claude child state / credentials are also retained for 30 days by default, and resume regenerates the child-owned Mail proxy configuration. Top-level Claude uses its existing owner token. Credentials deleted by older cleanup yield `credential_missing`; expired material yields `retention_expired`, and explicit purge yields `purged`. Authentication or unretire failure also prevents terminal launch. Resume never issues credentials or registers an alias. Codex top-level resumes also call unretire.
 
 If Claude startup preparation fails, the original husk is preserved and Mail is re-retired only if it was originally retired. An originally active identity is not retired. Failures of the restoration itself are reported in `rollback_errors`; they are not reported as successful recovery. The CLI waits until tmux and window preparation succeed.
+
+A known three-field legacy Claude child can be `ready` when its private token and existing owned registration pass local validation. Roster GET remains read-only; owner authentication and migration of the same identity happen only on explicit resume. Authentication failure refuses startup ([migration, retention, and rollback](launchers.en.md)).
 
 ## POST `/api/exit`
 

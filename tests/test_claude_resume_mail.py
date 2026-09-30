@@ -62,6 +62,7 @@ def resume(monkeypatch, tmp_path):
         return {"ok": True, "data": data}
 
     monkeypatch.setattr(server, "_mcp_call", call)
+    monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _tool: {"existing_agent_id"})
     private(runtime / f"agent_token_{NAME}", TOKEN)
     return runtime, registration, launches, calls
 
@@ -97,8 +98,7 @@ def test_resume_restores_mail_before_terminal_and_keeps_token_private(resume, is
         assert child_resume.purge_expired(runtime) == []
 
 
-@pytest.mark.parametrize("failure,code", [("missing", "credential_missing"), ("expired", "retention_expired"),
-                                            ("purged", "purged"), ("mismatch", "identity_mismatch"),
+@pytest.mark.parametrize("failure,code", [("purged", "purged"), ("mismatch", "identity_mismatch"),
                                             ("permissions", "credential_permission")])
 def test_unavailable_credentials_never_launch(resume, failure, code):
     runtime, registration, launches, calls = resume
@@ -137,15 +137,15 @@ def test_mail_failure_does_not_launch_and_restores_retention_marker(resume, monk
     assert "resume_in_progress_at" not in state
 
 
-def test_top_level_missing_token_does_not_launch(resume):
+def test_top_level_missing_token_resumes_conversation_without_mail(resume):
     runtime, _, launches, calls = resume
     (runtime / f"agent_token_{NAME}").unlink()
-    assert server._resume_capability(NAME, "claude", category="retired", verify_transcript=False) == "credential_missing"
-    assert server.do_resume(NAME)["resume_capability"] == "credential_missing"
-    assert not launches and not calls
+    result = server.do_resume(NAME)
+    assert result["ok"] and result["mail_reason"] == "credential_absent"
+    assert launches and not calls
 
 
-@pytest.mark.parametrize("is_child", [False, True])
+@pytest.mark.parametrize("is_child", [False, True, "legacy"])
 @pytest.mark.parametrize("launch_ok", [False, True])
 def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_path, is_child, launch_ok):
     """Use the bundled Mail service in memory, never the installed service."""
@@ -190,9 +190,21 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
             assert response["ok"], response
             if name == NAME:
                 registration["agent_id"] = response["data"]["id"]
+                registration["project_id"] = response["data"]["project_id"]
             assert call("set_contact_policy", {"project_key": project, "agent_name": name, "policy": "open"})["ok"]
         assert call("retire_agent", {"project_key": project, "agent_name": NAME})["ok"]
-        if is_child:
+        legacy_before = None
+        if is_child == "legacy":
+            monkeypatch.setattr(server, "DB_PATH", str(tmp_path / "fixture.sqlite3"))
+            old = {key: registration[key] for key in ("agent_name", "project_key")}
+            old["registration_token"] = TOKEN
+            old_state = runtime / "child-agents" / f"{NAME}.json"
+            old_mcp = runtime / "child-agents" / f"{NAME}.mcp.json"
+            private(old_state, json.dumps(old))
+            private(old_mcp, '{"mcpServers":{}}')
+            legacy_before = {path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                             for path in (old_state, old_mcp, runtime / f"agent_token_{NAME}")}
+        elif is_child:
             state = {**registration, "registration_token": TOKEN}
             private(runtime / "child-agents" / f"{NAME}.json", json.dumps(state))
             child_resume.prepare_active_state(runtime, NAME, project_key=project)
@@ -216,6 +228,9 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
 
         if not launch_ok:
             assert run(retired_at()) is not None
+            if legacy_before is not None:
+                for path, saved in legacy_before.items():
+                    assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
             return
         assert run(retired_at()) is None
         question = call("send_message", {"project_key": project, "sender_name": "GreenBohr", "sender_token": "parent-owner-token",

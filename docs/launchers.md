@@ -108,6 +108,28 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 `CHILD_REGISTRATION_TOKEN` は歴史的な変数名ですが、top-level identity の再認証でも使われます。
 
+### 以前の版で作った Claude child の移行（#140）
+
+2026.09.30.3 より前の Claude child に残る `agent_name`・`project_key`・`registration_token` の3項目だけの state も、同じ正式 Claude 登録と既存 owner が確認できれば resume できます。表示時は private state と canonical token の一致を読み取りだけで検査し、移行・再登録・unretire はしません。明示 resume 時に既存 token で認証し、返った正式 ID・名前・Claude provider・project ID の一致を確認してから schema 1 に移行し、子専用 Mail proxy を再生成します。新しい identity、owner token の発行、owner 未登録 row の claim は行いません。認証失敗では起動しません。
+
+旧 state には終了時刻がないため mtime は使いません。認証した移行時点から設定した保持日数（既定30日）を1回だけ適用し、以後の正常終了は通常の保持 policy に従います。保持設定が `0` のときは旧形式の移行も拒否し、表示の polling で期限を延ばすことはありません。破損した新形式、期限切れ、purge、pending を旧形式として救済しません。
+
+移行は nonce で結び付けた private undo を持ち、起動準備に失敗した場合は旧 state / MCP config の内容・mode・mtime と元の Mail / husk 状態を戻します。purge 後や別の起動世代への古い rollback は無変更です。強制終了で `child-agents/.<name>.legacy-migration.json` が残った場合は内容全体を表示せず `generation` field だけを取り出し、operator が対象 tmux / CLI の停止を確認してから `python3 ~/.agentstack/hooks/child_resume.py finish-legacy-migration --runtime-dir <runtime> --agent-name <name> --generation <generation> --rollback` で旧 material を復元できます。
+
+移行の認証は bundled Mail の `register_agent(existing_agent_id=...)` を使い、指定した既存 ID・名前・project・program と owner token だけを照合します。通常の登録・名前の自動生成・profile 更新へは進みません。schema が取得できない場合は `config_unrestorable` と更新・再起動の案内で拒否します。対応済み Mail の認証拒否は `credential_missing` のままです。取得済み schema が旧版だと確認できた場合は、以下の会話だけの再開を使います。
+
+旧形式のまま exit しても、cleanup は private な既知3項目 state と一致する canonical token の内容・mode・mtime をそのまま保持します。生成した MCP config は通常どおり削除します。exit では正式 ID・provider・保持時刻を推測して追加せず、後の明示 resume で owner を認証して移行します。その前には保持期限を自動で推測しません。旧 material の権限・名前・token の一致や pending 検査に失敗した場合も、削除に進まずエラーを返して state/token を残します。保持設定 `0` は明示的な opt-out として exit 時に旧 state/token も削除します。
+
+### Mail を復帰できない Claude の会話再開
+
+通常の `install.sh` は稼働中の Mail を採用し、Mail の build は切り替えません。既存 owner 認証 option が無いことを取得済み schema で確認できた旧形式の子、canonical token が実際に無い Claude、検証済み保持期限切れの Claude は、端末と会話だけを再開できます。対応した Mail と有効な credential がある場合は、従来の認証・移行・unretire を完了してから再開します。
+
+会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。
+
+この mode は空の `--strict-mcp-config` と `--settings '{"disableAllHooks":true}'` を使い、通常の user/project/plugin の MCP と hook を止めます。他の MCP と hook もこの起動では使えません。専用 `AGENTSTACK_MAIL_DISABLED=1` を tmux session に設定し、製品の自動登録・cleanup・reservation hook と watcher 通知を止めます。state/token は移行・削除・上書きせず、Mail の登録、claim、unretire、retire を行いません。通知 signal は既読化せず残します。古い Mail で普通の登録を代用して本人確認することもありません。
+
+欠落・期限切れに先立ち、存在する material の UID・mode・regular file・identity・token 一致と pending を検査します。空/不正 token、認証拒否、不一致、unsafe/symlink、破損 state/config、別 identity、pending、明示 purge は起動を拒否します。schema を取得できない通信失敗も「古い Mail」とは扱いません。保持切れ後に会話を再開しても Mail の保持期限は延びません。Mail の復帰は [Mail の更新手順](agentstack-mail-update.md) または operator の credential 復旧判断が必要です。会話内で登録や enrollment を代用しないでください。
+
 ## 再登録
 
 ```bash

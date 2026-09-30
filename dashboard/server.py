@@ -545,6 +545,8 @@ def tmux_state() -> dict:
         "#{session_created}",
         "#{session_activity}",
         "#{session_id}",
+        "#{AGENTSTACK_MAIL_DISABLED}",
+        "#{AGENTSTACK_MAIL_DISABLED_REASON}",
     ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
         parts = _split_tmux_fields(line)
@@ -555,6 +557,8 @@ def tmux_state() -> dict:
             "name": name,
             "created": _to_int(created),
             "session_id": parts[3] if len(parts) >= 4 else "",
+            "mail_disabled": parts[4] if len(parts) >= 5 else "",
+            "mail_disabled_reason": parts[5] if len(parts) >= 6 else "",
             "activity": _to_int(activity),
             "attached": False,
             "client_tty": None,
@@ -1349,6 +1353,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             row.get("program") or "",
             category=row.get("category") or "",
         )
+        row.update(_claude_row_mail_fields(row, category=row.get("category") or "", session_state=sessions.get(row["name"], {})))
         signature = (
             row.get("act_state"),
             row.get("ctx_used"),
@@ -1930,6 +1935,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
         row["resume_capability"] = _resume_capability_for_row(
             row["name"], row.get("program") or "", category=category
         )
+        row.update(_claude_row_mail_fields(row, category=category, session_state=sessions.get(row["name"], {})))
     fe = [
         e
         for e in g.get("edges", [])
@@ -2791,45 +2797,62 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session} --chrome'
         )
 
+    try:
+        _, conversation_reason = _claude_conversation_reason(session)
+        if conversation_reason:
+            return _launch_claude_conversation(session, sid, cwd, conversation_reason,
+                                               open_terminal=open_terminal, replace_husk=replace_husk)
+    except _ResumeCapabilityError as exc:
+        return {"ok": False, "resume_capability": exc.code, "error": str(exc)}
+
     mail_was_retired = False
     mail_restore_attempted = False
     registration = None
     child_state = None
+    legacy_generation = None
+    resume_started = False
     try:
         registration, token, child_state = _claude_resume_material(session)
+        legacy = child_state is not None and "_legacy_sha256" in child_state
         if child_state is not None:
             module = _child_resume_module()
+        if legacy:
+            # Authenticate an existing owned row before any migration writes.
+            mail_was_retired = _register_claude_resume(session, registration, token, legacy=True)
+            legacy_generation = secrets.token_hex(16)
+            child_state = module.begin_legacy_claude_migration(
+                pathlib.Path(RUNTIME_DIR), session, registration=registration, legacy=child_state,
+                generation=legacy_generation, retention_days=_legacy_claude_retention_days(),
+            )
+            resume_started = True
+        elif child_state is not None:
             module.begin_resume(
                 pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
                 project_key=registration["project_key"], program=registration["program"],
             )
-        try:
-            if child_state is not None:
-                mcp_config = _write_claude_resume_mcp_config(session, registration)
-                inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+            resume_started = True
+        if child_state is not None:
+            mcp_config = _write_claude_resume_mcp_config(session, registration)
+            inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+        if not legacy:
             mail_was_retired = _register_claude_resume(session, registration, token)
-            mail_restore_attempted = True
-            _set_claude_mail_retired(session, registration, retired=False)
-        except Exception:
-            if child_state is not None:
-                module.discard_generated(pathlib.Path(RUNTIME_DIR), session)
-                module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
-                                     agent_id=registration["agent_id"],
-                                     project_key=registration["project_key"])
-            raise
-    except _ResumeCapabilityError as exc:
-        result = {"ok": False, "error": str(exc), "resume_capability": exc.code}
-        if mail_restore_attempted and mail_was_retired:
-            _rollback_claude_mail(session, registration, result)
-        return result
-    except Exception:
+        mail_restore_attempted = True
+        _set_claude_mail_retired(session, registration, retired=False)
+    except Exception as exc:
         result = {"ok": False, "error": "Claude resume state could not be restored",
                   "resume_capability": "config_unrestorable"}
-        if mail_restore_attempted and mail_was_retired:
+        if isinstance(exc, _ResumeCapabilityError):
+            result.update(error=str(exc), resume_capability=exc.code)
+        if legacy_generation is not None or resume_started:
+            _rollback_claude_resume_local(session, registration, legacy_generation=legacy_generation,
+                                         resume_started=resume_started, result=result,
+                                         restore_mail=mail_restore_attempted and mail_was_retired)
+        if mail_restore_attempted and mail_was_retired and legacy_generation is None:
             _rollback_claude_mail(session, registration, result)
         return result
     resume_environment = {
         "AGENT_NAME": session, "AGENTSTACK_RESERVED_IDENTITY": "1", "CLAUDECODE": "1",
+        "AGENTSTACK_MAIL_DISABLED": "0", "AGENTSTACK_MAIL_DISABLED_REASON": "",
         "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
         "AGENTSTACK_HOME": os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE),
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
@@ -2862,6 +2885,14 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         replace_husk=replace_husk,
     )
     if launch.get("ok"):
+        if legacy_generation is not None:
+            try:
+                finished = module.finish_legacy_claude_migration(
+                    pathlib.Path(RUNTIME_DIR), session, generation=legacy_generation, rollback=False)
+                if not finished:
+                    launch["warning"] = "Legacy Claude migration was superseded; current material was preserved"
+            except Exception:
+                launch["warning"] = "Legacy Claude migration undo remains; confirm startup before operator recovery"
         result = {
             "ok": True,
             "action": "resumed",
@@ -2874,17 +2905,10 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     result = {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
     if launch.get("rollback_errors"):
         result["rollback_errors"] = launch["rollback_errors"]
-    if child_state is not None:
-        for action in (
-            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
-            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
-                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
-        ):
-            try:
-                action()
-            except Exception:
-                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
-    if mail_was_retired:
+    if legacy_generation is not None or resume_started:
+        _rollback_claude_resume_local(session, registration, legacy_generation=legacy_generation,
+                                     resume_started=resume_started, result=result, restore_mail=mail_was_retired)
+    if mail_was_retired and legacy_generation is None:
         _rollback_claude_mail(session, registration, result)
     return result
 
@@ -3174,10 +3198,21 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
     if os.path.lexists(state_path) or os.path.lexists(tombstone):
         module = _child_resume_module()
         try:
-            state = module.inspect_retained(
-                pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
-                project_key=registration["project_key"], program=registration["program"],
-            )
+            if os.path.lexists(state_path):
+                if not hasattr(module, "inspect_legacy_claude"):
+                    raise _ResumeCapabilityError("config_unrestorable", "Child resume helper needs updating")
+                state = module.inspect_legacy_claude(
+                    pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                    project_key=registration["project_key"], program=registration["program"],
+                )
+            if state is not None:
+                _legacy_claude_retention_days()
+                registration = _legacy_claude_owned_registration(session, registration)
+            else:
+                state = module.inspect_retained(
+                    pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                    project_key=registration["project_key"], program=registration["program"],
+                )
         except module.ResumeStateError as exc:
             raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     try:
@@ -3201,6 +3236,199 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
             raise _ResumeCapabilityError("config_unrestorable", "Child Mail proxy unavailable")
     return registration, token, state
 
+
+
+_CLAUDE_MAIL_UNAVAILABLE = {
+    "credential_absent": "The owner credential file is missing.",
+    "retention_expired": "The retained Mail credential has expired.",
+    "mail_schema_unsupported": "The running ORRERY Mail needs an update and restart for owner authentication.",
+}
+
+
+def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
+    """Inspect all existing material before classifying a known safe absence.
+
+    No mutations, RPC registration, guessed identity, or exception-message matching.
+    Missing/schema-old/expired are conversation-only; unsafe or ambiguous remains fatal.
+    """
+    if not _valid(session):
+        raise _ResumeCapabilityError("invalid_identity", "Unsafe Claude identity")
+    registration = _claude_registration(session)
+    if registration is None:
+        raise _ResumeCapabilityError("registration_missing", "Claude registration unavailable")
+    runtime = pathlib.Path(RUNTIME_DIR)
+    root = runtime / "child-agents"
+    state_path = root / f"{session}.json"
+    token_path = runtime / f"agent_token_{session}"
+    module = _child_resume_module()
+    def read_optional(path, label, limit):
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise _ResumeCapabilityError("config_unrestorable", "Resume material cannot be inspected") from None
+        try:
+            return _read_private_regular(str(path), label, limit)
+        except _PrivateFileError:
+            raise _ResumeCapabilityError("credential_permission", "Existing resume material is unsafe or unreadable") from None
+    read_optional(root / f".{session}.resume.lock", "Claude resume lock", 4096)
+    raw = read_optional(state_path, "Claude child state", module.MAX_STATE_BYTES)
+    token_raw = read_optional(token_path, "Claude owner credential", 4096)
+    config_raw = read_optional(root / f"{session}.mcp.json", "Claude proxy config", module.MAX_STATE_BYTES)
+    if config_raw is not None:
+        try:
+            config = json.loads(config_raw)
+            if not isinstance(config, dict) or not isinstance(config.get("mcpServers"), dict):
+                raise ValueError()
+        except (ValueError, UnicodeDecodeError):
+            raise _ResumeCapabilityError("config_unrestorable", "Existing Claude proxy config is invalid") from None
+    token = None
+    if token_raw is not None:
+        try:
+            token = token_raw.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            raise _ResumeCapabilityError("credential_missing", "Existing Claude credential is invalid") from None
+        if not token:
+            raise _ResumeCapabilityError("credential_missing", "Existing Claude credential is empty")
+    legacy = False
+    expired = False
+    if raw is not None:
+        try:
+            state = json.loads(raw)
+            if not isinstance(state, dict):
+                raise ValueError()
+        except (ValueError, UnicodeDecodeError):
+            raise _ResumeCapabilityError("config_unrestorable", "Existing Claude state is invalid") from None
+        legacy = set(state) == {"agent_name", "project_key", "registration_token"}
+        try:
+            if legacy:
+                if state["agent_name"] != session or state["project_key"] != registration["project_key"]:
+                    raise module.ResumeStateError("identity_mismatch", "Legacy Claude identity mismatch")
+            else:
+                module._validate_identity(state, agent_name=session, agent_id=registration["agent_id"],
+                                          project_key=registration["project_key"], program=registration["program"])
+                if not module._retained_shape(state) or state.get("program") != registration["program"]:
+                    raise module.ResumeStateError("config_unrestorable", "Claude state is incomplete")
+                module._parse_timestamp(state.get("retired_at"), "retired_at")
+                expiry = module._parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
+                expired = module._utc_now(None) >= expiry
+            saved_token = state.get("registration_token")
+            if not isinstance(saved_token, str) or not saved_token or len(saved_token) > 4096:
+                raise module.ResumeStateError("credential_missing", "Saved Claude credential is invalid")
+            try:
+                saved_bytes = saved_token.encode("utf-8")
+            except UnicodeEncodeError:
+                raise module.ResumeStateError("credential_missing", "Saved Claude credential is invalid") from None
+            if token is not None and not secrets.compare_digest(token.encode(), saved_bytes):
+                raise module.ResumeStateError("identity_mismatch", "Claude credentials belong to different registrations")
+            if state.get("resume_in_progress_at") is not None:
+                raise module.ResumeStateError("config_unrestorable", "Claude resume is already pending")
+        except module.ResumeStateError as exc:
+            raise _ResumeCapabilityError(exc.code, str(exc)) from exc
+    # Pending wins over missing/expiry, even when no state remains.
+    for suffix in ("registration-pending", "legacy-migration"):
+        if os.path.lexists(root / f".{session}.{suffix}.json"):
+            raise _ResumeCapabilityError("config_unrestorable", "Claude registration or migration is pending")
+    tombstone = read_optional(runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json",
+                              "Claude retention tombstone", 16384)
+    if tombstone is not None:
+        try:
+            removed = json.loads(tombstone)
+            if (not isinstance(removed, dict) or removed.get("agent_id") != registration["agent_id"]
+                    or removed.get("agent_name") != session or removed.get("project_key") != registration["project_key"]):
+                raise ValueError()
+            reason = removed.get("reason")
+            if reason not in {"purged", "retention_expired"}:
+                raise ValueError()
+        except (ValueError, UnicodeDecodeError):
+            raise _ResumeCapabilityError("identity_mismatch", "Claude retention tombstone is invalid") from None
+        if reason == "purged":
+            raise _ResumeCapabilityError("purged", "Claude resume material was explicitly purged")
+        expired = True
+    if expired:
+        return registration, "retention_expired"
+    if token is None:
+        return registration, "credential_absent"
+    if legacy:
+        # A known older advertised schema is different from a failed tools/list.
+        _legacy_claude_owned_registration(session, registration)
+        allowed = _mcp_tool_parameters("register_agent")
+        if allowed is not None and "existing_agent_id" not in allowed:
+            return registration, "mail_schema_unsupported"
+    return registration, None
+
+
+def _conversation_mail_fields(reason: str) -> dict:
+    return {"mail_status": "unavailable", "mail_reason": reason,
+            "mail_message": "This agent cannot send or receive ORRERY Mail. " + _CLAUDE_MAIL_UNAVAILABLE[reason]}
+
+
+def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *,
+                                open_terminal: bool | None, replace_husk: bool) -> dict:
+    module = _child_resume_module()
+    # Serialize with modern migration/purge. Revalidate immediately before the
+    # gated launch; no canonical state, token, proxy config or Mail row is changed.
+    try:
+        with module._AgentLock(pathlib.Path(RUNTIME_DIR) / "child-agents" / f".{session}.resume.lock", exclusive=True):
+            registration, current = _claude_conversation_reason(session)
+            if current != reason:
+                raise _ResumeCapabilityError("identity_mismatch", "Claude resume prerequisites changed")
+            fields = _conversation_mail_fields(reason)
+            environment = {
+                "AGENT_NAME": session, "CLAUDECODE": "1", "AGENTSTACK_RESERVED_IDENTITY": "1",
+                "AGENTSTACK_MAIL_DISABLED": "1", "AGENTSTACK_MAIL_DISABLED_REASON": reason,
+                "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": registration["project_key"],
+                "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
+            }
+            notice = fields["mail_message"] + " Do not register, recover credentials, or use Mail from this conversation."
+            command = [ABS_CLAUDE, "--resume", sid, "-n", session,
+                       "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                       "--settings", '{"disableAllHooks":true}', "--no-chrome",
+                       "--append-system-prompt", notice]
+            inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
+                     'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
+                     'export PATH="$HOME/.local/bin:$PATH"; ' +
+                     ''.join(f"export {key}={shlex.quote(value)}; " for key, value in environment.items()) +
+                     "printf '%s\n' " + shlex.quote(notice) + "; exec " + shlex.join(command))
+            launch = _launch_claude_resume_tmux(
+                ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
+                 *[arg for key, value in environment.items() for arg in ("-e", f"{key}={value}")],
+                 _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+    except module.ResumeStateError as exc:
+        raise _ResumeCapabilityError(exc.code, str(exc)) from exc
+    if not launch.get("ok"):
+        return {"ok": False, "error": "Conversation resume startup failed", **fields,
+                **({"rollback_errors": launch["rollback_errors"]} if launch.get("rollback_errors") else {})}
+    _invalidate_resume_capability_cache(session)
+    return {"ok": True, "action": "resumed", "resume_mode": "conversation_only", "resume_capability": "ready",
+            "detail": f"Conversation resumed in tmux (sid {sid[:8]}… / {cwd}); Mail unavailable",
+            "terminal": launch.get("adapter"), **fields,
+            **({"warning": launch["warning"]} if launch.get("warning") else {})}
+
+
+def _claude_row_mail_fields(row: dict, *, category: str, session_state: dict | None = None) -> dict:
+    if not (row.get("program") or "").startswith("claude"):
+        return {}
+    # A running conversation-only session retains its explicit warning across
+    # dashboard restarts. There is no inferred/secret runtime sidecar.
+    if row.get("running"):
+        if session_state is not None:
+            reason = session_state.get("mail_disabled_reason", "") if session_state.get("mail_disabled") == "1" else ""
+        else:
+            try:
+                disabled = _tmux_session_env(row["name"], "AGENTSTACK_MAIL_DISABLED")
+                reason = _tmux_session_env(row["name"], "AGENTSTACK_MAIL_DISABLED_REASON") if disabled == "1" else ""
+            except (OSError, subprocess.SubprocessError):
+                reason = ""
+        return _conversation_mail_fields(reason) if reason in _CLAUDE_MAIL_UNAVAILABLE else {}
+    if category in _RESUME_CATEGORIES and row.get("resume_capability") == "ready":
+        try:
+            _, reason = _claude_conversation_reason(row["name"])
+            return _conversation_mail_fields(reason) if reason else {}
+        except _ResumeCapabilityError:
+            pass
+    return {}
 
 def _claude_resume_proxy_runner() -> str:
     install_home = os.environ.get("AGENTSTACK_HOME") or os.path.dirname(HERE)
@@ -3242,20 +3470,99 @@ def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
     return str(path)
 
 
-def _register_claude_resume(session: str, registration: dict, token: str) -> bool:
+def _legacy_claude_retention_days() -> int:
+    try:
+        days = int(_env_text("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"))
+    except ValueError as exc:
+        raise _ResumeCapabilityError("config_unrestorable", "Invalid child retention setting") from exc
+    if days <= 0:
+        raise _ResumeCapabilityError("retention_expired", "Legacy child retention is disabled")
+    return days
+
+
+def _legacy_claude_owned_registration(session: str, registration: dict) -> dict:
+    """Never call registration to create or claim a legacy owner identity."""
+    try:
+        with _db() as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT a.id, a.name, a.program, p.id AS project_id, p.human_key, "
+                "(a.registration_token IS NOT NULL AND length(trim(a.registration_token)) > 0) AS has_owner "
+                "FROM agents a JOIN projects p ON a.project_id=p.id "
+                "WHERE a.id=? AND a.name=? COLLATE BINARY AND p.human_key=? COLLATE BINARY",
+                (registration["agent_id"], session, registration["project_key"]),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        raise _ResumeCapabilityError("registration_missing", "Original Claude owner registration unavailable") from None
+    if row is None:
+        raise _ResumeCapabilityError("registration_missing", "Original Claude registration does not exist")
+    if row["program"] not in {"claude", "claude-code"} or row["program"] != registration["program"]:
+        raise _ResumeCapabilityError("identity_mismatch", "Original Claude registration changed")
+    if not row["has_owner"]:
+        raise _ResumeCapabilityError("credential_missing", "Original Claude registration has no owner; refusing enrollment")
+    result = {**registration, "project_id": int(row["project_id"])}
+    if "project_id" in registration and result["project_id"] != registration["project_id"]:
+        raise _ResumeCapabilityError("identity_mismatch", "Original Claude project changed")
+    return result
+
+
+def _rollback_claude_resume_local(session: str, registration: dict, *, legacy_generation: str | None,
+                                resume_started: bool, result: dict, restore_mail: bool = False) -> None:
+    try:
+        module = _child_resume_module()
+    except Exception:
+        result.setdefault("rollback_errors", []).append("Claude resume material recovery helper unavailable")
+        return
+    if legacy_generation is not None:
+        try:
+            # An intentional purge/new attempt wins. A stale rollback is a no-op.
+            module.finish_legacy_claude_migration(
+                pathlib.Path(RUNTIME_DIR), session, generation=legacy_generation, rollback=True,
+                before_finish=(lambda: _rollback_claude_mail(session, registration, result)) if restore_mail else None,
+            )
+        except Exception:
+            result.setdefault("rollback_errors", []).append("Legacy Claude material could not be restored")
+    elif resume_started:
+        for action in (
+            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
+            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
+                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
+        ):
+            try:
+                action()
+            except Exception:
+                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
+
+
+def _register_claude_resume(session: str, registration: dict, token: str, *, legacy: bool = False) -> bool:
     """Authenticate the saved identity and capture its authoritative Mail state."""
-    registered = _mcp_call("register_agent", {
+    if legacy:
+        _legacy_claude_owned_registration(session, registration)
+    arguments = {
         "project_key": registration["project_key"], "name": session,
         "program": registration["program"], "model": registration.get("model", ""),
         "task_description": registration.get("task_description", ""),
         "registration_token": token,
-    })
+    }
+    if legacy:
+        arguments["existing_agent_id"] = registration["agent_id"]
+    registered = _mcp_call("register_agent", arguments)
     if not registered.get("ok"):
+        if registered.get("error_code") == "existing_owner_authentication_unavailable":
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "Update and restart the dashboard and bundled ORRERY Mail together; "
+                "existing-owner authentication support could not be confirmed",
+            )
         raise _ResumeCapabilityError("credential_missing", "Claude owner authentication failed; refusing resume")
     data = registered.get("data") or {}
     if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
             or data.get("name") != session):
         raise _ResumeCapabilityError("identity_mismatch", "Claude registration changed; refusing resume")
+    if legacy and (data.get("program") != registration["program"]
+                   or type(data.get("project_id")) is not int
+                   or data["project_id"] != registration["project_id"]):
+        raise _ResumeCapabilityError("identity_mismatch", "Claude owner authentication returned another project/provider")
     return bool(data.get("retired_at"))
 
 
@@ -3466,7 +3773,9 @@ def _resume_capability(
     if normalized_program.startswith("claude"):
         if not verify_transcript:
             try:
-                _claude_resume_material(session)
+                _, reason = _claude_conversation_reason(session)
+                if not reason:
+                    _claude_resume_material(session)
             except _ResumeCapabilityError as exc:
                 return exc.code
         if verify_transcript:
@@ -3487,7 +3796,9 @@ def _resume_capability(
         if not os.path.exists(ABS_CLAUDE):
             return "cli_missing"
         try:
-            _claude_resume_material(session)
+            _, reason = _claude_conversation_reason(session)
+            if not reason:
+                _claude_resume_material(session)
         except _ResumeCapabilityError as exc:
             return exc.code
         return "ready"
@@ -5913,6 +6224,11 @@ def _mcp_tool_parameters(tool: str) -> set[str] | None:
 def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
     """Call one ORRERY Mail tool, shaping arguments to its advertised schema."""
     allowed = _mcp_tool_parameters(method)
+    if (method == "register_agent" and "existing_agent_id" in args
+            and (allowed is None or "existing_agent_id" not in allowed)):
+        # This recovery guard must never be silently dropped for an older Mail.
+        return {"ok": False, "error": "ORRERY Mail needs existing-owner authentication support",
+                "error_code": "existing_owner_authentication_unavailable"}
     prepared = args if allowed is None else {
         key: value for key, value in args.items() if key in allowed
     }
@@ -7373,7 +7689,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 3}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 4}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

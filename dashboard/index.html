@@ -33238,7 +33238,7 @@ async function jump(name,ev){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session:name})});
     const j=await r.json();
-    if(j.ok) toast('▸ LINK','> '+name+'  ::  '+(j.detail||j.action).toUpperCase());
+    if(j.ok) toast('▸ LINK','> '+name+'  ::  '+(j.mail_message||j.detail||j.action));
     else toast('✕ FAIL','> '+(j.error||'unknown'),true);
   }catch(e){ toast('✕ FAIL','> uplink lost: '+e,true); }
 }
@@ -33497,6 +33497,7 @@ function bay(a,i){
   if(a.model) chips.push(`<span class="chip" title="${esc(a.model_raw||a.model)}">${esc(a.model)}</span>`);
   if(a.ctx_window) chips.push(`<span class="chip win" title="context window">◷ ${esc(a.ctx_window)}</span>`);
   if(+a.deliv>0) chips.push(`<span class="chip dv" title="output logs: ${+a.deliv}">¶ ${+a.deliv}</span>`);
+  if(a.mail_status==='unavailable') chips.push(`<span class="chip imp" title="${esc(a.mail_message||'This agent cannot send or receive ORRERY Mail')} · ${esc(a.mail_reason||'')}">MAIL UNAVAILABLE</span>`);
   if(a.mail_linked) chips.push(`<span class="chip att" title="tmux session name matches an ORRERY Mail identity">◉ LINKED</span>`);
   if(a.attached) chips.push(`<span class="chip att" title="a terminal client is attached to this tmux session">◉ ATTACHED</span>`);
   if(a.history_binding==='unconfirmed')
@@ -33870,6 +33871,7 @@ async function netTick(){
         // 足しただけでは届かない）。
         requested_name:n.requested_name||'',
         surface:n.surface||'',
+        mail_status:n.mail_status||'',mail_reason:n.mail_reason||'',mail_message:n.mail_message||'',
         resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
@@ -33885,7 +33887,7 @@ async function netTick(){
     // task/live/rel 等は tooltip が最新 gmap を都度読むため fingerprint 不要。
     const nodeKey=[...gmap].map(([name,g])=>[
       name,g.state,g.running,g.present,g.retired,g.actState,
-      g.resumeCapability,
+      g.resumeCapability,g.mail_status,g.mail_reason,
       typeof g.ctxUsed==='number'?Math.round(g.ctxUsed):null,
       g.model||'',g.provider||'',g.deg,
       g.annot&&g.annot.emoji||'',g.annot&&g.annot.role||''
@@ -34145,6 +34147,14 @@ function buildEls(){
         width:(tw+padX*2).toFixed(1),height:12.5,rx:6.2,ry:6.2});
       grp.insertBefore(ar,at);   // pill を text の後ろ（下層）へ
     }
+    if(g.mail_status==='unavailable'){
+      const mailLabel=svgEl('text',{x:0,y:NR+(hasAnnot?43:30),'text-anchor':'middle',
+        style:'font-family:var(--mono);font-size:8.5px;fill:var(--ink-dim)'});
+      mailLabel.textContent='MAIL UNAVAILABLE';
+      const mailTitle=svgEl('title');
+      mailTitle.textContent=(g.mail_message||'This agent cannot send or receive ORRERY Mail')+' · '+(g.mail_reason||'');
+      mailLabel.appendChild(mailTitle);grp.appendChild(mailLabel);
+    }
     grp.addEventListener('mouseenter',ev=>{
       if(!drag){focusNode(name);tipShow(name,ev);}});
     grp.addEventListener('mousemove',ev=>{if(!drag)tipMove(ev);});
@@ -34381,7 +34391,8 @@ function tipShow(name,ev){
     `<div class="gt-hd">${_pt}<div class="gt-nm">`+
     `<span class="gt-led"></span>${esc(name)}</div></div>`+
     `<div class="gt-meta">${stat} · ${esc(g.model||'?')} · last ${esc(g.rel)}</div>`+
-    roleRow+hpRow+
+    roleRow+hpRow+(g.mail_status==='unavailable'
+      ? `<div class="gt-row"><b>mail</b><span>UNAVAILABLE · ${esc(g.mail_reason)}<br>${esc(g.mail_message)}</span></div>` : '')+
     `<div class="gt-row"><b>task</b><span>${task}</span></div>`+liveRow+delivRow;
   gtip.classList.add('on');
   tipMove(ev);
@@ -36496,6 +36507,8 @@ function renderPanelSummary(name, a, g){
   const lastDisp=a.last_disp||g.lastDisp||g.last_disp;
   const deliv=+(a.deliv||g.deliv||0);
   const rows=[];
+  if((a.mail_status||g.mail_status)==='unavailable')
+    rows.push(`<div class="ts-row"><b>mail</b><span>UNAVAILABLE · ${esc(a.mail_reason||g.mail_reason||'')}<br>${esc(a.mail_message||g.mail_message||'This agent cannot send or receive ORRERY Mail')}</span></div>`);
   const ROLE={parent:'parent (delegator)',child:'child (delegated)',
     both:'both',none:'none'};
   if(role) rows.push(`<div class="ts-row"><b>role</b><span>${ROLE[role]||'—'}</span></div>`);

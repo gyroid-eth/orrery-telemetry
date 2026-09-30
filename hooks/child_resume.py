@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hmac
+import hashlib
 import json
 import math
 import os
@@ -21,7 +22,7 @@ import stat
 import tempfile
 from datetime import date, datetime, time, timedelta, timezone
 import tomllib
-from typing import Any
+from typing import Any, Callable
 
 
 SCHEMA_VERSION = 1
@@ -168,14 +169,61 @@ class _AgentLock:
         self.descriptor: int | None = None
 
     def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
-        self.descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.fchmod(self.descriptor, 0o600)
-        fcntl.flock(
-            self.descriptor, fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
-        )
-        return self
+        directory = None
+        try:
+            # Validate before creating anything; never repair existing permissions
+            # or follow a replaced lock/directory into another identity's files.
+            ancestor = self.path.parent
+            while True:
+                try:
+                    info = ancestor.lstat()
+                    break
+                except FileNotFoundError:
+                    ancestor = ancestor.parent
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock directory is unsafe")
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            info = os.fstat(directory)
+            if (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock directory is unsafe")
+            # Opening an existing private read-only lock also works with flock;
+            # neither its contents nor its mode/mtime need to change.
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            try:
+                self.descriptor = os.open(self.path.name, flags, dir_fd=directory)
+            except FileNotFoundError:
+                self.descriptor = os.open(
+                    self.path.name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory
+                )
+            locked = os.fstat(self.descriptor)
+            if (not stat.S_ISREG(locked.st_mode) or locked.st_uid != os.getuid()
+                    or stat.S_IMODE(locked.st_mode) & 0o077 or locked.st_nlink != 1):
+                raise ResumeStateError("credential_permission", "child resume lock is unsafe")
+            fcntl.flock(
+                self.descriptor, fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
+            )
+            current = os.stat(self.path.name, dir_fd=directory, follow_symlinks=False)
+            current_directory = self.path.parent.lstat()
+            if ((current.st_dev, current.st_ino) != (locked.st_dev, locked.st_ino)
+                    or current.st_uid != os.getuid() or stat.S_IMODE(current.st_mode) & 0o077
+                    or current.st_nlink != 1
+                    or (current_directory.st_dev, current_directory.st_ino) != (info.st_dev, info.st_ino)
+                    or current_directory.st_uid != os.getuid()
+                    or stat.S_IMODE(current_directory.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock changed during acquisition")
+            return self
+        except (OSError, ResumeStateError) as exc:
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            if isinstance(exc, ResumeStateError):
+                raise
+            raise ResumeStateError("credential_permission", "child resume lock is unsafe or unavailable") from exc
+        finally:
+            if directory is not None:
+                os.close(directory)
 
     def __exit__(self, *_args):
         if self.descriptor is not None:
@@ -219,6 +267,8 @@ def prepare_active_state(
     if mcp_profile not in MCP_PROFILES:
         raise ResumeStateError("config_unrestorable", "invalid Codex MCP profile")
     with _AgentLock(lock_path, exclusive=True):
+        if _legacy_pending(state_path).exists() or _legacy_pending(state_path).is_symlink():
+            raise ResumeStateError("config_unrestorable", "Legacy child migration is still pending")
         pending = state_path.with_name(f".{agent_name}.registration-pending.json")
         if generation is not None or pending.exists() or pending.is_symlink():
             if not _registration_matches(pending, generation):
@@ -265,6 +315,142 @@ def prepare_active_state(
         return state
 
 
+
+def _legacy_pending(state_path: Path) -> Path:
+    return state_path.with_name(f".{state_path.stem}.legacy-migration.json")
+
+
+def inspect_legacy_claude(
+    runtime_dir: Path, agent_name: str, *, agent_id: int, project_key: str, program: str,
+) -> dict[str, Any] | None:
+    """Recognize only the old three-field Claude state, without writing a lock/file."""
+    state_path, token_path, _home, mcp_path, _lock = _paths(runtime_dir, agent_name)
+    raw = _read_private(state_path, "child state", MAX_STATE_BYTES)
+    try:
+        state = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResumeStateError("config_unrestorable", "child state is invalid") from exc
+    if not isinstance(state, dict) or set(state) != {"agent_name", "project_key", "registration_token"}:
+        return None
+    if (type(agent_id) is not int or agent_id <= 0 or _provider(program) != "claude"
+            or state["agent_name"] != agent_name or state["project_key"] != project_key):
+        raise ResumeStateError("identity_mismatch", "Legacy child identity does not match the registration")
+    tombstone = runtime_dir / "child-resume-tombstones" / f"{agent_id}.json"
+    if tombstone.exists() or tombstone.is_symlink():
+        raise ResumeStateError("credential_missing", "Legacy child resume material was purged")
+    pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+    if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
+        raise ResumeStateError("config_unrestorable", "Child registration or migration is still pending")
+    token = state["registration_token"]
+    try:
+        canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ResumeStateError("credential_missing", "canonical child credential is invalid") from exc
+    if not isinstance(token, str) or not token or len(token.encode()) > MAX_TOKEN_BYTES or not canonical:
+        raise ResumeStateError("credential_missing", "Legacy child credential is unavailable")
+    if not hmac.compare_digest(token.encode(), canonical.encode()):
+        raise ResumeStateError("identity_mismatch", "Legacy child credential and state disagree")
+    if mcp_path.exists() or mcp_path.is_symlink():
+        _read_private(mcp_path, "legacy child MCP config", MAX_STATE_BYTES)
+    return {**state, "_legacy_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def begin_legacy_claude_migration(
+    runtime_dir: Path, agent_name: str, *, registration: dict[str, Any],
+    legacy: dict[str, Any], generation: str, retention_days: int, now: datetime | None = None,
+) -> dict[str, Any]:
+    """After remote owner authentication, snapshot and claim this legacy resume."""
+    state_path, token_path, _home, mcp_path, lock_path = _paths(runtime_dir, agent_name)
+    _validate_identity(registration, agent_name=agent_name, program="claude-code")
+    if type(retention_days) is not int or retention_days <= 0:
+        raise ResumeStateError("retention_expired", "Legacy child retention is disabled")
+    if not re.fullmatch(r"[0-9a-f]{32}", generation):
+        raise ResumeStateError("invalid_identity", "Invalid legacy migration generation")
+    current = _utc_now(now)
+    expires = current + timedelta(days=retention_days)
+    with _AgentLock(lock_path, exclusive=True):
+        checked = inspect_legacy_claude(runtime_dir, agent_name, agent_id=registration["agent_id"],
+                                      project_key=registration["project_key"], program=registration["program"])
+        if checked is None or checked != legacy:
+            raise ResumeStateError("identity_mismatch", "Legacy child material changed during authentication")
+        originals = {}
+        for label, path in (("state", state_path), ("mcp", mcp_path)):
+            originals[label] = None
+            if path.exists() or path.is_symlink():
+                raw = _read_private(path, label, MAX_STATE_BYTES)
+                info = path.stat()
+                originals[label] = {"raw": raw.hex(), "mode": stat.S_IMODE(info.st_mode),
+                                    "mtime_ns": info.st_mtime_ns}
+        identity = {key: registration[key] for key in ("agent_id", "agent_name", "project_key", "program", "project_id")}
+        snapshot = {"generation": generation, "registration": identity,
+                    "registration_token": checked["registration_token"], "originals": originals}
+        pending = _legacy_pending(state_path)
+        state = {**identity, "registration_token": checked["registration_token"],
+                 "schema_version": SCHEMA_VERSION, "launch_origin": "child", "provider": "claude",
+                 "retired_at": _timestamp(current), "resume_expires_at": _timestamp(expires),
+                 "resume_in_progress_at": _timestamp(current), "legacy_migration_generation": generation}
+        if len(json.dumps(state).encode()) > MAX_STATE_BYTES:
+            raise ResumeStateError("config_unrestorable", "Migrated child state is too large")
+        _atomic_json(pending, snapshot)
+        try:
+            _atomic_json(state_path, state)
+        except Exception:
+            _finish_legacy_claude_unlocked(runtime_dir, agent_name, generation=generation, rollback=True)
+            raise
+        return state
+
+
+def _finish_legacy_claude_unlocked(runtime_dir: Path, agent_name: str, *, generation: str, rollback: bool,
+                                   before_finish: Callable[[], None] | None = None) -> bool:
+    state_path, token_path, _home, mcp_path, _lock = _paths(runtime_dir, agent_name)
+    pending = _legacy_pending(state_path)
+    if not pending.exists() and not pending.is_symlink():
+        return False
+    snapshot = json.loads(_read_private(pending, "legacy migration undo record", MAX_STATE_BYTES * 6))
+    if snapshot.get("generation") != generation:
+        return False
+    registration = snapshot["registration"]
+    _validate_identity(registration, agent_name=agent_name, program="claude-code")
+    tombstone = runtime_dir / "child-resume-tombstones" / f"{registration['agent_id']}.json"
+    registration_pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+    if any(path.exists() or path.is_symlink() for path in (tombstone, registration_pending)):
+        return False
+    raw = _read_private(state_path, "child state", MAX_STATE_BYTES)
+    state = json.loads(raw)
+    original = snapshot["originals"]["state"]
+    if state.get("legacy_migration_generation") != generation and raw.hex() != original["raw"]:
+        return False
+    canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+    if not hmac.compare_digest(canonical.encode(), snapshot["registration_token"].encode()):
+        return False
+    # Keep the claim locked while compensating remote Mail, before allowing a retry.
+    if before_finish is not None:
+        before_finish()
+    if rollback:
+        for label, path in (("state", state_path), ("mcp", mcp_path)):
+            saved = snapshot["originals"][label]
+            if saved is None:
+                _remove_exact(path)
+            else:
+                _atomic_bytes(path, bytes.fromhex(saved["raw"]), saved["mode"])
+                os.utime(path, ns=(path.stat().st_atime_ns, saved["mtime_ns"]))
+    else:
+        if state.get("legacy_migration_generation") != generation:
+            return False
+        state.pop("legacy_migration_generation")
+        _atomic_json(state_path, state)
+    pending.unlink()
+    return True
+
+
+def finish_legacy_claude_migration(runtime_dir: Path, agent_name: str, *, generation: str, rollback: bool,
+                                  before_finish: Callable[[], None] | None = None) -> bool:
+    """Touch only this migration's material; a purge or newer generation wins."""
+    *_unused, lock_path = _paths(runtime_dir, agent_name)
+    with _AgentLock(lock_path, exclusive=True):
+        return _finish_legacy_claude_unlocked(runtime_dir, agent_name, generation=generation, rollback=rollback,
+                                              before_finish=before_finish)
+
 def stage_registration(
     runtime_dir: Path, agent_name: str, *, project_key: str, program: str, generation: str,
     source: Path | None = None, binding: Path | None = None,
@@ -275,7 +461,7 @@ def stage_registration(
     if not re.fullmatch(r"[0-9a-f]{32}", generation):
         raise ResumeStateError("invalid_identity", "Invalid child registration generation")
     with _AgentLock(lock_path, exclusive=True):
-        if pending.exists() or pending.is_symlink():
+        if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "A child registration change is already pending")
         if _provider(program) is None or (source is not None and binding is None):
             raise ResumeStateError("identity_mismatch", "Formal child registration metadata is required")
@@ -355,7 +541,7 @@ def mark_retired(
     retention_days: int,
     now: datetime | None = None,
 ) -> bool:
-    """Mark a valid Claude/Codex child retained. Return False for legacy/unsupported state."""
+    """Retain modern children, or preserve known legacy material without migration."""
 
     if retention_days < 0:
         raise ValueError("retention days must be a non-negative integer")
@@ -365,6 +551,32 @@ def mark_retired(
     with _AgentLock(lock_path, exclusive=True):
         try:
             state = _load_state(state_path)
+        except ResumeStateError:
+            # Existing unsafe/unreadable material is not permission to delete
+            # its credential. The cleanup caller already preserves on error.
+            if state_path.exists() or state_path.is_symlink():
+                raise
+            return False
+        if set(state) == {"agent_name", "project_key", "registration_token"}:
+            if (state["agent_name"] != agent_name or not isinstance(state["project_key"], str)
+                    or not state["project_key"].strip()):
+                raise ResumeStateError("identity_mismatch", "Legacy cleanup identity is invalid")
+            pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+            if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
+                raise ResumeStateError("config_unrestorable", "Legacy cleanup has a pending registration/migration")
+            try:
+                canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+            except UnicodeDecodeError as exc:
+                raise ResumeStateError("credential_missing", "canonical child credential is invalid") from exc
+            token = state["registration_token"]
+            if not isinstance(token, str) or not token or not canonical:
+                raise ResumeStateError("credential_missing", "Legacy cleanup credential is unavailable")
+            if not hmac.compare_digest(token.encode(), canonical.encode()):
+                raise ResumeStateError("identity_mismatch", "Legacy cleanup credential and state disagree")
+            # No ID/provider/timestamps are guessed here. Explicit resume
+            # authenticates the formal owner before migrating these same bytes.
+            return True
+        try:
             _validate_identity(state, agent_name=agent_name)
         except ResumeStateError:
             return False
@@ -411,7 +623,7 @@ def begin_resume(
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     with _AgentLock(lock_path, exclusive=True):
         pending = state_path.with_name(f".{agent_name}.registration-pending.json")
-        if pending.exists() or pending.is_symlink():
+        if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
         _validate_identity(
@@ -517,7 +729,7 @@ def inspect_retained(
         )
     with _AgentLock(lock_path, exclusive=False):
         pending = state_path.with_name(f".{agent_name}.registration-pending.json")
-        if pending.exists() or pending.is_symlink():
+        if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
         _validate_identity(
@@ -635,7 +847,7 @@ def purge_one(
                 tombstone,
             )
         pending_path = state_path.with_name(f".{agent_name}.registration-pending.json")
-        for path in (home_path, mcp_path, token_path, state_path, pending_path):
+        for path in (home_path, mcp_path, token_path, state_path, pending_path, _legacy_pending(state_path)):
             _remove_exact(path)
         return True
 
@@ -1078,6 +1290,11 @@ def main() -> int:
     finish.add_argument("--agent-name", required=True)
     finish.add_argument("--generation", required=True)
     finish.add_argument("--rollback", action="store_true")
+    legacy_finish = sub.add_parser("finish-legacy-migration")
+    legacy_finish.add_argument("--runtime-dir", required=True)
+    legacy_finish.add_argument("--agent-name", required=True)
+    legacy_finish.add_argument("--generation", required=True)
+    legacy_finish.add_argument("--rollback", action="store_true")
     retired = sub.add_parser("mark-retired")
     retired.add_argument("--runtime-dir", required=True)
     retired.add_argument("--agent-name", required=True)
@@ -1138,6 +1355,10 @@ def main() -> int:
         elif args.command == "finish-registration":
             if not finish_registration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
                 print("child_resume: registration attempt is no longer pending; nothing changed", file=os.sys.stderr)
+                return 3
+        elif args.command == "finish-legacy-migration":
+            if not finish_legacy_claude_migration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
+                print("child_resume: legacy migration is no longer pending; nothing changed", file=os.sys.stderr)
                 return 3
         elif args.command == "mark-retired":
             print(

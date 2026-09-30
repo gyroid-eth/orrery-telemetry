@@ -484,6 +484,15 @@ deliver_worker() {
         fi
     fi
 
+    # Leave the server-owned signal unread; conversation-only sessions cannot
+    # authenticate Mail and must never be prompted to claim/register an identity.
+    local mail_disabled
+    mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
+    if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
+    fi
+
     if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then
         state_mark_result "$agent_name" "$msg_key" "session_not_found" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
@@ -527,6 +536,13 @@ deliver_worker() {
     # 人が Enter を押すまで止まる。2026-09-27 に Codex と Claude Code の両方で、
     # REPL を SIGSTOP した間に送って再現し、paste-buffer -p なら submit されることを確認。
     # run_to は背景実行で stdin が /dev/null になるので、本文はファイル経由で渡す。
+    # The session may have been replaced during capture. Recheck immediately
+    # before constructing/injecting a notification into the resumed conversation.
+    mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
+    if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
+    fi
     local paste_file paste_buf="agentstack-notify-$$-${RANDOM}"
     paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
     if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file" \
