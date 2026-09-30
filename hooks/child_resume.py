@@ -453,9 +453,15 @@ def finish_legacy_claude_migration(runtime_dir: Path, agent_name: str, *, genera
 
 def stage_registration(
     runtime_dir: Path, agent_name: str, *, project_key: str, program: str, generation: str,
-    source: Path | None = None, binding: Path | None = None,
+    source: Path | None = None, binding: Path | None = None, legacy_agent_id: int | None = None,
 ) -> Path:
-    """Validate a preregistration before changing files; retain a private undo record."""
+    """Validate a preregistration before changing files; retain a private undo record.
+
+    ``legacy_agent_id`` names the owner ORRERY Mail confirmed for a Claude child
+    that still has the three-field state of an earlier version. Only then is
+    that state accepted, and it is rewritten with the confirmed identity; the
+    undo record keeps the original bytes, so a failed start restores them.
+    """
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     pending = state_path.with_name(f".{agent_name}.registration-pending.json")
     if not re.fullmatch(r"[0-9a-f]{32}", generation):
@@ -465,7 +471,17 @@ def stage_registration(
             raise ResumeStateError("config_unrestorable", "A child registration change is already pending")
         if _provider(program) is None or (source is not None and binding is None):
             raise ResumeStateError("identity_mismatch", "Formal child registration metadata is required")
-        state = _load_state(binding if source is not None and binding is not None else state_path)
+        if legacy_agent_id is not None:
+            if source is not None:
+                raise ResumeStateError("identity_mismatch", "A legacy child is launched from its own state")
+            legacy = inspect_legacy_claude(runtime_dir, agent_name, agent_id=legacy_agent_id,
+                                           project_key=project_key, program=program)
+            if legacy is None:
+                raise ResumeStateError("identity_mismatch", "Child state is not the legacy Claude shape")
+            state = {"agent_id": legacy_agent_id, "agent_name": agent_name, "project_key": project_key,
+                     "program": program, "registration_token": legacy["registration_token"]}
+        else:
+            state = _load_state(binding if source is not None and binding is not None else state_path)
         _validate_identity(state, agent_name=agent_name, project_key=project_key, program=program)
         if source is not None:
             token = _read_private(source, "token handoff", MAX_TOKEN_BYTES).decode("utf-8").strip()
@@ -1285,6 +1301,7 @@ def main() -> int:
     stage.add_argument("--generation", required=True)
     stage.add_argument("--source")
     stage.add_argument("--binding")
+    stage.add_argument("--legacy-agent-id", type=int)
     finish = sub.add_parser("finish-registration")
     finish.add_argument("--runtime-dir", required=True)
     finish.add_argument("--agent-name", required=True)
@@ -1351,7 +1368,8 @@ def main() -> int:
                 parser.error("source and binding must be supplied together")
             print(stage_registration(runtime, args.agent_name, project_key=args.project_key,
                                      program=args.program, generation=args.generation, source=Path(args.source) if args.source else None,
-                                     binding=Path(args.binding) if args.binding else None))
+                                     binding=Path(args.binding) if args.binding else None,
+                                     legacy_agent_id=args.legacy_agent_id))
         elif args.command == "finish-registration":
             if not finish_registration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
                 print("child_resume: registration attempt is no longer pending; nothing changed", file=os.sys.stderr)

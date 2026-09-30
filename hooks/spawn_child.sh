@@ -414,16 +414,148 @@ child_token_file_path() {
 # Stage only formally verified credentials; the undo record protects existing
 # canonical material until startup succeeds. Never consume a failed handoff.
 stage_child_registration() {
-    local agent_name="$1" program="$2" source_file="${3:-}"
+    local agent_name="$1" program="$2" source_file="${3:-}" legacy_agent_id="${4:-}"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
     [[ -f "$helper" ]] || return 1
     local source_args=()
     if [[ -n "$source_file" ]]; then
         source_args=(--source "$source_file" --binding "${source_file}.binding.json")
+    elif [[ -n "$legacy_agent_id" ]]; then
+        source_args=(--legacy-agent-id "$legacy_agent_id")
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" stage-registration \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" --program "$program" --generation "$CHILD_REGISTRATION_GENERATION" ${source_args[@]+"${source_args[@]}"}
+}
+
+# A Claude child spawned by an earlier version kept only a three-field state
+# (agent_name, project_key, registration_token). Before this launcher adopts it,
+# ORRERY Mail must confirm that the saved credential owns the row with that
+# exact name, project and program -- the same existing-owner check the
+# dashboard's resume makes (#140/#141). Nothing is registered or claimed.
+#
+# Prints "<agent_id><TAB><program>" for a confirmed legacy child and nothing
+# for any other state. Exit 2: Mail predates existing-owner authentication.
+# Exit 1: not confirmed; the reason is on stderr.
+authenticate_legacy_claude_child() {
+    local agent_name="$1" token_file bearer="" bearer_status=0
+    token_file="$(child_token_file_path "$agent_name")" || return 1
+    if legacy_http_bearer_enabled; then
+        bearer="$(get_agentstack_token 2>/dev/null || true)"
+    else
+        bearer_status=$?
+        [[ "$bearer_status" != 2 ]] || return 1
+    fi
+    printf '%s' "$bearer" | "${AGENTSTACK_PYTHON:-python3}" - \
+        "$CHILD_STATE_DIR/$agent_name.json" "$token_file" "$agent_name" \
+        "$PROJECT_KEY" "$MCP_URL" <<'PY'
+import hmac
+import http.client
+import json
+import os
+import stat
+import sys
+from urllib.parse import urlparse
+
+state_file, token_file, agent_name, project_key, url = sys.argv[1:6]
+bearer = sys.stdin.read()
+LEGACY_KEYS = {"agent_name", "project_key", "registration_token"}
+
+
+def read_private(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+            raise PermissionError(f"{path} must be a private regular file")
+        return os.read(descriptor, 65537).decode("utf-8")
+    finally:
+        os.close(descriptor)
+
+
+def fail(message, code=1):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+try:
+    state = json.loads(read_private(state_file))
+except FileNotFoundError:
+    raise SystemExit(0)
+except (OSError, ValueError) as exc:
+    fail(f"child state is unreadable: {exc}")
+if not isinstance(state, dict) or set(state) != LEGACY_KEYS:
+    raise SystemExit(0)
+if state["agent_name"] != agent_name or state["project_key"] != project_key:
+    fail("the earlier-version state names another agent or project")
+try:
+    token = read_private(token_file).strip()
+except OSError as exc:
+    fail(f"the saved owner credential is unavailable: {exc}")
+saved = state["registration_token"]
+if not token or not isinstance(saved, str) or not hmac.compare_digest(token.encode(), saved.encode()):
+    fail("the saved state and owner credential are from different registrations")
+
+parsed = urlparse(url)
+
+
+def rpc(method, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    headers = {"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    try:
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
+        connection.request("POST", parsed.path, body=body, headers=headers)
+        reply = json.loads(connection.getresponse().read().decode("utf-8"))
+        connection.close()
+    except (OSError, ValueError) as exc:
+        fail(f"ORRERY Mail at {url} did not answer: {exc}")
+    if not isinstance(reply, dict) or reply.get("error"):
+        fail(f"ORRERY Mail refused {params.get('name', method)}: {reply.get('error') if isinstance(reply, dict) else reply}")
+    return reply.get("result") or {}
+
+
+def call(name, arguments):
+    result = rpc("tools/call", {"name": name, "arguments": arguments})
+    text = ""
+    for part in result.get("content") or []:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            text = part["text"]
+            break
+    if result.get("isError"):
+        fail(f"ORRERY Mail refused {name}: {text or 'no reason given'}")
+    data = result.get("structuredContent")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+    if not isinstance(data, dict):
+        fail(f"ORRERY Mail returned no profile for {name}")
+    return data
+
+
+listing = rpc("tools/list", {})
+schemas = {tool.get("name"): tool.get("inputSchema") or {} for tool in listing.get("tools") or [] if isinstance(tool, dict)}
+if "existing_agent_id" not in (schemas.get("register_agent") or {}).get("properties", {}):
+    fail("the running ORRERY Mail cannot confirm an existing owner (existing_agent_id)", 2)
+profile = call("whois", {"project_key": project_key, "agent_name": agent_name, "include_recent_commits": False})
+agent_id, program = profile.get("id"), profile.get("program")
+if type(agent_id) is not int or agent_id <= 0 or profile.get("name") != agent_name:
+    fail("ORRERY Mail has no registration with this exact name")
+if program not in {"claude", "claude-code"}:
+    fail(f"the registration with this name belongs to {program!r}, not Claude")
+owner = call("register_agent", {
+    "project_key": project_key, "name": agent_name, "program": program,
+    "registration_token": token, "existing_agent_id": agent_id,
+})
+if (owner.get("id") != agent_id or owner.get("name") != agent_name or owner.get("program") != program
+        or type(owner.get("project_id")) is not int):
+    fail("ORRERY Mail confirmed a different identity")
+print(f"{agent_id}\t{program}")
+PY
 }
 
 finish_child_registration() {
@@ -2176,11 +2308,38 @@ PY
         REGISTRATION_PROGRAM=codex
         REGISTRATION_LABEL=Codex
     fi
-    if ! CHILD_TOKEN_FILE="$(stage_child_registration "$CHILD_NAME" "$REGISTRATION_PROGRAM" "$ONE_SHOT_TOKEN_FILE")"; then
+    # A Claude child from an earlier version is adopted the way the dashboard's
+    # resume adopts it: only after ORRERY Mail confirms its saved credential.
+    # Preregistering again is not a recovery for it -- that registers another
+    # name, and the old child keeps its role (WSL2 report, 2026-10-01).
+    LEGACY_CLAUDE_AGENT_ID=""
+    if [[ "$USE_CODEX" != true && -z "$ONE_SHOT_TOKEN_FILE" ]]; then
+        legacy_status=0
+        LEGACY_CLAUDE_OWNER="$(authenticate_legacy_claude_child "$CHILD_NAME")" || legacy_status=$?
+        if [[ "$legacy_status" != 0 ]]; then
+            echo "Error: $CHILD_NAME was started by an earlier version, and ORRERY Mail did not confirm its saved credential; nothing was changed." >&2
+            if [[ "$legacy_status" == 2 ]]; then
+                echo "  Update and restart ORRERY Mail first: docs/agentstack-mail-update.md" >&2
+            fi
+            echo "  Resuming $CHILD_NAME from the dashboard reaches the same check and keeps its name and conversation." >&2
+            echo "  Do not preregister it again: that registers a different name and leaves two agents in the same role." >&2
+            exit 1
+        fi
+        if [[ -n "$LEGACY_CLAUDE_OWNER" ]]; then
+            IFS=$'\t' read -r LEGACY_CLAUDE_AGENT_ID REGISTRATION_PROGRAM <<< "$LEGACY_CLAUDE_OWNER"
+            echo "[spawn_child/pre-reg] $CHILD_NAME was started by an earlier version; ORRERY Mail confirmed its owner (agent $LEGACY_CLAUDE_AGENT_ID), adopting its state" >&2
+        fi
+    fi
+    if ! CHILD_TOKEN_FILE="$(stage_child_registration "$CHILD_NAME" "$REGISTRATION_PROGRAM" "$ONE_SHOT_TOKEN_FILE" "$LEGACY_CLAUDE_AGENT_ID")"; then
         echo "Error: canonical $REGISTRATION_LABEL registration metadata is missing, invalid, or does not match the child token for $CHILD_NAME" >&2
         echo "  Preserve the credential and supply its matching formal .binding.json receipt before retrying." >&2
-        echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
-        echo "  A legacy token-only runtime entry cannot be promoted to a verified child registration." >&2
+        if [[ "$USE_CODEX" == true ]]; then
+            echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+            echo "  A legacy token-only runtime entry cannot be promoted to a verified child registration." >&2
+        else
+            echo "  If $CHILD_NAME has never started, re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+            echo "  If it has run before, preregistering again registers a different name; resume it from the dashboard instead." >&2
+        fi
         exit 1
     fi
     PRE_REGISTERED_ADOPTION_PENDING=true
