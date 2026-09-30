@@ -781,6 +781,20 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
         assert "dashboard endpoint serving" in running.stdout
         assert "dashboard service mode launchd" in running.stdout
         assert "running" in running.stdout
+
+        # 2026-09-30: the API generation went to 2; doctor only asks whether
+        # the port serves ORRERY Telemetry, so any generation 1+ is serving.
+        for api, serving in ((2, True), (3, True), (0, False), ("1", False), (None, False)):
+            payload = {"name": "orrery-telemetry", "version": "test"}
+            if api is not None:
+                payload["api"] = api
+            version_server.version_payload = payload
+            report = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "doctor.sh"), "--install-dir", str(install_dir)],
+                env=env, text=True, capture_output=True,
+            )
+            assert ("dashboard endpoint serving" in report.stdout) is serving, (api, report.stdout)
+            assert ("dashboard endpoint is not serving" in report.stdout) is not serving, api
     finally:
         version_server.shutdown()
         version_thread.join()

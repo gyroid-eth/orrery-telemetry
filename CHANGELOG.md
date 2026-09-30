@@ -8,6 +8,12 @@
 
 ---
 
+## 未リリース
+
+### `/api/version` の `api` を 2 にし、利用者との互換の世代として運用し始めました（#134）
+
+ORRERY cockpit は、orrery-telemetry が必要な版かどうかを、日付ではなく `api` で判定します。`api` は、利用者が頼る endpoint や field を足す・意味を変えるときだけ上げます（[docs/api.md](docs/api.md#get-apiversion)）。これより前の版は、中身にかかわらずどれも 1 を返していたので、この版で 2 にしました。`agentstack-doctor` と Windows の確認は、`api` が 1 以上であれば ORRERY Telemetry と認めます（世代は問いません）。
+
 ## 2026.09.30.1
 
 ### Codex の既定と「sol」を GPT-6.1 Sol にしました（#128）
