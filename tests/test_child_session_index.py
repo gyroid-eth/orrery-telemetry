@@ -25,7 +25,7 @@ CHILD = "CozyPlanck"
 
 
 class _Mail(http.server.BaseHTTPRequestHandler):
-    """health_check, ensure_project and register_agent, nothing else."""
+    """health_check, whois, ensure_project and register_agent, nothing else."""
 
     calls: list[str] = []
 
@@ -37,6 +37,12 @@ class _Mail(http.server.BaseHTTPRequestHandler):
         _Mail.calls.append(name)
         if name == "health_check":
             result = {"structuredContent": {"status": "ok"}}
+        elif name == "whois":
+            args = params.get("arguments") or {}
+            if args.get("agent_name") == CHILD and "registration_token" not in args:
+                result = {"structuredContent": {"id": AGENT_ID, "name": CHILD}}
+            else:
+                result = None
         elif name == "ensure_project":
             result = {"structuredContent": {"id": 1}}
         elif name == "register_agent":
@@ -136,6 +142,7 @@ def test_shell_registration_without_a_handed_model_still_names_the_program(mail:
 
 def test_shell_registration_writes_the_session_index(mail: str, tmp_path: Path) -> None:
     result, runtime, transcript = _run_child_session_start(tmp_path, mail)
+    assert "whois" in _Mail.calls, _Mail.calls
     assert "register_agent" in _Mail.calls, _Mail.calls
     assert "already registered" in result.stdout, result.stdout
     record = json.loads((runtime / "session_index" / f"{AGENT_ID}.json").read_text(encoding="utf-8"))

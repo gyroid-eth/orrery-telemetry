@@ -25,6 +25,14 @@ agent-start
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
 
+## Project namespace and workspace
+
+`AGENTSTACK_PROJECT_KEY` is the ORRERY Mail coordination namespace. It does not have to be the same path as the repository or worktree where code is edited. Existing delegation that runs children from different repositories under one shared namespace remains valid.
+
+A top-level launcher resolves the namespace separately from workspace provenance. Namespace precedence is `--project-key`, live `AGENTSTACK_PROJECT_KEY`, live `PROJECT_KEY`, the installed `env.sh`, then the launch target directory as the final fallback. Repository identity, actual `work_dir`, worktree root, and `AGENTSTACK_PROTECTED_ROOTS` are instead derived from the selected launch target. Selecting another repository does not by itself replace the namespace.
+
+This separation preserves intentional cross-repository coordination while preventing repository or protected-root metadata left by a parent shell or an existing tmux server from becoming the new session's workspace safety boundary. `--project-key KEY` selects only the namespace; even a path-shaped `KEY` is not proof of workspace ownership.
+
 ## tmux session
 
 When launched from outside tmux, the launcher creates a new named session and replaces the current terminal tab. From inside tmux, it renames the current session and runs the CLI in place with `exec`.

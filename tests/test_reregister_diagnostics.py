@@ -63,6 +63,8 @@ if tool == "ensure_project":
     mode_key = "FAKE_ENSURE_MODE"
 elif tool == "register_agent":
     mode_key = "FAKE_REGISTER_MODE"
+elif tool == "whois":
+    mode_key = "FAKE_WHOIS_MODE"
 else:
     mode_key = "FAKE_POLICY_MODE"
 mode = os.environ.get(mode_key, "success")
@@ -139,6 +141,8 @@ else:
             structured["name"] = name
     elif tool == "ensure_project":
         structured = {"id": 17, "human_key": arguments.get("human_key", "")}
+    elif tool == "whois":
+        structured = {"id": 41, "name": arguments.get("agent_name") or "FixtureAgent"}
     else:
         structured = {"status": "ok"}
     body = json.dumps({
@@ -183,6 +187,8 @@ def _fixture_env(tmp_path: pathlib.Path, credential_source: str | None = "runtim
         "CHILD_REGISTRATION_TOKEN",
         "PARENT_AGENT",
         "PROJECT_KEY",
+        "AGENTSTACK_PROJECT_REPOSITORY",
+        "AGENTSTACK_PROJECT_WORK_DIR",
     ):
         env.pop(key, None)
     env.update(
@@ -191,7 +197,8 @@ def _fixture_env(tmp_path: pathlib.Path, credential_source: str | None = "runtim
             "AGENTSTACK_HOME": str(home / ".agentstack"),
             "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
             "AGENTSTACK_ENV_FILE": str(tmp_path / "missing-env.sh"),
-            "AGENTSTACK_PROJECT_KEY": "/fixture/project",
+            "AGENTSTACK_PROJECT_KEY": "fixture-project",
+            "AGENTSTACK_PROJECT_WORK_DIR": str(tmp_path),
             "AGENTSTACK_RUNTIME_DIR": str(runtime),
             "AGENTSTACK_REGISTER_LIB": str(REGISTER_LIB),
             "AGENTSTACK_MCP_URL": "http://fixture.invalid/mcp",
@@ -252,11 +259,17 @@ def test_success_keeps_exact_stdout_and_cleans_temporary_files(tmp_path: pathlib
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == f"agentstack-reregister: registered {AGENT_NAME}\n"
     assert completed.stderr == ""
-    assert [call["tool"] for call in calls] == ["ensure_project", "register_agent"]
-    assert all(call["output_mode"] == 0o600 for call in calls)
-    assert all(call["diag_mode"] == 0o600 for call in calls)
-    assert len({call["output_path"] for call in calls}) == len(calls)
-    assert len({call["diag_path"] for call in calls}) == len(calls)
+    assert [call["tool"] for call in calls] == ["whois", "ensure_project", "register_agent"]
+    assert calls[0]["arguments"] == {
+        "project_key": "fixture-project",
+        "agent_name": AGENT_NAME,
+    }
+    assert calls[2]["arguments"]["registration_token"] == OWNER_SECRET
+    diagnosed_calls = calls[1:]
+    assert all(call["output_mode"] == 0o600 for call in diagnosed_calls)
+    assert all(call["diag_mode"] == 0o600 for call in diagnosed_calls)
+    assert len({call["output_path"] for call in diagnosed_calls}) == len(diagnosed_calls)
+    assert len({call["diag_path"] for call in diagnosed_calls}) == len(diagnosed_calls)
     _assert_no_secrets(completed)
 
 
@@ -268,7 +281,7 @@ def test_supported_project_response_shapes_reach_registration(
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == f"agentstack-reregister: registered {AGENT_NAME}\n"
     assert completed.stderr == ""
-    assert [call["tool"] for call in calls] == ["ensure_project", "register_agent"]
+    assert [call["tool"] for call in calls] == ["whois", "ensure_project", "register_agent"]
     _assert_no_secrets(completed)
 
 
@@ -288,6 +301,7 @@ def test_contact_policy_response_never_leaks_raw_stderr_from_successful_registra
     assert completed.stdout == f"agentstack-reregister: registered {AGENT_NAME}\n"
     assert completed.stderr == ""
     assert [call["tool"] for call in calls] == [
+        "whois",
         "ensure_project",
         "register_agent",
         *("set_contact_policy" for _ in range(policy_calls)),
@@ -419,7 +433,7 @@ def test_ensure_project_failures_stop_before_register_agent(
         f"agentstack-reregister: stage=ensure_project reason={reason} "
         f"credential_source=runtime-file{extra}\n"
     )
-    assert [call["tool"] for call in calls] == ["ensure_project"]
+    assert [call["tool"] for call in calls] == ["whois", "ensure_project"]
     _assert_no_secrets(completed)
 
 
@@ -446,7 +460,7 @@ def test_register_failures_are_classified_without_server_text(
         f"agentstack-reregister: stage={stage} reason={reason} "
         f"credential_source=runtime-file{extra}\n"
     )
-    assert [call["tool"] for call in calls] == ["ensure_project", "register_agent"]
+    assert [call["tool"] for call in calls] == ["whois", "ensure_project", "register_agent"]
     _assert_no_secrets(completed)
 
 
@@ -468,12 +482,12 @@ set -euo pipefail
 . {REGISTER_LIB!s}
 export FAKE_REGISTER_MODE=identity
 set +e
-ags_register_session /fixture/project codex fixture-model cx /fixture {AGENT_NAME} reserved >/dev/null
+ags_register_session "$AGENTSTACK_PROJECT_KEY" codex fixture-model cx "$AGENTSTACK_PROJECT_WORK_DIR" {AGENT_NAME} reserved >/dev/null
 first_status=$?
 set -e
 printf 'first=%s:%s:%s:%s\n' "$first_status" "$AGS_AGENT_NAME_SUBSTITUTED" "$AGS_REGISTRATION_DIAG_STAGE" "$AGS_REGISTRATION_DIAG_REASON"
 export FAKE_REGISTER_MODE=success
-ags_register_session /fixture/project codex fixture-model cx /fixture {AGENT_NAME} reserved >/dev/null
+ags_register_session "$AGENTSTACK_PROJECT_KEY" codex fixture-model cx "$AGENTSTACK_PROJECT_WORK_DIR" {AGENT_NAME} reserved >/dev/null
 printf 'second=%s:%s:%s\n' "$AGS_REGISTERED_AGENT_NAME" "${{AGS_REGISTRATION_DIAG_STAGE:-}}" "${{AGS_REGISTRATION_DIAG_REASON:-}}"
 '''
     completed = subprocess.run(

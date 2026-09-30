@@ -25,6 +25,14 @@ agent-start
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
 
+## Project namespace と workspace
+
+`AGENTSTACK_PROJECT_KEY` は ORRERY Mail 上で協調するための project namespace です。実際にコードを操作する repository / worktree と同じ path である必要はありません。たとえば1つの namespace の下で、別 repository の child を動かす既存の委任運用は有効です。
+
+top-level launcher は namespace と workspace provenance を別々に決めます。namespace の優先順位は `--project-key`、live `AGENTSTACK_PROJECT_KEY`、live `PROJECT_KEY`、install 済み `env.sh`、最後に起動対象 directory の順です。一方、repository identity、実 `work_dir`、worktree root、`AGENTSTACK_PROTECTED_ROOTS` は必ず今回選んだ起動対象から解決します。別 repository を選んだからという理由だけで namespace を書き換えません。
+
+この分離により、意図した cross-repository coordination は維持しつつ、親 shell や既存 tmux server に残った別 workspace の repository / protected-root 情報を新しい session の安全境界として使い回しません。`--project-key KEY` は namespace だけを明示する指定で、`KEY` が path 形式でもその path を workspace ownership の証拠にはしません。
+
 ## tmux session
 
 tmux 外から起動すると、新しい named session を作って現在の terminal tab を置き換えます。tmux 内からは current session を rename し、その場で CLI を `exec` します。
