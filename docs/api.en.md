@@ -423,6 +423,8 @@ The response is `{ok, session, actions}`. An existing tmux session is opened / f
 
 Claude verifies its saved owner credential against the original project, numeric ID, name, and program, then completes credential-backed registration and unretire before opening a terminal. Claude child state / credentials are also retained for 30 days by default, and resume regenerates the child-owned Mail proxy configuration. Top-level Claude uses its existing owner token. Credentials deleted by older cleanup yield `credential_missing`; expired material yields `retention_expired`, and explicit purge yields `purged`. Authentication or unretire failure also prevents terminal launch. Resume never issues credentials or registers an alias. Codex top-level resumes also call unretire.
 
+If Claude startup preparation fails, the original husk is preserved and Mail is re-retired only if it was originally retired. An originally active identity is not retired. Failures of the restoration itself are reported in `rollback_errors`; they are not reported as successful recovery. The CLI waits until tmux and window preparation succeed.
+
 ## POST `/api/exit`
 
 Request:

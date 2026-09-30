@@ -10,34 +10,30 @@ import urllib.request
 
 import pytest
 from dashboard import server
-from test_claude_resume_mail import resume, NAME
+from test_claude_resume_mail import resume, tmux_resume, NAME
 from test_codex_resume_flags import policy_env, _seed_child_identity, _invoke_resume_entry
 
 
 @pytest.mark.parametrize("setting,explicit,opens", [(None, None, True), ("1", None, True),
     ("0", None, False), ("0", True, True), ("1", False, False)])
-def test_claude_resume_terminal_preference_preserves_mail_order(resume, monkeypatch, setting, explicit, opens):
-    _, _, windows, calls = resume
+def test_claude_resume_terminal_preference_preserves_mail_order(tmux_resume, monkeypatch, setting, explicit, opens):
+    _, _, calls, sessions, state = tmux_resume
+    sessions.clear()
+    state['expect_husk'] = False
     monkeypatch.delenv("AGENTSTACK_AUTO_OPEN_CHILD", raising=False)
     if setting is not None:
         monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", setting)
-    detached = []
-
-    def run(argv, **kw):
-        assert [method for method, _ in calls] == ["register_agent", "unretire_agent"]
-        detached.append(argv)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(server.subprocess, "run", run)
     result = server.do_resume(NAME, open_terminal=explicit)
     assert result["ok"], result
-    assert bool(windows) is opens
-    assert bool(detached) is not opens
+    assert bool(state['windows']) is opens
+    prepared = state['commands'][0]
+    assert prepared[:4] == ['env', '-u', 'TMUX', '-u']
+    assert 'new-session' in prepared and '-d' in prepared and '-A' not in prepared
+    assert '--resume' in prepared[-1] and 'wait-for' in prepared[-1]
+    assert state['started'] and sessions == {'$2': NAME}
+    assert [method for method, _ in calls] == ['register_agent', 'unretire_agent']
     if not opens:
-        assert detached[0][:4] == ["env", "-u", "TMUX", "-u"]
-        assert "new-session" in detached[0] and "-d" in detached[0] and "-A" not in detached[0]
-        assert "--resume" in detached[0][-1]
-        assert result["terminal"] == "detached"
+        assert result['terminal'] == 'detached'
 
 
 def test_detached_failure_cancels_child_resume_marker(resume, monkeypatch):
@@ -46,7 +42,7 @@ def test_detached_failure_cancels_child_resume_marker(resume, monkeypatch):
     runtime, registration, windows, _ = resume
     child(runtime, registration)
     monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", "0")
-    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="duplicate session"))
+    monkeypatch.setattr(server, "_launch_claude_resume_tmux", lambda *a, **k: {"ok": False, "error": "duplicate session"})
     result = server.do_resume(NAME)
     assert not result["ok"] and "duplicate session" in result["error"]
     assert not windows
@@ -111,14 +107,13 @@ def test_jump_http_open_is_strict_boolean(monkeypatch, body, status, preference)
         thread.join(timeout=5)
 
 
-def test_explicit_detached_jump_bypasses_terminal_adapter_and_rechecks_material(resume, monkeypatch):
-    _, _, windows, calls = resume
+def test_explicit_detached_jump_bypasses_terminal_adapter_and_rechecks_material(tmux_resume, monkeypatch):
+    _, _, calls, sessions, state = tmux_resume
+    sessions.clear()
+    state['expect_husk'] = False
     monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", "1")
     monkeypatch.setattr(server, "_terminal_adapter", lambda: "none")
-    monkeypatch.setattr(server, "_has_session", lambda _name: False)
-    detached = []
-    monkeypatch.setattr(server.subprocess, "run", lambda argv, **kw: detached.append(argv) or SimpleNamespace(returncode=0, stdout="", stderr=""))
     result = server.do_jump(NAME, open_terminal=False)
     assert result["ok"], result
-    assert detached and not windows
+    assert state['started'] and not state['windows']
     assert [method for method, _ in calls] == ["register_agent", "unretire_agent"]

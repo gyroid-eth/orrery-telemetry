@@ -570,7 +570,7 @@ def _resume(monkeypatch, tmp_path, session="ResumeChild", transcript_text=""):
     monkeypatch.setattr(server, "_transcript_path", lambda _n: str(transcript))
     monkeypatch.setattr(server, "_transcript_cwd", lambda _p: str(tmp_path))
     monkeypatch.setattr(
-        server, "_open_terminal_tmux",
+        server, "_launch_claude_resume_tmux",
         lambda argv, **_k: launched.append(argv) or {"ok": False, "error": "test"},
     )
     result = server.do_resume(session)

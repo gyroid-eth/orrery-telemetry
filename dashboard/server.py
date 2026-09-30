@@ -2174,6 +2174,93 @@ def _launch_resume_tmux(tmux_args: list[str], title: str, open_terminal: bool | 
     return {"ok": True, "adapter": "detached"}
 
 
+def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
+                             open_terminal: bool | None, replace_husk: bool) -> dict:
+    """Prepare a gated replacement, preserving the old shell until startup commits."""
+    generation = secrets.token_hex(12)
+    staging = f"{title}.resume-{generation}"
+    backup = f"{title}.husk-{generation}"
+    channel = f"agentstack-resume-{generation}"
+    old_id = new_id = None
+    old_renamed = False
+    creation_attempted = False
+    control_env = {key: value for key, value in os.environ.items() if key not in {"TMUX", "TMUX_PANE"}}
+
+    def tmux(*args):
+        result = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=8, env=control_env)
+        if result.returncode:
+            raise RuntimeError("tmux resume preparation failed")
+        return result.stdout.strip()
+
+    try:
+        if replace_husk:
+            listing = tmux("list-sessions", "-F", "#{session_name}\t#{session_id}")
+            old_id = next((row.split("\t", 1)[1] for row in listing.splitlines()
+                           if row.startswith(title + "\t")), None)
+            if old_id is None or not re.fullmatch(r"\$\d+", old_id):
+                raise RuntimeError("Existing Claude shell could not be identified")
+        staged = list(tmux_args)
+        staged[staged.index("-s") + 1] = staging
+        staged = ["-d" if arg == "-A" else arg for arg in staged]
+        staged[2:2] = ["-P", "-F", "#{session_id}"]
+        wait_bin = shlex.quote(shutil.which("tmux") or "tmux")
+        staged[-1] = f"{wait_bin} wait-for {shlex.quote(channel)} || exit $?; " + staged[-1]
+        creation_attempted = True
+        result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *staged],
+                                capture_output=True, text=True, timeout=8)
+        if result.returncode:
+            raise RuntimeError("Detached Claude tmux preparation failed")
+        new_id = result.stdout.strip()
+        if not re.fullmatch(r"\$\d+", new_id):
+            # A successful creation has a unique name even if its receipt is malformed.
+            new_id = f"={staging}"
+            raise RuntimeError("New Claude session could not be identified")
+        adapter = "detached"
+        if _resume_opens_terminal(open_terminal):
+            opened = _open_terminal_tmux(["tmux", "attach-session", "-t", new_id], title=title)
+            if not opened.get("ok"):
+                raise RuntimeError("Claude terminal window could not be opened")
+            adapter = opened.get("adapter")
+        if old_id is not None:
+            tmux("rename-session", "-t", old_id, backup)
+            old_renamed = True
+        tmux("rename-session", "-t", new_id, title)
+        tmux("wait-for", "-S", channel)
+    except Exception as exc:
+        errors = []
+        if new_id is not None:
+            try:
+                tmux("kill-session", "-t", new_id)
+            except Exception:
+                errors.append("Prepared Claude session could not be removed")
+        elif creation_attempted:
+            # The tmux request can time out after creating the gated session.
+            # Its unique name is safe to clean even when no receipt was returned.
+            try:
+                subprocess.run(["tmux", "kill-session", "-t", f"={staging}"],
+                               capture_output=True, text=True, timeout=8, env=control_env)
+            except Exception:
+                errors.append("Prepared Claude session cleanup could not be confirmed")
+        if old_renamed:
+            try:
+                tmux("rename-session", "-t", old_id, title)
+            except Exception:
+                errors.append(f"Original shell remains in {backup}; its name could not be restored")
+        answer = {"ok": False, "error": str(exc)}
+        if errors:
+            answer["rollback_errors"] = errors
+        return answer
+    # Startup is now committed. Failure to dispose the old shell must not
+    # turn a running CLI into a reported failed launch or retire its identity.
+    answer = {"ok": True, "adapter": adapter}
+    if old_id is not None:
+        try:
+            tmux("kill-session", "-t", old_id)
+        except Exception:
+            answer["warning"] = f"Original shell retained in {backup}"
+    return answer
+
+
 def _focus_existing_terminal(session: str) -> bool:
     if _terminal_adapter() != "ghostty":
         return False
@@ -2626,8 +2713,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
 
     Claude は `claude --resume <sid>`、Codex は `codex resume <sid>`。
     transcript ファイル名/メタ = sessionId、`cwd` = 元の作業ディレクトリ。
-    対応端末で `tmux new-session -A` し、その中で resume。セッション名=
-    エージェント名に揃える(identity 整合)。
+    Claude は detached tmux で CLI を待機させ、起動準備の成功後に解放する。
+    セッション名はエージェント名に揃える(identity 整合)。
 
     ※ codex agent は ~/.claude/projects/ に自分の transcript を持たないため
       Claude 用 _transcript_path の selfref 探索だと「その名前を最も多く参照
@@ -2664,7 +2751,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
     if not os.path.exists(ABS_CLAUDE):
         return {"ok": False, "error": "claude CLI が見つかりません"}
-    # 端末adapter経由で tmux new-session(-A=あれば attach)。
+    # Claude tmux is prepared detached; an optional terminal attaches afterward.
     #
     # 重要: claude を「単一文字列」で tmux に渡すと tmux は `/bin/sh -c`
     # で実行し ~/.zshrc を読まない → ~/.local/bin が PATH に入らず
@@ -2704,6 +2791,10 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session} --chrome'
         )
 
+    mail_was_retired = False
+    mail_restore_attempted = False
+    registration = None
+    child_state = None
     try:
         registration, token, child_state = _claude_resume_material(session)
         if child_state is not None:
@@ -2716,12 +2807,9 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             if child_state is not None:
                 mcp_config = _write_claude_resume_mcp_config(session, registration)
                 inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
-            _restore_claude_mail(session, registration, token)
-            if replace_husk:
-                killed = subprocess.run(["tmux", "kill-session", "-t", f"={session}"],
-                                        capture_output=True, text=True, timeout=8)
-                if killed.returncode:
-                    raise _ResumeCapabilityError("config_unrestorable", "Claude shell could not be replaced; refusing resume")
+            mail_was_retired = _register_claude_resume(session, registration, token)
+            mail_restore_attempted = True
+            _set_claude_mail_retired(session, registration, retired=False)
         except Exception:
             if child_state is not None:
                 module.discard_generated(pathlib.Path(RUNTIME_DIR), session)
@@ -2730,10 +2818,16 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                                      project_key=registration["project_key"])
             raise
     except _ResumeCapabilityError as exc:
-        return {"ok": False, "error": str(exc), "resume_capability": exc.code}
+        result = {"ok": False, "error": str(exc), "resume_capability": exc.code}
+        if mail_restore_attempted and mail_was_retired:
+            _rollback_claude_mail(session, registration, result)
+        return result
     except Exception:
-        return {"ok": False, "error": "Claude resume state could not be restored",
-                "resume_capability": "config_unrestorable"}
+        result = {"ok": False, "error": "Claude resume state could not be restored",
+                  "resume_capability": "config_unrestorable"}
+        if mail_restore_attempted and mail_was_retired:
+            _rollback_claude_mail(session, registration, result)
+        return result
     resume_environment = {
         "AGENT_NAME": session, "AGENTSTACK_RESERVED_IDENTITY": "1", "CLAUDECODE": "1",
         "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
@@ -2759,25 +2853,40 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が
     # 誤爆する(2026-06-02 調査)。dashboard が tmux 内から再起動された場合に備え剥がす。
-    launch = _launch_resume_tmux(
+    launch = _launch_claude_resume_tmux(
         ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
          *[arg for key, value in resume_environment.items() for arg in ("-e", f"{key}={value}")],
          _login_shell(), "-lic", inner],
         title=session,
         open_terminal=open_terminal,
+        replace_husk=replace_husk,
     )
     if launch.get("ok"):
-        return {
+        result = {
             "ok": True,
             "action": "resumed",
             "detail": f"会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
+        if launch.get("warning"):
+            result["warning"] = launch["warning"]
+        return result
+    result = {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
+    if launch.get("rollback_errors"):
+        result["rollback_errors"] = launch["rollback_errors"]
     if child_state is not None:
-        module.discard_generated(pathlib.Path(RUNTIME_DIR), session)
-        module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
-                             agent_id=registration["agent_id"], project_key=registration["project_key"])
-    return {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
+        for action in (
+            lambda: module.discard_generated(pathlib.Path(RUNTIME_DIR), session),
+            lambda: module.cancel_resume(pathlib.Path(RUNTIME_DIR), session,
+                                         agent_id=registration["agent_id"], project_key=registration["project_key"]),
+        ):
+            try:
+                action()
+            except Exception:
+                result.setdefault("rollback_errors", []).append("Claude child resume material could not be restored")
+    if mail_was_retired:
+        _rollback_claude_mail(session, registration, result)
+    return result
 
 
 def _codex_meta(path: str) -> tuple[str | None, str | None]:
@@ -3133,8 +3242,8 @@ def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
     return str(path)
 
 
-def _restore_claude_mail(session: str, registration: dict, token: str) -> None:
-    """Authenticate the saved identity, then restore delivery before any launch."""
+def _register_claude_resume(session: str, registration: dict, token: str) -> bool:
+    """Authenticate the saved identity and capture its authoritative Mail state."""
     registered = _mcp_call("register_agent", {
         "project_key": registration["project_key"], "name": session,
         "program": registration["program"], "model": registration.get("model", ""),
@@ -3147,14 +3256,25 @@ def _restore_claude_mail(session: str, registration: dict, token: str) -> None:
     if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
             or data.get("name") != session):
         raise _ResumeCapabilityError("identity_mismatch", "Claude registration changed; refusing resume")
-    active = _mcp_call("unretire_agent", {
+    return bool(data.get("retired_at"))
+
+
+def _set_claude_mail_retired(session: str, registration: dict, *, retired: bool) -> None:
+    active = _mcp_call("retire_agent" if retired else "unretire_agent", {
         "project_key": registration["project_key"], "agent_name": session,
     })
     data = active.get("data") or {}
-    if (not active.get("ok") or data.get("status") != "active"
+    if (not active.get("ok") or data.get("status") != ("retired" if retired else "active")
             or data.get("agent_name") != session
             or data.get("project_key") != registration["project_key"]):
         raise _ResumeCapabilityError("config_unrestorable", "Claude Mail could not be unretired; refusing resume")
+
+
+def _rollback_claude_mail(session: str, registration: dict, result: dict) -> None:
+    try:
+        _set_claude_mail_retired(session, registration, retired=True)
+    except Exception:
+        result.setdefault("rollback_errors", []).append("Claude Mail retirement could not be restored")
 
 
 RESUME_CAPABILITY_MESSAGES = {

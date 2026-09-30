@@ -423,6 +423,8 @@ response は `{ok, session, actions}` です。既存 tmux session は configure
 
 Claude は保存済み owner credential で同じ project・数値 ID・name・program の登録を検証し、credential 付き再登録と unretire が成功してから端末を起動します。Claude child の state / credential も既定30日保持し、resume 時は子専用 Mail proxy config を再生成します。top-level Claude は既存 owner token を使います。旧 cleanup で credential が消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。認証・unretire の失敗でも端末を開きません。credential を自動発行したり別名で登録したりはしません。Codex top-level resume も unretire の対象です。
 
+Claude の起動準備が失敗した場合、元の husk を残し、元が retired だった Mail を再 retire します。元から active の identity は retire しません。復元にも失敗した場合は `rollback_errors` を返し、成功したようには報告しません。CLI は tmux と窓の準備が成功するまで待機します。
+
 ## POST `/api/exit`
 
 request:

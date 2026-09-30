@@ -416,3 +416,110 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert "launch prompt is canonical; do not send task mail" in result.stderr
     assert not backtick_marker.exists()
     assert not dollar_marker.exists()
+
+
+@pytest.mark.parametrize('codex', [False, True], ids=['claude', 'codex'])
+@pytest.mark.parametrize('damage', ['missing', 'corrupt', 'wrong_provider', 'wrong_name', 'wrong_project', 'unsafe'])
+def test_invalid_handoff_preserves_original_registration_before_tmux(tmp_path, codex, damage):
+    env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env['AGENTSTACK_CODEX_BIN'] = str(tmp_path / 'bin' / 'codex')
+    name = 'PreservedOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'codex' if codex else 'claude-code'
+    if damage == 'wrong_provider':
+        data['program'] = 'claude-code' if codex else 'codex'
+    elif damage == 'wrong_name':
+        data['agent_name'] = 'AnotherOwner'
+    elif damage == 'wrong_project':
+        data['project_key'] = '/other/project'
+    binding.write_text(json.dumps(data))
+    if damage == 'missing':
+        binding.unlink()
+    elif damage == 'corrupt':
+        binding.write_text('{broken')
+    elif damage == 'unsafe':
+        binding.chmod(0o644)
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    canonical = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text('original-owner-token')
+    canonical.chmod(0o600)
+    state.write_text(json.dumps({'agent_id': 73, 'agent_name': name, 'project_key': '/shared/project',
+                                'program': 'codex' if codex else 'claude-code',
+                                'registration_token': 'original-owner-token'}))
+    state.chmod(0o600)
+    managed = runtime / 'managed_agents.txt'
+    managed.write_text(name + '\nAnotherOwner\n')
+    originals = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) for p in (canonical, state, handoff, managed)}
+    args = ['/bin/bash', str(SPAWN), '--pre-registered', name, '--child-token-file', str(handoff)]
+    if codex:
+        args.append('--codex')
+    result = subprocess.run([*args, 'fixture task', str(workdir)], env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0, result
+    log = pathlib.Path(env['FAKE_TMUX_LOG'])
+    assert not log.exists() or 'new-session' not in log.read_text()
+    for path, before in originals.items():
+        assert (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_mode) == before
+    assert not list(state.parent.glob('*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('codex', [False, True], ids=['claude', 'codex'])
+def test_failed_startup_restores_existing_registration_and_keeps_handoff(tmp_path, codex):
+    from hooks import child_resume
+    env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env['AGENTSTACK_CODEX_BIN'] = str(tmp_path / 'bin' / 'codex')
+    name = 'FailedStartup'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'codex' if codex else 'claude-code'
+    binding.write_text(json.dumps(data))
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    canonical = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text('original-owner-token')
+    canonical.chmod(0o600)
+    state.write_text(json.dumps({**data, 'registration_token': 'original-owner-token'}))
+    state.chmod(0o600)
+    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', mcp_profile='inherit')
+    assert child_resume.mark_retired(runtime, name, retention_days=30)
+    originals = {p: (p.read_bytes(), p.stat().st_mode) for p in (canonical, state, handoff, binding)}
+    # Startup refuses before a real CLI can run. Codex stops at profile preparation;
+    # Claude reaches the real tmux invocation, which the disposable fixture rejects.
+    if not codex:
+        _executable(tmp_path / 'bin' / 'tmux', '#!/bin/bash\n[[ "$1" != new-session ]] || exit 1\nexit 0\n')
+    args = ['/bin/bash', str(SPAWN), '--pre-registered', name, '--child-token-file', str(handoff)]
+    if codex:
+        args.extend(['--codex', '--codex-mcp', 'orrery-only'])
+    result = subprocess.run([*args, 'fixture task', str(workdir)], env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0, result
+    for path, before in originals.items():
+        assert (path.read_bytes(), path.stat().st_mode) == before
+    assert not list(state.parent.glob('.*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('program', ['claude', 'claude-code', 'codex', 'codex-cli'])
+def test_valid_registration_staging_commits_the_expected_provider(tmp_path, program):
+    from hooks import child_resume
+    name = 'VerifiedProvider'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = program
+    binding.write_text(json.dumps(data))
+    runtime = tmp_path / 'runtime'
+    token = child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program,
+                                           source=handoff, binding=binding)
+    state = child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program)
+    child_resume.finish_registration(runtime, name, rollback=False)
+    assert token.read_text() == 'child-owner-token'
+    assert state['program'] == program and state['provider'] == ('codex' if program.startswith('codex') else 'claude')
+    assert handoff.exists() and binding.exists()  # Consumption belongs to the successful launcher.
+    assert token.stat().st_mode & 0o777 == 0o600
+    assert not list((runtime / 'child-agents').glob('.*.registration-pending.json'))

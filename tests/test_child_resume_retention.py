@@ -896,3 +896,26 @@ def test_real_resume_command_can_cleanup_and_resume_again(
     second_unretire = methods.index("unretire_agent", first_retire + 1)
     second_retire = methods.index("retire_agent", first_retire + 1)
     assert second_register < second_unretire < second_retire
+
+
+def test_explicit_purge_also_removes_a_private_preregistration_undo_record(tmp_path):
+    from hooks import child_resume
+    runtime = tmp_path / 'runtime'
+    name = 'PendingOwner'
+    token = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    state.parent.mkdir(parents=True)
+    token.write_text('owner-token')
+    token.chmod(0o600)
+    state.write_text(json.dumps({'agent_id': 73, 'agent_name': name, 'project_key': '/shared/project',
+                                'program': 'claude-code', 'registration_token': 'owner-token'}))
+    state.chmod(0o600)
+    child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code')
+    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code')
+    pending = state.parent / ('.' + name + '.registration-pending.json')
+    assert pending.exists() and pending.stat().st_mode & 0o777 == 0o600
+    assert child_resume.purge_one(runtime, name, reason='purged')
+    assert not pending.exists() and not token.exists()
+    # An intentional purge cannot be undone by the failed launch's later cleanup.
+    child_resume.finish_registration(runtime, name, rollback=True)
+    assert not token.exists() and not state.exists()

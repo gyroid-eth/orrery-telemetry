@@ -16,7 +16,7 @@
 
 ### Claude の resume 後に Mail を送受信できるようにしました（#135・#136）
 
-正常終了した Claude の子も、Codex と同じく再開用 state と owner credential を既定30日、0600で保持します。dashboard の Claude resume は保存済みの正式 ID と credential を検証し、子専用 Mail proxy config を再生成、同じ identity の再登録・unretire を完了してから起動します。top-level も既存 token で復帰します。credential 欠落、期限切れ、purge、認証や unretire の失敗では起動しません。Codex の top-level resume で unretire を飛ばしていた箇所も直しました。履歴は保持・purge の対象外です。
+正常終了した Claude の子も、Codex と同じく再開用 state と owner credential を既定30日、0600で保持します。dashboard の Claude resume は保存済みの正式 ID と credential を検証し、子専用 Mail proxy config を再生成、同じ identity の再登録・unretire を完了してから起動します。top-level も既存 token で復帰します。credential 欠落、期限切れ、purge、認証や unretire の失敗では起動しません。incoming receipt の provider 不一致や metadata 不備を保存前に拒否し、起動失敗でも既存 credential を保持します。Claude の起動準備が失敗した場合は元の husk と Mail の状態を戻し、元から active だった identity を retire しません。Codex の top-level resume で unretire を飛ばしていた箇所も直しました。履歴は保持・purge の対象外です。
 
 ## 2026.09.30.2
 
