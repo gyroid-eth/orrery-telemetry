@@ -139,6 +139,14 @@ except Exception:
     print("")
 ' 2>/dev/null || echo "")"
     export AGENTSTACK_SESSION_ID
+    SESSION_START_SOURCE="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("source", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")"
 fi
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
@@ -227,6 +235,16 @@ shell_register_resolved_agent() {
 restore_retired_identity() {
     SHELL_UNRETIRE_NOTE=""
     [ -n "${AGS_REGISTERED_RETIRED_AT:-}" ] || return 0
+    # Only a session being opened (again) may come back. On /clear or
+    # compaction the identity was already running, so a retirement seen here
+    # was made deliberately while it ran and must stand (#152 review N-1).
+    case "${SESSION_START_SOURCE:-}" in
+        startup|resume) ;;
+        *)
+            SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired です。/clear や compaction では active に戻しません。受信を再開するには dashboard から resume してください。"
+            return 0
+            ;;
+    esac
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" python_bin
     # A terminal session may not carry the installer's interpreter; the
     # helper needs a newer Python than the system one on macOS.
@@ -250,7 +268,15 @@ restore_retired_identity() {
 # was opened. The lease names the first non-shell ancestor (the provider CLI);
 # a dead PID is simply not a live session.
 write_live_session_lease() {
-    local name="$1" pid="$PPID" comm depth=0
+    local name="$1" pid="$PPID" comm depth=0 lease
+    # Leases outlive their sessions; drop the ones whose CLI has ended, for
+    # every identity, so they do not pile up (#152 review P3-a).
+    for lease in "$RUNTIME_DIR"/live-sessions/*/*; do
+        [ -f "$lease" ] || continue
+        case "${lease##*/}" in ''|*[!0-9]*) continue ;; esac
+        kill -0 "${lease##*/}" 2>/dev/null || rm -f "$lease"
+    done
+    rmdir "$RUNTIME_DIR"/live-sessions/*/ 2>/dev/null
     case "$name" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
     while [ "$depth" -lt 6 ] && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
         comm="$(ps -o comm= -p "$pid" 2>/dev/null)"

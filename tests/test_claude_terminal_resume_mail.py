@@ -24,7 +24,7 @@ from test_claude_resume_mail import NAME, ROOT, TOKEN, child, private, resume
 RETIRED_AT = "2026-09-30T14:32:36Z"
 
 
-def session_start(runtime, registration, cwd):
+def session_start(runtime, registration, cwd, source="resume"):
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": os.environ["HOME"],
@@ -40,6 +40,8 @@ def session_start(runtime, registration, cwd):
     }
     os.makedirs(env["HOME"], exist_ok=True)
     payload = {"session_id": "sess-terminal-1", "hook_event_name": "SessionStart", "cwd": str(cwd)}
+    if source is not None:
+        payload["source"] = source
     result = subprocess.run(["/bin/bash", str(ROOT / "hooks/session-start-reminder.sh")],
                             input=json.dumps(payload), capture_output=True, text=True,
                             timeout=60, env=env, cwd=cwd)
@@ -52,13 +54,14 @@ def unretires(mail):
     return [arguments for method, arguments in mail if method == "unretire_agent"]
 
 
+@pytest.mark.parametrize("source", ["startup", "resume"])
 @pytest.mark.parametrize("kind", ["token_only", "retained_child"])
-def test_terminal_resume_unretires_an_authenticated_retired_owner(resume, mail, tmp_path, kind):
+def test_terminal_resume_unretires_an_authenticated_retired_owner(resume, mail, tmp_path, kind, source):
     runtime, registration, launches, calls = resume
     if kind == "retained_child":
         child(runtime, registration)
     StandInMail.retired_at = RETIRED_AT
-    session_start(runtime, registration, tmp_path)
+    session_start(runtime, registration, tmp_path, source=source)
     registers = [arguments for method, arguments in mail if method == "register_agent"]
     assert registers and registers[-1]["registration_token"] == TOKEN
     assert unretires(mail) == [{"project_key": registration["project_key"], "agent_name": NAME}]
@@ -112,3 +115,33 @@ def test_exit_then_terminal_resume_round_trips_the_row(resume, mail, tmp_path):
     session_start(runtime, registration, tmp_path)
     assert [method for method, _ in mail if method in {"retire_agent", "unretire_agent"}] == [
         "retire_agent", "unretire_agent"]
+
+
+@pytest.mark.parametrize("source", ["clear", "compact", None])
+@pytest.mark.parametrize("kind", ["token_only", "retained_child"])
+def test_clear_or_compaction_never_undoes_a_deliberate_retire(resume, mail, tmp_path, kind, source):
+    """#152 review N-1: a running identity the user retired came back on the next /clear or compaction."""
+    runtime, registration, *_ = resume
+    if kind == "retained_child":
+        child(runtime, registration)
+    StandInMail.retired_at = RETIRED_AT
+    result = session_start(runtime, registration, tmp_path, source=source)
+    assert [method for method, _ in mail if method == "register_agent"]
+    assert unretires(mail) == []
+    assert "retired" in result.stdout
+
+
+def test_session_start_sweeps_leases_of_ended_sessions(resume, mail, tmp_path):
+    """#152 review P3-a: leases of sessions that have ended piled up under runtime/live-sessions."""
+    runtime, registration, *_ = resume
+    ended = subprocess.run(["/bin/sh", "-c", "echo $$"], capture_output=True, text=True).stdout.strip()
+    stale = [runtime / "live-sessions" / NAME / ended, runtime / "live-sessions" / "OtherAgent" / ended]
+    live = runtime / "live-sessions" / "OtherAgent" / str(os.getpid())
+    for lease in (*stale, live):
+        lease.parent.mkdir(parents=True, exist_ok=True)
+        lease.write_text("")
+    session_start(runtime, registration, tmp_path)
+    assert not any(lease.exists() for lease in stale)
+    assert live.exists()
+    # This session's own lease (the pytest process runs the hook) is written.
+    assert (runtime / "live-sessions" / NAME / str(os.getpid())).exists()
