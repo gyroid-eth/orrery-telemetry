@@ -22,9 +22,11 @@ def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     monkeypatch.delenv("AGENTSTACK_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(models.time, "time", lambda: NOW)
+    monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 159, 1))
 
 
-def row(model="gpt-6-sol", efforts=("low", "medium", "high", "xhigh", "max", "ultra"), **extra):
+def row(model="gpt-6.1-sol", efforts=("low", "medium", "high", "xhigh", "max", "ultra"), **extra):
     return {"slug": model, "visibility": "list", "default_reasoning_level": efforts[0] if efforts else "none",
             "supported_reasoning_levels": [{"effort": effort, "description": "unused"} for effort in efforts], **extra}
 
@@ -45,7 +47,7 @@ def test_fresh_cache_adds_gpt6_and_unknown_future_models_without_changing_defaul
     assert "gpt-9-future.1" in catalog.models
     assert "gpt-6-sol" in catalog.models and "gpt-6-luna" in catalog.models
     provider = models.provider_catalog()
-    assert provider["default_model"] == "gpt-6-sol"
+    assert provider["default_model"] == "gpt-6.1-sol"
     assert "ultra" not in provider["model_efforts"]["gpt-6-luna"]
     assert "ultra" in provider["model_efforts"]["gpt-6-sol"]
 
@@ -332,7 +334,7 @@ def test_invalid_allowlist_is_visible_error_not_silent_fallback(monkeypatch, ove
         models.normalize_model("gpt-6-sol")
 
 
-@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "gpt-6", "gpt-5.6", "gpt-5.6-sol", "gpt-unknown-new-generation"])
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "gpt-6", "gpt-5.6", "gpt-5.6-sol", "gpt-unknown-new-generation"])
 def test_formal_ids_remain_exact_even_when_cache_disappears(model):
     path = cache([row(model)])
     assert models.normalize_model(model) == model
@@ -341,8 +343,8 @@ def test_formal_ids_remain_exact_even_when_cache_disappears(model):
 
 
 def test_explicit_aliases_are_separate_from_omitted_default():
-    assert models.normalize_model() == "gpt-6-sol"
-    assert models.normalize_model("sol") == "gpt-6-sol"
+    assert models.normalize_model() == "gpt-6.1-sol"
+    assert models.normalize_model("sol") == "gpt-6.1-sol"
     assert models.normalize_model(" LUNA ") == "gpt-6-luna"
     assert models.normalize_model("astra") == "gpt-6-astra"
     assert models.normalize_model("terra") == "gpt-5.6-terra"
@@ -388,7 +390,7 @@ def test_bundled_overflow_folds_only_the_fixed_table():
     catalog = models.resolve_catalog()
     assert catalog.overflow == ("gpt-5.6-sol", "gpt-5.6-luna")
     front = [model for model in catalog.models if model not in catalog.overflow]
-    assert front == ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-6-luna"]
+    assert front == ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-6-luna"]
     assert models.provider_catalog()["overflow_models"] == ["gpt-5.6-sol", "gpt-5.6-luna"]
 
 
@@ -439,3 +441,105 @@ def test_explicit_allowlist_keeps_a_model_the_cache_hides(monkeypatch):
     cache([row(), row("gpt-5.6-sol", visibility="hide")])
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-5.6-sol")
     assert models.resolve_catalog().models == ("gpt-6-sol", "gpt-5.6-sol")
+
+
+@pytest.mark.parametrize("version", [(0, 158, 0), (0, 159, 0), (0, 159, 1), (1, 0, 0), None])
+def test_cli_version_wins_over_shared_catalog_rewrites(monkeypatch, version):
+    monkeypatch.setattr(models, "cli_version", lambda: version)
+    for client, rows in [("0.159.1", [row()]), ("0.158.0", [row("gpt-6-sol")]),
+                         ("0.159.0", [row()]), ("0.157.0", [row("gpt-6-sol")])]:
+        cache(rows, client_version=client)
+        preferred = version >= models.CLI_MIN_VERSION if version else client.startswith("0.159")
+        expected = models.DEFAULT_MODEL if preferred else models.FALLBACK_MODEL
+        catalog = models.resolve_catalog()
+        assert catalog.default_model == expected
+        assert models.normalize_model() == models.normalize_model(" SoL ") == expected
+        assert models.provider_catalog()["default_model"] == expected
+        assert (models.DEFAULT_MODEL in catalog.models) is preferred
+        assert models.FALLBACK_MODEL in catalog.models
+        assert expected not in catalog.overflow
+        assert bool(catalog.note) is not preferred
+        if catalog.note:
+            assert "0.159.0 or later" in catalog.note
+        # Formal IDs remain exact, including a deliberate request on an old CLI.
+        assert models.normalize_model(models.DEFAULT_MODEL) == models.DEFAULT_MODEL
+
+
+@pytest.mark.parametrize("failure", ["missing", "expired", "malformed", "hidden"])
+def test_unknown_version_and_unusable_catalog_use_legacy_default(monkeypatch, failure):
+    monkeypatch.setattr(models, "cli_version", lambda: None)
+    if failure == "expired":
+        cache(age=models.CACHE_TTL_SECONDS + 1)
+    elif failure == "malformed":
+        cache().write_text("{")
+    elif failure == "hidden":
+        cache([row(visibility="hide")])
+    catalog = models.resolve_catalog()
+    assert catalog.default_model == models.FALLBACK_MODEL
+    assert models.DEFAULT_MODEL not in catalog.models
+    assert models.normalize_model("sol") == models.FALLBACK_MODEL
+
+
+def test_fallback_still_respects_explicit_allowlist(monkeypatch):
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 158, 0))
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", models.DEFAULT_MODEL)
+    cache()
+    assert models.resolve_catalog().models == (models.DEFAULT_MODEL,)
+    for value in ("", "sol"):
+        with pytest.raises(ValueError, match=models.FALLBACK_MODEL):
+            models.normalize_model(value)
+
+
+# Preserve the real probe before the autouse fixture replaces it.
+_real_cli_version = models.cli_version
+
+
+def _version_binary(tmp_path, body):
+    binary = tmp_path / "codex-cli"
+    binary.write_text(f"#!{sys.executable}\n" + body)
+    binary.chmod(0o755)
+    return binary
+
+
+def test_version_probe_is_cached_and_invalidated_on_binary_replacement(monkeypatch, tmp_path):
+    binary = _version_binary(tmp_path, "print('codex-cli 0.159.1')\n")
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    models._VERSION_CACHE.clear()
+    assert _real_cli_version() == (0, 159, 1)
+    with monkeypatch.context() as m:
+        m.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("cached version must not execute CLI"))
+        assert _real_cli_version() == (0, 159, 1)
+    _version_binary(tmp_path, "print('codex-cli 0.158.0')\n")
+    assert _real_cli_version() == (0, 158, 0)
+    monkeypatch.setattr(models.time, "monotonic", lambda: 1e20)
+    real_popen = models.subprocess.Popen
+    calls = []
+    def tracked_popen(*args, **kwargs):
+        calls.append(args[0])
+        return real_popen(*args, **kwargs)
+    monkeypatch.setattr(models.subprocess, "Popen", tracked_popen)
+    assert _real_cli_version() == (0, 158, 0)
+    assert calls == [[str(binary), "--version"]]  # expired memo probes again
+
+
+@pytest.mark.parametrize("body", ["print('codex-cli dev-build')", "raise SystemExit(2)",
+                                  "import time; time.sleep(30)"])
+def test_failed_version_probe_is_bounded_cached_and_uses_catalog(monkeypatch, tmp_path, body):
+    binary = _version_binary(tmp_path, body + "\n")
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    monkeypatch.setattr(models, "CLI_VERSION_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(models, "cli_version", _real_cli_version)
+    models._VERSION_CACHE.clear()
+    assert _real_cli_version() is None
+    with monkeypatch.context() as m:
+        m.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("failed probes must be cached"))
+        cache()
+        assert models.resolve_catalog().default_model == models.DEFAULT_MODEL
+        cache([row("gpt-6-sol")])
+        assert models.resolve_catalog().default_model == models.FALLBACK_MODEL
+
+
+def test_discovery_does_not_probe_cli(monkeypatch):
+    cache()
+    monkeypatch.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("catalog reading must not execute CLI"))
+    assert models.DEFAULT_MODEL in models.discover_models()

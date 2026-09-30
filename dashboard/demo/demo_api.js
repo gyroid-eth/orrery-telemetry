@@ -567,7 +567,7 @@
     var claudeModels = [
       'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001',
     ];
-    var codexModels = ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'];
+    var codexModels = ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'];
     return {
       names: DEMO_SPAWN_SCIENTISTS.map(function (name) {
         return { name: name, portrait: true, status: 'available' };
@@ -584,7 +584,7 @@
           models: claudeModels.slice(), default_model: 'claude-opus-5-5',
           efforts: null },
         { id: 'codex', label: 'Codex', program: 'codex-cli',
-          models: codexModels, default_model: 'gpt-6-sol',
+          models: codexModels, default_model: 'gpt-6.1-sol',
           efforts: ['low', 'medium', 'high', 'xhigh'],
           effort_default: 'xhigh' },
       ],

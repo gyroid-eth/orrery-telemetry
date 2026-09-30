@@ -29,16 +29,17 @@ def run_ui(provider, scenario):
 def provider(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.setattr(codex_models, "cli_version", lambda: (0, 159, 1))
     return codex_models.provider_catalog()
 
 
 def test_model_switch_removes_unsupported_effort_and_preserves_id(provider):
     result = run_ui(provider, """
-selectSpawnModel('gpt-6-sol');selectSpawnEffort('ultra');out.sol=state();
+selectSpawnModel('gpt-6.1-sol');selectSpawnEffort('ultra');out.sol=state();
 selectSpawnModel('gpt-6-luna');out.luna=state();
 out.lunaEfforts=SPM('spm-efforts').children.map(x=>x.dataset.effort);
 """)
-    assert result["sol"]["payload"]["model"] == "gpt-6-sol"
+    assert result["sol"]["payload"]["model"] == "gpt-6.1-sol"
     assert result["sol"]["payload"]["effort"] == "ultra"
     assert result["luna"]["payload"]["model"] == "gpt-6-luna"
     assert result["luna"]["payload"]["effort"] == "xhigh"
@@ -82,7 +83,7 @@ def test_unknown_metadata_omits_effort_from_payload(provider):
 
 
 def test_supported_effort_survives_model_change(provider):
-    result = run_ui(provider, "selectSpawnModel('gpt-6-sol');selectSpawnEffort('high');selectSpawnModel('gpt-6-luna');out.state=state();out.note=SPM('spm-engine-note').textContent;")
+    result = run_ui(provider, "selectSpawnModel('gpt-6.1-sol');selectSpawnEffort('high');selectSpawnModel('gpt-6-luna');out.state=state();out.note=SPM('spm-engine-note').textContent;")
     assert result["state"]["payload"]["effort"] == "high"
     assert "gpt-6-luna" in result["note"] and "high" in result["note"]
 
@@ -91,7 +92,7 @@ def test_auto_selected_effort_does_not_replace_the_next_model_default(provider):
     provider["models"].append("gpt-lite")
     provider["model_efforts"]["gpt-lite"] = ["low", "medium"]
     provider["model_effort_defaults"]["gpt-lite"] = "low"
-    result = run_ui(provider, "selectSpawnModel('gpt-lite');out.lite=state();selectSpawnModel('gpt-6-sol');out.sol=state();")
+    result = run_ui(provider, "selectSpawnModel('gpt-lite');out.lite=state();selectSpawnModel('gpt-6.1-sol');out.sol=state();")
     assert result["lite"]["payload"]["effort"] == "low"
     assert result["sol"]["payload"]["effort"] == "xhigh"
 
@@ -104,7 +105,7 @@ selectSpawnModel('gpt-5.6-sol');out.folded=state();
     front, _, fold = result["html"].partition('<details class="spm-models-overflow">')
     assert "more models · 2" in fold
     assert 'data-model="gpt-5.6-sol"' in fold and 'data-model="gpt-5.6-luna"' in fold
-    for model in ("gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-terra"):
+    for model in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-terra"):
         assert f'data-model="{model}"' in front
     assert result["initial"]["payload"]["model"] == codex_models.DEFAULT_MODEL
     assert result["folded"]["payload"]["model"] == "gpt-5.6-sol"

@@ -1,7 +1,8 @@
 """Non-secret Codex CLI catalog discovery and the shared child model contract.
 
-Discovery is not account authorization. No CLI, network, credentials or model
-instruction text is consulted; only bounded local catalog metadata is used.
+Discovery is not account authorization. Local catalog metadata supplies choices
+and effort policy. A bounded, cached --version probe of AGENTSTACK_CODEX_BIN
+selects the default; no network, credentials or model instruction text is read.
 """
 from __future__ import annotations
 
@@ -11,20 +12,29 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
+import subprocess
 import stat
 import sys
+import threading
 import time
 
-DEFAULT_MODEL = "gpt-6-sol"  # Deliberately independent of catalog ordering.
+DEFAULT_MODEL = "gpt-6.1-sol"  # Preferred default, independent of catalog ordering.
+FALLBACK_MODEL = "gpt-6-sol"
+DEFAULT_MODEL_NOTE = (
+    "GPT-6.1 Sol is unavailable in the selected CLI or fresh local catalog; omitted model and sol "
+    "use gpt-6-sol. Update Codex CLI to 0.159.0 or later "
+    "(npm install -g @openai/codex@latest), then refresh its model catalog."
+)
 DEFAULT_MODELS = (
-    DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
+    DEFAULT_MODEL, FALLBACK_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
     "gpt-5.6-luna", "gpt-6-luna",
 )
 # Listed models shown under NEW AGENT's "more models" fold. A fixed table (a product
 # call), not a version comparison; the default is never folded, and models the
 # catalog hides (`visibility` other than "list") never reach this list at all.
 BUNDLED_OVERFLOW = ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
-ALIASES = {"sol": "gpt-6-sol", "luna": "gpt-6-luna",
+ALIASES = {"sol": DEFAULT_MODEL, "luna": "gpt-6-luna",
            "astra": "gpt-6-astra", "terra": "gpt-5.6-terra"}
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_EFFORT = "xhigh"
@@ -33,6 +43,60 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_MODELS = 256
 CACHE_TTL_SECONDS = 300  # Codex CLI rust-v0.154.0 models-manager default.
 MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is still read.
+
+CLI_MIN_VERSION = (0, 159, 0)
+CLI_VERSION_TIMEOUT_SECONDS = 2
+CLI_VERSION_CACHE_SECONDS = 60
+_VERSION_CACHE: dict[tuple, tuple[float, tuple[int, int, int] | None]] = {}
+_VERSION_LOCK = threading.Lock()
+
+
+def cli_version() -> tuple[int, int, int] | None:
+    """Probe only the configured launcher binary; unknown falls back to cache.
+
+    Cache positive and failed probes per executable identity for 60 seconds.
+    Changes to path, symlink target, or executable stat invalidate it immediately.
+    """
+    binary = os.environ.get("AGENTSTACK_CODEX_BIN", "").strip()
+    if not binary or not os.path.isabs(binary):
+        return None
+    try:
+        info = os.stat(binary)
+        if not stat.S_ISREG(info.st_mode) or not os.access(binary, os.X_OK):
+            return None
+        key = (binary, os.path.realpath(binary), info.st_dev, info.st_ino,
+               info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    except OSError:
+        return None
+    with _VERSION_LOCK:
+        now = time.monotonic()
+        cached = _VERSION_CACHE.get(key)
+        if cached is not None and now - cached[0] < CLI_VERSION_CACHE_SECONDS:
+            return cached[1]
+        version = None
+        process = None
+        try:
+            process = subprocess.Popen([binary, "--version"], stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       start_new_session=os.name == "posix")
+            output, _ = process.communicate(timeout=CLI_VERSION_TIMEOUT_SECONDS)
+            match = re.fullmatch(rb"codex-cli ([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][^\s]+)?\s*", output)
+            if process.returncode == 0 and match:
+                version = tuple(int(part) for part in match.groups())
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            if process is not None:
+                try:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except ProcessLookupError:
+                    pass
+                process.communicate()
+        # Keep the small cache bounded when executables are repeatedly replaced.
+        _VERSION_CACHE.clear()
+        _VERSION_CACHE[key] = (time.monotonic(), version)
+        return version
 
 
 @dataclass(frozen=True)
@@ -44,7 +108,7 @@ class EffortPolicy:
 _STANDARD = ("low", "medium", "high", "xhigh", "max", "ultra")
 BUNDLED_EFFORTS = {
     model: EffortPolicy(_STANDARD, DEFAULT_EFFORT)
-    for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol")
+    for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol", DEFAULT_MODEL)
 }
 BUNDLED_EFFORTS.update({
     model: EffortPolicy(_STANDARD[:-1], DEFAULT_EFFORT)
@@ -60,6 +124,8 @@ class ModelCatalog:
     efforts: dict[str, EffortPolicy]
     error: str = ""
     overflow: tuple[str, ...] = ()
+    default_model: str = FALLBACK_MODEL
+    note: str = ""
 
 
 def is_model_id(value: object) -> bool:
@@ -83,7 +149,8 @@ def normalize_model(raw: str = "") -> str:
     if not isinstance(raw, str):
         raise ValueError("invalid Codex model ID")
     value = raw.strip()
-    model = ALIASES.get(value.lower(), value) if value else DEFAULT_MODEL
+    model = (resolve_catalog().default_model if not value or value.lower() == "sol"
+             else ALIASES.get(value.lower(), value))
     if not is_model_id(model):
         raise ValueError("invalid Codex model ID; use sol / luna / astra / terra / gpt-<id>")
     allowed = _allow_list()
@@ -222,17 +289,24 @@ def resolve_catalog(now: float | None = None) -> ModelCatalog:
     hidden: set[str] = set()
     discovered = discover_models(now, hidden)
     policies = {**BUNDLED_EFFORTS, **discovered}
-    # A fresh catalog that hides a bundled candidate removes it from the menu.
-    # The default stays: it is the launcher's fixed contract. An explicit
-    # allow-list is the operator's own menu and wins over the catalog.
-    bundled = tuple(model for model in DEFAULT_MODELS if model == DEFAULT_MODEL or model not in hidden)
-    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *discovered)))
+    # Old, still-running CLI sessions overwrite the shared catalog periodically.
+    # Trust the binary selected for NEW AGENT over that snapshot's client_version.
+    # If its version cannot be read, use positive fresh catalog evidence instead.
+    version = cli_version()
+    supported = version >= CLI_MIN_VERSION if version is not None else DEFAULT_MODEL in discovered
+    default = DEFAULT_MODEL if supported else FALLBACK_MODEL
+    bundled = tuple(model for model in DEFAULT_MODELS
+                    if (model != DEFAULT_MODEL or default == DEFAULT_MODEL)
+                    and (model == default or model not in hidden))
+    listed = tuple(model for model in discovered if model != DEFAULT_MODEL or supported)
+    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *listed)))
     source = "override" if allowed is not None else ("local_cache" if discovered else "bundled")
     # An explicit allow-list is the operator's own menu and is not folded,
     # matching the Claude provider.
     overflow = () if allowed is not None else tuple(
-        model for model in models if model in BUNDLED_OVERFLOW and model != DEFAULT_MODEL)
-    return ModelCatalog(models, source, policies, overflow=overflow)
+        model for model in models if model in BUNDLED_OVERFLOW and model != default)
+    return ModelCatalog(models, source, policies, overflow=overflow, default_model=default,
+                        note="" if default == DEFAULT_MODEL else DEFAULT_MODEL_NOTE)
 
 
 def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = None) -> str:
@@ -257,7 +331,7 @@ def provider_catalog() -> dict:
     catalog = resolve_catalog()
     return {
         "id": "codex", "label": "Codex", "program": "codex-cli",
-        "models": list(catalog.models), "default_model": DEFAULT_MODEL,
+        "models": list(catalog.models), "default_model": catalog.default_model,
         "model_source": catalog.source, "model_error": catalog.error,
         "overflow_models": list(catalog.overflow),
         "efforts": list(_STANDARD), "effort_default": DEFAULT_EFFORT,
@@ -270,10 +344,14 @@ def main() -> int:
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "normalize":
             print(normalize_model(sys.argv[2]))
+        elif len(sys.argv) == 2 and sys.argv[1] == "note":
+            note = resolve_catalog().note
+            if note:
+                print(f"note: {note}")
         elif len(sys.argv) == 4 and sys.argv[1] == "effort":
             print(resolve_effort(sys.argv[2], sys.argv[3]))
         else:
-            raise ValueError("usage: codex_models.py normalize MODEL | effort MODEL EFFORT")
+            raise ValueError("usage: codex_models.py normalize MODEL | effort MODEL EFFORT | note")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

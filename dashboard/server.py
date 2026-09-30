@@ -5933,7 +5933,7 @@ def do_spawn(payload: dict) -> dict:
     default_model = (
         _CLAUDE_SPAWN_DEFAULT_MODEL
         if provider == "claude"
-        else _CODEX_DEFAULT_MODEL
+        else ""  # Codex resolves its default from the current local catalog.
     )
     model = (payload.get("model") or default_model).strip()
     effort = (payload.get("effort") or "").strip().lower()

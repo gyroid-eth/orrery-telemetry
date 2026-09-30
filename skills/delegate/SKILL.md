@@ -54,7 +54,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | --- | --- |
 | `codex` | `--codex` (a Codex child) |
 | `claude` | a Claude child (the default) |
-| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-6-sol`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-6-astra` |
+| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-6.1-sol` (`gpt-6-sol` on an older CLI; see the default policy below), `gpt-5.6-terra`, `gpt-6-luna`, `gpt-6-astra` |
 | `opus`, `sonnet`, `haiku` | Claude model shorthand: `--model <word>` |
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
 | `--codex-mcp inherit` | Keep the user's configured MCP servers and plugins in a Codex child (the default) |
@@ -65,7 +65,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
 
-Model defaults: Claude children use `claude-opus-5-5`; Codex children use `gpt-6-sol` at effort `xhigh`. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree. For Codex, resolve friendly names before registration with `python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" normalize "<word>"`; pass that exact formal ID to both steps. Do not derive the omitted default from candidate order.
+Model defaults: Claude children use `claude-opus-5-5`; Codex children prefer `gpt-6.1-sol` at effort `xhigh` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`. GPT-6.1 Sol requires Codex CLI 0.159.0 or later; doctor reports fallback and update guidance. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree. For Codex, resolve friendly names before registration with `python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" normalize "<word>"` (use `""` for omission); pass that exact formal ID to both steps. Do not derive the omitted default from candidate order.
 
 MCP defaults are deliberately backward-compatible: omit `--codex-mcp` or use `--codex-mcp inherit` to preserve the user's configured MCP/plugin surface. Use `--codex-mcp orrery-only` for a Codex child whose task needs shell/files plus ORRERY coordination but no inherited browser, application, or account tools. This is an explicit capability reduction: do not select it when the task depends on a plugin skill or any non-ORRERY MCP server.
 
@@ -195,7 +195,7 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
   "<working-directory>"
 ```
 
-For a Codex child, repeat the model (and effort) the user asked for; without `--model` the launcher starts `gpt-6-sol` regardless of what was registered:
+For a Codex child, repeat the model (and effort) the user asked for; without `--model` the launcher resolves the current catalog default (`gpt-6.1-sol` with CLI 0.159.0+, otherwise `gpt-6-sol`; unknown versions use fresh catalog evidence) regardless of what was registered. Resolve omission before registration and pass that formal ID to both steps:
 
 ```bash
 PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \

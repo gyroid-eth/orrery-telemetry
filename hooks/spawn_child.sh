@@ -24,7 +24,7 @@
 #   他のブラウザの操作を技術的に禁止するものではない。
 #   chrome を要求した子は warm pool を使わず cold start する。
 #
-# モデル指定（--model。Codex は gpt-6-sol 既定で旧 model 名も有効）:
+# モデル指定（--model。Codex は CLI 0.159.0+ なら gpt-6.1-sol 既定、古ければ gpt-6-sol）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
@@ -32,7 +32,7 @@
 #   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
-#   --codex --model 省略 → gpt-6-sol（固定既定）。sol / luna → GPT-6、terra → GPT-5.6、astra → GPT-6。
+#   --codex --model 省略 → gpt-6.1-sol（CLI が古ければ gpt-6-sol、版不明なら catalog 判定）。sol も同じ。luna / astra → GPT-6、terra → GPT-5.6。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と
@@ -2152,7 +2152,8 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
     # Both providers share the catalog/normalizers above in every launch path.
     if [[ "$USE_CODEX" == true ]]; then
-        CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+        prime_codex_bin
+        CHILD_MODEL="$(AGENTSTACK_CODEX_BIN="$CODEX_BIN_RESOLVED" normalize_codex_model "$CLAUDE_MODEL")"
         CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
     else
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
@@ -2836,7 +2837,8 @@ fi
 TASK_SHORT="${TASK:0:80}"
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_PROGRAM="codex"
-    CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+    prime_codex_bin
+    CHILD_MODEL="$(AGENTSTACK_CODEX_BIN="$CODEX_BIN_RESOLVED" normalize_codex_model "$CLAUDE_MODEL")"
     CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
 else
     CHILD_PROGRAM="claude-code"

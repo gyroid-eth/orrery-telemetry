@@ -521,10 +521,8 @@ codex_launcher_problem() {
   fi
 }
 
-# Codex CLI 0.153.4 had GPT-6 models rejected for a ChatGPT account ("model is
-# not supported when using Codex with a ChatGPT account"); 0.158.0 answered
-# (WSL, 2026-09-28). Only a parseable version below the floor is reported.
-CODEX_CLI_MIN_MINOR=157
+# GPT-6.1 Sol requires Codex CLI 0.159.0 or later.
+CODEX_CLI_MIN_MINOR=159
 report_old_codex_cli() {
   local text="$1" version major minor
   version="$(printf '%s' "$text" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
@@ -533,7 +531,7 @@ report_old_codex_cli() {
   minor="${version#*.}"
   minor="${minor%%.*}"
   if [[ "$major" -eq 0 && "$minor" -lt "$CODEX_CLI_MIN_MINOR" ]]; then
-    echo "note: Codex CLI $version is older than 0.$CODEX_CLI_MIN_MINOR; GPT-6 models may be rejected for a ChatGPT account. Update: npm install -g @openai/codex@latest"
+    echo "note: Codex CLI $version is older than 0.$CODEX_CLI_MIN_MINOR.0; GPT-6.1 Sol requires Codex CLI 0.159.0 or later. Update: npm install -g @openai/codex@latest"
   fi
 }
 
@@ -632,9 +630,17 @@ PYPLUGIN
   esac
 }
 
+report_codex_model_default() {
+  local helper="$1" codex_home="$2"
+  if [[ -f "$helper" ]]; then
+    AGENTSTACK_CODEX_BIN="${CODEX_LAUNCHER_BIN:-}" CODEX_HOME="$codex_home" "$PYTHON_BIN" "$helper" note
+  fi
+}
+
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_LAUNCHER_BIN="$(resolve_launcher_codex_bin)"
 report_codex_history_binding_prereqs "$CODEX_LAUNCHER_BIN" "$CODEX_HOME"
+report_codex_model_default "$INSTALL_DIR/dashboard/codex_models.py" "$CODEX_HOME"
 check_managed_block "Codex AGENTS.md" agentstack-codex-setup CODEX_HOME="$CODEX_HOME"
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
