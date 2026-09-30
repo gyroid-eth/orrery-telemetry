@@ -5229,7 +5229,7 @@ def _claude_default_model(models: list[str]) -> str:
 
 def _codex_models() -> list[str]:
     """Candidates only; explicit authorization is checked at launch time."""
-    return list(codex_models.resolve_catalog().models)
+    return list(codex_models.candidate_models())
 
 
 def _agent_name_comparison_key(name: str) -> str:
@@ -5933,7 +5933,7 @@ def do_spawn(payload: dict) -> dict:
     default_model = (
         _CLAUDE_SPAWN_DEFAULT_MODEL
         if provider == "claude"
-        else _CODEX_DEFAULT_MODEL
+        else ""  # Codex resolves its default from the current local catalog.
     )
     model = (payload.get("model") or default_model).strip()
     effort = (payload.get("effort") or "").strip().lower()
@@ -5977,13 +5977,15 @@ def do_spawn(payload: dict) -> dict:
         )
     elif provider == "codex":
         try:
-            model = codex_models.normalize_model(model)
-            effort = codex_models.resolve_effort(model, effort)
+            launcher = codex_models.resolve_launcher()
+            model = codex_models.normalize_model(model, launcher=launcher)
+            effort = codex_models.resolve_effort(model, effort, codex_models.resolve_catalog(launcher=launcher))
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         spec = SpawnLaunchSpec(
             provider="codex", program="codex-cli", model=model,
             script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",),
+            launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
     else:

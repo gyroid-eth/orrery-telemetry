@@ -54,7 +54,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | --- | --- |
 | `codex` | `--codex` (a Codex child) |
 | `claude` | a Claude child (the default) |
-| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-6-sol`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-6-astra` |
+| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. The launcher expands them to `gpt-6.1-sol` (`gpt-6-sol` on an older CLI; see the default policy below), `gpt-5.6-terra`, `gpt-6-luna`, `gpt-6-astra` |
 | `opus`, `sonnet`, `haiku` | Claude model shorthand: `--model <word>` |
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
 | `--codex-mcp inherit` | Keep the user's configured MCP servers and plugins in a Codex child (the default) |
@@ -65,7 +65,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
 
-Model defaults: Claude children use `claude-opus-5-5`; Codex children use `gpt-6-sol` at effort `xhigh`. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree. For Codex, resolve friendly names before registration with `python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" normalize "<word>"`; pass that exact formal ID to both steps. Do not derive the omitted default from candidate order.
+Model defaults: Claude children use `claude-opus-5-5`; Codex children prefer `gpt-6.1-sol` at effort `xhigh` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`. GPT-6.1 Sol requires Codex CLI 0.159.0 or later; doctor reports fallback and update guidance. Pass the same `--model` (and `--effort`) both to the registration helper and to `spawn_child.sh`, so the roster and the running process agree. For Codex, resolve the CLI and model together before registration with the public `resolve` command below (use `""` for omission). It uses the same environment → saved `env.sh` → usable PATH selection and child login shell as the spawner. Pass the returned formal ID to both steps and pin the returned `AGENTSTACK_CODEX_BIN` for the spawn. Do not derive the omitted default from candidate order.
 
 MCP defaults are deliberately backward-compatible: omit `--codex-mcp` or use `--codex-mcp inherit` to preserve the user's configured MCP/plugin surface. Use `--codex-mcp orrery-only` for a Codex child whose task needs shell/files plus ORRERY coordination but no inherited browser, application, or account tools. This is an explicit capability reduction: do not select it when the task depends on a plugin skill or any non-ORRERY MCP server.
 
@@ -147,6 +147,16 @@ the ORRERY Mail database, start an ad hoc watcher/poll loop, inject the task int
 tmux, use a built-in child tool, or invoke the launcher's direct mode as a
 substitute.
 
+For a Codex child, resolve the requested model before step 3, in the same shell environment that will run the launcher:
+
+```bash
+CODEX_LAUNCH_POLICY="$(python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve "<requested model or empty string>")" || exit 1
+CODEX_MODEL="$(printf '%s' "$CODEX_LAUNCH_POLICY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])')" || exit 1
+CODEX_BIN="$(printf '%s' "$CODEX_LAUNCH_POLICY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["codex_bin"])')" || exit 1
+```
+
+The JSON also reports `cli_version` and `default_source` for diagnosis. An empty `codex_bin` means resolution did not find a usable CLI within its short budget; version-unknown selection then uses fresh catalog evidence. The launcher retains its own usability checks and reports a missing CLI before starting a child.
+
 1. Verify `AGENTSTACK_PROJECT_KEY` is set to the shared project key, not a random cwd.
 2. Let the helper name the child. Omit `--name` and it draws a free `Adjective-Scientist` name from the same picker top-level registration uses, so the name always has a dashboard portrait. Only pass `--name` when the caller needs a specific existing identity; an off-list name is accepted with a warning (no portrait), or rejected outright under `AGENTSTACK_STRICT_AGENT_NAMES=1`.
 3. Pre-register the child with a child-owned token and write that token to a temporary 0600 file. Prefer the helper so the parent LLM never sees the token:
@@ -165,7 +175,7 @@ substitute.
    ```
 
    The helper prints the registered name; use `$CHILD_NAME` from here on rather than a name you chose yourself.
-   For a Codex child, pass `--program "codex" --model "<formal gpt-* ID>"`, using the full model id the user's shorthand expands to (see "How to read the arguments"). Do not pass `--name` just because the user typed a word you do not recognize.
+   For a Codex child, pass `--program "codex" --model "$CODEX_MODEL"`, using the resolved formal ID above. Do not pass `--name` just because the user typed a word you do not recognize.
    Do not paste the token into the inbox message, prompt text, shell history, or a command-line argument.
 4. Contact policy. The registration helper sets the child's `contact_policy` to `open` by default, but that is best effort and an environment override can change it, and `whois` does not show policies. So you usually **cannot confirm** either side's policy before spawning. That is not a reason to stop:
    - **You know a side is restrictive** (the user or operator said so, or an earlier message to or from this child was rejected by contact policy): complete a contact handshake or approval before spawning, with the contact tools you have or through the operator.
@@ -195,11 +205,11 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
   "<working-directory>"
 ```
 
-For a Codex child, repeat the model (and effort) the user asked for; without `--model` the launcher starts `gpt-6-sol` regardless of what was registered:
+For a Codex child, repeat the model (and effort) the user asked for; without `--model` the launcher resolves the current catalog default (`gpt-6.1-sol` with CLI 0.159.0+, otherwise `gpt-6-sol`; unknown versions use fresh catalog evidence) regardless of what was registered. Resolve omission before registration with `resolve ""`, pass `$CODEX_MODEL` to both steps, and pass `$CODEX_BIN` to this launch:
 
 ```bash
-PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
-  --pre-registered "<child-name>" --codex --model terra --effort medium \
+AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
+  --pre-registered "<child-name>" --codex --model "$CODEX_MODEL" --effort medium \
   --child-token-file "$CHILD_TOKEN_FILE" \
   --embed-task --task-file "$TASK_FILE" \
   "<working-directory>"

@@ -1880,6 +1880,9 @@ def test_deck_new_agent_handoff_reaches_recorder_and_reader(
     monkeypatch.setattr(server, "_spawn_name_status", lambda _name: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server, "_runtime_agent_token", lambda _name: "parent-owner-token")
+    # This handoff/recorder test isolates launch policy, which has real-process
+    # integration coverage in test_spawn_child_codex_bin.py.
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy())
     with monkeypatch.context() as process_patch:
         process_patch.setattr(
             server.subprocess, "Popen", lambda args, **_kwargs: launched.append(args)

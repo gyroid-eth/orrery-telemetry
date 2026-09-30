@@ -24,7 +24,7 @@
 #   他のブラウザの操作を技術的に禁止するものではない。
 #   chrome を要求した子は warm pool を使わず cold start する。
 #
-# モデル指定（--model。Codex は gpt-6-sol 既定で旧 model 名も有効）:
+# モデル指定（--model。Codex は CLI 0.159.0+ なら gpt-6.1-sol 既定、古ければ gpt-6-sol）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
@@ -32,7 +32,7 @@
 #   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
 #   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
 #   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
-#   --codex --model 省略 → gpt-6-sol（固定既定）。sol / luna → GPT-6、terra → GPT-5.6、astra → GPT-6。
+#   --codex --model 省略 → gpt-6.1-sol（CLI が古ければ gpt-6-sol、版不明なら catalog 判定）。sol も同じ。luna / astra → GPT-6、terra → GPT-5.6。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と
@@ -843,7 +843,13 @@ cleanup_worktree() {
 # when present (macOS default, and where every operator so far has run this),
 # otherwise bash; AGENTSTACK_CHILD_SHELL overrides both. The launch snippets
 # above are written in the syntax subset both shells share.
+# shellcheck disable=SC1090
+[[ -f "$HOOKS_DIR/codex-bin.sh" ]] && . "$HOOKS_DIR/codex-bin.sh"
 resolve_child_shell() {
+    if declare -F codex_launch_shell >/dev/null; then
+        codex_launch_shell "$@"
+        return
+    fi
     local shell="${AGENTSTACK_CHILD_SHELL:-}"
     if [[ -n "$shell" && -x "$shell" ]]; then
         printf '%s\n' "$shell"
@@ -870,6 +876,10 @@ CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
 # has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
 # the reserved-identity marker, must behave as it will for the child.
 run_like_codex_child() {
+    if declare -F codex_launch_runner >/dev/null; then
+        codex_launch_runner "$@"
+        return
+    fi
     env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
         "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
 }
@@ -898,6 +908,10 @@ if ! declare -F codex_bin_problem >/dev/null; then
 fi
 
 codex_search_path() {
+    if declare -F codex_launch_search_path >/dev/null; then
+        codex_launch_search_path "$@"
+        return
+    fi
     local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
     local candidate
@@ -920,6 +934,10 @@ codex_search_path() {
 # path is probed at most once, and all probes share one time budget, so an
 # unresponsive saved codex cannot eat the dashboard's 120 seconds.
 find_codex_bin() {
+    if declare -F codex_find_bin >/dev/null; then
+        codex_find_bin "$@"
+        return
+    fi
     if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
         printf '%s\n' "$CODEX_BIN_RESOLVED"
         return 0
@@ -2152,7 +2170,8 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     CHILD_NAME="$PRE_REGISTERED"
     # Both providers share the catalog/normalizers above in every launch path.
     if [[ "$USE_CODEX" == true ]]; then
-        CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+        prime_codex_bin
+        CHILD_MODEL="$(AGENTSTACK_CODEX_BIN="$CODEX_BIN_RESOLVED" normalize_codex_model "$CLAUDE_MODEL")"
         CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
     else
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
@@ -2836,7 +2855,8 @@ fi
 TASK_SHORT="${TASK:0:80}"
 if [[ "$USE_CODEX" == true ]]; then
     CHILD_PROGRAM="codex"
-    CHILD_MODEL="$(normalize_codex_model "$CLAUDE_MODEL")"
+    prime_codex_bin
+    CHILD_MODEL="$(AGENTSTACK_CODEX_BIN="$CODEX_BIN_RESOLVED" normalize_codex_model "$CLAUDE_MODEL")"
     CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
 else
     CHILD_PROGRAM="claude-code"

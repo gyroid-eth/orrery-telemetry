@@ -191,7 +191,7 @@ worktree root を変える場合は、たとえば `AGENTSTACK_WORKTREE_ROOT=/sr
 
 自動表示を止めるには、`AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` として installer に渡してください。設定は `env.sh`、Dashboard service、install-state に保存され、再インストールでも保持されます。未設定の旧 install は `1` となり、これまでと挙動は変わりません。明示した `0` / `1` は保存値より優先されます。`AGENTSTACK_FOCUS_CHILD=1` は自動表示が有効なときだけ効きます。直接 shell から起動する場合は、その shell に同じ変数を export します。child から孫への新規起動と、Codex session の再開先へも設定を渡します。Gemini の別 launcher に OS terminal 自動表示を追加する設定ではありません。
 
-child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` は `claude-opus-5-5`、`sonnet` は `claude-sonnet-5`、Codex の無指定と明示 `sol` はどちらも `gpt-6-sol` です。旧世代を固定する場合は `gpt-5.6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
+child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` は `claude-opus-5-5`、`sonnet` は `claude-sonnet-5`、Codex の無指定と明示 `sol` はどちらも起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します（[Codex model catalog](#codex-model-catalog) 参照）。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
 
 Codex の reasoning effort は `--effort` から決まり、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。対応情報があれば既定は `xhigh` またはそのモデルの既定、情報がなければCLI既定です。`gpt-5.6-luna` / `gpt-6-luna` は `ultra` を、旧 `gpt-5.5` は `max` / `ultra` をサポートしないため spawner が拒否します。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
 
@@ -311,16 +311,23 @@ AGENTSTACK_CLAUDE_MODELS="claude-sonnet-5,claude-opus-5-5" ./scripts/install.sh
 
 ```bash
 # 新規起動をこの正式 ID のみに制限したい場合だけ指定します。
-AGENTSTACK_CODEX_MODELS="gpt-6-sol,gpt-6-luna" ./scripts/install.sh
+AGENTSTACK_CODEX_MODELS="gpt-6.1-sol,gpt-6-luna" ./scripts/install.sh
 ```
 
 明示設定は cache より優先される許可リストです。空要素・前後空白・重複は除去します。不正な ID を含む場合は Codex タブに設定エラーを表示して起動を止め、別 provider や同梱候補へ黙って切り替えません。設定の永続化は既存の installer 経路を使います。shell の `export` は稼働中 service に届きません。
 
-**無指定時の既定モデルは `gpt-6-sol` に固定**され、cache や許可リストの順序では変わりません。以前の既定を使う場合は `gpt-5.6-sol` のように正式 ID を指定してください。許可リストからこの既定を除いた場合、UI はモデルの明示選択を要求し、API のモデル省略は拒否されます。一方、明示的な短縮名は `sol` → `gpt-6-sol`、`luna` → `gpt-6-luna`、`astra` → `gpt-6-astra`、`terra` → `gpt-5.6-terra` です。世代を固定したいときは正式 ID を指定してください。`gpt-6` / `gpt-5.6` を含む `gpt-*` の正式形式は別名として読み替えません。
+**無指定と `sol` は、起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol` を使い、古い版なら `gpt-6-sol` に戻ります。** GPT-6.1 Sol には Codex CLI 0.159.0 以上が必要です。版が不明なら新鮮な catalog に 6.1 があるかを判定し、無い場合（欠損・期限切れ・hidden・破損・非対応形式・信頼できない symlink を含む）は同じ fallback を使います。doctor が fallback と更新コマンドを note で示します。cache や許可リストの順序では既定は変わりません。以前の既定を使う場合は `gpt-6-sol` のように正式 ID を指定してください。許可リストからこの既定を除いた場合、UI はモデルの明示選択を要求し、API のモデル省略は拒否されます。明示的な短縮名は `sol` → 同じ判定で決まる既定、`luna` → `gpt-6-luna`、`astra` → `gpt-6-astra`、`terra` → `gpt-5.6-terra` です。世代を固定したいときは正式 ID を指定してください。`gpt-6` / `gpt-5.6` を含む `gpt-*` の正式形式は別名として読み替えません。
 
-cache は `fetched_at` の日時と `models[].slug`、`visibility`、`supported_reasoning_levels[].effort`、`default_reasoning_level` の観測済み形式だけを使います。Codex CLI 0.154.0 の実装に合わせ、取得から300秒以内の一覧を利用します。通常ファイル、または launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink だけを対象にし、2 MiB・256モデル・ID長128文字まで読み、hidden モデルは追加しません。欠損・破損・非対応形式・空・期限切れでは同梱の6候補へ戻ります。異なるeffortを持つ同一IDの重複もfallback対象です。
+cache は `fetched_at` の日時と `models[].slug`、`visibility`、`supported_reasoning_levels[].effort`、`default_reasoning_level` の観測済み形式だけを使います。Codex CLI 0.154.0 の実装に合わせ、取得から300秒以内の一覧を利用します。通常ファイル、または launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink だけを対象にし、2 MiB・256モデル・ID長128文字まで読み、hidden モデルは追加しません。欠損・破損・非対応形式・空・期限切れでは同梱候補へ戻ります。CLI の版が 0.159.0 以上なら GPT-6.1 Sol も残し、版不明なら除きます。異なるeffortを持つ同一IDの重複もfallback対象です。
 
-同梱候補は `gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-sol`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。discovery は credential、API key、token、Keychain を探索せず、CLI の起動や通信もしません。cache のアカウント識別子や `client_version` を現在の認証・実行ファイルと照合しないため、候補の表示はそのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
+同梱候補は `gpt-6.1-sol`（CLI 0.159.0 以上、または版不明で新鮮な catalog にある場合）、`gpt-6-sol`、`gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。catalog の読み取りは CLI の起動や通信をせず、credential、API key、token、Keychain を探索しません。既定選択は spawner と共通の resolver で、環境の `AGENTSTACK_CODEX_BIN` → 保存済み `env.sh` → usable PATH candidate の順に起動対象を選びます。版の確認も子と同じ login shell・`~/.local/bin` を追加した PATH・guard 変数で `--version` を実行します。各候補の timeout は実 spawner と同じ10秒、候補全体の予算は15秒、cleanup を含む読み取り helper 全体は18秒で打ち切ります。負荷の高い login shell でも同じ usable 判定になるよう、既存 spawner の予算に揃えています。成功・失敗を60秒間メモリに保持し、環境・保存設定・選択された実行ファイルの参照先や stat が変われば再取得します。API と delegate は選んだ CLI と正式 model ID の組を起動へ渡します。古い稼働中 session が共有 cache を上書きするため、取得できた CLI の版を cache より優先します。起動対象を解決できない、または版が読めない場合は新鮮な catalog による判定へ戻ります。cache のアカウント識別子や `client_version` を現在の認証・実行ファイルと照合しないため、候補の表示はそのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
+
+NEW AGENT と同じ判断を確認するには、dashboard の service と同じ環境変数・PATH を持つ shell で次を実行します（delegate では launcher を実行する shell で実行）。`model`、`codex_bin`、`cli_version`、`default_source`（`cli_version` / `local_catalog`）を JSON で返します。`""` を `sol` や正式 ID に置き換えて確認できます。
+
+```bash
+python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve ""
+```
+
 
 UI はモデルごとの effort 情報を候補表示と無指定時の既定選択に使います。新鮮な cache に制約があればそちらを優先し、情報が無い ID では effort を勝手に補いません。明示した既知の effort 値は cache の期限切れや候補情報だけを理由に拒否せず、そのまま Codex CLI へ渡して最終判定を任せます。
 

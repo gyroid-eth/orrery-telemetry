@@ -441,17 +441,17 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     assert 'env -u OPENAI_API_KEY codex -C "$PWD"' not in text
 
 
-def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
+def _model_call(function: str, *args: str, extra_env=None) -> subprocess.CompletedProcess[str]:
     functions = ["normalize_claude_model", "normalize_codex_model",
                  "validate_codex_effort"]
     script = _model_catalog() + "\n" + "\n".join(
         _extract(name) for name in functions
     )
     command = " ".join([function, *(shlex.quote(arg) for arg in args)])
-    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home")})
+    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home"), "AGENTSTACK_CODEX_BIN": "", **(extra_env or {})})
 
 
-def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
+def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_version():
     expected = {
         ("normalize_claude_model", ""): "claude-opus-5-5",
         ("normalize_claude_model", "opus"): "claude-opus-5-5",
@@ -477,7 +477,7 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
     }
     for (function, raw), normalized in expected.items():
-        result = _model_call(function, raw)
+        result = _model_call(function, raw, extra_env={"AGENTSTACK_CHILD_SHELL": "/usr/bin/false"})
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == normalized
 
@@ -952,6 +952,18 @@ def _main() -> int:
                 print(f"FAIL {name}: {exc}")
     print("\n" + ("ALL PASSED" if not failures else f"{failures} FAILED"))
     return 1 if failures else 0
+
+
+def test_launcher_normalization_uses_configured_cli_version():
+    for version, expected in [("0.158.0", "gpt-6-sol"), ("0.159.0", "gpt-6.1-sol"), ("0.159.1", "gpt-6.1-sol")]:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = pathlib.Path(directory) / "codex"
+            binary.write_text(f'#!/bin/sh\n[ "$1" = --version ] || exit 2\necho "codex-cli {version}"\n')
+            binary.chmod(0o755)
+            for requested in ("", "sol"):
+                result = _model_call("normalize_codex_model", requested, extra_env={"AGENTSTACK_CODEX_BIN": str(binary)})
+                assert result.returncode == 0, result.stderr
+                assert result.stdout.strip() == expected
 
 
 if __name__ == "__main__":

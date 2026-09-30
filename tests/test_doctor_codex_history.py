@@ -279,8 +279,10 @@ def test_codex_that_ignores_term_is_still_bounded(tmp_path):
 
 @pytest.mark.parametrize(("output", "noted"), [
     ("codex-cli 0.153.4", True),
-    ("codex-cli 0.157.0", False),
-    ("codex-cli 0.158.0", False),
+    ("codex-cli 0.157.0", True),
+    ("codex-cli 0.158.0", True),
+    ("codex-cli 0.159.0", False),
+    ("codex-cli 0.159.1", False),
     ("codex-cli 1.0.0", False),
     ("codex-cli dev-build", False),
     ("", False),
@@ -291,6 +293,8 @@ def test_old_codex_cli_gets_an_update_note(tmp_path, output, noted):
     assert result.returncode == 0, result.stderr
     assert f"ok: Codex launcher binary {codex}" in result.stdout
     assert ("npm install -g @openai/codex@latest" in result.stdout) is noted
+    if noted:
+        assert "0.159.0 or later" in result.stdout
 
 
 def test_doctor_does_not_leave_a_stubborn_native_child_behind(tmp_path):
@@ -311,3 +315,17 @@ def test_doctor_does_not_leave_a_stubborn_native_child_behind(tmp_path):
                 os.kill(int(pidfile.read_text()), 9)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+@pytest.mark.parametrize("version, noted", [("0.158.0", True), ("0.159.1", False)])
+def test_doctor_model_default_reports_fallback_from_selected_cli(tmp_path, version, noted):
+    source = DOCTOR.read_text()
+    function = source[source.index("report_codex_model_default() {"):source.index('\nCODEX_HOME="')]
+    binary = _script(tmp_path / "bin" / "codex", f"echo 'codex-cli {version}'\n")
+    script = f"set -euo pipefail\nPYTHON_BIN={shlex.quote(sys.executable)}\nCODEX_LAUNCHER_BIN={shlex.quote(str(binary))}\n" + function
+    script += '\nreport_codex_model_default "$1" "$2"\n'
+    result = subprocess.run(["/bin/bash", "-c", script, "doctor-models", str(ROOT / "dashboard/codex_models.py"), str(tmp_path / "codex-home")], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert ("use gpt-6-sol" in result.stdout) is noted
+    if noted:
+        assert "0.159.0 or later" in result.stdout

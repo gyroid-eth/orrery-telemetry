@@ -272,7 +272,7 @@ Scientist-rail `available` means that at least one pairing with the 134 adjectiv
 - Claude / Codex provider tabs
 - model cards and usage guidance per provider
 - Claude: Sonnet / Opus / Haiku
-- Codex defaults to `gpt-6-sol`; prior generations remain available through formal IDs such as `gpt-5.6-sol`
+- Codex defaults to `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`; prior generations remain available through formal IDs such as `gpt-6-sol`
 - Codex effort choices follow `model_efforts` / `model_effort_defaults`; Codex CLI makes the final decision for an explicit effort
 
 The server uses the provider / model / effort allowlist for both catalog and validation.

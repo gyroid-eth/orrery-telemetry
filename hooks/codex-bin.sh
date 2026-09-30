@@ -41,7 +41,7 @@ codex_version_answers() {
   end=$((SECONDS + secs))
   # CODEX_PROBE_RUNNER, when set, runs the candidate the way the launcher will
   # (spawn_child.sh: the child's login shell and PATH setup).
-  ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >/dev/null 2>&1 &
+  ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>/dev/null &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( SECONDS >= end )); then
@@ -175,3 +175,83 @@ find_usable_codex_bin_in() {
   done
   return 0
 }
+
+# Shared child execution context and binary selection. The spawner and the
+# read-only model-policy helper below call these same functions.
+
+codex_launch_shell() {
+    local shell="${AGENTSTACK_CHILD_SHELL:-}"
+    if [[ -n "$shell" && -x "$shell" ]]; then
+        printf '%s\n' "$shell"
+        return 0
+    fi
+    shell="$(command -v zsh 2>/dev/null || true)"
+    [[ -z "$shell" ]] && shell="$(command -v bash 2>/dev/null || true)"
+    if [[ -z "$shell" ]]; then
+        echo "Error: neither zsh nor bash found for the child session; set AGENTSTACK_CHILD_SHELL" >&2
+        return 1
+    fi
+    printf '%s\n' "$shell"
+}
+
+codex_launch_runner() {
+    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
+        "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
+}
+
+codex_launch_search_path() {
+    local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    local candidate
+    for candidate in "$nvm_dir"/versions/node/*/bin; do
+        [[ -d "$candidate" ]] && extra="$extra:$candidate"
+    done
+    printf '%s\n' "$PATH:$extra"
+}
+
+codex_find_bin() {
+    if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
+        printf '%s\n' "$CODEX_BIN_RESOLVED"
+        return 0
+    fi
+    local codex_bin source problem
+    declare -F codex_probe_budget_start >/dev/null && codex_probe_budget_start
+    for source in environment env.sh; do
+        if [[ "$source" == environment ]]; then
+            codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+        elif declare -F agentstack_installed_env_value >/dev/null; then
+            codex_bin="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
+        else
+            codex_bin=""
+        fi
+        [[ -n "$codex_bin" ]] || continue
+        [[ "${CODEX_JUDGED:-:}" != *":$codex_bin:"* ]] || continue
+        CODEX_JUDGED="${CODEX_JUDGED:-:}$codex_bin:"
+        problem="$(codex_bin_problem "$codex_bin")"
+        if [[ -z "$problem" ]]; then
+            printf '%s\n' "$codex_bin"
+            return 0
+        fi
+        echo "note: skipping AGENTSTACK_CODEX_BIN from $source ($codex_bin): $problem" >&2
+    done
+    find_usable_codex_bin_in "$(codex_launch_search_path)"
+}
+
+
+# Read-only entrypoint: no registration, mailbox, tmux or application launch.
+# NUL framing keeps paths and version output separate without shell evaluation.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    [[ "${1:-}" == policy ]] || { echo "usage: codex-bin.sh policy" >&2; exit 2; }
+    set -euo pipefail
+    context="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+    [[ -f "$context" ]] && . "$context"
+    CHILD_SHELL="$(codex_launch_shell)"
+    CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+    CODEX_PROBE_RUNNER=codex_launch_runner
+    # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
+    # must not be discarded here and then accepted after preregistration.
+    CODEX_VERSION_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-policy.XXXXXX")"
+    trap 'rm -f "$CODEX_VERSION_OUTPUT"' EXIT
+    binary="$(codex_find_bin)"
+    printf '%s\0%s\0%s' "$binary" "$(cat "$CODEX_VERSION_OUTPUT")" "$CHILD_SHELL"
+fi
