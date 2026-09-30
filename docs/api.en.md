@@ -66,6 +66,9 @@ curl -s http://127.0.0.1:8770/api/version
 
 See [Installation](install.en.md#version) for version resolution order.
 
+- `version`: when the release was made (a date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
+- `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and the CHANGELOG says so; it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs)
+
 ## GET `/api/spawn-names`
 
 The Claude provider exposes `model_source` (`override`, `local_cache`, or `bundled`) and `model_error` for explicit-setting diagnostics. Invalid overrides return an empty Claude `models` list without disabling other providers. Top-level `models` / `default_model` mirror the same Claude candidates. See [Claude model catalog](configuration.en.md#claude-model-catalog) for discovery and authorization boundaries.

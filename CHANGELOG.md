@@ -2,7 +2,7 @@
 
 版は日付で付けます（`YYYY.MM.DD`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
 
-インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
+インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
 
 **この記録は 2026.09.16 から始めます。** それ以前は `VERSION` が `0.9.0` のまま更新されておらず、版から中身を知ることができませんでした。過去 6 週間分を遡って記載することはせず、ここを新しい基点とします。以前の版を使っていた場合も、上書き更新の手順は変わりません。
 

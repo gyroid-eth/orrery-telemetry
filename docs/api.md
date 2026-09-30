@@ -66,6 +66,9 @@ curl -s http://127.0.0.1:8770/api/version
 
 version の解決順は [インストール](install.md#version)を参照してください。
 
+- `version`: いつの配布物か（日付。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
+- `api`: この API を使う側（[ORRERY cockpit](https://github.com/gyroid-eth/orrery) など）との**互換の世代**です。利用者が頼る endpoint や field を**足す・意味を変える**ときだけ 1 つ上げ、CHANGELOG に書きます。release のたびには上げません。利用者は、必要な機能があるかを `version` の日付ではなく `api` で判定してください（cockpit は、`api` が必要な世代に足りないと起動時に警告します）
+
 ## GET `/api/spawn-names`
 
 Claude provider の `model_source` は `override` / `local_cache` / `bundled`、`model_error` は明示設定の診断です。不正な明示指定ではClaudeの `models` は空になり、他providerは残ります。top-levelの `models` / `default_model` は同じClaude候補を返します。探索規則と権限の境界は [Claude model catalog](configuration.md#claude-model-catalog) を参照してください。
