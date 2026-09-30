@@ -115,7 +115,14 @@ def _probe_launcher() -> LauncherPolicy:
     output = _capture(["/bin/bash", str(helper), "policy"], CLI_POLICY_TIMEOUT_SECONDS)
     if output is None:
         return LauncherPolicy()
-    fields = output.split(b"\0", 2)
+    if output.startswith(b"policy-v2\0"):
+        # The helper streams candidate outputs over a pipe to avoid even
+        # transient filesystem writes. Only the selected (last) probe counts.
+        fields = output.rsplit(b"\0", 2)
+        if len(fields) == 3:
+            fields = [fields[1], fields[0].rsplit(b"\0", 1)[-1], fields[2]]
+    else:
+        fields = output.split(b"\0", 2)  # Compatibility with installed older helpers.
     if len(fields) != 3:
         return LauncherPolicy()
     try:

@@ -19,6 +19,7 @@ CODEX_VERSION_TIMEOUT_SECONDS=10
 CODEX_PROBE_BUDGET_SECONDS=15
 CODEX_PROBE_DEADLINE=""
 CODEX_JUDGED=":"
+CODEX_POLICY_FD=""
 
 codex_probe_budget_start() {
   CODEX_PROBE_DEADLINE=$((SECONDS + CODEX_PROBE_BUDGET_SECONDS))
@@ -41,7 +42,13 @@ codex_version_answers() {
   end=$((SECONDS + secs))
   # CODEX_PROBE_RUNNER, when set, runs the candidate the way the launcher will
   # (spawn_child.sh: the child's login shell and PATH setup).
-  ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>/dev/null &
+  # A policy caller captures each probe over a pipe, never a temporary file.
+  if [[ -n "${CODEX_POLICY_FD:-}" ]]; then
+    printf '\0' >&3
+    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >&3 2>/dev/null &
+  else
+    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>/dev/null &
+  fi
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( SECONDS >= end )); then
@@ -250,8 +257,12 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     CODEX_PROBE_RUNNER=codex_launch_runner
     # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
     # must not be discarded here and then accepted after preregistration.
-    CODEX_VERSION_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-policy.XXXXXX")"
-    trap 'rm -f "$CODEX_VERSION_OUTPUT"' EXIT
+    # FD 3 bypasses the nested command substitutions used for candidate
+    # errors. Probe boundaries let the reader select only the final candidate
+    # output, while failed candidates and timeout handling remain unchanged.
+    exec 3>&1
+    CODEX_POLICY_FD=3
+    printf 'policy-v2\0'
     binary="$(codex_find_bin)"
-    printf '%s\0%s\0%s' "$binary" "$(cat "$CODEX_VERSION_OUTPUT")" "$CHILD_SHELL"
+    printf '\0%s\0%s' "$binary" "$CHILD_SHELL"
 fi

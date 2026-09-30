@@ -179,6 +179,34 @@ def _gemini_payload(env, **extra) -> dict:
     return payload
 
 
+def test_gemini_dry_run_does_not_create_handoffs_or_launch(monkeypatch, gemini_env):
+    def forbidden(*args, **kwargs):
+        pytest.fail(f"Gemini preview attempted a side effect: {args!r}")
+
+    monkeypatch.setattr(gemini_runtime, "_write_task_file", forbidden)
+    monkeypatch.setattr(server, "_runtime_agent_token", forbidden)
+    monkeypatch.setattr(server, "_mcp_call", forbidden)
+    def read_only_run(args, *a, **k):
+        if args and args[0] == "tmux":
+            forbidden(args)
+        return _REAL_RUN(args, *a, **k)
+
+    monkeypatch.setattr(server.subprocess, "run", read_only_run)
+    before = sorted(gemini_env.tmp.rglob("*"))
+    result = server.do_spawn(_gemini_payload(gemini_env, dry_run=True, **{"async": True}))
+    assert result["ok"] is True and result["dry_run"] is True
+    assert result["provider"] == "gemini"
+    assert result["model"] == "gemini-3.8-flash-medium"
+    assert result["effort"] == "medium" and result["dir"] == str(gemini_env.repo)
+    assert result["argv"] == [str(gemini_env.adapter), "--pre-registered", "Sunny-Curie",
+                              "--child-token-file", "<child-token-file>", "--model",
+                              "gemini-3.8-flash-medium", "--worktree",
+                              "implement the requested change", str(gemini_env.repo)]
+    assert result["launcher_env"]["AGENTSTACK_GEMINI_TASK_FILE"] == "<gemini-task-file>"
+    assert gemini_env.launches.launched == [] and gemini_env.launches.mcp_calls == []
+    assert sorted(gemini_env.tmp.rglob("*")) == before
+
+
 # --------------------------------------------------------------------------- #
 # Catalog and the single explicit-effort policy owner
 # --------------------------------------------------------------------------- #
@@ -811,12 +839,11 @@ def test_public_payload_cannot_spoof_launch_identity(gemini_env, monkeypatch):
         "handoff_paths": [str(gemini_env.claude_launcher)],
         "spec": {"provider": "gemini"}, "provider_identity": "gemini",
     })
-    assert result["ok"] is True
-    assert result["provider"] == "claude"
-    assert gemini_env.launches.registrations["Zesty-Bohr"]["program"] == "claude-code"
-    [(args, kwargs)] = gemini_env.launches.launched
-    assert args[0] == str(gemini_env.claude_launcher)
-    assert "AGENTSTACK_GEMINI_TASK_FILE" not in kwargs["env"]
+    assert result == {
+        "ok": False, "error": "unknown spawn fields: handoff_paths, launcher_env, program, provider_identity, script, spec",
+    }
+    assert gemini_env.launches.launched == []
+    assert gemini_env.launches.mcp_calls == []
     assert gemini_env.claude_launcher.exists()
 
     # A Claude request naming a Gemini model never borrows Gemini's program.
@@ -1523,3 +1550,27 @@ def test_non_codex_spawn_does_not_probe_a_codex_launcher(gemini_env, monkeypatch
         "dir": str(gemini_env.repo), "provider": "claude", "model": "claude-opus-5-5",
     }
     assert server.do_spawn(payload)["ok"] is True
+
+
+@pytest.mark.parametrize("headless", [False, True])
+def test_cockpit_payload_launch_uses_headless_policy(monkeypatch, gemini_env, headless):
+    monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", "1" if headless else "0")
+    annotations = []
+    def annotate(*args):
+        annotations.append(args)
+        return {"ok": True}
+    monkeypatch.setattr(server, "_write_annotation", annotate)
+    payload = {
+        "provider": "claude", "model": "claude-sonnet-5", "effort": None,
+        "dir": str(gemini_env.repo), "task": "check cockpit", "name": "Sunny-Curie",
+        "parent": "Parent", "standalone": False, "headless": headless,
+        "worktree": False, "worktree_base": "", "role": "review",
+        "emoji": "🔎", "group": "release", "async": False,
+    }
+    assert len(payload) == 15
+    result = server.do_spawn(payload)
+    assert result["ok"] is True and result["provider"] == "claude"
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[0] == str(gemini_env.claude_launcher)
+    assert kwargs["env"]["AGENTSTACK_AUTO_OPEN_CHILD"] == ("0" if headless else "1")
+    assert annotations == [("Sunny-Curie", "review", "", "release")]
