@@ -248,8 +248,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     CHILD_SHELL="$(codex_launch_shell)"
     CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
     CODEX_PROBE_RUNNER=codex_launch_runner
-    CODEX_VERSION_TIMEOUT_SECONDS=2
-    CODEX_PROBE_BUDGET_SECONDS=3
+    # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
+    # must not be discarded here and then accepted after preregistration.
     CODEX_VERSION_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-policy.XXXXXX")"
     trap 'rm -f "$CODEX_VERSION_OUTPUT"' EXIT
     binary="$(codex_find_bin)"

@@ -837,7 +837,10 @@ def _isolated_claude_catalog(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
 
 
-def test_concurrent_gemini_and_native_spawns_do_not_cross_contaminate(gemini_env):
+def test_concurrent_gemini_and_native_spawns_do_not_cross_contaminate(gemini_env, monkeypatch):
+    # The fake launcher process below is the concurrency boundary; keep the
+    # Codex thread's real CLI selection at its separately tested boundary.
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy())
     launches = gemini_env.launches
     release = launches.block(str(gemini_env.adapter))
     results: dict[str, dict] = {}
@@ -1510,3 +1513,13 @@ process.stdout.write(JSON.stringify(out));
 def isolate_codex_discovery_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+
+
+@pytest.mark.parametrize("provider", ["gemini", "claude"])
+def test_non_codex_spawn_does_not_probe_a_codex_launcher(gemini_env, monkeypatch, provider):
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: pytest.fail("non-Codex spawn must not probe Codex"))
+    payload = _gemini_payload(gemini_env) if provider == "gemini" else {
+        "parent": "Parent", "name": "Sunny-Curie", "task": "work",
+        "dir": str(gemini_env.repo), "provider": "claude", "model": "claude-opus-5-5",
+    }
+    assert server.do_spawn(payload)["ok"] is True

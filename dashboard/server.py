@@ -5229,7 +5229,7 @@ def _claude_default_model(models: list[str]) -> str:
 
 def _codex_models() -> list[str]:
     """Candidates only; explicit authorization is checked at launch time."""
-    return list(codex_models.resolve_catalog().models)
+    return list(codex_models.candidate_models())
 
 
 def _agent_name_comparison_key(name: str) -> str:

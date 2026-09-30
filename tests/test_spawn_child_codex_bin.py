@@ -16,6 +16,7 @@ Windows install under /mnt on WSL, and answering --version.
 from __future__ import annotations
 
 import pathlib
+import os
 import json
 import sys
 from datetime import datetime, timezone
@@ -403,5 +404,62 @@ def test_saved_cli_changes_invalidate_the_policy_cache(tmp_path, monkeypatch):
             (installed / "env.sh").write_text(f"export AGENTSTACK_CODEX_BIN={shlex.quote(str(binary))}\n")
             assert models.resolve_launcher().binary == str(binary)
             assert models.normalize_model("") == expected
+    finally:
+        models._VERSION_CACHE.clear()
+
+
+@pytest.mark.parametrize("version, expected", [("0.158.0", "gpt-6-sol"), ("0.159.1", "gpt-6.1-sol")])
+def test_slow_usable_cli_keeps_launcher_api_and_delegate_defaults_stable(tmp_path, monkeypatch, version, expected):
+    from dashboard import codex_models as models, server
+    binary = _script(tmp_path / "installed" / "codex", f'sleep 3\necho "codex-cli {version}"\n')
+    rc, selected, err = _resolve(tmp_path, path_dirs=[], installed=str(binary))
+    assert rc == 0 and selected == str(binary), err
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("AGENTSTACK_HOME", str(home / ".agentstack"))
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
+    monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(catalog))
+    models._VERSION_CACHE.clear()
+    monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
+    specs = []
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: specs.append(spec) or {"ok": True})
+    try:
+        for slug in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-sol"):
+            (catalog / "models_cache.json").write_text(json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat(), "models": [{"slug": slug, "visibility": "list"}]}))
+            for requested in ("", "sol"):
+                assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": requested}) == {"ok": True}
+                assert specs[-1].model == expected
+                assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+            # The actual launcher's normalize_codex_model calls this command
+            # after prime with the selected binary; exercise that boundary.
+            result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "normalize", ""], env={**os.environ, "AGENTSTACK_CODEX_BIN": selected}, capture_output=True, text=True, timeout=20)
+            assert result.returncode == 0 and result.stdout.strip() == expected, result.stderr
+        result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=20)
+        policy = json.loads(result.stdout)
+        assert (policy["model"], policy["codex_bin"], policy["cli_version"]) == (expected, str(binary), version)
+    finally:
+        models._VERSION_CACHE.clear()
+
+
+def test_gemini_collision_check_does_not_execute_codex(tmp_path, monkeypatch):
+    from dashboard import codex_models as models, server, gemini_provider_runtime
+    marker = tmp_path / "codex-probes"
+    binary = _script(tmp_path / "codex", f'echo called >> {shlex.quote(str(marker))}\necho "codex-cli 0.158.0"\n')
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-catalog"))
+    monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    models._VERSION_CACHE.clear()
+    try:
+        candidates, error = gemini_provider_runtime._gemini_models(server)
+        assert candidates and not error
+        assert not marker.exists(), "Gemini's model collision check must not start Codex"
     finally:
         models._VERSION_CACHE.clear()

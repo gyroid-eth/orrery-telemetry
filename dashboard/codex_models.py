@@ -46,7 +46,7 @@ MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is stil
 
 CLI_MIN_VERSION = (0, 159, 0)
 CLI_VERSION_TIMEOUT_SECONDS = 2
-CLI_POLICY_TIMEOUT_SECONDS = 6  # Includes resolution and bounded probe cleanup.
+CLI_POLICY_TIMEOUT_SECONDS = 18  # Same 15s selection budget as spawn, plus cleanup.
 CLI_VERSION_CACHE_SECONDS = 60
 
 
@@ -360,6 +360,21 @@ def resolve_catalog(now: float | None = None, *, launcher: LauncherPolicy | None
         model for model in models if model in BUNDLED_OVERFLOW and model != default)
     return ModelCatalog(models, source, policies, overflow=overflow, default_model=default,
                         note="" if default == DEFAULT_MODEL else DEFAULT_MODEL_NOTE)
+
+
+def candidate_models() -> tuple[str, ...]:
+    """Known IDs for collision checks, independently of the current default.
+
+    A bundled ID belongs to Codex even when a CLI/catalog hides its UI choice.
+    Read only non-secret local metadata; do not probe a launch target.
+    """
+    try:
+        allowed = _allow_list()
+    except ValueError:
+        return ()
+    if allowed is not None:
+        return allowed
+    return tuple(dict.fromkeys((*DEFAULT_MODELS, *sorted(discover_models()))))
 
 
 def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = None) -> str:
