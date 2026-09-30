@@ -8,6 +8,18 @@
 
 ---
 
+## Unreleased
+
+### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
+
+`git pull && ./scripts/install.sh` を環境変数のない端末で実行すると、port・label prefix・terminal・MCP URL・service の `PATH`・Python・ORRERY Mail の state root（DB の場所）・`LANG` / `MURMUR` / `DELIVERABLE_ROOTS` などが既定値に戻り、dashboard が別の port・別の launchd label で登録し直されていました。installer はすべての設定を「明示した値（option・環境変数）> 前回の `env.sh` > 既定値」の順で決めるようにしました。既定値に戻すには `--reset-settings`（`AGENTSTACK_RESET_SETTINGS=1`）を使います。project key・protected roots・Mail の state / service root はデータの置き場所なので reset でも引き継ぎます。前回記録した Python が無くなっていた場合は通知して探し直します。dry-run の冒頭に port・label prefix・terminal・MCP URL を表示します。
+
+### launcher が、明示した project key を install 時の値で上書きしていました（#33）
+
+`agent-start`・`agent-start-codex`・`agent-start-gemini` が起動の途中で `env.sh` を source し、起動前に設定した `AGENTSTACK_PROJECT_KEY` などを install 時の値に戻していました。起動前に設定された値は `env.sh` より優先し、明示した project key に合わせて protected roots も決めます。明示しなければ従来どおり `env.sh` の値を使います。
+
+この順序は `hooks/project-context.sh`（`AGENTSTACK_INHERITED_SETTINGS`）の 1 か所で定義し、installer と launcher の両方が使います。`env.sh` を shell の起動時に読み込んでいる場合、その shell の値は明示した値として扱われるため、入れ直した後は新しい shell を開いてください。
+
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）

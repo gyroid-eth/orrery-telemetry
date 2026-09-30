@@ -18,10 +18,12 @@ INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
 MAIL_HTTP_BEARER_MODE="disabled"
-MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
-PORT="${AGENTSTACK_PORT:-8770}"
-LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
-TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
+# Explicit values only; the rest come from the previous env.sh or the defaults
+# once the options are parsed (hooks/project-context.sh has the order).
+RESET_SETTINGS="${AGENTSTACK_RESET_SETTINGS:-0}"
+PORT="${AGENTSTACK_PORT:-}"
+LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-}"
+TERMINAL="${AGENTSTACK_TERMINAL:-}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
@@ -57,8 +59,9 @@ CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
-PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
-MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+PYTHON_INHERITED=""
+PATH_VALUE="${AGENTSTACK_PATH:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-}"
 
 # These match packages/agentstack_mail/pyproject.toml. A regression test keeps
 # the shell gate and package metadata in lock-step.
@@ -93,11 +96,17 @@ Options:
   --scoped               Tier2 placeholder; no user-settings merge
   --install-dir PATH     Default: ~/.agentstack
   --project-key PATH     Required on first install; existing env.sh is reused
-  --port PORT            Default: 8770
-  --label-prefix PREFIX  Default: org.agentstack
+  --port PORT            Default: existing env.sh, else 8770
+  --label-prefix PREFIX  Default: existing env.sh, else org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
-  --terminal MODE        auto, ghostty, iterm, terminal, or none
+  --terminal MODE        auto, ghostty, iterm, terminal, or none (default:
+                         existing env.sh, else auto)
+  --reset-settings       Do not inherit settings from the existing env.sh:
+                         anything not given explicitly goes back to its
+                         default. The project key, protected roots and the
+                         ORRERY Mail state/service roots are still inherited.
+                         AGENTSTACK_RESET_SETTINGS=1 does the same.
   --spawn-dirs PATHS     ':'-separated NEW AGENT launch-directory presets
                          (absolute or ~; default: existing env.sh, else ~)
   --spawn-roots PATHS    ':'-separated roots the directory typeahead may
@@ -185,6 +194,10 @@ while [[ $# -gt 0 ]]; do
       TERMINAL="$2"
       shift 2
       ;;
+    --reset-settings)
+      RESET_SETTINGS=1
+      shift
+      ;;
     --spawn-dirs)
       SPAWN_DIRS_SETTING="$2"
       shift 2
@@ -243,37 +256,41 @@ if [[ -z "$PROJECT_KEY" ]]; then
   exit 2
 fi
 PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
-# The dashboard runs under launchd/systemd, so a shell `export` never reaches
-# it: these presets only take effect when the installer persists them. A
-# re-install keeps what the previous install recorded unless told otherwise.
-if [[ -z "$AUTO_OPEN_CHILD_SETTING" ]]; then
-  AUTO_OPEN_CHILD_SETTING="$(agentstack_installed_env_value AGENTSTACK_AUTO_OPEN_CHILD "$INSTALL_DIR/env.sh")"
+# Every other setting: explicit (option or environment) > the previous env.sh >
+# the product default, as hooks/project-context.sh defines it. The dashboard
+# runs under launchd/systemd, so a shell `export` never reaches it and a
+# re-install that forgot a setting would silently undo it (issue #137).
+# --reset-settings drops the middle step. Where the data lives (project key,
+# protected roots, ORRERY Mail state) is inherited regardless.
+case "$RESET_SETTINGS" in
+  0|"") RESET_SETTINGS=0; SETTINGS_ENV_FILE="$INSTALL_DIR/env.sh" ;;
+  1) SETTINGS_ENV_FILE=/dev/null ;;
+  *) echo "error: AGENTSTACK_RESET_SETTINGS must be 0 or 1 (got: $RESET_SETTINGS)" >&2; exit 2 ;;
+esac
+setting() { agentstack_resolve_setting "$1" "$2" "${3:-}" "$SETTINGS_ENV_FILE"; }
+LABEL_PREFIX_EXPLICIT="$LABEL_PREFIX"
+PORT="$(setting AGENTSTACK_PORT "$PORT" 8770)"
+LABEL_PREFIX="$(setting AGENTSTACK_LABEL_PREFIX "$LABEL_PREFIX" org.agentstack)"
+TERMINAL="$(setting AGENTSTACK_TERMINAL "$TERMINAL" auto)"
+MCP_URL="$(setting AGENTSTACK_MCP_URL "$MCP_URL" http://127.0.0.1:18765/mcp)"
+PATH_VALUE="$(setting AGENTSTACK_PATH "$PATH_VALUE" /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin)"
+if [[ -z "${AGENTSTACK_PYTHON:-}" ]]; then
+  # Not the explicit AGENTSTACK_PYTHON: select_python falls back to its own
+  # search when the interpreter recorded last time is gone or too old.
+  PYTHON_INHERITED="$(setting AGENTSTACK_PYTHON "")"
 fi
-if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
-  SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
-  SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$WORKTREE_ROOT_SETTING" ]]; then
-  WORKTREE_ROOT_SETTING="$(agentstack_installed_env_value AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/env.sh")"
-fi
-WORKTREE_ROOT_SETTING="${WORKTREE_ROOT_SETTING:-$INSTALL_DIR/worktrees}"
-if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
-  CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]]; then
-  CODEX_CHILD_CONFIG_OVERLAY_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_NETWORK_SETTING" ]]; then
-  CODEX_NETWORK_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_NETWORK "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_ADD_DIRS_SETTING" ]]; then
-  CODEX_ADD_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_ADD_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
-  CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
-fi
+DELIVERABLE_ROOTS="$(setting AGENTSTACK_DELIVERABLE_ROOTS "$DELIVERABLE_ROOTS")"
+LANG_SETTING="$(setting AGENTSTACK_LANG "$LANG_SETTING")"
+MURMUR_SETTING="$(setting AGENTSTACK_MURMUR "$MURMUR_SETTING")"
+AUTO_OPEN_CHILD_SETTING="$(setting AGENTSTACK_AUTO_OPEN_CHILD "$AUTO_OPEN_CHILD_SETTING")"
+SPAWN_DIRS_SETTING="$(setting AGENTSTACK_SPAWN_DIRS "$SPAWN_DIRS_SETTING")"
+SPAWN_ROOTS_SETTING="$(setting AGENTSTACK_SPAWN_ROOTS "$SPAWN_ROOTS_SETTING")"
+WORKTREE_ROOT_SETTING="$(setting AGENTSTACK_WORKTREE_ROOT "$WORKTREE_ROOT_SETTING" "$INSTALL_DIR/worktrees")"
+CODEX_CHILD_APPROVAL_SETTING="$(setting AGENTSTACK_CODEX_CHILD_APPROVAL "$CODEX_CHILD_APPROVAL_SETTING")"
+CODEX_CHILD_CONFIG_OVERLAY_SETTING="$(setting AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY "$CODEX_CHILD_CONFIG_OVERLAY_SETTING")"
+CODEX_NETWORK_SETTING="$(setting AGENTSTACK_CODEX_NETWORK "$CODEX_NETWORK_SETTING")"
+CODEX_ADD_DIRS_SETTING="$(setting AGENTSTACK_CODEX_ADD_DIRS "$CODEX_ADD_DIRS_SETTING")"
+CHILD_RESUME_RETENTION_DAYS_SETTING="$(setting AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$CHILD_RESUME_RETENTION_DAYS_SETTING")"
 # --- codex launcher resolution (tests extract from here to the end marker) ---
 # Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
 # there is the Windows npm shim: run by the Linux node it dies at once with
@@ -422,7 +439,7 @@ find_usable_codex_bin() {
 # --- end codex launcher resolution ---
 
 if [[ -z "$CODEX_BIN_SETTING" ]]; then
-  CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")"
+  CODEX_BIN_SETTING="$(setting AGENTSTACK_CODEX_BIN "")"
   if [[ -n "$CODEX_BIN_SETTING" ]]; then
     # A stale path from an earlier install (Node upgraded, prefix moved, or a
     # Windows shim picked up under WSL) must not pin the dashboard to a binary
@@ -458,18 +475,13 @@ AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"
-if [[ -z "$PORTRAITS_DIR_SETTING" ]]; then
-  PORTRAITS_DIR_SETTING="$(agentstack_installed_env_value AGENTSTACK_PORTRAITS_DIR "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
-  CUSTOM_PORTRAITS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CUSTOM_PORTRAITS "$INSTALL_DIR/env.sh")"
-fi
+PORTRAITS_DIR_SETTING="$(setting AGENTSTACK_PORTRAITS_DIR "$PORTRAITS_DIR_SETTING")"
+CUSTOM_PORTRAITS_SETTING="$(setting AGENTSTACK_CUSTOM_PORTRAITS "$CUSTOM_PORTRAITS_SETTING")"
+# An empty AGENTSTACK_CLAUDE_MODELS is itself a choice (the built-in list).
 if [[ -z "${AGENTSTACK_CLAUDE_MODELS+x}" ]]; then
-  CLAUDE_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CLAUDE_MODELS "$INSTALL_DIR/env.sh")"
+  CLAUDE_MODELS_SETTING="$(setting AGENTSTACK_CLAUDE_MODELS "")"
 fi
-if [[ -z "$CODEX_MODELS_SETTING" ]]; then
-  CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")"
-fi
+CODEX_MODELS_SETTING="$(setting AGENTSTACK_CODEX_MODELS "$CODEX_MODELS_SETTING")"
 
 # Pass the new settings as data, never interpolate them into Python source.
 export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
@@ -515,10 +527,18 @@ MAIL_AUTOSTART_LABEL="$LABEL_PREFIX.mail"
 # Only a deliberately scoped install pins its own service label; leaving it
 # empty keeps the historical default for everybody else, whose running job was
 # registered under that name long before this setting existed.
+# A label recorded by the previous install is kept, unless the prefix it came
+# from was given again explicitly.
+MAIL_LAUNCHD_LABEL_INHERITED=""
+if [[ -z "$LABEL_PREFIX_EXPLICIT" ]]; then
+  MAIL_LAUNCHD_LABEL_INHERITED="$(setting AGENTSTACK_MAIL_LAUNCHD_LABEL "")"
+fi
 if [[ -n "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-}" ]]; then
   # An operator who named the label keeps it. Deriving one from the prefix
   # would point this install at a job nobody registered under that name.
   MAIL_LAUNCHD_LABEL_SETTING="$AGENTSTACK_MAIL_LAUNCHD_LABEL"
+elif [[ -n "$MAIL_LAUNCHD_LABEL_INHERITED" ]]; then
+  MAIL_LAUNCHD_LABEL_SETTING="$MAIL_LAUNCHD_LABEL_INHERITED"
 elif [[ "$LABEL_PREFIX" == "org.agentstack" ]]; then
   MAIL_LAUNCHD_LABEL_SETTING=""
 else
@@ -541,8 +561,13 @@ PROVISION_NATIVE_MAIL=false
 NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=true
 NATIVE_MAIL_ENROLL_AVAILABLE=true
 NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true
-NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
-NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-service}"
+# Where ORRERY Mail keeps its database. Falling back to the default here would
+# quietly start an empty one, so the previous install's roots are inherited even
+# under --reset-settings. env.sh records the service root as AGENTSTACK_MAIL_DIR.
+NATIVE_MAIL_STATE_ROOT="$(agentstack_resolve_setting AGENTSTACK_MAIL_STATE_ROOT \
+  "${AGENTSTACK_MAIL_STATE_ROOT:-}" "$HOME/.agentstack/mail" "$INSTALL_DIR/env.sh")"
+NATIVE_MAIL_SERVICE_ROOT="$(agentstack_resolve_setting AGENTSTACK_MAIL_DIR \
+  "${AGENTSTACK_MAIL_SERVICE_ROOT:-}" "$INSTALL_DIR/mail-service" "$INSTALL_DIR/env.sh")"
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
 NATIVE_MAIL_SOURCE_ID="${AGENTSTACK_MAIL_CANDIDATE_ID:-}"
 if [[ -z "$NATIVE_MAIL_SOURCE_ID" ]]; then
@@ -831,6 +856,15 @@ select_python() {
     PYTHON_BIN="$candidate"
     say "python: $PYTHON_BIN ($version)"
     return
+  fi
+  if [[ -n "$PYTHON_INHERITED" ]]; then
+    candidate="$(resolve_python_candidate "$PYTHON_INHERITED")"
+    if [[ -n "$candidate" ]] && { [[ "$PREFLIGHT_SKIP_PYTHON" == "1" && -x "$candidate" ]] || python_is_compatible "$candidate"; }; then
+      PYTHON_BIN="$candidate"
+      say "python: $PYTHON_BIN ($(python_version "$candidate"); from the existing env.sh)"
+      return
+    fi
+    say "note: the Python recorded in the existing env.sh ($PYTHON_INHERITED) is missing or too old; searching again"
   fi
 
   local checked=""
@@ -2796,7 +2830,7 @@ retire_legacy_mail_services() {
   # to retire is "org.agentstack.mcp-agent-mail", which lives under that very
   # prefix.
   local protected=(
-    "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+    "${MAIL_LAUNCHD_LABEL_SETTING:-org.orrery.mail}"
     "${LABEL:-}"
     "${MAIL_AUTOSTART_LABEL:-}"
   )
@@ -3869,6 +3903,13 @@ main() {
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  if [[ "$RESET_SETTINGS" == 1 ]]; then
+    say "settings: reset (not inherited from the existing env.sh)"
+  fi
+  say "dashboard port: $PORT"
+  say "label prefix: $LABEL_PREFIX"
+  say "terminal: $TERMINAL"
+  say "ORRERY Mail MCP URL: $MCP_URL"
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"

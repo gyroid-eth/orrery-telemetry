@@ -154,9 +154,10 @@ CI や script から入れる場合、既定のままだと 4 つの承認（Cla
 ```text
 --install-dir PATH      default: ~/.agentstack
 --project-key PATH      first install: required / re-install: existing env.sh
---port PORT             default: 8770
---label-prefix PREFIX   default: org.agentstack
---terminal MODE         auto | ghostty | iterm | terminal | none
+--port PORT             default: existing env.sh, else 8770
+--label-prefix PREFIX   default: existing env.sh, else org.agentstack
+--terminal MODE         auto | ghostty | iterm | terminal | none (default: existing env.sh, else auto)
+--reset-settings        前回の env.sh から設定を引き継がない（Upgrade 参照）
 --spawn-dirs PATHS      NEW AGENT の launch directory preset（`:` 区切り）
 --spawn-roots PATHS     directory typeahead が閲覧できる root（`:` 区切り）
 --codex-approval MODE   Codex child の `--ask-for-approval`（never | on-request | on-failure | untrusted、既定 never）
@@ -349,7 +350,26 @@ git pull
 ~/.agentstack/bin/agentstack-doctor
 ```
 
-installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。同梱 ORRERY Mail の candidate と state を検証して再利用します。`--project-key` は前回の値を引き継ぎます。
+installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。同梱 ORRERY Mail の candidate と state を検証して再利用します。
+
+### 前回の設定の引き継ぎ
+
+入れ直しでは、各設定を次の順で決めます。
+
+1. 明示した値（option、または installer を起動したときの環境変数）
+2. 前回の install が書いた `~/.agentstack/env.sh` の値
+3. 既定値
+
+したがって、既定値から変えた設定は、環境変数のない新しい端末で `./scripts/install.sh` を実行しても保たれます。対象は project key と protected roots、dashboard port（`AGENTSTACK_PORT`）、label prefix（`AGENTSTACK_LABEL_PREFIX`）とそこから決まる ORRERY Mail の launchd label、terminal、MCP URL、service の `PATH`、Python、ORRERY Mail の state root（DB の場所）と service root、`AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`、spawn の dirs / roots、worktree root、Codex child の設定、`AGENTSTACK_CODEX_BIN`、portraits、model catalog です。一覧は `hooks/project-context.sh` の `AGENTSTACK_INHERITED_SETTINGS` が正本です。
+
+- 前回の値を変えるには、その option か環境変数を明示します（例: `./scripts/install.sh --port 8771`）。
+- 前回の値をまとめて既定値に戻すには `--reset-settings`（または `AGENTSTACK_RESET_SETTINGS=1`）を付けます。明示しなかった設定は既定値になります。ただし project key、protected roots、ORRERY Mail の state root と service root はデータの置き場所なので、reset でも引き継ぎます。変えるときは明示してください。
+- 前回記録した Python が無くなっていた・古すぎる場合は、通知を出して探し直します（明示した `AGENTSTACK_PYTHON` が使えない場合は従来どおり停止します）。
+- ORRERY Mail の service env（`AGENTSTACK_MAIL_ENV`）と DB path（`AGENTSTACK_MAIL_DB`）は引き継ぐ設定ではなく、state root と render から毎回決め直します（下記）。
+
+dry-run の冒頭に、決まった project key・port・label prefix・terminal・MCP URL が表示されます。
+
+`env.sh` を shell の起動時に読み込んでいる場合、その shell の `AGENTSTACK_*` は「明示した値」として扱われます。別の shell で入れ直した後は、新しい shell を開くか `env.sh` を読み直してから launcher や installer を使ってください。
 
 **in-place upgrade 中も ORRERY Mail server は稼働させたまま**にしてください。稼働 listener から解決した実 DB path は filesystem の候補探索より優先されます。ORRERY Mail を先に止めると候補探索へフォールバックし、複数の DB がある環境では誤選択を避けるため installer が停止します。
 

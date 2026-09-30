@@ -17,14 +17,19 @@ AGS_PROG="${AGS_PROG:-agentstack}"
 
 ags_die() { printf '%s: %s\n' "$AGS_PROG" "$*" >&2; exit 1; }
 
-# Pull in installer-written AGENTSTACK_* values. Variables already set in the
-# environment win (env.sh uses `export KEY=val`, so we load it first and let the
-# caller's explicit overrides be re-applied by the caller if needed).
+# Pull in installer-written AGENTSTACK_* values without letting them replace a
+# setting chosen for this command: an explicit value wins over env.sh, which
+# wins over the defaults below (issue #33). The order lives in
+# hooks/project-context.sh so the installer and the launchers share it.
+AGS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ags_load_env() {
   local envf="${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh"
-  # shellcheck disable=SC1090
-  [[ -f "$envf" ]] && . "$envf"
-  return 0
+  local ctx="$AGS_LIB_DIR/../../hooks/project-context.sh"
+  [[ -f "$ctx" ]] || ctx="${AGENTSTACK_HOME:-$HOME/.agentstack}/hooks/project-context.sh"
+  [[ -f "$ctx" ]] || ags_die "missing hooks/project-context.sh next to $AGS_LIB_DIR; re-run install.sh"
+  # shellcheck source=../../hooks/project-context.sh
+  . "$ctx"
+  agentstack_load_installed_env "$envf"
 }
 
 ags_resolve_tmux() {

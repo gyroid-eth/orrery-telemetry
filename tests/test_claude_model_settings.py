@@ -20,10 +20,14 @@ def test_installer_preserves_replaces_or_explicitly_clears_settings(tmp_path, mo
     env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
     if mode != "inherit":
         env[KEY] = "replacement" if mode == "replace" else ""
-    setup = '''CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
+    setting_line = next(line for line in text.splitlines() if line.startswith("setting() {"))
+    setup = f'''. {ROOT / "hooks/project-context.sh"}
+CLAUDE_MODELS_SETTING="${{AGENTSTACK_CLAUDE_MODELS:-}}"
 CODEX_MODELS_SETTING="codex-fixture"
 INSTALL_DIR="/unused-fixture"
-agentstack_installed_env_value() { printf '%s' "old-$1"; }
+SETTINGS_ENV_FILE="$INSTALL_DIR/env.sh"
+agentstack_installed_env_value() {{ printf '%s' "old-$1"; }}
+{setting_line}
 '''
     command = setup + text[start:end] + '\nprintf "%s\\n" "$AGENTSTACK_CLAUDE_MODELS"'
     result = subprocess.run(["/bin/bash", "-eu", "-c", command], env=env, text=True, capture_output=True, check=True)

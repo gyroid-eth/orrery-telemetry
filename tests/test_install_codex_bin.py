@@ -50,11 +50,16 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
+    text = INSTALL.read_text(encoding="utf-8")
     stubs = (
         "set -euo pipefail\n"
+        f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'project-context.sh'))}\n"
         f"INSTALL_DIR={shlex.quote(str(tmp_path / 'install'))}\n"
+        'SETTINGS_ENV_FILE="$INSTALL_DIR/env.sh"\n'
         f"CODEX_BIN_SETTING={shlex.quote(explicit)}\n"
         f"agentstack_installed_env_value() {{ printf '%s\\n' {shlex.quote(installed)}; }}\n"
+        + next(line for line in text.splitlines() if line.startswith("setting() {"))
+        + "\n"
     )
     block = _block()
     # Stub the environment checks after their definitions inside the block.

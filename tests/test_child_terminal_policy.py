@@ -154,8 +154,12 @@ def test_installer_preserves_valid_saved_policy_and_explicit_override(
     tmp_path, explicit, saved, expected,
 ):
     text = INSTALL.read_text()
-    start = text.index('if [[ -z "$AUTO_OPEN_CHILD_SETTING" ]]; then')
-    saved_resolution = text[start:text.index("\nfi", start) + 3]
+    start = text.index('AUTO_OPEN_CHILD_SETTING="$(setting AGENTSTACK_AUTO_OPEN_CHILD')
+    saved_resolution = "\n".join([
+        'SETTINGS_ENV_FILE="$INSTALL_DIR/env.sh"',
+        next(line for line in text.splitlines() if line.startswith("setting() {")),
+        text[start:text.index("\n", start)],
+    ])
     start = text.index('case "$AUTO_OPEN_CHILD_SETTING" in')
     validation = text[start:text.index("\nesac", start) + 5]
     env_file = tmp_path / "env.sh"

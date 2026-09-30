@@ -40,6 +40,110 @@ for line in raw.splitlines():
 PY
 }
 
+# Settings a person chooses at install time, by the name env.sh records them
+# under. Each one takes its value in this order, and only this order:
+#
+#   explicit (an installer option or a variable set before the command ran)
+#   > the previous install's env.sh
+#   > the product default
+#
+# The installer resolves each with agentstack_resolve_setting; the launchers
+# load env.sh with agentstack_load_installed_env, which keeps an explicit value
+# instead of letting env.sh overwrite it (issues #33 and #137).
+AGENTSTACK_INHERITED_SETTINGS="
+AGENTSTACK_PROJECT_KEY
+AGENTSTACK_PROTECTED_ROOTS
+AGENTSTACK_PORT
+AGENTSTACK_LABEL_PREFIX
+AGENTSTACK_MAIL_LAUNCHD_LABEL
+AGENTSTACK_TERMINAL
+AGENTSTACK_MCP_URL
+AGENTSTACK_PATH
+AGENTSTACK_PYTHON
+AGENTSTACK_MAIL_STATE_ROOT
+AGENTSTACK_MAIL_DIR
+AGENTSTACK_LANG
+AGENTSTACK_MURMUR
+AGENTSTACK_DELIVERABLE_ROOTS
+AGENTSTACK_AUTO_OPEN_CHILD
+AGENTSTACK_SPAWN_DIRS
+AGENTSTACK_SPAWN_ROOTS
+AGENTSTACK_WORKTREE_ROOT
+AGENTSTACK_CODEX_CHILD_APPROVAL
+AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY
+AGENTSTACK_CODEX_NETWORK
+AGENTSTACK_CODEX_ADD_DIRS
+AGENTSTACK_CHILD_RESUME_RETENTION_DAYS
+AGENTSTACK_CODEX_BIN
+AGENTSTACK_PORTRAITS_DIR
+AGENTSTACK_CUSTOM_PORTRAITS
+AGENTSTACK_CLAUDE_MODELS
+AGENTSTACK_CODEX_MODELS
+"
+
+# The order itself, with no I/O: EXPLICIT, else INSTALLED, else DEFAULT.
+# An empty value counts as not given.
+agentstack_pick_setting() {
+    if [ -n "${1:-}" ]; then
+        printf '%s\n' "$1"
+    elif [ -n "${2:-}" ]; then
+        printf '%s\n' "$2"
+    else
+        printf '%s\n' "${3:-}"
+    fi
+}
+
+# NAME EXPLICIT DEFAULT [ENV_FILE]: the value NAME takes, reading the previous
+# install's env.sh (never sourcing it) only when nothing explicit was given.
+agentstack_resolve_setting() {
+    local name="$1" explicit="${2:-}" default="${3:-}"
+    local env_file="${4:-${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh}"
+    local installed=""
+    if [ -z "$explicit" ]; then
+        installed="$(agentstack_installed_env_value "$name" "$env_file")"
+    fi
+    agentstack_pick_setting "$explicit" "$installed" "$default"
+}
+
+# Source env.sh the way the launchers always have, but keep every setting
+# above that was already set: env.sh is the previous install's value, not a
+# choice made for this command. A live project key (AGENTSTACK_PROJECT_KEY or
+# the legacy PROJECT_KEY, as agentstack_resolve_project_key reads them) also
+# keeps env.sh from supplying the installed project's protected roots.
+agentstack_load_installed_env() {
+    local env_file="${1:-${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh}"
+    local name value count=0 i=0 live_project_key="" live_protected_roots=""
+    local names=() values=()
+    [ -f "$env_file" ] || return 0
+    for name in $AGENTSTACK_INHERITED_SETTINGS; do
+        value="${!name:-}"
+        if [ -n "$value" ]; then
+            names[$count]="$name"
+            values[$count]="$value"
+            count=$((count + 1))
+        fi
+    done
+    live_project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
+    live_protected_roots="${AGENTSTACK_PROTECTED_ROOTS:-}"
+    # shellcheck disable=SC1090
+    . "$env_file"
+    while [ "$i" -lt "$count" ]; do
+        name="${names[$i]}"
+        value="${!name:-}"
+        export "$name=$(agentstack_pick_setting "${values[$i]}" "$value")"
+        i=$((i + 1))
+    done
+    if [ -n "$live_project_key" ]; then
+        export AGENTSTACK_PROJECT_KEY="$live_project_key"
+        # What env.sh just set belongs to the installed project, not this one.
+        AGENTSTACK_PROTECTED_ROOTS="$live_protected_roots"
+        value="$(agentstack_resolve_protected_roots \
+            "$live_project_key" "$live_project_key" "$env_file")"
+        export AGENTSTACK_PROTECTED_ROOTS="$value"
+    fi
+    return 0
+}
+
 # Priority: live AGENTSTACK_PROJECT_KEY, live PROJECT_KEY, installed env, cwd.
 agentstack_resolve_project_key() {
     local fallback="${1:-}"

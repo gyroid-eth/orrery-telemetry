@@ -122,6 +122,13 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 
 DB が一致する健康な listener でも service env を特定できない場合、明示 pin が無い通常の再 install は listener をそのまま再利用します。この degraded 状態では deployment / enrollment の path を空にし、enrollment profile と Mail autostart を更新しません。既設 trigger は削除・停止せず残しますが、installer は次回 login での再起動を保証しません。明示した `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` を稼働 deployment と照合できない場合、既知 metadata が不正な場合、または metadata が約束した enrollment CLI が無い場合は、listener を切り替えず明示エラーで停止します。
 
+再 install では、上の表の設定のうち利用者が選ぶもの（project key、protected roots、
+port、label prefix、terminal、MCP URL、`PATH`、Python、Mail の state / service root、
+`LANG` / `MURMUR` / `DELIVERABLE_ROOTS` など）を、明示した値 → 前回の `env.sh` → 既定値
+の順で決めます。一覧は `hooks/project-context.sh` の `AGENTSTACK_INHERITED_SETTINGS`、
+既定値に戻す方法は [install.md](install.md) の Upgrade「前回の設定の引き継ぎ」を参照して
+ください。
+
 installer の project key 解決順は `--project-key` / process の
 `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → install 先の既存 `env.sh` です。
 初回 install でどれも無い場合は repo checkout を project と推測せず、変更前に
@@ -157,6 +164,12 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | `AGENTSTACK_TCC_GUARD` | enabled | macOS TCC warning。`0` で無効 |
 | `AGENTSTACK_TCC_DIRS` | `$HOME/Desktop:$HOME/Downloads:$HOME/Documents` | `:` 区切りの TCC probe 対象 |
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | scientist vocabulary override |
+
+launcher（`agent-start`・`agent-start-codex`・`agent-start-gemini`）は起動時に
+`env.sh` を読み込みますが、起動前に設定されていた `AGENTSTACK_INHERITED_SETTINGS` の
+値は上書きしません。たとえば `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` は
+install 時の project ではなく `/path/to/other` に登録し、protected roots も（明示しない限り）
+その project になります。明示しなければ `env.sh` の値を使います。
 
 `AGENTSTACK_TCC_DIRS` は空白を含む path も保持できる `:` 区切りが正本です。colon を含まない旧 whitespace 区切りも legacy compatibility として解釈します。
 
