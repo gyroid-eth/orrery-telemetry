@@ -843,7 +843,13 @@ cleanup_worktree() {
 # when present (macOS default, and where every operator so far has run this),
 # otherwise bash; AGENTSTACK_CHILD_SHELL overrides both. The launch snippets
 # above are written in the syntax subset both shells share.
+# shellcheck disable=SC1090
+[[ -f "$HOOKS_DIR/codex-bin.sh" ]] && . "$HOOKS_DIR/codex-bin.sh"
 resolve_child_shell() {
+    if declare -F codex_launch_shell >/dev/null; then
+        codex_launch_shell "$@"
+        return
+    fi
     local shell="${AGENTSTACK_CHILD_SHELL:-}"
     if [[ -n "$shell" && -x "$shell" ]]; then
         printf '%s\n' "$shell"
@@ -870,6 +876,10 @@ CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
 # has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
 # the reserved-identity marker, must behave as it will for the child.
 run_like_codex_child() {
+    if declare -F codex_launch_runner >/dev/null; then
+        codex_launch_runner "$@"
+        return
+    fi
     env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
         "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
 }
@@ -898,6 +908,10 @@ if ! declare -F codex_bin_problem >/dev/null; then
 fi
 
 codex_search_path() {
+    if declare -F codex_launch_search_path >/dev/null; then
+        codex_launch_search_path "$@"
+        return
+    fi
     local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
     local candidate
@@ -920,6 +934,10 @@ codex_search_path() {
 # path is probed at most once, and all probes share one time budget, so an
 # unresponsive saved codex cannot eat the dashboard's 120 seconds.
 find_codex_bin() {
+    if declare -F codex_find_bin >/dev/null; then
+        codex_find_bin "$@"
+        return
+    fi
     if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
         printf '%s\n' "$CODEX_BIN_RESOLVED"
         return 0

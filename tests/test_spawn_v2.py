@@ -1267,6 +1267,7 @@ def test_codex_api_default_excluded_by_allowlist_never_selects_first(monkeypatch
 @pytest.fixture(autouse=True)
 def isolate_codex_discovery_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(server.codex_models, "cli_version", lambda: (0, 159, 1))
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=(0, 159, 1)))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
 
@@ -1275,6 +1276,7 @@ def isolate_codex_discovery_cache(monkeypatch, tmp_path):
 @pytest.mark.parametrize("requested", [None, "sol"])
 def test_api_omission_and_sol_use_the_same_cli_default(monkeypatch, version, expected, requested):
     monkeypatch.setattr(server.codex_models, "cli_version", lambda: version)
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=version))
     monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"ok": True, "model": spec.model})
     payload = {"standalone": True, "task": "work", "provider": "codex"}
     if requested is not None:

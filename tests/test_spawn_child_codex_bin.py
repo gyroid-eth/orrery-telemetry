@@ -16,6 +16,11 @@ Windows install under /mnt on WSL, and answering --version.
 from __future__ import annotations
 
 import pathlib
+import json
+import sys
+from datetime import datetime, timezone
+
+import pytest
 import re
 import shlex
 import subprocess
@@ -325,3 +330,78 @@ def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
     # The same guard values as the child's tmux session.
     text = SPAWN.read_text(encoding="utf-8")
     assert text.count('TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1"') == 2
+
+
+@pytest.mark.parametrize("version, expected", [("0.158.0", "gpt-6-sol"), ("0.159.1", "gpt-6.1-sol")])
+@pytest.mark.parametrize("source", ["environment", "env.sh", "broken-environment"])
+def test_model_policy_and_api_use_the_child_runner_and_selected_binary(tmp_path, monkeypatch, version, expected, source):
+    """Real minimal-PATH probes, saved CLI selection and alternating catalogs.
+
+    Stub only the API's launch boundary; no child identity/process is created.
+    The public resolve command is the delegate preregistration contract.
+    """
+    from dashboard import codex_models as models, server
+    home = tmp_path / "home"
+    local = home / ".local" / "bin"
+    _script(local / "node", '#!/bin/sh\n[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 2\necho "codex-cli ' + version + '"\n')
+    binary = _script(local / "codex", "#!/usr/bin/env node\n")
+    broken = _script(tmp_path / "broken" / "codex", "exit 2\n")
+    live = str(binary) if source == "environment" else str(broken) if source == "broken-environment" else None
+    saved = str(binary) if source != "environment" else None
+    rc, selected, err = _resolve(tmp_path, path_dirs=[], env_bin=live, installed=saved)
+    assert rc == 0 and selected == str(binary), err
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("AGENTSTACK_HOME", str(home / ".agentstack"))
+    monkeypatch.setenv("AGENTSTACK_HOOKS_DIR", str(ROOT / "hooks"))
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
+    monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    if live:
+        monkeypatch.setenv("AGENTSTACK_CODEX_BIN", live)
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(catalog))
+    models._VERSION_CACHE.clear()
+    monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
+    specs = []
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: specs.append(spec) or {"ok": True})
+    for slug in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-sol"):
+        (catalog / "models_cache.json").write_text(json.dumps({
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "models": [{"slug": slug, "visibility": "list"}],
+        }))
+        assert models.cli_version() == tuple(map(int, version.split(".")))
+        for requested in ("", "sol"):
+            assert models.normalize_model(requested) == expected
+            assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": requested}) == {"ok": True}
+            assert specs[-1].model == expected
+            assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+        result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"model": expected, "codex_bin": str(binary), "cli_version": version, "default_source": "cli_version"}
+    # Formal generation pins remain explicit even on the older CLI.
+    assert models.normalize_model("gpt-6.1-sol") == "gpt-6.1-sol"
+    models._VERSION_CACHE.clear()
+
+
+def test_saved_cli_changes_invalidate_the_policy_cache(tmp_path, monkeypatch):
+    from dashboard import codex_models as models
+    home = tmp_path / "home"
+    installed = home / ".agentstack"
+    installed.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("AGENTSTACK_HOME", str(installed))
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
+    monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-catalog"))
+    models._VERSION_CACHE.clear()
+    try:
+        for version, expected in [("0.158.0", "gpt-6-sol"), ("0.159.1", "gpt-6.1-sol")]:
+            binary = _script(tmp_path / version / "codex", f'echo "codex-cli {version}"\n')
+            (installed / "env.sh").write_text(f"export AGENTSTACK_CODEX_BIN={shlex.quote(str(binary))}\n")
+            assert models.resolve_launcher().binary == str(binary)
+            assert models.normalize_model("") == expected
+    finally:
+        models._VERSION_CACHE.clear()

@@ -477,7 +477,7 @@ def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_versio
         ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
     }
     for (function, raw), normalized in expected.items():
-        result = _model_call(function, raw)
+        result = _model_call(function, raw, extra_env={"AGENTSTACK_CHILD_SHELL": "/usr/bin/false"})
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == normalized
 

@@ -5977,13 +5977,15 @@ def do_spawn(payload: dict) -> dict:
         )
     elif provider == "codex":
         try:
-            model = codex_models.normalize_model(model)
-            effort = codex_models.resolve_effort(model, effort)
+            launcher = codex_models.resolve_launcher()
+            model = codex_models.normalize_model(model, launcher=launcher)
+            effort = codex_models.resolve_effort(model, effort, codex_models.resolve_catalog(launcher=launcher))
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         spec = SpawnLaunchSpec(
             provider="codex", program="codex-cli", model=model,
             script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",),
+            launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
     else:

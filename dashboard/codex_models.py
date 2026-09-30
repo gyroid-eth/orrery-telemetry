@@ -1,8 +1,8 @@
 """Non-secret Codex CLI catalog discovery and the shared child model contract.
 
 Discovery is not account authorization. Local catalog metadata supplies choices
-and effort policy. A bounded, cached --version probe of AGENTSTACK_CODEX_BIN
-selects the default; no network, credentials or model instruction text is read.
+and effort policy. Bounded, cached probes use the spawner's CLI resolver and child environment
+to select the default; no network, credentials or model instruction text is read.
 """
 from __future__ import annotations
 
@@ -46,57 +46,110 @@ MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is stil
 
 CLI_MIN_VERSION = (0, 159, 0)
 CLI_VERSION_TIMEOUT_SECONDS = 2
+CLI_POLICY_TIMEOUT_SECONDS = 6  # Includes resolution and bounded probe cleanup.
 CLI_VERSION_CACHE_SECONDS = 60
-_VERSION_CACHE: dict[tuple, tuple[float, tuple[int, int, int] | None]] = {}
+
+
+@dataclass(frozen=True)
+class LauncherPolicy:
+    binary: str = ""
+    version: tuple[int, int, int] | None = None
+    shell: str = ""
+
+
+_VERSION_CACHE: dict[tuple, tuple[float, LauncherPolicy, tuple]] = {}
 _VERSION_LOCK = threading.Lock()
 
 
-def cli_version() -> tuple[int, int, int] | None:
-    """Probe only the configured launcher binary; unknown falls back to cache.
-
-    Cache positive and failed probes per executable identity for 60 seconds.
-    Changes to path, symlink target, or executable stat invalidate it immediately.
-    """
-    binary = os.environ.get("AGENTSTACK_CODEX_BIN", "").strip()
-    if not binary or not os.path.isabs(binary):
-        return None
+def _file_identity(path: str | Path) -> tuple:
     try:
-        info = os.stat(binary)
-        if not stat.S_ISREG(info.st_mode) or not os.access(binary, os.X_OK):
-            return None
-        key = (binary, os.path.realpath(binary), info.st_dev, info.st_ino,
-               info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        info = os.stat(path)
+        return (os.path.realpath(path), info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
     except OSError:
+        return ()
+
+
+def _capture(command: list[str], timeout: float) -> bytes | None:
+    process = None
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   start_new_session=os.name == "posix")
+        output, _ = process.communicate(timeout=timeout)
+        return output if process.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        if process is not None:
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            process.communicate()
         return None
+
+
+def _parse_version(output: bytes | None) -> tuple[int, int, int] | None:
+    if output is None:
+        return None
+    match = re.search(rb"^codex-cli ([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][^\s]+)?\s*$", output, re.MULTILINE)
+    try:
+        return tuple(int(part) for part in match.groups()) if match else None
+    except ValueError:
+        return None
+
+
+def _native_cli_version(binary: str) -> tuple[int, int, int] | None:
+    return _parse_version(_capture([binary, "--version"], CLI_VERSION_TIMEOUT_SECONDS))
+
+
+def _probe_launcher() -> LauncherPolicy:
+    if os.name != "posix":
+        # Native Windows is the experimental lane; its launcher supplies a path.
+        binary = os.environ.get("AGENTSTACK_CODEX_BIN", "").strip()
+        return LauncherPolicy(binary, _native_cli_version(binary)) if os.path.isabs(binary) else LauncherPolicy()
+    hooks = Path(os.environ.get("AGENTSTACK_HOOKS_DIR", "") or str(Path(__file__).resolve().parents[1] / "hooks"))
+    helper = hooks / "codex-bin.sh"
+    output = _capture(["/bin/bash", str(helper), "policy"], CLI_POLICY_TIMEOUT_SECONDS)
+    if output is None:
+        return LauncherPolicy()
+    fields = output.split(b"\0", 2)
+    if len(fields) != 3:
+        return LauncherPolicy()
+    try:
+        binary, shell = os.fsdecode(fields[0]), os.fsdecode(fields[2])
+        return LauncherPolicy(binary, _parse_version(fields[1]) if binary else None, shell)
+    except ValueError:
+        return LauncherPolicy()
+
+
+def resolve_launcher() -> LauncherPolicy:
+    """Use the spawner's environment -> saved env.sh -> usable PATH resolver.
+
+    All probes run under the same child login shell, PATH setup and guards.
+    Memoize successes/failures for 60s; context or executable changes invalidate.
+    """
+    names = ("HOME", "PATH", "NVM_DIR", "AGENTSTACK_HOME", "AGENTSTACK_HOOKS_DIR",
+             "AGENTSTACK_CODEX_BIN", "AGENTSTACK_CHILD_SHELL")
+    context = tuple(os.environ.get(name, "") for name in names)
+    env_file = Path(os.environ.get("AGENTSTACK_HOME", "") or "~/.agentstack").expanduser() / "env.sh"
+    key = (context, _file_identity(env_file), _file_identity(context[5]))
     with _VERSION_LOCK:
         now = time.monotonic()
         cached = _VERSION_CACHE.get(key)
-        if cached is not None and now - cached[0] < CLI_VERSION_CACHE_SECONDS:
+        if (cached is not None and now - cached[0] < CLI_VERSION_CACHE_SECONDS
+                and cached[2] == _file_identity(cached[1].binary)):
             return cached[1]
-        version = None
-        process = None
-        try:
-            process = subprocess.Popen([binary, "--version"], stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                       start_new_session=os.name == "posix")
-            output, _ = process.communicate(timeout=CLI_VERSION_TIMEOUT_SECONDS)
-            match = re.fullmatch(rb"codex-cli ([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][^\s]+)?\s*", output)
-            if process.returncode == 0 and match:
-                version = tuple(int(part) for part in match.groups())
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            if process is not None:
-                try:
-                    if os.name == "posix":
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                except ProcessLookupError:
-                    pass
-                process.communicate()
-        # Keep the small cache bounded when executables are repeatedly replaced.
+        policy = _probe_launcher()
         _VERSION_CACHE.clear()
-        _VERSION_CACHE[key] = (time.monotonic(), version)
-        return version
+        _VERSION_CACHE[key] = (time.monotonic(), policy, _file_identity(policy.binary))
+        return policy
+
+
+def cli_version() -> tuple[int, int, int] | None:
+    return resolve_launcher().version
 
 
 @dataclass(frozen=True)
@@ -144,12 +197,12 @@ def _allow_list() -> tuple[str, ...] | None:
     return tuple(dict.fromkeys(values))
 
 
-def normalize_model(raw: str = "") -> str:
+def normalize_model(raw: str = "", *, launcher: LauncherPolicy | None = None) -> str:
     """Only unprefixed friendly names are aliases; formal IDs remain exact."""
     if not isinstance(raw, str):
         raise ValueError("invalid Codex model ID")
     value = raw.strip()
-    model = (resolve_catalog().default_model if not value or value.lower() == "sol"
+    model = (resolve_catalog(launcher=launcher).default_model if not value or value.lower() == "sol"
              else ALIASES.get(value.lower(), value))
     if not is_model_id(model):
         raise ValueError("invalid Codex model ID; use sol / luna / astra / terra / gpt-<id>")
@@ -281,7 +334,7 @@ def discover_models(now: float | None = None,
         return {}
 
 
-def resolve_catalog(now: float | None = None) -> ModelCatalog:
+def resolve_catalog(now: float | None = None, *, launcher: LauncherPolicy | None = None) -> ModelCatalog:
     try:
         allowed = _allow_list()
     except ValueError as exc:
@@ -292,7 +345,7 @@ def resolve_catalog(now: float | None = None) -> ModelCatalog:
     # Old, still-running CLI sessions overwrite the shared catalog periodically.
     # Trust the binary selected for NEW AGENT over that snapshot's client_version.
     # If its version cannot be read, use positive fresh catalog evidence instead.
-    version = cli_version()
+    version = launcher.version if launcher is not None else cli_version()
     supported = version >= CLI_MIN_VERSION if version is not None else DEFAULT_MODEL in discovered
     default = DEFAULT_MODEL if supported else FALLBACK_MODEL
     bundled = tuple(model for model in DEFAULT_MODELS
@@ -315,7 +368,8 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
     if not isinstance(raw, str):
         raise ValueError("invalid Codex reasoning effort")
     effort = raw.strip().lower()
-    catalog = resolve_catalog() if catalog is None else catalog
+    # Effort metadata does not need a launch-target/version probe.
+    catalog = resolve_catalog(launcher=LauncherPolicy()) if catalog is None else catalog
     if catalog.error:
         raise ValueError(catalog.error)
     policy = catalog.efforts.get(model)
@@ -344,6 +398,12 @@ def main() -> int:
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "normalize":
             print(normalize_model(sys.argv[2]))
+        elif len(sys.argv) == 3 and sys.argv[1] == "resolve":
+            policy = resolve_launcher()
+            model = normalize_model(sys.argv[2], launcher=policy)
+            print(json.dumps({"model": model, "codex_bin": policy.binary,
+                              "cli_version": ".".join(map(str, policy.version)) if policy.version else "",
+                              "default_source": "cli_version" if policy.version else "local_catalog"}))
         elif len(sys.argv) == 2 and sys.argv[1] == "note":
             note = resolve_catalog().note
             if note:
@@ -351,7 +411,7 @@ def main() -> int:
         elif len(sys.argv) == 4 and sys.argv[1] == "effort":
             print(resolve_effort(sys.argv[2], sys.argv[3]))
         else:
-            raise ValueError("usage: codex_models.py normalize MODEL | effort MODEL EFFORT | note")
+            raise ValueError("usage: codex_models.py normalize MODEL | resolve MODEL | effort MODEL EFFORT | note")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

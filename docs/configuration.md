@@ -320,7 +320,14 @@ AGENTSTACK_CODEX_MODELS="gpt-6.1-sol,gpt-6-luna" ./scripts/install.sh
 
 cache は `fetched_at` の日時と `models[].slug`、`visibility`、`supported_reasoning_levels[].effort`、`default_reasoning_level` の観測済み形式だけを使います。Codex CLI 0.154.0 の実装に合わせ、取得から300秒以内の一覧を利用します。通常ファイル、または launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink だけを対象にし、2 MiB・256モデル・ID長128文字まで読み、hidden モデルは追加しません。欠損・破損・非対応形式・空・期限切れでは同梱候補へ戻ります。CLI の版が 0.159.0 以上なら GPT-6.1 Sol も残し、版不明なら除きます。異なるeffortを持つ同一IDの重複もfallback対象です。
 
-同梱候補は `gpt-6.1-sol`（CLI 0.159.0 以上、または版不明で新鮮な catalog にある場合）、`gpt-6-sol`、`gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。catalog の読み取りは CLI の起動や通信をせず、credential、API key、token、Keychain を探索しません。既定選択では `AGENTSTACK_CODEX_BIN --version` だけを2秒の timeout 付きで実行し、成功・失敗を60秒間メモリに保持します。実行ファイルのパス・symlink の参照先・stat が変われば直ちに再取得します。古い稼働中 session が共有 cache を上書きするため、取得できた CLI の版を cache より優先します。絶対パスの起動対象が未設定、または版の取得に失敗した場合は新鮮な catalog による判定へ戻ります。cache のアカウント識別子や `client_version` を現在の認証・実行ファイルと照合しないため、候補の表示はそのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
+同梱候補は `gpt-6.1-sol`（CLI 0.159.0 以上、または版不明で新鮮な catalog にある場合）、`gpt-6-sol`、`gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。catalog の読み取りは CLI の起動や通信をせず、credential、API key、token、Keychain を探索しません。既定選択は spawner と共通の resolver で、環境の `AGENTSTACK_CODEX_BIN` → 保存済み `env.sh` → usable PATH candidate の順に起動対象を選びます。版の確認も子と同じ login shell・`~/.local/bin` を追加した PATH・guard 変数で `--version` を実行します。各候補の timeout は2秒、候補全体の予算は3秒、cleanup を含む読み取り helper 全体は6秒で打ち切ります。成功・失敗を60秒間メモリに保持し、環境・保存設定・選択された実行ファイルの参照先や stat が変われば再取得します。API と delegate は選んだ CLI と正式 model ID の組を起動へ渡します。古い稼働中 session が共有 cache を上書きするため、取得できた CLI の版を cache より優先します。起動対象を解決できない、または版が読めない場合は新鮮な catalog による判定へ戻ります。cache のアカウント識別子や `client_version` を現在の認証・実行ファイルと照合しないため、候補の表示はそのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
+
+NEW AGENT と同じ判断を確認するには、dashboard の service と同じ環境変数・PATH を持つ shell で次を実行します（delegate では launcher を実行する shell で実行）。`model`、`codex_bin`、`cli_version`、`default_source`（`cli_version` / `local_catalog`）を JSON で返します。`""` を `sol` や正式 ID に置き換えて確認できます。
+
+```bash
+python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve ""
+```
+
 
 UI はモデルごとの effort 情報を候補表示と無指定時の既定選択に使います。新鮮な cache に制約があればそちらを優先し、情報が無い ID では effort を勝手に補いません。明示した既知の effort 値は cache の期限切れや候補情報だけを理由に拒否せず、そのまま Codex CLI へ渡して最終判定を任せます。
 

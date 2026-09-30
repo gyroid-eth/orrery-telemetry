@@ -503,6 +503,8 @@ def _version_binary(tmp_path, body):
 
 def _configure_version_binary(monkeypatch, binary):
     monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    monkeypatch.setattr(models, "_probe_launcher",
+                        lambda: models.LauncherPolicy(str(binary), models._native_cli_version(str(binary))))
     if os.name == "nt":
         # Windows cannot execute a shebang fixture. Run it with the native
         # Python executable while keeping the real Popen/timeout/cache behavior.
