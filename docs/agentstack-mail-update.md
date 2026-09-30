@@ -127,6 +127,15 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
 - **token と credential。** agent の token は共有 database にあり、client 側の
   file（`~/.agentstack/runtime` など）には触れません。build が変わっても変わり
   ません。
+- **稼働中の session と bound proxy。** 再起動も再登録も要りません。test では、
+  切り替え前に登録した agent が同じ owner token で切り替え後も送受信でき、
+  違う token は拒否されることを確かめています。bound proxy の `runtime_status`
+  は direct binding では平常時から `state: "registering"`・`agent_id: null` を
+  返すので、それだけでは止まっている証拠になりません。
+- **systemd の timer（WSL2 など）。** unit は `env.sh` を読んで
+  `agentstack-mailctl start` を実行するだけで、render の path を持ちません。
+  切り替え後に timer が発火しても新しい build を見つけて何もしません（test で
+  unit の command をそのまま実行して確認）。
 - **enrollment。** `server_instance_id` は database の `mail_instances` にあるので
   同じ値のままです。`connections/local.json` の `expected_server_instance_id`
   は保持し、`mail_env` だけを新しい render に書き換えます。管理 socket の path

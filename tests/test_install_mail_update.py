@@ -13,8 +13,11 @@ import json
 import os
 import pathlib
 import sqlite3
+import secrets
+import shlex
 import subprocess
 import sys
+import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
@@ -28,6 +31,13 @@ from test_install_agentstack_mail import (
     _stop_mail,
     _wait_health,
     _write_command,
+)
+
+sys.path.insert(0, str(ROOT / "integrations" / "codex_app" / "src"))
+from agentstack_codex_app.agent_mail_client import (  # noqa: E402
+    AgentMailClient,
+    AgentMailError,
+    HttpJsonRpcTransport,
 )
 
 ENTRYPOINTS = (
@@ -122,6 +132,19 @@ class Stack:
         stop_dashboard(self.home, label_prefix=self.env["AGENTSTACK_LABEL_PREFIX"])
 
 
+def _ensure_project(url: str, project_key: str) -> None:
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "ensure_project", "arguments": {"human_key": project_key}},
+    }).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    })
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert b'"isError":true' not in response.read()
+
+
 def _first_install(stack: Stack) -> tuple[dict, pathlib.Path]:
     first = stack.install("fixture-old")
     assert first.returncode == 0, first.stdout + first.stderr
@@ -182,6 +205,23 @@ def test_update_switches_the_running_build_and_keeps_state(tmp_path):
         pinned["expected_server_instance_id"] = instance
         connection.write_text(json.dumps(pinned) + "\n", encoding="utf-8")
         connection.chmod(0o600)
+        # Two agents registered through the client a bound proxy uses, with a
+        # message in flight: after the switch the same owner tokens must still
+        # authenticate, with nothing re-registered and no proxy restarted.
+        project = stack.env["AGENTSTACK_PROJECT_KEY"]
+        _ensure_project(stack.mail_url, project)
+        client = AgentMailClient(HttpJsonRpcTransport(stack.mail_url))
+        tokens = {name: secrets.token_hex(24) for name in ("BlueCurie", "GreenNoether")}
+        for name, token in tokens.items():
+            client.register_agent(
+                project_key=project, model="test", registration_token=token,
+                agent_name=name,
+            )
+        client.send_message(
+            project_key=project, agent_name="BlueCurie",
+            registration_token=tokens["BlueCurie"], to=["GreenNoether"],
+            subject="before the switch", body_md="sent to the old build",
+        )
 
         updated = stack.install("fixture-new", "--update-mail")
         assert updated.returncode == 0, updated.stdout + updated.stderr
@@ -192,6 +232,28 @@ def test_update_switches_the_running_build_and_keeps_state(tmp_path):
         assert stack.pid() != old_pid
         assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
         assert stack.instance_id() == instance
+        client.send_message(
+            project_key=project, agent_name="BlueCurie",
+            registration_token=tokens["BlueCurie"], to=["GreenNoether"],
+            subject="after the switch", body_md="sent to the new build",
+        )
+        inbox = client.fetch_inbox(
+            project_key=project, agent_name="GreenNoether",
+            registration_token=tokens["GreenNoether"],
+        )
+        subjects = {item["subject"] for item in inbox}
+        assert {"before the switch", "after the switch"} <= subjects
+        # The server still checks the token: authentication is not simply off.
+        try:
+            client.send_message(
+                project_key=project, agent_name="BlueCurie",
+                registration_token=tokens["GreenNoether"], to=["GreenNoether"],
+                subject="wrong token", body_md="must be refused",
+            )
+        except AgentMailError:
+            pass
+        else:
+            raise AssertionError("a wrong owner token was accepted after the switch")
         generated = _generated_env(stack.home)
         assert generated["AGENTSTACK_MAIL_ENV"] == str(new_render / "service.env")
         assert generated["AGENTSTACK_MAIL_ENROLL_BIN"] == str(
@@ -384,3 +446,69 @@ def test_package_tree_comparison_decides_whether_a_new_build_differs(tmp_path):
     assert compare(first, docs_only) == "same"
     assert compare(first, package_change) == "different"
     assert compare("fixture-old", first) == "different"
+
+
+def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp_path):
+    """Linux with a systemd user timer, as on WSL2.
+
+    systemctl is a recorder here: the units are rendered and "enabled", but
+    nothing fires them. The test then runs the rendered service's command
+    itself, the way the timer would, and checks that it finds the new build
+    running rather than starting the one it was installed with.
+    """
+    stack = Stack(tmp_path)
+    fake_bin = pathlib.Path(stack.env["PATH"].split(":", 1)[0])
+    calls = tmp_path / "systemctl.calls"
+    _write_command(
+        fake_bin,
+        "systemctl",
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
+        # The dashboard falls back to a supervised process at once instead of
+        # waiting on a unit nothing will start; only the Mail timer is kept.
+        'case "$*" in *agentdashboard*) exit 1 ;; *is-active*|*is-enabled*) exit 3 ;; esac\n'
+        "exit 0\n",
+    )
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _, old_render = _first_install(stack)
+        label = f"{stack.env['AGENTSTACK_LABEL_PREFIX']}.mail"
+        unit = stack.home / ".config" / "systemd" / "user" / f"{label}.service"
+        assert unit.is_file()
+        assert f"enable --now {label}.timer" in calls.read_text(encoding="utf-8")
+
+        updated = stack.install("fixture-new", "--update-mail")
+        assert updated.returncode == 0, updated.stdout + updated.stderr
+        new_runner = str(stack.render_of("fixture-new") / "run-agentstack-mail.sh")
+        assert stack.runner() == new_runner
+        # The unit names no render: it follows env.sh, which now names the new one.
+        text = unit.read_text(encoding="utf-8")
+        assert "renders/" not in text
+        assert str(old_render) not in text
+
+        environment = {}
+        exec_start: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("Environment="):
+                key, value = line.removeprefix("Environment=").split("=", 1)
+                environment[key] = shlex.split(value)[0]
+            elif line.startswith("ExecStart="):
+                exec_start = shlex.split(line.removeprefix("ExecStart="))
+        assert environment.get("AGENTSTACK_MAILCTL_SWEEP") == "1"
+        assert exec_start[-1] == "start"
+        fired = subprocess.run(
+            exec_start,
+            env={**environment, "PATH": f"{fake_bin}:/usr/bin:/bin",
+                 "AGENTSTACK_LABEL_PREFIX": stack.env["AGENTSTACK_LABEL_PREFIX"],
+                 "AGENTSTACK_MAIL_LAUNCHD_LABEL": f"{label}-service"},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        assert fired.returncode == 0, fired.stdout + fired.stderr
+        assert stack.runner() == new_runner
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()

@@ -144,6 +144,16 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
 - **Tokens and credentials.** Agent tokens live in the shared database, and the
   client-side files (`~/.agentstack/runtime` and the like) are not touched. A
   build change does not change them.
+- **Running sessions and bound proxies.** Nothing needs restarting or
+  re-registering. The tests check that an agent registered before the switch
+  sends and receives with the same owner token afterwards, and that a wrong
+  token is refused. A bound proxy's `runtime_status` returns
+  `state: "registering"` and `agent_id: null` for a direct binding even in
+  normal operation, so that alone is no evidence that it is stuck.
+- **systemd timer (WSL2 and others).** The unit only reads `env.sh` and runs
+  `agentstack-mailctl start`; it names no render. A timer firing after the
+  switch finds the new build and does nothing (the tests run the unit's command
+  as written to check this).
 - **Enrollment.** `server_instance_id` is stored in the database's
   `mail_instances`, so it keeps its value. `expected_server_instance_id` in
   `connections/local.json` is preserved and only `mail_env` is rewritten to the
