@@ -453,15 +453,6 @@ deliver_worker() {
     local lease_owner="${10:-}"
     local session_name="$agent_name"
 
-    # Leave the server-owned signal unread; conversation-only sessions cannot
-    # authenticate Mail and must never be prompted to claim/register an identity.
-    local mail_disabled
-    mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
-    if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
-        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
-        return 0
-    fi
-
     # A persistent headless profile has no REPL pane to inject. Its wrapper
     # publishes a mode-0600 runtime manifest and execs a bridge that owns the
     # referenced Unix socket. The delivery helper returns success only after
@@ -491,6 +482,15 @@ deliver_worker() {
             release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
             return 0
         fi
+    fi
+
+    # Leave the server-owned signal unread; conversation-only sessions cannot
+    # authenticate Mail and must never be prompted to claim/register an identity.
+    local mail_disabled
+    mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
+    if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
     fi
 
     if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then

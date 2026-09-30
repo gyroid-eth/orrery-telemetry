@@ -138,6 +138,93 @@ def test_fallback_revalidation_rejects_changed_material(legacy, monkeypatch):
     assert (runtime / f'agent_token_{NAME}').read_text() == 'new-owner'
 
 
+@pytest.mark.parametrize('replacement', ['symlink_0400', 'symlink_0640', 'public', 'directory', 'fifo', 'hardlink', 'wrong_uid'])
+def test_lock_replaced_after_preflight_never_changes_other_material(legacy, monkeypatch, replacement):
+    runtime, _, launches, calls, *_ = legacy
+    (runtime / f'agent_token_{NAME}').unlink()
+    lock = runtime / 'child-agents' / f'.{NAME}.resume.lock'
+    lock.unlink(missing_ok=True)
+    foreign = runtime / 'agent_token_OtherOwner'
+    foreign.chmod(0o400 if replacement == 'symlink_0400' else 0o640)
+    before = snapshot(runtime)
+    directory_mode = lock.parent.stat().st_mode
+    original = server._claude_conversation_reason
+    replaced = False
+    created = []
+    def inspect(name):
+        nonlocal replaced
+        result = original(name)
+        if not replaced:
+            replaced = True
+            if replacement.startswith('symlink'):
+                lock.symlink_to(foreign)
+            elif replacement == 'directory': lock.mkdir()
+            elif replacement == 'fifo': os.mkfifo(lock, 0o600)
+            elif replacement == 'hardlink': os.link(foreign, lock)
+            else:
+                private(lock, 'replacement lock')
+                if replacement == 'public': lock.chmod(0o644)
+                else:
+                    from types import SimpleNamespace
+                    fstat = child_resume.os.fstat
+                    inode = lock.stat().st_ino
+                    def wrong_uid(fd):
+                        info = fstat(fd)
+                        if info.st_ino == inode:
+                            return SimpleNamespace(st_mode=info.st_mode, st_uid=os.getuid()+1)
+                        return info
+                    monkeypatch.setattr(child_resume.os, 'fstat', wrong_uid)
+            created.append(lock.lstat())
+        return result
+    monkeypatch.setattr(server, '_claude_conversation_reason', inspect)
+    result = server.do_resume(NAME, open_terminal=False)
+    assert not result['ok'] and result['resume_capability'] == 'credential_permission', result
+    assert not launches and not calls
+    same_material(before)
+    assert lock.lstat() == created[0]
+    assert lock.parent.stat().st_mode == directory_mode
+
+
+@pytest.mark.parametrize('replacement', ['symlink', 'public'])
+def test_lock_changed_while_waiting_for_flock_is_rejected(legacy, monkeypatch, replacement):
+    runtime, _, launches, calls, *_ = legacy
+    (runtime / f'agent_token_{NAME}').unlink()
+    lock = runtime / 'child-agents' / f'.{NAME}.resume.lock'
+    private(lock, '')
+    before = snapshot(runtime)
+    foreign = runtime / 'agent_token_OtherOwner'
+    flock = child_resume.fcntl.flock
+    changed = []
+    def change_after_wait(fd, operation):
+        flock(fd, operation)
+        if replacement == 'symlink':
+            lock.unlink(); lock.symlink_to(foreign)
+        else: lock.chmod(0o644)
+        changed.append(lock.lstat())
+    monkeypatch.setattr(child_resume.fcntl, 'flock', change_after_wait)
+    result = server.do_resume(NAME, open_terminal=False)
+    assert not result['ok'] and result['resume_capability'] == 'credential_permission', result
+    assert not launches and not calls
+    same_material({path:value for path,value in before.items() if path != lock})
+    assert lock.lstat() == changed[0]
+
+
+@pytest.mark.parametrize('mode', [0o400, 0o600])
+def test_existing_private_lock_is_preserved_during_conversation_resume(legacy, monkeypatch, mode):
+    runtime, _, launches, calls, *_ = legacy
+    (runtime / f'agent_token_{NAME}').unlink()
+    lock = runtime / 'child-agents' / f'.{NAME}.resume.lock'
+    private(lock, '')
+    lock.chmod(mode)
+    before = snapshot(runtime)
+    directory_mode = lock.parent.stat().st_mode
+    result = server.do_resume(NAME, open_terminal=False)
+    assert result['ok'] and result['resume_mode'] == 'conversation_only'
+    assert launches and not calls
+    same_material(before)
+    assert lock.parent.stat().st_mode == directory_mode
+
+
 @pytest.mark.parametrize('hook', ['session-start-reminder.sh', 'cleanup-child-agent.sh', 'release-all-reservations.sh'])
 def test_conversation_mode_actual_hooks_do_not_call_mail_or_write_material(tmp_path, hook):
     runtime = tmp_path / 'runtime'
@@ -163,7 +250,7 @@ def test_conversation_mode_watcher_skips_delivery_without_consuming_signal(tmp_p
     function = source[start:source.index('\n}\n', start)+3]
     signal = tmp_path / '777.signal'; signal.write_text('{"message":{"id":777}}')
     released = tmp_path / 'released'
-    script = ('set -euo pipefail\nTMUX_TIMEOUT=5\n' + function +
+    script = ('set -euo pipefail\nTMUX_TIMEOUT=5\nPERSISTENT_DELIVER=/nonexistent/fixture-helper\n' + function +
         '\nrun_to() { shift; "$@"; }\n'
         'tmux() { [[ "$1" == show-environment ]] || exit 98; echo AGENTSTACK_MAIL_DISABLED=1; }\n'
         f'release_delivery_lease() {{ echo "$*" > {shlex.quote(str(released))}; }}\n'
@@ -171,6 +258,37 @@ def test_conversation_mode_watcher_skips_delivery_without_consuming_signal(tmp_p
     result = subprocess.run(['/bin/bash', '-c', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert released.exists() and signal.read_text() == '{"message":{"id":777}}'
+
+
+@pytest.mark.parametrize("headless_rc", [0, 20])
+def test_headless_bridge_result_never_probes_tmux(tmp_path, headless_rc):
+    source = (ROOT / 'hooks/watch_agent_mail_signals.sh').read_text()
+    start = source.index('deliver_worker() {')
+    function = source[start:source.index('\n}\n', start)+3]
+    signal = tmp_path / '777.signal'; signal.write_text('{"message":{"id":777}}')
+    helper = tmp_path / 'headless-deliver'
+    helper.write_text(f'#!/bin/bash\nexit {headless_rc}\n'); helper.chmod(0o700)
+    tmux_marker = tmp_path / 'tmux'
+    released = tmp_path / 'released'
+    failure = tmp_path / 'failed'
+    script = ('set -euo pipefail\nTMUX_TIMEOUT=5\nHEADLESS_REPLY_TIMEOUT=1\n'
+        f'PERSISTENT_DELIVER={shlex.quote(str(helper))}\nSTATE_DIR={shlex.quote(str(tmp_path))}\n' + function +
+        '\nrun_to() { shift; "$@"; }\n'
+        f'tmux() {{ touch {shlex.quote(str(tmux_marker))}; return 98; }}\n'
+        'log() { :; }\n'
+        f'state_mark_result() {{ echo "$*" > {shlex.quote(str(failure))}; }}\n'
+        f'release_delivery_lease() {{ echo "$*" > {shlex.quote(str(released))}; }}\n'
+        f'deliver_worker {shlex.quote(str(signal))} {NAME} 777 Sender subject high 1 body 0 owner\n')
+    result = subprocess.run(['/bin/bash', '-c', script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert not tmux_marker.exists()
+    assert released.exists()
+    if headless_rc:
+        assert 'headless_reply_failed' in failure.read_text()
+        assert signal.read_text() == '{"message":{"id":777}}'
+    else:
+        assert 'persistent-headless-replied' in failure.read_text()
+        assert not signal.exists()
 
 
 def test_running_deck_and_network_keep_unavailable_reason_after_dashboard_restart(monkeypatch):

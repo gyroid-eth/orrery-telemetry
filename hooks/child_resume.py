@@ -169,14 +169,61 @@ class _AgentLock:
         self.descriptor: int | None = None
 
     def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
-        self.descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.fchmod(self.descriptor, 0o600)
-        fcntl.flock(
-            self.descriptor, fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
-        )
-        return self
+        directory = None
+        try:
+            # Validate before creating anything; never repair existing permissions
+            # or follow a replaced lock/directory into another identity's files.
+            ancestor = self.path.parent
+            while True:
+                try:
+                    info = ancestor.lstat()
+                    break
+                except FileNotFoundError:
+                    ancestor = ancestor.parent
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock directory is unsafe")
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            info = os.fstat(directory)
+            if (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock directory is unsafe")
+            # Opening an existing private read-only lock also works with flock;
+            # neither its contents nor its mode/mtime need to change.
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            try:
+                self.descriptor = os.open(self.path.name, flags, dir_fd=directory)
+            except FileNotFoundError:
+                self.descriptor = os.open(
+                    self.path.name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory
+                )
+            locked = os.fstat(self.descriptor)
+            if (not stat.S_ISREG(locked.st_mode) or locked.st_uid != os.getuid()
+                    or stat.S_IMODE(locked.st_mode) & 0o077 or locked.st_nlink != 1):
+                raise ResumeStateError("credential_permission", "child resume lock is unsafe")
+            fcntl.flock(
+                self.descriptor, fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
+            )
+            current = os.stat(self.path.name, dir_fd=directory, follow_symlinks=False)
+            current_directory = self.path.parent.lstat()
+            if ((current.st_dev, current.st_ino) != (locked.st_dev, locked.st_ino)
+                    or current.st_uid != os.getuid() or stat.S_IMODE(current.st_mode) & 0o077
+                    or current.st_nlink != 1
+                    or (current_directory.st_dev, current_directory.st_ino) != (info.st_dev, info.st_ino)
+                    or current_directory.st_uid != os.getuid()
+                    or stat.S_IMODE(current_directory.st_mode) & 0o022):
+                raise ResumeStateError("credential_permission", "child resume lock changed during acquisition")
+            return self
+        except (OSError, ResumeStateError) as exc:
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            if isinstance(exc, ResumeStateError):
+                raise
+            raise ResumeStateError("credential_permission", "child resume lock is unsafe or unavailable") from exc
+        finally:
+            if directory is not None:
+                os.close(directory)
 
     def __exit__(self, *_args):
         if self.descriptor is not None:

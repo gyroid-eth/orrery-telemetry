@@ -3369,31 +3369,34 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
     module = _child_resume_module()
     # Serialize with modern migration/purge. Revalidate immediately before the
     # gated launch; no canonical state, token, proxy config or Mail row is changed.
-    with module._AgentLock(pathlib.Path(RUNTIME_DIR) / "child-agents" / f".{session}.resume.lock", exclusive=True):
-        registration, current = _claude_conversation_reason(session)
-        if current != reason:
-            raise _ResumeCapabilityError("identity_mismatch", "Claude resume prerequisites changed")
-        fields = _conversation_mail_fields(reason)
-        environment = {
-            "AGENT_NAME": session, "CLAUDECODE": "1", "AGENTSTACK_RESERVED_IDENTITY": "1",
-            "AGENTSTACK_MAIL_DISABLED": "1", "AGENTSTACK_MAIL_DISABLED_REASON": reason,
-            "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": registration["project_key"],
-            "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
-        }
-        notice = fields["mail_message"] + " Do not register, recover credentials, or use Mail from this conversation."
-        command = [ABS_CLAUDE, "--resume", sid, "-n", session,
-                   "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                   "--settings", '{"disableAllHooks":true}', "--no-chrome",
-                   "--append-system-prompt", notice]
-        inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
-                 'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
-                 'export PATH="$HOME/.local/bin:$PATH"; ' +
-                 ''.join(f"export {key}={shlex.quote(value)}; " for key, value in environment.items()) +
-                 "printf '%s\n' " + shlex.quote(notice) + "; exec " + shlex.join(command))
-        launch = _launch_claude_resume_tmux(
-            ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
-             *[arg for key, value in environment.items() for arg in ("-e", f"{key}={value}")],
-             _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+    try:
+        with module._AgentLock(pathlib.Path(RUNTIME_DIR) / "child-agents" / f".{session}.resume.lock", exclusive=True):
+            registration, current = _claude_conversation_reason(session)
+            if current != reason:
+                raise _ResumeCapabilityError("identity_mismatch", "Claude resume prerequisites changed")
+            fields = _conversation_mail_fields(reason)
+            environment = {
+                "AGENT_NAME": session, "CLAUDECODE": "1", "AGENTSTACK_RESERVED_IDENTITY": "1",
+                "AGENTSTACK_MAIL_DISABLED": "1", "AGENTSTACK_MAIL_DISABLED_REASON": reason,
+                "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": registration["project_key"],
+                "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
+            }
+            notice = fields["mail_message"] + " Do not register, recover credentials, or use Mail from this conversation."
+            command = [ABS_CLAUDE, "--resume", sid, "-n", session,
+                       "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                       "--settings", '{"disableAllHooks":true}', "--no-chrome",
+                       "--append-system-prompt", notice]
+            inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
+                     'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
+                     'export PATH="$HOME/.local/bin:$PATH"; ' +
+                     ''.join(f"export {key}={shlex.quote(value)}; " for key, value in environment.items()) +
+                     "printf '%s\n' " + shlex.quote(notice) + "; exec " + shlex.join(command))
+            launch = _launch_claude_resume_tmux(
+                ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
+                 *[arg for key, value in environment.items() for arg in ("-e", f"{key}={value}")],
+                 _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+    except module.ResumeStateError as exc:
+        raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     if not launch.get("ok"):
         return {"ok": False, "error": "Conversation resume startup failed", **fields,
                 **({"rollback_errors": launch["rollback_errors"]} if launch.get("rollback_errors") else {})}
