@@ -15,14 +15,7 @@ from claude_resume_harness import mail, run_resumed
 from test_claude_resume_mail import NAME, ROOT, child, resume
 
 
-@pytest.mark.parametrize("is_child", [False, True])
-def test_resume_session_start_keeps_the_registered_model(resume, mail, tmp_path, is_child):
-    """#144: the resumed session's SessionStart re-registration wrote `claude-code`."""
-    runtime, registration, launches, calls = resume
-    if is_child:
-        child(runtime, registration)
-    result = server.do_resume(NAME, open_terminal=False)
-    assert result["ok"], result
+def session_start_models(launches, tmp_path, mail):
     payload = json.dumps({"session_id": "sess-resume-1", "hook_event_name": "SessionStart",
                           "cwd": str(tmp_path)})
     process = run_resumed(launches, tmp_path,
@@ -32,12 +25,30 @@ def test_resume_session_start_keeps_the_registered_model(resume, mail, tmp_path,
     assert process.returncode == 0, process.stderr
     registers = [arguments for method, arguments in mail if method == "register_agent"]
     assert registers, mail
-    assert {arguments["model"] for arguments in registers} == {"fixture-model"}, registers
+    return {arguments["model"] for arguments in registers}
 
 
-def test_resume_with_no_registered_model_keeps_the_program_label(resume, mail, tmp_path):
+@pytest.mark.parametrize("is_child", [False, True])
+def test_resume_session_start_keeps_the_registered_model(resume, mail, tmp_path, is_child):
+    """#144: the resumed session's SessionStart re-registration wrote `claude-code`."""
+    runtime, registration, launches, calls = resume
+    if is_child:
+        child(runtime, registration)
+    result = server.do_resume(NAME, open_terminal=False)
+    assert result["ok"], result
+    assert session_start_models(launches, tmp_path, mail) == {"fixture-model"}
+
+
+def test_resume_with_no_registered_model_does_not_take_an_ambient_one(resume, mail, tmp_path):
     runtime, registration, launches, calls = resume
     registration["model"] = ""
     result = server.do_resume(NAME, open_terminal=False)
     assert result["ok"], result
-    assert "CLAUDE_CHILD_MODEL=" not in launches[-1][-1]
+    assert session_start_models(launches, tmp_path, mail) == {"claude-code"}
+
+
+def test_resumed_session_does_not_hand_its_model_to_later_launchers(resume):
+    """`agentstack-preregister-child` / `agent-start` default to AGENTSTACK_CLAUDE_MODEL."""
+    runtime, registration, launches, calls = resume
+    assert server.do_resume(NAME, open_terminal=False)["ok"]
+    assert "AGENTSTACK_CLAUDE_MODEL" not in launches[-1][-1]

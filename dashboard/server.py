@@ -2865,13 +2865,12 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     }
     if os.environ.get("AGENTSTACK_PYTHON", "").strip():
         resume_environment["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
-    if registration.get("model"):
-        # The resumed session's SessionStart hook re-registers from the shell
-        # and takes its model from these, falling back to the program name.
-        # Without them it overwrote the registered model with `claude-code`,
-        # or with whatever model the tmux server environment carried (#144).
-        resume_environment["AGENTSTACK_CLAUDE_MODEL"] = registration["model"]
-        resume_environment["CLAUDE_CHILD_MODEL"] = registration["model"]
+    # The resumed session's SessionStart hook re-registers from the shell and
+    # takes its model from here. Without it the registered model was replaced
+    # by `claude-code`, or by a model the tmux server environment carried
+    # (#144). Only this session-scoped name is set: AGENTSTACK_CLAUDE_MODEL is
+    # the default for agents this session later launches.
+    resume_environment["CLAUDE_CHILD_MODEL"] = registration.get("model") or "claude-code"
     inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG AGENTSTACK_CLAUDE_LAUNCH_ID; '
              + "".join(f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()) + inner)
     if child_state is not None:

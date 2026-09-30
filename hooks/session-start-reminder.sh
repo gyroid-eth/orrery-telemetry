@@ -203,7 +203,9 @@ shell_register_resolved_agent() {
     # it this re-registration overwrote the pre-registered model with the
     # program name, and the dashboard lost the provider (no logo, chip said
     # "CLAUDE-CODE" — seen on WSL2, where no pane model is parsed either).
-    model="${AGENTSTACK_CLAUDE_MODEL:-${CLAUDE_CHILD_MODEL:-claude-code}}"
+    # The session's own model wins over the install-wide label; a dashboard
+    # resume hands the registered one the same way (#144).
+    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-claude-code}}"
     ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1
     register_status=$?
     if [ "$register_status" -ne 0 ]; then

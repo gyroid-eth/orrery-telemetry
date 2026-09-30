@@ -28,7 +28,7 @@
 
 ### resume すると whois の model が claude-code に変わっていました（#144）
 
-resume した Claude の SessionStart hook は shell から再登録しますが、model を受け取っていなかったため、登録済みの model（例: `opus-5.5`）を `claude-code`、または tmux server の環境に残った別の agent の model で上書きしていました。resume は登録済みの model をその session に渡し、再登録でも変えません。
+resume した Claude の SessionStart hook は shell から再登録しますが、model を受け取っていなかったため、登録済みの model（例: `opus-5.5`）を `claude-code`、または tmux server の環境に残った別の agent の model で上書きしていました。resume は登録済みの model（無ければ `claude-code`）をその session の `CLAUDE_CHILD_MODEL` として渡し、SessionStart の再登録はこれを `AGENTSTACK_CLAUDE_MODEL` より優先します。
 
 
 
