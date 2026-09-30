@@ -27,6 +27,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+# The Mail proxy's agent-name rule (mcp_server._AGENT_NAME); it refuses to
+# start with any other parent name.
+PROXY_AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,127}")
 CODEX_PROGRAMS = {"codex", "codex-cli"}
 CLAUDE_PROGRAMS = {"claude", "claude-code"}
 MCP_PROFILES = {"inherit", "orrery-only"}
@@ -1067,9 +1070,12 @@ def _build_home_unlocked(
     python_bin: str,
     mcp_profile: str,
     overlay_setting: str = "",
+    parent_agent: str = "",
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
+    if parent_agent and not PROXY_AGENT_NAME.fullmatch(parent_agent):
+        raise ValueError("the parent agent name cannot be given to the Mail proxy")
     if not source.is_dir() or not runner.is_file() or not os.access(runner, os.X_OK):
         raise ValueError("current Codex home or MCP proxy is unavailable")
     _read_private(token_file, "canonical child credential", MAX_TOKEN_BYTES)
@@ -1182,6 +1188,9 @@ def _build_home_unlocked(
                     "AGENTSTACK_RUNTIME_DIR = " + _toml_string(os.fspath(runtime_dir)),
                 ]
             )
+            # The proxy reports this as lineage.parent_agent (standalone: none).
+            if parent_agent:
+                lines.append("AGENTSTACK_PROXY_PARENT_AGENT = " + _toml_string(parent_agent))
             if python_bin:
                 lines.append("AGENTSTACK_PYTHON = " + _toml_string(python_bin))
             lines.append(
@@ -1257,6 +1266,7 @@ def build_home(
     python_bin: str,
     mcp_profile: str,
     overlay_setting: str = "",
+    parent_agent: str = "",
 ) -> Path:
     """Build only the canonical generated home while holding the child lock."""
 
@@ -1280,6 +1290,7 @@ def build_home(
             python_bin=python_bin,
             mcp_profile=mcp_profile,
             overlay_setting=overlay_setting,
+            parent_agent=parent_agent,
         )
 
 
@@ -1352,6 +1363,7 @@ def main() -> int:
         build.add_argument("--" + name, required=True)
     build.add_argument("--python-bin", default="")
     build.add_argument("--overlay", default="")
+    build.add_argument("--parent-agent", default="")
     args = parser.parse_args()
     try:
         runtime = Path(getattr(args, "runtime_dir", "")).expanduser()
@@ -1436,6 +1448,7 @@ def main() -> int:
                 python_bin=args.python_bin,
                 mcp_profile=args.mcp_profile,
                 overlay_setting=args.overlay,
+                parent_agent=args.parent_agent,
             )
             print(home)
     except (OSError, ValueError, ResumeStateError) as exc:

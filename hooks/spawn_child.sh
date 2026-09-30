@@ -1867,14 +1867,14 @@ write_child_mcp_config() {
     python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
         "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
         "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" \
-        "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
+        "${AGENTSTACK_PYTHON:-}" "${PARENT_NAME:-}" <<'PY' || return 0
 # NOTE: no line here may start with "}" in column 0 — the shell function is
 # extracted by "up to the first line that is just a closing brace".
 import json
 import os
 import sys
 
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin = sys.argv[1:12]
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin, parent = sys.argv[1:13]
 server_env = dict(
     AGENTSTACK_PROXY_AGENT_NAME=child,
     AGENTSTACK_PROXY_TOKEN_FILE=token_file,
@@ -1891,6 +1891,9 @@ server_env = dict(
 )
 if python_bin:
     server_env["AGENTSTACK_PYTHON"] = python_bin
+# The proxy reports this as lineage.parent_agent (standalone: none).
+if parent:
+    server_env["AGENTSTACK_PROXY_PARENT_AGENT"] = parent
 server = dict(command=runner, args=[], env=server_env)
 
 
@@ -1980,7 +1983,73 @@ write_child_codex_home() {
         --bearer-mode "$HTTP_BEARER_MODE" \
         --python-bin "${AGENTSTACK_PYTHON:-}" \
         --mcp-profile "$mcp_profile" \
+        --parent-agent "${PARENT_NAME:-}" \
         --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}" || return 0
+}
+
+# The Mail proxy a child is given reports its ORRERY parent as
+# lineage.parent_agent. A child told "your parent is X" that sees no parent
+# there stops as an identity mismatch (WSL2 report, 2026-10-01, problem 4), so
+# a launch whose proxy cannot carry the parent is refused before the CLI runs.
+#   before <provider>          the parent name must be one the proxy accepts
+#   after codex <home|"">      the generated home names the parent; without a
+#                              home, the user's config must not route bootstrap
+#                              to the Codex App Bridge, which never saw the child
+#   after claude <config|"">   the generated proxy config names the parent
+ensure_child_proxy_parent() {
+    local phase="$1" provider="$2" path="${3:-}"
+    local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
+    [[ -n "${PARENT_NAME:-}" ]] || return 0
+    if [[ "$phase" == before ]]; then
+        [[ -x "$runner" ]] || return 0
+        if [[ ! "$PARENT_NAME" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]]; then
+            echo "Error: the parent name '$PARENT_NAME' cannot be given to the child's ORRERY Mail proxy (letters, digits and '-' only)." >&2
+            echo "  Set PARENT_AGENT to the parent's ORRERY Mail agent name, or use --standalone for a child with no parent." >&2
+            return 1
+        fi
+        return 0
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" - "$provider" "$path" "$PARENT_NAME" "${CODEX_HOME:-$HOME/.codex}" <<'PY'
+import json
+import pathlib
+import sys
+import tomllib
+
+provider, path, parent, source_home = sys.argv[1:5]
+
+
+def refuse(message):
+    print(f"Error: {message}", file=sys.stderr)
+    print(f"  The child would not see {parent} as its parent in bootstrap/runtime_status; not starting it.", file=sys.stderr)
+    raise SystemExit(1)
+
+
+if provider == "codex" and not path:
+    try:
+        config = tomllib.loads((pathlib.Path(source_home) / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit(0)
+    plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    for plugin_id, plugin in plugins.items():
+        if (plugin_id.startswith("agentstack-codex-app@") and isinstance(plugin, dict)
+                and plugin.get("enabled", True) is not False):
+            refuse("no ORRERY Mail proxy could be prepared for this Codex child, and the inherited "
+                   f"Codex config enables {plugin_id}, whose bootstrap answers from the Codex App Bridge")
+    raise SystemExit(0)
+if not path:
+    raise SystemExit(0)
+try:
+    if provider == "codex":
+        servers = tomllib.loads((pathlib.Path(path) / "config.toml").read_text(encoding="utf-8")).get("mcp_servers", {})
+    else:
+        servers = json.loads(pathlib.Path(path).read_text(encoding="utf-8")).get("mcpServers", {})
+except (OSError, ValueError) as exc:
+    refuse(f"the generated ORRERY Mail proxy config is unreadable: {exc}")
+proxies = [server.get("env") or {} for server in servers.values()
+           if isinstance(server, dict) and "AGENTSTACK_PROXY_AGENT_NAME" in (server.get("env") or {})]
+if not proxies or any(env.get("AGENTSTACK_PROXY_PARENT_AGENT") != parent for env in proxies):
+    refuse("the generated ORRERY Mail proxy config does not name the parent")
+PY
 }
 
 # Generate the direct-spawn registration token in a 0600 one-shot file.  The
@@ -2410,11 +2479,13 @@ PY
         CHILD_CODEX_BIN="$(resolve_codex_bin)"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
+        ensure_child_proxy_parent before codex || exit 1
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
         if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
             echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
             exit 1
         fi
+        ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
         if ! CHILD_LAUNCH_INFO="$(
             prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
         )"; then
@@ -2567,7 +2638,9 @@ ${TASK}"
         if [[ "$WARM_CLAIMED" == false ]]; then
             # Cold start（フォールバック）
             echo "[spawn_child/pre-reg] Cold start..." >&2
+            ensure_child_proxy_parent before claude || exit 1
             CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+            ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
             if [[ -n "$CHILD_MCP_CONFIG" ]]; then
                 echo "[spawn_child/pre-reg] Child MCP proxy config: $CHILD_MCP_CONFIG" >&2
             else
@@ -3213,11 +3286,13 @@ if [[ "$USE_CODEX" == true ]]; then
         echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
         exit 1
     fi
+    ensure_child_proxy_parent before codex || exit 1
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
     if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
         echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
         exit 1
     fi
+    ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
     if ! CHILD_LAUNCH_INFO="$(
         prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
     )"; then
@@ -3314,7 +3389,9 @@ else
         echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
     fi
+    ensure_child_proxy_parent before claude || exit 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+    ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

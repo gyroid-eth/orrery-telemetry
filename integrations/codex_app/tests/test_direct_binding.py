@@ -324,3 +324,59 @@ def test_agent_id_naming_another_agent_is_refused(tmp_path):
         _dispatch(
             proxy, "bootstrap", {"session_id": CODEX_THREAD_ID, "agent_id": "Other-Agent"}
         )
+
+
+# --- the launcher's parent reaches lineage (WSL2 report, 2026-10-01) -------
+
+
+def test_config_reads_the_parent_the_launcher_named(tmp_path):
+    config = ProxyConfig.from_env({
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+        "AGENTSTACK_PROXY_AGENT_NAME": AGENT,
+        "AGENTSTACK_PROJECT_KEY": PROJECT,
+        "AGENTSTACK_PROXY_PARENT_AGENT": "Blue-Lake",
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path),
+    })
+    assert config.parent_agent == "Blue-Lake"
+
+
+@pytest.mark.parametrize("environment", [
+    {"AGENTSTACK_PROXY_PARENT_AGENT": "Parent Agent"},
+    {"AGENTSTACK_PROXY_PARENT_AGENT": "../Other"},
+    # A parent is only meaningful for a direct binding.
+    {"AGENTSTACK_PROXY_AGENT_NAME": "", "AGENTSTACK_PROXY_PARENT_AGENT": "Blue-Lake"},
+])
+def test_a_parent_the_proxy_cannot_state_is_refused_at_startup(tmp_path, environment):
+    with pytest.raises(ValueError):
+        ProxyConfig.from_env({
+            "AGENTSTACK_MCP_URL": "http://127.0.0.1:8765/mcp",
+            "AGENTSTACK_PROXY_AGENT_NAME": AGENT,
+            "AGENTSTACK_PROJECT_KEY": PROJECT,
+            "AGENTSTACK_RUNTIME_DIR": str(tmp_path),
+            **environment,
+        })
+
+
+def test_a_launched_child_reports_its_parent_not_a_root(tmp_path):
+    from agentstack_codex_app.identity_store import IdentityStore
+    from agentstack_codex_app.snapshot import SnapshotStore
+
+    proxy = AgentStackProxy(
+        IdentityStore(tmp_path / "identity"),
+        SnapshotStore(tmp_path / "snapshot.json"),
+        AgentMailClient(RecordingTransport(advertises_owner_token=True)),
+    )
+    proxy.bind_direct(agent_name=AGENT, project_key=PROJECT, owner_token=TOKEN, parent_agent="Blue-Lake")
+    # Codex passes its own thread id to bootstrap; the answer is the same.
+    booted = _dispatch(proxy, "bootstrap", {"session_id": "019a-codex-thread"})
+    status = _dispatch(proxy, "runtime_status", {})
+    assert booted["lineage"] == status["lineage"]
+    assert status["lineage"]["kind"] == "child"
+    assert status["lineage"]["parent_agent"] == "Blue-Lake"
+
+
+def test_a_standalone_direct_binding_is_still_a_root(tmp_path):
+    proxy, _transport = _proxy(tmp_path)
+    lineage = _dispatch(proxy, "runtime_status", {})["lineage"]
+    assert lineage["kind"] == "root"
+    assert lineage["parent_agent"] is None
