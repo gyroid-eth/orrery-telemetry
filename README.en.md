@@ -130,7 +130,7 @@ See "For first-time installers" in the cockpit's [installation guide](https://gi
 
 When you use an Obsidian vault as the place where agents work, their work logs, paper notes, and tasks become Markdown notes as they are, and you only need to read them in the Daily Note and on a Kanban board. ORRERY Telemetry works without Obsidian; this is one useful way to work.
 
-![Typing /adddone to an agent adds the finished task to "Done today" in the Obsidian Daily Note](docs/img/obsidian-daily.gif)
+![Obsidian on the left and one agent's window popped out of ORRERY on the right. Typing /adddone to the agent adds the finished task to "Done today" in the Obsidian Daily Note](docs/img/obsidian-daily.gif)
 
 See [Using it with Obsidian](docs/obsidian.en.md) for how to set it up, and [orrery-demo-vault](https://github.com/gyroid-eth/orrery-demo-vault) for a vault you can try right away.
 

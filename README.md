@@ -130,7 +130,7 @@ skill の置き場所と仕組みは [Launcher と identity](docs/launchers.md#s
 
 Obsidian の vault を作業場所にすると、agent の作業ログ・論文ノート・タスクがそのまま Markdown のノートになり、人は Daily Note と Kanban で見るだけで済みます。ORRERY Telemetry は Obsidian が無くても使えます。これは便利な使い方の 1 つです。
 
-![agent に /adddone と打つと、Obsidian の Daily Note の「今日完了した」に完了したタスクが増える](docs/img/obsidian-daily.gif)
+![左に Obsidian、右に ORRERY から独立させた 1 agent の窓。窓の agent に /adddone と打つと、Obsidian の Daily Note の「今日完了した」に完了したタスクが増える](docs/img/obsidian-daily.gif)
 
 使い方は [Obsidian と一緒に使う](docs/obsidian.md)、すぐ試せるひな形は [orrery-demo-vault](https://github.com/gyroid-eth/orrery-demo-vault) にあります。
 

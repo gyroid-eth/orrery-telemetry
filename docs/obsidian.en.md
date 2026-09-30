@@ -6,7 +6,7 @@
 
 ORRERY Telemetry works without Obsidian. This page shows one useful way to work: using an Obsidian vault as the place where your agents work.
 
-![Typing /adddone to an agent adds the finished task to "Done today" in the Obsidian Daily Note](img/obsidian-daily.gif)
+![Obsidian on the left and one agent's window popped out of ORRERY on the right. Typing /adddone to the agent adds the finished task to "Done today" in the Obsidian Daily Note](img/obsidian-daily.gif)
 
 ## What you get
 
