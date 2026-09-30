@@ -89,6 +89,9 @@ def _fake_launch_env(
             ROOT / "bin" / "lib" / "agentstack-register.sh"
         ),
         "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+        # A relaunched retired child is unretired through Mail; never let a
+        # fixture reach a Mail that happens to run on the default port.
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:9/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "FAKE_TMUX_LOG": str(tmux_log),
         "FAKE_TMUX_ALIVE": str(tmux_alive),
@@ -490,8 +493,9 @@ def test_failed_startup_restores_existing_registration_and_keeps_handoff(tmp_pat
     child_resume.prepare_active_state(runtime, name, project_key='/shared/project', mcp_profile='inherit')
     assert child_resume.mark_retired(runtime, name, retention_days=30)
     originals = {p: (p.read_bytes(), p.stat().st_mode) for p in (canonical, state, handoff, binding)}
-    # Startup refuses before a real CLI can run. Codex stops at profile preparation;
-    # Claude reaches the real tmux invocation, which the disposable fixture rejects.
+    # Startup refuses before a real CLI can run. The child is retired, and the
+    # fixture's Mail is a closed port, so both stop before tmux when it cannot
+    # be made active again; the tmux fixture below would reject Claude anyway.
     if not codex:
         _executable(tmp_path / 'bin' / 'tmux', '#!/bin/bash\n[[ "$1" != new-session ]] || exit 1\nexit 0\n')
     args = ['/bin/bash', str(SPAWN), '--pre-registered', name, '--child-token-file', str(handoff)]
