@@ -414,16 +414,148 @@ child_token_file_path() {
 # Stage only formally verified credentials; the undo record protects existing
 # canonical material until startup succeeds. Never consume a failed handoff.
 stage_child_registration() {
-    local agent_name="$1" program="$2" source_file="${3:-}"
+    local agent_name="$1" program="$2" source_file="${3:-}" legacy_agent_id="${4:-}"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
     [[ -f "$helper" ]] || return 1
     local source_args=()
     if [[ -n "$source_file" ]]; then
         source_args=(--source "$source_file" --binding "${source_file}.binding.json")
+    elif [[ -n "$legacy_agent_id" ]]; then
+        source_args=(--legacy-agent-id "$legacy_agent_id")
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" stage-registration \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" --program "$program" --generation "$CHILD_REGISTRATION_GENERATION" ${source_args[@]+"${source_args[@]}"}
+}
+
+# A Claude child spawned by an earlier version kept only a three-field state
+# (agent_name, project_key, registration_token). Before this launcher adopts it,
+# ORRERY Mail must confirm that the saved credential owns the row with that
+# exact name, project and program -- the same existing-owner check the
+# dashboard's resume makes (#140/#141). Nothing is registered or claimed.
+#
+# Prints "<agent_id><TAB><program>" for a confirmed legacy child and nothing
+# for any other state. Exit 2: Mail predates existing-owner authentication.
+# Exit 1: not confirmed; the reason is on stderr.
+authenticate_legacy_claude_child() {
+    local agent_name="$1" token_file bearer="" bearer_status=0
+    token_file="$(child_token_file_path "$agent_name")" || return 1
+    if legacy_http_bearer_enabled; then
+        bearer="$(get_agentstack_token 2>/dev/null || true)"
+    else
+        bearer_status=$?
+        [[ "$bearer_status" != 2 ]] || return 1
+    fi
+    printf '%s' "$bearer" | "${AGENTSTACK_PYTHON:-python3}" - \
+        "$CHILD_STATE_DIR/$agent_name.json" "$token_file" "$agent_name" \
+        "$PROJECT_KEY" "$MCP_URL" <<'PY'
+import hmac
+import http.client
+import json
+import os
+import stat
+import sys
+from urllib.parse import urlparse
+
+state_file, token_file, agent_name, project_key, url = sys.argv[1:6]
+bearer = sys.stdin.read()
+LEGACY_KEYS = {"agent_name", "project_key", "registration_token"}
+
+
+def read_private(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+            raise PermissionError(f"{path} must be a private regular file")
+        return os.read(descriptor, 65537).decode("utf-8")
+    finally:
+        os.close(descriptor)
+
+
+def fail(message, code=1):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+try:
+    state = json.loads(read_private(state_file))
+except FileNotFoundError:
+    raise SystemExit(0)
+except (OSError, ValueError) as exc:
+    fail(f"child state is unreadable: {exc}")
+if not isinstance(state, dict) or set(state) != LEGACY_KEYS:
+    raise SystemExit(0)
+if state["agent_name"] != agent_name or state["project_key"] != project_key:
+    fail("the earlier-version state names another agent or project")
+try:
+    token = read_private(token_file).strip()
+except OSError as exc:
+    fail(f"the saved owner credential is unavailable: {exc}")
+saved = state["registration_token"]
+if not token or not isinstance(saved, str) or not hmac.compare_digest(token.encode(), saved.encode()):
+    fail("the saved state and owner credential are from different registrations")
+
+parsed = urlparse(url)
+
+
+def rpc(method, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    headers = {"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    try:
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
+        connection.request("POST", parsed.path, body=body, headers=headers)
+        reply = json.loads(connection.getresponse().read().decode("utf-8"))
+        connection.close()
+    except (OSError, ValueError) as exc:
+        fail(f"ORRERY Mail at {url} did not answer: {exc}")
+    if not isinstance(reply, dict) or reply.get("error"):
+        fail(f"ORRERY Mail refused {params.get('name', method)}: {reply.get('error') if isinstance(reply, dict) else reply}")
+    return reply.get("result") or {}
+
+
+def call(name, arguments):
+    result = rpc("tools/call", {"name": name, "arguments": arguments})
+    text = ""
+    for part in result.get("content") or []:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            text = part["text"]
+            break
+    if result.get("isError"):
+        fail(f"ORRERY Mail refused {name}: {text or 'no reason given'}")
+    data = result.get("structuredContent")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+    if not isinstance(data, dict):
+        fail(f"ORRERY Mail returned no profile for {name}")
+    return data
+
+
+listing = rpc("tools/list", {})
+schemas = {tool.get("name"): tool.get("inputSchema") or {} for tool in listing.get("tools") or [] if isinstance(tool, dict)}
+if "existing_agent_id" not in (schemas.get("register_agent") or {}).get("properties", {}):
+    fail("the running ORRERY Mail cannot confirm an existing owner (existing_agent_id)", 2)
+profile = call("whois", {"project_key": project_key, "agent_name": agent_name, "include_recent_commits": False})
+agent_id, program = profile.get("id"), profile.get("program")
+if type(agent_id) is not int or agent_id <= 0 or profile.get("name") != agent_name:
+    fail("ORRERY Mail has no registration with this exact name")
+if program not in {"claude", "claude-code"}:
+    fail(f"the registration with this name belongs to {program!r}, not Claude")
+owner = call("register_agent", {
+    "project_key": project_key, "name": agent_name, "program": program,
+    "registration_token": token, "existing_agent_id": agent_id,
+})
+if (owner.get("id") != agent_id or owner.get("name") != agent_name or owner.get("program") != program
+        or type(owner.get("project_id")) is not int):
+    fail("ORRERY Mail confirmed a different identity")
+print(f"{agent_id}\t{program}")
+PY
 }
 
 finish_child_registration() {
@@ -532,7 +664,16 @@ prepare_codex_child_resume_state() {
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
-        --mcp-profile "$mcp_profile" --program codex ${generation_args[@]+"${generation_args[@]}"}
+        --mcp-profile "$mcp_profile" --program codex --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
+}
+
+# The parent recorded in the child's state, for the Mail proxy a later resume
+# rebuilds. Empty for a standalone child, and for a name the proxy would refuse
+# (a launch that uses the proxy is stopped over such a name before it starts).
+recordable_parent_name() {
+    if [[ "${PARENT_NAME:-}" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]]; then
+        printf '%s' "$PARENT_NAME"
+    fi
 }
 
 prepare_claude_child_resume_state() {
@@ -545,7 +686,7 @@ prepare_claude_child_resume_state() {
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
-        --project-key "$PROJECT_KEY" --program claude-code ${generation_args[@]+"${generation_args[@]}"}
+        --project-key "$PROJECT_KEY" --program claude-code --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
 }
 
 # Start one launch expectation from a registration receipt. Output is
@@ -1735,14 +1876,14 @@ write_child_mcp_config() {
     python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
         "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
         "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" \
-        "${AGENTSTACK_PYTHON:-}" <<'PY' || return 0
+        "${AGENTSTACK_PYTHON:-}" "${PARENT_NAME:-}" <<'PY' || return 0
 # NOTE: no line here may start with "}" in column 0 — the shell function is
 # extracted by "up to the first line that is just a closing brace".
 import json
 import os
 import sys
 
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin = sys.argv[1:12]
+path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin, parent = sys.argv[1:13]
 server_env = dict(
     AGENTSTACK_PROXY_AGENT_NAME=child,
     AGENTSTACK_PROXY_TOKEN_FILE=token_file,
@@ -1759,6 +1900,9 @@ server_env = dict(
 )
 if python_bin:
     server_env["AGENTSTACK_PYTHON"] = python_bin
+# The proxy reports this as lineage.parent_agent (standalone: none).
+if parent:
+    server_env["AGENTSTACK_PROXY_PARENT_AGENT"] = parent
 server = dict(command=runner, args=[], env=server_env)
 
 
@@ -1848,7 +1992,73 @@ write_child_codex_home() {
         --bearer-mode "$HTTP_BEARER_MODE" \
         --python-bin "${AGENTSTACK_PYTHON:-}" \
         --mcp-profile "$mcp_profile" \
+        --parent-agent "${PARENT_NAME:-}" \
         --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}" || return 0
+}
+
+# The Mail proxy a child is given reports its ORRERY parent as
+# lineage.parent_agent. A child told "your parent is X" that sees no parent
+# there stops as an identity mismatch (WSL2 report, 2026-10-01, problem 4), so
+# a launch whose proxy cannot carry the parent is refused before the CLI runs.
+#   before <provider>          the parent name must be one the proxy accepts
+#   after codex <home|"">      the generated home names the parent; without a
+#                              home, the user's config must not route bootstrap
+#                              to the Codex App Bridge, which never saw the child
+#   after claude <config|"">   the generated proxy config names the parent
+ensure_child_proxy_parent() {
+    local phase="$1" provider="$2" path="${3:-}"
+    local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
+    [[ -n "${PARENT_NAME:-}" ]] || return 0
+    if [[ "$phase" == before ]]; then
+        [[ -x "$runner" ]] || return 0
+        if [[ ! "$PARENT_NAME" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]]; then
+            echo "Error: the parent name '$PARENT_NAME' cannot be given to the child's ORRERY Mail proxy (letters, digits and '-' only)." >&2
+            echo "  Set PARENT_AGENT to the parent's ORRERY Mail agent name, or use --standalone for a child with no parent." >&2
+            return 1
+        fi
+        return 0
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" - "$provider" "$path" "$PARENT_NAME" "${CODEX_HOME:-$HOME/.codex}" <<'PY'
+import json
+import pathlib
+import sys
+import tomllib
+
+provider, path, parent, source_home = sys.argv[1:5]
+
+
+def refuse(message):
+    print(f"Error: {message}", file=sys.stderr)
+    print(f"  The child would not see {parent} as its parent in bootstrap/runtime_status; not starting it.", file=sys.stderr)
+    raise SystemExit(1)
+
+
+if provider == "codex" and not path:
+    try:
+        config = tomllib.loads((pathlib.Path(source_home) / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit(0)
+    plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    for plugin_id, plugin in plugins.items():
+        if (plugin_id.startswith("agentstack-codex-app@") and isinstance(plugin, dict)
+                and plugin.get("enabled", True) is not False):
+            refuse("no ORRERY Mail proxy could be prepared for this Codex child, and the inherited "
+                   f"Codex config enables {plugin_id}, whose bootstrap answers from the Codex App Bridge")
+    raise SystemExit(0)
+if not path:
+    raise SystemExit(0)
+try:
+    if provider == "codex":
+        servers = tomllib.loads((pathlib.Path(path) / "config.toml").read_text(encoding="utf-8")).get("mcp_servers", {})
+    else:
+        servers = json.loads(pathlib.Path(path).read_text(encoding="utf-8")).get("mcpServers", {})
+except (OSError, ValueError) as exc:
+    refuse(f"the generated ORRERY Mail proxy config is unreadable: {exc}")
+proxies = [server.get("env") or {} for server in servers.values()
+           if isinstance(server, dict) and "AGENTSTACK_PROXY_AGENT_NAME" in (server.get("env") or {})]
+if not proxies or any(env.get("AGENTSTACK_PROXY_PARENT_AGENT") != parent for env in proxies):
+    refuse("the generated ORRERY Mail proxy config does not name the parent")
+PY
 }
 
 # Generate the direct-spawn registration token in a 0600 one-shot file.  The
@@ -2176,11 +2386,38 @@ PY
         REGISTRATION_PROGRAM=codex
         REGISTRATION_LABEL=Codex
     fi
-    if ! CHILD_TOKEN_FILE="$(stage_child_registration "$CHILD_NAME" "$REGISTRATION_PROGRAM" "$ONE_SHOT_TOKEN_FILE")"; then
+    # A Claude child from an earlier version is adopted the way the dashboard's
+    # resume adopts it: only after ORRERY Mail confirms its saved credential.
+    # Preregistering again is not a recovery for it -- that registers another
+    # name, and the old child keeps its role (WSL2 report, 2026-10-01).
+    LEGACY_CLAUDE_AGENT_ID=""
+    if [[ "$USE_CODEX" != true && -z "$ONE_SHOT_TOKEN_FILE" ]]; then
+        legacy_status=0
+        LEGACY_CLAUDE_OWNER="$(authenticate_legacy_claude_child "$CHILD_NAME")" || legacy_status=$?
+        if [[ "$legacy_status" != 0 ]]; then
+            echo "Error: $CHILD_NAME was started by an earlier version, and ORRERY Mail did not confirm its saved credential; nothing was changed." >&2
+            if [[ "$legacy_status" == 2 ]]; then
+                echo "  Update and restart ORRERY Mail first: docs/agentstack-mail-update.md" >&2
+            fi
+            echo "  Resuming $CHILD_NAME from the dashboard reaches the same check and keeps its name and conversation." >&2
+            echo "  Do not preregister it again: that registers a different name and leaves two agents in the same role." >&2
+            exit 1
+        fi
+        if [[ -n "$LEGACY_CLAUDE_OWNER" ]]; then
+            IFS=$'\t' read -r LEGACY_CLAUDE_AGENT_ID REGISTRATION_PROGRAM <<< "$LEGACY_CLAUDE_OWNER"
+            echo "[spawn_child/pre-reg] $CHILD_NAME was started by an earlier version; ORRERY Mail confirmed its owner (agent $LEGACY_CLAUDE_AGENT_ID), adopting its state" >&2
+        fi
+    fi
+    if ! CHILD_TOKEN_FILE="$(stage_child_registration "$CHILD_NAME" "$REGISTRATION_PROGRAM" "$ONE_SHOT_TOKEN_FILE" "$LEGACY_CLAUDE_AGENT_ID")"; then
         echo "Error: canonical $REGISTRATION_LABEL registration metadata is missing, invalid, or does not match the child token for $CHILD_NAME" >&2
         echo "  Preserve the credential and supply its matching formal .binding.json receipt before retrying." >&2
-        echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
-        echo "  A legacy token-only runtime entry cannot be promoted to a verified child registration." >&2
+        if [[ "$USE_CODEX" == true ]]; then
+            echo "  Re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+            echo "  A legacy token-only runtime entry cannot be promoted to a verified child registration." >&2
+        else
+            echo "  If $CHILD_NAME has never started, re-run agentstack-preregister-child for this project and launch the exact returned name." >&2
+            echo "  If it has run before, preregistering again registers a different name; resume it from the dashboard instead." >&2
+        fi
         exit 1
     fi
     PRE_REGISTERED_ADOPTION_PENDING=true
@@ -2251,11 +2488,13 @@ PY
         CHILD_CODEX_BIN="$(resolve_codex_bin)"
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
+        ensure_child_proxy_parent before codex || exit 1
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
         if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
             echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
             exit 1
         fi
+        ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
         if ! CHILD_LAUNCH_INFO="$(
             prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
         )"; then
@@ -2408,7 +2647,9 @@ ${TASK}"
         if [[ "$WARM_CLAIMED" == false ]]; then
             # Cold start（フォールバック）
             echo "[spawn_child/pre-reg] Cold start..." >&2
+            ensure_child_proxy_parent before claude || exit 1
             CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+            ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
             if [[ -n "$CHILD_MCP_CONFIG" ]]; then
                 echo "[spawn_child/pre-reg] Child MCP proxy config: $CHILD_MCP_CONFIG" >&2
             else
@@ -3054,11 +3295,13 @@ if [[ "$USE_CODEX" == true ]]; then
         echo "Error: could not prepare retained Codex child state for $CHILD_NAME" >&2
         exit 1
     fi
+    ensure_child_proxy_parent before codex || exit 1
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
     if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
         echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
         exit 1
     fi
+    ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
     if ! CHILD_LAUNCH_INFO="$(
         prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
     )"; then
@@ -3155,7 +3398,9 @@ else
         echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
     fi
+    ensure_child_proxy_parent before claude || exit 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+    ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

@@ -175,6 +175,8 @@ tool call が失敗したとき、proxy は Mail server のエラー 1 行目を
 
 root task は `session_id` だけを渡します。subagent は同じ `session_id` と自分の `agent_id` を渡し、Bridge が記録した parent lineage と一致しない binding は拒否されます。
 
+`spawn_child.sh` などの launcher が子に渡す proxy は Bridge を使わず、起動時に名前・project・token を直接 bind します。この binding の `lineage` は Codex App の lineage ではなく、launcher が `AGENTSTACK_PROXY_PARENT_AGENT` で渡した ORRERY の親を `parent_agent` に示します（`kind` は `child`）。`--standalone` など親のない agent は `kind: root`・`parent_agent: null` です。launcher は親を子の private な state（`child-agents/<name>.json` の `parent_agent`）にも記録します。dashboard から再開して proxy の設定を作り直すときも、同じ親を渡します。launcher は、生成した proxy が親を示せない組み合わせ（proxy が受け付けない親の名前、proxy を用意できず継承した Codex 設定が Bridge の plugin を有効にしている場合）では、CLI を起動する前に止まります。
+
 ## Inbox 通知と cold wake
 
 active turn と停止中の task では配送経路が異なります。

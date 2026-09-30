@@ -27,6 +27,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+# The Mail proxy's agent-name rule (mcp_server._AGENT_NAME); it refuses to
+# start with any other parent name.
+PROXY_AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,127}")
 CODEX_PROGRAMS = {"codex", "codex-cli"}
 CLAUDE_PROGRAMS = {"claude", "claude-code"}
 MCP_PROFILES = {"inherit", "orrery-only"}
@@ -261,11 +264,16 @@ def _validate_identity(
 
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
-    program: str | None = None, generation: str | None = None,
+    program: str | None = None, generation: str | None = None, parent_agent: str | None = None,
 ) -> dict[str, Any]:
+    """Mark the child active. ``parent_agent`` records the launcher's parent
+    (``""`` for a standalone launch clears it; ``None`` leaves it as is) so a
+    later resume can hand it to the Mail proxy again."""
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     if mcp_profile not in MCP_PROFILES:
         raise ResumeStateError("config_unrestorable", "invalid Codex MCP profile")
+    if parent_agent and not PROXY_AGENT_NAME.fullmatch(parent_agent):
+        raise ResumeStateError("invalid_identity", "The parent name cannot be given to the Mail proxy")
     with _AgentLock(lock_path, exclusive=True):
         if _legacy_pending(state_path).exists() or _legacy_pending(state_path).is_symlink():
             raise ResumeStateError("config_unrestorable", "Legacy child migration is still pending")
@@ -309,6 +317,10 @@ def prepare_active_state(
         else:
             state.pop("codex_mcp_profile", None)
         state.pop("resume_in_progress_at", None)
+        if parent_agent:
+            state["parent_agent"] = parent_agent
+        elif parent_agent is not None:
+            state.pop("parent_agent", None)
         _atomic_json(state_path, state)
         tombstone = runtime_dir / "child-resume-tombstones" / f"{state['agent_id']}.json"
         tombstone.unlink(missing_ok=True)
@@ -453,9 +465,15 @@ def finish_legacy_claude_migration(runtime_dir: Path, agent_name: str, *, genera
 
 def stage_registration(
     runtime_dir: Path, agent_name: str, *, project_key: str, program: str, generation: str,
-    source: Path | None = None, binding: Path | None = None,
+    source: Path | None = None, binding: Path | None = None, legacy_agent_id: int | None = None,
 ) -> Path:
-    """Validate a preregistration before changing files; retain a private undo record."""
+    """Validate a preregistration before changing files; retain a private undo record.
+
+    ``legacy_agent_id`` names the owner ORRERY Mail confirmed for a Claude child
+    that still has the three-field state of an earlier version. Only then is
+    that state accepted, and it is rewritten with the confirmed identity; the
+    undo record keeps the original bytes, so a failed start restores them.
+    """
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     pending = state_path.with_name(f".{agent_name}.registration-pending.json")
     if not re.fullmatch(r"[0-9a-f]{32}", generation):
@@ -465,7 +483,17 @@ def stage_registration(
             raise ResumeStateError("config_unrestorable", "A child registration change is already pending")
         if _provider(program) is None or (source is not None and binding is None):
             raise ResumeStateError("identity_mismatch", "Formal child registration metadata is required")
-        state = _load_state(binding if source is not None and binding is not None else state_path)
+        if legacy_agent_id is not None:
+            if source is not None:
+                raise ResumeStateError("identity_mismatch", "A legacy child is launched from its own state")
+            legacy = inspect_legacy_claude(runtime_dir, agent_name, agent_id=legacy_agent_id,
+                                           project_key=project_key, program=program)
+            if legacy is None:
+                raise ResumeStateError("identity_mismatch", "Child state is not the legacy Claude shape")
+            state = {"agent_id": legacy_agent_id, "agent_name": agent_name, "project_key": project_key,
+                     "program": program, "registration_token": legacy["registration_token"]}
+        else:
+            state = _load_state(binding if source is not None and binding is not None else state_path)
         _validate_identity(state, agent_name=agent_name, project_key=project_key, program=program)
         if source is not None:
             token = _read_private(source, "token handoff", MAX_TOKEN_BYTES).decode("utf-8").strip()
@@ -1051,9 +1079,12 @@ def _build_home_unlocked(
     python_bin: str,
     mcp_profile: str,
     overlay_setting: str = "",
+    parent_agent: str = "",
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
+    if parent_agent and not PROXY_AGENT_NAME.fullmatch(parent_agent):
+        raise ValueError("the parent agent name cannot be given to the Mail proxy")
     if not source.is_dir() or not runner.is_file() or not os.access(runner, os.X_OK):
         raise ValueError("current Codex home or MCP proxy is unavailable")
     _read_private(token_file, "canonical child credential", MAX_TOKEN_BYTES)
@@ -1166,6 +1197,9 @@ def _build_home_unlocked(
                     "AGENTSTACK_RUNTIME_DIR = " + _toml_string(os.fspath(runtime_dir)),
                 ]
             )
+            # The proxy reports this as lineage.parent_agent (standalone: none).
+            if parent_agent:
+                lines.append("AGENTSTACK_PROXY_PARENT_AGENT = " + _toml_string(parent_agent))
             if python_bin:
                 lines.append("AGENTSTACK_PYTHON = " + _toml_string(python_bin))
             lines.append(
@@ -1226,6 +1260,20 @@ def _build_home_unlocked(
             shutil.rmtree(temporary)
 
 
+def _recorded_parent(state_path: Path) -> str:
+    """The parent a launcher recorded for this child, or "" if none."""
+    try:
+        state = _load_state(state_path)
+    except (ResumeStateError, OSError):
+        return ""
+    parent = state.get("parent_agent")
+    if parent is None:
+        return ""
+    if not isinstance(parent, str) or not PROXY_AGENT_NAME.fullmatch(parent):
+        raise ValueError("the recorded parent name cannot be given to the Mail proxy")
+    return parent
+
+
 def build_home(
     *,
     home: Path,
@@ -1241,6 +1289,7 @@ def build_home(
     python_bin: str,
     mcp_profile: str,
     overlay_setting: str = "",
+    parent_agent: str = "",
 ) -> Path:
     """Build only the canonical generated home while holding the child lock."""
 
@@ -1250,6 +1299,10 @@ def build_home(
     if home.absolute() != expected_home.absolute():
         raise ValueError("generated Codex home is not canonical for this child")
     with _AgentLock(lock_path, exclusive=True):
+        if not parent_agent:
+            # A resume rebuilds the home without being told the parent; the
+            # launcher recorded it in the child's state.
+            parent_agent = _recorded_parent(_state)
         return _build_home_unlocked(
             home=home,
             source=source,
@@ -1264,6 +1317,7 @@ def build_home(
             python_bin=python_bin,
             mcp_profile=mcp_profile,
             overlay_setting=overlay_setting,
+            parent_agent=parent_agent,
         )
 
 
@@ -1277,6 +1331,7 @@ def main() -> int:
     active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
     active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
     active.add_argument("--generation")
+    active.add_argument("--parent-agent")
     stage = sub.add_parser("stage-registration")
     stage.add_argument("--runtime-dir", required=True)
     stage.add_argument("--agent-name", required=True)
@@ -1285,6 +1340,7 @@ def main() -> int:
     stage.add_argument("--generation", required=True)
     stage.add_argument("--source")
     stage.add_argument("--binding")
+    stage.add_argument("--legacy-agent-id", type=int)
     finish = sub.add_parser("finish-registration")
     finish.add_argument("--runtime-dir", required=True)
     finish.add_argument("--agent-name", required=True)
@@ -1335,6 +1391,7 @@ def main() -> int:
         build.add_argument("--" + name, required=True)
     build.add_argument("--python-bin", default="")
     build.add_argument("--overlay", default="")
+    build.add_argument("--parent-agent", default="")
     args = parser.parse_args()
     try:
         runtime = Path(getattr(args, "runtime_dir", "")).expanduser()
@@ -1345,13 +1402,15 @@ def main() -> int:
                 project_key=args.project_key,
                 mcp_profile=args.mcp_profile,
                 program=args.program, generation=args.generation,
+                parent_agent=args.parent_agent,
             )
         elif args.command == "stage-registration":
             if bool(args.source) != bool(args.binding):
                 parser.error("source and binding must be supplied together")
             print(stage_registration(runtime, args.agent_name, project_key=args.project_key,
                                      program=args.program, generation=args.generation, source=Path(args.source) if args.source else None,
-                                     binding=Path(args.binding) if args.binding else None))
+                                     binding=Path(args.binding) if args.binding else None,
+                                     legacy_agent_id=args.legacy_agent_id))
         elif args.command == "finish-registration":
             if not finish_registration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
                 print("child_resume: registration attempt is no longer pending; nothing changed", file=os.sys.stderr)
@@ -1418,6 +1477,7 @@ def main() -> int:
                 python_bin=args.python_bin,
                 mcp_profile=args.mcp_profile,
                 overlay_setting=args.overlay,
+                parent_agent=args.parent_agent,
             )
             print(home)
     except (OSError, ValueError, ResumeStateError) as exc:

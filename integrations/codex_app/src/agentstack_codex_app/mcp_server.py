@@ -66,6 +66,10 @@ class ProxyConfig:
     project_key: str | None = None
     token_file: Path | None = None
     program: str = "claude-code"
+    # The ORRERY parent the launcher started this child for. Without it a
+    # direct binding can only call itself a root, which a child told "your
+    # parent is X" reads as an identity mismatch (WSL2 report, 2026-10-01).
+    parent_agent: str | None = None
 
     @property
     def is_direct(self) -> bool:
@@ -88,6 +92,16 @@ class ProxyConfig:
             raise ValueError(
                 "AGENTSTACK_PROXY_AGENT_NAME requires AGENTSTACK_PROJECT_KEY"
             )
+        direct_parent = (env.get("AGENTSTACK_PROXY_PARENT_AGENT") or "").strip() or None
+        if direct_parent is not None:
+            if not direct_agent:
+                raise ValueError(
+                    "AGENTSTACK_PROXY_PARENT_AGENT requires AGENTSTACK_PROXY_AGENT_NAME"
+                )
+            if _AGENT_NAME.fullmatch(direct_parent) is None:
+                raise ValueError(
+                    "AGENTSTACK_PROXY_PARENT_AGENT is not a valid agent name"
+                )
         wait_value = (env.get("AGENTSTACK_CODEX_APP_BOOTSTRAP_WAIT") or "1").strip()
         try:
             wait_seconds = float(wait_value)
@@ -108,6 +122,7 @@ class ProxyConfig:
             project_key=direct_project,
             token_file=direct_token_file,
             program=direct_program,
+            parent_agent=direct_parent,
         )
 
 
@@ -352,6 +367,12 @@ class AgentStackProxy:
             "root_external_id": external_id_for(binding["session_id"]),
             "parent_external_id": binding["parent_external_id"],
         }
+        if binding["surface"] == "direct":
+            # A direct binding has no Codex App lineage; its parent is the
+            # ORRERY agent the launcher named, or none for a standalone agent.
+            parent_agent = binding.get("parent_agent")
+            lineage["kind"] = "child" if parent_agent else "root"
+            lineage["parent_agent"] = parent_agent
         return {
             "external_id": binding["external_id"],
             "surface": binding["surface"],
@@ -377,6 +398,7 @@ class AgentStackProxy:
         project_key: str,
         owner_token: str,
         program: str = "claude-code",
+        parent_agent: str | None = None,
     ) -> dict[str, Any]:
         """Bind this process to an agent the launcher already registered.
 
@@ -389,6 +411,8 @@ class AgentStackProxy:
 
         if not agent_name or not project_key or not owner_token:
             raise ProxyError("direct binding needs agent_name, project_key and token")
+        if parent_agent is not None and _AGENT_NAME.fullmatch(parent_agent) is None:
+            raise ProxyError("direct binding parent is not a valid agent name")
         # external_id_for rejects colons, so the synthetic id uses a dash.
         session_id = f"direct-{agent_name}"
         self._binding = {
@@ -401,6 +425,7 @@ class AgentStackProxy:
             "project_key": project_key,
             "program": program,
             "last_seen_at": None,
+            "parent_agent": parent_agent,
         }
         self._owner_token = owner_token
         return dict(self._binding)
@@ -844,7 +869,9 @@ TOOL_DEFINITIONS = [
         "name": "runtime_status",
         "description": (
             "Return this process binding's authoritative runtime identity, state, "
-            "and parent lineage. Takes no caller-supplied identity."
+            "and parent lineage. For a launcher-started agent, lineage.parent_agent "
+            "is its ORRERY parent (null when standalone). Takes no caller-supplied "
+            "identity."
         ),
         "inputSchema": _schema({}, []),
     },
@@ -884,6 +911,7 @@ def serve() -> None:
             project_key=config.project_key or "",
             owner_token=load_direct_owner_token(config),
             program=config.program,
+            parent_agent=config.parent_agent,
         )
     StdioMcpServer(proxy).serve_forever()
 
