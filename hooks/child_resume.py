@@ -737,8 +737,14 @@ def _build_home_unlocked(
     # real data into the disposable child home and cleanup removes it (#123).
     (source / "sessions").mkdir(mode=0o700, exist_ok=True)
     for name in ("history.jsonl", "session_index.jsonl"):
-        fd = os.open(source / name, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        os.close(fd)
+        try:
+            fd = os.open(source / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # Existing records (including read-only files and symlinks) belong
+            # to the user. Do not open them or change their metadata.
+            continue
+        else:
+            os.close(fd)
 
     home.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(home.parent, 0o700)

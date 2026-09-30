@@ -160,6 +160,7 @@ def _run_codex_home_process(
     mcp_profile: str = "inherit",
     with_sessions: bool = True,
     shared_records: dict[str, str] | None = None,
+    shared_record_mode: int = 0o640,
 ) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -180,7 +181,7 @@ def _run_codex_home_process(
         path = source_home / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(records, encoding="utf-8")
-        path.chmod(0o640)
+        path.chmod(shared_record_mode)
         os.utime(path, ns=(1_000_000_000, 1_000_000_000))
     if with_sandbox_metadata:
         for name in (".git", ".agents", ".codex"):
@@ -674,6 +675,25 @@ def test_codex_home_build_preserves_existing_shared_records():
             assert path.read_text() == contents
             assert path.stat().st_mtime_ns == 1_000_000_000
             assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_codex_home_build_preserves_read_only_shared_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        records = {"history.jsonl": "read-only history\n",
+                   "session_index.jsonl": "read-only index\n"}
+        result = _run_codex_home_process(
+            tmpdir, shared_records=records, shared_record_mode=0o400)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name, contents in records.items():
+            assert (home / name).is_symlink()
+            assert (home / name).read_text() == contents
+            path = source / name
+            assert path.read_text() == contents
+            assert path.stat().st_mtime_ns == 1_000_000_000
+            assert stat.S_IMODE(path.stat().st_mode) == 0o400
 
 
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
