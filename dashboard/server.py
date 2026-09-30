@@ -3340,6 +3340,12 @@ def _register_claude_resume(session: str, registration: dict, token: str, *, leg
         arguments["existing_agent_id"] = registration["agent_id"]
     registered = _mcp_call("register_agent", arguments)
     if not registered.get("ok"):
+        if registered.get("error_code") == "existing_owner_authentication_unavailable":
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "Update and restart the dashboard and bundled ORRERY Mail together; "
+                "existing-owner authentication support could not be confirmed",
+            )
         raise _ResumeCapabilityError("credential_missing", "Claude owner authentication failed; refusing resume")
     data = registered.get("data") or {}
     if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
@@ -6009,7 +6015,8 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
     if (method == "register_agent" and "existing_agent_id" in args
             and (allowed is None or "existing_agent_id" not in allowed)):
         # This recovery guard must never be silently dropped for an older Mail.
-        return {"ok": False, "error": "ORRERY Mail needs existing-owner authentication support"}
+        return {"ok": False, "error": "ORRERY Mail needs existing-owner authentication support",
+                "error_code": "existing_owner_authentication_unavailable"}
     prepared = args if allowed is None else {
         key: value for key, value in args.items() if key in allowed
     }

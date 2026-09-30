@@ -116,6 +116,8 @@ Migration uses a private undo record tied to its nonce. Failed startup preparati
 
 Migration authenticates through bundled Mail's `register_agent(existing_agent_id=...)`, checking only the exact existing ID, name, project, program, and owner token. It bypasses ordinary registration, name generation, and profile updates. An older Mail without this option, or an unavailable tool schema, refuses recovery instead of dropping the guard and registering. Update and restart the dashboard and bundled Mail together.
 
+This refusal returns `config_unrestorable` and a fixed message asking you to update and restart the dashboard and bundled ORRERY Mail. It does not mean the token is missing. If Mail supports the guard but owner authentication fails, resume still returns `credential_missing` without showing the raw authentication error.
+
 ## Reregistration
 
 ```bash

@@ -118,6 +118,8 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 移行の認証は bundled Mail の `register_agent(existing_agent_id=...)` を使い、指定した既存 ID・名前・project・program と owner token だけを照合します。通常の登録・名前の自動生成・profile 更新へは進みません。このオプションを持たない古い Mail や schema を取得できない接続では、引数を省略して登録することなく拒否します。dashboard と bundled Mail を一緒に更新して再起動してください。
 
+この拒否は `config_unrestorable` と、dashboard / bundled ORRERY Mail の更新・再起動が必要だと分かる固定メッセージを返します。token の欠落を意味しません。Mail が対応済みで実際の owner 認証が失敗した場合は、従来どおり `credential_missing` を返し、認証エラーの生の内容は表示しません。
+
 ## 再登録
 
 ```bash

@@ -13,6 +13,8 @@ from dashboard import server
 from hooks import child_resume
 from test_claude_resume_mail import NAME, TOKEN, private, resume, tmux_resume
 
+REAL_MCP_CALL = server._mcp_call
+
 
 def owned_database(path, registration):
     with sqlite3.connect(path) as con:
@@ -48,6 +50,7 @@ def test_old_or_unknown_mail_schema_never_drops_existing_owner_guard(monkeypatch
     monkeypatch.setattr(server, '_mcp_jsonrpc', lambda *_a, **_k: pytest.fail('Unprotected registration called'))
     result = server._mcp_call('register_agent', {'existing_agent_id': 73, 'name': NAME})
     assert not result['ok']
+    assert result['error_code'] == 'existing_owner_authentication_unavailable'
 
 
 def test_supported_mail_schema_sends_existing_owner_guard(monkeypatch):
@@ -80,6 +83,55 @@ def legacy(resume, monkeypatch, tmp_path):
     private(runtime / 'agent_token_OtherOwner', 'different-fixture-owner')
     private(runtime / 'child-agents' / 'OtherOwner.json', '{"unrelated":"state"}\n')
     return runtime, registration, launches, calls, state, config, db
+
+
+@pytest.mark.parametrize('supported', [False, None, True])
+def test_resume_old_mail_has_fixed_update_diagnosis_and_new_mail_still_launches(legacy, monkeypatch, supported):
+    runtime, registration, launches, _, *_ = legacy
+    before = snapshot(runtime)
+    rpc_calls = []
+    def parameters(tool):
+        if tool != 'register_agent':
+            return {'project_key', 'agent_name'}
+        if supported is None:
+            return None
+        fields = {'project_key', 'name', 'program', 'model', 'task_description', 'registration_token'}
+        return fields | {'existing_agent_id'} if supported else fields
+    def rpc(method, params, timeout):
+        rpc_calls.append((method, params))
+        if params['name'] == 'register_agent':
+            data = {'id': registration['agent_id'], 'name': NAME, 'program': 'claude-code',
+                    'project_id': 5, 'retired_at': registration['retired_at']}
+        else:
+            data = {'status': 'active', 'agent_name': NAME, 'project_key': registration['project_key']}
+        return {'ok': True, 'result': {'structuredContent': data}}
+    monkeypatch.setattr(server, '_mcp_tool_parameters', parameters)
+    monkeypatch.setattr(server, '_mcp_jsonrpc', rpc)
+    monkeypatch.setattr(server, '_mcp_call', REAL_MCP_CALL)
+    result = server.do_resume(NAME)
+    if supported:
+        assert result['ok'] and launches
+        assert [params['name'] for _, params in rpc_calls] == ['register_agent', 'unretire_agent']
+    else:
+        assert not result['ok'] and result['resume_capability'] == 'config_unrestorable'
+        assert result['error'] == ('Update and restart the dashboard and bundled ORRERY Mail together; '
+                                   'existing-owner authentication support could not be confirmed')
+        assert not rpc_calls and not launches and snapshot(runtime) == before
+    assert TOKEN not in json.dumps(result)
+
+
+def test_remote_auth_error_cannot_spoof_update_diagnosis_or_disclose_token(legacy, monkeypatch):
+    runtime, _, launches, _, *_ = legacy
+    before = snapshot(runtime)
+    monkeypatch.setattr(server, '_mcp_tool_parameters', lambda _tool: {'existing_agent_id', 'registration_token'})
+    monkeypatch.setattr(server, '_mcp_jsonrpc', lambda *_a, **_k: {
+        'ok': True, 'result': {'isError': True, 'content': [{'text': TOKEN + ' ORRERY Mail needs existing-owner authentication support'}]}})
+    monkeypatch.setattr(server, '_mcp_call', REAL_MCP_CALL)
+    result = server.do_resume(NAME)
+    assert not result['ok'] and result['resume_capability'] == 'credential_missing'
+    assert result['error'] == 'Claude owner authentication failed; refusing resume'
+    assert not launches and snapshot(runtime) == before
+    assert TOKEN not in json.dumps(result)
 
 
 @pytest.mark.parametrize('verify', [False, True])
