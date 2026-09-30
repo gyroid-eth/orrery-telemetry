@@ -5889,7 +5889,7 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
     allowed = {
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
-        "claude_chrome", "claude_chrome_device", "async", "dry_run",
+        "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
@@ -5900,6 +5900,10 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         return None, {"ok": False, "error": "dry_run must be boolean"}
     if "standalone" in payload and not isinstance(payload["standalone"], bool):
         return None, {"ok": False, "error": "standalone must be boolean"}
+    if "headless" in payload and not isinstance(payload["headless"], bool):
+        return None, {"ok": False, "error": "headless must be boolean"}
+    if "emoji" in payload and not isinstance(payload["emoji"], str):
+        return None, {"ok": False, "error": "emoji must be a string"}
     standalone = payload.get("standalone", False)
     request = {
         "dry_run": payload.get("dry_run", False),
@@ -6042,6 +6046,13 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
             discard_handoff()
 
 
+def _spawn_env_overrides(payload: dict, spec: SpawnLaunchSpec) -> dict[str, str]:
+    env = dict(spec.launcher_env)
+    if "headless" in payload:
+        env["AGENTSTACK_AUTO_OPEN_CHILD"] = "0" if payload["headless"] else "1"
+    return env
+
+
 def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
                 child_name: str, token_file: str) -> list[str]:
     """Build both preview and actual launch arguments without side effects."""
@@ -6101,7 +6112,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             "standalone": standalone, "worktree": worktree,
             "argv": _spawn_argv(request, spec, requested_name or "<child-name>",
                                 "<child-token-file>"),
-            "launcher_env": dict(spec.launcher_env),
+            "launcher_env": _spawn_env_overrides(payload, spec),
         }
 
     if not requested_name:
@@ -6378,7 +6389,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     args = _spawn_argv(request, spec, child_name, token_file)
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
-    env.update(dict(spec.launcher_env))
+    env.update(_spawn_env_overrides(payload, spec))
     # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)

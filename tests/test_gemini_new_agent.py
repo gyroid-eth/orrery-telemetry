@@ -1550,3 +1550,27 @@ def test_non_codex_spawn_does_not_probe_a_codex_launcher(gemini_env, monkeypatch
         "dir": str(gemini_env.repo), "provider": "claude", "model": "claude-opus-5-5",
     }
     assert server.do_spawn(payload)["ok"] is True
+
+
+@pytest.mark.parametrize("headless", [False, True])
+def test_cockpit_payload_launch_uses_headless_policy(monkeypatch, gemini_env, headless):
+    monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", "1" if headless else "0")
+    annotations = []
+    def annotate(*args):
+        annotations.append(args)
+        return {"ok": True}
+    monkeypatch.setattr(server, "_write_annotation", annotate)
+    payload = {
+        "provider": "claude", "model": "claude-sonnet-5", "effort": None,
+        "dir": str(gemini_env.repo), "task": "check cockpit", "name": "Sunny-Curie",
+        "parent": "Parent", "standalone": False, "headless": headless,
+        "worktree": False, "worktree_base": "", "role": "review",
+        "emoji": "🔎", "group": "release", "async": False,
+    }
+    assert len(payload) == 15
+    result = server.do_spawn(payload)
+    assert result["ok"] is True and result["provider"] == "claude"
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[0] == str(gemini_env.claude_launcher)
+    assert kwargs["env"]["AGENTSTACK_AUTO_OPEN_CHILD"] == ("0" if headless else "1")
+    assert annotations == [("Sunny-Curie", "review", "", "release")]

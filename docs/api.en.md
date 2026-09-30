@@ -504,6 +504,8 @@ Request:
 | `parent` | child only | Valid existing agent name. Omit for `standalone: true` |
 | `standalone` | no | Boolean. Start without a parent when `true` |
 | `dry_run` | no | Boolean. `true` returns a launch preview without registering or launching an agent |
+| `headless` | no | Boolean. `true` disables automatic terminal-window opening; `false` enables it. Omitted: inherit the launcher setting. The agent always uses tmux |
+| `emoji` | no | String. Accepted for cockpit compatibility; spawn annotations use only `role` / `group` |
 | `async` | no | Boolean. Start readiness checks in the background; ignored when `dry_run: true` |
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
@@ -518,7 +520,7 @@ Request:
 | `claude_chrome` | Claude only | Boolean. `true` adds `--chrome` to the child. Omitted or `false` means inherit (the user's Claude settings decide). The launcher's env defaults are not used. See [Claude in Chrome](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
 | `claude_chrome_device` | Claude only | deviceId of the browser to use (`[A-Za-z0-9._:-]{1,128}`). Implies `claude_chrome: true`; combining it with `claude_chrome: false` is rejected |
 
-Unknown request fields return HTTP 400 before model resolution or launch. For example, `headless` is not supported. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
+Unknown request fields return HTTP 400 before model resolution or launch. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
 
 Adding `"dry_run": true` validates the request and resolves provider, model, effort and directory, then returns HTTP 200 with a preview:
 

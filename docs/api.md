@@ -504,6 +504,8 @@ request:
 | `parent` | child のみ | 有効な既存 agent 名。`standalone: true` では省略 |
 | `standalone` | no | boolean。`true` なら parentless 起動 |
 | `dry_run` | no | boolean。`true` なら登録・起動せず起動プレビューを返す |
+| `headless` | no | boolean。`true` は端末ウィンドウの自動表示を無効、`false` は有効にする。省略時は launcher 設定を継承。agent はいずれも tmux で動く |
+| `emoji` | no | string。cockpit 互換として受け付ける。spawn annotation は `role` / `group` だけを使用 |
 | `async` | no | boolean。readiness 確認をバックグラウンドで行う。`dry_run: true` では無視 |
 | `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
@@ -518,7 +520,7 @@ request:
 | `claude_chrome` | Claude only | boolean。`true` で child に `--chrome` を付ける。省略・`false` は inherit（利用者の Claude 設定に従う）。launcher の env 既定は使わない。[Claude in Chrome](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |
 | `claude_chrome_device` | Claude only | 使うブラウザの deviceId（`[A-Za-z0-9._:-]{1,128}`）。指定すると `claude_chrome: true` と同じ。`claude_chrome: false` との併用は拒否 |
 
-未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。例えば `headless` は未対応です。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
+未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
 
 `"dry_run": true` を付けると request を検証し、provider・model・effort・directory を解決した起動プレビューを HTTP 200 で返します。
 

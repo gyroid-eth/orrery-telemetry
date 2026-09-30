@@ -118,10 +118,10 @@ def test_unknown_fields_are_http_400_before_model_resolution(
     directory, _ = preview_env
     monkeypatch.setattr(server.codex_models, "resolve_launcher", forbidden)
     code, result = spawn_http({"standalone": True, "task": "dry", "dir": str(directory),
-                               "provider": provider, "dry_run": dry_run, "headless": True,
+                               "provider": provider, "dry_run": dry_run, "headles": True,
                                "typo": 1})
     assert code == 400
-    assert result == {"ok": False, "error": "unknown spawn fields: headless, typo"}
+    assert result == {"ok": False, "error": "unknown spawn fields: headles, typo"}
 
 
 @pytest.mark.parametrize("invalid", ["true", 1, None, []])
@@ -158,3 +158,31 @@ def test_preview_does_not_delete_existing_handoff(preview_env):
                                script=script, handoff_paths=(str(handoff),)))
     assert result["dry_run"] is True
     assert handoff.read_text() == "retained"
+
+
+@pytest.mark.parametrize("headless", [False, True])
+def test_cockpit_fifteen_field_payload_is_accepted(preview_env, spawn_http, headless):
+    directory, _ = preview_env
+    payload = {
+        "provider": "claude", "model": "claude-sonnet-5", "effort": None,
+        "dir": str(directory), "task": "check cockpit", "name": None,
+        "parent": None, "standalone": True, "headless": headless,
+        "worktree": False, "worktree_base": "", "role": "review",
+        "emoji": "🔎", "group": "release", "async": True,
+    }
+    assert len(payload) == 15
+    code, result = spawn_http({**payload, "dry_run": True})
+    assert code == 200 and result["dry_run"] is True
+    assert result["model"] == "claude-sonnet-5"
+    assert result["launcher_env"]["AGENTSTACK_AUTO_OPEN_CHILD"] == ("0" if headless else "1")
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("headless", "true", "headless must be boolean"),
+    ("emoji", [], "emoji must be a string"),
+])
+def test_invalid_cockpit_fields_are_http_400(preview_env, spawn_http, field, value, message):
+    directory, _ = preview_env
+    code, result = spawn_http({"standalone": True, "task": "dry", "dir": str(directory),
+                               "dry_run": True, field: value})
+    assert code == 400 and result == {"ok": False, "error": message}
