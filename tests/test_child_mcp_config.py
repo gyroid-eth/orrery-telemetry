@@ -158,6 +158,9 @@ def _run_codex_home_process(
     overlay_path: pathlib.Path | None = None,
     corrupt_emitted_candidate: bool = False,
     mcp_profile: str = "inherit",
+    with_sessions: bool = True,
+    shared_records: dict[str, str] | None = None,
+    shared_record_mode: int = 0o640,
 ) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -172,7 +175,14 @@ def _run_codex_home_process(
     source_home = tmpdir / "codex-home"
     source_home.mkdir()
     (source_home / "auth.json").write_text('{"token": "secret"}', encoding="utf-8")
-    (source_home / "sessions").mkdir()
+    if with_sessions:
+        (source_home / "sessions").mkdir()
+    for name, records in (shared_records or {}).items():
+        path = source_home / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(records, encoding="utf-8")
+        path.chmod(shared_record_mode)
+        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
     if with_sandbox_metadata:
         for name in (".git", ".agents", ".codex"):
             (source_home / name).mkdir()
@@ -607,6 +617,83 @@ def test_codex_child_home_works_when_the_user_has_no_config():
         assert '[mcp_servers."orrery-mail"]' in config
         assert '[mcp_servers."agentstack"]' in config
         _assert_proxy_tool_approvals(config, ("orrery-mail", "agentstack"))
+
+
+def test_fresh_codex_child_shares_records_that_survive_cleanup():
+    """A child-only install has no shared history until the home is built."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        result = _run_codex_home_process(tmpdir, with_sessions=False)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name in ("sessions", "history.jsonl", "session_index.jsonl"):
+            assert (home / name).is_symlink()
+            assert (home / name).resolve() == (source / name).resolve()
+            assert (source / name).exists()
+            assert stat.S_IMODE((source / name).stat().st_mode) == (
+                0o700 if name == "sessions" else 0o600)
+        (home / "sessions" / "rollout.jsonl").write_text("transcript\n", encoding="utf-8")
+        (home / "history.jsonl").write_text("history\n", encoding="utf-8")
+        (home / "session_index.jsonl").write_text("index\n", encoding="utf-8")
+        runtime = tmpdir / "runtime"
+        token = runtime / "agent_token_Red-Euler"
+        token.write_text("child-owner-token", encoding="utf-8")
+        token.chmod(0o600)
+        env = os.environ.copy()
+        env.update({
+            "AGENTSTACK_HOOKS_DIR": str(_ROOT / "hooks"),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_PROJECT_KEY": "/workspace/example",
+            "AGENTSTACK_MANAGED_AGENTS_FILE": str(runtime / "managed_agents.txt"),
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
+            "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        })
+        cleanup = subprocess.run(
+            ["/bin/bash", str(_ROOT / "hooks" / "cleanup-child-agent.sh"), "Red-Euler"],
+            env=env, text=True, capture_output=True, timeout=30)
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert not home.exists()
+        assert "deleting unshared Codex sessions" not in cleanup.stderr
+        assert (source / "sessions" / "rollout.jsonl").read_text() == "transcript\n"
+        assert (source / "history.jsonl").read_text() == "history\n"
+        assert (source / "session_index.jsonl").read_text() == "index\n"
+
+
+def test_codex_home_build_preserves_existing_shared_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        records = {"history.jsonl": "history\n", "session_index.jsonl": "index\n",
+                   "sessions/rollout.jsonl": "transcript\n"}
+        result = _run_codex_home_process(tmpdir, shared_records=records)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name, contents in records.items():
+            assert (home / name).read_text() == contents
+            path = source / name
+            assert path.read_text() == contents
+            assert path.stat().st_mtime_ns == 1_000_000_000
+            assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_codex_home_build_preserves_read_only_shared_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        records = {"history.jsonl": "read-only history\n",
+                   "session_index.jsonl": "read-only index\n"}
+        result = _run_codex_home_process(
+            tmpdir, shared_records=records, shared_record_mode=0o400)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name, contents in records.items():
+            assert (home / name).is_symlink()
+            assert (home / name).read_text() == contents
+            path = source / name
+            assert path.read_text() == contents
+            assert path.stat().st_mtime_ns == 1_000_000_000
+            assert stat.S_IMODE(path.stat().st_mode) == 0o400
 
 
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():

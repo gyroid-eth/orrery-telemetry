@@ -155,7 +155,7 @@ child の Claude / Codex command の後段へ連結され、REPL が戻った時
 
 Claude child と、`AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` の Codex child は state、token、MCP config、分離 home を全削除します。既定の Codex child は MCP config、home、proxy runtime を削除しますが、schema version、`retired_at`、`resume_expires_at`、非秘密 provenance を含む state と canonical owner credential を0600で保持します。保持処理が安全に完了しない場合は credential を推測で削除せず、明示 recovery / purge 用に private state を残して非0で終わります。bound session receipt と transcript はどちらの cleanup / purge の対象にも含みません。
 
-共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
+共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。子の home を作る前に利用者の Codex home（`CODEX_HOME`、未指定なら `~/.codex`）に `sessions/`・`history.jsonl`・`session_index.jsonl` を作り、子からは symlink で共有します。既存の記録は上書きしません。子としてしか Codex を使わない初回環境でも、記録は cleanup 後に残ります。旧 home などに実体の `sessions/` が残っていた場合、cleanup は会話の記録が失われる旨と対象パスを stderr に警告してから削除します。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
 
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 
