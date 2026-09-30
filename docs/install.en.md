@@ -150,9 +150,10 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 ```text
 --install-dir PATH      default: ~/.agentstack
 --project-key PATH      first install: required / re-install: existing env.sh
---port PORT             default: 8770
---label-prefix PREFIX   default: org.agentstack
---terminal MODE         auto | ghostty | iterm | terminal | none
+--port PORT             default: existing env.sh, else 8770
+--label-prefix PREFIX   default: existing env.sh, else org.agentstack
+--terminal MODE         auto | ghostty | iterm | terminal | none (default: existing env.sh, else auto)
+--reset-settings        do not inherit settings from the existing env.sh (see Upgrade)
 --spawn-dirs PATHS      NEW AGENT launch-directory presets (`:`-separated)
 --spawn-roots PATHS     roots the directory typeahead may browse (`:`-separated)
 --codex-approval MODE   Codex child `--ask-for-approval` (never | on-request | on-failure | untrusted; default never)
@@ -344,7 +345,30 @@ git pull
 ~/.agentstack/bin/agentstack-doctor
 ```
 
-The installer updates payloads and `VERSION`, reregisters services, and previews managed merges again. It validates and reuses the bundled ORRERY Mail candidate and state. `--project-key` inherits the previous value.
+The installer updates payloads and `VERSION`, reregisters services, and previews managed merges again. It validates and reuses the bundled ORRERY Mail candidate and state.
+
+### What a re-install inherits
+
+A re-install decides each setting in this order:
+
+1. an explicit value (an option, or an environment variable set when the installer runs)
+2. the value the previous install wrote to `~/.agentstack/env.sh`
+3. the default
+
+A setting you changed from its default therefore survives `./scripts/install.sh` in a new terminal without the environment variable. This covers the project key and protected roots, the dashboard port (`AGENTSTACK_PORT`), the label prefix (`AGENTSTACK_LABEL_PREFIX`) and the ORRERY Mail launchd label derived from it, the terminal, the MCP URL, the service `PATH`, Python, the ORRERY Mail state root (where the database lives), service root and management socket, `AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`, `AGENTSTACK_VAULT`, `AGENTSTACK_MANAGED_AGENTS_FILE`, the dashboard log and restart settings (`AGENTSTACK_DASHBOARD_LOG` / `_LOG_MAX_BYTES` / `_LOG_BACKUPS` / `_RESTART_DELAY`), spawn dirs / roots, the worktree root, the Codex child settings, `AGENTSTACK_CODEX_BIN`, portraits and the model catalogs. The canonical list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`.
+
+- **Only values you chose are inherited.** `env.sh` writes every value out, defaults included, so it also records which ones were chosen explicitly (`AGENTSTACK_CHOSEN_SETTINGS`), and the next install inherits only those. A value you never chose (a default written out, or the Python and PATH the installer found) follows the new default when a later release changes it. An `env.sh` from an earlier release has no such record; there a value that differs from today's default counts as chosen, except PATH and Python, which the installer always worked out itself. `AGENTSTACK_CODEX_BIN` also inherits the location the installer found (and searches again when it no longer runs).
+- To change a previous value, give that option or environment variable explicitly (for example `./scripts/install.sh --port 8771`).
+- **To put just one setting back to its default, give it explicitly empty** (for example `AGENTSTACK_VAULT= ./scripts/install.sh` or `./scripts/install.sh --codex-add-dirs ""`).
+- To put every chosen value back to its default, pass `--reset-settings` (or `AGENTSTACK_RESET_SETTINGS=1`). Where the data lives, and what the services running on it are called, are inherited even then: the project key, protected roots, the ORRERY Mail state root, service root and management socket, the label prefix, the ORRERY Mail launchd label and the MCP URL. Resetting those would leave the previous service registered while a second ORRERY Mail, under another name, started on the same database. Give them explicitly to change them (and stop the previous service yourself).
+- An environment variable equal to the value `env.sh` recorded is taken to come from a shell that sourced `env.sh`, or from ORRERY cockpit's update script, not as a new choice: it keeps the status it had, and `--reset-settings` resets it. A value passed as an option is always explicit. Against an `env.sh` from an earlier release, which has no record of choices, an equal value is still explicit, so a value you have always passed is not reset.
+- If the Python recorded last time is gone or too old, the installer says so and searches again (an explicit `AGENTSTACK_PYTHON` that cannot be used still stops the install).
+- `AGENTSTACK_CLAUDE_JSON` is not inherited. It is an override for installing into a sandbox; the next ordinary install writes `~/.claude.json`.
+- The ORRERY Mail service env (`AGENTSTACK_MAIL_ENV`) and database path (`AGENTSTACK_MAIL_DB`) are not inherited settings; they are derived again from the state root and render each time (below).
+
+The start of a dry-run prints the resolved project key, port, label prefix, terminal and MCP URL.
+
+If your shell sources `env.sh` at startup, its `AGENTSTACK_*` values count as explicit. After re-installing from another shell, open a new shell or source `env.sh` again before using a launcher or the installer.
 
 **Keep the ORRERY Mail server running during an in-place upgrade.** The real database path resolved from the running listener takes precedence over filesystem candidate discovery. Stopping ORRERY Mail first falls back to candidate discovery, and the installer stops rather than risk choosing incorrectly in an environment with several databases.
 

@@ -115,6 +115,8 @@ When a healthy ORRERY Mail listener already exists, the installer adopts the dep
 
 When a healthy listener uses the expected database but its service environment cannot be identified, an ordinary unpinned reinstall reuses the listener unchanged. In this degraded state deployment and enrollment paths are empty, and the installer updates neither the enrollment connection profile nor Mail autostart. Existing triggers are not deleted or stopped, but the installer cannot guarantee restart at the next login. Installation instead stops explicitly, without switching the listener, when an explicit `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` cannot be matched to the running deployment, known metadata is invalid, or metadata promises an enrollment CLI that is missing.
 
+On a re-install, the settings in the table above that a person chooses (project key, protected roots, port, label prefix, terminal, MCP URL, `PATH`, Python, the Mail state / service roots, `LANG` / `MURMUR` / `DELIVERABLE_ROOTS`, and so on) are decided as explicit value → previous `env.sh` → default. The list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`; see "What a re-install inherits" under Upgrade in [install.en.md](install.en.md) for how to return to the defaults.
+
 The installer's project-key precedence is `--project-key` / process `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → existing `env.sh` at the install destination. If none exist on first install, it does not guess that the repository checkout is the project; it stops with exit 2 before making changes. `AGENTSTACK_PROJECT_KEY` is recommended for persistent configuration.
 
 At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The installed `env.sh` is not sourced; only `AGENTSTACK_PROJECT_KEY`, and `AGENTSTACK_PROTECTED_ROOTS` when falling back for protected roots, are read literally. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
@@ -140,6 +142,8 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | `AGENTSTACK_TCC_GUARD` | enabled | macOS TCC warning; set to `0` to disable |
 | `AGENTSTACK_TCC_DIRS` | `$HOME/Desktop:$HOME/Downloads:$HOME/Documents` | `:`-separated TCC probe targets |
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | Scientist vocabulary override |
+
+The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `env.sh` at startup but do not overwrite a value from `AGENTSTACK_INHERITED_SETTINGS` that was already set. For example `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` registers under `/path/to/other`, not the installed project, and its protected roots follow that project unless given explicitly. Without an explicit value, `env.sh` supplies it.
 
 The canonical `AGENTSTACK_TCC_DIRS` syntax is colon-separated so paths may contain spaces. Legacy whitespace-separated values without a colon are also interpreted for compatibility.
 

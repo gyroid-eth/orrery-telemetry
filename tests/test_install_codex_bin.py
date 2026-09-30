@@ -50,11 +50,17 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
+    text = INSTALL.read_text(encoding="utf-8")
     stubs = (
         "set -euo pipefail\n"
+        f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'project-context.sh'))}\n"
         f"INSTALL_DIR={shlex.quote(str(tmp_path / 'install'))}\n"
+        "RESET_SETTINGS=0\n"
+        # An explicit value is what --codex-bin / AGENTSTACK_CODEX_BIN supplies.
+        f"OPTION_GIVEN={'AGENTSTACK_CODEX_BIN' if explicit else ''}\n"
         f"CODEX_BIN_SETTING={shlex.quote(explicit)}\n"
         f"agentstack_installed_env_value() {{ printf '%s\\n' {shlex.quote(installed)}; }}\n"
+        + text[text.index("# --- setting resolution"):text.index("# --- end setting resolution ---")]
     )
     block = _block()
     # Stub the environment checks after their definitions inside the block.

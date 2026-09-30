@@ -18,16 +18,22 @@ INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
 MAIL_HTTP_BEARER_MODE="disabled"
-MCP_URL_EXPLICIT="${AGENTSTACK_MCP_URL+x}"
-PORT="${AGENTSTACK_PORT:-8770}"
-LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
-TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
+# Explicit values only; the rest come from the previous env.sh or the defaults
+# once the options are parsed (see "setting resolution" below). Options record
+# the env.sh name they set in OPTION_GIVEN, so an empty option value counts too.
+OPTION_GIVEN=""
+RESET_SETTINGS="${AGENTSTACK_RESET_SETTINGS:-0}"
+PORT="${AGENTSTACK_PORT:-}"
+LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-}"
+TERMINAL="${AGENTSTACK_TERMINAL:-}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
+# The Obsidian vault the dashboard falls back to and links Output items into.
+VAULT_SETTING="${AGENTSTACK_VAULT:-}"
 # NEW AGENT launch-directory presets. Resolved below: explicit > installed env.sh > empty.
 SPAWN_DIRS_SETTING="${AGENTSTACK_SPAWN_DIRS:-}"
 SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
@@ -57,8 +63,11 @@ CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
-PATH_VALUE="${AGENTSTACK_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
-MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
+PYTHON_CHOICE="${AGENTSTACK_PYTHON:-}"
+PYTHON_REQUESTED=""
+PYTHON_INHERITED=""
+PATH_VALUE="${AGENTSTACK_PATH:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-}"
 
 # These match packages/agentstack_mail/pyproject.toml. A regression test keeps
 # the shell gate and package metadata in lock-step.
@@ -93,11 +102,21 @@ Options:
   --scoped               Tier2 placeholder; no user-settings merge
   --install-dir PATH     Default: ~/.agentstack
   --project-key PATH     Required on first install; existing env.sh is reused
-  --port PORT            Default: 8770
-  --label-prefix PREFIX  Default: org.agentstack
+  --port PORT            Default: existing env.sh, else 8770
+  --label-prefix PREFIX  Default: existing env.sh, else org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
-  --terminal MODE        auto, ghostty, iterm, terminal, or none
+  --terminal MODE        auto, ghostty, iterm, terminal, or none (default:
+                         existing env.sh, else auto)
+  --reset-settings       Do not inherit settings from the existing env.sh:
+                         anything not given explicitly goes back to its
+                         default. Kept even then: the project key, protected
+                         roots, the ORRERY Mail state/service roots and
+                         socket, the label prefix, the Mail launchd label and
+                         the MCP URL. An empty explicit value (for example
+                         AGENTSTACK_VAULT= or --codex-add-dirs "") resets
+                         just that setting.
+                         AGENTSTACK_RESET_SETTINGS=1 does the same.
   --spawn-dirs PATHS     ':'-separated NEW AGENT launch-directory presets
                          (absolute or ~; default: existing env.sh, else ~)
   --spawn-roots PATHS    ':'-separated roots the directory typeahead may
@@ -175,46 +194,61 @@ while [[ $# -gt 0 ]]; do
       ;;
     --port)
       PORT="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_PORT"
       shift 2
       ;;
     --label-prefix)
       LABEL_PREFIX="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_LABEL_PREFIX"
       shift 2
       ;;
     --terminal)
       TERMINAL="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_TERMINAL"
       shift 2
+      ;;
+    --reset-settings)
+      RESET_SETTINGS=1
+      shift
       ;;
     --spawn-dirs)
       SPAWN_DIRS_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_SPAWN_DIRS"
       shift 2
       ;;
     --spawn-roots)
       SPAWN_ROOTS_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_SPAWN_ROOTS"
       shift 2
       ;;
     --codex-approval)
       CODEX_CHILD_APPROVAL_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_CHILD_APPROVAL"
       shift 2
       ;;
     --codex-child-overlay)
       CODEX_CHILD_CONFIG_OVERLAY_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"
       shift 2
       ;;
     --codex-network)
       CODEX_NETWORK_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_NETWORK"
       shift 2
       ;;
     --codex-add-dirs)
       CODEX_ADD_DIRS_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_ADD_DIRS"
       shift 2
       ;;
     --child-resume-retention-days)
       CHILD_RESUME_RETENTION_DAYS_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"
       shift 2
       ;;
     --codex-bin)
       CODEX_BIN_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_BIN"
       shift 2
       ;;
     -h|--help)
@@ -243,37 +277,134 @@ if [[ -z "$PROJECT_KEY" ]]; then
   exit 2
 fi
 PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
-# The dashboard runs under launchd/systemd, so a shell `export` never reaches
-# it: these presets only take effect when the installer persists them. A
-# re-install keeps what the previous install recorded unless told otherwise.
-if [[ -z "$AUTO_OPEN_CHILD_SETTING" ]]; then
-  AUTO_OPEN_CHILD_SETTING="$(agentstack_installed_env_value AGENTSTACK_AUTO_OPEN_CHILD "$INSTALL_DIR/env.sh")"
+case "$RESET_SETTINGS" in
+  0|"") RESET_SETTINGS=0 ;;
+  1) ;;
+  *) echo "error: AGENTSTACK_RESET_SETTINGS must be 0 or 1 (got: $RESET_SETTINGS)" >&2; exit 2 ;;
+esac
+# --- setting resolution (tests extract from here to the end marker) ---
+# Every setting a person chooses: explicit (an option or the environment) > the
+# previous env.sh > the product default, in the order hooks/project-context.sh
+# defines. The dashboard runs under launchd/systemd, so a shell `export` never
+# reaches it and a re-install that forgot a setting silently undid it (#137).
+#
+# - Explicit includes an empty value: `AGENTSTACK_VAULT=` or `--codex-add-dirs ""`
+#   puts that one setting back to its default.
+# - env.sh writes every value out, defaults included, so it also records which
+#   were chosen (AGENTSTACK_CHOSEN_SETTINGS). Only those are inherited; a default
+#   written out follows the current default next time. An env.sh from before
+#   that record counts a value as chosen when it differs from today's default,
+#   except PATH and Python, which the installer always worked out itself.
+# - A value in the environment equal to what env.sh recorded is an echo of
+#   env.sh (cockpit's update.sh and some shell profiles source it), not a new
+#   choice: it keeps the status it had. An option is always a request. Only
+#   an env.sh with the record can be echoed; before it, the value is explicit.
+# - --reset-settings drops the previous choices. What names the data and the
+#   services running on it (project key, protected roots, the Mail state and
+#   service roots and socket, the label prefix, the Mail launchd label, the MCP
+#   URL) is kept: resetting those left the old Mail job running on the same
+#   database next to a new one (review of #146).
+SETTINGS_ENV_FILE="$INSTALL_DIR/env.sh"
+CHOSEN_SETTINGS=""
+SETTING_SOURCE=""
+PREVIOUS_CHOSEN=""
+PREVIOUS_CHOSEN_RECORDED=false
+if [[ -f "$SETTINGS_ENV_FILE" ]] && grep -q '^export AGENTSTACK_CHOSEN_SETTINGS=' "$SETTINGS_ENV_FILE"; then
+  PREVIOUS_CHOSEN_RECORDED=true
+  PREVIOUS_CHOSEN="$(agentstack_installed_env_value AGENTSTACK_CHOSEN_SETTINGS "$SETTINGS_ENV_FILE")"
 fi
-if [[ -z "$SPAWN_DIRS_SETTING" ]]; then
-  SPAWN_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$SPAWN_ROOTS_SETTING" ]]; then
-  SPAWN_ROOTS_SETTING="$(agentstack_installed_env_value AGENTSTACK_SPAWN_ROOTS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$WORKTREE_ROOT_SETTING" ]]; then
-  WORKTREE_ROOT_SETTING="$(agentstack_installed_env_value AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/env.sh")"
-fi
-WORKTREE_ROOT_SETTING="${WORKTREE_ROOT_SETTING:-$INSTALL_DIR/worktrees}"
-if [[ -z "$CODEX_CHILD_APPROVAL_SETTING" ]]; then
-  CODEX_CHILD_APPROVAL_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_APPROVAL "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" ]]; then
-  CODEX_CHILD_CONFIG_OVERLAY_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_NETWORK_SETTING" ]]; then
-  CODEX_NETWORK_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_NETWORK "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_ADD_DIRS_SETTING" ]]; then
-  CODEX_ADD_DIRS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_ADD_DIRS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CHILD_RESUME_RETENTION_DAYS_SETTING" ]]; then
-  CHILD_RESUME_RETENTION_DAYS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CHILD_RESUME_RETENTION_DAYS "$INSTALL_DIR/env.sh")"
-fi
+
+setting_listed() {
+  case " $2 " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+setting_previously_chosen() {
+  local name="$1" saved="$2" default="$3"
+  if [[ "$PREVIOUS_CHOSEN_RECORDED" == true ]]; then
+    setting_listed "$name" "$PREVIOUS_CHOSEN"
+    return
+  fi
+  case "$name" in
+    AGENTSTACK_PATH|AGENTSTACK_PYTHON) return 1 ;;
+  esac
+  [[ "$saved" != "$default" ]]
+}
+
+# resolve_setting VAR NAME DEFAULT [MODE [ENV_NAME]]
+#   VAR holds the explicit value on entry (from ENV_NAME, default NAME, or an
+#   option) and the value in effect on return; SETTING_SOURCE says which of
+#   explicit / saved / default it is. MODE `kept` inherits the saved value even
+#   under --reset-settings and whether or not it was chosen; `found` inherits
+#   it, chosen or not, unless reset (a location the installer found itself).
+resolve_setting() {
+  local var="$1" name="$2" default="${3:-}" mode="${4:-chosen}" env_name="${5:-$2}"
+  local value="${!1:-}" saved given=""
+  saved="$(agentstack_installed_env_value "$name" "$SETTINGS_ENV_FILE")"
+  if setting_listed "$env_name" "$OPTION_GIVEN"; then
+    given=option
+  elif [[ -n "${!env_name+x}" ]]; then
+    given=environment
+    # Only against a record of choices: before it, a value someone passes on
+    # every install looks the same as an echo, and taking it for one sent it
+    # back to the default and flipped it on the next install (#146, N-1).
+    if [[ "$PREVIOUS_CHOSEN_RECORDED" == true && -n "$saved" && "$value" == "$saved" ]]; then
+      given=""
+    fi
+  fi
+  if [[ -n "$given" ]]; then
+    if [[ -n "$value" ]]; then
+      SETTING_SOURCE=explicit
+      CHOSEN_SETTINGS="${CHOSEN_SETTINGS:+$CHOSEN_SETTINGS }$name"
+    else
+      value="$default"
+      SETTING_SOURCE=default
+    fi
+  elif [[ -n "$saved" ]] && {
+    [[ "$mode" == kept ]] ||
+      { [[ "$RESET_SETTINGS" != 1 ]] &&
+        { [[ "$mode" == found ]] || setting_previously_chosen "$name" "$saved" "$default"; }; }
+  }; then
+    value="$saved"
+    SETTING_SOURCE=saved
+    # Kept or found without being chosen stays unchosen in the record.
+    if [[ "$mode" == chosen ]] || setting_previously_chosen "$name" "$saved" "$default"; then
+      CHOSEN_SETTINGS="${CHOSEN_SETTINGS:+$CHOSEN_SETTINGS }$name"
+    fi
+  else
+    value="$default"
+    SETTING_SOURCE=default
+  fi
+  printf -v "$var" '%s' "$value"
+}
+# --- end setting resolution ---
+
+resolve_setting PORT AGENTSTACK_PORT 8770
+resolve_setting LABEL_PREFIX AGENTSTACK_LABEL_PREFIX org.agentstack kept
+LABEL_PREFIX_SOURCE="$SETTING_SOURCE"
+resolve_setting TERMINAL AGENTSTACK_TERMINAL auto
+resolve_setting MCP_URL AGENTSTACK_MCP_URL http://127.0.0.1:18765/mcp kept
+resolve_setting PATH_VALUE AGENTSTACK_PATH /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# An explicit AGENTSTACK_PYTHON must work or the install stops; one recorded
+# before is only tried first, and select_python searches again without it.
+resolve_setting PYTHON_CHOICE AGENTSTACK_PYTHON ""
+case "$SETTING_SOURCE" in
+  explicit) PYTHON_REQUESTED="$PYTHON_CHOICE" ;;
+  saved) PYTHON_INHERITED="$PYTHON_CHOICE" ;;
+esac
+resolve_setting DELIVERABLE_ROOTS AGENTSTACK_DELIVERABLE_ROOTS
+resolve_setting LANG_SETTING AGENTSTACK_LANG
+resolve_setting MURMUR_SETTING AGENTSTACK_MURMUR
+resolve_setting VAULT_SETTING AGENTSTACK_VAULT
+resolve_setting AUTO_OPEN_CHILD_SETTING AGENTSTACK_AUTO_OPEN_CHILD 1
+resolve_setting SPAWN_DIRS_SETTING AGENTSTACK_SPAWN_DIRS
+resolve_setting SPAWN_ROOTS_SETTING AGENTSTACK_SPAWN_ROOTS
+resolve_setting WORKTREE_ROOT_SETTING AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/worktrees"
+resolve_setting CODEX_CHILD_APPROVAL_SETTING AGENTSTACK_CODEX_CHILD_APPROVAL never
+resolve_setting CODEX_CHILD_CONFIG_OVERLAY_SETTING AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY
+resolve_setting CODEX_NETWORK_SETTING AGENTSTACK_CODEX_NETWORK on
+resolve_setting CODEX_ADD_DIRS_SETTING AGENTSTACK_CODEX_ADD_DIRS
+resolve_setting CHILD_RESUME_RETENTION_DAYS_SETTING AGENTSTACK_CHILD_RESUME_RETENTION_DAYS 30
 # --- codex launcher resolution (tests extract from here to the end marker) ---
 # Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
 # there is the Windows npm shim: run by the Linux node it dies at once with
@@ -421,8 +552,8 @@ find_usable_codex_bin() {
 }
 # --- end codex launcher resolution ---
 
-if [[ -z "$CODEX_BIN_SETTING" ]]; then
-  CODEX_BIN_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN "$INSTALL_DIR/env.sh")"
+resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
+if [[ "$SETTING_SOURCE" != explicit ]]; then
   if [[ -n "$CODEX_BIN_SETTING" ]]; then
     # A stale path from an earlier install (Node upgraded, prefix moved, or a
     # Windows shim picked up under WSL) must not pin the dashboard to a binary
@@ -458,18 +589,11 @@ AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"
-if [[ -z "$PORTRAITS_DIR_SETTING" ]]; then
-  PORTRAITS_DIR_SETTING="$(agentstack_installed_env_value AGENTSTACK_PORTRAITS_DIR "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CUSTOM_PORTRAITS_SETTING" ]]; then
-  CUSTOM_PORTRAITS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CUSTOM_PORTRAITS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "${AGENTSTACK_CLAUDE_MODELS+x}" ]]; then
-  CLAUDE_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CLAUDE_MODELS "$INSTALL_DIR/env.sh")"
-fi
-if [[ -z "$CODEX_MODELS_SETTING" ]]; then
-  CODEX_MODELS_SETTING="$(agentstack_installed_env_value AGENTSTACK_CODEX_MODELS "$INSTALL_DIR/env.sh")"
-fi
+resolve_setting PORTRAITS_DIR_SETTING AGENTSTACK_PORTRAITS_DIR
+resolve_setting CUSTOM_PORTRAITS_SETTING AGENTSTACK_CUSTOM_PORTRAITS
+# An empty AGENTSTACK_CLAUDE_MODELS is itself a choice: the built-in list.
+resolve_setting CLAUDE_MODELS_SETTING AGENTSTACK_CLAUDE_MODELS
+resolve_setting CODEX_MODELS_SETTING AGENTSTACK_CODEX_MODELS
 
 # Pass the new settings as data, never interpolate them into Python source.
 export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
@@ -485,16 +609,23 @@ BACKUPS_DIR="$INSTALL_DIR/backups"
 ENV_FILE="$INSTALL_DIR/env.sh"
 MANIFEST="$INSTALL_DIR/install-state.json"
 CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+# Not inherited: a sandbox override for tests and trials, not a setting. A later
+# plain install writes the real ~/.claude.json (review of #146).
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
-MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
-DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-$RUNTIME_DIR/dashboard.log}"
-DASHBOARD_LOG_MAX_BYTES="${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-5242880}"
-DASHBOARD_LOG_BACKUPS="${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-3}"
-DASHBOARD_RESTART_DELAY="${AGENTSTACK_DASHBOARD_RESTART_DELAY:-5}"
+MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-}"
+resolve_setting MANAGED_AGENTS_FILE AGENTSTACK_MANAGED_AGENTS_FILE "$RUNTIME_DIR/managed_agents.txt"
+DASHBOARD_LOG="${AGENTSTACK_DASHBOARD_LOG:-}"
+resolve_setting DASHBOARD_LOG AGENTSTACK_DASHBOARD_LOG "$RUNTIME_DIR/dashboard.log"
+DASHBOARD_LOG_MAX_BYTES="${AGENTSTACK_DASHBOARD_LOG_MAX_BYTES:-}"
+resolve_setting DASHBOARD_LOG_MAX_BYTES AGENTSTACK_DASHBOARD_LOG_MAX_BYTES 5242880
+DASHBOARD_LOG_BACKUPS="${AGENTSTACK_DASHBOARD_LOG_BACKUPS:-}"
+resolve_setting DASHBOARD_LOG_BACKUPS AGENTSTACK_DASHBOARD_LOG_BACKUPS 3
+DASHBOARD_RESTART_DELAY="${AGENTSTACK_DASHBOARD_RESTART_DELAY:-}"
+resolve_setting DASHBOARD_RESTART_DELAY AGENTSTACK_DASHBOARD_RESTART_DELAY 5
 LABEL="$LABEL_PREFIX.agentdashboard"
 URL="http://127.0.0.1:$PORT/"
 ACTIVE_SERVICE_KIND=""
@@ -515,10 +646,17 @@ MAIL_AUTOSTART_LABEL="$LABEL_PREFIX.mail"
 # Only a deliberately scoped install pins its own service label; leaving it
 # empty keeps the historical default for everybody else, whose running job was
 # registered under that name long before this setting existed.
-if [[ -n "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-}" ]]; then
-  # An operator who named the label keeps it. Deriving one from the prefix
-  # would point this install at a job nobody registered under that name.
-  MAIL_LAUNCHD_LABEL_SETTING="$AGENTSTACK_MAIL_LAUNCHD_LABEL"
+# The label the previous install registered is kept (even under reset: it
+# names the running job), unless the prefix it came from was given explicitly.
+# An operator who named the label keeps it. Deriving one from the prefix would
+# point this install at a job nobody registered under that name.
+MAIL_LAUNCHD_LABEL_SETTING="${AGENTSTACK_MAIL_LAUNCHD_LABEL:-}"
+resolve_setting MAIL_LAUNCHD_LABEL_SETTING AGENTSTACK_MAIL_LAUNCHD_LABEL "" kept
+if [[ "$SETTING_SOURCE" == saved && "$LABEL_PREFIX_SOURCE" == explicit ]]; then
+  MAIL_LAUNCHD_LABEL_SETTING=""
+fi
+if [[ -n "$MAIL_LAUNCHD_LABEL_SETTING" ]]; then
+  :
 elif [[ "$LABEL_PREFIX" == "org.agentstack" ]]; then
   MAIL_LAUNCHD_LABEL_SETTING=""
 else
@@ -541,8 +679,15 @@ PROVISION_NATIVE_MAIL=false
 NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=true
 NATIVE_MAIL_ENROLL_AVAILABLE=true
 NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true
-NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-$HOME/.agentstack/mail}"
-NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-$INSTALL_DIR/mail-service}"
+# Where ORRERY Mail keeps its database. Falling back to the default here would
+# quietly start an empty one, so the previous install's roots are inherited even
+# under --reset-settings. env.sh records the service root as AGENTSTACK_MAIL_DIR.
+NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-}"
+resolve_setting NATIVE_MAIL_STATE_ROOT AGENTSTACK_MAIL_STATE_ROOT "$HOME/.agentstack/mail" kept
+MAIL_STATE_ROOT_SOURCE="$SETTING_SOURCE"
+NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-}"
+resolve_setting NATIVE_MAIL_SERVICE_ROOT AGENTSTACK_MAIL_DIR "$INSTALL_DIR/mail-service" kept \
+  AGENTSTACK_MAIL_SERVICE_ROOT
 NATIVE_MAIL_PACKAGE_SOURCE="${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}"
 NATIVE_MAIL_SOURCE_ID="${AGENTSTACK_MAIL_CANDIDATE_ID:-}"
 if [[ -z "$NATIVE_MAIL_SOURCE_ID" ]]; then
@@ -558,7 +703,15 @@ NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
 NATIVE_MAIL_DEPLOYMENT="$(dirname "$NATIVE_MAIL_ENV")/deployment.json"
 NATIVE_MAIL_PIDFILE="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.pid"
 NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
+# Empty means "derive it from the state root" (below). A socket the previous
+# install recorded belongs with that install's state root, so it is inherited
+# like the roots (even under --reset-settings), unless the state root itself was
+# given explicitly: a socket derived for another root would be shared by two.
 NATIVE_MAIL_MANAGEMENT_SOCKET="${AGENTSTACK_MAIL_MANAGEMENT_SOCKET:-}"
+resolve_setting NATIVE_MAIL_MANAGEMENT_SOCKET AGENTSTACK_MAIL_MANAGEMENT_SOCKET "" kept
+if [[ "$SETTING_SOURCE" == saved && "$MAIL_STATE_ROOT_SOURCE" == explicit ]]; then
+  NATIVE_MAIL_MANAGEMENT_SOCKET=""
+fi
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected ORRERY Mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
 PREFLIGHT_ERRORS=()
@@ -814,7 +967,7 @@ python_is_compatible() {
 }
 
 select_python() {
-  local requested="${AGENTSTACK_PYTHON:-}"
+  local requested="$PYTHON_REQUESTED"
   local candidate version
   PYTHON_SELECTION_ERROR=""
   if [[ -n "$requested" ]]; then
@@ -831,6 +984,15 @@ select_python() {
     PYTHON_BIN="$candidate"
     say "python: $PYTHON_BIN ($version)"
     return
+  fi
+  if [[ -n "$PYTHON_INHERITED" ]]; then
+    candidate="$(resolve_python_candidate "$PYTHON_INHERITED")"
+    if [[ -n "$candidate" ]] && { [[ "$PREFLIGHT_SKIP_PYTHON" == "1" && -x "$candidate" ]] || python_is_compatible "$candidate"; }; then
+      PYTHON_BIN="$candidate"
+      say "python: $PYTHON_BIN ($(python_version "$candidate"); from the existing env.sh)"
+      return
+    fi
+    say "note: the Python recorded in the existing env.sh ($PYTHON_INHERITED) is missing or too old; searching again"
   fi
 
   local checked=""
@@ -2269,9 +2431,12 @@ values = {
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
-    "AGENTSTACK_VAULT": "",
+    "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
     "AGENTSTACK_PATH": "$PATH_VALUE",
+    # Which of the values above were chosen, not written-out defaults: only
+    # these are inherited by the next install.
+    "AGENTSTACK_CHOSEN_SETTINGS": "$CHOSEN_SETTINGS",
 }
 values.update({
     "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
@@ -2796,7 +2961,7 @@ retire_legacy_mail_services() {
   # to retire is "org.agentstack.mcp-agent-mail", which lives under that very
   # prefix.
   local protected=(
-    "${AGENTSTACK_MAIL_LAUNCHD_LABEL:-org.orrery.mail}"
+    "${MAIL_LAUNCHD_LABEL_SETTING:-org.orrery.mail}"
     "${LABEL:-}"
     "${MAIL_AUTOSTART_LABEL:-}"
   )
@@ -3275,7 +3440,51 @@ render_launchd_plist() {
   plan "render launchd plist $plist"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$HOME/Library/LaunchAgents"
-    "$PYTHON_BIN" - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" <<PY
+    # Values travel as arguments and are XML-escaped there: a path with `&`, `<`
+    # or `"` (an Obsidian vault named "Research & Notes") broke the plist, and
+    # launchd will not load a broken one (review of #146).
+    local pairs=(
+      __LABEL_PREFIX__ "$LABEL_PREFIX"
+      __INSTALL_DIR__ "$DASHBOARD_DIR"
+      __PYTHON__ "$PYTHON_BIN"
+      __PORT__ "$PORT"
+      __MAIL_DB__ "$MAIL_DB"
+      __MAIL_ENV__ "$MAIL_ENV"
+      __MAIL_HOME__ "$MAIL_HOME"
+      __MAIL_HTTP_BEARER_MODE__ "$MAIL_HTTP_BEARER_MODE"
+      __SIGNALS_DIR__ "$SIGNALS_DIR"
+      __MCP_URL__ "$MCP_URL"
+      __TERMINAL__ "$TERMINAL"
+      __AUTO_OPEN_CHILD__ "$AUTO_OPEN_CHILD_SETTING"
+      __PROJECT_KEY__ "$PROJECT_KEY"
+      __PROTECTED_ROOTS__ "$PROTECTED_ROOTS"
+      __DELIVERABLE_ROOTS__ "$DELIVERABLE_ROOTS"
+      __LANG__ "$LANG_SETTING"
+      __MURMUR__ "$MURMUR_SETTING"
+      __SPAWN_DIRS__ "$SPAWN_DIRS_SETTING"
+      __SPAWN_ROOTS__ "$SPAWN_ROOTS_SETTING"
+      __WORKTREE_ROOT__ "$WORKTREE_ROOT_SETTING"
+      __CODEX_CHILD_APPROVAL__ "$CODEX_CHILD_APPROVAL_SETTING"
+      __CODEX_NETWORK__ "$CODEX_NETWORK_SETTING"
+      __CODEX_ADD_DIRS__ "$CODEX_ADD_DIRS_SETTING"
+      __CHILD_RESUME_RETENTION_DAYS__ "$CHILD_RESUME_RETENTION_DAYS_SETTING"
+      __CODEX_BIN__ "$CODEX_BIN_SETTING"
+      __PORTRAITS_DIR__ "$PORTRAITS_DIR_SETTING"
+      __CUSTOM_PORTRAITS__ "$CUSTOM_PORTRAITS_SETTING"
+      __CODEX_MODELS__ "$CODEX_MODELS_SETTING"
+      __HOOKS_DIR__ "$HOOKS_DIR"
+      __RUNTIME_DIR__ "$RUNTIME_DIR"
+      __PERSISTENT_PROFILES_DIR__ "$PERSISTENT_PROFILES_DIR"
+      __DASHBOARD_LOG__ "$DASHBOARD_LOG"
+      __DASHBOARD_LOG_MAX_BYTES__ "$DASHBOARD_LOG_MAX_BYTES"
+      __DASHBOARD_LOG_BACKUPS__ "$DASHBOARD_LOG_BACKUPS"
+      __DASHBOARD_RESTART_DELAY__ "$DASHBOARD_RESTART_DELAY"
+      __MANAGED_AGENTS_FILE__ "$MANAGED_AGENTS_FILE"
+      __VAULT__ "$VAULT_SETTING"
+      __PATH__ "$PATH_VALUE"
+    )
+    "$PYTHON_BIN" - "$REPO_ROOT/dashboard/agentdashboard.plist.template" "$plist" \
+      "$CODEX_CHILD_CONFIG_OVERLAY_SETTING" "${pairs[@]}" <<'PY'
 import os
 import pathlib
 import sys
@@ -3283,55 +3492,18 @@ import xml.sax.saxutils
 
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(sys.argv[2])
-repl = {
-    "__LABEL_PREFIX__": "$LABEL_PREFIX",
-    "__INSTALL_DIR__": "$DASHBOARD_DIR",
-    "__PYTHON__": "$PYTHON_BIN",
-    "__PORT__": "$PORT",
-    "__MAIL_DB__": "$MAIL_DB",
-    "__MAIL_ENV__": "$MAIL_ENV",
-    "__MAIL_HOME__": "$MAIL_HOME",
-    "__MAIL_HTTP_BEARER_MODE__": "$MAIL_HTTP_BEARER_MODE",
-    "__SIGNALS_DIR__": "$SIGNALS_DIR",
-    "__MCP_URL__": "$MCP_URL",
-    "__TERMINAL__": "$TERMINAL",
-    "__AUTO_OPEN_CHILD__": "$AUTO_OPEN_CHILD_SETTING",
-    "__PROJECT_KEY__": "$PROJECT_KEY",
-    "__PROTECTED_ROOTS__": "$PROTECTED_ROOTS",
-    "__DELIVERABLE_ROOTS__": "$DELIVERABLE_ROOTS",
-    "__LANG__": "$LANG_SETTING",
-    "__MURMUR__": "$MURMUR_SETTING",
-    "__SPAWN_DIRS__": "$SPAWN_DIRS_SETTING",
-    "__SPAWN_ROOTS__": "$SPAWN_ROOTS_SETTING",
-    "__WORKTREE_ROOT__": "$WORKTREE_ROOT_SETTING",
-    "__CODEX_CHILD_APPROVAL__": "$CODEX_CHILD_APPROVAL_SETTING",
-    "__CODEX_NETWORK__": "$CODEX_NETWORK_SETTING",
-    "__CODEX_ADD_DIRS__": "$CODEX_ADD_DIRS_SETTING",
-    "__CHILD_RESUME_RETENTION_DAYS__": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
-    "__CODEX_BIN__": "$CODEX_BIN_SETTING",
-    "__PORTRAITS_DIR__": "$PORTRAITS_DIR_SETTING",
-    "__CUSTOM_PORTRAITS__": "$CUSTOM_PORTRAITS_SETTING",
-    "__CLAUDE_MODELS__": xml.sax.saxutils.escape(os.environ.get("AGENTSTACK_CLAUDE_MODELS", "")),
-    "__CODEX_MODELS__": "$CODEX_MODELS_SETTING",
-    "__HOOKS_DIR__": "$HOOKS_DIR",
-    "__RUNTIME_DIR__": "$RUNTIME_DIR",
-    "__PERSISTENT_PROFILES_DIR__": "$PERSISTENT_PROFILES_DIR",
-    "__DASHBOARD_LOG__": "$DASHBOARD_LOG",
-    "__DASHBOARD_LOG_MAX_BYTES__": "$DASHBOARD_LOG_MAX_BYTES",
-    "__DASHBOARD_LOG_BACKUPS__": "$DASHBOARD_LOG_BACKUPS",
-    "__DASHBOARD_RESTART_DELAY__": "$DASHBOARD_RESTART_DELAY",
-    "__MANAGED_AGENTS_FILE__": "$MANAGED_AGENTS_FILE",
-    "__VAULT__": "",
-    "__PATH__": "$PATH_VALUE",
-}
+overlay = sys.argv[3]
+pairs = sys.argv[4:]
+repl = dict(zip(pairs[0::2], pairs[1::2]))
+repl["__CLAUDE_MODELS__"] = os.environ.get("AGENTSTACK_CLAUDE_MODELS", "")
 text = src.read_text(encoding="utf-8")
 for key, value in repl.items():
-    text = text.replace(key, value)
+    text = text.replace(key, xml.sax.saxutils.escape(value))
 overlay_marker = "    <key>AGENTSTACK_CODEX_CHILD_APPROVAL</key>"
 overlay_entry = (
     "    <key>AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY</key>\n"
     "    <string>"
-    + xml.sax.saxutils.escape("$CODEX_CHILD_CONFIG_OVERLAY_SETTING")
+    + xml.sax.saxutils.escape(overlay)
     + "</string>\n"
 )
 text = text.replace(overlay_marker, overlay_entry + overlay_marker)
@@ -3394,7 +3566,7 @@ env = {
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
-    "AGENTSTACK_VAULT": "",
+    "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "PATH": "$PATH_VALUE",
 }
 def esc(v):
@@ -3869,6 +4041,13 @@ main() {
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  if [[ "$RESET_SETTINGS" == 1 ]]; then
+    say "settings: reset (not inherited from the existing env.sh)"
+  fi
+  say "dashboard port: $PORT"
+  say "label prefix: $LABEL_PREFIX"
+  say "terminal: $TERMINAL"
+  say "ORRERY Mail MCP URL: $MCP_URL"
   say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
