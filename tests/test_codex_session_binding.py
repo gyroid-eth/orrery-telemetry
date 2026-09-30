@@ -1934,3 +1934,185 @@ def test_deck_badges_are_only_wired_in_the_card_renderer() -> None:
     assert "— NO HISTORY" in card
     assert html.count("? UNBOUND") == 1
     assert html.count("— NO HISTORY") == 1
+
+
+# --- #125: a dashboard-spawned child (registered as "codex-cli") resumes
+# through the bootstrap, which prepares with `--program codex`. -----------------
+
+
+def _bound_codex_cli_child(env: dict) -> dict:
+    """Bind one child launch whose registration spelled the program codex-cli."""
+
+    registration = {**env["registration"], "program": "codex-cli"}
+    launch_path, launch_id = prepare_mod.prepare(
+        env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(env, launch_path, launch_id) == "bound"
+    receipt_path = env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["program"] == "codex-cli"
+    return receipt
+
+
+def test_codex_cli_child_resumes_with_the_bootstrap_program_spelling(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+
+    # The same arguments agentstack-codex-bootstrap passes: --program codex.
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    assert launch["launch_id"] == launch_id
+    assert launch["launch_kind"] == "resume"
+    assert launch["fallback_launch_id"] == receipt["launch_id"]
+    assert launch["fallback_receipt_id"] == receipt["receipt_id"]
+
+
+def test_resume_check_only_accepts_the_other_spelling_and_writes_nothing(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    receipt_path = runtime / "session_index" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+    receipt_before = receipt_path.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "hooks" / "prepare-codex-session-binding.py"),
+            "--check-only",
+            "--runtime-dir", str(runtime),
+            "--agent-id", str(AGENT_ID),
+            "--agent-name", AGENT,
+            "--project-key", binding_env["registration"]["project_key"],
+            "--program", "codex",
+            "--launch-kind", "resume",
+            "--launch-origin", "child",
+            "--codex-mcp-profile", "orrery-only",
+            "--resume-session-id", SESSION_ID,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    # The verified receipt's spelling, which the bootstrap then keeps.
+    assert result.stdout == "codex-cli\n"
+    assert launch_path.read_bytes() == launch_before
+    assert receipt_path.read_bytes() == receipt_before
+    assert prepare_mod.check_resume(
+        runtime,
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    ) == (receipt["launch_id"], receipt["receipt_id"], "codex-cli")
+
+
+def test_resume_check_only_refuses_a_mismatch_without_writing(
+    binding_env: dict,
+) -> None:
+    _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+
+    with pytest.raises(ValueError, match="does not match a verified prior receipt"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "codex"},
+            resume_session_id="11111111-2222-3333-4444-555555555555",
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    # Another program family is still refused.
+    with pytest.raises(ValueError, match="not for Codex CLI"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "claude-code"},
+            resume_session_id=SESSION_ID,
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    assert launch_path.read_bytes() == launch_before
+
+
+@pytest.mark.parametrize("original", ["codex-cli", "codex"])
+def test_resume_closed_before_first_input_stays_resumable(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch, original: str
+) -> None:
+    """#125 acceptance: resume, close before any prompt (no new SessionStart
+    receipt), and the next dashboard resume is still ready."""
+
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "macos")
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (original, AGENT_ID)
+        )
+    registration = {**binding_env["registration"], "program": original}
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    # This fixture carries no retained child credential, so the capability
+    # stops at that later gate; what matters is that the history gate before
+    # it (the one that failed in #125 with no_history) passes before and after.
+    before = server._resume_capability(AGENT, original, category="retired")
+    assert before != "no_history"
+
+    # The bootstrap's check does not know the spelling in advance ...
+    *_nonces, program = prepare_mod.check_resume(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    )
+    assert program == original
+    # ... and re-registers and prepares under the verified receipt's spelling.
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (program, AGENT_ID)
+        )
+    prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": program},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    # No SessionStart(resume) arrives: the prior receipt stays authoritative.
+    state = server._codex_history_binding(AGENT, now=250.0)
+    assert state["history_binding"] == "bound", state
+    after = server._resume_capability(AGENT, program, category="retired")
+    assert after == before
+    assert after != "no_history"

@@ -778,7 +778,7 @@ ags_register_session() {
   local task_description="Agent session in $work_dir"
   case "$program" in
     claude-code) task_description="Claude session in $work_dir" ;;
-    codex) task_description="Codex session in $work_dir" ;;
+    codex|codex-cli) task_description="Codex session in $work_dir" ;;
   esac
 
   local agent_name="$requested_name"

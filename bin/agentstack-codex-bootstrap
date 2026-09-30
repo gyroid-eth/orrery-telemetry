@@ -200,11 +200,84 @@ fi
 # 2. ensure the mail-watcher (delivers inbox signals into this tmux session).
 ags_start_mail_watcher "$TMUX_BIN" "$HOOKS_DIR"
 
+# 3a. Verify a retained Codex child's resume target against its prior receipt
+# *before* registering again. register_agent rewrites the stored program and
+# task, so a resume that is refused only after re-registering leaves the
+# receipt no longer matching the registration, and the child can never be
+# resumed again. The check reads the child state (numeric id and program
+# spelling: "codex" from /delegate, "codex-cli" from the dashboard spawn),
+# writes nothing, and returns the verified receipt's spelling. Registration,
+# the new launch expectation, and the resume state then all keep that
+# spelling, so the dashboard's exact receipt/registration match still holds
+# for the prior receipt until the resumed session writes a new one.
+CODEX_PROGRAM="codex"
+if [[ "$CODEX_LAUNCH_KIND" == "resume" && "$CODEX_LAUNCH_ORIGIN" == "child" ]]; then
+  PREPARE_BINDING="$HOOKS_DIR/prepare-codex-session-binding.py"
+  if [[ ! -f "$PREPARE_BINDING" ]]; then
+    echo "⚠️  Codex history binding expectation helper is missing; refusing to start: $PREPARE_BINDING" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  if ! CHILD_RESUME_IDENTITY="$(
+    "${AGENTSTACK_PYTHON:-python3}" - "$RUNTIME_DIR" "$CANDIDATE_AGENT_NAME" "$PROJECT_KEY" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+runtime, name, project = Path(sys.argv[1]).expanduser(), sys.argv[2], sys.argv[3]
+if not re.fullmatch(r"[A-Za-z0-9_.-]+", name or ""):
+    raise SystemExit(1)
+try:
+    state = json.loads((runtime / "child-agents" / f"{name}.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+if not isinstance(state, dict):
+    raise SystemExit(1)
+agent_id, program = state.get("agent_id"), state.get("program")
+if (
+    type(agent_id) is not int
+    or agent_id <= 0
+    or state.get("agent_name") != name
+    or state.get("project_key") != project
+    or program not in {"codex", "codex-cli"}
+):
+    raise SystemExit(1)
+print(f"{agent_id}\t{program}")
+PY
+  )"; then
+    echo "⚠️  retained Codex child state for '${CANDIDATE_AGENT_NAME:-}' is missing or belongs to another registration; refusing to start." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  IFS=$'\t' read -r CHILD_STATE_AGENT_ID CHILD_STATE_PROGRAM <<< "$CHILD_RESUME_IDENTITY"
+  if ! RESUME_RECEIPT_PROGRAM="$(
+     "${AGENTSTACK_PYTHON:-python3}" "$PREPARE_BINDING" --check-only \
+       --runtime-dir "$RUNTIME_DIR" \
+       --agent-id "$CHILD_STATE_AGENT_ID" \
+       --agent-name "$CANDIDATE_AGENT_NAME" \
+       --project-key "$PROJECT_KEY" \
+       --program "$CHILD_STATE_PROGRAM" \
+       --launch-kind resume \
+       --launch-origin child \
+       --codex-mcp-profile "$CODEX_CHILD_MCP_PROFILE" \
+       --resume-session-id "$CODEX_RESUME_SESSION_ID"
+  )"; then
+    echo "⚠️  resume target does not match this child's verified prior receipt; refusing to start before re-registering, so the retained state stays resumable." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  case "$RESUME_RECEIPT_PROGRAM" in
+    codex|codex-cli) CODEX_PROGRAM="$RESUME_RECEIPT_PROGRAM" ;;
+    *)
+      echo "⚠️  verified prior receipt names no Codex CLI program; refusing to start." >&2
+      return 1 2>/dev/null || exit 1
+      ;;
+  esac
+fi
+
 # 3. ensure_project + register_agent (reuse a child's reserved name if present).
 REGISTERED_AGENT_NAME=""
 REGISTER_STATUS=1
 if [[ "$TMUX_PREFLIGHT_CONFLICT" != "1" ]]; then
-  if ags_register_session "$PROJECT_KEY" "codex" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
+  if ags_register_session "$PROJECT_KEY" "$CODEX_PROGRAM" "$CODEX_MODEL" "cx" "$WORK_DIR" "$CANDIDATE_AGENT_NAME" "$REGISTER_MODE" >/dev/null 2>&1; then
     REGISTER_STATUS=0
     REGISTERED_AGENT_NAME="${AGS_REGISTERED_AGENT_NAME:-}"
   else
@@ -249,7 +322,7 @@ if [[ -n "$REGISTERED_AGENT_NAME" ]]; then
       --agent-id "$AGS_REGISTERED_AGENT_ID"
       --agent-name "$AGENT_NAME"
       --project-key "$PROJECT_KEY"
-      --program codex
+      --program "$CODEX_PROGRAM"
       --launch-kind "$CODEX_LAUNCH_KIND"
       --history-mode enabled
       --launch-origin "$CODEX_LAUNCH_ORIGIN"
@@ -289,7 +362,7 @@ if [[ "$CODEX_LAUNCH_KIND" == "resume" && "$CODEX_LAUNCH_ORIGIN" == "child" ]]; 
        --agent-name "$AGENT_NAME" \
        --agent-id "$AGS_REGISTERED_AGENT_ID" \
        --project-key "$PROJECT_KEY" \
-       --program codex \
+       --program "$CODEX_PROGRAM" \
        --mcp-profile "$CODEX_CHILD_MCP_PROFILE"; then
     echo "⚠️  retained Codex child state could not enter resume; refusing to start." >&2
     return 1 2>/dev/null || exit 1

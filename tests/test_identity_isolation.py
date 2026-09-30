@@ -356,3 +356,176 @@ def _main() -> int:
 
 if __name__ == "__main__":
     sys.exit(_main())
+
+
+def _bootstrap_resume_fixture(
+    tmp_path, *, receipt_session_id, state_program="codex-cli", receipt_program="codex-cli"
+):
+    """A retained codex-cli child plus a bootstrap whose registration is spied on."""
+
+    import json
+    import shutil
+
+    session_id = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
+    project = "/project"
+    bindir = tmp_path / "bin"
+    libdir = bindir / "lib"
+    hooks = tmp_path / "hooks"
+    libdir.mkdir(parents=True)
+    hooks.mkdir()
+    bootstrap = bindir / "agentstack-codex-bootstrap"
+    bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
+    for helper in ("prepare-codex-session-binding.py", "child_resume.py"):
+        shutil.copy2(
+            pathlib.Path(__file__).resolve().parents[1] / "hooks" / helper, hooks
+        )
+    marker = tmp_path / "registered"
+    (libdir / "agentstack-register.sh").write_text(
+        "ags_mail_load_token() { :; }\n"
+        "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
+        "ags_mcp_has_error() { return 1; }\n"
+        "ags_start_mail_watcher() { :; }\n"
+        "ags_register_session() {\n"
+        f"  printf '%s\\n' \"$2\" >> '{marker}'\n"
+        "  AGS_REGISTERED_AGENT_NAME=BoundCodex\n"
+        "  AGS_REGISTERED_AGENT_ID=73\n"
+        "  return 0\n"
+        "}\n"
+        "ags_record_managed_agent() { :; }\n",
+        encoding="utf-8",
+    )
+    runtime = tmp_path / "runtime"
+    (runtime / "child-agents").mkdir(parents=True)
+    (runtime / "session_index").mkdir()
+    state = runtime / "child-agents" / "BoundCodex.json"
+    state.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "launch_origin": "child",
+                "provider": "codex",
+                "agent_id": 73,
+                "agent_name": "BoundCodex",
+                "project_key": project,
+                "program": state_program,
+                "codex_mcp_profile": "orrery-only",
+                "registration_token": "owner-token",
+                "retired_at": "2026-09-21T00:00:00Z",
+                "resume_expires_at": "2999-09-21T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state.chmod(0o600)
+    token = runtime / "agent_token_BoundCodex"
+    token.write_text("owner-token", encoding="utf-8")
+    token.chmod(0o600)
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": receipt_session_id}})
+        + "\n",
+        encoding="utf-8",
+    )
+    receipt = runtime / "session_index" / "73.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "binding_kind": "self",
+                "provider": "codex",
+                "program": receipt_program,
+                "agent_id": 73,
+                "agent_name": "BoundCodex",
+                "project_key": project,
+                "registered_by": "BoundCodex",
+                "launch_id": "prior-launch",
+                "receipt_id": "prior-receipt",
+                "session_id": receipt_session_id,
+                "transcript_path": str(transcript),
+                "launch_origin": "child",
+                "codex_mcp_profile": "orrery-only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = (
+        f'source "{bootstrap}" . >/dev/null 2>"{tmp_path / "stderr"}"; '
+        "printf '%s\n' $?"
+    )
+    env = {
+        **os.environ,
+        "AGENTSTACK_PROJECT_KEY": project,
+        "AGENTSTACK_HOOKS_DIR": str(hooks),
+        "AGENTSTACK_RUNTIME_DIR": str(runtime),
+        "AGENTSTACK_RESERVED_IDENTITY": "1",
+        "AGENTSTACK_CODEX_LAUNCH_KIND": "resume",
+        "AGENTSTACK_CODEX_LAUNCH_ORIGIN": "child",
+        "AGENTSTACK_CODEX_RESUME_SESSION_ID": session_id,
+        "AGENTSTACK_CODEX_CHILD_MCP_PROFILE": "orrery-only",
+        "AGENT_NAME": "BoundCodex",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "TMUX": "",
+    }
+    return script, env, marker, state, receipt
+
+
+def test_refused_child_resume_does_not_re_register_or_touch_the_receipt(tmp_path):
+    """#125: a resume refused by the binding check leaves the child resumable."""
+
+    script, env, marker, state, receipt = _bootstrap_resume_fixture(
+        tmp_path, receipt_session_id="11111111-2222-3333-4444-555555555555"
+    )
+    state_before, receipt_before = state.read_bytes(), receipt.read_bytes()
+
+    result = subprocess.run(
+        ["bash", "-c", script], env=env, text=True, capture_output=True, check=False
+    )
+
+    assert result.stdout.strip() == "1"
+    assert "before re-registering" in (tmp_path / "stderr").read_text(encoding="utf-8")
+    assert not marker.exists(), "register_agent must not run for a refused resume"
+    assert state.read_bytes() == state_before
+    assert receipt.read_bytes() == receipt_before
+    assert not (receipt.parent.parent / "codex_launches" / "73.json").exists()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("state_program", "receipt_program"),
+    [("codex-cli", "codex-cli"), ("codex", "codex"), ("codex-cli", "codex")],
+)
+def test_child_resume_keeps_the_verified_receipt_spelling_end_to_end(
+    tmp_path, state_program, receipt_program
+):
+    """#125: the whole bootstrap succeeds and keeps the receipt's spelling.
+
+    Registration, the fresh launch expectation, and the resume state all use
+    the program recorded in the verified prior receipt, including the existing
+    mixed case where the child state says codex-cli but the receipt says codex.
+    """
+
+    import json
+
+    script, env, marker, state, _receipt = _bootstrap_resume_fixture(
+        tmp_path,
+        receipt_session_id="01d13f58-8e1a-7777-a3d8-e2ba243cdb49",
+        state_program=state_program,
+        receipt_program=receipt_program,
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script], env=env, text=True, capture_output=True, check=False
+    )
+
+    stderr = (tmp_path / "stderr").read_text(encoding="utf-8")
+    assert result.stdout.strip() == "0", stderr
+    assert marker.read_text(encoding="utf-8").split() == [receipt_program]
+    launch = json.loads(
+        (tmp_path / "runtime" / "codex_launches" / "73.json").read_text(encoding="utf-8")
+    )
+    assert launch["program"] == receipt_program
+    assert launch["launch_kind"] == "resume"
+    assert launch["fallback_receipt_id"] == "prior-receipt"
+    assert json.loads(state.read_text(encoding="utf-8"))["resume_in_progress_at"]
