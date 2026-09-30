@@ -2832,7 +2832,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             )
             resume_started = True
         if child_state is not None:
-            mcp_config = _write_claude_resume_mcp_config(session, registration)
+            mcp_config = _write_claude_resume_mcp_config(session, registration,
+                                                         parent=child_state.get("parent_agent"))
             inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
         if not legacy:
             mail_was_retired = _register_claude_resume(session, registration, token)
@@ -3436,8 +3437,15 @@ def _claude_resume_proxy_runner() -> str:
         install_home, "integrations", "codex_app", "plugin", "scripts", "run-mcp.sh")
 
 
-def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
-    """Regenerate the same child-owned proxy routing used on fresh spawn."""
+def _write_claude_resume_mcp_config(session: str, registration: dict, *, parent=None) -> str:
+    """Regenerate the same child-owned proxy routing used on fresh spawn.
+
+    ``parent`` is the one spawn_child recorded in the child state; without it
+    the resumed proxy reports the child as a root with no parent.
+    """
+    if parent is not None and (not isinstance(parent, str)
+                               or not _child_resume_module().PROXY_AGENT_NAME.fullmatch(parent)):
+        raise _ResumeCapabilityError("config_unrestorable", "The recorded parent cannot be given to the Mail proxy")
     proxy = {"command": _claude_resume_proxy_runner(), "args": [], "env": {
         "AGENTSTACK_PROXY_AGENT_NAME": session,
         "AGENTSTACK_PROXY_TOKEN_FILE": os.path.join(RUNTIME_DIR, f"agent_token_{session}"),
@@ -3448,6 +3456,8 @@ def _write_claude_resume_mcp_config(session: str, registration: dict) -> str:
         "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
     }}
+    if parent:
+        proxy["env"]["AGENTSTACK_PROXY_PARENT_AGENT"] = parent
     if os.environ.get("AGENTSTACK_PYTHON", "").strip():
         proxy["env"]["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
     names = {"orrery-mail"}

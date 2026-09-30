@@ -664,7 +664,16 @@ prepare_codex_child_resume_state() {
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
-        --mcp-profile "$mcp_profile" --program codex ${generation_args[@]+"${generation_args[@]}"}
+        --mcp-profile "$mcp_profile" --program codex --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
+}
+
+# The parent recorded in the child's state, for the Mail proxy a later resume
+# rebuilds. Empty for a standalone child, and for a name the proxy would refuse
+# (a launch that uses the proxy is stopped over such a name before it starts).
+recordable_parent_name() {
+    if [[ "${PARENT_NAME:-}" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]]; then
+        printf '%s' "$PARENT_NAME"
+    fi
 }
 
 prepare_claude_child_resume_state() {
@@ -677,7 +686,7 @@ prepare_claude_child_resume_state() {
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
-        --project-key "$PROJECT_KEY" --program claude-code ${generation_args[@]+"${generation_args[@]}"}
+        --project-key "$PROJECT_KEY" --program claude-code --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
 }
 
 # Start one launch expectation from a registration receipt. Output is

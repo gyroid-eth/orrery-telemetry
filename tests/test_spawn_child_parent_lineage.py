@@ -80,6 +80,11 @@ def _proxy_status(server: dict, tmp_path: pathlib.Path) -> dict:
     return status
 
 
+def _state(env: dict, name: str) -> dict:
+    path = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / f"{name}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _codex_servers(env: dict, name: str) -> dict:
     home = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / f"{name}.codex-home"
     config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
@@ -105,6 +110,8 @@ def test_a_restarted_codex_child_is_told_its_parent(tmp_path):
     assert status["lineage"]["kind"] == "child"
     assert status["lineage"]["parent_agent"] == PARENT
     assert status["agent_name"] == name
+    # Recorded for the proxy a later resume rebuilds.
+    assert _state(env, name)["parent_agent"] == PARENT
 
 
 def test_a_standalone_codex_child_is_a_root_with_no_parent(tmp_path):
@@ -119,6 +126,7 @@ def test_a_standalone_codex_child_is_a_root_with_no_parent(tmp_path):
     status = _proxy_status(servers["orrery-mail"], tmp_path)
     assert status["lineage"]["kind"] == "root"
     assert status["lineage"]["parent_agent"] is None
+    assert "parent_agent" not in _state(env, name)
 
 
 def test_a_claude_child_proxy_is_told_its_parent_too(tmp_path):
@@ -144,6 +152,7 @@ def test_a_claude_child_proxy_is_told_its_parent_too(tmp_path):
     for server in servers.values():
         assert server["env"]["AGENTSTACK_PROXY_PARENT_AGENT"] == PARENT
     assert _proxy_status(servers["orrery-mail"], tmp_path)["lineage"]["parent_agent"] == PARENT
+    assert _state(env, name)["parent_agent"] == PARENT
 
 
 def test_a_parent_the_proxy_cannot_carry_stops_the_launch(tmp_path):

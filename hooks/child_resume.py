@@ -264,11 +264,16 @@ def _validate_identity(
 
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
-    program: str | None = None, generation: str | None = None,
+    program: str | None = None, generation: str | None = None, parent_agent: str | None = None,
 ) -> dict[str, Any]:
+    """Mark the child active. ``parent_agent`` records the launcher's parent
+    (``""`` for a standalone launch clears it; ``None`` leaves it as is) so a
+    later resume can hand it to the Mail proxy again."""
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     if mcp_profile not in MCP_PROFILES:
         raise ResumeStateError("config_unrestorable", "invalid Codex MCP profile")
+    if parent_agent and not PROXY_AGENT_NAME.fullmatch(parent_agent):
+        raise ResumeStateError("invalid_identity", "The parent name cannot be given to the Mail proxy")
     with _AgentLock(lock_path, exclusive=True):
         if _legacy_pending(state_path).exists() or _legacy_pending(state_path).is_symlink():
             raise ResumeStateError("config_unrestorable", "Legacy child migration is still pending")
@@ -312,6 +317,10 @@ def prepare_active_state(
         else:
             state.pop("codex_mcp_profile", None)
         state.pop("resume_in_progress_at", None)
+        if parent_agent:
+            state["parent_agent"] = parent_agent
+        elif parent_agent is not None:
+            state.pop("parent_agent", None)
         _atomic_json(state_path, state)
         tombstone = runtime_dir / "child-resume-tombstones" / f"{state['agent_id']}.json"
         tombstone.unlink(missing_ok=True)
@@ -1251,6 +1260,20 @@ def _build_home_unlocked(
             shutil.rmtree(temporary)
 
 
+def _recorded_parent(state_path: Path) -> str:
+    """The parent a launcher recorded for this child, or "" if none."""
+    try:
+        state = _load_state(state_path)
+    except (ResumeStateError, OSError):
+        return ""
+    parent = state.get("parent_agent")
+    if parent is None:
+        return ""
+    if not isinstance(parent, str) or not PROXY_AGENT_NAME.fullmatch(parent):
+        raise ValueError("the recorded parent name cannot be given to the Mail proxy")
+    return parent
+
+
 def build_home(
     *,
     home: Path,
@@ -1276,6 +1299,10 @@ def build_home(
     if home.absolute() != expected_home.absolute():
         raise ValueError("generated Codex home is not canonical for this child")
     with _AgentLock(lock_path, exclusive=True):
+        if not parent_agent:
+            # A resume rebuilds the home without being told the parent; the
+            # launcher recorded it in the child's state.
+            parent_agent = _recorded_parent(_state)
         return _build_home_unlocked(
             home=home,
             source=source,
@@ -1304,6 +1331,7 @@ def main() -> int:
     active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
     active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
     active.add_argument("--generation")
+    active.add_argument("--parent-agent")
     stage = sub.add_parser("stage-registration")
     stage.add_argument("--runtime-dir", required=True)
     stage.add_argument("--agent-name", required=True)
@@ -1374,6 +1402,7 @@ def main() -> int:
                 project_key=args.project_key,
                 mcp_profile=args.mcp_profile,
                 program=args.program, generation=args.generation,
+                parent_agent=args.parent_agent,
             )
         elif args.command == "stage-registration":
             if bool(args.source) != bool(args.binding):
