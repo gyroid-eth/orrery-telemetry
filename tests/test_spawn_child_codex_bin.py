@@ -487,6 +487,9 @@ def test_dry_run_real_policy_uses_no_temporary_files(tmp_path, monkeypatch, vers
     monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", "/bin/bash")
     monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(broken))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    # SPAWN_SCRIPT is fixed at server import time; changing HOME or the hooks
+    # environment here must not require a stack installed for the test user.
+    monkeypatch.setattr(server, "SPAWN_SCRIPT", str(SPAWN))
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     def forbidden(*a, **k):
         pytest.fail("preview attempted Mail or agent launch")
@@ -497,9 +500,10 @@ def test_dry_run_real_policy_uses_no_temporary_files(tmp_path, monkeypatch, vers
     try:
         result = server.do_spawn({"standalone": True, "task": "dry", "provider": "codex",
                                   "dir": str(home), "dry_run": True})
-        assert result["ok"] is True and result["dry_run"] is True
-        assert result["model"] == expected
-        assert result["launcher_env"]["AGENTSTACK_CODEX_BIN"] == str(binary)
+        assert result["ok"] is True and result["dry_run"] is True, result
+        assert result["model"] == expected, result
+        assert result["argv"][0] == str(SPAWN), result
+        assert result["launcher_env"].get("AGENTSTACK_CODEX_BIN") == str(binary), result
         assert models.resolve_launcher().version == tuple(map(int, version.split(".")))
         assert not marker.exists() and list(temporary.iterdir()) == []
         assert sorted(tmp_path.rglob("*")) == before
