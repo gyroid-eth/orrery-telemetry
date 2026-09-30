@@ -525,7 +525,7 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
         return {}, boundary
     if not base._project_key():
         return {}, "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"
-    if not base._runtime_agent_token(request["parent"]):
+    if not request["dry_run"] and not base._runtime_agent_token(request["parent"]):
         return {}, f"parent registration token unavailable for '{request['parent']}'"
     return {"adapter": adapter, "hooks_dir": hooks_dir, "home": home}, ""
 
@@ -672,7 +672,8 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         if error:
             return {"ok": False, "error": error}
 
-        task_file = _write_task_file(base, request["task"])
+        task_file = ("<gemini-task-file>" if request["dry_run"]
+                     else _write_task_file(base, request["task"]))
         try:
             spec = base.SpawnLaunchSpec(
                 provider=PROVIDER_ID,
@@ -693,11 +694,12 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                     ("AGENTSTACK_GEMINI_RESOURCES", resources),
                     ("AGENTSTACK_GEMINI_TASK_FILE", task_file),
                 ),
-                handoff_paths=(task_file,),
+                handoff_paths=() if request["dry_run"] else (task_file,),
                 signal_process_group=True,
             )
         except BaseException:
-            os.unlink(task_file)
+            if not request["dry_run"]:
+                os.unlink(task_file)
             raise
         # The core owns task_file from here and removes it after the adapter.
         return base.spawn_with_launch_spec(payload, spec)

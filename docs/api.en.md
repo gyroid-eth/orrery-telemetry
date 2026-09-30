@@ -503,6 +503,8 @@ Request:
 | --- | --- | --- |
 | `parent` | child only | Valid existing agent name. Omit for `standalone: true` |
 | `standalone` | no | Boolean. Start without a parent when `true` |
+| `dry_run` | no | Boolean. `true` returns a launch preview without registering or launching an agent |
+| `async` | no | Boolean. Start readiness checks in the background; ignored when `dry_run: true` |
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
@@ -515,6 +517,27 @@ Request:
 | `worktree_base` | no | Base revision; default `HEAD` |
 | `claude_chrome` | Claude only | Boolean. `true` adds `--chrome` to the child. Omitted or `false` means inherit (the user's Claude settings decide). The launcher's env defaults are not used. See [Claude in Chrome](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
 | `claude_chrome_device` | Claude only | deviceId of the browser to use (`[A-Za-z0-9._:-]{1,128}`). Implies `claude_chrome: true`; combining it with `claude_chrome: false` is rejected |
+
+Unknown request fields return HTTP 400 before model resolution or launch. For example, `headless` is not supported. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
+
+Adding `"dry_run": true` validates the request and resolves provider, model, effort and directory, then returns HTTP 200 with a preview:
+
+```json
+{
+  "ok":true,
+  "dry_run":true,
+  "provider":"claude",
+  "model":"claude-opus-5-5",
+  "effort":"",
+  "dir":"/path/to/project",
+  "standalone":true,
+  "worktree":false,
+  "argv":["/path/to/hooks/spawn_child.sh","--pre-registered","<child-name>","--child-token-file","<child-token-file>","--standalone","--model","claude-opus-5-5","dry","/path/to/project"],
+  "launcher_env":{}
+}
+```
+
+`argv` uses the same builder as an actual launch. `<child-name>` represents the name that a real launch would select when `name` is omitted; a supplied name is checked and shown directly. The server may normalize it during registration. `<child-token-file>` and, for Gemini, `<gemini-task-file>` in `launcher_env` stand for files created only by a real launch. `launcher_env` contains provider-specific overrides, not the inherited environment. The preview registers no identity, takes no reservation, sends no Mail, starts no tmux session or agent process, and creates no token, task, annotation, log or worktree files. Parent credentials are not required for a preview. Validation can run read-only Git checks and the existing bounded Codex `--version` probe to resolve the actual CLI/model policy. `async: true` still returns only this preview. Names and resources are not reserved, so their availability can change before a real launch.
 
 Success:
 

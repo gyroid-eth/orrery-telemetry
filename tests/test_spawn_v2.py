@@ -1103,12 +1103,17 @@ def test_async_pending_deadline_comes_from_the_spec_not_the_payload(monkeypatch,
     try:
         for extra in ({"provider": "claude"},
                       {"provider": "codex", "model": server._codex_models()[0]}):
-            pending = server.do_spawn({**spoofed, **extra})
+            assert server.do_spawn({**spoofed, **extra}) == {
+                "ok": False, "error": "unknown spawn fields: verdict_deadline_seconds",
+            }
+            valid = {key: value for key, value in spoofed.items()
+                     if key != "verdict_deadline_seconds"}
+            pending = server.do_spawn({**valid, **extra})
             assert pending["pending"] is True
             assert pending["verdict_deadline_seconds"] == 140
         group = server.SpawnLaunchSpec(provider="gemini", program="antigravity", model="m",
                                        script=str(launcher), signal_process_group=True)
-        pending = server.spawn_with_launch_spec({**spoofed, "verdict_deadline_seconds": 1}, group)
+        pending = server.spawn_with_launch_spec(valid, group)
         assert pending["pending"] is True
         assert pending["verdict_deadline_seconds"] == server._spawn_verdict_deadline_seconds(group)
         assert pending["verdict_deadline_seconds"] >= (

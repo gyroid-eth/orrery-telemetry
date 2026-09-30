@@ -5886,10 +5886,23 @@ def _spawn_unavailable_error() -> dict | None:
 
 def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
     """Validate the provider-independent NEW AGENT fields of a payload."""
+    allowed = {
+        "parent", "standalone", "task", "role", "group", "worktree",
+        "worktree_base", "name", "dir", "provider", "model", "effort",
+        "claude_chrome", "claude_chrome_device", "async", "dry_run",
+    }
+    if str(payload.get("provider") or "").strip().lower() == "gemini":
+        allowed.add("resources")
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        return None, {"ok": False, "error": f"unknown spawn fields: {', '.join(unknown)}"}
+    if "dry_run" in payload and not isinstance(payload["dry_run"], bool):
+        return None, {"ok": False, "error": "dry_run must be boolean"}
     if "standalone" in payload and not isinstance(payload["standalone"], bool):
         return None, {"ok": False, "error": "standalone must be boolean"}
     standalone = payload.get("standalone", False)
     request = {
+        "dry_run": payload.get("dry_run", False),
         "standalone": standalone,
         "parent": (payload.get("parent") or "").strip(),
         "task": (payload.get("task") or "").strip(),
@@ -6006,6 +6019,8 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
     handoff = {"transferred": False}
 
     def discard_handoff() -> None:
+        if payload.get("dry_run") is True:
+            return
         for path in spec.handoff_paths:
             try:
                 os.unlink(path)
@@ -6025,6 +6040,25 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
     finally:
         if not handoff["transferred"]:
             discard_handoff()
+
+
+def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
+                child_name: str, token_file: str) -> list[str]:
+    """Build both preview and actual launch arguments without side effects."""
+    args = [spec.script, "--pre-registered", child_name, "--child-token-file", token_file]
+    if request["standalone"]:
+        args.append("--standalone")
+    args.extend(spec.provider_args)
+    args.extend(["--model", spec.model])
+    if spec.effort_arg:
+        args.extend(["--effort", spec.effort])
+    if request["worktree"] or spec.worktree_required:
+        args.append("--worktree")
+        if request["worktree_base"]:
+            args.extend(["--worktree-base", request["worktree_base"]])
+    args.extend([request["task"][:4000] if request["standalone"] else request["task"][:80],
+                 request["work_dir"]])
+    return args
 
 
 def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
@@ -6059,6 +6093,16 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     project_key = _project_key()
     if not project_key:
         return {"ok": False, "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
+
+    if request["dry_run"]:
+        return {
+            "ok": True, "dry_run": True, "provider": provider,
+            "model": model_str, "effort": effort, "dir": work_dir,
+            "standalone": standalone, "worktree": worktree,
+            "argv": _spawn_argv(request, spec, requested_name or "<child-name>",
+                                "<child-token-file>"),
+            "launcher_env": dict(spec.launcher_env),
+        }
 
     if not requested_name:
         requested_name = _suggest_any_spawn_name() or ""
@@ -6331,18 +6375,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         remove_spawn_credentials()
         return retained_registration_error(f"spawn token write failed: {e}")
 
-    args = [spec.script, "--pre-registered", child_name, "--child-token-file", token_file]
-    if standalone:
-        args.append("--standalone")
-    args.extend(spec.provider_args)
-    args.extend(["--model", model_str])
-    if spec.effort_arg:
-        args.extend(["--effort", effort])
-    if worktree:
-        args.append("--worktree")
-        if worktree_base:
-            args.extend(["--worktree-base", worktree_base])
-    args.extend([task[:4000] if standalone else task_short, work_dir])
+    args = _spawn_argv(request, spec, child_name, token_file)
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(dict(spec.launcher_env))

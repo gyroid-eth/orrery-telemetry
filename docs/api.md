@@ -503,6 +503,8 @@ request:
 | --- | --- | --- |
 | `parent` | child のみ | 有効な既存 agent 名。`standalone: true` では省略 |
 | `standalone` | no | boolean。`true` なら parentless 起動 |
+| `dry_run` | no | boolean。`true` なら登録・起動せず起動プレビューを返す |
+| `async` | no | boolean。readiness 確認をバックグラウンドで行う。`dry_run: true` では無視 |
 | `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
 | `dir` | no | 存在する working directory。既定は source repo |
@@ -515,6 +517,27 @@ request:
 | `worktree_base` | no | base revision。既定 `HEAD` |
 | `claude_chrome` | Claude only | boolean。`true` で child に `--chrome` を付ける。省略・`false` は inherit（利用者の Claude 設定に従う）。launcher の env 既定は使わない。[Claude in Chrome](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |
 | `claude_chrome_device` | Claude only | 使うブラウザの deviceId（`[A-Za-z0-9._:-]{1,128}`）。指定すると `claude_chrome: true` と同じ。`claude_chrome: false` との併用は拒否 |
+
+未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。例えば `headless` は未対応です。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
+
+`"dry_run": true` を付けると request を検証し、provider・model・effort・directory を解決した起動プレビューを HTTP 200 で返します。
+
+```json
+{
+  "ok":true,
+  "dry_run":true,
+  "provider":"claude",
+  "model":"claude-opus-5-5",
+  "effort":"",
+  "dir":"/path/to/project",
+  "standalone":true,
+  "worktree":false,
+  "argv":["/path/to/hooks/spawn_child.sh","--pre-registered","<child-name>","--child-token-file","<child-token-file>","--standalone","--model","claude-opus-5-5","dry","/path/to/project"],
+  "launcher_env":{}
+}
+```
+
+`argv` は実起動と同じ builder で組み立てます。`name` を省略した場合の `<child-name>` は実起動で選ぶ名前の仮置きです。指定名は検証してそのまま表示しますが、登録時にサーバーが正規化する場合があります。`<child-token-file>` と Gemini の `launcher_env` にある `<gemini-task-file>` は、実起動でだけ作るファイルの仮置きです。`launcher_env` は provider 固有の上書き値で、継承する環境全体は含みません。プレビューでは identity 登録・予約・Mail・tmux・agent process 起動を行わず、token・task・annotation・log・worktree のファイルも作りません。parent の認証情報も不要です。検証では read-only の Git 確認と、実際の CLI/model の組を解決するため既存の時間制限付き Codex `--version` probe を実行する場合があります。`async: true` を併用してもプレビューだけを返します。名前や resources は予約しないため、実起動までに使用状況が変わる場合があります。
 
 成功:
 
