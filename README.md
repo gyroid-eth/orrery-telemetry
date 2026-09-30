@@ -189,13 +189,13 @@ Python 3.11 以上、`git`、`tmux`、`uv` が必須で、実行時には Claude
 | [Google Antigravity / Gemini provider](docs/antigravity.md) | optional provider の導入と制約 |
 | [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
 | [Obsidian と一緒に使う](docs/obsidian.md) | 作業ログ・論文ノート・タスクを vault に置き、Daily Note と Kanban で見る |
-
-端末とこの dashboard を 1 画面で使う作業台は、別の repository の [ORRERY cockpit](https://github.com/gyroid-eth/orrery) にあります。
 | [API reference](docs/api.md) | 全 route、query / request、response schema |
 | [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
 | [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
 | [デザイン言語](docs/design.md) | dashboard の見え方と動きの正本。UI を足す前に読む |
 | [第三者コンポーネント](docs/third-party.md) | ORRERY Mail、license、credits |
+
+端末とこの dashboard を 1 画面で使う作業台は、別の repository の [ORRERY cockpit](https://github.com/gyroid-eth/orrery) にあります。
 
 同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。
 

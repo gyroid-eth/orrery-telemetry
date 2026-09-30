@@ -189,13 +189,13 @@ The Japanese documentation is canonical. The main guides have English versions.
 | [Google Antigravity / Gemini provider](docs/antigravity.en.md) | Installing the optional provider and its limits |
 | [Dashboard](docs/dashboard.en.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, embed |
 | [Using it with Obsidian](docs/obsidian.en.md) | Keep work logs, paper notes, and tasks in a vault and read them in the Daily Note and on Kanban |
-
-The workbench that uses your terminals and this dashboard on one screen lives in a separate repository, [ORRERY cockpit](https://github.com/gyroid-eth/orrery).
 | [API reference](docs/api.en.md) | Every route, query / request fields, response schemas |
 | [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
 | [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, authentication |
 | [Design language](docs/design.en.md) | The canonical account of how the dashboard looks and moves. Read before adding UI |
 | [Third-party components](docs/third-party.md) | ORRERY Mail, licensing, credits |
+
+The workbench that uses your terminals and this dashboard on one screen lives in a separate repository, [ORRERY cockpit](https://github.com/gyroid-eth/orrery).
 
 For the internals of the bundled server see the [ORRERY Mail design document](docs/agentstack-mail.en.md), and see [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.
 
