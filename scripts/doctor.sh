@@ -257,7 +257,11 @@ try:
         response.status == 200
         and isinstance(payload, dict)
         and payload.get("name") in ("orrery-telemetry", "claude-agent-stack")
-        and payload.get("api") == 1
+        # Any API generation: this only checks that the port serves ORRERY
+        # Telemetry (the generation went from 1 to 2 in 2026.09).
+        and isinstance(payload.get("api"), int)
+        and not isinstance(payload.get("api"), bool)
+        and payload.get("api") >= 1
     )
 except (OSError, ValueError, TypeError):
     healthy = False

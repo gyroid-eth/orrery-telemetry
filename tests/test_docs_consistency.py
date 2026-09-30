@@ -89,3 +89,16 @@ def test_both_readmes_share_the_quick_start_commands() -> None:
             assert needle in text, (name, needle)
         for image in ("docs/img/deck.jpg", "docs/img/network.jpg", "docs/img/new-agent.jpg"):
             assert image in text, (name, image)
+
+
+def test_api_docs_state_the_served_api_generation_and_when_it_changes() -> None:
+    # 2026-09-30: ORRERY cockpit decides whether orrery-telemetry is new
+    # enough from `api`, not from the release date, so the docs must show the
+    # generation the server really serves and the rule for raising it.
+    served = re.search(r'"name": "orrery-telemetry", "version": version, "api": (\d+)\}',
+                       _read("dashboard/server.py"))
+    assert served, "/api/version response not found in dashboard/server.py"
+    for rel, rule in (("docs/api.md", "互換の世代"), ("docs/api.en.md", "compatibility generation")):
+        doc = _read(rel)
+        assert f'"api":{served.group(1)}}}' in doc, f"{rel} shows another api generation"
+        assert rule in doc and "CHANGELOG" in doc, f"{rel} does not say when api goes up"

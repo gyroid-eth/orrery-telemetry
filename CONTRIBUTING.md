@@ -71,6 +71,11 @@ approval prompts, the number of Claude event hooks, the guide list — are
 checked against the implementation by `tests/test_docs_consistency.py`.
 Extend that test when you add such a fact instead of relying on review.
 
+When a change adds an endpoint or field that other programs (ORRERY cockpit
+and others) rely on, or changes what one means, raise the `api` generation in
+`GET /api/version` (`dashboard/server.py`) by one and say so in the
+CHANGELOG. Do not raise it for anything else; see `docs/api.md`.
+
 The docs must not contradict the implementation. If no docs change is needed,
 that should be an explicit review decision, not an accidental omission.
 
