@@ -727,8 +727,10 @@ NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
 # given explicitly: a socket derived for another root would be shared by two.
 NATIVE_MAIL_MANAGEMENT_SOCKET="${AGENTSTACK_MAIL_MANAGEMENT_SOCKET:-}"
 resolve_setting NATIVE_MAIL_MANAGEMENT_SOCKET AGENTSTACK_MAIL_MANAGEMENT_SOCKET "" kept
+MAIL_SOCKET_SOURCE="$SETTING_SOURCE"
 if [[ "$SETTING_SOURCE" == saved && "$MAIL_STATE_ROOT_SOURCE" == explicit ]]; then
   NATIVE_MAIL_MANAGEMENT_SOCKET=""
+  MAIL_SOCKET_SOURCE=default
 fi
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected ORRERY Mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
@@ -1473,7 +1475,14 @@ resolve_native_mail_connection() {
   NATIVE_MAIL_VENV="$(normalize_path "$NATIVE_MAIL_VENV")"
   NATIVE_MAIL_ENROLL_BIN="$NATIVE_MAIL_VENV/bin/agentstack-enroll"
   if [[ -n "$NATIVE_MAIL_MANAGEMENT_SOCKET" ]]; then
-    NATIVE_MAIL_MANAGEMENT_SOCKET="$(normalize_path "$NATIVE_MAIL_MANAGEMENT_SOCKET")"
+    # Only a value given on this run is normalized. One inherited from env.sh
+    # is what the previous install rendered into its immutable service env;
+    # rewriting it (on macOS /tmp becomes /private/tmp) makes the same inputs
+    # render differently, and re-rendering an existing render -- the same
+    # commit reinstalled, or --update-mail going back -- is refused.
+    if [[ "${MAIL_SOCKET_SOURCE:-explicit}" == explicit ]]; then
+      NATIVE_MAIL_MANAGEMENT_SOCKET="$(normalize_path "$NATIVE_MAIL_MANAGEMENT_SOCKET")"
+    fi
   else
     NATIVE_MAIL_MANAGEMENT_SOCKET="$($PYTHON_BIN - "$NATIVE_MAIL_STATE_ROOT" <<'PY'
 import hashlib

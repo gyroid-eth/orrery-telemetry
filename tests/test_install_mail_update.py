@@ -191,6 +191,31 @@ def test_a_plain_rerun_keeps_the_running_build_and_a_dry_run_changes_nothing(tmp
         assert not list((stack.service_root / "renders").glob("fixture-new-*"))
         assert not (stack.service_root / "backups").exists()
         assert stack.pid() == old_pid
+
+        # The Mail roots and endpoint now come from env.sh (and survive
+        # --reset-settings): with none of them in the environment the update
+        # must still target the same deployment, not a default one.
+        inherited = {
+            key: value for key, value in stack.env.items()
+            if not key.startswith("AGENTSTACK_MAIL_") and key != "AGENTSTACK_MCP_URL"
+        }
+        for extra_args in ((), ("--reset-settings",)):
+            replanned = subprocess.run(
+                ["/bin/bash", str(INSTALLER), "--update-mail", "--dry-run", *extra_args],
+                cwd=ROOT,
+                env={**inherited, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=100,
+            )
+            assert replanned.returncode == 0, replanned.stdout + replanned.stderr
+            assert (
+                f"will switch ORRERY Mail from fixture-old ({stack.service_root}/candidates/fixture-old/venv)"
+                in replanned.stdout
+            ), replanned.stdout
+            assert f"stop ORRERY Mail {old_render}/service.env" in replanned.stdout
+        assert stack.pid() == old_pid
     finally:
         stack.teardown()
 
@@ -736,3 +761,29 @@ def test_schema_check_refuses_removed_or_redefined_indexes_and_triggers(
     else:
         assert checked.returncode == 1
         assert verdict in checked.stderr
+
+
+def test_reinstalling_the_same_build_with_mail_stopped_reuses_its_render(tmp_path):
+    """The inherited management socket must render exactly as it did.
+
+    On macOS /tmp is a symlink; normalizing the path env.sh recorded turned
+    /tmp/orrery-mail-<uid>/… into /private/tmp/…, and the immutable render of
+    the same inputs was then refused.
+    """
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    try:
+        _, old_render = _first_install(stack)
+        stopped = subprocess.run(
+            [str(stack.home / ".agentstack" / "bin" / "agentstack-mailctl"), "stop"],
+            env=stack.env, text=True, capture_output=True, check=False, timeout=60,
+        )
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        again = stack.install("fixture-old")
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "refusing to rewrite immutable service env" not in again.stderr
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert len(list((stack.service_root / "renders").glob("fixture-old-*"))) == 1
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
