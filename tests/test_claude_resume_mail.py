@@ -441,10 +441,10 @@ def test_real_isolated_tmux_preserves_husk_until_the_cli_gate_commits(monkeypatc
 def test_pending_preregistration_cannot_be_resumed_concurrently(resume):
     runtime, registration, _, _ = resume
     child(runtime, registration)
-    child_resume.stage_registration(runtime, NAME, project_key=registration['project_key'], program='claude-code')
+    child_resume.stage_registration(runtime, NAME, project_key=registration['project_key'], program='claude-code', generation='a' * 32)
     with pytest.raises(child_resume.ResumeStateError, match='preregistration is still pending'):
         child_resume.inspect_retained(runtime, NAME, agent_id=73, project_key=registration['project_key'], program='claude-code')
     with pytest.raises(child_resume.ResumeStateError, match='preregistration is still pending'):
         child_resume.begin_resume(runtime, NAME, agent_id=73, project_key=registration['project_key'], program='claude-code')
-    child_resume.finish_registration(runtime, NAME, rollback=True)
+    child_resume.finish_registration(runtime, NAME, generation='a' * 32, rollback=True)
     assert child_resume.inspect_retained(runtime, NAME, agent_id=73, project_key=registration['project_key'], program='claude-code')

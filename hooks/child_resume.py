@@ -213,12 +213,16 @@ def _validate_identity(
 
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
-    program: str | None = None,
+    program: str | None = None, generation: str | None = None,
 ) -> dict[str, Any]:
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     if mcp_profile not in MCP_PROFILES:
         raise ResumeStateError("config_unrestorable", "invalid Codex MCP profile")
     with _AgentLock(lock_path, exclusive=True):
+        pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+        if generation is not None or pending.exists() or pending.is_symlink():
+            if not _registration_matches(pending, generation):
+                raise ResumeStateError("identity_mismatch", "Child registration attempt has changed")
         state = _load_state(state_path)
         _validate_identity(state, agent_name=agent_name, project_key=project_key, program=program)
         state_token = state.get("registration_token")
@@ -262,12 +266,14 @@ def prepare_active_state(
 
 
 def stage_registration(
-    runtime_dir: Path, agent_name: str, *, project_key: str, program: str,
+    runtime_dir: Path, agent_name: str, *, project_key: str, program: str, generation: str,
     source: Path | None = None, binding: Path | None = None,
 ) -> Path:
     """Validate a preregistration before changing files; retain a private undo record."""
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+    if not re.fullmatch(r"[0-9a-f]{32}", generation):
+        raise ResumeStateError("invalid_identity", "Invalid child registration generation")
     with _AgentLock(lock_path, exclusive=True):
         if pending.exists() or pending.is_symlink():
             raise ResumeStateError("config_unrestorable", "A child registration change is already pending")
@@ -296,21 +302,30 @@ def stage_registration(
             if path.exists() or path.is_symlink():
                 originals[label] = {"raw": _read_private(path, label, limit).hex(),
                                     "mode": stat.S_IMODE(path.stat().st_mode)}
-        _atomic_json(pending, {"agent_id": state["agent_id"], "originals": originals})
+        _atomic_json(pending, {"agent_id": state["agent_id"], "generation": generation, "originals": originals})
         try:
             _atomic_bytes(token_path, token.encode())
             _atomic_json(state_path, state)
         except Exception:
-            _finish_registration_unlocked(runtime_dir, agent_name, rollback=True)
+            _finish_registration_unlocked(runtime_dir, agent_name, generation=generation, rollback=True)
             raise
     return token_path
 
 
-def _finish_registration_unlocked(runtime_dir: Path, agent_name: str, *, rollback: bool) -> None:
+def _registration_matches(pending: Path, generation: str | None) -> bool:
+    if generation is None or not re.fullmatch(r"[0-9a-f]{32}", generation):
+        return False
+    if not pending.exists() and not pending.is_symlink():
+        return False
+    snapshot = json.loads(_read_private(pending, "registration undo record", MAX_STATE_BYTES * 6))
+    return snapshot.get("generation") == generation
+
+
+def _finish_registration_unlocked(runtime_dir: Path, agent_name: str, *, generation: str, rollback: bool) -> bool:
     state_path, token_path, _home, _mcp, _lock = _paths(runtime_dir, agent_name)
     pending = state_path.with_name(f".{agent_name}.registration-pending.json")
-    if not pending.exists() and not pending.is_symlink():
-        return
+    if not _registration_matches(pending, generation):
+        return False
     snapshot = json.loads(_read_private(pending, "registration undo record", MAX_STATE_BYTES * 6))
     if type(snapshot.get("agent_id")) is not int or snapshot["agent_id"] <= 0:
         raise ResumeStateError("config_unrestorable", "Invalid registration undo record")
@@ -323,13 +338,14 @@ def _finish_registration_unlocked(runtime_dir: Path, agent_name: str, *, rollbac
             else:
                 _atomic_bytes(path, bytes.fromhex(original["raw"]), original["mode"])
     pending.unlink()
+    return True
 
 
-def finish_registration(runtime_dir: Path, agent_name: str, *, rollback: bool) -> None:
+def finish_registration(runtime_dir: Path, agent_name: str, *, generation: str, rollback: bool) -> bool:
     """Restore the pre-launch files on failure, or discard the undo record on success."""
     *_paths_unused, lock_path = _paths(runtime_dir, agent_name)
     with _AgentLock(lock_path, exclusive=True):
-        _finish_registration_unlocked(runtime_dir, agent_name, rollback=rollback)
+        return _finish_registration_unlocked(runtime_dir, agent_name, generation=generation, rollback=rollback)
 
 
 def mark_retired(
@@ -1048,16 +1064,19 @@ def main() -> int:
     active.add_argument("--project-key", required=True)
     active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
     active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
+    active.add_argument("--generation")
     stage = sub.add_parser("stage-registration")
     stage.add_argument("--runtime-dir", required=True)
     stage.add_argument("--agent-name", required=True)
     stage.add_argument("--project-key", required=True)
     stage.add_argument("--program", required=True, choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
+    stage.add_argument("--generation", required=True)
     stage.add_argument("--source")
     stage.add_argument("--binding")
     finish = sub.add_parser("finish-registration")
     finish.add_argument("--runtime-dir", required=True)
     finish.add_argument("--agent-name", required=True)
+    finish.add_argument("--generation", required=True)
     finish.add_argument("--rollback", action="store_true")
     retired = sub.add_parser("mark-retired")
     retired.add_argument("--runtime-dir", required=True)
@@ -1108,16 +1127,18 @@ def main() -> int:
                 args.agent_name,
                 project_key=args.project_key,
                 mcp_profile=args.mcp_profile,
-                program=args.program,
+                program=args.program, generation=args.generation,
             )
         elif args.command == "stage-registration":
             if bool(args.source) != bool(args.binding):
                 parser.error("source and binding must be supplied together")
             print(stage_registration(runtime, args.agent_name, project_key=args.project_key,
-                                     program=args.program, source=Path(args.source) if args.source else None,
+                                     program=args.program, generation=args.generation, source=Path(args.source) if args.source else None,
                                      binding=Path(args.binding) if args.binding else None))
         elif args.command == "finish-registration":
-            finish_registration(runtime, args.agent_name, rollback=args.rollback)
+            if not finish_registration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
+                print("child_resume: registration attempt is no longer pending; nothing changed", file=os.sys.stderr)
+                return 3
         elif args.command == "mark-retired":
             print(
                 "retained"

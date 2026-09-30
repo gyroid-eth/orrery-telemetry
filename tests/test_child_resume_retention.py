@@ -910,12 +910,12 @@ def test_explicit_purge_also_removes_a_private_preregistration_undo_record(tmp_p
     state.write_text(json.dumps({'agent_id': 73, 'agent_name': name, 'project_key': '/shared/project',
                                 'program': 'claude-code', 'registration_token': 'owner-token'}))
     state.chmod(0o600)
-    child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code')
-    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code')
+    child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code', generation='a' * 32)
+    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code', generation='a' * 32)
     pending = state.parent / ('.' + name + '.registration-pending.json')
     assert pending.exists() and pending.stat().st_mode & 0o777 == 0o600
     assert child_resume.purge_one(runtime, name, reason='purged')
     assert not pending.exists() and not token.exists()
     # An intentional purge cannot be undone by the failed launch's later cleanup.
-    child_resume.finish_registration(runtime, name, rollback=True)
+    child_resume.finish_registration(runtime, name, generation='a' * 32, rollback=True)
     assert not token.exists() and not state.exists()

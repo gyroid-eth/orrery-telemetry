@@ -514,12 +514,93 @@ def test_valid_registration_staging_commits_the_expected_provider(tmp_path, prog
     data['program'] = program
     binding.write_text(json.dumps(data))
     runtime = tmp_path / 'runtime'
-    token = child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program,
+    token = child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program, generation='a' * 32,
                                            source=handoff, binding=binding)
-    state = child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program)
-    child_resume.finish_registration(runtime, name, rollback=False)
+    state = child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program, generation='a' * 32)
+    child_resume.finish_registration(runtime, name, generation='a' * 32, rollback=False)
     assert token.read_text() == 'child-owner-token'
     assert state['program'] == program and state['provider'] == ('codex' if program.startswith('codex') else 'claude')
     assert handoff.exists() and binding.exists()  # Consumption belongs to the successful launcher.
     assert token.stat().st_mode & 0o777 == 0o600
     assert not list((runtime / 'child-agents').glob('.*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('program', ['claude-code', 'codex'])
+@pytest.mark.parametrize('rollback', [False, True], ids=['late-commit', 'late-rollback'])
+def test_purged_attempt_cannot_finalize_or_prepare_the_same_identity_retry(tmp_path, program, rollback):
+    from hooks import child_resume
+    runtime = tmp_path / 'runtime'
+    name = 'GenerationOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = program
+    binding.write_text(json.dumps(data))
+    old, new = 'a' * 32, 'b' * 32
+    def stage(generation):
+        child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program,
+                                        generation=generation, source=handoff, binding=binding)
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program,
+                                          generation=generation)
+    stage(old)
+    assert child_resume.purge_one(runtime, name, reason='purged')
+    stage(new)  # Same name, numeric ID, owner token and provider; only the attempt differs.
+    token = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    pending = state.with_name('.' + name + '.registration-pending.json')
+    tombstone = runtime / 'child-resume-tombstones' / '73.json'
+    before = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in (token, state, pending, handoff, binding)}
+    assert not child_resume.finish_registration(runtime, name, generation=old, rollback=rollback)
+    with pytest.raises(child_resume.ResumeStateError, match='attempt has changed'):
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program, generation=old)
+    for path, saved in before.items():
+        assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
+    assert json.loads(pending.read_text())['generation'] == new
+    # Positive control: the retry can finish its own transaction.
+    assert child_resume.finish_registration(runtime, name, generation=new, rollback=rollback)
+    assert not pending.exists()
+    if rollback:
+        assert not token.exists() and not state.exists() and tombstone.exists()
+    else:
+        assert token.read_text() == 'child-owner-token' and state.exists() and not tombstone.exists()
+
+
+def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(tmp_path):
+    from hooks import child_resume
+    env, _workdir = _fake_launch_env(tmp_path, codex=False)
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    name = 'GenerationOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'claude-code'
+    binding.write_text(json.dumps(data))
+    for generation in ('a' * 32, 'b' * 32):
+        child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code',
+                                        generation=generation, source=handoff, binding=binding)
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code', generation=generation)
+        if generation == 'a' * 32:
+            assert child_resume.purge_one(runtime, name, reason='purged')
+    managed = runtime / 'managed_agents.txt'
+    managed.write_text(name + '\nOtherOwner\n')
+    before = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in runtime.rglob('*') if p.is_file()}
+    spawn = SPAWN.read_text()
+    wrappers = spawn[spawn.index('stage_child_registration() {'):spawn.index('# Verify that a Codex token')]
+    cleanup = spawn[spawn.index('    cleanup_preregister_failure() {'):spawn.index('    trap cleanup_preregister_failure EXIT')]
+    marker = tmp_path / 'unwanted-shared-cleanup'
+    script = ('set -eu\n' +
+              'RUNTIME_DIR=' + str(runtime) + '\nHOOKS_DIR=' + str(ROOT / 'hooks') + '\n' +
+              'CHILD_NAME=' + name + '\nCHILD_REGISTRATION_GENERATION=' + 'a' * 32 + '\n' +
+              'PRE_REGISTERED_SUCCESS=false\nPRE_REGISTERED_ADOPTION_PENDING=true\n' +
+              'PRE_REGISTERED_SESSION_STARTED=true\nPRE_REGISTERED_MANAGED_ADDED=true\n' +
+              'MANAGED_FILE=' + str(managed) + '\n' +
+              'warn_if_uninjected() { :; }\n' +
+              'discard_claude_launch_record() { touch ' + str(marker) + '; }\n' +
+              'cleanup_worktree() { touch ' + str(marker) + '; }\n' +
+              wrappers + cleanup + '\ncleanup_preregister_failure\n')
+    result = subprocess.run(['/bin/bash', '-c', script], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert 'nothing changed' in result.stderr
+    assert not marker.exists() and not pathlib.Path(env['FAKE_TMUX_LOG']).exists()
+    for path, saved in before.items():
+        assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved

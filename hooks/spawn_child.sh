@@ -423,7 +423,7 @@ stage_child_registration() {
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" stage-registration \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
-        --project-key "$PROJECT_KEY" --program "$program" ${source_args[@]+"${source_args[@]}"}
+        --project-key "$PROJECT_KEY" --program "$program" --generation "$CHILD_REGISTRATION_GENERATION" ${source_args[@]+"${source_args[@]}"}
 }
 
 finish_child_registration() {
@@ -432,7 +432,7 @@ finish_child_registration() {
     local rollback_args=()
     [[ "$rollback" != true ]] || rollback_args=(--rollback)
     "${AGENTSTACK_PYTHON:-python3}" "$helper" finish-registration \
-        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" ${rollback_args[@]+"${rollback_args[@]}"}
+        --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" --generation "$CHILD_REGISTRATION_GENERATION" ${rollback_args[@]+"${rollback_args[@]}"}
 }
 
 # Verify that a Codex token and its formal registration metadata belong to the
@@ -524,20 +524,28 @@ prepare_codex_child_resume_state() {
     local agent_name="$1" mcp_profile="$2"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
     [[ -f "$helper" ]] || return 1
+    local generation_args=()
+    if [[ -n "${CHILD_REGISTRATION_GENERATION:-}" ]]; then
+        generation_args=(--generation "$CHILD_REGISTRATION_GENERATION")
+    fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
-        --mcp-profile "$mcp_profile" --program codex
+        --mcp-profile "$mcp_profile" --program codex ${generation_args[@]+"${generation_args[@]}"}
 }
 
 prepare_claude_child_resume_state() {
     local agent_name="$1"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
     [[ -f "$helper" ]] || return 1
+    local generation_args=()
+    if [[ -n "${CHILD_REGISTRATION_GENERATION:-}" ]]; then
+        generation_args=(--generation "$CHILD_REGISTRATION_GENERATION")
+    fi
     "${AGENTSTACK_PYTHON:-python3}" "$helper" prepare-active \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$agent_name" \
-        --project-key "$PROJECT_KEY" --program claude-code
+        --project-key "$PROJECT_KEY" --program claude-code ${generation_args[@]+"${generation_args[@]}"}
 }
 
 # Start one launch expectation from a registration receipt. Output is
@@ -2111,6 +2119,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     # caller's ambient CHILD_REGISTRATION_TOKEN here; that may be the parent's
     # owner token. Validate before adoption, retain the original canonical pair
     # until startup succeeds, and only then consume the handoff.
+    CHILD_REGISTRATION_GENERATION="$("${AGENTSTACK_PYTHON:-python3}" -c 'import secrets; print(secrets.token_hex(16))')" || exit 1
     PRE_REGISTERED_ADOPTION_PENDING=false
     PRE_REGISTERED_HANDOFF_TO_CONSUME=""
     PRE_REGISTERED_BINDING_TO_CONSUME=""
@@ -2123,11 +2132,20 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         fi
         warn_if_uninjected
         rm -f "${CODEX_PROMPT_FILE:-}"
+        if [[ "$PRE_REGISTERED_ADOPTION_PENDING" == true ]]; then
+            local finish_status=0
+            finish_child_registration "$CHILD_NAME" true || finish_status=$?
+            if [[ "$finish_status" == 3 ]]; then
+                # Purged/replaced by another attempt. None of its shared
+                # credentials, session, registry or worktree belongs to us.
+                return
+            elif [[ "$finish_status" != 0 ]]; then
+                echo "Error: child registration rollback failed; private undo record retained" >&2
+                return
+            fi
+        fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
-        fi
-        if [[ "$PRE_REGISTERED_ADOPTION_PENDING" == true ]]; then
-            finish_child_registration "$CHILD_NAME" true || echo "Error: child registration rollback failed; private undo record retained" >&2
         fi
         discard_claude_launch_record
         cleanup_worktree

@@ -394,6 +394,7 @@ def _adopt_child_handoff(
         f'HOOKS_DIR="{ROOT / "hooks"}"\n'
         f'PROJECT_KEY="{project_key}"\n'
         'CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"\n'
+        'CHILD_REGISTRATION_GENERATION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
         + spawn[start:end]
         + f'\nstage_child_registration "{agent_name}" codex "{token}"\n'
         + f'finish_child_registration "{agent_name}"\n'
