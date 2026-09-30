@@ -401,6 +401,28 @@ print("" if found is None else found)
 '
 }
 
+# The registration's `retired_at` (empty when the row is active).
+ags_extract_retired_at() {
+  python3 -c '
+import json, sys
+try:
+    result = json.load(sys.stdin).get("result") or {}
+except Exception:
+    result = {}
+data = result.get("structuredContent") if isinstance(result, dict) else None
+if not isinstance(data, dict):
+    data = {}
+    for part in (result.get("content") or []) if isinstance(result, dict) else []:
+        try:
+            data = json.loads(part.get("text", ""))
+            break
+        except Exception:
+            continue
+value = data.get("retired_at") if isinstance(data, dict) else None
+print(value if isinstance(value, str) else "")
+'
+}
+
 ags_extract_agent_name() {
   python3 -c '
 import json, sys
@@ -770,6 +792,7 @@ ags_register_session() {
   local project_key="$1" program="$2" model="$3" prefix="$4" work_dir="$5" requested_name="${6:-}" requested_mode="${7:-reserved}"
   AGS_REGISTERED_AGENT_NAME=""
   AGS_REGISTERED_AGENT_ID=""
+  AGS_REGISTERED_RETIRED_AT=""
   AGS_REGISTERED_REGISTRATION_TOKEN=""
   AGS_REQUESTED_AGENT_NAME=""
   AGS_SERVER_RETURNED_AGENT_NAME=""
@@ -858,7 +881,38 @@ ags_register_session() {
   fi
   AGS_REGISTERED_AGENT_NAME="$registered"
   AGS_REGISTERED_AGENT_ID="$(printf '%s' "$result" | ags_extract_agent_id)"
+  AGS_REGISTERED_RETIRED_AT="$(printf '%s' "$result" | ags_extract_retired_at)"
   printf '%s\n' "$registered"
+}
+
+# Unretire a row whose owner the caller has already authenticated and judged
+# eligible. Only the Mail call and its read-back live here: the caller decides
+# when (and whether) a retired identity may come back.
+ags_unretire_owned_identity() {
+  local project_key="$1" agent_name="$2"
+  [[ -n "$project_key" && -n "$agent_name" ]] || return 1
+  ags_mcp_call_diagnosed "unretire_agent" "unretire_agent" \
+    "project_key=$project_key" "agent_name=$agent_name" || return 1
+  printf '%s' "$AGS_MCP_RESPONSE" | python3 -c '
+import json, sys
+project_key, agent_name = sys.argv[1:3]
+try:
+    result = json.load(sys.stdin).get("result") or {}
+except Exception:
+    raise SystemExit(1)
+data = result.get("structuredContent") if isinstance(result, dict) else None
+if not isinstance(data, dict):
+    data = {}
+    for part in (result.get("content") or []) if isinstance(result, dict) else []:
+        try:
+            data = json.loads(part.get("text", ""))
+            break
+        except Exception:
+            continue
+ok = (isinstance(data, dict) and data.get("status") == "active"
+      and data.get("agent_name") == agent_name and data.get("project_key") == project_key)
+raise SystemExit(0 if ok else 1)
+' "$project_key" "$agent_name"
 }
 
 ags_start_mail_watcher() {

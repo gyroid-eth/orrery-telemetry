@@ -216,6 +216,56 @@ shell_register_resolved_agent() {
     fi
     SHELL_REGISTERED_AGENT="${AGS_REGISTERED_AGENT_NAME:-$RESOLVED_AGENT}"
     record_shell_registration_index
+    restore_retired_identity
+    return 0
+}
+
+# A session reopened from a terminal (`claude --resume`) came back with its row
+# still retired: only the dashboard resume unretired it (TRIAGE 5a, #143). The
+# owner credential has just authenticated; unretire on the dashboard's terms,
+# which child_resume.py judges without changing anything.
+restore_retired_identity() {
+    SHELL_UNRETIRE_NOTE=""
+    [ -n "${AGS_REGISTERED_RETIRED_AT:-}" ] || return 0
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" python_bin
+    # A terminal session may not carry the installer's interpreter; the
+    # helper needs a newer Python than the system one on macOS.
+    python_bin="${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null)}"
+    if [ ! -f "$helper" ] || [ -z "${AGS_REGISTERED_AGENT_ID:-}" ] ||
+        ! "${python_bin:-python3}" "$helper" resume-eligibility \
+            --runtime-dir "$RUNTIME_DIR" --agent-name "$SHELL_REGISTERED_AGENT" \
+            --agent-id "$AGS_REGISTERED_AGENT_ID" --project-key "$PROJECT_KEY" \
+            --program claude-code >/dev/null 2>&1; then
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（保持期間外・旧形式・purge 済み、または確認できませんでした）。受信するには dashboard から resume してください。"
+        return 0
+    fi
+    if ags_unretire_owned_identity "$PROJECT_KEY" "$SHELL_REGISTERED_AGENT" >/dev/null 2>&1; then
+        SHELL_UNRETIRE_NOTE="retired だったこの identity を、保存した owner credential で確かめて active に戻しました。"
+    else
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（unretire に失敗しました）。受信するには dashboard から resume してください。"
+    fi
+}
+
+# Tell exit-time cleanup that this identity is live in this process, however it
+# was opened. The lease names the first non-shell ancestor (the provider CLI);
+# a dead PID is simply not a live session.
+write_live_session_lease() {
+    local name="$1" pid="$PPID" comm depth=0
+    case "$name" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+    while [ "$depth" -lt 6 ] && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null)"
+        comm="${comm##*/}"; comm="${comm#-}"
+        case "$comm" in
+            ''|bash|sh|zsh|dash|fish|ksh|tcsh|csh) ;;
+            *)
+                mkdir -p "$RUNTIME_DIR/live-sessions/$name" 2>/dev/null &&
+                    : > "$RUNTIME_DIR/live-sessions/$name/$pid" 2>/dev/null
+                return 0
+                ;;
+        esac
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+        depth=$((depth + 1))
+    done
     return 0
 }
 
@@ -264,9 +314,12 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
     "${CURRENT_SESSION:-}" \
     >> "$RUNTIME_DIR/session-start-resolve.log" 2>/dev/null
 
+write_live_session_lease "${RESOLVED_AGENT:-}"
+
 if mail_server_is_answering; then
     if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
         echo "ORRERY Mail server is running. This session is already registered."
+        [ -n "${SHELL_UNRETIRE_NOTE:-}" ] && echo "$SHELL_UNRETIRE_NOTE"
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
         echo "接続経路は正本の明示契約と、提供された tool の説明・引数 schema で判定し、最初に一致した経路だけを使ってください。"
         echo "正本 embed-task が登録済み・儀式不要を明示している場合はそれが最優先です。parent の有無を問わず task を開始し、起動儀式として inbox を取得しないでください。"

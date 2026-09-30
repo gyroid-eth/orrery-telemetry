@@ -179,6 +179,47 @@ conn.close()
 ' "$method" "$MCP_URL"
 }
 
+# Is this identity still live in another session? Only the retire-only exit of
+# a resumed top-level Claude asks: exiting one copy must not release the
+# reservations of, or retire, a copy still in use (#143 review). Evidence is a
+# live tmux pane other than ours whose pane metadata names the agent, or a
+# SessionStart lease whose provider PID is still running (ours has exited).
+# When tmux cannot be read from inside tmux, the answer is unknown: say yes.
+identity_live_elsewhere() {
+    local name="$1" panes pane key lease pid
+    if panes="$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null)"; then
+        while IFS= read -r pane; do
+            [[ -n "$pane" && "$pane" != "${TMUX_PANE:-}" ]] || continue
+            key="${pane//%/_}"
+            if [[ -f "$RUNTIME_DIR/agent_name_${key}" ]] &&
+                [[ "$(tr -d '[:space:]' < "$RUNTIME_DIR/agent_name_${key}" 2>/dev/null)" == "$name" ]]; then
+                return 0
+            fi
+        done <<< "$panes"
+    elif [[ -n "${TMUX:-}" ]]; then
+        return 0
+    fi
+    for lease in "$RUNTIME_DIR/live-sessions/$name"/*; do
+        [[ -f "$lease" ]] || continue
+        pid="${lease##*/}"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$lease"
+    done
+    return 1
+}
+
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" == "1" ]]; then
+    if identity_live_elsewhere "$AGENT_NAME"; then
+        echo "[cleanup-child-agent] '$AGENT_NAME' is still live in another session; leaving its Mail row and reservations as they are" >&2
+        exit 0
+    fi
+fi
+
+# Reservations of a retire-only exit belong to its SessionEnd hook.
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" != "1" ]]; then
 release_args=$(python3 -c "
 import json, sys
 print(json.dumps({
@@ -187,6 +228,7 @@ print(json.dumps({
 }))
 " "$PROJECT_KEY" "$AGENT_NAME")
 call_mcp "release_file_reservations" "$release_args" > /dev/null 2>&1 || true
+fi
 
 retire_args=$(python3 -c '
 import json

@@ -36,7 +36,9 @@ resume した Claude の SessionStart hook は shell から再登録しますが
 
 ### token だけの Claude を resume して exit すると、Mail の row が active のまま残っていました（#143）
 
-子の state が無く owner token だけを持つ Claude を resume すると、resume は Mail の row を unretire しますが、exit の後に retired へ戻す処理がありませんでした（子の state を持つ体だけが cleanup で戻っていました）。resume の前に retired だった体は、CLI の終了後に reservation を解放し、同じ token で再 retire します。token は削除せず次の resume に残します。元から active だった体は retire しません。
+子の state が無く owner token だけを持つ Claude を resume すると、resume は Mail の row を unretire しますが、exit の後に retired へ戻す処理がありませんでした（子の state を持つ体だけが cleanup で戻っていました）。resume の前に retired だった体は、CLI が正常に終了した後に同じ token で再 retire します。reservation の解放は SessionEnd hook に任せ、同じ identity が別の tmux pane や端末の session で生きている間は retire もしません。token は削除せず次の resume に残します。元から active だった体は retire しません。
+
+対になる側として、端末から `claude --resume` で開き直した体も、SessionStart が保存した owner credential で本人を確かめ、retained（保持期間内）の子か token だけの体なら unretire します（これまでは dashboard の resume だけが unretire していました）。旧形式・期限切れ・purge 済みは retired のままです。
 
 ## 2026.09.30.4
 
