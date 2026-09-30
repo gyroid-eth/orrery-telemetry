@@ -297,7 +297,8 @@ esac
 #   except PATH and Python, which the installer always worked out itself.
 # - A value in the environment equal to what env.sh recorded is an echo of
 #   env.sh (cockpit's update.sh and some shell profiles source it), not a new
-#   choice: it keeps the status it had. An option is always a request.
+#   choice: it keeps the status it had. An option is always a request. Only
+#   an env.sh with the record can be echoed; before it, the value is explicit.
 # - --reset-settings drops the previous choices. What names the data and the
 #   services running on it (project key, protected roots, the Mail state and
 #   service roots and socket, the label prefix, the Mail launchd label, the MCP
@@ -344,7 +345,10 @@ resolve_setting() {
     given=option
   elif [[ -n "${!env_name+x}" ]]; then
     given=environment
-    if [[ -n "$saved" && "$value" == "$saved" ]]; then
+    # Only against a record of choices: before it, a value someone passes on
+    # every install looks the same as an echo, and taking it for one sent it
+    # back to the default and flipped it on the next install (#146, N-1).
+    if [[ "$PREVIOUS_CHOSEN_RECORDED" == true && -n "$saved" && "$value" == "$saved" ]]; then
       given=""
     fi
   fi

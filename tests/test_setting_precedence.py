@@ -74,7 +74,8 @@ def _write_env_sh_like_the_installer(home: pathlib.Path, values: dict[str, str])
         f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
         f"ENV_FILE={shlex.quote(str(install_dir / 'env.sh'))}\n"
         + assignments
-        + text[start:end]
+        # The writer runs under this interpreter; PYTHON_BIN is only the value.
+        + text[start:end].replace('"$PYTHON_BIN" - "$ENV_FILE"', f'{shlex.quote(sys.executable)} - "$ENV_FILE"', 1)
         + "write_env_file\n"
     )
     subprocess.run(
@@ -465,6 +466,37 @@ def test_p2_2_values_echoed_from_a_sourced_env_sh_are_not_new_choices(tmp_path):
     assert _resolve_like_the_installer(
         home, "PORT", args=("--reset-settings", "--port", "19876"), env=echoed
     ) == ["19876"]
+
+
+def test_n1_values_given_every_time_since_before_the_record_stay_put(tmp_path):
+    """Someone who has always passed AGENTSTACK_PATH / AGENTSTACK_PYTHON.
+
+    Their env.sh predates the record of choices, so a value equal to it cannot
+    be told apart from an echo. Taking it as an echo sent it back to the
+    default, and the next install (now differing from env.sh) took it again:
+    the value flipped on every re-install (re-check of #146, N-1).
+    """
+    home = tmp_path / "home"
+    (home / ".agentstack").mkdir(parents=True)
+    custom_path = "/custom/bin:/usr/bin:/bin"
+    (home / ".agentstack" / "env.sh").write_text(
+        f"export AGENTSTACK_PROJECT_KEY={tmp_path}\n"
+        f"export AGENTSTACK_PATH={custom_path}\n"
+        f"export AGENTSTACK_PYTHON={sys.executable}\n",
+        encoding="utf-8",
+    )
+    given = {"AGENTSTACK_PATH": custom_path, "AGENTSTACK_PYTHON": sys.executable}
+    outputs = ("PATH_VALUE", "PYTHON_REQUESTED", "PYTHON_INHERITED", "CHOSEN_SETTINGS")
+    runs = []
+    for _ in range(3):
+        path_value, requested, inherited, chosen = _resolve_like_the_installer(home, *outputs, env=given)
+        runs.append((path_value, requested or inherited, set(chosen.split())))
+        # What this install would write for the next one.
+        _write_env_sh_like_the_installer(home, {
+            "PROJECT_KEY": str(tmp_path), "PATH_VALUE": path_value,
+            "PYTHON_BIN": requested or inherited, "CHOSEN_SETTINGS": chosen,
+        })
+    assert runs == [(custom_path, sys.executable, {"AGENTSTACK_PATH", "AGENTSTACK_PYTHON"})] * 3
 
 
 def test_p2_3_the_launchd_plist_escapes_every_value(tmp_path):
