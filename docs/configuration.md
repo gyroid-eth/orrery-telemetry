@@ -151,7 +151,7 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 | --- | --- | --- |
 | `AGENTSTACK_BASE_DIR` | `$HOME` | `fzf` picker root |
 | `AGENTSTACK_CLAUDE_BIN` | `claude` | Claude CLI |
-| `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude 登録 model label |
+| `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude 登録 model label。子と dashboard から resume した session は、その session の model（`CLAUDE_CHILD_MODEL`）を優先します。子の tmux session に開いた新しい window はこの値を継ぐので、そこで別の agent を `AGENT_NAME=<name> claude --resume` で開くときは、先に `unset CLAUDE_CHILD_MODEL` してください（しないと子の model で登録されます） |
 | `AGENTSTACK_CODEX_BIN` | install 時に operator の shell で解決した、`--version` に答える `codex`（WSL では `/mnt/<drive>/` 配下の Windows 版を除く。`--codex-bin` で明示可） | Codex CLI。dashboard は launchd / systemd の最小 PATH で動くので、nvm / nodebrew / `~/.npm-global` の codex はこの値で届く |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap の既定 | Codex 登録 model |
 | `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |

@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":4}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":5}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -217,6 +217,8 @@ Each row's `resume_capability` is a fixed reason code decided by the backend. A 
 Conversation-only resume returns `resume_mode: conversation_only`, `mail_status: unavailable`, a fixed `mail_reason` (`credential_absent` / `retention_expired` / `mail_schema_unsupported`), and `mail_message` stating that this agent cannot send or receive ORRERY Mail. The DECK chip, NETWORK label/details and an initial terminal line show the warning. `resume_capability: ready` verifies conversation-resume prerequisites; it does not prove successful Mail owner authentication.
 
 API generation 4 adds these fields. GET `/api/agents` and `/api/graph` Claude rows also carry `mail_status`, `mail_reason` and `mail_message`. Missing fields mean Mail reachability is unreported, not authenticated. Explicit purge still refuses; safely validated expired Claude material permits conversation-only resume. Codex expiry refusal is unchanged.
+
+API generation 5 adds `resume_mode` to finished Claude rows that can be resumed (`ready` or `verification_required`), before any resume. `mail` means the resume authenticates the owner and unretires its Mail row, or refuses without launching; it never falls back to a conversation-only resume. `conversation_only` means the conversation resumes without touching Mail, and the row also carries `mail_status: unavailable` with `mail_reason` / `mail_message`. The `/api/jump` response reports the same `resume_mode`; a Claude resume that restores Mail now returns `resume_mode: mail`. `resume_capability` keeps its codes and meaning, so a caller that resumes on `ready` is unaffected. Codex rows, rows that cannot be resumed and running rows carry no `resume_mode`.
 
 ## GET `/api/graph`
 

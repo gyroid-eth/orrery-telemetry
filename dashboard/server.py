@@ -2865,6 +2865,12 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     }
     if os.environ.get("AGENTSTACK_PYTHON", "").strip():
         resume_environment["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
+    # The resumed session's SessionStart hook re-registers from the shell and
+    # takes its model from here. Without it the registered model was replaced
+    # by `claude-code`, or by a model the tmux server environment carried
+    # (#144). Only this session-scoped name is set: AGENTSTACK_CLAUDE_MODEL is
+    # the default for agents this session later launches.
+    resume_environment["CLAUDE_CHILD_MODEL"] = registration.get("model") or "claude-code"
     inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG AGENTSTACK_CLAUDE_LAUNCH_ID; '
              + "".join(f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()) + inner)
     if child_state is not None:
@@ -2897,6 +2903,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         result = {
             "ok": True,
             "action": "resumed",
+            "resume_mode": "mail",
             "detail": f"会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
@@ -3423,12 +3430,19 @@ def _claude_row_mail_fields(row: dict, *, category: str, session_state: dict | N
             except (OSError, subprocess.SubprocessError):
                 reason = ""
         return _conversation_mail_fields(reason) if reason in _CLAUDE_MAIL_UNAVAILABLE else {}
-    if category in _RESUME_CATEGORIES and row.get("resume_capability") == "ready":
+    # `resume_capability` says whether the conversation can be resumed; it is
+    # `ready` for conversation-only resumes too. `resume_mode` is what
+    # /api/jump will do (#145): `mail` authenticates the owner and unretires
+    # it or refuses without launching; `conversation_only` never touches Mail.
+    # `verification_required` has already passed these material checks.
+    if category in _RESUME_CATEGORIES and row.get("resume_capability") in {"ready", "verification_required"}:
         try:
             _, reason = _claude_conversation_reason(row["name"])
-            return _conversation_mail_fields(reason) if reason else {}
         except _ResumeCapabilityError:
-            pass
+            return {}
+        if reason:
+            return {"resume_mode": "conversation_only", **_conversation_mail_fields(reason)}
+        return {"resume_mode": "mail"}
     return {}
 
 def _claude_resume_proxy_runner() -> str:
@@ -7699,7 +7713,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 4}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 5}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

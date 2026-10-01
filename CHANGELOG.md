@@ -26,6 +26,14 @@
 
 `./scripts/install.sh --update-mail` は次の順で差し替えます。まず稼働中の Mail を止めずに、新しい build の用意、scratch port で database の snapshot に対する検証、database の backup を済ませます。そのうえで切り替え、新しい build が共有 database で応答しなければ前の build を起動し直します。`env.sh`・autostart・`install-state.json` は、実際に動いている方の build で書きます。差し替えなかったときと戻したときは、終了 status 1 で知らせます。途中で Ctrl-C などで止めた場合も、検証用の snapshot と server を残さず、Mail は前の build か新しい build のどちらかで `env.sh` と一致した状態で終わります。稼働中の接続・token・enrollment の pin・database は失いません。systemd の timer（WSL2 など）でも同じです。`--update-mail` を付けない再実行は、これまでどおり稼働中の build を使い続けます。build が違うときは `notice:` でそれを示します。手順と影響は [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md#--update-mail-による差し替え) を参照してください。
 
+### resume すると whois の model が claude-code に変わっていました（#144）
+
+resume した Claude の SessionStart hook は shell から再登録しますが、model を受け取っていなかったため、登録済みの model（例: `opus-5.5`）を `claude-code`、または tmux server の環境に残った別の agent の model で上書きしていました。resume は登録済みの model（無ければ `claude-code`）をその session の `CLAUDE_CHILD_MODEL` として渡し、SessionStart の再登録はこれを `AGENTSTACK_CLAUDE_MODEL` より優先します。
+
+### resume の前に、Mail まで戻るのか会話だけなのかが分かるようにしました（#145、API 世代5）
+
+`resume_capability: ready` は会話だけの resume でも出るため、resume した体が Mail を使えるかは `/api/jump` を実行した後の応答でしか分かりませんでした。`/api/agents` / `/api/graph` の resume できる Claude row（`ready` / `verification_required`）に `resume_mode` を追加し、`mail`（owner を認証して unretire する。できなければ起動しない）か `conversation_only`（Mail に触れない。`mail_reason` 付き）かを resume の前に出します。`/api/jump` も Mail まで戻した場合に `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていません。利用側が頼る field を足したため `/api/version` の `api` を5にしました。
+
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）

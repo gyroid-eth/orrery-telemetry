@@ -126,7 +126,7 @@ launcher が強制終了され、`child-agents/.<name>.registration-pending.json
 
 通常の `install.sh` は稼働中の Mail を採用し、Mail の build は切り替えません。既存 owner 認証 option が無いことを取得済み schema で確認できた旧形式の子、canonical token が実際に無い Claude、検証済み保持期限切れの Claude は、端末と会話だけを再開できます。対応した Mail と有効な credential がある場合は、従来の認証・移行・unretire を完了してから再開します。
 
-会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。
+会話だけの再開は `resume_mode: conversation_only`、`mail_status: unavailable`、固定 `mail_reason`（`credential_absent` / `retention_expired` / `mail_schema_unsupported`）と「この agent は ORRERY Mail を送受信できない」旨の `mail_message` を返します。DECK の chip と NETWORK のラベル・詳細にも表示し、起動端末にも1行出します。`resume_capability: ready` は会話再開の検査結果であり、Mail の owner 認証成功を意味しません。resume の前にどちらになるかは、`/api/agents` / `/api/graph` の row の `resume_mode`（`mail` / `conversation_only`）で分かります。
 
 この mode は空の `--strict-mcp-config` と `--settings '{"disableAllHooks":true}'` を使い、通常の user/project/plugin の MCP と hook を止めます。他の MCP と hook もこの起動では使えません。専用 `AGENTSTACK_MAIL_DISABLED=1` を tmux session に設定し、製品の自動登録・cleanup・reservation hook と watcher 通知を止めます。state/token は移行・削除・上書きせず、Mail の登録、claim、unretire、retire を行いません。通知 signal は既読化せず残します。古い Mail で普通の登録を代用して本人確認することもありません。
 
@@ -163,7 +163,7 @@ CLAUDECODE=1
 
 ## dashboard からの Claude resume
 
-Claude の子も正常終了後、state と owner credential を既定30日、mode `0600` で保持します。dashboard は元の project・数値 ID・name・program と credential の一致、保持期限・権限を検証します。子専用 Mail proxy config を再生成し、保存済み credential 付きで同じ identity を再登録、`unretire_agent` で受信を復帰させてから端末を起動します。子では resume 中の保持状態を期限切れ purge から保護し、CLI の終了時に再び cleanup します。top-level も既存 owner token があれば同じ再登録・unretire を行います。
+Claude の子も正常終了後、state と owner credential を既定30日、mode `0600` で保持します。dashboard は元の project・数値 ID・name・program と credential の一致、保持期限・権限を検証します。子専用 Mail proxy config を再生成し、保存済み credential 付きで同じ identity を再登録、`unretire_agent` で受信を復帰させてから端末を起動します。子では resume 中の保持状態を期限切れ purge から保護し、CLI の終了時に再び cleanup します。top-level も既存 owner token があれば同じ再登録・unretire を行います。resume した session の SessionStart hook が shell から再登録するときも、登録済みの model（無ければ `claude-code`）を `CLAUDE_CHILD_MODEL` で渡し、tmux server の環境に残った別の model で上書きしません。`AGENTSTACK_CLAUDE_MODEL` は変えないので、その session から起動する agent の既定の model には影響しません。
 
 credential が旧版の cleanup で消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。別名への登録や credential の自動発行は行いません。必要な復旧は operator が [Persistent-agent enrollment and startup](persistent-agents.md) に従って行います。Mail の再登録・unretire、子専用 proxy の復元に失敗しても Claude は起動しません。起動準備では detached tmux の一時 session を作り、CLI を `tmux wait-for` で待機させます。窓表示と session 名の置換が成功してから CLI を解放し、元の husk を片付けます。途中の失敗では一時 session を除去して元の shell を残し、再登録応答で元が retired と確認できた場合だけ Mail を再 retire します。元から active の identity は retire しません。復元処理自体が失敗した場合は応答の `rollback_errors` に明示します。
 
