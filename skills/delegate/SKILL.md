@@ -44,6 +44,7 @@ If the child runs outside the project directory, explicitly tell it to use `$PRO
 /delegate "<task>" --worktree
 /delegate "<task>" --worktree --worktree-base <rev>
 /delegate "<task>" --claude-chrome-device <deviceId>
+/delegate "<task>" --base mail-only --tools screen:read:windows-mcp
 ```
 
 ### How to read the arguments
@@ -61,6 +62,8 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | `--codex-mcp orrery-only` | Keep authenticated ORRERY Mail and the session-binding plugin, and disable other inherited MCP servers and plugins |
 | `--claude-chrome` | Start a Claude child with `--chrome` (Claude in Chrome). Claude children only |
 | `--claude-chrome-device <deviceId>` | Same, and tell the child which connected browser to use |
+| `--base mail-only` | Give the child ORRERY Mail and only what `--tools` selects (Claude also gets `--no-chrome` unless a browser is selected; Codex gets the `orrery-only` profile) |
+| `--tools <spec>` | Add a tool; repeatable or comma separated: `browser[:<deviceId>]` (Claude only), `screen` / `screen:operate` (macOS computer use, Claude only), `screen:<read\|operate>:<server>`, `mcp:<server>` (copied, no tool approved), `mcp:<server>:all` (every tool approved, including arbitrary code on that host; only when the user asked for it) |
 | anything else | part of the task text |
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
@@ -216,6 +219,8 @@ AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT="<parent-name>" bash "${AGENTSTAC
 ```
 
 When the user selected `/delegate --codex-mcp orrery-only`, add the same `--codex-mcp orrery-only` to that launcher command. Omit it for the backward-compatible `inherit` default.
+
+When the user selected `/delegate --base` or `--tools`, add exactly the same flags to the launcher command, for Claude or Codex. Never add a tool, a server name or `mail-only` the user did not ask for. With a selection the launcher stops before tmux when it cannot apply it (no Mail proxy, a server it cannot copy, `mail-only` where the macOS computer use is enabled, read only for a server not in the table); report that error to the user instead of retrying without the flags. See docs/delegation.en.md (Choosing the tools a child gets).
 
 When the user selected `/delegate --claude-chrome` or `--claude-chrome-device <deviceId>` for a Claude child, add the same flag to the launcher command. Never pick a deviceId yourself: pass only the one the user gave. Without either flag the launch is unchanged and the child inherits the user's Claude settings. The deviceId is an instruction the child follows, not a lock on other browsers; see docs/delegation.en.md.
 

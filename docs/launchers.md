@@ -226,11 +226,13 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 | 項目 | 内容 |
 | --- | --- |
 | トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
-| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>]` |
+| 基本形 | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>] [--base <default\|mail-only>] [--tools <spec>]...` |
 | 必須前提 | 親の ORRERY Mail identity と正本 project key。編集 task では対象 resource 宣言と reservation |
 | 任意前提 | `--worktree` には git repository、dashboard annotation には dashboard service |
 
 親 agent は task を渡して終了せず、scope と risk の決定、reservation、monitoring、成果物の検証に責任を持ちます。`--codex` で Codex child、`--model` で許可済み model、`--dir` で child の cwd を選びます。
+
+`--base mail-only` と `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` で、child に渡す道具を選べます。選択がある child は、指定どおりにできなければ起動しません（[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools)）。
 
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 

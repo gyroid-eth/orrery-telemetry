@@ -1130,13 +1130,17 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     child_home_helper = (_ROOT / "hooks" / "child_resume.py").read_text(
         encoding="utf-8"
     )
-    assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode," in text
+    # The Claude child's config is written by hooks/child_tools.py for both
+    # the launcher and the dashboard resume.
+    assert "hooks/child_tools.py" in text or "child_tools.py\" claude-config" in text
+    child_tools_text = (_ROOT / "hooks" / "child_tools.py").read_text(encoding="utf-8")
+    assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=args.bearer_mode," in child_tools_text
     assert (
         '"AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + _toml_string(bearer_mode)'
         in child_home_helper
     )
     run_mcp = (_ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh").read_text(encoding="utf-8")
-    assert 'server_env["AGENTSTACK_PYTHON"] = python_bin' in text
+    assert 'env["AGENTSTACK_PYTHON"] = args.python_bin' in child_tools_text
     assert (
         'lines.append("AGENTSTACK_PYTHON = " + _toml_string(python_bin))'
         in child_home_helper

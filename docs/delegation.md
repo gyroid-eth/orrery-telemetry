@@ -144,6 +144,80 @@ warm pool（`hooks/warm_pool.sh`）の session は起動済みなので、タス
 scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside --runs 3 --parent <自分の名前>
 ```
 
+## 子に渡す道具を選ぶ（`--base` / `--tools`）
+
+`/delegate "<task>" --base mail-only --tools screen:read:windows-mcp` のように、child に渡す道具を起動時に選べます。`/api/spawn` では `base` と `tools` です（[API](api.md#post-apispawn)）。解釈は `hooks/child_tools.py` が一手に行います。
+
+- **`--base` を省く・`default`**: 従来と同じ起動です（コマンドも引数も変わりません）。Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は利用者の MCP を継承します。`--tools` で選んだものはこれに足します
+- **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server だけを有効にします（`--codex-mcp inherit` との併用は拒否します）
+
+| `--tools` | Claude child | Codex child |
+|---|---|---|
+| `browser` / `browser:<deviceId>` | `--chrome` と deviceId の指示（[Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ。`--claude-chrome-device` と deviceId が食い違えば拒否） | 使えません。利用者のブラウザ系 server を `mcp:<名前>` で選びます |
+| `screen` / `screen:operate` | Mac の組み込み computer use。子の起動ディレクトリの project で有効（`~/.claude.json` の `projects[<dir>].enabledMcpServers` にあり、`disabledMcpServers` に無い）なときだけ起動します。無効なら止めます | 使えません（server 名が要ります） |
+| `screen:<read\|operate>:<server>` | 利用者の画面系 server（WSL の Windows-MCP など）を strict の設定に写します | 子の `config.toml` でその server を有効にします |
+| `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
+| `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
+
+### 分類表と、読むだけ・操作も
+
+画面の選択で何を公開し承認するかは、分類表（`TOOL_TABLE`）で決まります。今の表は Windows-MCP 0.8.6（全 20 tool）だけで、tool を 3 つに分けています。
+
+| 分類 | Windows-MCP 0.8.6 の tool |
+|---|---|
+| 読む（`read`） | Screenshot・Snapshot |
+| 画面を操作する（`operate`） | App・Click・DisplayInventory・Move・MultiEdit・MultiSelect・Scroll・Shortcut・Type・Wait・WaitFor |
+| 画面ではない | Clipboard・FileSystem・Notification・PowerShell・Process・Registry・Scrape |
+
+- `screen:read` は「読む」だけを、`screen:operate` は「読む」と「画面を操作する」を公開して承認します。残りは隠します（Claude は `--disallowed-tools`、Codex は `enabled_tools` から外す）。画面を選んでも PowerShell やレジストリは渡りません
+- 「画面ではない」tool まで渡すのは、`mcp:<server>:all` を別に指定したときだけです。これはその server の全 tool を承認し、Windows なら**ホストで任意のコードを人の承認なしに動かせる**ことになります。child の最初の prompt にもそう書きます
+- 版は server の起動コマンドから読みます（`uvx windows-mcp@0.8.6` のように版を固定した形。`--with` で足しただけの package は数えません）。wrapper script、版を固定しない定義、表に無い版では、`screen:read` と `mcp:<server>:all` を選べず起動を止めます。`screen:operate` は、server を写す・有効にするだけで、tool は 1 つも承認しません
+- Mac の組み込み computer use と、Mac の Codex の画面・ブラウザ（`node_repl` という任意の JS を実行する tool を通る）は、読むと操作を tool で分けられないので「読むだけ」を選べません
+
+### 承認
+
+承認は child の起動の中だけで、表で分かる tool ごとに渡します。利用者の `settings.json`・`~/.codex/config.toml` と全体の承認方針（Codex の `never`）は変えず、server 全体（Claude の `mcp__<server>`、Codex の `default_tools_approval_mode`）を承認することはありません。
+
+- Claude は `--allowed-tools`、Codex は tool ごとの `approval_mode = "approve"` で渡します
+- `mcp:<server>`（`:all` なし）で選んだ server と、版の分からない server は、写す・有効にするだけです。その tool を呼ぶには、利用者が自分の設定で承認します（Codex なら installer の overlay）。承認が無いと、無人の child は最初の呼び出しで止まります（WSL の Claude で、許可が無いと拒否され、`--allowed-tools` で許可すると呼べることを確かめました）
+- 承認は起動・resume のたびに、その時の server の版と表から決め直します。resume の前に server が表に無い版へ上がっていれば、承認は起動時より狭くなり（`screen:read` と `:all` は止まり）、広がることはありません
+
+### 写せる server と検査（Claude）
+
+写せるのは `~/.claude.json` の user scope と、child の起動ディレクトリに当たる project scope の server だけです（project scope が優先）。project の `.mcp.json`、plugin の server、claude.ai のコネクタは写せません。次の server は選べず、起動を止めます。
+
+- ORRERY Mail に当たる名前（child には常に自分用の認証済み Mail が付くため）
+- `env` や `headers` に値がある（写すと秘密が child の設定ファイルに増えるため）
+- stdio の `command` が絶対パスでない、`cwd` が相対パス（child の PATH と起動ディレクトリで壊れるため）
+
+### 止める条件（fail closed）
+
+`--base mail-only` か `--tools` を指定した child は、指定どおりにできなければ tmux を起動する前に止めます。黙って「全部あり」や「道具なし」で起動することはありません。
+
+- ORRERY Mail の proxy が用意できない（指定の無い child は従来どおり共有 endpoint へ fallback します）
+- 選んだ server が見つからない・上の検査に通らない、Codex の `config.toml` に無い
+- `mail-only` で computer use を選んでいないのに、起動ディレクトリの project で computer use が有効（Mac）。strict の設定では computer use が外れず、外す手段がまだ確かめられていないためです。別のディレクトリで起動するか、`screen:operate` を選んでください
+- `screen:read` か `mcp:<server>:all` で、表に無い server・版
+
+`--worktree` の child は子ごとに別のディレクトリ（別の project）で動くので、Mac の computer use は原則として届きません。computer use は Mac 全体で同時に 1 セッションしか使えないので、child に渡すと、その間は親も使えません。
+
+### WSL の画面とWindows のセッション
+
+WSL から起動した Windows のプロセスは、その WSL が動く Windows のセッションで動きます。ssh から起動した WSL はセッション 0（デスクトップ無し）で、Windows-MCP は起動しても Screenshot が `screen grab failed` になります。RDP やコンソールの中で起動した tmux サーバーの中なら取れます。launcher は WSL で画面の server を選んだとき、PowerShell で自分のセッション番号を読み、0 なら警告します（起動は止めません。launcher と child の tmux サーバーが別のセッションにいることがあるため）。
+
+### 記録と resume
+
+- Claude: 選択は [Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ起動の記録（`<name>.claude-launch.<session-id>.json`、version 3）に `base` と `tools` として残り、会話に結び付きます。dashboard の resume は、この記録と今の利用者の設定から同じ strict の設定と flag を作り直します。作れなければ（server が消えた、computer use が有効になった等）、または child の state が無く strict を付けられないときは、resume を止めて理由を返します。SessionStart hook は、起動・resume・compaction のたびに渡された道具を child に伝え直します
+- Codex: 選択は `AGENTSTACK_RUNTIME_DIR/child-agents/<name>.tools.json`（0600）に残り、`child_resume.py build-home` が起動と resume のたびに子の `config.toml` に当てます。記録が壊れていれば home を作らず、起動・resume は止まります
+
+### 約束の水準
+
+`mail-only` が絞るのは MCP・ブラウザ・computer use です。Claude Code や Codex に組み込みの tool（shell・ファイル・WebFetch など）と、利用者の hooks・skills はそのまま残ります。
+
+これは child への方針であって、技術的な隔離ではありません。child は利用者と同じ権限で動き、自分の設定ファイルや記録を書き換えられます。dashboard の API にも呼び出し元の認証はありません。画面操作の本当の歯止めは、Mac の computer use のアプリごとの許可（人が画面で出す）と、Windows-MCP を起動する側（公開する tool を絞る）に置いてください。
+
+動いている child に道具を足す・resume で道具を変える（`/api/jump` の `tools`）、roster と DECK への表示、NEW AGENT の欄は、まだありません。
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。

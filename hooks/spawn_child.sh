@@ -24,6 +24,15 @@
 #   他のブラウザの操作を技術的に禁止するものではない。
 #   chrome を要求した子は warm pool を使わず cold start する。
 #
+# 子に渡す道具（base / tools。hooks/child_tools.py が解釈する）:
+#   --base default|mail-only   省略・default は今までと同じ起動。mail-only は ORRERY Mail と
+#                              --tools で選んだものだけを渡す（Claude は --no-chrome も付ける）
+#   --tools SPEC               繰り返し・カンマ区切り可: browser[:deviceId] / screen[:read|:operate]
+#                              / screen:<read|operate>:<server> / mcp:<server>
+#   選択（mail-only かいずれかの tools）がある子は fail closed: Mail の proxy が作れない、
+#   選んだ server を写せない、computer use が有効な project での mail-only などは起動しない。
+#   これは子への方針であって、技術的な隔離ではない。
+#
 # モデル指定（--model。Codex は CLI 0.159.0+ なら gpt-6.1-sol 既定、古ければ gpt-6-sol）:
 #   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
@@ -247,6 +256,14 @@ CLAUDE_CHILD_CHROME=false
 CLAUDE_CHILD_CHROME_CLI=false
 CLAUDE_CHILD_CHROME_DEVICE=""
 CLAUDE_CHILD_CHROME_DEVICE_CLI=false
+CODEX_MCP_PROFILE_CLI=false
+# Tools selection (hooks/child_tools.py). Empty base and no --tools keep the
+# launch exactly as before; any selection makes the launch fail closed.
+CHILD_TOOLS_BASE=""
+CHILD_TOOLS_ARGS=()
+CHILD_TOOLS_SPEC=""
+CHILD_TOOLS_RESTRICTIVE=false
+CLAUDE_CHILD_TOOL_FLAGS=""
 WORKTREE_BASE="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 if [[ "$WORKTREE_BASE" == "~" ]]; then
     WORKTREE_BASE="$HOME"
@@ -277,6 +294,23 @@ while [[ "${1:-}" == --* ]]; do
                 exit 1
             fi
             CODEX_MCP_PROFILE="$2"
+            CODEX_MCP_PROFILE_CLI=true
+            shift 2
+            ;;
+        --base)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --base requires default or mail-only" >&2
+                exit 1
+            fi
+            CHILD_TOOLS_BASE="$2"
+            shift 2
+            ;;
+        --tools)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --tools requires a selection (browser, screen:read, mcp:<name>, ...)" >&2
+                exit 1
+            fi
+            CHILD_TOOLS_ARGS+=(--tools "$2")
             shift 2
             ;;
         --resources)
@@ -381,6 +415,34 @@ if [[ -n "$CLAUDE_CHILD_CHROME_DEVICE" ]] \
     && ! [[ "$CLAUDE_CHILD_CHROME_DEVICE" =~ ^[A-Za-z0-9._:-]{1,128}$ ]]; then
     echo "Error: --claude-chrome-device must match [A-Za-z0-9._:-]{1,128}" >&2
     exit 1
+fi
+
+# Tools selection. Parsed here so that an invalid request stops before any
+# registration or tmux work; what can only be checked in the child's final
+# directory (servers, computer use) is checked again just before launch.
+if [[ -n "$CHILD_TOOLS_BASE" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then
+    if [[ "$CHILD_TOOLS_BASE" == "mail-only" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then
+        CHILD_TOOLS_RESTRICTIVE=true
+    fi
+    if [[ "$USE_CODEX" == true && "$CHILD_TOOLS_BASE" == "mail-only" ]]; then
+        if [[ "$CODEX_MCP_PROFILE_CLI" == true && "$CODEX_MCP_PROFILE" != "orrery-only" ]]; then
+            echo "Error: --base mail-only contradicts --codex-mcp $CODEX_MCP_PROFILE" >&2
+            exit 1
+        fi
+        CODEX_MCP_PROFILE="orrery-only"
+    fi
+    if ! CHILD_TOOLS_PARSED="$(python3 "$HOOKS_DIR/child_tools.py" parse \
+            --provider "$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)" \
+            --base "$CHILD_TOOLS_BASE" ${CHILD_TOOLS_ARGS[@]+"${CHILD_TOOLS_ARGS[@]}"} \
+            --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
+            --chrome-device "$CLAUDE_CHILD_CHROME_DEVICE")"; then
+        exit 1
+    fi
+    IFS=$'\t' read -r CHILD_TOOLS_SPEC _tools_chrome _tools_device <<< "$CHILD_TOOLS_PARSED"
+    if [[ "$USE_CODEX" != true && "$_tools_chrome" == 1 ]]; then
+        CLAUDE_CHILD_CHROME=true
+        CLAUDE_CHILD_CHROME_DEVICE="$_tools_device"
+    fi
 fi
 
 # --worktree-base は --worktree とのみ意味を持つ
@@ -2111,9 +2173,14 @@ warn_if_uninjected() {
 # stdio proxy instead of the shared HTTP endpoint. The proxy holds the child's
 # owner token and authenticates every call on its behalf, so the child can read
 # its OWN inbox (and nobody else's) without the token ever entering its context.
+# The child is started in strict MCP mode, so this file is its whole MCP
+# configuration: the proxy under every name the user uses for ORRERY Mail, plus
+# the servers selected with --tools (hooks/child_tools.py builds the file; the
+# dashboard resume uses the same code).
 #
 # Prints the config path, or nothing when the proxy is unavailable — callers
-# fall back to the shared endpoint rather than failing the spawn.
+# fall back to the shared endpoint rather than failing the spawn, except when
+# tools were selected (CHILD_TOOLS_RESTRICTIVE), where the caller stops.
 write_child_mcp_config() {
     local child_name="$1" token_file="$2"
     local runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
@@ -2122,75 +2189,19 @@ write_child_mcp_config() {
     local config_dir="$RUNTIME_DIR/child-agents"
     local config_path="$config_dir/${child_name}.mcp.json"
     mkdir -p "$config_dir" || return 0
-    python3 - "$config_path" "$runner" "$child_name" "$PROJECT_KEY" "$token_file" \
-        "$MCP_URL" "$MAIL_ENV" "$RUNTIME_DIR" \
-        "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" "$HTTP_BEARER_MODE" \
-        "${AGENTSTACK_PYTHON:-}" "${PARENT_NAME:-}" <<'PY' || return 0
-# NOTE: no line here may start with "}" in column 0 — the shell function is
-# extracted by "up to the first line that is just a closing brace".
-import json
-import os
-import sys
-
-path, runner, child, project_key, token_file, mcp_url, mail_env, runtime_dir, claude_json, bearer_mode, python_bin, parent = sys.argv[1:13]
-server_env = dict(
-    AGENTSTACK_PROXY_AGENT_NAME=child,
-    AGENTSTACK_PROXY_TOKEN_FILE=token_file,
-    AGENTSTACK_PROXY_PROGRAM="claude-code",
-    AGENTSTACK_PROJECT_KEY=project_key,
-    AGENTSTACK_MCP_URL=mcp_url,
-    AGENTSTACK_MAIL_ENV=mail_env,
-    # The MCP client starts the proxy with this table only, not the child's
-    # shell environment. Without the bearer mode the proxy defaulted to
-    # "auto", found no HTTP_BEARER_TOKEN in a bearer-disabled service env
-    # and exited before answering initialize (2026-09-03).
-    AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode,
-    AGENTSTACK_RUNTIME_DIR=runtime_dir,
-)
-if python_bin:
-    server_env["AGENTSTACK_PYTHON"] = python_bin
-# The proxy reports this as lineage.parent_agent (standalone: none).
-if parent:
-    server_env["AGENTSTACK_PROXY_PARENT_AGENT"] = parent
-server = dict(command=runner, args=[], env=server_env)
-
-
-def looks_like_agent_mail(name):
-    normalized = name.replace("-", "").replace("_", "").lower()
-    return normalized in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"}
-
-
-# The child inherits the user's own MCP servers, including their DIRECT
-# ORRERY Mail connection. Publishing the proxy under a NEW name just adds a
-# second ORRERY Mail, and the model reaches for the name it knows — the direct,
-# unauthenticated one. --mcp-config overrides a same-named server (measured),
-# so claim the names the user already uses as compatibility aliases as well as
-# the canonical product key.
-names = set()
-try:
-    with open(claude_json, encoding="utf-8") as handle:
-        settings = json.load(handle)
-except Exception:
-    settings = dict()
-scopes = [settings.get("mcpServers")]
-projects = settings.get("projects")
-if isinstance(projects, dict):
-    for scope in projects.values():
-        if isinstance(scope, dict):
-            scopes.append(scope.get("mcpServers"))
-for scope in scopes:
-    if isinstance(scope, dict):
-        names.update(name for name in scope if looks_like_agent_mail(name))
-if not names:
-    names = {"orrery-mail"}
-else:
-    names.add("orrery-mail")
-
-config = dict(mcpServers=dict((name, server) for name in sorted(names)))
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-os.chmod(path, 0o600)
-PY
+    local spec_args=()
+    if [[ -n "${CHILD_TOOLS_SPEC:-}" ]]; then
+        spec_args=(--spec "$CHILD_TOOLS_SPEC")
+    fi
+    python3 "$HOOKS_DIR/child_tools.py" claude-config \
+        ${spec_args[@]+"${spec_args[@]}"} --cwd "${WORK_DIR:-$PWD}" \
+        --chrome "$([[ "${CLAUDE_CHILD_CHROME:-false}" == true ]] && echo 1 || echo 0)" \
+        --out "$config_path" --runner "$runner" --child "$child_name" \
+        --project-key "$PROJECT_KEY" --token-file "$token_file" \
+        --mcp-url "$MCP_URL" --mail-env "$MAIL_ENV" --runtime-dir "$RUNTIME_DIR" \
+        --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" \
+        --bearer-mode "$HTTP_BEARER_MODE" --python-bin "${AGENTSTACK_PYTHON:-}" \
+        --parent-agent "${PARENT_NAME:-}" || return 0
     printf '%s\n' "$config_path"
 }
 
@@ -2537,9 +2548,11 @@ build_embedded_task_prompt() {
         "$parent_name" "$task_text"
 }
 
-# The Claude child's tmux command. With chrome off and no first prompt this
-# must stay byte-for-byte the command used before --claude-chrome existed;
-# --chrome and the first prompt are the only additions.
+# The Claude child's tmux command. With chrome off, no tools selected and no
+# first prompt this must stay byte-for-byte the command used before
+# --claude-chrome existed; the tool flags (checked to hold only
+# [A-Za-z0-9_,.:-] words), --chrome and the first prompt are the only
+# additions.
 #
 # The first prompt goes in as the `claude [prompt]` argument, so it is the
 # user's first message. Pasted into the input box it arrived wrapped in
@@ -2550,6 +2563,9 @@ build_embedded_task_prompt() {
 # that the child's shell reads once and removes.
 claude_child_launch_command() {
     local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
+        inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
+    fi
     if [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
         inner+=' --chrome'
     fi
@@ -2572,6 +2588,56 @@ claude_chrome_prompt_block() {
     printf '\n\n%s' "$text"
 }
 
+# Checks the tools selection against the child's final directory and the
+# user's Claude settings, and sets the extra claude flags (--no-chrome,
+# --allowed-tools/--disallowed-tools for read-only screen access). Fails when
+# the selection cannot be honoured; the caller then stops before tmux.
+claude_tools_plan() {
+    CLAUDE_CHILD_TOOL_FLAGS=""
+    [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
+    local flags
+    flags="$(python3 "$HOOKS_DIR/child_tools.py" claude-plan --spec "$CHILD_TOOLS_SPEC" \
+        --cwd "$WORK_DIR" \
+        --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
+        --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}")" || return 1
+    if ! [[ "$flags" =~ ^[A-Za-z0-9_,.:\ -]*$ ]]; then
+        echo "Error: unexpected characters in the child's tool flags" >&2
+        return 1
+    fi
+    CLAUDE_CHILD_TOOL_FLAGS="$flags"
+}
+
+# On WSL, warn when a selected screen server would run in Windows session 0
+# (no desktop). Never stops the launch; see child_tools.windows_session_warning.
+warn_windows_screen_session() {
+    [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
+    python3 "$HOOKS_DIR/child_tools.py" windows-session --spec "$CHILD_TOOLS_SPEC" || true
+}
+
+# Appended to the child's first prompt when tools were selected.
+child_tools_prompt_block() {
+    [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
+    local text
+    text="$(python3 "$HOOKS_DIR/child_tools.py" prompt --spec "$CHILD_TOOLS_SPEC" \
+        --provider "$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)" \
+        --standalone "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)")" || return 1
+    printf '\n\n%s' "$text"
+}
+
+# A Codex child's selection is kept per agent next to its retained state
+# (codex_mcp_profile is kept the same way), and child_resume.py build-home
+# applies it on every build, including a dashboard resume. A launch without a
+# selection removes a record left by an earlier child of the same name.
+write_child_codex_tools_record() {
+    local record="$RUNTIME_DIR/child-agents/$CHILD_NAME.tools.json"
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" != true ]]; then
+        rm -f -- "$record"
+        return 0
+    fi
+    mkdir -p "$RUNTIME_DIR/child-agents" || return 1
+    python3 "$HOOKS_DIR/child_tools.py" codex-record --spec "$CHILD_TOOLS_SPEC" --out "$record"
+}
+
 # Prepares the launch record a resume needs (hooks/claude_chrome_policy.py has
 # the lifecycle). Only a pending record for this launch is written; records of
 # earlier conversations under the same name are never touched, so a failed
@@ -2584,16 +2650,21 @@ CLAUDE_CHROME_LAUNCH_ID=""
 CLAUDE_CHROME_PENDING_RECORD=""
 prepare_claude_launch_record() {
     CLAUDE_CHROME_TMUX_ENV=()
-    [[ "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    [[ "$CLAUDE_CHILD_CHROME" == true || "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
     local launch_id
     launch_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
     CLAUDE_CHROME_LAUNCH_ID="$launch_id"
     CLAUDE_CHROME_PENDING_RECORD="$CHILD_STATE_DIR/$CHILD_NAME.claude-launch.pending-$launch_id.json"
     mkdir -p "$CHILD_STATE_DIR" || return 1
     chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || true
+    local tools_args=()
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]]; then
+        tools_args=("$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" "$CHILD_TOOLS_SPEC")
+    fi
     python3 "$HOOKS_DIR/claude_chrome_policy.py" prepare "$CHILD_STATE_DIR" "$CHILD_NAME" \
         "$launch_id" "$CLAUDE_CHILD_CHROME_DEVICE" \
-        "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" || return 1
+        "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)" \
+        ${tools_args[@]+"${tools_args[@]}"} || return 1
     CLAUDE_CHROME_TMUX_ENV=(-e "AGENTSTACK_CLAUDE_LAUNCH_ID=$launch_id")
 }
 
@@ -2613,6 +2684,10 @@ build_codex_mail_task_prompt() {
 append_codex_mcp_profile_notice() {
     local prompt="$1"
     printf '%s' "$prompt"
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]]; then
+        child_tools_prompt_block
+        return
+    fi
     if [[ "$CODEX_MCP_PROFILE" == "orrery-only" ]]; then
         printf '\n\nCapability notice: shell/files and authenticated ORRERY Mail remain available. Other inherited MCP servers and plugins are disabled. The existing AgentStack session-binding plugin configuration is preserved. If a required tool is unavailable, ask your parent agent for help (or the operator in standalone mode).'
     fi
@@ -2886,7 +2961,16 @@ PY
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_BIN=$CHILD_CODEX_BIN")
         TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_MODEL=$CHILD_MODEL" -e "AGENTSTACK_CODEX_EFFORT=$CODEX_EFFORT")
         ensure_child_proxy_parent before codex || exit 1
+        warn_windows_screen_session
+        if ! write_child_codex_tools_record; then
+            echo "Error: could not record the tools selected for $CHILD_NAME" >&2
+            exit 1
+        fi
         CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
+        if [[ "$CHILD_TOOLS_RESTRICTIVE" == true && -z "$CHILD_CODEX_HOME" ]]; then
+            echo "Error: the selected tools could not be applied (or the ORRERY Mail proxy is unavailable); a Codex child with base/tools is not started without them" >&2
+            exit 1
+        fi
         if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
             echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
             exit 1
@@ -3011,9 +3095,10 @@ ${TASK}"
             # A claimed warm session may retain a parent environment. Cold
             # start standalone children so PARENT_AGENT is guaranteed absent.
             WARM_TYPE="__skip_warm__"
-        elif [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
-            # A warm session was started without --chrome, and a claim cannot
-            # add a CLI flag to a running process. Cold start instead.
+        elif [[ "$CLAUDE_CHILD_CHROME" == true || "$CHILD_TOOLS_RESTRICTIVE" == true ]]; then
+            # A warm session was started without --chrome or the tool flags,
+            # and a claim cannot add a CLI flag to a running process. Cold
+            # start instead.
             WARM_TYPE="__skip_warm__"
         else
             case "$CHILD_MODEL" in
@@ -3023,6 +3108,11 @@ ${TASK}"
             esac
         fi
 
+        if ! claude_tools_plan; then
+            echo "[spawn_child/pre-reg] Aborting: the selected tools cannot be given to this child (see above)." >&2
+            exit 1
+        fi
+        warn_windows_screen_session
         if ! prepare_claude_launch_record; then
             echo "[spawn_child/pre-reg] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
             exit 1
@@ -3042,10 +3132,15 @@ ${TASK}"
             exit 1
         fi
         CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
+        if ! TOOLS_PROMPT_BLOCK="$(child_tools_prompt_block)"; then
+            echo "[spawn_child/pre-reg] Aborting: could not describe the selected tools." >&2
+            exit 1
+        fi
+        CHILD_PROMPT+="$TOOLS_PROMPT_BLOCK"
 
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
-        if [[ "$CLAUDE_CHILD_CHROME" != true && -f "$WARM_POOL" ]] \
+        if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true && -f "$WARM_POOL" ]] \
             && echo "$WARM_STATUS" | grep -q "${WARM_TYPE}.*ready"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
             if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
@@ -3061,6 +3156,10 @@ ${TASK}"
             echo "[spawn_child/pre-reg] Cold start..." >&2
             ensure_child_proxy_parent before claude || exit 1
             CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+            if [[ "$CHILD_TOOLS_RESTRICTIVE" == true && -z "$CHILD_MCP_CONFIG" ]]; then
+                echo "[spawn_child/pre-reg] Aborting: the ORRERY Mail proxy is unavailable. A child with base/tools is never started without it: it would receive all of the user's MCP servers." >&2
+                exit 1
+            fi
             ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
             if [[ -n "$CHILD_MCP_CONFIG" ]]; then
                 echo "[spawn_child/pre-reg] Child MCP proxy config: $CHILD_MCP_CONFIG" >&2
@@ -3721,7 +3820,16 @@ if [[ "$USE_CODEX" == true ]]; then
         exit 1
     fi
     ensure_child_proxy_parent before codex || exit 1
+    warn_windows_screen_session
+    if ! write_child_codex_tools_record; then
+        echo "Error: could not record the tools selected for $CHILD_NAME" >&2
+        exit 1
+    fi
     CHILD_CODEX_HOME="$(write_child_codex_home "$CHILD_NAME" "$CHILD_TOKEN_FILE" "$CODEX_MCP_PROFILE")"
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" == true && -z "$CHILD_CODEX_HOME" ]]; then
+        echo "Error: the selected tools could not be applied (or the ORRERY Mail proxy is unavailable); a Codex child with base/tools is not started without them" >&2
+        exit 1
+    fi
     if [[ "$CODEX_MCP_PROFILE" != "inherit" && -z "$CHILD_CODEX_HOME" ]]; then
         echo "Error: could not create the requested Codex MCP profile: $CODEX_MCP_PROFILE" >&2
         exit 1
@@ -3819,6 +3927,11 @@ if [[ "$USE_CODEX" == true ]]; then
     esac
 else
     # Claude Code 起動（モデル指定付き）
+    if ! claude_tools_plan; then
+        echo "[spawn_child] Aborting: the selected tools cannot be given to this child (see above)." >&2
+        exit 1
+    fi
+    warn_windows_screen_session
     if ! prepare_claude_launch_record; then
         echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
@@ -3829,8 +3942,17 @@ else
         exit 1
     fi
     CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
+    if ! TOOLS_PROMPT_BLOCK="$(child_tools_prompt_block)"; then
+        echo "[spawn_child] Aborting: could not describe the selected tools." >&2
+        exit 1
+    fi
+    CHILD_PROMPT+="$TOOLS_PROMPT_BLOCK"
     ensure_child_proxy_parent before claude || exit 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" == true && -z "$CHILD_MCP_CONFIG" ]]; then
+        echo "[spawn_child] Aborting: the ORRERY Mail proxy is unavailable. A child with base/tools is never started without it: it would receive all of the user's MCP servers." >&2
+        exit 1
+    fi
     ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
     if ! CHILD_PROMPT="$(claude_argv_prompt "$CHILD_NAME" "$CHILD_PROMPT")" \
         || ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
