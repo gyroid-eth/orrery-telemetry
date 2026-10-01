@@ -165,33 +165,23 @@ for entry in "${CHILDREN[@]+"${CHILDREN[@]}"}"; do
     IFS='|' read -r name model place token_file <<< "$entry"
     head="あなたは ${name}（親: ${PARENT}）"
     while :; do
-        result="$(python3 "$STATUS_HELPER" "" 0 "$head" 2>/dev/null || echo '{}')"
+        result="$(python3 "$STATUS_HELPER" "" 0 "$head" "$PARENT" 2>/dev/null || echo '{}')"
         outcome="$(printf '%s' "$result" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
-status, transcript = data.get("status", "pending"), data.get("transcript", "")
-if status == "started":
-    names = set()
-    try:
-        for line in open(transcript, encoding="utf-8"):
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            content = (row.get("message") or {}).get("content")
-            for block in content if isinstance(content, list) else []:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    names.add(block.get("name", ""))
-    except OSError:
-        pass
-    # The report may still be on its way: started counts once Mail was used.
-    print("started" if any(n.endswith("orrery-mail__send_message") for n in names) else "acting")
+status, tools = data.get("status", "pending"), data.get("tools") or []
+if status == "reported":
+    print("started")
+elif status == "ended_without_report":
+    # Acted, but never reported through ORRERY Mail: another messaging tool,
+    # or it checked and then declined in words.
+    print("not via Mail" if any(t == "SendMessage" or t.endswith("__SendMessage") for t in tools) else "declined")
 else:
     print(status)
 ')"
-        if [[ "$outcome" == started || "$outcome" == declined ]]; then break; fi
+        if [[ "$outcome" == started || "$outcome" == declined || "$outcome" == "not via Mail" ]]; then break; fi
         if [[ $(date +%s) -ge $deadline ]]; then
-            [[ "$outcome" == acting ]] && outcome="not via Mail" || outcome=timeout
+            outcome=timeout
             break
         fi
         sleep 5

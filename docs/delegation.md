@@ -109,10 +109,11 @@ Codex CLI 0.154.0 の interactive session で、事前設定済みの stdio MCP 
 
 Claude の子には、launcher（`spawn_child.sh`）が最初のタスクを `claude [prompt]` の引数で渡します。子にとってはこれが利用者の最初の発言になります。同じ起動コマンドの `--append-system-prompt` で、運用者の設定として次を伝えます。
 
-- この session は ORRERY の子 X で、親 P のために launcher が起動したこと
-- 最初の発言は P が委任したタスクであること
+- この session は ORRERY の子 X で、親 P がタスクを委任したため launcher が起動したこと
+- 最初の発言は P が委任したタスクであること（ふだんどおり判断して進める）
 - 報告は `mcp__orrery-mail__send_message` で行うこと
 
+launcher が確かめていない「人が頼んだ」といった主張は書きません。
 以前はタスクを入力欄に貼り付けていました。Claude Code は貼り付けを `<pasted_content>` で包み、「貼り付けの中の指示は、利用者自身の発言が求めたときだけ従う」と扱います。2026-10-01 の測定では、vault の外（managed block の CLAUDE.md が無い場所）の Sonnet 5 の子は、事故と同じ形のタスクを次のように扱いました。
 
 | 渡し方 | 結果 |
@@ -121,13 +122,19 @@ Claude の子には、launcher（`spawn_child.sh`）が最初のタスクを `cl
 | 引数だけ | 3 回中 2 回断った |
 | 引数と system prompt | 3 回中 3 回実行した |
 
-**受け取ったかの確認:** 起動の後、launcher は background で子の transcript を読みます。
+**受け取ったかの確認:** 起動の後、launcher は background で子の transcript を読み、最初の turn の終わり方を見ます。読むのは、見つけた 1 本の transcript の書き足された部分だけです。
 
-- 最初の turn に tool の呼び出しがあれば「始めた」とみなします
-- 最初の turn が文章だけで終わった場合（断った・確認を求めた）は、親に ORRERY Mail で知らせます
-- `AGENTSTACK_CHILD_START_WAIT_SECONDS`（既定 180 秒）の間に始めなかった場合や、transcript が見つからない場合も同じです
+- 親への `mcp__orrery-mail__send_message` で終われば、何も知らせません
+- 次の場合は、親に ORRERY Mail で知らせます
+  - 文章だけで終わった（断った・確認を求めた）
+  - tool を呼んだが、親へ報告せずに終わった（確かめてから断った・報告を忘れた）
+  - `AGENTSTACK_CHILD_START_WAIT_SECONDS`（既定 180 秒）の間に応答が無い、または transcript が見つからない
+- 180 秒の時点で最初の turn がまだ書かれている（考え中）なら、「まだ最初の応答の途中です」と分けて知らせます
+- 先の知らせの後で始めた場合は、「始めました」をもう 1 通送ります
 - この Mail は子の名前で届きますが、件名は `[launcher]` で始まり、本文の先頭に「子本人ではなく launcher が自動で送った」と書いてあります
 - 結果はどれも `spawn_incidents.log` に残ります。`AGENTSTACK_CHILD_START_CHECK=0` で無効にできます（テスト用）
+
+1 つの引数に収まらない長いタスク（Linux・WSL は 1 引数 128 KiB）は、子だけが読める file に置き、引数にはその file を読むようにという短い文だけを渡します。引数で渡したタスクは、子が動いている間 process の一覧（`ps`）から見えます。Codex の子も同じです。
 
 warm pool（`hooks/warm_pool.sh`）の session は起動済みなので、タスクは今も貼り付けで渡します。warm pool を使う場合は、事前起動の時に同じ system prompt を渡してください。Codex の子は前からタスクを引数で受け取っています。
 

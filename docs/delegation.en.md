@@ -109,10 +109,11 @@ Explicitly passing `/delegate "<task>" --claude-chrome-device <deviceId>` (or `-
 
 The launcher (`spawn_child.sh`) gives a Claude child its first task as the `claude [prompt]` argument, so it is the user's first message. The same launch command passes `--append-system-prompt` with operator configuration saying:
 
-- this session is ORRERY child X, started by the launcher for parent P;
-- the first message is the task P delegated;
+- this session is ORRERY child X, started by the launcher because parent P delegated a task to it;
+- the first message is the task P delegated (to be carried out with the usual judgment);
 - reports go through `mcp__orrery-mail__send_message`.
 
+It makes no claim the launcher has not checked, such as that a person asked for the task.
 The task used to be pasted into the input box. Claude Code wraps a paste in `<pasted_content>` and follows instructions inside it only when the user's own message asks it to. On 2026-10-01, Sonnet 5 children outside the vault (no CLAUDE.md with the managed block) handled a task shaped like the incident as follows:
 
 | Delivery | Result |
@@ -121,13 +122,19 @@ The task used to be pasted into the input box. Claude Code wraps a paste in `<pa
 | argument only | declined 2 times in 3 |
 | argument and system prompt | started 3 times in 3 |
 
-**Checking that the child started:** after the launch, the launcher reads the child's transcript in the background.
+**Checking that the child started:** after the launch, the launcher reads the child's transcript in the background and looks at how its first turn ends. It reads one transcript, once found, and only what is appended to it.
 
-- A first turn that calls a tool counts as started.
-- A first turn that ends in text alone (declined, or asked for confirmation) is reported to the parent by ORRERY Mail.
-- So is a child that has not started within `AGENTSTACK_CHILD_START_WAIT_SECONDS` (default 180), or whose transcript cannot be found.
+- A first turn that ends with `mcp__orrery-mail__send_message` to the parent needs no notice.
+- The parent is told by ORRERY Mail when the first turn:
+  - ends in text alone (declined, or asked for confirmation);
+  - called tools but ended without the report (checked and then declined, or forgot to report);
+  - has no answer within `AGENTSTACK_CHILD_START_WAIT_SECONDS` (default 180), or its transcript cannot be found.
+- A first turn still being written at 180 s (still thinking) gets a separate "still in its first answer" notice.
+- A child that starts after an early notice gets one more message saying it started.
 - The message arrives under the child's name, but its subject starts with `[launcher]` and its first line says the launcher sent it, not the child.
 - Every outcome is logged in `spawn_incidents.log`. `AGENTSTACK_CHILD_START_CHECK=0` turns the check off (for tests).
+
+A task too long for one argument (128 KiB per argument on Linux and WSL) is kept in a file only the child can read, and the argument only says to read that file. A task passed as an argument is visible in the process list (`ps`) while the child runs, as it already was for Codex children.
 
 A warm-pool session (`hooks/warm_pool.sh`) is already running, so its task is still pasted. If you use a warm pool, give it the same system prompt when it is pre-started. Codex children already received their task as an argument.
 

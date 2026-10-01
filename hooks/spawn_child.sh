@@ -2339,6 +2339,27 @@ write_claude_first_prompt() {
     printf '%s\n' "$path"
 }
 
+# A single argument is limited to 128 KiB on Linux (and WSL), and the whole
+# argument list to about 1 MiB on macOS: beyond that `claude` cannot even be
+# started. A longer first prompt stays in a private file, and the argument only
+# says where to read it, starting with the same words (up to the child's name)
+# so the watcher and the readiness check still recognise it. Prints the prompt
+# to pass.
+CLAUDE_ARGV_PROMPT_MAX_BYTES="${AGENTSTACK_CLAUDE_ARGV_PROMPT_MAX_BYTES:-98304}"
+claude_argv_prompt() {
+    local child_name="$1" prompt_text="$2" task_file
+    if [[ "$(printf '%s' "$prompt_text" | wc -c | tr -d ' ')" -le "$CLAUDE_ARGV_PROMPT_MAX_BYTES" ]]; then
+        printf '%s' "$prompt_text"
+        return 0
+    fi
+    mkdir -p "$CHILD_STATE_DIR" && chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || return 1
+    task_file="$(mktemp "$CHILD_STATE_DIR/$child_name.task.XXXXXX")" || return 1
+    chmod 600 "$task_file" || { rm -f "$task_file"; return 1; }
+    printf '%s' "$prompt_text" > "$task_file" || { rm -f "$task_file"; return 1; }
+    printf '%s: this launch prompt is too long to pass as an argument, so it is in the file %s. Read that whole file first; it is your canonical task, from the launcher.' \
+        "$(claude_prompt_echo_head "$prompt_text" "$child_name")" "$task_file"
+}
+
 # Operator configuration for a launched Claude child, passed with
 # --append-system-prompt: who started this session and what its first message
 # is. Said by the operator's own launch command, in the system prompt, rather
@@ -2347,10 +2368,10 @@ write_claude_first_prompt() {
 claude_child_system_prompt() {
     local child_name="$1" parent_name="$2"
     if [[ -n "$parent_name" ]]; then
-        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine for its parent agent %s, at the request of the person who runs both. The first user message is the task %s delegated to you: carry it out. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first. Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
+        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. The first user message is the task %s delegated. Carry it out, using your usual judgment. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first. Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
             "$child_name" "$parent_name" "$parent_name" "$child_name" "$parent_name"
     else
-        printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine at the request of the person who runs it. The first user message is your task: carry it out. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration is needed first.' \
+        printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine; ORRERY is set up on this machine by the person who runs it. The first user message is its task. Carry it out, using your usual judgment. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration is needed first.' \
             "$child_name" "$child_name"
     fi
 }
@@ -2362,117 +2383,27 @@ claude_prompt_head() {
     printf '%s' "$1" | head -n 1
 }
 
-# Tell the parent that its child did not start. Sent through ORRERY Mail as the
-# child (the launcher holds its token), and says so first: the child did not
-# write it.
-notify_parent_child_not_started() {
-    local child_name="$1" parent_name="$2" token_file="$3" reason="$4" child_text="$5"
-    if [[ -z "$parent_name" ]]; then
-        echo "no parent to tell" >&2
-        return 1
-    fi
-    if [[ ! -s "$token_file" ]]; then
-        echo "the child's token is not available (${token_file:-unset})" >&2
-        return 1
-    fi
-    "${AGENTSTACK_PYTHON:-python3}" - "$child_name" "$parent_name" "$PROJECT_KEY" \
-        "$token_file" "$MCP_URL" "$reason" "$child_text" "$CLAUDE_START_WAIT_SECONDS" <<'PY'
-import http.client
-import json
-import sys
-from urllib.parse import urlparse
-
-child, parent, project_key, token_file, url, reason, child_text, wait = sys.argv[1:9]
-with open(token_file, encoding="utf-8") as handle:
-    token = handle.read().strip()
-why = {
-    "declined": "最初の turn で tool を呼ばずに、文章だけで返しました（タスクを断ったか、確認を求めています）。",
-    "timeout": f"起動から {wait} 秒の間に、最初の turn が終わりませんでした（tool の呼び出しもありません）。",
-    "unverified": f"起動から {wait} 秒の間に、この子の会話の記録（Claude Code の transcript）が見つからず、始めたかを確かめられませんでした。",
-}.get(reason, reason)
-if reason == "unverified":
-    finding = f"{child} が起動時に渡したタスクを始めたかを、確かめられませんでした。{why}"
-else:
-    finding = f"{child} は、起動時に渡したタスクを始めていません。{why}"
-body = (
-    f"この Mail は {child} 本人ではなく、ORRERY の launcher（spawn_child.sh）が自動で送りました。\n\n"
-    f"{finding}\n\n"
-    f"tmux session `{child}` を開いて様子を見るか、タスクを渡し直してください。\n"
-)
-if child_text:
-    body += "\n## 子の最初の発言\n\n" + "\n".join("> " + line for line in child_text.splitlines()) + "\n"
-arguments = {
-    "project_key": project_key, "sender_name": child, "to": [parent],
-    "subject": (f"[launcher] {child} がタスクを始めたか確かめられません" if reason == "unverified"
-                else f"[launcher] {child} がタスクを始めていません"),
-    "body_md": body, "importance": "high", "sender_token": token,
-}
-parsed = urlparse(url)
-request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                      "params": {"name": "send_message", "arguments": arguments}}).encode()
-try:
-    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
-    connection.request("POST", parsed.path, body=request,
-                       headers={"Content-Type": "application/json",
-                                "Accept": "application/json", "Connection": "close"})
-    reply = json.loads(connection.getresponse().read().decode("utf-8"))
-    connection.close()
-except (OSError, ValueError) as exc:
-    print(f"ORRERY Mail at {url} did not answer: {type(exc).__name__}", file=sys.stderr)
-    raise SystemExit(1)
-result = reply.get("result") if isinstance(reply, dict) else None
-if not isinstance(result, dict) or reply.get("error") or result.get("isError"):
-    print("ORRERY Mail refused the message", file=sys.stderr)
-    raise SystemExit(1)
-PY
-}
-
-# Watch, in the background, whether a Claude child acts on its first prompt.
-# Started: its first turn called a tool. Declined: the turn ended with text
-# alone. Neither within CLAUDE_START_WAIT_SECONDS: timeout. Declined and
-# timeout reach the parent by Mail; every outcome is in the incident log.
+# Watch, in the background, how a Claude child's first turn goes, from its
+# transcript (claude-initial-task-status.py watch). The parent gets a Mail, sent
+# with the child's token and saying the launcher wrote it, when the first turn
+# ends in text alone, ends without the report to the parent (checked and then
+# declined, or forgot), or has not started within CLAUDE_START_WAIT_SECONDS; a
+# child still thinking then is told apart, and a later start is reported once
+# to correct an early notice. One process per child reads only what the
+# transcript appends, until the first turn ends or the session does.
 claude_watch_initial_task() {
     local child_name="$1" parent_name="$2" token_file="$3" prompt_text="$4"
-    local head since nap=sleep
     # Off only where nothing real is launched (the test suite sets it).
     [[ "${AGENTSTACK_CHILD_START_CHECK:-1}" == 0 ]] && return 0
-    [[ -x /bin/sleep ]] && nap=/bin/sleep
-    head="$(claude_prompt_head "$prompt_text")"
-    since="$(date +%s)"
-    (
-        local deadline=$((since + CLAUDE_START_WAIT_SECONDS)) result status text
-        while :; do
-            result="$("${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
-                "" "$since" "$head" 2>/dev/null || true)"
-            status="$(printf '%s' "$result" | "${AGENTSTACK_PYTHON:-python3}" -c \
-                'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-            if [[ "$status" == started ]]; then
-                spawn_note "Claude child $child_name started its task (its first turn called a tool)"
-                exit 0
-            fi
-            if [[ "$status" == declined || $(date +%s) -ge $deadline ]]; then
-                if [[ "$status" != declined ]]; then
-                    status=timeout
-                    # No transcript at all: the check itself could not run.
-                    printf '%s' "$result" | grep -q '"transcript": ""' && status=unverified
-                fi
-                text="$(printf '%s' "$result" | "${AGENTSTACK_PYTHON:-python3}" -c \
-                    'import json,sys; print(json.load(sys.stdin).get("text",""))' 2>/dev/null || true)"
-                local why
-                if why="$(notify_parent_child_not_started "$child_name" "$parent_name" "$token_file" "$status" "$text" 2>&1)"; then
-                    spawn_note "WARNING: Claude child $child_name did not start its task ($status); told ${parent_name} by Mail"
-                else
-                    spawn_note "WARNING: Claude child $child_name did not start its task ($status); could not tell ${parent_name:-the parent} by Mail: ${why:-unknown error}"
-                fi
-                exit 0
-            fi
-            if ! tmux has-session -t "=$child_name" 2>/dev/null; then
-                spawn_note "Claude child $child_name ended before its first turn could be checked"
-                exit 0
-            fi
-            "$nap" "$CLAUDE_START_POLL_SECONDS"
-        done
-    ) </dev/null >/dev/null 2>&1 &
+    CHILD_START_TOKEN_FILE="$token_file" \
+    CHILD_START_MCP_URL="$MCP_URL" \
+    CHILD_START_PROJECT_KEY="$PROJECT_KEY" \
+    CHILD_START_WAIT_SECONDS="$CLAUDE_START_WAIT_SECONDS" \
+    CHILD_START_POLL_SECONDS="$CLAUDE_START_POLL_SECONDS" \
+    AGENTSTACK_SPAWN_INCIDENT_LOG="$SPAWN_INCIDENT_LOG" \
+        nohup "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
+        watch "$child_name" "$parent_name" "$(claude_prompt_head "$prompt_text")" \
+        </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
 }
 
@@ -3013,7 +2944,8 @@ ${TASK}"
             else
                 echo "[spawn_child/pre-reg] No MCP proxy available; child uses the shared ORRERY Mail endpoint" >&2
             fi
-            if ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
+            if ! CHILD_PROMPT="$(claude_argv_prompt "$CHILD_NAME" "$CHILD_PROMPT")" \
+                || ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
                 echo "[spawn_child/pre-reg] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
                 exit 1
             fi
@@ -3771,7 +3703,8 @@ else
     ensure_child_proxy_parent before claude || exit 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
-    if ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
+    if ! CHILD_PROMPT="$(claude_argv_prompt "$CHILD_NAME" "$CHILD_PROMPT")" \
+        || ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
         echo "[spawn_child] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
         exit 1
     fi

@@ -14,7 +14,7 @@
 
 launcher はタスクを入力欄に貼り付けていたため、Claude Code はそれを `<pasted_content>` として扱っていました。vault の外の Sonnet 5 の子は、文面によらず断りました（2026-10-01 の測定で 6 回中 6 回）。Claude の子には、タスクを `claude [prompt]` の引数（利用者の最初の発言）で渡し、同じ起動コマンドの `--append-system-prompt` で、誰がこの session を起動したかを運用者の設定として伝えるようにしました。同じ条件で 3 回中 3 回実行しました。
 
-launcher は、子が最初の turn でタスクを始めたかを transcript で確かめます。断った・確認を求めた・既定 180 秒（`AGENTSTACK_CHILD_START_WAIT_SECONDS`）の間に始めなかった、のいずれかなら、親に `[launcher]` で始まる Mail を送ります。子が黙って止まることはなくなりました。
+launcher は、子の最初の turn が親への報告で終わったかを transcript で確かめます。文章だけで終わった、tool を呼んだが報告せずに終わった、既定 180 秒（`AGENTSTACK_CHILD_START_WAIT_SECONDS`）の間に応答が無い、のいずれかなら、親に `[launcher]` で始まる Mail を送ります。180 秒の時点でまだ考えている子は分けて知らせ、後で始めたらもう 1 通送ります。子が黙って止まることはなくなりました。1 引数に収まらない長いタスクは、子だけが読める file 経由で渡します。
 
 報告の道具は ORRERY Mail の `send_message` と名前で書くようにしました（Claude Code の SendMessage で報告する子がいたため）。モデルが変わったときに回す `scripts/canary-embed-task.sh` を足しました。
 
