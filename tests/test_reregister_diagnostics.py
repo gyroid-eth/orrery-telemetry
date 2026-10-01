@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import pathlib
 import stat
 import subprocess
@@ -527,3 +528,42 @@ printf 'second=%s:%s:%s\n' "$AGS_REGISTERED_AGENT_NAME" "${{AGS_REGISTRATION_DIA
     )
     assert completed.stderr == ""
     _assert_no_secrets(completed)
+
+
+@pytest.mark.parametrize("failure", [{"FAKE_POLICY_MODE": "http", "FAKE_HTTP_STATUS": "500"},
+                                     {"FAKE_POLICY_MODE": "transport", "FAKE_CURL_EXIT": "22"}],
+                         ids=["http-500", "curl-exit-22"])
+def test_a_failing_contact_policy_never_fails_the_registration(tmp_path: pathlib.Path, failure):
+    # #170 review: under `set -e` a token-less call that failed at the HTTP
+    # layer ended the wrapper before the token retry, and after a successful
+    # registration. Both calls are best-effort.
+    completed, calls = _run_wrapper(tmp_path, AGENTSTACK_CONTACT_POLICY="open", **failure)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == f"agentstack-reregister: registered {AGENT_NAME}\n"
+    policy = _policy_calls(calls)
+    assert len(policy) == 2
+    assert "registration_token" not in policy[0] and policy[1].get("registration_token")
+    _assert_no_secrets(completed)
+
+
+def test_contact_policy_failures_do_not_end_a_set_e_caller():
+    # agentstack-preregister-child calls ags_apply_contact_policy directly
+    # under `set -euo pipefail` as its last step (#170 review).
+    script = (
+        "set -euo pipefail\n"
+        f"source {shlex.quote(str(ROOT / 'bin' / 'lib' / 'agentstack-register.sh'))}\n"
+        'ags_mcp_call() { printf "%s\\n" "$*" >> "$CALLS"; return 22; }\n'
+        "AGENTSTACK_CONTACT_POLICY=open\n"
+        "ags_apply_contact_policy /p FixtureAgent owner-token\n"
+        "echo AFTER\n"
+    )
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = pathlib.Path(tmp) / "calls"
+        completed = subprocess.run([BASH, "-c", script], env=dict(os.environ, CALLS=str(calls)),
+                                   capture_output=True, text=True, timeout=15)
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip().endswith("AFTER")
+        made = calls.read_text().splitlines()
+    assert len(made) == 2
+    assert "registration_token=" not in made[0] and "registration_token=owner-token" in made[1]

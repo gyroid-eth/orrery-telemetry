@@ -618,12 +618,13 @@ ags_apply_contact_policy() {
   # Legacy deployments gated the call on the agent's registration_token; only
   # when the token-less call errors is it retried with the token, so the policy
   # is not silently left at the server default there. Both paths are
-  # best-effort.
+  # best-effort. Callers run under `set -e` (agentstack-preregister-child calls
+  # this directly as its last step), so a failed call must not end them.
   local resp
   resp="$(ags_mcp_call "set_contact_policy" \
     "project_key=$project_key" \
     "agent_name=$agent_name" \
-    "policy=$policy" 2>/dev/null)"
+    "policy=$policy" 2>/dev/null)" || resp=""
   if [[ -z "$resp" ]] || printf '%s' "$resp" | ags_mcp_has_error; then
     ags_mcp_call "set_contact_policy" \
       "project_key=$project_key" \
