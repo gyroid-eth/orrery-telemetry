@@ -147,6 +147,16 @@ try:
 except Exception:
     print("")
 ' 2>/dev/null || echo "")"
+    # The model of this session, as Claude Code reports it to SessionStart
+    # (2.1.286 sends it; older versions do not). Only a plain model id is used.
+    SESSION_START_MODEL="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, re, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("model", "")
+except Exception:
+    value = ""
+print(value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}", value) else "")
+' 2>/dev/null || echo "")"
 fi
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
@@ -186,6 +196,43 @@ child_has_mcp_proxy_config() {
     return 1
 }
 
+# The model ORRERY Mail has for this identity, or nothing. whois failing (an
+# unknown name, a token-strict server, no Mail) only means "not known here".
+registered_model_of() {
+    local agent_name="$1"
+    [ -n "$agent_name" ] || return 0
+    ags_mcp_call "whois" "project_key=$PROJECT_KEY" "agent_name=$agent_name" \
+        "include_recent_commits=false" 2>/dev/null | python3 -c '
+import json, re, sys
+
+def model_of(obj):
+    if isinstance(obj, dict):
+        value = obj.get("model")
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}", value):
+            return value
+    return ""
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+result = data.get("result") if isinstance(data, dict) else None
+if not isinstance(result, dict) or result.get("isError"):
+    sys.exit(0)
+found = model_of(result.get("structuredContent"))
+if not found:
+    for part in result.get("content") or []:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            try:
+                found = model_of(json.loads(part["text"]))
+            except Exception:
+                continue
+            if found:
+                break
+print(found)
+' 2>/dev/null || true
+}
+
 shell_register_resolved_agent() {
     local register_lib restored_token work_dir model
     [ -n "$RESOLVED_AGENT" ] || return 1
@@ -212,8 +259,14 @@ shell_register_resolved_agent() {
     # program name, and the dashboard lost the provider (no logo, chip said
     # "CLAUDE-CODE" — seen on WSL2, where no pane model is parsed either).
     # The session's own model wins over the install-wide label; a dashboard
-    # resume hands the registered one the same way (#144).
-    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-claude-code}}"
+    # resume hands the registered one the same way (#144). A session reopened
+    # from a terminal (`claude --resume`) has neither, and wrote `claude-code`
+    # over the model (RUNTHROUGH 2026-10-01, problem 2): use the model Claude
+    # Code reports for this session, else the one already registered.
+    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-}}"
+    [ -n "$model" ] || model="${SESSION_START_MODEL:-}"
+    [ -n "$model" ] || model="$(registered_model_of "$RESOLVED_AGENT")"
+    [ -n "$model" ] || model="claude-code"
     ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1
     register_status=$?
     if [ "$register_status" -ne 0 ]; then
