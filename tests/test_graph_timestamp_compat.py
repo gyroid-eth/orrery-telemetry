@@ -233,24 +233,33 @@ def test_graph_payload_and_spawn_only_preserve_timestamp_health(monkeypatch):
     assert payload["degraded"] is True
     assert payload["timestamp_diagnostics"]["invalid_count"] == 1
 
-    monkeypatch.setattr(server, "graph_payload", lambda _days, _all: {
-        **unhealthy,
-        "error": "timestamp fixture failed",
-    })
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
-    try:
+
+    def get_spawn_only():
         with urllib.request.urlopen(
             f"http://127.0.0.1:{httpd.server_port}/api/graph?spawn_only=1"
         ) as response:
-            spawn_only = json.load(response)
+            return json.load(response)
+
+    try:
+        # spawn_only reads the raw graph's health without the per-row payload.
+        spawn_only = get_spawn_only()
+        assert "error" not in spawn_only
+        assert spawn_only["degraded"] is True
+        assert spawn_only["timestamp_diagnostics"]["invalid_count"] == 1
+
+        def failing(_days, _all):
+            raise RuntimeError("timestamp fixture failed")
+
+        monkeypatch.setattr(server, "graph_spawn_payload", failing)
+        spawn_only = get_spawn_only()
     finally:
         httpd.shutdown()
         thread.join()
-    assert spawn_only["error"] == "timestamp fixture failed"
-    assert spawn_only["degraded"] is True
-    assert spawn_only["timestamp_diagnostics"]["invalid_count"] == 1
+    assert spawn_only["error"] == "RuntimeError: timestamp fixture failed"
+    assert spawn_only["degraded"] is True and spawn_only["spawn_only"] is True
 
 
 def test_dashboard_startup_never_analyzes_the_foreign_mail_database():

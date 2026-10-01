@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
+import functools
 import importlib.util
 import json
 import logging
@@ -800,6 +802,150 @@ def _db():
     )
 
 
+class _RegistrationIndex:
+    """Every agent registration, read with one query for one poll.
+
+    A graph or agents poll looked registrations up per row, opening SQLite
+    once or twice per row: about 3,400 connections, each parsing the schema,
+    for 2,000 rows (AUDIT 2026-10-01). The index answers the same questions
+    as the per-row queries, in the same order, from a single read.
+    """
+
+    def __init__(self) -> None:
+        self.loaded = False
+        self.usable = False
+        self.by_name: dict[str, int] = {}
+        self.by_project: dict[tuple[str, str], sqlite3.Row] = {}
+
+    def load(self) -> bool:
+        if self.loaded:
+            return self.usable
+        self.loaded = True
+        if not os.path.isfile(DB_PATH):
+            return False
+        try:
+            with _db() as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute(
+                    "SELECT a.id, a.name, a.program, a.model, a.task_description, "
+                    "p.human_key FROM agents a LEFT JOIN projects p ON a.project_id=p.id "
+                    "ORDER BY a.last_active_ts DESC"
+                ).fetchall()
+        except sqlite3.Error:
+            return False
+        for row in rows:
+            # First in last_active_ts DESC order wins, as with LIMIT 1.
+            self.by_name.setdefault(row["name"], int(row["id"]))
+            if row["human_key"] is not None:
+                self.by_project.setdefault((row["human_key"], row["name"]), row)
+        self.usable = True
+        return True
+
+
+_REGISTRATION_BATCH = threading.local()
+
+
+@contextlib.contextmanager
+def _registration_batch(*, enabled: bool = True):
+    """Within this block, registration lookups on this thread share one read.
+
+    Only display polls use it; an action re-reads the database itself."""
+    previous = getattr(_REGISTRATION_BATCH, "index", None)
+    _REGISTRATION_BATCH.index = (previous or _RegistrationIndex()) if enabled else None
+    try:
+        yield
+    finally:
+        _REGISTRATION_BATCH.index = previous
+
+
+def _batched_registrations() -> _RegistrationIndex | None:
+    index = getattr(_REGISTRATION_BATCH, "index", None)
+    return index if index is not None and index.load() else None
+
+
+class _SingleFlight:
+    """At most one computation per display query at a time.
+
+    Overlapping graph/agents polls (several cockpit tabs, DECK and NETWORK)
+    contended on the GIL and SQLite's mutex until one request took over 10 s,
+    past the cockpit's 6 s timeout, which re-fired it (AUDIT 2026-10-01).
+
+    Freshness is kept: a request never receives a computation that started
+    before it arrived. One that arrives while the query is being computed
+    waits for the next computation, which starts as soon as the running one
+    ends and serves every request that arrived in the meantime. Results are
+    dropped once delivered; nothing is reused over time.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._states: dict[tuple, dict] = {}
+
+    def clear(self) -> None:
+        with self._cond:
+            self._states.clear()
+
+    def get(self, key: tuple, compute) -> bytes:
+        with self._cond:
+            state = self._states.setdefault(
+                key, {"running": False, "started": 0, "results": {}, "wanted": {}})
+            # The first computation that starts after this request arrived.
+            target = state["started"] + 1
+            state["wanted"][target] = state["wanted"].get(target, 0) + 1
+            while target not in state["results"]:
+                if not state["running"]:
+                    state["running"] = True
+                    state["started"] += 1
+                    break
+                self._cond.wait()
+            else:
+                return self._take(key, state, target, compute)
+        try:
+            body = compute()
+        except BaseException:
+            body = None
+            raise
+        finally:
+            with self._cond:
+                state["running"] = False
+                state["results"][target] = body
+                self._cond.notify_all()
+                self._take(key, state, target, None)
+        return body
+
+    def _take(self, key: tuple, state: dict, target: int, compute):
+        """Hand one waiter its result (lock held); the last one drops it."""
+        body = state["results"][target]
+        state["wanted"][target] -= 1
+        if not state["wanted"][target]:
+            del state["wanted"][target]
+            del state["results"][target]
+            if not state["running"] and not state["wanted"]:
+                self._states.pop(key, None)
+        if body is None and compute is not None:
+            # The shared computation failed; answer this request on its own.
+            self._cond.release()
+            try:
+                return compute()
+            finally:
+                self._cond.acquire()
+        return body
+
+
+_HTTP_SINGLE_FLIGHT = _SingleFlight()
+
+
+def _with_registration_batch(function):
+    """Run one display computation over a single registration read."""
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        with _registration_batch():
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
 _RETIRED_AT_CACHE: dict[str, bool] = {}
 
 
@@ -1156,6 +1302,7 @@ def _history_cutoff(days: float | None) -> tuple[str, tuple]:
     return "AND a.last_active_ts > datetime('now', ?)", (f"-{days:g} days",)
 
 
+@_with_registration_batch
 def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict]:
     """Roster rows for the DECK. Live tmux sessions always appear; agents known
     only to ORRERY Mail (gone / retired) appear when their last activity falls
@@ -1789,25 +1936,20 @@ def _write_annotation(name: str, role: str, emoji: str,
                                   "emoji": emoji, "group": group}}
 
 
-def graph_payload(days: float, show_all: bool) -> dict:
-    """recency で間引いた {nodes, edges, spawn} + tmux ライブ状態。
-
-    graph_data normalizes both Rust INTEGER microseconds and legacy ISO TEXT
-    to UTC epoch seconds before this recency filter runs."""
-    g = _raw_graph()
-    graph_health = {
+def _graph_health(g: dict) -> dict:
+    return {
         "timestamp_diagnostics": g.get(
             "timestamp_diagnostics", {"invalid_count": 0, "fields": {}}
         ),
         "degraded": bool(g.get("degraded")),
     }
-    nodes = g.get("nodes", [])
-    if not nodes:
-        return {
-            "nodes": [], "edges": [], "spawn": [], "total": 0,
-            **graph_health,
-        }
 
+
+def _graph_keep(nodes: list[dict], days: float, show_all: bool):
+    """Which nodes a graph view shows: all of them, or the running and recent.
+
+    Returns (keep, mx, sessions, codex_apps, process_tree) so the full payload
+    can reuse the tmux/process snapshot it was decided from."""
     mx = max((n["last_active"] for n in nodes if n["last_active"]), default=0)
     win = days * 86400
     sessions = tmux_state()  # name -> {attached, cmd, title, activity, ...}
@@ -1848,6 +1990,62 @@ def graph_payload(days: float, show_all: bool) -> dict:
             if n["name"] in running_set or
                (n["last_active"] and (mx - n["last_active"]) <= win)
         }
+    return keep, mx, sessions, codex_apps, process_tree
+
+
+def _graph_response(days: float, show_all: bool, spawn_only: bool) -> dict:
+    """The /api/graph body. spawn_only computes nothing per row."""
+    try:
+        if spawn_only:
+            payload = {"nodes": [], "edges": [], "spawn_only": True,
+                       **graph_spawn_payload(days, show_all)}
+        else:
+            payload = graph_payload(days, show_all)
+    except Exception as e:  # noqa: BLE001
+        payload = {"nodes": [], "edges": [], "spawn": [],
+                   "error": f"{type(e).__name__}: {e}",
+                   "timestamp_diagnostics": {
+                       "invalid_count": 0, "fields": {},
+                   },
+                   "degraded": True,
+                   **({"spawn_only": True} if spawn_only else {})}
+    payload["ts"] = int(time.time())
+    return payload
+
+
+def graph_spawn_payload(days: float, show_all: bool) -> dict:
+    """Only the parent/child lineage, for `spawn_only` callers (the cockpit).
+
+    The cockpit polls this every 6 s. It never needed the per-row resume
+    capability, Mail fields or runtime reads of the full payload, which cost
+    one or two SQLite connections per row (AUDIT 2026-10-01)."""
+    g = _raw_graph()
+    nodes = g.get("nodes", [])
+    if show_all:
+        keep = {n["name"] for n in nodes}
+    else:
+        keep = _graph_keep(nodes, days, show_all)[0] if nodes else set()
+    return {
+        "spawn": [s for s in g.get("spawn", []) if s["source"] in keep and s["target"] in keep],
+        **_graph_health(g),
+    }
+
+
+@_with_registration_batch
+def graph_payload(days: float, show_all: bool) -> dict:
+    """recency で間引いた {nodes, edges, spawn} + tmux ライブ状態。
+
+    graph_data normalizes both Rust INTEGER microseconds and legacy ISO TEXT
+    to UTC epoch seconds before this recency filter runs."""
+    g = _raw_graph()
+    graph_health = _graph_health(g)
+    nodes = g.get("nodes", [])
+    if not nodes:
+        return {
+            "nodes": [], "edges": [], "spawn": [], "total": 0,
+            **graph_health,
+        }
+    keep, mx, sessions, codex_apps, process_tree = _graph_keep(nodes, days, show_all)
     now_real = int(time.time())
 
     def live(name: str, program: str | None = None) -> dict:
@@ -2481,6 +2679,8 @@ def _agent_id_for_name(name: str) -> int | None:
     プロジェクトをまたぐ同名は last_active 最新を採る。"""
     if not os.path.exists(DB_PATH):
         return None
+    if (index := _batched_registrations()) is not None:
+        return index.by_name.get(name)
     con = None
     try:
         con = _db()
@@ -4230,6 +4430,20 @@ def _resume_registration(session: str, programs: set[str]) -> dict | None:
     project_key = _project_key()
     if not project_key or not os.path.isfile(DB_PATH):
         return None
+    if (index := _batched_registrations()) is not None:
+        row = index.by_project.get((project_key, session))
+        program = (row["program"] or "") if row else ""
+        if not row or program not in programs:
+            return None
+        claude = "claude" in programs
+        return {
+            "agent_id": int(row["id"]),
+            "agent_name": session,
+            "project_key": project_key,
+            "program": program,
+            "model": (row["model"] or "") if claude else "",
+            "task_description": (row["task_description"] or "") if claude else "",
+        }
     try:
         with _db() as con:
             con.row_factory = sqlite3.Row
@@ -7748,14 +7962,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/agents":
             q = parse_qs(urlparse(self.path).query)
             history_days = _parse_history_days((q.get("days") or [""])[0])
-            body = json.dumps(
+            body = _HTTP_SINGLE_FLIGHT.get(("agents", history_days), lambda: json.dumps(
                 {
                     "ts": int(time.time()),
                     "history_days": history_days,
                     "agents": build_agents(history_days),
                 },
                 ensure_ascii=False,
-            ).encode()
+            ).encode())
             self._send(200, body, "application/json; charset=utf-8")
         elif path == "/api/spawn-status":
             q = parse_qs(urlparse(self.path).query)
@@ -7787,30 +8001,14 @@ class Handler(BaseHTTPRequestHandler):
             # lineage.  The ORRERY cockpit is one — it was pulling the full
             # node+edge payload every 6s just to read `spawn` out of it.
             spawn_only = (q.get("spawn_only") or ["0"])[0] in ("1", "true")
-            try:
-                payload = graph_payload(days, show_all)
-            except Exception as e:  # noqa: BLE001
-                payload = {"nodes": [], "edges": [], "spawn": [],
-                           "error": f"{type(e).__name__}: {e}",
-                           "timestamp_diagnostics": {
-                               "invalid_count": 0, "fields": {},
-                           },
-                           "degraded": True}
-            if spawn_only:
-                payload = {"nodes": [], "edges": [],
-                           "spawn": payload.get("spawn", []),
-                           "spawn_only": True,
-                           **({"error": payload["error"]}
-                              if payload.get("error") else {}),
-                           "timestamp_diagnostics": payload.get(
-                               "timestamp_diagnostics",
-                               {"invalid_count": 0, "fields": {}},
-                           ),
-                           "degraded": bool(payload.get("degraded"))}
-            payload["ts"] = int(time.time())
+            body = _HTTP_SINGLE_FLIGHT.get(
+                ("graph", days, show_all, spawn_only),
+                lambda: json.dumps(_graph_response(days, show_all, spawn_only),
+                                   ensure_ascii=False).encode(),
+            )
             self._send(
                 200,
-                json.dumps(payload, ensure_ascii=False).encode(),
+                body,
                 "application/json; charset=utf-8",
             )
         elif path == "/api/history":
