@@ -33718,6 +33718,8 @@ async function tick(){
   const seq=++tickSeq;
   try{
     const r=await fetch('/api/agents?days='+HISTORY_DAYS[historyRange]);
+    // 503 busy: the server is still computing; keep this view and poll again.
+    if(r.status===503)return;
     const j=await r.json();
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
     lastData=j.agents;
@@ -33828,6 +33830,7 @@ async function netTick(){
   try{
     const qs=gWin==="all"?"all=1":"days="+gWin;
     const r=await fetch('/api/graph?'+qs);
+    if(r.status===503)return;   // busy: keep the current graph, poll again
     const j=await r.json();
     const {w,h}=netDims();
     const previousNodeCount=gmap.size;

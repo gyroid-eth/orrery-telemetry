@@ -248,6 +248,8 @@ response:
 
 ORRERY Mail の timestamp は、legacy の ISO 8601 text と Rust 実装の integer microseconds のどちらも epoch seconds に正規化してから比較します。NULL と空文字以外の解釈不能値がある場合は `timestamp_diagnostics.invalid_count` と該当する `fields` を返し、`degraded` を `true` にします。解釈不能値を epoch 0 として扱うことはありません。
 
+`/api/agents` と `/api/graph` は、同じ query の計算を同時に 1 本だけ走らせます。計算中に来た request は、その計算が終わった直後に始まる次の計算の結果を受け取るので、表示が古くなることはありません。30 秒待っても結果が無いときは、`503`、`Retry-After: 1`、`{"error":"busy","retry":true}` を返します。前の表示を残して取り直してください。
+
 data source が読めない場合も HTTP 200 で空の `nodes / edges / spawn` と `error`、`degraded: true` を返し、DECK 全体を巻き込まないようにします。
 
 ## GET `/api/history`

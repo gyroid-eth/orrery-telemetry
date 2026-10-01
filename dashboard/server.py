@@ -863,6 +863,10 @@ def _batched_registrations() -> _RegistrationIndex | None:
     return index if index is not None and index.load() else None
 
 
+class _SingleFlightBusy(Exception):
+    """A display request waited past _SingleFlight.WAIT_LIMIT; answer 503."""
+
+
 class _SingleFlight:
     """At most one computation per display query at a time.
 
@@ -875,7 +879,14 @@ class _SingleFlight:
     waits for the next computation, which starts as soon as the running one
     ends and serves every request that arrived in the meantime. Results are
     dropped once delivered; nothing is reused over time.
+
+    A request waits at most WAIT_LIMIT seconds, then is answered busy. When a
+    shared computation fails, its waiters queue for the next single one rather
+    than each computing on its own, so a query that keeps failing still runs
+    once at a time (#161 review P3).
     """
+
+    WAIT_LIMIT = 30.0
 
     def __init__(self) -> None:
         self._cond = threading.Condition()
@@ -886,20 +897,31 @@ class _SingleFlight:
             self._states.clear()
 
     def get(self, key: tuple, compute) -> bytes:
+        deadline = time.monotonic() + self.WAIT_LIMIT
         with self._cond:
             state = self._states.setdefault(
                 key, {"running": False, "started": 0, "results": {}, "wanted": {}})
-            # The first computation that starts after this request arrived.
-            target = state["started"] + 1
-            state["wanted"][target] = state["wanted"].get(target, 0) + 1
-            while target not in state["results"]:
-                if not state["running"]:
-                    state["running"] = True
-                    state["started"] += 1
-                    break
-                self._cond.wait()
-            else:
-                return self._take(key, state, target, compute)
+            while True:
+                # The first computation that starts after this request (re)queued.
+                target = state["started"] + 1
+                state["wanted"][target] = state["wanted"].get(target, 0) + 1
+                while target not in state["results"]:
+                    if not state["running"]:
+                        state["running"] = True
+                        state["started"] += 1
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._release(key, state, target)
+                        raise _SingleFlightBusy()
+                    self._cond.wait(remaining)
+                else:
+                    body = self._release(key, state, target)
+                    if body is not None:
+                        return body
+                    # That computation failed; wait for the next one.
+                    continue
+                break
         try:
             body = compute()
         except BaseException:
@@ -910,25 +932,18 @@ class _SingleFlight:
                 state["running"] = False
                 state["results"][target] = body
                 self._cond.notify_all()
-                self._take(key, state, target, None)
+                self._release(key, state, target)
         return body
 
-    def _take(self, key: tuple, state: dict, target: int, compute):
-        """Hand one waiter its result (lock held); the last one drops it."""
-        body = state["results"][target]
+    def _release(self, key: tuple, state: dict, target: int):
+        """Drop one claim on a computation (lock held); return its result."""
+        body = state["results"].get(target)
         state["wanted"][target] -= 1
         if not state["wanted"][target]:
             del state["wanted"][target]
-            del state["results"][target]
+            state["results"].pop(target, None)
             if not state["running"] and not state["wanted"]:
                 self._states.pop(key, None)
-        if body is None and compute is not None:
-            # The shared computation failed; answer this request on its own.
-            self._cond.release()
-            try:
-                return compute()
-            finally:
-                self._cond.acquire()
         return body
 
 
@@ -7904,6 +7919,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _single_flight(self, key: tuple, compute) -> bytes | None:
+        """A shared display body, or None after answering 503 busy."""
+        try:
+            return _HTTP_SINGLE_FLIGHT.get(key, compute)
+        except _SingleFlightBusy:
+            body = b'{"error":"busy","retry":true}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Retry-After", "1")
+            self.end_headers()
+            self.wfile.write(body)
+            return None
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
@@ -7962,7 +7992,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/agents":
             q = parse_qs(urlparse(self.path).query)
             history_days = _parse_history_days((q.get("days") or [""])[0])
-            body = _HTTP_SINGLE_FLIGHT.get(("agents", history_days), lambda: json.dumps(
+            body = self._single_flight(("agents", history_days), lambda: json.dumps(
                 {
                     "ts": int(time.time()),
                     "history_days": history_days,
@@ -7970,7 +8000,8 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 ensure_ascii=False,
             ).encode())
-            self._send(200, body, "application/json; charset=utf-8")
+            if body is not None:
+                self._send(200, body, "application/json; charset=utf-8")
         elif path == "/api/spawn-status":
             q = parse_qs(urlparse(self.path).query)
             name = (q.get("name") or [""])[0]
@@ -8001,16 +8032,17 @@ class Handler(BaseHTTPRequestHandler):
             # lineage.  The ORRERY cockpit is one — it was pulling the full
             # node+edge payload every 6s just to read `spawn` out of it.
             spawn_only = (q.get("spawn_only") or ["0"])[0] in ("1", "true")
-            body = _HTTP_SINGLE_FLIGHT.get(
+            body = self._single_flight(
                 ("graph", days, show_all, spawn_only),
                 lambda: json.dumps(_graph_response(days, show_all, spawn_only),
                                    ensure_ascii=False).encode(),
             )
-            self._send(
-                200,
-                body,
-                "application/json; charset=utf-8",
-            )
+            if body is not None:
+                self._send(
+                    200,
+                    body,
+                    "application/json; charset=utf-8",
+                )
         elif path == "/api/history":
             q = parse_qs(urlparse(self.path).query)
             sess = (q.get("session") or [""])[0]

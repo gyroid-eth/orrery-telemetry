@@ -248,6 +248,8 @@ Response:
 
 ORRERY Mail timestamps are normalized to epoch seconds before comparison, whether they are legacy ISO 8601 text or integer microseconds from the Rust implementation. If an unparseable value other than NULL or empty text is present, the response reports `timestamp_diagnostics.invalid_count` and affected `fields` and sets `degraded` to `true`. An unparseable value is never treated as epoch 0.
 
+`/api/agents` and `/api/graph` run at most one computation per query at a time. A request that arrives during one receives the next computation, which starts right after it, so nothing shown gets older. A request with no result after 30 seconds is answered `503` with `Retry-After: 1` and `{"error":"busy","retry":true}`; keep the previous view and poll again.
+
 When the data source cannot be read, it still returns HTTP 200 with empty `nodes / edges / spawn`, an `error`, and `degraded: true`, so that the failure does not take down the entire DECK.
 
 ## GET `/api/history`

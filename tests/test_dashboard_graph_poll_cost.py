@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from http.server import ThreadingHTTPServer
 import json
+import pathlib
 import sqlite3
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -249,3 +251,82 @@ def test_spawn_only_body_is_the_full_payloads_lineage(roster, http, query):
     assert lineage == {"nodes": [], "edges": [], "spawn": full["spawn"], "spawn_only": True,
                        "timestamp_diagnostics": full["timestamp_diagnostics"],
                        "degraded": full["degraded"]}
+
+
+def test_an_always_failing_computation_never_runs_twice_at_once(roster):
+    """#161 review P3-2: after a failure each waiter recomputed on its own (up to 4 at once)."""
+    flight = server._SingleFlight()
+    running, peak, lock = [0], [0], threading.Lock()
+
+    def compute():
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        try:
+            time.sleep(0.3)
+            raise RuntimeError("fixture")
+        finally:
+            with lock:
+                running[0] -= 1
+
+    errors = []
+
+    def one():
+        try:
+            flight.get(("k",), compute)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=one) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+        time.sleep(0.02)
+    for thread in threads:
+        thread.join(timeout=20)
+    assert not any(thread.is_alive() for thread in threads)
+    assert len(errors) == 6 and peak[0] == 1
+    assert flight._states == {}
+
+
+def test_a_wait_past_the_limit_is_answered_busy(roster, monkeypatch):
+    """#161 review P3-1: a waiter had no upper bound."""
+    flight = server._SingleFlight()
+    monkeypatch.setattr(server._SingleFlight, "WAIT_LIMIT", 0.2)
+    release = threading.Event()
+    done = []
+    leader = threading.Thread(target=lambda: done.append(flight.get(("k",), lambda: release.wait(5) and b"late")))
+    leader.start()
+    time.sleep(0.05)
+    started = time.monotonic()
+    with pytest.raises(server._SingleFlightBusy):
+        flight.get(("k",), lambda: b"never")
+    assert time.monotonic() - started < 2
+    release.set()
+    leader.join(timeout=10)
+    assert done == [b"late"]
+    assert flight._states == {}
+
+
+def test_busy_poll_gets_503_with_retry_after(roster, http, monkeypatch):
+    def busy(_key, _compute):
+        raise server._SingleFlightBusy()
+
+    monkeypatch.setattr(server._HTTP_SINGLE_FLIGHT, "get", busy)
+    for path in ("/api/agents", "/api/graph?all=1&spawn_only=1"):
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            http(path)
+        assert caught.value.code == 503
+        assert caught.value.headers["Retry-After"] == "1"
+        assert json.loads(caught.value.read()) == {"error": "busy", "retry": True}
+
+
+@pytest.mark.parametrize("function,endpoint", [("async function tick(){", "'/api/agents?days='"),
+                                               ("async function netTick(){", "'/api/graph?'")])
+def test_deck_and_network_keep_their_view_when_busy(function, endpoint):
+    """A 503 busy must not blank DECK (agents undefined) or drop NETWORK into its error path."""
+    html = (pathlib.Path(server.__file__).with_name("index.html")).read_text(encoding="utf-8")
+    body = html[html.index(function):]
+    body = body[:body.index("\n}\n")]
+    fetch = body.index(f"await fetch({endpoint}")
+    guard = body.index("if(r.status===503)return", fetch)
+    assert guard < body.index("await r.json()", fetch)
