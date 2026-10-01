@@ -42,7 +42,7 @@ launcher は、子の最初の turn が親への報告で終わったかを tran
 
 ### 製品が起動する Codex で、起動時の更新案内を出さないようにしました（#60）
 
-Codex の起動時の更新案内は、既定の選択が `npm install -g @openai/codex` です。無人の child では断る人がいません。以前の launcher は案内の Enter を sign-in と取り違えて押しており、更新の途中で child を止めると、機体の `codex` が旧版も新版も使えない状態で残りました。Enter の取り違えはすでに直っています（trust 画面だけを全体の配置で見分ける）。今回、child・dashboard の再開・`agent-start-codex`・Windows の launcher の全部で `-c check_for_update_on_startup=false` を付け、案内そのものが出ないようにしました。Codex の更新は利用者が行ってください。
+Codex の起動時の更新案内は、既定の選択が `npm install -g @openai/codex` です。無人の child では断る人がいません。以前の launcher は案内の Enter を sign-in と取り違えて押しており、更新の途中で child を止めると、機体の `codex` が旧版も新版も使えない状態で残りました。Enter の取り違えはすでに直っています（trust 画面だけを全体の配置で見分ける）。今回、child・dashboard の再開・`agent-start-codex`・Windows の launcher の全部で `-c check_for_update_on_startup=false` を付け、案内そのものが出ないようにしました。Codex の更新は利用者が行ってください。また、起動に失敗した child を片付けるとき（launcher の 2 つの経路と dashboard の spawn）、画面に `Updating Codex via` が出ていれば session を止めずに残し、そのことを知らせます。
 
 ### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
 

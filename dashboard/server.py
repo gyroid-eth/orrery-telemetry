@@ -6994,6 +6994,21 @@ def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
     return args
 
 
+def _codex_self_update_on_screen(session: str) -> bool:
+    """Whether the session shows Codex replacing itself (`npm install -g`).
+
+    A global npm install renames directories as it goes; killing it midway
+    left neither the old nor the new codex usable on the machine (#60).
+    """
+    try:
+        result = subprocess.run(["tmux", "capture-pane", "-t", f"={session}", "-p"],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    pane = getattr(result, "stdout", "")
+    return isinstance(pane, str) and "Updating Codex via" in pane
+
+
 def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                   handoff: dict, discard_handoff) -> dict:
     standalone = request["standalone"]
@@ -7262,6 +7277,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
              "cleanup_child_agent_can_recover": False})
 
     def kill_spawn_session() -> None:
+        if _codex_self_update_on_screen(child_name):
+            print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
+            return
         try:
             subprocess.run(
                 ["tmux", "kill-session", "-t", f"={child_name}"],

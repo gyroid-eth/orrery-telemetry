@@ -1323,3 +1323,19 @@ def test_dashboard_resume_turns_off_the_startup_update_check(monkeypatch):
     for network in ("on", "off"):
         monkeypatch.setenv("AGENTSTACK_CODEX_NETWORK", network)
         assert f"-c {_NO_UPDATE}" in server._codex_child_launch_flags()
+
+
+def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
+    # #60: a spawn that fails while Codex runs `npm install -g` must leave the
+    # session alone, or the machine's codex is left half replaced.
+    from dashboard import server
+
+    screens = {"updating": "Updating Codex via `npm install -g @openai/codex`...\n", "idle": "› Ask Codex\n"}
+    for name, screen in screens.items():
+        monkeypatch.setattr(server.subprocess, "run",
+                            lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
+        assert server._codex_self_update_on_screen("Child") is (name == "updating")
+    source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
+    body = source[source.index("    def kill_spawn_session() -> None:"):]
+    body = body[:body.index("\n\n")]
+    assert body.index("_codex_self_update_on_screen") < body.index('"kill-session"')

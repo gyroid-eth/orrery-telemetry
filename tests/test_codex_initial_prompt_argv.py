@@ -512,3 +512,63 @@ def test_a_task_end_wrapped_across_lines_is_still_found():
     screen = "› " + tricky + "\n\n• yes\n" + PROVISIONAL
     assert _finished(screen, tricky) == 0
     assert _finished("› something else\n\n• yes\n" + PROVISIONAL, tricky) != 0
+
+
+# --- #60: Codex's own update screen, and a self-update in progress -------------
+# Built from the strings in the Codex 0.159.2 binary; the exact layout has not
+# been captured on a real screen. Its default choice ran `npm install -g`.
+UPDATE_SCREEN = (
+    "\n  ✨ Update available! 0.158.0 -> 0.159.2\n\n"
+    "  Release notes: https://github.com/openai/codex/releases/latest\n\n"
+    "› 1. Update now (runs `npm install -g @openai/codex`)\n"
+    "  2. Skip\n"
+    "  3. Skip until next version\n\n"
+    "  Press enter to continue\n"
+)
+
+
+def test_the_update_screen_gets_no_key(tmp_path):
+    # "Press enter to continue" alone once read as a sign-in screen, and the
+    # Enter started the update (#60). Only a trust screen, by its whole
+    # layout, is answered.
+    result, keys, notes = _watch(tmp_path, [UPDATE_SCREEN])
+    assert keys == []
+    assert "STATUS=3 VERIFIED=false" in result.stdout
+
+
+def _cleanup(tmp_path, screen: str, which: str) -> list[str]:
+    """Run one launcher cleanup with tmux showing `screen`; return tmux calls."""
+    calls = tmp_path / "calls"
+    (tmp_path / "screen").write_text(screen, encoding="utf-8")
+    spawn = SPAWN.read_text(encoding="utf-8")
+    if which == "pre-registered":
+        body = spawn[spawn.index("    cleanup_preregister_failure() {"):spawn.index("    trap cleanup_preregister_failure EXIT")]
+        state = ("PRE_REGISTERED_SUCCESS=false\nPRE_REGISTERED_ADOPTION_PENDING=false\n"
+                 "PRE_REGISTERED_SESSION_STARTED=true\nPRE_REGISTERED_MANAGED_ADDED=false\n")
+        call = "cleanup_preregister_failure"
+    else:
+        body = spawn[spawn.index("cleanup_on_failure() {"):spawn.index("\n}\n", spawn.index("cleanup_on_failure() {")) + 3]
+        state = "SPAWN_COMPLETED=false\nCHILD_SESSION_STARTED=true\nRESOURCES=\nPROJECT_KEY=/p\n"
+        call = "cleanup_on_failure"
+    script = (
+        f"DIR={shlex.quote(str(tmp_path))}\nCHILD_NAME=Child\n" + state
+        + 'tmux() { printf "%s\\n" "$*" >> "$DIR/calls"; [[ "$1" == capture-pane ]] && cat "$DIR/screen"; return 0; }\n'
+        + "warn_if_uninjected() { :; }\ndiscard_claude_launch_record() { :; }\ncleanup_worktree() { :; }\n"
+        + "call_mcp() { :; }\nretire_agent_with_token_file() { :; }\nspawn_note() { printf '%s\\n' \"$1\" >&2; }\n"
+        + _extract("codex_self_update_on_screen") + "\n" + body + "\n" + call + "\n"
+    )
+    subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20)
+    return calls.read_text().splitlines() if calls.exists() else []
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_cleanup_never_kills_a_codex_updating_itself(tmp_path, which):
+    # Killing the session mid `npm install -g` left neither the old nor the
+    # new codex usable on the machine (#60).
+    updating = "Updating Codex via `npm install -g @openai/codex`...\n\nadded 1 package in 41s\n"
+    assert not any(c.startswith("kill-session") for c in _cleanup(tmp_path, updating, which))
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_cleanup_still_kills_an_ordinary_half_started_child(tmp_path, which):
+    assert any(c.startswith("kill-session") for c in _cleanup(tmp_path, PROVISIONAL, which))

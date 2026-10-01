@@ -2030,6 +2030,15 @@ codex_watch_initial_task() {
     return 3
 }
 
+# Whether the child's pane shows Codex replacing itself ("Updating Codex via
+# `npm install -g ...`"). A global npm install renames directories as it goes;
+# killing it midway left neither the old nor the new codex usable on the
+# machine (#60). Children start with the update check off, but a codex already
+# updating when the launcher gives up is left to finish.
+codex_self_update_on_screen() {
+    tmux capture-pane -t "=$1" -p 2>/dev/null | grep -q 'Updating Codex via'
+}
+
 # Existing failure cleanup terminates a half-started child. Preserve that
 # stronger repository contract, while leaving durable evidence that prompt
 # delivery was never verified before cleanup ran.
@@ -2657,7 +2666,11 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 || echo "Warning: $CHILD_NAME was made active in ORRERY Mail and could not be retired again" >&2
         fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
-            tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+            if codex_self_update_on_screen "$CHILD_NAME"; then
+                spawn_note "WARNING: Codex is updating itself in session $CHILD_NAME; left running so the install is not cut off. Close it when the update has finished, then spawn again."
+            else
+                tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+            fi
         fi
         discard_claude_launch_record
         cleanup_worktree
@@ -3441,7 +3454,11 @@ cleanup_on_failure() {
     warn_if_uninjected
     rm -f "${CODEX_PROMPT_FILE:-}" "${CLAUDE_CHILD_PROMPT_FILE:-}"
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
-        tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+        if codex_self_update_on_screen "$CHILD_NAME"; then
+            spawn_note "WARNING: Codex is updating itself in session $CHILD_NAME; left running so the install is not cut off. Close it when the update has finished, then spawn again."
+        else
+            tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+        fi
     fi
     if [[ -n "${CHILD_NAME:-}" ]]; then
         echo "[spawn_child] cleanup: retiring $CHILD_NAME and releasing reservations" >&2
