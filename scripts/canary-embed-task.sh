@@ -123,7 +123,7 @@ PY
 cleanup() {
     local entry name token_file
     for entry in "${CHILDREN[@]+"${CHILDREN[@]}"}"; do
-        IFS='|' read -r name _ _ token_file <<< "$entry"
+        IFS='|' read -r name _ _ token_file _ <<< "$entry"
         retire_child "$name" "$token_file"
     done
     rm -rf "$WORK"
@@ -143,7 +143,7 @@ for model in "${MODEL_LIST[@]}"; do
                 echo "canary: could not pre-register a $model child" >&2
                 continue
             fi
-            CHILDREN+=("$name|$model|$place|$token_file")
+            CHILDREN+=("$name|$model|$place|$token_file|$(date +%s)")
             # The launcher's own hooks: a launcher from a checkout must not mix
             # with the installed helpers of another version.
             if ! (cd "$WORK" && AGENTSTACK_TERMINAL=none AGENTSTACK_HOOKS_DIR="$HOOKS_DIR" \
@@ -162,16 +162,18 @@ done
 deadline=$(( $(date +%s) + WAIT ))
 declare -a RESULTS=()
 for entry in "${CHILDREN[@]+"${CHILDREN[@]}"}"; do
-    IFS='|' read -r name model place token_file <<< "$entry"
+    IFS='|' read -r name model place token_file launched <<< "$entry"
     head="あなたは ${name}（親: ${PARENT}）"
     while :; do
-        result="$(python3 "$STATUS_HELPER" "" 0 "$head" "$PARENT" 2>/dev/null || echo '{}')"
+        result="$(python3 "$STATUS_HELPER" "" "$launched" "$head" "$PARENT" 2>/dev/null || echo '{}')"
         outcome="$(printf '%s' "$result" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
 status, tools = data.get("status", "pending"), data.get("tools") or []
 if status == "reported":
     print("started")
+elif status == "report_failed":
+    print("not via Mail")
 elif status == "ended_without_report":
     # Acted, but never reported through ORRERY Mail: another messaging tool,
     # or it checked and then declined in words.

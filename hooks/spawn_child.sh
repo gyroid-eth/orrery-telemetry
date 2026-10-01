@@ -2366,13 +2366,20 @@ claude_argv_prompt() {
 # than claimed inside the conversation, where a careful model treats an identity
 # and a "no registration needed" as an injection (2026-10-01).
 claude_child_system_prompt() {
-    local child_name="$1" parent_name="$2"
-    if [[ -n "$parent_name" ]]; then
-        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. The first user message is the task %s delegated. Carry it out, using your usual judgment. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first. Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
-            "$child_name" "$parent_name" "$parent_name" "$child_name" "$parent_name"
+    local child_name="$1" parent_name="$2" mcp_config="${3:-}" mail
+    # Say how this session really reaches ORRERY Mail: only a per-child proxy
+    # is "bound", and only it answers runtime_status.
+    if [[ -n "$mcp_config" ]]; then
+        mail="Your ORRERY Mail connection is already bound to the name ${child_name} (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first."
     else
-        printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine; ORRERY is set up on this machine by the person who runs it. The first user message is its task. Carry it out, using your usual judgment. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration is needed first.' \
-            "$child_name" "$child_name"
+        mail="The ORRERY Mail identity ${child_name} is already registered. This session has no per-child Mail proxy and reaches ORRERY Mail directly, so use the coordination route for an already-registered identity on a raw/direct connection instead of registering again."
+    fi
+    if [[ -n "$parent_name" ]]; then
+        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. The first user message is the task %s delegated. Carry it out, using your usual judgment. %s Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
+            "$child_name" "$parent_name" "$parent_name" "$mail" "$parent_name"
+    else
+        printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine; ORRERY is set up on this machine by the person who runs it. The first user message is its task. Carry it out, using your usual judgment. %s' \
+            "$child_name" "$mail"
     fi
 }
 
@@ -2951,7 +2958,7 @@ ${TASK}"
             fi
             CLAUDE_CHILD_ARGV_PROMPT=true
             CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
-            CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME")"
+            CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
             tmux new-session -d -s "$CHILD_NAME" \
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
@@ -3710,7 +3717,7 @@ else
     fi
     CLAUDE_CHILD_ARGV_PROMPT=true
     CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
-    CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME")"
+    CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \

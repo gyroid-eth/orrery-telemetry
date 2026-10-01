@@ -124,7 +124,7 @@ The task used to be pasted into the input box. Claude Code wraps a paste in `<pa
 
 **Checking that the child started:** after the launch, the launcher reads the child's transcript in the background and looks at how its first turn ends. It reads one transcript, once found, and only what is appended to it.
 
-- A first turn that ends with `mcp__orrery-mail__send_message` to the parent needs no notice.
+- A first turn that ends after ORRERY Mail accepted a `mcp__orrery-mail__send_message` to the parent needs no notice (a send that failed, or whose result never came back, is reported). The transcript is the one whose first message was written after this launch, so an earlier conversation of the same name is not mistaken for it.
 - The parent is told by ORRERY Mail when the first turn:
   - ends in text alone (declined, or asked for confirmation);
   - called tools but ended without the report (checked and then declined, or forgot to report);

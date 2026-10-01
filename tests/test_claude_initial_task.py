@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -29,11 +30,17 @@ SPAWN = ROOT / "hooks" / "spawn_child.sh"
 HEAD = "Child agent startup. AGENT_NAME=Watched; parent=ParentAgent. Follow the child-agent startup"
 
 
-def _transcript(path: pathlib.Path, *assistant_rows: dict, first_user: str = HEAD + " procedure") -> None:
+def _now_stamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _transcript(path: pathlib.Path, *assistant_rows: dict, first_user: str = HEAD + " procedure",
+                written: str | None = None) -> None:
     rows = [
         {"type": "mode"},
         {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<local-command>"}},
-        {"type": "user", "message": {"role": "user", "content": first_user}},
+        {"type": "user", "timestamp": written or _now_stamp(),
+         "message": {"role": "user", "content": first_user}},
         *assistant_rows,
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,12 +57,22 @@ def _assistant(*blocks: dict, stop: str | None, message_id: str | None = None) -
 THINKING = {"type": "thinking", "thinking": "..."}
 TOOL = {"type": "tool_use", "name": "Bash", "input": {"command": "ps"}}
 QUESTION = {"type": "text", "text": "Before I run anything: did you set this up?"}
-REPORT = {"type": "tool_use", "name": "mcp__orrery-mail__send_message",
+REPORT = {"type": "tool_use", "id": "report1", "name": "mcp__orrery-mail__send_message",
           "input": {"to": ["ParentAgent"], "subject": "done", "body_md": "done"}}
 DONE = {"type": "text", "text": "Reported to ParentAgent."}
 # A tool result comes back as a user row; it is not someone answering.
 RESULT = {"type": "user", "message": {"role": "user", "content": [
     {"type": "tool_result", "tool_use_id": "x", "content": "ok"}]}}
+
+
+def _result(tool_use_id: str, *, error: bool = False) -> dict:
+    block = {"type": "tool_result", "tool_use_id": tool_use_id, "content": "refused" if error else "ok"}
+    if error:
+        block["is_error"] = True
+    return {"type": "user", "message": {"role": "user", "content": [block]}}
+
+
+REPORT_OK = _result("report1")
 
 
 def _status(projects: pathlib.Path, head: str = HEAD, since: float = 0) -> dict:
@@ -77,8 +94,39 @@ def test_a_first_turn_calling_tools_is_working_until_it_ends(tmp_path):
 
 def test_a_first_turn_that_ends_with_the_report_is_reported(tmp_path):
     _transcript(tmp_path / "p" / "a.jsonl", _assistant(TOOL, stop="tool_use"), RESULT,
-                _assistant(REPORT, stop="tool_use"), RESULT, _assistant(DONE, stop="end_turn"))
+                _assistant(REPORT, stop="tool_use"), REPORT_OK, _assistant(DONE, stop="end_turn"))
     assert _status(tmp_path)["status"] == "reported"
+
+
+def test_a_report_that_mail_refused_is_not_a_report(tmp_path):
+    """Re-check of #163, P2-R1: calling send_message is not delivering it."""
+    _transcript(tmp_path / "p" / "a.jsonl", _assistant(REPORT, stop="tool_use"),
+                _result("report1", error=True), _assistant(DONE, stop="end_turn"))
+    assert _status(tmp_path)["status"] == "report_failed"
+
+
+def test_a_report_whose_result_never_came_is_not_a_report(tmp_path):
+    _transcript(tmp_path / "p" / "a.jsonl", _assistant(REPORT, stop="tool_use"),
+                _assistant(DONE, stop="end_turn"))
+    assert _status(tmp_path)["status"] == "report_failed"
+
+
+def test_a_send_message_without_recipients_is_not_the_report(tmp_path):
+    unaddressed = dict(REPORT, input={"subject": "x", "body_md": "x"})
+    _transcript(tmp_path / "p" / "a.jsonl", _assistant(unaddressed, stop="tool_use"), REPORT_OK,
+                _assistant(DONE, stop="end_turn"))
+    assert _status(tmp_path)["status"] == "ended_without_report"
+
+
+def test_an_earlier_conversation_of_the_same_name_is_not_this_launch(tmp_path):
+    """Re-check of #163, P2-R2: a relaunch sends the same first words, and the
+    old conversation may still be written to (a resume), so its mtime is new."""
+    _transcript(tmp_path / "p" / "old.jsonl", _assistant(REPORT, stop="tool_use"), REPORT_OK,
+                _assistant(DONE, stop="end_turn"), written="2026-09-01T01:00:00Z")
+    assert _status(tmp_path, since=time.time())["status"] == "pending"
+    _transcript(tmp_path / "p" / "new.jsonl", _assistant(QUESTION, stop="end_turn"))
+    status = _status(tmp_path, since=time.time() - 1)
+    assert status["status"] == "declined" and status["transcript"].endswith("new.jsonl")
 
 
 def test_checking_and_then_declining_in_words_is_caught(tmp_path):
@@ -253,7 +301,7 @@ def test_a_child_that_works_and_reports_is_left_alone(tmp_path, mail):
     env = _spawn_watched(tmp_path, mail, transcript_rows=[
         _assistant(THINKING, stop="tool_use"), _assistant(TOOL, stop="tool_use"), RESULT])
     time.sleep(2)
-    _append(env, _assistant(REPORT, stop="tool_use"), RESULT, _assistant(DONE, stop="end_turn"))
+    _append(env, _assistant(REPORT, stop="tool_use"), REPORT_OK, _assistant(DONE, stop="end_turn"))
     assert _wait_for(lambda: "Watched started its task and reported" in _incidents(tmp_path))
     assert _Mail.calls == []
 
@@ -336,6 +384,10 @@ def test_the_launch_says_who_started_the_session_in_the_system_prompt(tmp_path):
     system = next(arg for arg in args if arg.startswith("CLAUDE_CHILD_SYSTEM_PROMPT="))
     assert "the ORRERY child agent Told" in system and "parent agent ParentAgent" in system
     assert "mcp__orrery-mail__send_message" in system
+    # Re-check of #163, P2-R3: this fixture has no per-child proxy, so the
+    # prompt must not claim a bound connection or a runtime_status that is not there.
+    assert "already bound" not in system and "runtime_status" not in system
+    assert "reaches ORRERY Mail directly" in system
     # Facts only (review of #163, P2-1): the launcher does not know that a
     # person asked for this task, so it must not say so.
     assert "at the request" not in system and "person who runs both" not in system
@@ -370,3 +422,17 @@ def test_a_prompt_too_long_for_one_argument_goes_through_a_private_file(tmp_path
     task_file = pathlib.Path(passed.split("in the file ", 1)[1].split(". Read", 1)[0])
     assert task_file.stat().st_mode & 0o777 == 0o600
     assert "Long task. Long task." in task_file.read_text(encoding="utf-8")
+
+
+def test_the_system_prompt_says_bound_only_with_a_proxy():
+    text = SPAWN.read_text(encoding="utf-8")
+    start = text.index("claude_child_system_prompt() {")
+    builder = text[start:text.index("\n}\n", start) + 3]
+
+    def render(config: str) -> str:
+        return subprocess.run(["/bin/bash", "-c", builder + 'claude_child_system_prompt Kid Dad "$1"', "_", config],
+                              text=True, capture_output=True, check=True).stdout
+
+    with_proxy, without = render("/tmp/kid-mcp.json"), render("")
+    assert "already bound to the name Kid" in with_proxy and "runtime_status" in with_proxy
+    assert "already bound" not in without and "runtime_status" not in without

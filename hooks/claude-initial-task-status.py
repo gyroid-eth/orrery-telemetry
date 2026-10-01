@@ -11,7 +11,10 @@ never from what the model says about itself. A launched child is asked to
 report to its parent with ORRERY Mail's send_message, so its first turn should
 end with that report. The first turn is classified as:
 
-  reported              it ended after a send_message to the parent
+  reported              it ended after a send_message to the parent that
+                        ORRERY Mail accepted (its tool result is not an error)
+  report_failed         it ended after a send_message to the parent that
+                        failed, or whose result never came back
   declined              it ended in text alone (refused, or asked to confirm)
   ended_without_report  it called tools but ended without reporting (checked
                         and then declined, or forgot to report)
@@ -38,6 +41,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -90,7 +94,8 @@ class FirstTurn:
         self.matched: bool | None = None  # None until the first human row is seen
         self.ended = False
         self.tools: list[str] = []
-        self.reported = False
+        self.report_ids: set[str] = set()  # send_message calls to the parent
+        self.reported = False  # one of them succeeded
         self.texts: list[str] = []
         self.assistant_rows = 0
         self.end_id: object = None  # the message that ended the turn
@@ -102,9 +107,10 @@ class FirstTurn:
                 name = str(block.get("name", ""))
                 self.tools.append(name)
                 if name.endswith(_MAIL_TOOL_SUFFIX):
+                    # Only a message addressed to the parent is the report.
                     recipients = (block.get("input") or {}).get("to")
-                    if not self.parent or not isinstance(recipients, list) or self.parent in recipients:
-                        self.reported = True
+                    if isinstance(recipients, list) and (not self.parent or self.parent in recipients):
+                        self.report_ids.add(str(block.get("id", "")))
         text = _content_text(content)
         if text:
             self.texts.append(text)
@@ -129,6 +135,14 @@ class FirstTurn:
             self.ended = True  # someone answered: the first turn is over
             return
         message = row.get("message")
+        if row.get("type") == "user" and isinstance(message, dict):
+            # A tool result: the report counts once ORRERY Mail accepted it.
+            for block in message.get("content") if isinstance(message.get("content"), list) else []:
+                if (isinstance(block, dict) and block.get("type") == "tool_result"
+                        and str(block.get("tool_use_id", "")) in self.report_ids
+                        and not block.get("is_error")):
+                    self.reported = True
+            return
         if row.get("type") != "assistant" or not isinstance(message, dict):
             return
         self.assistant_rows += 1
@@ -145,6 +159,8 @@ class FirstTurn:
         if self.ended:
             if self.reported:
                 return "reported"
+            if self.report_ids:
+                return "report_failed"
             return "ended_without_report" if self.tools else "declined"
         if self.tools:
             return "working"
@@ -184,8 +200,23 @@ class Transcript:
                 return
 
 
-def _launch_prompt_matches(path: Path, head: str) -> bool:
-    """Read a candidate only up to its first human row, near the top."""
+def _epoch(stamp: object) -> float | None:
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _launch_prompt_matches(path: Path, head: str, since: float = 0.0) -> bool:
+    """Read a candidate only up to its first human row, near the top.
+
+    A child relaunched under the same name sends the same first words, and an
+    older conversation of that name can still be written to (a resume): its
+    mtime says nothing about when it began. So the launch prompt itself must
+    have been written after this launch started.
+    """
     try:
         with path.open("rb") as handle:
             for raw in handle:
@@ -194,7 +225,12 @@ def _launch_prompt_matches(path: Path, head: str) -> bool:
                 except ValueError:
                     continue
                 if isinstance(row, dict) and _is_human_turn(row):
-                    return head in _content_text((row.get("message") or {}).get("content"))
+                    if head not in _content_text((row.get("message") or {}).get("content")):
+                        return False
+                    if since <= 0:
+                        return True
+                    written = _epoch(row.get("timestamp"))
+                    return written is not None and written >= since - 5
     except OSError:
         return False
     return False
@@ -209,7 +245,7 @@ def find_transcript(projects: Path, since: float, prompt_head: str) -> Path | No
     except OSError:
         return None
     for path in sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True):
-        if _launch_prompt_matches(path, head):
+        if _launch_prompt_matches(path, head, since):
             return path
     return None
 
@@ -256,6 +292,10 @@ def notice(kind: str, child: str, parent: str, wait: int, text: str) -> tuple[st
             f"{child} は tool を使いましたが、{parent} への ORRERY Mail の send_message を送らずに"
             "最初の turn を終え、入力を待っています。確かめた後でタスクを断ったか、報告を忘れた"
             "可能性があります。\n\n" + look),
+        "report_failed": (
+            f"[launcher] {child} の報告が {parent} に届いていません",
+            f"{child} は {parent} への ORRERY Mail の send_message を試みましたが、成功した記録が無いまま"
+            "最初の turn を終え、入力を待っています（送信が失敗したか、承認されませんでした）。\n\n" + look),
         "timeout": (
             f"[launcher] {child} がタスクを始めていません",
             f"起動から {wait} 秒の間に、{child} の最初の応答がありませんでした。始めたら、もう 1 通"
@@ -273,7 +313,7 @@ def notice(kind: str, child: str, parent: str, wait: int, text: str) -> tuple[st
             f"先に知らせた後で、{child} は tool を呼んでタスクを始めました。\n"),
     }
     subject, body = notices[kind]
-    if text and kind in {"declined", "ended_without_report", "thinking"}:
+    if text and kind in {"declined", "ended_without_report", "report_failed", "thinking"}:
         body += "\n## 子の最後の発言\n\n" + _quote(text) + "\n"
     return subject, first + body
 
@@ -345,13 +385,13 @@ def watch(child: str, parent: str, prompt_head: str) -> int:
         if transcript is not None:
             transcript.update()
         status = turn.status()
-        if early and status in {"working", "reported", "ended_without_report"}:
+        if early and status in {"working", "reported", "ended_without_report", "report_failed"}:
             tell("started")  # correct the early notice, once
             early = ""
         if status == "reported":
             _note(f"Claude child {child} started its task and reported to {parent or 'its parent'}")
             return 0
-        if status in {"declined", "ended_without_report"}:
+        if status in {"declined", "ended_without_report", "report_failed"}:
             # The rest of the last message may be a moment behind its first row.
             time.sleep(min(poll, 1.0))
             transcript.update()
