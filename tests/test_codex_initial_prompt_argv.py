@@ -583,7 +583,8 @@ def test_cleanup_still_kills_an_ordinary_half_started_child(tmp_path, which):
 # as a retired identity, in a worktree the cleanup had removed. The worktree is
 # now handed to a watcher, which closes the session once the update is over.
 
-def _update_watch(tmp_path, screens: list[str], *, alive_polls: int = 99, limit: int = 30):
+def _update_watch(tmp_path, screens: list[str], *, alive_polls: int = 99, limit: int = 30,
+                  capture_fails: bool = False, kill_fails: bool = False):
     """Run codex_update_watch with tmux replaying `screens` (last repeats)."""
     for i, screen in enumerate(screens):
         (tmp_path / f"screen{i}").write_text(screen, encoding="utf-8")
@@ -591,13 +592,15 @@ def _update_watch(tmp_path, screens: list[str], *, alive_polls: int = 99, limit:
     worktree.mkdir()
     script = (
         f"DIR={shlex.quote(str(tmp_path))}; SCREENS={len(screens)}; ALIVE={alive_polls}\n"
+        f"CAPTURE_FAILS={int(capture_fails)}; KILL_FAILS={int(kill_fails)}\n"
         'printf 0 > "$DIR/i"\n'
         "tmux() {\n"
         '  printf "%s\\n" "$*" >> "$DIR/calls"\n'
         '  local i; i="$(cat "$DIR/i")"\n'
         '  case "$1" in\n'
-        '    has-session) (( i < ALIVE )) ;;\n'
-        '    capture-pane) cat "$DIR/screen$(( i < SCREENS ? i : SCREENS - 1 ))" ;;\n'
+        '    has-session) [[ -f "$DIR/killed" ]] && return 1; (( i < ALIVE )) ;;\n'
+        '    capture-pane) (( CAPTURE_FAILS )) && return 1; cat "$DIR/screen$(( i < SCREENS ? i : SCREENS - 1 ))" ;;\n'
+        '    kill-session) (( KILL_FAILS )) && return 1; : > "$DIR/killed" ;;\n'
         "  esac\n"
         "}\n"
         'sleep() { printf %s "$(( $(cat "$DIR/i") + 1 ))" > "$DIR/i"; }\n'
@@ -646,3 +649,19 @@ def test_leaving_an_updating_child_hands_its_worktree_to_the_watch(tmp_path, whi
     worktree = spawn[spawn.index("cleanup_worktree() {"):]
     worktree = worktree[:worktree.index("\n}\n")]
     assert "CODEX_UPDATE_LEFT_RUNNING" in worktree
+
+
+def test_a_failed_capture_is_not_taken_as_the_update_being_over(tmp_path):
+    # #165 re-review P2-R1: an empty capture has no "Updating Codex via" in it.
+    calls, notes = _update_watch(tmp_path, [UPDATING], capture_fails=True, limit=15)
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert not any(c.startswith("git ") for c in calls)
+    assert "still updating" in notes
+
+
+def test_a_child_that_survived_the_kill_keeps_its_worktree(tmp_path):
+    # #165 re-review P2-R2: never remove the working directory of a live codex.
+    calls, notes = _update_watch(tmp_path, [UPDATING, PROVISIONAL], kill_fails=True)
+    assert any(c.startswith("kill-session") for c in calls)
+    assert not any(c.startswith("git ") for c in calls)
+    assert "could not be closed" in notes

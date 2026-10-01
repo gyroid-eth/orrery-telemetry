@@ -2054,13 +2054,21 @@ codex_self_update_on_screen() {
 # Args: session worktree worktree-source child limit-seconds poll-seconds.
 codex_update_watch() {
     local session="$1" worktree="$2" source="$3" child="$4" limit="${5:-600}" poll="${6:-5}" waited=0
-    local log="${SPAWN_INCIDENT_LOG:-/dev/null}"
+    local log="${SPAWN_INCIDENT_LOG:-/dev/null}" pane
     while (( waited < limit )); do
         if ! tmux has-session -t "=$session" 2>/dev/null; then
             break
         fi
-        if ! tmux capture-pane -t "=$session" -p 2>/dev/null | grep -q 'Updating Codex via'; then
+        # A capture that fails says nothing about the update: wait.
+        if pane="$(tmux capture-pane -t "=$session" -p 2>/dev/null)" \
+            && ! printf '%s' "$pane" | grep -q 'Updating Codex via'; then
             tmux kill-session -t "=$session" >/dev/null 2>&1 || true
+            # Its worktree is a live codex's cwd until the session is gone.
+            if tmux has-session -t "=$session" 2>/dev/null; then
+                printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+                    "WARNING: Codex update finished in session $session, but the session could not be closed; left it with its worktree. Close it with 'tmux kill-session -t $session'." >> "$log" 2>/dev/null || true
+                return 0
+            fi
             printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
                 "Codex update finished in session $session; closed it (its registration was rolled back when the spawn failed)" >> "$log" 2>/dev/null || true
             break
