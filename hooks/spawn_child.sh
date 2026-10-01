@@ -2433,18 +2433,17 @@ PY
 # timeout reach the parent by Mail; every outcome is in the incident log.
 claude_watch_initial_task() {
     local child_name="$1" parent_name="$2" token_file="$3" prompt_text="$4"
-    local projects head since nap=sleep
+    local head since nap=sleep
     # Off only where nothing real is launched (the test suite sets it).
     [[ "${AGENTSTACK_CHILD_START_CHECK:-1}" == 0 ]] && return 0
     [[ -x /bin/sleep ]] && nap=/bin/sleep
-    projects="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
     head="$(claude_prompt_head "$prompt_text")"
     since="$(date +%s)"
     (
         local deadline=$((since + CLAUDE_START_WAIT_SECONDS)) result status text
         while :; do
             result="$("${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
-                "$projects" "$since" "$head" 2>/dev/null || true)"
+                "" "$since" "$head" 2>/dev/null || true)"
             status="$(printf '%s' "$result" | "${AGENTSTACK_PYTHON:-python3}" -c \
                 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
             if [[ "$status" == started ]]; then

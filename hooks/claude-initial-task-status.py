@@ -14,6 +14,9 @@ prompt either calls a tool (the child started) or ends with text alone
 Usage:
   claude-initial-task-status.py PROJECTS_DIR SINCE_EPOCH PROMPT_HEAD
 
+An empty PROJECTS_DIR means Claude Code's own: $CLAUDE_CONFIG_DIR/projects,
+else ~/.claude/projects.
+
 Prints one JSON object: {"status": "started" | "declined" | "pending",
 "transcript": path or "", "text": the first turn's text (declined only)}.
 Never raises: a transcript that cannot be read is "pending".
@@ -105,7 +108,10 @@ def main(argv: list[str]) -> int:
     if len(argv) != 4:
         print("usage: claude-initial-task-status.py PROJECTS_DIR SINCE_EPOCH PROMPT_HEAD", file=sys.stderr)
         return 2
-    projects, since_raw, prompt_head = Path(argv[1]), argv[2], argv[3].strip()[:_HEAD_CHARS]
+    projects = Path(argv[1]) if argv[1] else (
+        Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    )
+    since_raw, prompt_head = argv[2], argv[3].strip()[:_HEAD_CHARS]
     result = {"status": "pending", "transcript": "", "text": ""}
     try:
         since = float(since_raw)

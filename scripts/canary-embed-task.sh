@@ -68,7 +68,6 @@ PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-$(installed AGENTSTACK_PROJECT_KEY)}"
 MCP_URL="${AGENTSTACK_MCP_URL:-$(installed AGENTSTACK_MCP_URL)}"
 [[ -n "$PROJECT_KEY" && -d "$PROJECT_KEY" ]] || die "no project directory (AGENTSTACK_PROJECT_KEY)"
 MCP_URL="${MCP_URL:-http://127.0.0.1:18765/mcp}"
-PROJECTS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 
 IFS=',' read -r -a MODEL_LIST <<< "$MODELS"
 IFS=',' read -r -a PLACE_LIST <<< "$PLACES"
@@ -166,7 +165,7 @@ for entry in "${CHILDREN[@]+"${CHILDREN[@]}"}"; do
     IFS='|' read -r name model place token_file <<< "$entry"
     head="あなたは ${name}（親: ${PARENT}）"
     while :; do
-        result="$(python3 "$STATUS_HELPER" "$PROJECTS_DIR" 0 "$head" 2>/dev/null || echo '{}')"
+        result="$(python3 "$STATUS_HELPER" "" 0 "$head" 2>/dev/null || echo '{}')"
         outcome="$(printf '%s' "$result" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)

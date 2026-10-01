@@ -72,15 +72,20 @@ def _no_inherited_agentstack_env():
     }
     for key in inherited:
         del os.environ[key]
-    # A Claude child launched by spawn_child.sh gets a background watcher that
-    # reports to its parent by Mail when the child does not start its task.
-    # Tests launch fake children; the tests of that watcher turn it back on.
-    os.environ["AGENTSTACK_CHILD_START_CHECK"] = "0"
     try:
         yield
     finally:
-        os.environ.pop("AGENTSTACK_CHILD_START_CHECK", None)
         os.environ.update(inherited)
+
+
+@pytest.fixture(autouse=True)
+def _no_child_start_watcher(monkeypatch):
+    """A Claude child launched by spawn_child.sh gets a background watcher that
+    reports to its parent by Mail when the child does not start its task.
+    Tests launch fake children; the tests of that watcher turn it back on.
+    Per test, so nothing reaches suites that check for inherited AGENTSTACK_*.
+    """
+    monkeypatch.setenv("AGENTSTACK_CHILD_START_CHECK", "0")
 
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_user_instructions_alone():
