@@ -1208,6 +1208,12 @@ codex_child_add_dirs() {
     printf '%s\n' "${seen[*]-}"
 }
 
+# Both Codex launch lines below also pass -c check_for_update_on_startup=false
+# (#60). An unattended child must not show Codex's "Update available" screen:
+# its default choice runs `npm install -g @openai/codex`, nobody is there to
+# decline it, and a launcher that stops the child mid-install leaves the
+# machine's codex half replaced. Updating Codex is the operator's call.
+#
 # Sandbox network flag for a Codex child. workspace-write blocks the network
 # by default, which turns every curl / git fetch / ssh into an approval prompt
 # (or a hard failure under `never`). AGENTSTACK_CODEX_NETWORK (installer
@@ -2899,7 +2905,7 @@ ${TASK}"
                     exit 1
                 fi
                 rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
-                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c check_for_update_on_startup=false \
                     "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -3716,7 +3722,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 exit 1
             fi
             rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
-            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c check_for_update_on_startup=false \
                 "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''

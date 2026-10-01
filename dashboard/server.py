@@ -3230,6 +3230,9 @@ def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
     approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
     network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
     parts = [f"--sandbox workspace-write --ask-for-approval {shlex.quote(approval)}"]
+    # No update screen in a product-launched Codex: its default choice runs
+    # `npm install -g`, and nobody is there to decline it (#60).
+    parts.append("-c check_for_update_on_startup=false")
     if network not in ("0", "off", "false", "no"):
         parts.append("-c sandbox_workspace_write.network_access=true")
     parts += [f"--add-dir {shlex.quote(d)}" for d in _codex_child_add_dirs(extra_dirs)]
