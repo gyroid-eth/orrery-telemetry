@@ -147,7 +147,10 @@ def test_installed_codex_that_fails_version_is_stale(tmp_path):
     linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
     _, resolved, stderr = _resolve(tmp_path, path_dirs=[linux.parent], installed=str(broken))
     assert resolved == str(linux)
-    assert "--version' did not succeed" in stderr
+    # It ended at once with an error: say so, not that it ran out of time (#121).
+    assert "--version' exited with status 1 after 0." in stderr
+    assert "Missing optional dependency @openai/codex-linux-x64" in stderr
+    assert "within" not in stderr
 
 
 def test_installed_working_codex_is_kept(tmp_path):
@@ -163,7 +166,8 @@ def test_explicit_codex_that_cannot_run_stops_with_the_reason(tmp_path):
     code, _, stderr = _resolve(tmp_path, path_dirs=[], explicit=str(broken))
     assert code == 2
     assert f"cannot be used: {broken}" in stderr
-    assert "--version' did not succeed" in stderr
+    assert "--version' exited with status 1" in stderr
+    assert "Missing optional dependency @openai/codex-linux-x64" in stderr
 
 
 def test_explicit_windows_codex_under_wsl_stops_with_the_reason(tmp_path):
@@ -335,3 +339,19 @@ def test_probe_is_killed_even_when_ps_stops_answering(script):
     assert "KILL 410001" not in out
     assert "RETURNED" in out
     assert "left process 410001" in result.stderr
+
+
+def test_an_explicit_codex_that_hangs_says_it_ran_out_of_time(tmp_path):
+    hung = _script(tmp_path / "hung-bin" / "codex", "sleep 30\n")
+    code, _, stderr = _resolve(tmp_path, path_dirs=[], explicit=str(hung), timeout=1)
+    assert code == 2
+    assert "--version' did not finish within 1s and was stopped" in stderr
+    assert "exited with status" not in stderr
+
+
+def test_an_explicit_codex_that_fails_silently_says_there_was_no_output(tmp_path):
+    silent = _script(tmp_path / "silent-bin" / "codex", "exit 7\n")
+    code, _, stderr = _resolve(tmp_path, path_dirs=[], explicit=str(silent))
+    assert code == 2
+    assert "--version' exited with status 7 after 0." in stderr
+    assert "(no error output)" in stderr

@@ -421,17 +421,45 @@ running_under_wsl() {
 
 codex_version_answers() {
   local bin="$1" out="${2:-/dev/null}" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
-  "$bin" --version </dev/null >"$out" 2>/dev/null &
+  local err status=0
+  # Why it failed, for codex_version_failure: a probe that ran out of time and
+  # one that exited at once (a wrong node on PATH dies in a few hundredths of a
+  # second) need different fixes, and used to read the same.
+  CODEX_VERSION_STATUS=""
+  CODEX_VERSION_ERROR=""
+  CODEX_VERSION_ELAPSED=""
+  err="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-stderr.XXXXXX" 2>/dev/null || true)"
+  "$bin" --version </dev/null >"$out" 2>"${err:-/dev/null}" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$tick" -ge "$limit" ]]; then
       codex_probe_stop "$pid"
+      CODEX_VERSION_STATUS=timeout
+      [[ -n "$err" ]] && rm -f "$err"
       return 1
     fi
     sleep 0.1
     tick=$((tick + 1))
   done
-  wait "$pid"
+  wait "$pid" || status=$?
+  CODEX_VERSION_STATUS="$status"
+  CODEX_VERSION_ELAPSED="$((tick / 10)).$((tick % 10))"
+  if [[ -n "$err" ]]; then
+    # First non-blank line, bounded: it is shown inside a one-line warning.
+    CODEX_VERSION_ERROR="$(sed -n '/[^[:space:]]/{p;q;}' "$err" 2>/dev/null | cut -c1-200 || true)"
+    rm -f "$err"
+  fi
+  return "$status"
+}
+
+# One line saying why the last codex_version_answers failed.
+codex_version_failure() {
+  local bin="$1"
+  if [[ "$CODEX_VERSION_STATUS" == timeout ]]; then
+    echo "'$bin --version' did not finish within ${CODEX_VERSION_TIMEOUT_SECONDS}s and was stopped"
+  else
+    echo "'$bin --version' exited with status ${CODEX_VERSION_STATUS:-unknown} after ${CODEX_VERSION_ELAPSED:-0.0}s: ${CODEX_VERSION_ERROR:-(no error output)}"
+  fi
 }
 
 # Stop a probe that overran. Every wait here is a kill -0 poll with a
@@ -521,7 +549,7 @@ codex_launcher_problem() {
     return 0
   fi
   if ! codex_version_answers "$bin" "${CODEX_VERSION_OUTPUT:-/dev/null}"; then
-    echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+    codex_version_failure "$bin"
   fi
 }
 
