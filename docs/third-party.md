@@ -21,6 +21,20 @@ license は [`AGENTSTACK_LICENSE`](../packages/agentstack_mail/AGENTSTACK_LICENS
 | Claude Code / Codex CLI | user install | agent runtime | vendor terms |
 | tmux / uv / git / Python | user environment | local runtime dependency | 各 upstream |
 
+## provider のロゴ
+
+dashboard（と ORRERY cockpit の usage の表示）が Claude・Codex（OpenAI）・Gemini を示すのに使うロゴです。cockpit の repository も、Claude と OpenAI の 2 つを同じ file で同梱しています。
+
+| 配置 | マーク | 出典 | License |
+| --- | --- | --- | --- |
+| `dashboard/assets/anthropic.svg` | Claude | Simple Icons（Iconify の `simple-icons:claude`） | CC0 1.0 |
+| `dashboard/assets/openai.svg` | OpenAI | SVG Logos（Gil Barbara 作、Iconify の `logos:openai-icon`） | CC0 1.0 |
+| `dashboard/assets/google.svg` | Gemini | 出典の記録なし（dd6376a で追加。上の 2 つの icon 集のどちらとも一致しない、4 点の星の単純な図形） | — |
+
+変更点: 塗りの色を `#ece2cc` にした。各ロゴは各社の商標で、provider を識別するためだけに使います。
+
+> Provider logos: `dashboard/assets/anthropic.svg` (Claude) is from Simple Icons (Iconify `simple-icons:claude`) and `dashboard/assets/openai.svg` (OpenAI) from SVG Logos by Gil Barbara (Iconify `logos:openai-icon`), both CC0 1.0; `dashboard/assets/google.svg` (Gemini) has no recorded source. Changes: fill colour set to `#ece2cc`. Each logo is a trademark of its company and is used only to identify the provider.
+
 ## 肖像画像
 
 dashboard が agent 名の科学者に対応させて表示する肖像は、第三者の画像ではありません。
