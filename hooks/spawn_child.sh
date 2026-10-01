@@ -2253,6 +2253,7 @@ write_child_codex_home() {
         --python-bin "${AGENTSTACK_PYTHON:-}" \
         --mcp-profile "$mcp_profile" \
         --parent-agent "${PARENT_NAME:-}" \
+        --work-dir "$WORK_DIR" \
         --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}" || return 0
 }
 

@@ -78,6 +78,15 @@ default_tools_approval_mode = "approve"
 
 この overlay は現在 macOS/Linux の `spawn_child.sh` にだけ適用されます。Windows では WSL2 経由なら同じ経路を使いますが、community lane の native Windows launcher は対象外です。
 
+### worktree の Codex child と hook の信頼
+
+Codex は、project の hook（`<checkout>/.codex/hooks.json`）を信頼したことを、利用者の `~/.codex/config.toml` に、その `hooks.json` の path ごとに記録します（`[hooks.state."<path>:<event>:<i>:<j>"]` の `trusted_hash`）。`--worktree` の子は同じ hook を別の path で読むので、記録が無く、「N hooks need review」の画面で止まり、その間は hook が動きません。
+
+launcher は、子の `CODEX_HOME` の `config.toml` だけに、元の checkout で利用者が信頼した hook の記録を、worktree の path でも書き足します。元の checkout は、worktree と同じ git directory を指す checkout として見つけます（git directory を別の場所に置く checkout も含む）。
+
+- `trusted_hash` は hook の中身の hash で、Codex が起動のたびに照らし合わせます。そのため、中身が同じ hook だけが信頼され、変わった hook は review に戻ります
+- 利用者の `~/.codex/config.toml` は変えません。利用者が信頼していない hook を足すこともありません
+
 ### Codex child の MCP を最小化する
 
 `/delegate "<task>" --codex --codex-mcp orrery-only` を明示すると、child 専用 `config.toml` は認証済み ORRERY Mail と session-binding に必要な AgentStack plugin だけを残し、それ以外の継承 MCP server と plugin を `enabled = false` にします。shell と file 操作は残りますが、plugin が提供する skill / app tool も無効になるため、それらを使う task には指定しません。
