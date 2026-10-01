@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import os
+import shutil
 import pathlib
 import sys
 
@@ -307,6 +308,21 @@ def test_an_explicit_mail_label_reaches_the_env_and_the_manifest(tmp_path):
                     )
         finally:
             _bootout()
+
+    # Nothing the install loaded may stay in this machine's launchd: the
+    # autostart and the watcher used to, restarting against a deleted tmp dir.
+    if shutil.which("launchctl"):
+        listed = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+        left = []
+        for line in listed.stdout.splitlines():
+            name = line.rsplit("\t", 1)[-1].strip()
+            if not name.startswith("org.agentstack.test.explicit-label."):
+                continue
+            printed = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{name}"],
+                                     capture_output=True, text=True).stdout
+            if str(home) in printed or str(home.resolve()) in printed:
+                left.append(name)
+        assert left == [], f"jobs left loaded in launchd: {left}"
 
 
 def test_the_installer_records_the_label_it_will_act_on():

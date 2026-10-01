@@ -173,14 +173,56 @@ def stop_recorded_supervisor(pidfile, home) -> bool:
     return True
 
 
+def bootout_install_jobs(home, label_prefix: str) -> list[str]:
+    """Boot out every launchd job that the install under ``home`` loaded.
+
+    The installer loads more than the dashboard under its prefix: the Mail
+    autostart (``.mail``), the Mail watcher (``.mail-watcher``) and others. A
+    teardown that named only ``.agentdashboard`` left those loaded in the real
+    launchd of the machine, restarting forever against a deleted temporary
+    directory (exit 78/127). A job is booted out only when its label is under
+    ``label_prefix`` and its plist or program lies inside ``home``, so a
+    concurrent test sharing the prefix keeps its own jobs. Returns the labels
+    booted out.
+    """
+    if not label_prefix or not shutil.which("launchctl"):
+        return []
+    if label_prefix != TEST_LABEL_PREFIX and not label_prefix.startswith(TEST_LABEL_PREFIX + "."):
+        raise ValueError(f"refusing to boot out jobs outside the test prefix: {label_prefix}")
+    roots = {str(pathlib.Path(home)), str(pathlib.Path(home).resolve())}
+    listed = _run_command(["launchctl", "list"], timeout=30)
+    if listed.returncode != 0:
+        raise RuntimeError(f"launchctl list failed: {listed.stderr.strip()}")
+    booted = []
+    for line in listed.stdout.splitlines():
+        label = line.rsplit("\t", 1)[-1].strip()
+        if not label.startswith(label_prefix + "."):
+            continue
+        printed = _run_command(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=30)
+        owned = False
+        for row in printed.stdout.splitlines():
+            key, _, value = row.strip().partition(" = ")
+            if key in ("path", "program") and any(
+                    value == root or value.startswith(root + "/") for root in roots):
+                owned = True
+                break
+        if owned:
+            _run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], timeout=30)
+            booted.append(label)
+    return booted
+
+
 def stop_dashboard(home, *, appear_timeout: float = 8.0,
                    label_prefix: str = TEST_LABEL_PREFIX) -> None:
-    """Terminate the dashboard this install started, launchd or supervised."""
+    """Terminate the dashboard this install started, launchd or supervised.
+
+    Every other launchd job the same install loaded is booted out as well."""
     home = pathlib.Path(home)
     # launchd is macOS only; on Linux the installer uses systemd or a plain
     # supervisor, and there is no launchctl to call.
     if label_prefix and shutil.which("launchctl"):
         _run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{label_prefix}.agentdashboard"])
+        bootout_install_jobs(home, label_prefix)
     marker = str(home.resolve() / ".agentstack" / "dashboard")
     pidfile = home / ".agentstack" / "runtime" / "dashboard.pid"
 
