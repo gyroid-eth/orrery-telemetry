@@ -58,6 +58,22 @@ resume した Claude の SessionStart hook は shell から再登録しますが
 
 receipt が無い環境（WSL など）では、launcher は Codex の画面を見て、最初の task が始まったことが分かった時点で待つのをやめます。手掛かりは実行中の表示と、task の末尾の後に続く応答です。ところが長い応答では、実行中の表示は約 2 秒、task の末尾は数秒しか画面に出ません。3 秒ごとの確認が両方を逃すと、上限の 90 秒まで待っていました。Codex 0.158 は、task が画面の外に出たあと、その 1 行目を `…` で切って画面の 1 行目に固定表示します。この行がこの task の 1 行目（16 文字以上）と一致し、入力欄が空になっていれば、応答が出ていると判断します。task の末尾が折り返しで 2 行に分かれていても見つけます。WSL で 1 秒ごとに採った実画面で、どの位相から確認を始めても 3〜6 秒で終わることを確かめました（以前は最長 90 秒）。この判定は待ちを終えるためだけに使い、キーは送りません。task が始まった証拠にもしません。
 
+### 以前の版の Claude の子を、同じ名前で起動し直せるようになりました（WSL2 の報告の問題 3）
+
+`spawn_child.sh --pre-registered` は、以前の版の 3 項目の state を「child state belongs to another registration」で拒否し、preregister のやり直しを勧めていました。やり直すと別の名前が登録され、同じ役割の体が二重になりました。旧 state を見つけたら、whois で得た ID で `register_agent(existing_agent_id=…)` を呼び、保存済みの credential を照合します。照合できたときだけ 5 項目の state に移して起動します。照合できなければ state と token を変えずに止め、dashboard の再開を案内します。
+
+### 子の lineage に親を示すようになりました（WSL2 の報告の問題 4）
+
+launcher が子に渡す proxy（direct binding）は親を知らず、`runtime_status` の lineage は常に root でした。`PARENT_AGENT` 付きの Codex の子は、正本の親と食い違うとして起動処理を止めていました。proxy は `AGENTSTACK_PROXY_PARENT_AGENT` を受け、lineage を `kind: child`・`parent_agent: <親>` にします。親を反映できない組み合わせは、CLI の起動前に止めます。
+
+### 子の proxy が、schema に無い引数で落ちていました（WSL2 の報告の問題 2）
+
+direct binding の proxy は、モデルが付けた `sender_name` などで `TypeError` になっていました。binding と一致する値は捨て、食い違う値は理由を返して拒否します。モデルが渡した token は Mail へ送りません。schema に無い引数は、受け付ける引数の一覧つきで拒否します。direct binding の `runtime_status` は `bound` を返します。
+
+### retire された子を起動し直すと、retired のまま動いていました（#153）
+
+`--pre-registered` で以前に動いた子を起動するとき、起動前に Mail の `retired_at` を確かめます。retired なら子自身の token で `unretire_agent` を呼び、active に戻ったことを確かめてから起動します。戻せなければ起動しません。起動に失敗したら retire し直します。
+
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）
