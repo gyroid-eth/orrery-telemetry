@@ -246,7 +246,9 @@ def test_codex_whose_version_fails_is_a_warning_with_a_fix(tmp_path):
     result = _report(tmp_path, codex)
     assert result.returncode == 0, result.stderr
     assert f"warn: Codex launcher binary {codex} cannot start Codex" in result.stdout
-    assert "--version' did not succeed" in result.stdout
+    assert "--version' exited with status 1 after 0." in result.stdout
+    assert "Missing optional dependency @openai/codex-linux-x64" in result.stdout
+    assert "within" not in result.stdout
     assert "hint: install Codex where this shell can run it" in result.stdout
     assert "ok: Codex launcher binary" not in result.stdout
 
@@ -265,7 +267,7 @@ def test_windows_codex_under_wsl_is_a_warning_naming_the_reason(tmp_path):
 def test_codex_that_hangs_on_version_is_bounded(tmp_path):
     codex = _script(tmp_path / "bin" / "codex", "sleep 30\n")
     result = _report(tmp_path, codex)
-    assert "did not succeed within 2s" in result.stdout
+    assert "did not finish within 2s and was stopped" in result.stdout
 
 
 def test_codex_that_ignores_term_is_still_bounded(tmp_path):
@@ -274,7 +276,7 @@ def test_codex_that_ignores_term_is_still_bounded(tmp_path):
     codex.write_text('#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.1; done\n', encoding="utf-8")
     codex.chmod(0o755)
     result = _report(tmp_path, codex)  # subprocess timeout=20 would raise if unbounded
-    assert "did not succeed within 2s" in result.stdout
+    assert "did not finish within 2s and was stopped" in result.stdout
 
 
 @pytest.mark.parametrize(("output", "noted"), [
@@ -303,7 +305,7 @@ def test_doctor_does_not_leave_a_stubborn_native_child_behind(tmp_path):
     wrapper, pidfile = _wrapper_with_stubborn_native(tmp_path)
     try:
         result = _report(tmp_path, wrapper)
-        assert "did not succeed within 2s" in result.stdout
+        assert "did not finish within 2s and was stopped" in result.stdout
         native_pid = int(pidfile.read_text())
         deadline = time.monotonic() + 3
         while _alive(native_pid) and time.monotonic() < deadline:

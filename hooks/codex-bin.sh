@@ -33,11 +33,22 @@ running_under_wsl() {
 # Succeeds when `$1 --version` exits 0 within the timeout (portable: no
 # coreutils `timeout` on macOS).
 codex_version_answers() {
-  local bin="$1" pid secs="$CODEX_VERSION_TIMEOUT_SECONDS" end
+  local bin="$1" pid secs="$CODEX_VERSION_TIMEOUT_SECONDS" end started err="" status=0
+  # Why it failed, for codex_version_failure (#121): running out of time and
+  # exiting at once with an error need different fixes.
+  CODEX_VERSION_STATUS=""
+  CODEX_VERSION_ERROR=""
+  CODEX_VERSION_ELAPSED=""
+  CODEX_VERSION_LIMIT=""
   if [[ -n "$CODEX_PROBE_DEADLINE" ]] && (( CODEX_PROBE_DEADLINE - SECONDS < secs )); then
     secs=$((CODEX_PROBE_DEADLINE - SECONDS))
   fi
-  (( secs >= 1 )) || return 1
+  CODEX_VERSION_LIMIT="$secs"
+  if (( secs < 1 )); then
+    CODEX_VERSION_STATUS=timeout
+    return 1
+  fi
+  started=$SECONDS
   # Wall-clock, not a count of sleeps: the limit holds whatever `sleep` does.
   end=$((SECONDS + secs))
   # CODEX_PROBE_RUNNER, when set, runs the candidate the way the launcher will
@@ -47,17 +58,39 @@ codex_version_answers() {
     printf '\0' >&3
     ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >&3 2>/dev/null &
   else
-    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>/dev/null &
+    # The first stderr line goes into the warning; the policy path above
+    # keeps to its pipe and reports the exit status alone.
+    err="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-stderr.XXXXXX" 2>/dev/null || true)"
+    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>"${err:-/dev/null}" &
   fi
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( SECONDS >= end )); then
       codex_probe_stop "$pid"
+      CODEX_VERSION_STATUS=timeout
+      [[ -n "$err" ]] && rm -f "$err"
       return 1
     fi
     sleep 0.1
   done
-  wait "$pid"
+  wait "$pid" || status=$?
+  CODEX_VERSION_STATUS="$status"
+  CODEX_VERSION_ELAPSED=$((SECONDS - started))
+  if [[ -n "$err" ]]; then
+    CODEX_VERSION_ERROR="$(sed -n '/[^[:space:]]/{p;q;}' "$err" 2>/dev/null | cut -c1-200 || true)"
+    rm -f "$err"
+  fi
+  return "$status"
+}
+
+# One line saying why the last codex_version_answers failed.
+codex_version_failure() {
+  local bin="$1"
+  if [[ "$CODEX_VERSION_STATUS" == timeout ]]; then
+    echo "'$bin --version' did not finish within ${CODEX_VERSION_LIMIT:-$CODEX_VERSION_TIMEOUT_SECONDS}s and was stopped"
+  else
+    echo "'$bin --version' exited with status ${CODEX_VERSION_STATUS:-unknown} after ${CODEX_VERSION_ELAPSED:-0}s: ${CODEX_VERSION_ERROR:-(no error output)}"
+  fi
 }
 
 # Stop a probe that overran. Every wait here is a kill -0 poll with a
@@ -155,7 +188,7 @@ codex_bin_problem() {
     return 0
   fi
   if ! codex_version_answers "$bin"; then
-    echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+    codex_version_failure "$bin"
   fi
 }
 

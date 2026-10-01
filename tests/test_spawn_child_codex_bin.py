@@ -116,7 +116,8 @@ def test_the_search_skips_a_codex_that_fails_version(tmp_path):
     rc, out, err = _resolve(tmp_path, path_dirs=[broken.parent, linux.parent])
     assert rc == 0, err
     assert out == str(linux)
-    assert f"skipping codex {broken}: '{broken} --version' did not succeed" in err
+    assert f"skipping codex {broken}: '{broken} --version' exited with status 1 after" in err
+    assert "Missing optional dependency" in err
 
 
 def test_the_environment_value_wins_when_it_can_run(tmp_path):
@@ -191,7 +192,7 @@ def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
     assert out == str(codex)
     # Probing with the launcher's PATH instead would reject it.
     rc, _, err = _resolve(tmp_path, path_dirs=[], runner=False)
-    assert rc == 1 and "--version' did not succeed" in err
+    assert rc == 1 and "--version' exited with status" in err
 
 
 def test_both_codex_launches_use_the_one_path_setup():

@@ -129,7 +129,8 @@ def test_an_explicit_codex_that_does_not_answer_stops_before_anything_is_written
     broken = _codex(tmp_path / "bin" / "codex", works=False)
     result = _resolve(tmp_path, path_dirs=[], explicit=str(broken), wsl=False)
     assert result.returncode != 0
-    assert f"codex {broken} cannot be used: '{broken} --version' did not succeed" in result.stderr
+    assert f"codex {broken} cannot be used: '{broken} --version' exited with status 1 after" in result.stderr
+    assert "Missing optional dependency @openai/codex-linux-x64" in result.stderr
 
 
 def test_the_hook_guidance_names_the_chosen_codex():
