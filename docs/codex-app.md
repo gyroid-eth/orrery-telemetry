@@ -177,6 +177,8 @@ root task は `session_id` だけを渡します。subagent は同じ `session_i
 
 `spawn_child.sh` などの launcher が子に渡す proxy は Bridge を使わず、起動時に名前・project・token を直接 bind します。この binding の `lineage` は Codex App の lineage ではなく、launcher が `AGENTSTACK_PROXY_PARENT_AGENT` で渡した ORRERY の親を `parent_agent` に示します（`kind` は `child`）。`--standalone` など親のない agent は `kind: root`・`parent_agent: null` です。launcher は親を子の private な state（`child-agents/<name>.json` の `parent_agent`）にも記録します。dashboard から再開して proxy の設定を作り直すときも、同じ親を渡します。launcher は、生成した proxy が親を示せない組み合わせ（proxy が受け付けない親の名前、proxy を用意できず継承した Codex 設定が Bridge の plugin を有効にしている場合）では、CLI を起動する前に止まります。
 
+launcher が起動時に bind した proxy は、raw の ORRERY Mail と同じ形の引数も受けます。raw で使った会話を再開すると、モデルは以前の形のまま呼ぶためです。`project_key`・`agent_name`・`sender_name` は binding と一致すれば無視し、食い違えばその理由を返します。raw の `whois` の `agent_name` は、調べる相手として扱います。モデルが渡した `registration_token`・`sender_token` は使わず、Mail へも送りません。schema にないその他の引数は、受け付ける引数の一覧をつけて拒否します。この proxy の `runtime_status` の `state` は `bound`（binding がある）で、Mail には問い合わせません。
+
 ## Inbox 通知と cold wake
 
 active turn と停止中の task では配送経路が異なります。

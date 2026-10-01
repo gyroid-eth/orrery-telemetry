@@ -382,7 +382,14 @@ class AgentStackProxy:
             "agent_name": binding["agent_name"],
             "project_key": binding["project_key"],
             "program": binding["program"],
-            "state": snapshot["state"] if snapshot is not None else "registering",
+            # Only the Codex App Bridge writes snapshots. A launcher binding
+            # never gets one, so "registering" would never change; say what is
+            # known instead: the binding exists. Mail is not contacted here.
+            "state": (
+                snapshot["state"] if snapshot is not None
+                else "bound" if binding["surface"] == "direct"
+                else "registering"
+            ),
             "last_seen_at": (
                 snapshot["last_seen_at"]
                 if snapshot is not None
@@ -566,6 +573,23 @@ def _dispatch(
     if handler is None:
         raise ProxyError("tool is not allowlisted")
     call_arguments = dict(arguments)
+    # A conversation first run against raw ORRERY Mail keeps calling these
+    # tools the way raw Mail takes them after it is resumed on this proxy
+    # (WSL2 report, 2026-10-01): whois names its target in `agent_name`, and
+    # model-held credentials ride along. The target is not the caller, and the
+    # proxy authenticates with its own token, so translate and drop first.
+    if name == "whois" and "agent_name" in call_arguments:
+        target = call_arguments.pop("agent_name")
+        if "name" in call_arguments and call_arguments["name"] != target:
+            raise ProxyError(
+                "whois got two different agents to look up (name and agent_name)"
+            )
+        call_arguments["name"] = target
+    if name == "whois":
+        for option in _RAW_WHOIS_OPTIONS:
+            call_arguments.pop(option, None)
+    for credential in _MODEL_SUPPLIED_CREDENTIALS:
+        call_arguments.pop(credential, None)
     if name != "bootstrap" and proxy.bound_session_id is None:
         raise ProxyError(
             "call bootstrap before using coordination tools; runtime identity "
@@ -582,6 +606,7 @@ def _dispatch(
             "agent_id",
             "project_key",
             "agent_name",
+            "sender_name",
         }.intersection(call_arguments)
         if supplied_identity:
             raise ProxyError(
@@ -639,19 +664,46 @@ def _dispatch(
     # "unexpected keyword argument" on a child's very first call. Accept them
     # when they agree with the binding, and refuse only a real mismatch — which
     # is someone trying to act as another agent or project.
+    # Raw send_message names its sender in `sender_name`; it is the same claim.
     binding = proxy.bound_binding
-    for field in ("project_key", "agent_name"):
+    for field, bound_field in (
+        ("project_key", "project_key"),
+        ("agent_name", "agent_name"),
+        ("sender_name", "agent_name"),
+    ):
         if field not in call_arguments:
             continue
         supplied = call_arguments.pop(field)
         if supplied is None or binding is None:
             continue
-        if str(supplied) != str(binding[field]):
+        if str(supplied) != str(binding[bound_field]):
             raise ProxyError(
                 f"{field} does not match this connection's binding: "
                 f"this process serves {binding['agent_name']!r}"
             )
+    # Anything else the schema does not list would reach the handler as
+    # "unexpected keyword argument", which names neither the cause nor the fix.
+    accepted = _accepted_arguments(name)
+    unknown = sorted(set(call_arguments) - accepted - {"session_id", "agent_id"})
+    if unknown:
+        raise ProxyError(
+            f"{name} on this ORRERY Mail connection does not accept "
+            f"{', '.join(unknown)}; it accepts: "
+            f"{', '.join(sorted(accepted)) or '(no arguments)'}"
+        )
     return handler(**call_arguments)
+
+
+# Raw ORRERY Mail arguments with no meaning on a bound connection.
+_MODEL_SUPPLIED_CREDENTIALS = ("registration_token", "sender_token")
+_RAW_WHOIS_OPTIONS = ("include_recent_commits", "commit_limit", "format")
+
+
+def _accepted_arguments(name: str) -> set[str]:
+    for tool in TOOL_DEFINITIONS:
+        if tool["name"] == name:
+            return set(tool["inputSchema"]["properties"])
+    return set()
 
 
 def _required_text(value: Any, field: str, maximum: int) -> str:
@@ -870,8 +922,9 @@ TOOL_DEFINITIONS = [
         "description": (
             "Return this process binding's authoritative runtime identity, state, "
             "and parent lineage. For a launcher-started agent, lineage.parent_agent "
-            "is its ORRERY parent (null when standalone). Takes no caller-supplied "
-            "identity."
+            "is its ORRERY parent (null when standalone), and the state is "
+            "\"bound\": the binding exists; ORRERY Mail is not contacted. Takes "
+            "no caller-supplied identity."
         ),
         "inputSchema": _schema({}, []),
     },

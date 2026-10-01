@@ -558,6 +558,104 @@ print(f"{agent_id}\t{program}")
 PY
 }
 
+# What the child's state says about earlier runs, read before adoption
+# (prepare-active clears the retirement marker): "retired" when its cleanup
+# retired it, "ran" when it was launched before, nothing for a child that has
+# never run (a fresh preregistration).
+child_run_history() {
+    local agent_name="$1"
+    "${AGENTSTACK_PYTHON:-python3}" - "$CHILD_STATE_DIR/$agent_name.json" <<'PY' 2>/dev/null
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        state = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+if not isinstance(state, dict):
+    raise SystemExit(0)
+retired = state.get("retired_at")
+if isinstance(retired, str) and retired:
+    print("retired")
+elif "launch_origin" in state or set(state) == {"agent_name", "project_key", "registration_token"}:
+    print("ran")
+PY
+}
+
+# A pre-registered child's Mail row. "status" prints retired/active from whois;
+# "unretire" / "retire" set it, as the child itself: its owner token is read
+# from the canonical file inside Python and never appears in argv. The
+# dashboard's resume does the same; a relaunch that skipped it left a child
+# nobody could message (Mail refuses mail to a retired agent). Mail, not the
+# local state, decides: a row can be retired with the state saying nothing
+# (the dashboard's retire button, an earlier-version child).
+preregistered_child_mail() {
+    local agent_name="$1" token_file="$2" action="$3" bearer=""
+    if legacy_http_bearer_enabled; then
+        bearer="$(get_agentstack_token 2>/dev/null || true)"
+    elif [[ $? == 2 ]]; then
+        return 1
+    fi
+    printf '%s' "$bearer" | "${AGENTSTACK_PYTHON:-python3}" - \
+        "$action" "$agent_name" "$PROJECT_KEY" "$token_file" "$MCP_URL" <<'PY'
+import http.client
+import json
+import sys
+from urllib.parse import urlparse
+
+action, agent_name, project_key, token_file, url = sys.argv[1:6]
+bearer = sys.stdin.read()
+if action == "status":
+    tool, arguments = "whois", {"project_key": project_key, "agent_name": agent_name,
+                                "include_recent_commits": False}
+else:
+    try:
+        with open(token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError as exc:
+        print(f"the owner credential is unavailable: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    tool = f"{action}_agent"
+    arguments = {"project_key": project_key, "agent_name": agent_name, "registration_token": token}
+parsed = urlparse(url)
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": tool, "arguments": arguments}}).encode()
+headers = {"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"}
+if bearer:
+    headers["Authorization"] = f"Bearer {bearer}"
+try:
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
+    connection.request("POST", parsed.path, body=body, headers=headers)
+    reply = json.loads(connection.getresponse().read().decode("utf-8"))
+    connection.close()
+except (OSError, ValueError) as exc:
+    print(f"ORRERY Mail at {url} did not answer: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+result = reply.get("result") if isinstance(reply, dict) else None
+if not isinstance(result, dict) or reply.get("error") or result.get("isError"):
+    print(f"ORRERY Mail refused {tool}", file=sys.stderr)
+    raise SystemExit(1)
+data = result.get("structuredContent")
+if not isinstance(data, dict):
+    try:
+        data = json.loads(result["content"][0]["text"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        data = {}
+if action == "status":
+    if data.get("name") != agent_name:
+        print(f"ORRERY Mail has no profile for {agent_name}", file=sys.stderr)
+        raise SystemExit(1)
+    print("retired" if data.get("retired_at") else "active")
+    raise SystemExit(0)
+expected = {"unretire": "active", "retire": "retired"}[action]
+if (data.get("status") != expected or data.get("agent_name") != agent_name
+        or data.get("project_key") != project_key):
+    print(f"ORRERY Mail did not confirm {agent_name} as {expected}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 finish_child_registration() {
     local agent_name="$1" rollback="${2:-false}"
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
@@ -2336,6 +2434,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     PRE_REGISTERED_SESSION_STARTED=false
     PRE_REGISTERED_SUCCESS=false
     PRE_REGISTERED_MANAGED_ADDED=false
+    PRE_REGISTERED_UNRETIRED=false
     cleanup_preregister_failure() {
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
@@ -2353,6 +2452,13 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 echo "Error: child registration rollback failed; private undo record retained" >&2
                 return
             fi
+        fi
+        # This attempt still owns the child and it never started: leave its
+        # Mail row as its cleanup left it. (A purged or newer attempt returned
+        # above; its row is not ours to change.)
+        if [[ "${PRE_REGISTERED_UNRETIRED:-false}" == true ]]; then
+            preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" retire \
+                || echo "Warning: $CHILD_NAME was made active in ORRERY Mail and could not be retired again" >&2
         fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -2380,6 +2486,7 @@ PY
     trap cleanup_preregister_failure EXIT
 
     ONE_SHOT_TOKEN_FILE="$CHILD_TOKEN_FILE"
+    PRE_REGISTERED_HISTORY="$(child_run_history "$CHILD_NAME")"
     REGISTRATION_PROGRAM=claude-code
     REGISTRATION_LABEL=Claude
     if [[ "$USE_CODEX" == true ]]; then
@@ -2445,6 +2552,29 @@ PY
             echo "Error: verified Claude child registration metadata is unavailable for $CHILD_NAME" >&2
             exit 1
         fi
+    fi
+    # A child that ran before may be retired in ORRERY Mail, which refuses
+    # messages to a retired agent: started as it is, it could not hear from its
+    # parent. Mail decides; the local state only stands in when Mail cannot be
+    # asked. A fresh preregistration never ran and costs no Mail call.
+    PRE_REGISTERED_MAIL_RETIRED=false
+    if [[ -n "$PRE_REGISTERED_HISTORY" ]]; then
+        if PRE_REGISTERED_MAIL_STATUS="$(preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" status)"; then
+            [[ "$PRE_REGISTERED_MAIL_STATUS" != retired ]] || PRE_REGISTERED_MAIL_RETIRED=true
+        elif [[ "$PRE_REGISTERED_HISTORY" == retired ]]; then
+            PRE_REGISTERED_MAIL_RETIRED=true
+        else
+            echo "Warning: could not check whether $CHILD_NAME is retired in ORRERY Mail; starting it as it is." >&2
+        fi
+    fi
+    if [[ "$PRE_REGISTERED_MAIL_RETIRED" == true ]]; then
+        if ! preregistered_child_mail "$CHILD_NAME" "$CHILD_TOKEN_FILE" unretire; then
+            echo "Error: $CHILD_NAME is retired in ORRERY Mail and could not be made active again; not starting it." >&2
+            echo "  Its parent could not message it. Check that ORRERY Mail is running, or resume $CHILD_NAME from the dashboard." >&2
+            exit 1
+        fi
+        PRE_REGISTERED_UNRETIRED=true
+        echo "[spawn_child/pre-reg] $CHILD_NAME was retired in ORRERY Mail; made it active again" >&2
     fi
 
     # --worktree が指定されていれば worktree を作って WORK_DIR を上書き
