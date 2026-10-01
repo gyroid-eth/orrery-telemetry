@@ -14,6 +14,16 @@
 
 Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
 
+### cockpit を開いていると、dashboard が CPU を数コア使っていました
+
+ORRERY cockpit は `/api/graph?all=1&spawn_only=1` を 6 秒ごとに呼びます。dashboard はそのたびに全 agent（約 2,000 行）の resume の可否を計算して捨て、行ごとに SQLite を開き直していました（1 回あたり約 3,000 回）。複数の poll が重なると 1 本が 10 秒を超え、cockpit の timeout で取り直しが積み上がっていました。
+
+- `spawn_only` は親子の線だけを返し、行ごとの計算をしません。返す内容は以前と同じです
+- graph と agents の 1 回の計算では、Mail の登録を 1 回の問い合わせで読みます
+- 同じ graph / agents の計算は同時に 1 本だけにします。計算中に来た問い合わせは、その計算が終わった直後に始まる次の 1 回の結果を、ほかの問い合わせとまとめて受け取ります。どの問い合わせも自分が来た後に始まった計算の結果を受け取り、結果は時間で使い回さないので、表示が以前より古くなることはありません
+
+2,000 行での計測: `spawn_only` 1 回 0.94 秒 → 0.01 秒、`all=1` 0.83 秒 → 0.21 秒、`/api/agents?days=all` 1.08 秒 → 0.20 秒。4 本同時の `spawn_only` は最長 3.65 秒・CPU 7.9 秒 → 0.01 秒未満。API と表示の内容は変わりません。
+
 ### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
 
 `git pull && ./scripts/install.sh` を環境変数のない端末で実行すると、port・label prefix・terminal・MCP URL・service の `PATH`・Python・ORRERY Mail の state root（DB の場所）・`LANG` / `MURMUR` / `DELIVERABLE_ROOTS`・`AGENTSTACK_VAULT` などが既定値に戻り、dashboard が別の port・別の launchd label で登録し直されていました。installer はすべての設定を「明示した値（option・環境変数）> 前回の `env.sh` > 既定値」の順で決めるようにしました。`AGENTSTACK_VAULT` は明示しても env.sh・service に空で書かれていたので、明示した値も届くようにしました。`AGENTSTACK_MANAGED_AGENTS_FILE`・dashboard の log と再起動の設定・Mail の management socket も引き継ぎます。引き継ぐのは選んだ値だけです（`env.sh` に `AGENTSTACK_CHOSEN_SETTINGS` として記録します）。書き出された既定値は固定されず、次の版で既定値が変われば新しい既定値になります。1 つだけ既定値に戻すには空の値を明示し（`AGENTSTACK_VAULT=`、`--codex-add-dirs ""`）、まとめて戻すには `--reset-settings`（`AGENTSTACK_RESET_SETTINGS=1`）を使います。project key・protected roots・Mail の state / service root と management socket・label prefix・Mail の launchd label・MCP URL は、データの置き場所とそこで動く service の名前なので reset でも引き継ぎます（reset で戻すと、前の Mail が残ったまま同じ DB に 2 つ目の Mail が立ちえました）。`env.sh` と同じ値の環境変数（`env.sh` を読み込んだ shell や cockpit の更新 script から来たもの）は新しい選択として扱いません。`AGENTSTACK_CLAUDE_JSON` は試験用の差し替え口なので引き継ぎません。dashboard の plist に入れる値はすべて XML として escape し、`&` や `"` を含む path（vault など）でも plist が壊れないようにしました。前回記録した Python が無くなっていた場合は通知して探し直します。dry-run の冒頭に port・label prefix・terminal・MCP URL を表示します。
