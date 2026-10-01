@@ -553,9 +553,12 @@ def _cleanup(tmp_path, screen: str, which: str) -> list[str]:
     script = (
         f"DIR={shlex.quote(str(tmp_path))}\nCHILD_NAME=Child\nUSE_CODEX=true\n" + state
         + 'tmux() { printf "%s\\n" "$*" >> "$DIR/calls"; [[ "$1" == capture-pane ]] && cat "$DIR/screen"; return 0; }\n'
-        + "warn_if_uninjected() { :; }\ndiscard_claude_launch_record() { :; }\ncleanup_worktree() { :; }\n"
+        + "warn_if_uninjected() { :; }\ndiscard_claude_launch_record() { :; }\n"
         + "call_mcp() { :; }\nretire_agent_with_token_file() { :; }\nspawn_note() { printf '%s\\n' \"$1\" >&2; }\n"
-        + _extract("codex_self_update_on_screen") + "\n" + body + "\n" + call + "\n"
+        + f"SPAWN_INCIDENT_LOG={shlex.quote(str(tmp_path / 'incidents'))}\nAGENTSTACK_CODEX_UPDATE_WATCH_SECONDS=0\n"
+        + "\n".join(_extract(n) for n in ("codex_self_update_on_screen", "codex_update_watch",
+                                          "leave_updating_codex_child", "cleanup_worktree"))
+        + "\n" + body + "\n" + call + "\nwait\n"
     )
     subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20)
     return calls.read_text().splitlines() if calls.exists() else []
@@ -572,3 +575,74 @@ def test_cleanup_never_kills_a_codex_updating_itself(tmp_path, which):
 @pytest.mark.parametrize("which", ["pre-registered", "direct"])
 def test_cleanup_still_kills_an_ordinary_half_started_child(tmp_path, which):
     assert any(c.startswith("kill-session") for c in _cleanup(tmp_path, PROVISIONAL, which))
+
+
+# --- #165 review P2-1: who closes a child left updating ------------------------
+# The launcher's cleanup goes on after leaving the session: the registration is
+# rolled back. A codex that kept running the task after its update would work
+# as a retired identity, in a worktree the cleanup had removed. The worktree is
+# now handed to a watcher, which closes the session once the update is over.
+
+def _update_watch(tmp_path, screens: list[str], *, alive_polls: int = 99, limit: int = 30):
+    """Run codex_update_watch with tmux replaying `screens` (last repeats)."""
+    for i, screen in enumerate(screens):
+        (tmp_path / f"screen{i}").write_text(screen, encoding="utf-8")
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    script = (
+        f"DIR={shlex.quote(str(tmp_path))}; SCREENS={len(screens)}; ALIVE={alive_polls}\n"
+        'printf 0 > "$DIR/i"\n'
+        "tmux() {\n"
+        '  printf "%s\\n" "$*" >> "$DIR/calls"\n'
+        '  local i; i="$(cat "$DIR/i")"\n'
+        '  case "$1" in\n'
+        '    has-session) (( i < ALIVE )) ;;\n'
+        '    capture-pane) cat "$DIR/screen$(( i < SCREENS ? i : SCREENS - 1 ))" ;;\n'
+        "  esac\n"
+        "}\n"
+        'sleep() { printf %s "$(( $(cat "$DIR/i") + 1 ))" > "$DIR/i"; }\n'
+        'git() { printf "git %s\\n" "$*" >> "$DIR/calls"; }\n'
+        f'SPAWN_INCIDENT_LOG={shlex.quote(str(tmp_path / "incidents"))}\n'
+        + _extract("codex_update_watch")
+        + f"\ncodex_update_watch Child {shlex.quote(str(worktree))} /src Child {limit} 5\n"
+    )
+    subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20)
+    calls = (tmp_path / "calls").read_text().splitlines()
+    notes = (tmp_path / "incidents").read_text() if (tmp_path / "incidents").exists() else ""
+    return calls, notes
+
+
+UPDATING = "Updating Codex via `npm install -g @openai/codex`...\n"
+
+
+def test_the_watch_closes_a_child_that_went_on_after_its_update(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING, UPDATING, PROVISIONAL])
+    assert "kill-session -t =Child" in calls
+    assert any(c.startswith("git -C /src worktree remove --force") for c in calls)
+    assert "update finished" in notes
+
+
+def test_the_watch_only_tidies_up_after_a_child_that_closed_itself(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING], alive_polls=2)
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert any(c.startswith("git -C /src worktree remove --force") for c in calls)
+
+
+def test_a_child_still_updating_at_the_limit_is_left_and_reported(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING], limit=15)
+    assert not any(c.startswith("kill-session") for c in calls)
+    # Its worktree is its working directory: never removed under a live codex.
+    assert not any(c.startswith("git ") for c in calls)
+    assert "still updating" in notes and "tmux kill-session -t Child" in notes
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_leaving_an_updating_child_hands_its_worktree_to_the_watch(tmp_path, which):
+    spawn = SPAWN.read_text(encoding="utf-8")
+    start = spawn.index("    cleanup_preregister_failure() {") if which == "pre-registered" else spawn.index("cleanup_on_failure() {")
+    body = spawn[start:spawn.index("\n}\n", start)]
+    guarded = body[body.index("codex_self_update_on_screen"):]
+    assert "leave_updating_codex_child" in guarded.split("kill-session")[0]
+    worktree = spawn[spawn.index("cleanup_worktree() {"):]
+    worktree = worktree[:worktree.index("\n}\n")]
+    assert "CODEX_UPDATE_LEFT_RUNNING" in worktree
