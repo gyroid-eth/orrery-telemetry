@@ -20,6 +20,12 @@
 
 この順序は `hooks/project-context.sh`（`AGENTSTACK_INHERITED_SETTINGS`）の 1 か所で定義し、installer と launcher の両方が使います。`env.sh` を shell の起動時に読み込んでいる場合、その shell の値は明示した値として扱われるため、入れ直した後は新しい shell を開いてください。
 
+### installer が稼働中の ORRERY Mail を新しい build に差し替えられるようになりました
+
+これまで `install.sh` の再実行は稼働中の Mail を採用し、build には触れませんでした。そのため Mail 側の変更（2026.09.30.4 の `register_agent(existing_agent_id=…)` など）は普通の update では届かず、以前の版の Claude の子は会話だけの resume になっていました。
+
+`./scripts/install.sh --update-mail` は次の順で差し替えます。まず稼働中の Mail を止めずに、新しい build の用意、scratch port で database の snapshot に対する検証、database の backup を済ませます。そのうえで切り替え、新しい build が共有 database で応答しなければ前の build を起動し直します。`env.sh`・autostart・`install-state.json` は、実際に動いている方の build で書きます。差し替えなかったときと戻したときは、終了 status 1 で知らせます。途中で Ctrl-C などで止めた場合も、検証用の snapshot と server を残さず、Mail は前の build か新しい build のどちらかで `env.sh` と一致した状態で終わります。稼働中の接続・token・enrollment の pin・database は失いません。systemd の timer（WSL2 など）でも同じです。`--update-mail` を付けない再実行は、これまでどおり稼働中の build を使い続けます。build が違うときは `notice:` でそれを示します。手順と影響は [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md#--update-mail-による差し替え) を参照してください。
+
 ## 2026.09.30.4
 
 ### 以前の版で作った Claude child が resume できなくなっていました（#140）

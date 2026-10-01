@@ -10,6 +10,13 @@ build を出荷する手順です。同梱 service が唯一の provider にな�
 file が残っていることがあるので、下の事前確認は「消えているはず」と仮定せず
 探します。
 
+**まず `--update-mail`。** installer は `--update-mail` を付けると、稼働中の
+Mail をこの checkout の build に差し替えます（下の「[`--update-mail` による差し替え](#--update-mail-による差し替え)」）。
+candidate の build、scratch port での検証、database の backup を稼働中の Mail を
+止めずに済ませてから切り替え、新しい build が応答しなければ前の build に戻します。
+下の手動の手順は、`--update-mail` が拒否した配置を扱うときと、その各段階が何を
+しているかを確かめるときのためのものです。
+
 **適用範囲。** コマンドは既定の配置を前提にします。install dir は
 `~/.agentstack`、`--install-dir` なし、install 時の `AGENTSTACK_MAIL_*` override
 なし。custom install は対象外です。この文書が `env.sh` から読む値はあなたの
@@ -25,7 +32,11 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
 （手順 3）をここに書いたとおりに installed service に対して再実行し、手順 2 と
 3 の停止条件は `uv`・`git`・`lsof` を stub にした無害な bash 対照で確かめました（親 shell に残った旧値、`git` の失敗、`lsof` の不在と失敗を含む）。
 手順 4〜7 はその live run に基づきますが、ここに書いた形で通しては再実行して
-いません。Rollback 節は installer の source から読んだもので、未実行です。
+いません。Rollback 節の手動の手順は installer の source から読んだもので、未実行です。
+`--update-mail` は、一時 HOME・一時 state root・空き port の上で実 server を
+起動する test（`tests/test_install_mail_update.py`）で、切り替え、前の build への
+戻し、新しい build が応答しないときの自動 rollback、offline 検証の失敗で
+止めないこと、を通しています。稼働中の machine ではまだ実行していません。
 
 ## installer がすること・しないこと
 
@@ -38,15 +49,123 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
   service には**触りません**。port が占有されているのに ORRERY Mail として答え
   ない、あるいは別の database を配信している場合は error で止まります。この
   採用経路が通常の再実行のすべてで、だから再実行だけでは Mail の build は決して
-  切り替わりません。dashboard の `/api/version` は package の版であって、port の
-  裏にある build ではありません。
+  切り替わりません。稼働中の build がこの checkout の build と違えば、再実行は
+  `notice:` でそれを示し、`--update-mail` を案内します（package の tree が同じ
+  commit どうしなら何も言いません）。dashboard の `/api/version` は package の版で
+  あって、port の裏にある build ではありません。
 - **何も応答していない。** installer は checkout の正確な commit で candidate を
   用意し（無ければ build、あるが不完全なら run を止める）、service env を render
   し、`agentstack-mailctl` で起動し、`env.sh` と autostart unit をその render に
   向け、配信される database が共有のものであることを確かめます。
 
-したがって更新とは「古い service を止めてから installer を走らせる」ことで、
-その間に autostart unit が古い build を起こさないよう unit を押さえておきます。
+したがって手動の更新とは「古い service を止めてから installer を走らせる」こと
+で、その間に autostart unit が古い build を起こさないよう unit を押さえておきます。
+`--update-mail` はこの二つの経路の間を installer の中で行います。
+
+## `--update-mail` による差し替え
+
+```bash
+./scripts/install.sh --update-mail --dry-run   # 計画だけを表示する
+./scripts/install.sh --update-mail
+```
+
+採用経路で稼働中の deployment を特定したあと、この checkout の candidate
+（`candidates/<commit>/venv`）が稼働中のものと違えば、次の順に進みます。
+1〜4 の間、稼働中の Mail は止まりません。
+
+1. **candidate を用意する。** 完全なものがあれば再利用し、無ければ clean な
+   commit から build します（不完全なら止まる）。新しい render を書きます。
+2. **offline で検証する。** SQLite の backup API で共有 database の snapshot を
+   `/tmp/orrery-mail-verify.*`（mode 700）に取り、空の process 環境で
+   candidate を空き loopback port（`AGENTSTACK_MAIL_UPDATE_VERIFY_PORT` で固定可）に
+   起動します。その port が使用中か、稼働中の Mail の port と同じなら、何も起動せず
+   `not-switched` で終わります。そこにいる何かの health を candidate のものと
+   読まないためです。scratch の service env は
+   本番の render と同じ関数から作るので、database・archive・signals・管理
+   socket はすべて scratch を指します。`/mcp` と `/api` の両方の `health_check`
+   が scratch の database を返すこと、起動時の DDL が既存の table・column・
+   index・trigger を消したり定義し直したりしていないこと、`PRAGMA quick_check`
+   が `ok` であることを確かめます。待っている間は 10 秒ごとに経過を表示します。
+   snapshot は成否に関わらず削除し、server log だけを
+   `mail-service/runtime/mail-update-verify.log` に残します。検証中に Ctrl-C や
+   SIGTERM で止めても、scratch の server を止めて snapshot を消してから終わり
+   ます（終了 status 130。稼働中の Mail は止めていない）。
+3. **database を backup する。** `mail-service/backups/storage-<UTC>-before-<commit>.sqlite3`
+   （mode 600）。直近 3 個を残します（`AGENTSTACK_MAIL_UPDATE_BACKUPS`）。
+   自動で戻すのは build だけで、database は戻しません。backup は、新しい build
+   が data を壊したと分かったときに人が判断して使うためのものです。
+4. **切り替える。** `agentstack-mailctl stop` で前の runner を止め（stop marker が
+   autostart の sweep を押さえる）、新しい render で `agentstack-mailctl start`
+   します。endpoint の health が共有 database を返し、pidfile が新しい runner を
+   指すことを確かめます。
+5. **応答しなければ戻す。** 新しい runner を止め、前の render で start し直し、
+   同じ確認をします。前の candidate・render・runner は不変で、書き換えていません。
+
+そのあと `env.sh`、autostart unit、`connections/local.json`、`install-state.json`
+を、実際に稼働している方の deployment で書きます。`install-state.json` の
+`agent_mail.update` に結果（`switched`・`rolled-back`・`not-switched`）、理由、
+前後の render と candidate、backup の path を記録します。
+
+| 結果 | Mail | 終了 status |
+| --- | --- | --- |
+| `switched` | 新しい build | 0 |
+| `not-switched`（1〜3 で失敗） | 前の build。止めていない | 1 |
+| `rolled-back`（4 で失敗し 5 が成功） | 前の build。数秒〜 grace 分の停止あり | 1 |
+| rollback 失敗 | 停止中の可能性。error が状態と次の操作を示す | 1（その場で終了） |
+| 切り替え中に中断（Ctrl-C・SIGTERM・端末を閉じる） | `env.sh` がすでに新しい build を指していればそのまま、でなければ前の build に戻す | 130 |
+
+`not-switched` と `rolled-back` でも installer の残りは前の build に対して完了
+します。終了 status 1 は「頼まれた更新は起きていない」ことを示します。
+
+**前の build に戻す。** 前の candidate を pin して同じ操作をします。render は
+同じ入力から同じ path になり、そのまま再利用されます。
+
+```bash
+AGENTSTACK_MAIL_CANDIDATE_ID=<前の commit> \
+AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commit>/venv \
+  ./scripts/install.sh --update-mail
+```
+
+**影響を受けるもの・受けないもの。**
+
+- **接続。** server は stateless HTTP なので、切り替えは session を失いません。
+  停止から新しい server の応答までの間（前回の手動 run で 12 秒）に届いた
+  request は接続拒否になり、client の再試行で戻ります。
+- **token と credential。** agent の token は共有 database にあり、client 側の
+  file（`~/.agentstack/runtime` など）には触れません。build が変わっても変わり
+  ません。
+- **稼働中の session と bound proxy。** 再起動も再登録も要りません。test では、
+  切り替え前に登録した agent が同じ owner token で切り替え後も送受信でき、
+  違う token は拒否されることを確かめています。bound proxy の `runtime_status`
+  は direct binding では平常時から `state: "registering"`・`agent_id: null` を
+  返すので、それだけでは止まっている証拠になりません。
+- **systemd の timer（WSL2 など）。** unit は `env.sh` を読んで
+  `agentstack-mailctl start` を実行するだけで、render の path を持ちません。
+  切り替え後に timer が発火しても新しい build を見つけて何もしません（test で
+  unit の command をそのまま実行して確認）。
+- **enrollment。** `server_instance_id` は database の `mail_instances` にあるので
+  同じ値のままです。`connections/local.json` の `expected_server_instance_id`
+  は保持し、`mail_env` だけを新しい render に書き換えます。管理 socket の path
+  は state root から決まるので同じです。
+- **database・archive・signals。** 同じ state root を使い続けます。新しい build の
+  起動時の DDL は追加だけを許し、既存の table・column・index・trigger を消すか
+  定義し直す build は検証で止まります。
+- **autostart。** 切り替え中は stop marker が sweep を押さえ、`start` がそれを
+  外します。unit は `env.sh` を読むので、installer が `env.sh` を書き換えた時点で
+  新しい render を起動するようになります。
+
+**扱わないもの。** `agentstack-mailctl` が起動した runner（pidfile が生きた
+runner を指す）だけを差し替えます。deployment を特定できない listener と
+launchd が直接 supervise する service は対象外で、何も止めずに error で終わり
+ます。state root・service root・endpoint の override（`AGENTSTACK_MAIL_*`、
+`AGENTSTACK_MCP_URL`）は同じ経路で扱い、test もこれらを override して実行して
+います。既定以外の `--install-dir` も拒否はしませんが、それ自体は test して
+いません。
+
+時間の上限: 検証 server の応答待ち `AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT`
+（既定 120 秒）、新しい build の起動待ち `AGENTSTACK_MAIL_UPDATE_START_GRACE`
+（既定は controller の `AGENTSTACK_MAIL_START_GRACE`、180 秒）。rollback の起動は
+controller の既定の grace で待ちます。
 
 ## 配置
 
@@ -368,6 +487,9 @@ installer が管理する範囲に第二の supervisor はありません。旧�
    path、outage、probe の結果を deployment note に記録します。
 
 ## Rollback
+
+前の build への戻しは `--update-mail` に前の candidate を pin するのが test で
+通した経路です（上の節）。以下は手動で行う場合の手順です。
 
 **installer の source から読んだ手順で、未実行です。** 頼る前に scratch な install
 で検証する plan として扱ってください。

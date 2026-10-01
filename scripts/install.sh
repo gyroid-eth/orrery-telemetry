@@ -8,6 +8,13 @@ MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
 RETIRE_LEGACY_MAIL=false
+# --update-mail: switch a running ORRERY Mail to this checkout's candidate.
+# Without it a re-run adopts the running build and only reports the difference.
+UPDATE_MAIL=false
+MAIL_UPDATE_PLANNED=false
+MAIL_UPDATE_RESULT=""
+MAIL_UPDATE_REASON=""
+MAIL_UPDATE_BACKUP=""
 LEGACY_MAIL_SCAN_COMPLETE=false
 LEGACY_MAIL_DETECTED_LABELS=""
 LEGACY_MAIL_RETIRE_PLANNED=false
@@ -106,6 +113,11 @@ Options:
   --label-prefix PREFIX  Default: existing env.sh, else org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
+  --update-mail          Switch a running ORRERY Mail to this checkout's build:
+                         build and verify the candidate on a scratch port,
+                         back up the database, stop, start the new build, and
+                         restore the running build if the new one is not
+                         healthy (default: keep the running build)
   --terminal MODE        auto, ghostty, iterm, terminal, or none (default:
                          existing env.sh, else auto)
   --reset-settings       Do not inherit settings from the existing env.sh:
@@ -159,6 +171,12 @@ while [[ $# -gt 0 ]]; do
       # Explicit opt-in. Without it a previous mail service is reported and left
       # running: stopping a service someone is using is the operator's call.
       RETIRE_LEGACY_MAIL=true
+      shift
+      ;;
+    --update-mail)
+      # Explicit opt-in. Replacing the Mail build every agent is connected to
+      # is an outage, however short; the operator chooses when to take it.
+      UPDATE_MAIL=true
       shift
       ;;
     -y|--assume-yes)
@@ -709,8 +727,10 @@ NATIVE_MAIL_LOG="$NATIVE_MAIL_SERVICE_ROOT/runtime/agentstack-mail.log"
 # given explicitly: a socket derived for another root would be shared by two.
 NATIVE_MAIL_MANAGEMENT_SOCKET="${AGENTSTACK_MAIL_MANAGEMENT_SOCKET:-}"
 resolve_setting NATIVE_MAIL_MANAGEMENT_SOCKET AGENTSTACK_MAIL_MANAGEMENT_SOCKET "" kept
+MAIL_SOCKET_SOURCE="$SETTING_SOURCE"
 if [[ "$SETTING_SOURCE" == saved && "$MAIL_STATE_ROOT_SOURCE" == explicit ]]; then
   NATIVE_MAIL_MANAGEMENT_SOCKET=""
+  MAIL_SOCKET_SOURCE=default
 fi
 AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"unknown","evidence":"not-inspected","enforcement_mode":"unknown","mail_dir":"","detail":"installer has not inspected ORRERY Mail naming source","warning":"requested-name handling is unknown"}'
 PREFLIGHT_OS=""
@@ -1455,7 +1475,14 @@ resolve_native_mail_connection() {
   NATIVE_MAIL_VENV="$(normalize_path "$NATIVE_MAIL_VENV")"
   NATIVE_MAIL_ENROLL_BIN="$NATIVE_MAIL_VENV/bin/agentstack-enroll"
   if [[ -n "$NATIVE_MAIL_MANAGEMENT_SOCKET" ]]; then
-    NATIVE_MAIL_MANAGEMENT_SOCKET="$(normalize_path "$NATIVE_MAIL_MANAGEMENT_SOCKET")"
+    # Only a value given on this run is normalized. One inherited from env.sh
+    # is what the previous install rendered into its immutable service env;
+    # rewriting it (on macOS /tmp becomes /private/tmp) makes the same inputs
+    # render differently, and re-rendering an existing render -- the same
+    # commit reinstalled, or --update-mail going back -- is refused.
+    if [[ "${MAIL_SOCKET_SOURCE:-explicit}" == explicit ]]; then
+      NATIVE_MAIL_MANAGEMENT_SOCKET="$(normalize_path "$NATIVE_MAIL_MANAGEMENT_SOCKET")"
+    fi
   else
     NATIVE_MAIL_MANAGEMENT_SOCKET="$($PYTHON_BIN - "$NATIVE_MAIL_STATE_ROOT" <<'PY'
 import hashlib
@@ -1547,7 +1574,11 @@ PY
       [[ -f "$resolved_db" ]] || die "ORRERY Mail database does not exist: $resolved_db"
       NATIVE_MAIL_EXISTING=true
       EXISTING_AGENT_MAIL_SERVER=true
+      # What this checkout would deploy; --update-mail switches to it once the
+      # running deployment has been identified.
+      mail_update_save NEW
       adopt_running_native_mail_render
+      [[ "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" != true ]] || mail_update_decide
       say "existing ORRERY Mail database: $resolved_db"
       return
     fi
@@ -1608,6 +1639,9 @@ adopt_running_native_mail_render() {
     [[ -n "$candidate" && -f "$candidate" ]] || candidate=""
   fi
   if [[ -z "$candidate" ]]; then
+    if [[ "${UPDATE_MAIL:-false}" == true ]]; then
+      die "--update-mail cannot replace the running ORRERY Mail because its deployment is not identifiable; nothing was stopped"
+    fi
     if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
       die "cannot verify explicit AGENTSTACK_MAIL_SERVICE_VENV against the running ORRERY Mail deployment because its service env is not identifiable; stop Mail before switching candidates"
     fi
@@ -1643,7 +1677,7 @@ adopt_running_native_mail_render() {
   resolved_venv="$(resolve_native_mail_candidate_for_render "$candidate")" || \
     die "the running ORRERY Mail service env has no trusted candidate association: $candidate"
   resolved_venv="$(normalize_path "$resolved_venv")"
-  if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" && "$requested_venv" != "$resolved_venv" ]]; then
+  if [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" && "$requested_venv" != "$resolved_venv" && "${UPDATE_MAIL:-false}" != true ]]; then
     die "AGENTSTACK_MAIL_SERVICE_VENV '$requested_venv' does not match the running ORRERY Mail deployment '$resolved_venv'; stop Mail before switching candidates"
   fi
   native_mail_service_binaries_ready "$resolved_venv" || \
@@ -1667,6 +1701,87 @@ adopt_running_native_mail_render() {
   say "adopted the running ORRERY Mail deployment: $NATIVE_MAIL_ENV ($NATIVE_MAIL_VENV)"
 } # end adopt_running_native_mail_render
 
+# --- replacing a running ORRERY Mail (--update-mail) --------------------------
+#
+# The variables that name one deployment. The adopt step overwrites them with
+# the running deployment; an update needs both sets, so it keeps them under the
+# NEW_ and OLD_ prefixes and switches between them. Whatever set is current when
+# write_env_file and write_manifest run is what env.sh, the autostart unit and
+# install-state.json record -- so a rolled-back update records the old one.
+MAIL_UPDATE_VARS="NATIVE_MAIL_SOURCE_ID NATIVE_MAIL_VENV NATIVE_MAIL_ENV NATIVE_MAIL_RUNNER NATIVE_MAIL_DEPLOYMENT NATIVE_MAIL_ENROLL_BIN NATIVE_MAIL_ENROLL_AVAILABLE NATIVE_MAIL_MANAGEMENT_SOCKET MAIL_ENV"
+
+mail_update_save() {
+  local prefix="$1" name
+  for name in $MAIL_UPDATE_VARS; do
+    printf -v "${prefix}_${name}" '%s' "${!name}"
+  done
+}
+
+mail_update_use() {
+  local prefix="$1" name source
+  for name in $MAIL_UPDATE_VARS; do
+    source="${prefix}_${name}"
+    printf -v "$name" '%s' "${!source}"
+  done
+}
+
+# The source id a render was built from: deployment.json records it; a render
+# older than that metadata is named <source id>-<hash>.
+mail_render_source_id() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+import json
+import pathlib
+import sys
+
+render = pathlib.Path(sys.argv[1]).parent
+try:
+    value = json.loads((render / "deployment.json").read_text(encoding="utf-8"))
+    source = value.get("source_id") if isinstance(value, dict) else None
+except (OSError, ValueError):
+    source = None
+if not isinstance(source, str) or not source:
+    source = render.name.rsplit("-", 1)[0]
+print(source)
+PY
+}
+
+# True when both source ids are commits of this checkout and the bundled
+# package tree is identical in them: a new candidate would be the same build.
+mail_package_unchanged() {
+  local old="$1" new="$2" old_tree new_tree
+  [[ "$NATIVE_MAIL_PACKAGE_SOURCE" == "$REPO_ROOT/packages/agentstack_mail" ]] || return 1
+  old_tree="$(git -C "$REPO_ROOT" rev-parse -q --verify "$old^{commit}:packages/agentstack_mail" 2>/dev/null)" || return 1
+  new_tree="$(git -C "$REPO_ROOT" rev-parse -q --verify "$new^{commit}:packages/agentstack_mail" 2>/dev/null)" || return 1
+  [[ -n "$old_tree" && "$old_tree" == "$new_tree" ]]
+}
+
+mail_update_decide() {
+  local old_source
+  NATIVE_MAIL_SOURCE_ID="$(mail_render_source_id "$NATIVE_MAIL_ENV")"
+  mail_update_save OLD
+  if [[ "$NATIVE_MAIL_VENV" == "$NEW_NATIVE_MAIL_VENV" ]]; then
+    [[ "$UPDATE_MAIL" != true ]] || \
+      say "--update-mail: the running ORRERY Mail already uses candidate $NATIVE_MAIL_VENV; nothing to switch"
+    return 0
+  fi
+  old_source="$OLD_NATIVE_MAIL_SOURCE_ID"
+  if [[ -z "$NATIVE_MAIL_VENV_EXPLICIT" ]] && mail_package_unchanged "$old_source" "$NEW_NATIVE_MAIL_SOURCE_ID"; then
+    [[ "$UPDATE_MAIL" != true ]] || \
+      say "--update-mail: packages/agentstack_mail is identical in $old_source and $NEW_NATIVE_MAIL_SOURCE_ID; keeping the running build"
+    return 0
+  fi
+  if [[ "$UPDATE_MAIL" != true ]]; then
+    say "notice: the running ORRERY Mail is built from $old_source; this checkout would build $NEW_NATIVE_MAIL_SOURCE_ID"
+    say "notice: the running build was kept. Re-run with --update-mail to switch (docs/agentstack-mail-update.md)"
+    return 0
+  fi
+  if [[ "$AGENT_MAIL_SERVICE_KIND" != nohup ]]; then
+    die "--update-mail can only replace an ORRERY Mail started by agentstack-mailctl, and $NATIVE_MAIL_PIDFILE does not name a live runner; nothing was stopped"
+  fi
+  MAIL_UPDATE_PLANNED=true
+  say "--update-mail: will switch ORRERY Mail from $old_source ($OLD_NATIVE_MAIL_VENV) to $NEW_NATIVE_MAIL_SOURCE_ID ($NEW_NATIVE_MAIL_VENV)"
+}
+
 check_dependencies() {
   if ! command -v fswatch >/dev/null 2>&1; then
     warn "optional dependency 'fswatch' not found; mail watcher will use polling"
@@ -1682,7 +1797,8 @@ check_agent_mail_provisioning_dependencies() {
   if [[ "$PREFLIGHT_SKIP_COMMANDS" == "1" ]]; then
     return 0
   fi
-  if [[ "$PROVISION_NATIVE_MAIL" != true || -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
+  if [[ "$PROVISION_NATIVE_MAIL" != true && "$MAIL_UPDATE_PLANNED" != true ]] || \
+     [[ -n "$NATIVE_MAIL_VENV_EXPLICIT" ]]; then
     return 0
   fi
   if ! command -v uv >/dev/null 2>&1; then
@@ -2521,8 +2637,16 @@ write_native_mail_env() {
   fi
   mkdir -p "$(dirname "$NATIVE_MAIL_ENV")" "$NATIVE_MAIL_SERVICE_ROOT/runtime"
   umask 077
-  "$PYTHON_BIN" - "$NATIVE_MAIL_ENV" "$host" "$port" "$path" \
-    "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_MANAGEMENT_SOCKET" <<'PY'
+  emit_native_mail_env "$NATIVE_MAIL_ENV" "$host" "$port" "$path" \
+    "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_MANAGEMENT_SOCKET"
+}
+
+# One service env. The production render and the scratch env --update-mail
+# verifies a candidate with come from this single definition, so a setting
+# added here cannot be missed by the scratch copy and leave it pointing at a
+# live location.
+emit_native_mail_env() {
+  "$PYTHON_BIN" - "$@" <<'PY'
 import pathlib
 import sys
 
@@ -2759,9 +2883,476 @@ start_native_mail() {
   say "ORRERY Mail ready at $MCP_URL (database: $MAIL_DB)"
 }
 
+# agentstack-mailctl for one explicit deployment. The installed env.sh names
+# the running deployment until write_env_file replaces it, so an update drives
+# the controller with each render's own values instead of letting it read env.sh.
+native_mailctl() {  # native_mailctl <service env> <runner> <action>
+  AGENTSTACK_MAILCTL_SKIP_ENV=1 \
+  AGENTSTACK_HOME="$INSTALL_DIR" \
+  AGENTSTACK_MAIL_DIR="$NATIVE_MAIL_SERVICE_ROOT" \
+  AGENTSTACK_MAIL_ENV="$1" \
+  AGENTSTACK_MAIL_RUNNER="$2" \
+  AGENTSTACK_MAIL_PIDFILE="$NATIVE_MAIL_PIDFILE" \
+  AGENTSTACK_MAIL_LOG="$NATIVE_MAIL_LOG" \
+  AGENTSTACK_MAIL_DB="$MAIL_DB" \
+  AGENTSTACK_MCP_URL="$MCP_URL" \
+  AGENTSTACK_MAIL_LAUNCHD_LABEL="$MAIL_LAUNCHD_LABEL_SETTING" \
+  AGENTSTACK_PYTHON="$PYTHON_BIN" \
+    "$BIN_DIR/agentstack-mailctl" "$3"
+}
+
+# Health on the configured endpoint names the shared database, and the
+# controller's pidfile names this render's runner: the build answering the
+# port is the one we meant to start, not something that came up in the window.
+native_mail_serving_render() {  # native_mail_serving_render <runner>
+  local database_url resolved_db runner
+  database_url="$(probe_agent_mail_database_url || true)"
+  resolved_db="$(database_url_to_path "$database_url" "" || true)"
+  [[ -n "$resolved_db" ]] || { MAIL_UPDATE_REASON="health did not report a local SQLite database"; return 1; }
+  resolved_db="$(normalize_path "$resolved_db")"
+  [[ "$resolved_db" == "$MAIL_DB" ]] || { MAIL_UPDATE_REASON="the endpoint serves '$resolved_db', not '$MAIL_DB'"; return 1; }
+  runner="$(sed -n '2p' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)"
+  [[ "$runner" == "$1" ]] || { MAIL_UPDATE_REASON="the pidfile names runner '$runner', not '$1'"; return 1; }
+}
+
+mail_update_helper() {
+  "$PYTHON_BIN" - "$@" <<'PY'
+import json
+import os
+import pathlib
+import socket
+import sqlite3
+import sys
+import time
+import urllib.request
+
+
+def schema(path):
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        tables = [row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )]
+        columns = {
+            table: sorted(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
+            for table in tables
+        }
+        # Indexes (a UNIQUE one constrains what the previous build may write)
+        # and triggers, by their defining SQL. Automatic indexes have no SQL;
+        # they come with their table and are compared through it.
+        objects = {
+            f"{kind} {name}": sql
+            for kind, name, sql in connection.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE type IN ('index', 'trigger') AND sql IS NOT NULL"
+            )
+        }
+        return {"columns": columns, "objects": objects}
+    finally:
+        connection.close()
+
+
+def backup(source, target):
+    # The backup API, not a file copy: the live database is in WAL mode and its
+    # main file alone can miss committed pages.
+    target = pathlib.Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    dst = sqlite3.connect(target)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+
+def health_database(url):
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": "agentstack-mail-update", "method": "tools/call",
+        "params": {"name": "health_check", "arguments": {}},
+    }).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    })
+    with urllib.request.urlopen(request, timeout=5) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    result = json.loads(raw)["result"]
+    health = result.get("structuredContent") or {}
+    if not health:
+        for block in result.get("content") or []:
+            if block.get("type") == "text":
+                health = json.loads(block.get("text") or "{}")
+                break
+    return str(health.get("database_url") or "")
+
+
+command, *args = sys.argv[1:]
+if command == "free-port":
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        print(probe.getsockname()[1])
+elif command == "port-free":
+    # 0 only when a connect is refused: something answering, or a probe that
+    # cannot tell, is never treated as free.
+    try:
+        with socket.create_connection(("127.0.0.1", int(args[0])), timeout=0.5):
+            pass
+    except ConnectionRefusedError:
+        raise SystemExit(0)
+    except OSError as exc:
+        print(f"could not probe port {args[0]}: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(1)
+elif command == "snapshot":
+    live, target, schema_file = args
+    backup(live, target)
+    pathlib.Path(schema_file).write_text(json.dumps(schema(target)), encoding="utf-8")
+elif command == "wait-health":
+    # wait-health <server pid> <timeout> <expected db> <url>...
+    pid, timeout, expected, *urls = args
+    expected_path = pathlib.Path(expected).resolve()
+    deadline = time.monotonic() + float(timeout)
+    pending = list(urls)
+    last = "not started"
+    started = time.monotonic()
+    next_report = started + 10
+    while pending and time.monotonic() < deadline:
+        if time.monotonic() >= next_report:
+            # A silent two-minute wait invites Ctrl-C; say that it is waiting.
+            print(f"still waiting for the candidate to answer health "
+                  f"({int(time.monotonic() - started)}s of {timeout}s)", flush=True)
+            next_report += 10
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            print("the candidate server exited before it answered health", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            database_url = health_database(pending[0])
+        except Exception as exc:  # readiness retry boundary
+            last = str(exc)
+            time.sleep(0.2)
+            continue
+        served = database_url.split(":///", 1)[-1].split("?", 1)[0]
+        if not served or pathlib.Path(served).resolve() != expected_path:
+            print(f"{pending[0]} reports database {database_url!r}, not the scratch snapshot", file=sys.stderr)
+            raise SystemExit(1)
+        pending.pop(0)
+    if pending:
+        print(f"{pending[0]} did not answer health within {timeout}s ({last})", file=sys.stderr)
+        raise SystemExit(1)
+elif command == "schema-kept":
+    # The candidate ran its startup DDL on the snapshot. Additive changes are
+    # what the running build tolerates on rollback; a table or column that
+    # disappeared is not, and that needs its own migration plan.
+    schema_file, database = args
+    before_all = json.loads(pathlib.Path(schema_file).read_text(encoding="utf-8"))
+    after_all = schema(database)
+    before, after = before_all["columns"], after_all["columns"]
+    missing = [
+        f"{table}.{column}" if column else table
+        for table, columns in sorted(before.items())
+        for column in ([None] if table not in after else [c for c in columns if c not in after[table]])
+    ]
+    missing += sorted(
+        name for name in before_all["objects"] if name not in after_all["objects"]
+    )
+    changed = sorted(
+        name for name, sql in before_all["objects"].items()
+        if name in after_all["objects"] and after_all["objects"][name] != sql
+    )
+    if missing:
+        print("the candidate removed schema the running build uses: " + ", ".join(missing), file=sys.stderr)
+        raise SystemExit(1)
+    if changed:
+        print("the candidate redefined schema the running build uses: " + ", ".join(changed), file=sys.stderr)
+        raise SystemExit(1)
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        check = connection.execute("PRAGMA quick_check").fetchone()[0]
+    finally:
+        connection.close()
+    if check != "ok":
+        print(f"the snapshot failed quick_check after the candidate ran: {check}", file=sys.stderr)
+        raise SystemExit(1)
+    added = sorted(set(after) - set(before))
+    added += sorted(
+        f"{table}.{column}" for table in before if table in after
+        for column in set(after[table]) - set(before[table])
+    )
+    added += sorted(set(after_all["objects"]) - set(before_all["objects"]))
+    print("schema additions: " + (", ".join(added) if added else "none"))
+elif command == "backup":
+    live, directory, stem, keep = args
+    directory = pathlib.Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    target = directory / f"storage-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-before-{stem}.sqlite3"
+    backup(live, target)
+    kept = sorted(directory.glob("storage-*-before-*.sqlite3"))
+    for old in kept[:-int(keep)]:
+        old.unlink()
+    print(target)
+else:
+    raise SystemExit(f"unknown helper command {command}")
+PY
+}
+
+# Scratch state of the offline check, global so the signal handler can reach it.
+MAIL_VERIFY_SCRATCH=""
+MAIL_VERIFY_SERVER_PID=""
+MAIL_VERIFY_HELPER_PID=""
+
+stop_mail_verify_pid() {  # stop_mail_verify_pid <pid>: TERM, wait up to 10 s, then KILL
+  local pid="$1" waited=0
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || return 0
+  while kill -0 "$pid" 2>/dev/null && (( waited < 100 )); do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+# The snapshot holds every message and every agent's registration token, and
+# the scratch server serves it on loopback without authentication. Neither may
+# outlive the check -- not on success, not on failure, not on Ctrl-C.
+cleanup_mail_verify() {
+  stop_mail_verify_pid "$MAIL_VERIFY_HELPER_PID"
+  stop_mail_verify_pid "$MAIL_VERIFY_SERVER_PID"
+  MAIL_VERIFY_HELPER_PID=""
+  MAIL_VERIFY_SERVER_PID=""
+  if [[ -n "$MAIL_VERIFY_SCRATCH" ]]; then
+    rm -rf "$MAIL_VERIFY_SCRATCH"
+    MAIL_VERIFY_SCRATCH=""
+  fi
+}
+
+mail_verify_interrupted() {
+  trap - EXIT INT TERM HUP
+  cleanup_mail_verify
+  warn "interrupted while verifying the ORRERY Mail candidate; the scratch server and snapshot were removed and the running Mail was not stopped"
+  exit 130
+}
+
+# Start the candidate on a free loopback port against a snapshot of the shared
+# database, in an empty process environment (python-decouple prefers the
+# process environment over the env file, so an inherited AGENTSTACK_MAIL_*
+# would point the scratch server at live state). Nothing here touches the
+# running service, its database file, its archive, signals or management socket.
+verify_native_mail_candidate_offline() {
+  local scratch port parts path live_port rc=1 timeout log_copy
+  timeout="${AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT:-120}"
+  parts="$(mcp_local_server_parts)" || { MAIL_UPDATE_REASON="ORRERY Mail requires a local HTTP endpoint"; return 1; }
+  IFS='|' read -r _ live_port path <<< "$parts"
+  log_copy="$NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log"
+  # Armed before the scratch directory exists, so no window leaves it behind.
+  trap mail_verify_interrupted INT TERM HUP
+  trap cleanup_mail_verify EXIT
+  # Short on purpose: the management socket lives inside it, and a Unix socket
+  # path is limited to about 100 bytes.
+  if ! scratch="$(mktemp -d /tmp/orrery-mail-verify.XXXXXX)"; then
+    trap - EXIT INT TERM HUP
+    MAIL_UPDATE_REASON="could not create a scratch directory"
+    return 1
+  fi
+  MAIL_VERIFY_SCRATCH="$scratch"
+  chmod 700 "$scratch"
+  mkdir -p "$scratch/state/archive" "$scratch/state/signals" "$scratch/home"
+  port="${AGENTSTACK_MAIL_UPDATE_VERIFY_PORT:-}"
+  if [[ -n "$port" && ! "$port" =~ ^[1-9][0-9]{0,4}$ ]]; then
+    MAIL_UPDATE_REASON="AGENTSTACK_MAIL_UPDATE_VERIFY_PORT is not a port number: $port"
+  elif [[ -n "$port" && "$port" == "$live_port" ]]; then
+    MAIL_UPDATE_REASON="the scratch port $port is the live ORRERY Mail port; choose another AGENTSTACK_MAIL_UPDATE_VERIFY_PORT"
+  elif [[ -z "$port" ]] && ! port="$(mail_update_helper free-port)"; then
+    MAIL_UPDATE_REASON="could not pick a scratch port"
+  elif ! mail_update_helper port-free "$port" 2>/dev/null; then
+    # Never start next to, or probe as ours, whatever holds the port: its
+    # health answer would be read as the candidate's.
+    MAIL_UPDATE_REASON="the scratch port $port is in use; nothing was started on it"
+  elif ! mail_update_helper snapshot "$MAIL_DB" "$scratch/state/storage.sqlite3" "$scratch/schema.json" 2> "$scratch/snapshot.err"; then
+    MAIL_UPDATE_REASON="could not snapshot $MAIL_DB: $(tail -n 1 "$scratch/snapshot.err")"
+  elif ! emit_native_mail_env "$scratch/service.env" 127.0.0.1 "$port" "$path" "$scratch/state" "$scratch/mgmt.sock"; then
+    MAIL_UPDATE_REASON="could not render the scratch service env"
+  else
+    say "verifying candidate $NATIVE_MAIL_VENV on scratch port $port in $scratch (waits up to ${timeout}s)"
+    env -i HOME="$scratch/home" PATH=/usr/bin:/bin AGENTSTACK_MAIL_ENV_FILE="$scratch/service.env" \
+      "$NATIVE_MAIL_VENV/bin/agentstack-mail" > "$scratch/server.log" 2>&1 &
+    MAIL_VERIFY_SERVER_PID=$!
+    # In the background and collected with `wait`: bash runs a trap only after
+    # a foreground command returns, so a SIGTERM would otherwise wait out the
+    # whole health timeout before anything was cleaned up.
+    mail_update_helper wait-health "$MAIL_VERIFY_SERVER_PID" "$timeout" "$scratch/state/storage.sqlite3" \
+      "http://127.0.0.1:$port$path" "http://127.0.0.1:$port/api" 2> "$scratch/probe.err" &
+    MAIL_VERIFY_HELPER_PID=$!
+    if wait "$MAIL_VERIFY_HELPER_PID"; then
+      rc=0
+    else
+      MAIL_UPDATE_REASON="candidate failed offline verification: $(tail -n 1 "$scratch/probe.err")"
+    fi
+    MAIL_VERIFY_HELPER_PID=""
+    stop_mail_verify_pid "$MAIL_VERIFY_SERVER_PID"
+    MAIL_VERIFY_SERVER_PID=""
+    if [[ "$rc" -eq 0 ]]; then
+      if mail_update_helper schema-kept "$scratch/schema.json" "$scratch/state/storage.sqlite3" > "$scratch/schema.out" 2> "$scratch/schema.err"; then
+        say "candidate verified offline ($(cat "$scratch/schema.out"))"
+      else
+        rc=1
+        MAIL_UPDATE_REASON="$(tail -n 1 "$scratch/schema.err")"
+      fi
+    fi
+    mkdir -p "$(dirname "$log_copy")"
+    cp "$scratch/server.log" "$log_copy" 2>/dev/null || true
+  fi
+  cleanup_mail_verify
+  trap - EXIT INT TERM HUP
+  return "$rc"
+}
+
+# From the stop until env.sh names the build that is serving, an interrupt
+# would leave a stopped Mail held down by the stop marker, or a new runner
+# that env.sh does not name (the autostart sweep and `status` then refuse it).
+# Finish the job either way before exiting: if env.sh already names the new
+# render, that is consistent and is left alone; otherwise the previous build
+# is put back, as after a failed switch.
+MAIL_UPDATE_SWITCH_ARMED=false
+
+mail_update_switch_interrupted() {
+  trap - INT TERM HUP
+  MAIL_UPDATE_SWITCH_ARMED=false
+  if [[ "$(installed_env_mail_env)" == "$NATIVE_MAIL_ENV" ]] && \
+     native_mail_serving_render "$NATIVE_MAIL_RUNNER"; then
+    warn "installer interrupted after ORRERY Mail was switched; $NATIVE_MAIL_ENV is serving and env.sh names it. Re-run install.sh to finish the rest of the install"
+    exit 130
+  fi
+  MAIL_UPDATE_REASON="the installer was interrupted during the switch"
+  rollback_native_mail
+  mail_update_use OLD
+  write_enrollment_connection_profile
+  warn "installer interrupted; ORRERY Mail was restored to $NATIVE_MAIL_ENV, which env.sh still names. Re-run install.sh --update-mail to try again"
+  exit 130
+}
+
+mail_update_disarm_switch() {
+  if [[ "$MAIL_UPDATE_SWITCH_ARMED" == true ]]; then
+    trap - INT TERM HUP
+    MAIL_UPDATE_SWITCH_ARMED=false
+  fi
+}
+
+switch_native_mail() {
+  say "stopping ORRERY Mail $OLD_NATIVE_MAIL_ENV"
+  if ! native_mailctl "$OLD_NATIVE_MAIL_ENV" "$OLD_NATIVE_MAIL_RUNNER" stop; then
+    MAIL_UPDATE_REASON="agentstack-mailctl could not stop the running build"
+    return 1
+  fi
+  # AGENTSTACK_MAIL_UPDATE_START_GRACE bounds only the new build's start; the
+  # rollback below starts the previous build with the controller's own grace.
+  local grace="${AGENTSTACK_MAIL_UPDATE_START_GRACE:-${AGENTSTACK_MAIL_START_GRACE:-180}}"
+  say "starting ORRERY Mail $NATIVE_MAIL_ENV (waits up to ${grace}s for it to answer)"
+  if ! AGENTSTACK_MAIL_START_GRACE="$grace" \
+      native_mailctl "$NATIVE_MAIL_ENV" "$NATIVE_MAIL_RUNNER" start; then
+    MAIL_UPDATE_REASON="the new build did not start (see $NATIVE_MAIL_LOG)"
+    return 1
+  fi
+  native_mail_serving_render "$NATIVE_MAIL_RUNNER"
+}
+
+# Put the build that was running back. Its render, runner and candidate were
+# never modified (all three are immutable), so this is the start that was
+# already working before the update. A failure here is reported with the exact
+# state and ends the run: there is no further fallback to try.
+rollback_native_mail() {
+  local runner
+  warn "ORRERY Mail update failed: $MAIL_UPDATE_REASON"
+  warn "restoring the previous ORRERY Mail build $OLD_NATIVE_MAIL_ENV"
+  runner="$(sed -n '2p' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)"
+  if [[ "$runner" == "$NATIVE_MAIL_RUNNER" ]]; then
+    native_mailctl "$NATIVE_MAIL_ENV" "$NATIVE_MAIL_RUNNER" stop || \
+      die "rollback failed: could not stop the new ORRERY Mail runner recorded in $NATIVE_MAIL_PIDFILE; env.sh still names $OLD_NATIVE_MAIL_ENV. Stop that runner, then run $BIN_DIR/agentstack-mailctl start"
+  fi
+  if ! native_mailctl "$OLD_NATIVE_MAIL_ENV" "$OLD_NATIVE_MAIL_RUNNER" start; then
+    # A start that ran out of grace leaves its runner alive and still coming
+    # up (a loaded machine is enough). That runner is the previous build: wait
+    # for it rather than declare the rollback failed while it is starting.
+    local waited=0 limit="${AGENTSTACK_MAIL_START_GRACE:-180}"
+    while ! native_mail_serving_render "$OLD_NATIVE_MAIL_RUNNER" 2>/dev/null; do
+      [[ "$(sed -n '2p' "$NATIVE_MAIL_PIDFILE" 2>/dev/null || true)" == "$OLD_NATIVE_MAIL_RUNNER" ]] && \
+        (( waited < limit )) || \
+        die "rollback failed: the previous ORRERY Mail build did not start; env.sh still names $OLD_NATIVE_MAIL_ENV. Inspect $NATIVE_MAIL_LOG, then run $BIN_DIR/agentstack-mailctl start"
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
+  native_mail_serving_render "$OLD_NATIVE_MAIL_RUNNER" || \
+    die "rollback failed: $MAIL_UPDATE_REASON; env.sh still names $OLD_NATIVE_MAIL_ENV"
+  say "restored ORRERY Mail $OLD_NATIVE_MAIL_ENV"
+}
+
+# --update-mail. Everything that can fail slowly or be refused happens while
+# the running build keeps serving: building the candidate, verifying it on a
+# scratch port against a snapshot, backing up the database. Only then is the
+# running build stopped, and the new one must answer on the real endpoint with
+# the shared database or the old one is started again. env.sh, the autostart
+# unit and install-state.json are written afterwards from whichever deployment
+# ended up serving.
+update_native_mail() {
+  local backup
+  mail_update_use NEW
+  ensure_native_mail_candidate
+  write_native_mail_env
+  plan "verify candidate $NATIVE_MAIL_VENV on a scratch port against a snapshot of $MAIL_DB"
+  plan "back up $MAIL_DB under $NATIVE_MAIL_SERVICE_ROOT/backups"
+  plan "stop ORRERY Mail $OLD_NATIVE_MAIL_ENV, start $NATIVE_MAIL_ENV, and restore the previous build if the new one is not serving"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  if ! verify_native_mail_candidate_offline; then
+    MAIL_UPDATE_RESULT="not-switched"
+    warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON"
+    warn "the running build $OLD_NATIVE_MAIL_ENV was not stopped (server log: $NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log)"
+    mail_update_use OLD
+    return
+  fi
+  if ! backup="$(mail_update_helper backup "$MAIL_DB" "$NATIVE_MAIL_SERVICE_ROOT/backups" "$NATIVE_MAIL_SOURCE_ID" "${AGENTSTACK_MAIL_UPDATE_BACKUPS:-3}")"; then
+    MAIL_UPDATE_RESULT="not-switched"
+    MAIL_UPDATE_REASON="could not back up $MAIL_DB"
+    warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON"
+    mail_update_use OLD
+    return
+  fi
+  MAIL_UPDATE_BACKUP="$backup"
+  say "backed up ORRERY Mail database to $backup"
+  render_native_mail_runner
+  # Disarmed in main once env.sh names the serving build.
+  MAIL_UPDATE_SWITCH_ARMED=true
+  trap mail_update_switch_interrupted INT TERM HUP
+  if switch_native_mail; then
+    MAIL_UPDATE_RESULT="switched"
+    say "ORRERY Mail switched from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID"
+    return
+  fi
+  mail_update_disarm_switch
+  rollback_native_mail
+  MAIL_UPDATE_RESULT="rolled-back"
+  mail_update_use OLD
+}
+
 ensure_native_agentstack_mail() {
   AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"honored","evidence":"agentstack-cutover-profile","enforcement_mode":"passthrough","mail_dir":"","detail":"ORRERY Mail service env requires passthrough","warning":""}'
   if [[ "$NATIVE_MAIL_EXISTING" == true ]]; then
+    if [[ "$MAIL_UPDATE_PLANNED" == true ]]; then
+      update_native_mail
+      return
+    fi
     plan "reuse existing ORRERY Mail service at $MCP_URL"
     return
   fi
@@ -3793,7 +4384,17 @@ write_manifest() {
   local service_path="$2"
   local mail_service_kind="${3:-}"
   local mail_service_path="${4:-}"
-  local tmp="$MANIFEST.tmp"
+  local tmp="$MANIFEST.tmp" mail_update=""
+  if [[ -n "$MAIL_UPDATE_RESULT" ]]; then
+    # Through the environment as JSON: the reason is free text and must not
+    # be spliced into the Python source below.
+    mail_update="$("$PYTHON_BIN" -c 'import json, sys; keys = sys.argv[1::2]; print(json.dumps(dict(zip(keys, sys.argv[2::2]))))' \
+      result "$MAIL_UPDATE_RESULT" reason "$MAIL_UPDATE_REASON" \
+      previous_service_env "${OLD_NATIVE_MAIL_ENV:-}" previous_candidate_venv "${OLD_NATIVE_MAIL_VENV:-}" \
+      requested_service_env "${NEW_NATIVE_MAIL_ENV:-}" requested_candidate_venv "${NEW_NATIVE_MAIL_VENV:-}" \
+      database_backup "$MAIL_UPDATE_BACKUP")"
+  fi
+  AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
@@ -4024,6 +4625,11 @@ manifest["agent_mail"]["enroll_bin"] = "$NATIVE_MAIL_ENROLL_BIN"
 manifest["agent_mail"]["deployment_identified"] = mail_deployment_identified
 manifest["agent_mail"]["enrollment_available"] = mail_enrollment_available
 manifest["agent_mail"]["autostart_managed_by_this_install"] = mail_autostart_managed
+mail_update = json.loads(os.environ.get("AGENTSTACK_INSTALL_MAIL_UPDATE") or "null")
+if mail_update:
+    # The last --update-mail outcome. "rolled-back" and "not-switched" mean the
+    # deployment above is the one that was already running.
+    manifest["agent_mail"]["update"] = mail_update
 manifest["env"].update({
     "AGENTSTACK_MAIL_DIR": "$NATIVE_MAIL_SERVICE_ROOT",
     "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
@@ -4095,6 +4701,7 @@ main() {
   say "ORRERY Mail requested-name handling: honored (passthrough)"
   write_enrollment_connection_profile
   write_env_file
+  mail_update_disarm_switch
   # After write_env_file: the unit runs `agentstack-mailctl start`, which reads
   # env.sh. Registering it earlier would fire RunAtLoad against a config that
   # does not exist yet. This is outside ensure_native_agentstack_mail on purpose
@@ -4131,6 +4738,16 @@ main() {
       report_managed_instructions
     fi
   fi
+  case "$MAIL_UPDATE_RESULT" in
+    not-switched|rolled-back)
+      # The rest of the install finished against the build that is serving, but
+      # what was asked for did not happen: exit non-zero so nobody reads this
+      # run as an update.
+      printf 'error: ORRERY Mail update %s: %s\n' "$MAIL_UPDATE_RESULT" "$MAIL_UPDATE_REASON" >&2
+      printf 'error: ORRERY Mail still runs %s\n' "$NATIVE_MAIL_ENV" >&2
+      exit 1
+      ;;
+  esac
 }
 
 main "$@"
