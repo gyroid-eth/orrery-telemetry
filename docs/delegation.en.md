@@ -78,6 +78,15 @@ default_tools_approval_mode = "approve"
 
 The overlay currently applies only to macOS/Linux `spawn_child.sh`. WSL2 uses that path, but the community-lane native-Windows launcher does not apply it.
 
+### Codex children in a worktree and hook trust
+
+Codex records that a project's hooks (`<checkout>/.codex/hooks.json`) are trusted in the user's `~/.codex/config.toml`, keyed by the path of that `hooks.json` (`[hooks.state."<path>:<event>:<i>:<j>"]` with a `trusted_hash`). A `--worktree` child reads the same hooks at another path, finds no record, and stops on the "N hooks need review" screen; none of those hooks run meanwhile.
+
+The launcher therefore adds, in the child's own `CODEX_HOME` `config.toml` only, the trust the user gave to the hooks of the source checkout, keyed by the worktree path. The source checkout is the one whose `.git` names the same git directory as the worktree (also when that git directory is kept elsewhere).
+
+- The `trusted_hash` is a hash of the hook's content, which Codex checks at every start: only identical hooks become trusted, and a changed hook goes back to review.
+- The user's `~/.codex/config.toml` is not changed, and no hook the user has not trusted is added.
+
 ### Minimizing MCP for a Codex child
 
 Explicitly use `/delegate "<task>" --codex --codex-mcp orrery-only` to make the child-owned `config.toml` keep only authenticated ORRERY Mail and the AgentStack plugin needed for session binding. Other inherited MCP servers and plugins are set to `enabled = false`. Shell and file operations remain available, but plugin-provided skills and app tools are disabled too, so do not use this profile when the task depends on them.

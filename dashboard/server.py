@@ -4266,7 +4266,7 @@ def _resume_unavailable(capability: str) -> dict:
 
 
 def _rebuild_codex_child_home(
-    session: str, registration: dict, child_home: str, mcp_profile: str
+    session: str, registration: dict, child_home: str, mcp_profile: str, work_dir: str = ""
 ) -> None:
     """Recreate the isolated home from current user config, never a snapshot."""
 
@@ -4318,6 +4318,9 @@ def _rebuild_codex_child_home(
         mcp_profile,
         "--overlay",
         os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip(),
+        # A child in a git worktree keeps the hook trust given to its source.
+        "--work-dir",
+        work_dir,
     ]
     try:
         result = subprocess.run(
@@ -4375,7 +4378,7 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
                 session, registration
             )
             _rebuild_codex_child_home(
-                session, registration, child_home, child_profile
+                session, registration, child_home, child_profile, cwd or ""
             )
         elif launch_origin == "standalone":
             _validate_codex_standalone_credential(session)

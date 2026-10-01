@@ -1127,6 +1127,114 @@ def _plugin_name(header: str) -> str:
     return (match.group(1) or match.group(2)) if match else ""
 
 
+def _git_dir_of(directory: Path) -> Path | None:
+    """The git directory a checkout's `.git` names (a directory or a gitdir: file)."""
+    marker = directory / ".git"
+    try:
+        if marker.is_dir():
+            return marker.resolve()
+        if marker.is_file():
+            text = marker.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text[len("gitdir:"):].strip())
+                return (gitdir if gitdir.is_absolute() else directory / gitdir).resolve()
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def _linked_worktree(work_dir: Path) -> tuple[Path, Path] | None:
+    """(worktree root, shared git directory) when work_dir is in a linked worktree.
+
+    Read from files only (the worktree's `.git` and its `commondir`), never by
+    running git, so no GIT_* variable or repository config takes part. A main
+    checkout and a submodule are not linked worktrees.
+    """
+    for directory in (work_dir, *work_dir.parents):
+        marker = directory / ".git"
+        if marker.is_dir():
+            return None
+        if not marker.is_file():
+            continue
+        gitdir = _git_dir_of(directory)
+        if gitdir is None or gitdir.parent.name != "worktrees":
+            return None
+        common = gitdir.parent.parent
+        try:
+            pointer = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+            if pointer:
+                common = (gitdir / pointer).resolve()
+        except (OSError, UnicodeError):
+            pass
+        return directory, common.resolve()
+    return None
+
+
+def _source_checkout(key_path: str, common: Path) -> Path | None:
+    """The checkout above key_path whose `.git` names the shared git directory."""
+    path = Path(key_path)
+    if not path.is_absolute():
+        return None
+    for directory in path.parents:
+        gitdir = _git_dir_of(directory)
+        if gitdir is not None:
+            return directory if gitdir == common else None
+    return None
+
+
+def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
+    """Config lines carrying a checkout's hook trust to its linked worktree.
+
+    Codex keys hook trust by the hooks.json path, so the project hooks a user
+    already trusted in a checkout wait for review again in its worktree, and do
+    not run meanwhile (a Codex child stopped on "4 hooks need review" for 4.5
+    minutes, 2026-10-01). The trust is a hash of the hook's content, which Codex
+    checks again: copying it re-trusts only hooks that are identical to the ones
+    the user trusted. The source checkout is the one whose `.git` names the same
+    git directory as the worktree (also when it is kept elsewhere, as for the
+    vault). Nothing the user has not trusted is added, an entry the user already
+    has for the worktree path is kept, and only this child's config.toml is
+    written.
+    """
+    if work_dir is None:
+        return []
+    found = _linked_worktree(work_dir)
+    if found is None:
+        return []
+    worktree, common = found
+    try:
+        state = tomllib.loads(config_text).get("hooks", {}).get("state", {})
+    except tomllib.TOMLDecodeError:
+        return []
+    if not isinstance(state, dict):
+        return []
+    roots = {os.fspath(worktree)}
+    try:
+        roots.add(os.fspath(worktree.resolve()))
+    except OSError:
+        pass
+    lines: list[str] = []
+    for key, entry in state.items():
+        trusted = entry.get("trusted_hash") if isinstance(entry, dict) else None
+        parts = key.rsplit(":", 3)
+        if not isinstance(trusted, str) or len(parts) != 4:
+            continue
+        source = _source_checkout(parts[0], common)
+        if source is None:
+            continue
+        relative = key[len(os.fspath(source)):]
+        for root in sorted(roots):
+            new_key = root + relative
+            if new_key in state:
+                continue
+            lines.extend(["", "[hooks.state." + _toml_string(new_key) + "]",
+                          "trusted_hash = " + _toml_string(trusted)])
+    if lines:
+        lines[0:0] = ["", "# Written by spawn_child.sh: hook trust the user gave to this",
+                      "# worktree's source checkout, for the same hooks here."]
+    return lines
+
+
 def _build_home_unlocked(
     *,
     home: Path,
@@ -1143,6 +1251,7 @@ def _build_home_unlocked(
     mcp_profile: str,
     overlay_setting: str = "",
     parent_agent: str = "",
+    work_dir: Path | None = None,
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
@@ -1291,6 +1400,7 @@ def _build_home_unlocked(
                         'approval_mode = "approve"',
                     ]
                 )
+        lines.extend(_worktree_hook_trust("\n".join(lines) + "\n", work_dir))
         config_text = "\n".join(lines) + "\n"
         if overlay_setting.strip():
             try:
@@ -1375,6 +1485,7 @@ def build_home(
     mcp_profile: str,
     overlay_setting: str = "",
     parent_agent: str = "",
+    work_dir: Path | None = None,
 ) -> Path:
     """Build only the canonical generated home while holding the child lock."""
 
@@ -1403,6 +1514,7 @@ def build_home(
             mcp_profile=mcp_profile,
             overlay_setting=overlay_setting,
             parent_agent=parent_agent,
+            work_dir=work_dir,
         )
 
 
@@ -1483,6 +1595,7 @@ def main() -> int:
     build.add_argument("--python-bin", default="")
     build.add_argument("--overlay", default="")
     build.add_argument("--parent-agent", default="")
+    build.add_argument("--work-dir", default="")
     args = parser.parse_args()
     try:
         runtime = Path(getattr(args, "runtime_dir", "")).expanduser()
@@ -1572,6 +1685,7 @@ def main() -> int:
                 mcp_profile=args.mcp_profile,
                 overlay_setting=args.overlay,
                 parent_agent=args.parent_agent,
+                work_dir=Path(args.work_dir).expanduser() if args.work_dir else None,
             )
             print(home)
     except (OSError, ValueError, ResumeStateError) as exc:

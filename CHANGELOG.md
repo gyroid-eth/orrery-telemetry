@@ -14,6 +14,10 @@
 
 登録の helper は `set_contact_policy` を owner token 付きで先に呼んでいました。同梱の ORRERY Mail の `set_contact_policy` は `registration_token` を受け付けないので、この呼び出しは毎回失敗し、token なしの呼び直しで設定されていました。token なしを先に呼び、失敗したときだけ token 付きで呼び直すようにしました。owner token を求める古い Mail にも、2 回目で設定されます。
 
+### worktree の Codex の子が「hooks need review」で止まっていました
+
+`--worktree` で起動した Codex の子は、利用者が元の checkout で信頼した project の hook を、別の path なので信頼済みと見なされず、Codex の review の画面で止まっていました（2026-10-01 の通しで 4.5 分）。その間は hook も動いていませんでした。launcher は子の `CODEX_HOME` の設定にだけ、元の checkout の hook の信頼を worktree の path でも書き足します。Codex は hook の中身の hash で照合するので、中身が同じ hook だけが信頼されます。利用者の `~/.codex/config.toml` は変えません。dashboard からの再開でも同じです。
+
 ## 2026.10.01.1
 
 ### 計算の待ちに上限を付け、失敗した計算が重ならないようにしました（#161 のレビュー、API 世代6）
