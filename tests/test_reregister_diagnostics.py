@@ -66,6 +66,11 @@ elif tool == "register_agent":
 else:
     mode_key = "FAKE_POLICY_MODE"
 mode = os.environ.get(mode_key, "success")
+# The bundled Mail's set_contact_policy has no registration_token parameter
+# and rejects it; an older deployment gated the call on the owner token.
+if tool == "set_contact_policy" and mode in ("bundled-schema", "token-gated"):
+    has_token = "registration_token" in arguments
+    mode = "tool" if has_token == (mode == "bundled-schema") else "success"
 status = os.environ.get("FAKE_HTTP_STATUS", "200") if mode == "http" else "200"
 if mode == "transport":
     sys.stderr.write("LEAK_CURL_STDERR_SENTINEL\n")
@@ -292,6 +297,37 @@ def test_contact_policy_response_never_leaks_raw_stderr_from_successful_registra
         "register_agent",
         *("set_contact_policy" for _ in range(policy_calls)),
     ]
+    _assert_no_secrets(completed)
+
+
+def _policy_calls(calls):
+    return [call["arguments"] for call in calls if call["tool"] == "set_contact_policy"]
+
+
+def test_contact_policy_is_set_without_the_token_on_the_bundled_mail(tmp_path: pathlib.Path):
+    # #51: the token-first call could never succeed against the bundled
+    # schema, so every registration made one failing call before the real one.
+    completed, calls = _run_wrapper(
+        tmp_path, AGENTSTACK_CONTACT_POLICY="open", FAKE_POLICY_MODE="bundled-schema",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+    policy = _policy_calls(calls)
+    assert len(policy) == 1
+    assert "registration_token" not in policy[0] and policy[0]["policy"] == "open"
+    _assert_no_secrets(completed)
+
+
+def test_contact_policy_still_reaches_a_mail_that_wants_the_token(tmp_path: pathlib.Path):
+    completed, calls = _run_wrapper(
+        tmp_path, AGENTSTACK_CONTACT_POLICY="open", FAKE_POLICY_MODE="token-gated",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+    policy = _policy_calls(calls)
+    assert len(policy) == 2
+    assert "registration_token" not in policy[0]
+    assert policy[1].get("registration_token")
     _assert_no_secrets(completed)
 
 
