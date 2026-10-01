@@ -224,3 +224,19 @@ def test_disagreeing_trust_for_one_hook_is_left_to_review(tmp_path):
     source, worktree = _checkouts(tmp_path)
     state = _build(tmp_path, _alias_config(tmp_path, source, OTHER), worktree)
     assert f"{worktree}/.codex/hooks.json:session_start:0:0" not in state
+
+
+def test_metadata_elsewhere_cannot_point_its_commondir_at_a_trusted_repository(tmp_path):
+    """Re-check of #174, P2-R1: real metadata with a correct back-reference, but
+    under another repository's worktrees/, naming the trusted repository as its
+    commondir. Nothing is written under the trusted repository."""
+    source, _worktree = _checkouts(tmp_path)
+    other_repo = tmp_path / "other-repo"
+    metadata = other_repo / ".git" / "worktrees" / "other"
+    metadata.mkdir(parents=True)
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    (stranger / ".git").write_text(f"gitdir: {metadata}\n", encoding="utf-8")
+    (metadata / "gitdir").write_text(f"{stranger}/.git\n", encoding="utf-8")
+    (metadata / "commondir").write_text(f"{source}/.git\n", encoding="utf-8")
+    assert _carried(tmp_path, stranger, source) == []

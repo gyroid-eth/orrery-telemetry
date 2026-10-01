@@ -1177,7 +1177,13 @@ def _linked_worktree(work_dir: Path) -> tuple[Path, Path] | None:
             common = (gitdir / pointer).resolve()
         except OSError:
             return None
-        if not common.is_dir():
+        # The metadata must live under worktrees/ of the very git directory
+        # its commondir names: metadata kept in another repository cannot lend
+        # itself a trusted repository's identity (re-check of #174).
+        try:
+            if not common.is_dir() or common != gitdir.parent.parent.resolve():
+                return None
+        except OSError:
             return None
         return directory, common
     return None
