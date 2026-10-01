@@ -359,7 +359,9 @@ def test_choice_screen_that_resolves_itself_does_not_stop_the_launch(tmp_path):
     result, calls, _polls, _incidents = _launch(
         tmp_path, [UNKNOWN_CHOICE, UNKNOWN_CHOICE, LOADING, READY])
     assert result.returncode == 0, result.stderr
-    assert _keys(calls)[-1].startswith("send-keys")  # only the task injection
+    # No key at all: the choice resolved itself, and the task is the launch
+    # argument rather than a paste followed by Enter.
+    assert _keys(calls) == []
 
 
 @pytest.mark.parametrize("prefix", ["spawn_child/pre-reg", "spawn_child"])
@@ -369,3 +371,37 @@ def test_both_claude_launch_paths_use_the_shared_wait(prefix):
     # The copied per-path loops are gone.
     assert "while [[ $WAITED -lt 60 ]]" not in text
     assert "\n    WAIT_MAX=60" not in text
+
+
+# As captured on macOS (Sonnet 5), 2026-10-01: a child started with its first
+# prompt as the `claude [prompt]` argument shows that prompt at once after the
+# cursor glyph and starts working. The echoed prompt row is not a choice; the
+# launcher took it for one and stopped a child that was already working.
+WORKING_ON_ARGV_PROMPT = """\
+❯ Child agent startup. AGENT_NAME=Probe-Curie; parent=ParentAgent. Follow the
+  child-agent startup procedure in CLAUDE.md and start the task immediately.
+· Wandering… (11s · thinking with medium effort)
+  tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and re…
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  work | Sonnet 5
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+"""
+
+
+def test_the_echo_of_the_launch_prompt_is_not_a_choice_screen(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [LOADING, WORKING_ON_ARGV_PROMPT])
+    assert result.returncode == 0, result.stderr
+    assert "unrecognised choice screen" not in incidents
+    assert _keys(calls) == []
+    assert polls <= 3
+
+
+def test_a_real_choice_below_the_echoed_prompt_still_stops_the_launch(tmp_path):
+    """Ignoring the echo must not hide a dialog shown after it."""
+    screen = WORKING_ON_ARGV_PROMPT.split("────")[0] + UNKNOWN_CHOICE
+    result, calls, _polls, incidents = _launch(tmp_path, [screen])
+    assert result.returncode != 0
+    assert "unrecognised choice screen" in incidents
+    assert _keys(calls) == []

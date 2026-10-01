@@ -44,7 +44,11 @@ def _fake_launch_env(
         "    for arg in \"$@\"; do case \"$arg\" in AGENTSTACK_CODEX_PROMPT_FILE=*)\n"
         "      printf 'ARGV_TASK\\034' >> \"$FAKE_TMUX_LOG\"; cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\"\n"
         # Codex then shows the task it was started with, as the real one does.
-        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;; esac; done ;;\n"
+        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;;\n"
+        # A Claude child reads its first prompt from the file named in its env
+        # (the launch argument); record what it would have received and its mode.
+        "      CLAUDE_CHILD_PROMPT_FILE=*) printf 'ARGV_TASK\\034%s\\034' \"$(stat -c %a \"${arg#*=}\" 2>/dev/null || stat -f %Lp \"${arg#*=}\")\" >> \"$FAKE_TMUX_LOG\"\n"
+        "      cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\" ;; esac; done ;;\n"
         "  capture-pane)\n"
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
         "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
@@ -403,18 +407,21 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert result.stdout.strip() == child_name
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
     assert task in injected
+    # Both get the task as their argv, never as a paste: a pasted task reaches
+    # a Claude child as <pasted_content>, which it may decline to act on.
+    assert "ARGV_TASK" in injected
+    assert "\034paste-buffer" not in injected
     if codex:
-        # Codex gets the task as its argv; Claude keeps the pasted prompt.
-        assert "ARGV_TASK" in injected
-        assert "\034paste-buffer" not in injected
         assert "first-task confirmation unknown" in result.stderr
+    else:
+        assert "ARGV_TASK\034600\034" in injected, "the first prompt file must be private"
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
     assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected
     assert f"あなたは {child_name}（親: ParentAgent）" in injected
     assert "現在時刻:" in injected
     assert "project_key は /shared/project" in injected
-    assert "send_message で ParentAgent に報告してください" in injected
+    assert "ORRERY Mail の send_message（Claude Code の SendMessage ではない）で ParentAgent に報告してください" in injected
     assert "Capability notice:" not in injected
     assert "launch prompt is canonical; do not send task mail" in result.stderr
     assert not backtick_marker.exists()

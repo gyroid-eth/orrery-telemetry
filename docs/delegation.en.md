@@ -105,6 +105,45 @@ Explicitly passing `/delegate "<task>" --claude-chrome-device <deviceId>` (or `-
 - **WSL.** The official documentation ([Claude in Chrome](https://code.claude.com/docs/en/chrome)) lists WSL as unsupported. With Claude Code 2.1.283, `claude -p --chrome` in WSL controlled a Windows browser connected through the account on one test machine. Do not treat this as supported, and check again after upgrading.
 - **Env defaults.** Setting `AGENTSTACK_CLAUDE_CHILD_CHROME=1` and `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE=<id>` applies the same request to every Claude child started by `spawn_child.sh`. CLI flags take precedence over env. Codex children ignore them, and they are removed from the environment when a Codex child starts or resumes, so a Codex child does not hand them on to children it starts. The dashboard's NEW AGENT uses only the value chosen in the form, never the env defaults.
 
+## How a Claude child receives its task
+
+The launcher (`spawn_child.sh`) gives a Claude child its first task as the `claude [prompt]` argument, so it is the user's first message. The same launch command passes `--append-system-prompt` with operator configuration saying:
+
+- this session is ORRERY child X, started by the launcher because parent P delegated a task to it;
+- the first message is the task P delegated (to be carried out with the usual judgment);
+- reports go through `mcp__orrery-mail__send_message`.
+
+It makes no claim the launcher has not checked, such as that a person asked for the task.
+The task used to be pasted into the input box. Claude Code wraps a paste in `<pasted_content>` and follows instructions inside it only when the user's own message asks it to. On 2026-10-01, Sonnet 5 children outside the vault (no CLAUDE.md with the managed block) handled a task shaped like the incident as follows:
+
+| Delivery | Result |
+|---|---|
+| pasted | declined 6 times in 6, however it was worded |
+| argument only | declined 2 times in 3 |
+| argument and system prompt | started 3 times in 3 |
+
+**Checking that the child started:** after the launch, the launcher reads the child's transcript in the background and looks at how its first turn ends. It reads one transcript, once found, and only what is appended to it.
+
+- A first turn that ends after ORRERY Mail accepted a `mcp__orrery-mail__send_message` to the parent needs no notice (a send that failed, or whose result never came back, is reported). The transcript is the one whose first message was written after this launch, so an earlier conversation of the same name is not mistaken for it.
+- The parent is told by ORRERY Mail when the first turn:
+  - ends in text alone (declined, or asked for confirmation);
+  - called tools but ended without the report (checked and then declined, or forgot to report);
+  - has no answer within `AGENTSTACK_CHILD_START_WAIT_SECONDS` (default 180), or its transcript cannot be found.
+- A first turn still being written at 180 s (still thinking) gets a separate "still in its first answer" notice.
+- A child that starts after an early notice gets one more message saying it started.
+- The message arrives under the child's name, but its subject starts with `[launcher]` and its first line says the launcher sent it, not the child.
+- Every outcome is logged in `spawn_incidents.log`. `AGENTSTACK_CHILD_START_CHECK=0` turns the check off (for tests).
+
+A task too long for one argument (128 KiB per argument on Linux and WSL) is kept in a file only the child can read, and the argument only says to read that file. A task passed as an argument is visible in the process list (`ps`) while the child runs, as it already was for Codex children.
+
+A warm-pool session (`hooks/warm_pool.sh`) is already running, so its task is still pasted. If you use a warm pool, give it the same system prompt when it is pre-started. Codex children already received their task as an argument.
+
+**Run after a model changes:** `scripts/canary-embed-task.sh` starts short-lived children for each model and place (inside or outside the vault) and tabulates them as started, reported outside Mail, declined, or timed out. It is run by hand, not in CI. Every child is ended and retired at the end. It creates temporary identities in the live ORRERY Mail, so it asks before starting.
+
+```bash
+scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside --runs 3 --parent <your name>
+```
+
 ## Choosing between them
 
 There are cases where a built-in subagent is correct: a short search where only the answer matters, or a read-only investigation that should not consume the parent's context. These are jobs that end after one call and that nobody needs to refer to later.

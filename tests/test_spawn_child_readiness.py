@@ -105,7 +105,10 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     assert result.stdout.strip() == "Fresh-Curie"
     assert "Claude trust dialog detected" in result.stderr
     calls = tmux_log.read_text(encoding="utf-8").splitlines()
-    assert sum(call.endswith(" C-m") for call in calls) >= 2
+    # The one Enter accepts the trust dialog. The task is the launch argument,
+    # so nothing is pasted or submitted afterwards.
+    assert sum(call.endswith(" C-m") for call in calls) == 1
+    assert not any(call.startswith(("paste-buffer", "load-buffer")) for call in calls)
     # Waiting out the 60s timeout would take 30 polls of 2s; accepting the
     # trust dialog and seeing the prompt takes about five (deterministic:
     # sleep is faked), so 10 leaves room without hiding a wait-out.

@@ -42,6 +42,11 @@ PRE_CHROME_INNER = (
 CHROME_INNER = PRE_CHROME_INNER.replace(
     '"${MCP_ARGS[@]}";', '"${MCP_ARGS[@]}" --chrome;'
 )
+# A launched child also takes its first prompt as the `claude [prompt]`
+# argument, read once from a private file (see claude_child_launch_command).
+ARGV_PROMPT = (' --append-system-prompt "$CLAUDE_CHILD_SYSTEM_PROMPT"'
+               ' "$(cat "$CLAUDE_CHILD_PROMPT_FILE"; rm -f "$CLAUDE_CHILD_PROMPT_FILE")"')
+LAUNCHED_CHROME_INNER = CHROME_INNER.replace("--chrome;", "--chrome" + ARGV_PROMPT + ";")
 
 
 # --------------------------------------------------------------------------- #
@@ -178,7 +183,7 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
         pytest.skip("pre-change launcher is not in this checkout's history")
     (old_hooks / "spawn_child.sh").write_text(old_text.stdout, encoding="utf-8")
 
-    runs = {}
+    launches, prompts = {}, {}
     for label, script in (("old", old_hooks / "spawn_child.sh"), ("new", SPAWN)):
         (tmp_path / label).mkdir(exist_ok=True)
         env, workdir = _launch_env(tmp_path / label)
@@ -189,14 +194,27 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             cwd=ROOT, env=env, text=True, capture_output=True, timeout=60, check=False,
         )
         assert result.returncode == 0, result.stderr
-        # The whole tmux conversation (launch argv, env, injected prompt),
-        # with only per-run temp names normalized.
-        text = _log_text(env).replace(str(tmp_path / label), "<tmp>")
-        text = re.sub(r"agentstack-spawn-\d+-\d+", "<buf>", text)
-        text = re.sub(r"agentstack-spawn-prompt\.\w+", "<prompt>", text)
-        runs[label] = text
-    assert runs["new"] == runs["old"]
-    assert f"-lc '{PRE_CHROME_INNER}'" in runs["new"]
+        log = _log_text(env)
+        launch = [arg.replace(str(tmp_path / label), "<tmp>") for arg in _new_session(env)]
+        if label == "old":
+            # The old launcher pasted the prompt: it is the load-buffer content.
+            _, _, rest = log.partition("\034load-buffer\034")
+            prompts[label] = rest.split("\035\n", 1)[1].split("CALL", 1)[0]
+        else:
+            # The new one passes the same text as the launch argument instead.
+            for variable in ("CLAUDE_CHILD_PROMPT_FILE=", "CLAUDE_CHILD_SYSTEM_PROMPT="):
+                index = next(i for i, arg in enumerate(launch) if arg.startswith(variable)) - 1
+                assert launch[index] == "-e"
+                del launch[index:index + 2]
+            launch[-1] = launch[-1].replace(ARGV_PROMPT, "")
+            prompts[label] = log.split("ARGV_TASK\034600\034", 1)[1].split("CALL", 1)[0]
+            assert "\034load-buffer\034" not in log and "\034paste-buffer\034" not in log
+        launches[label] = launch
+    # Without --claude-chrome the child is launched exactly as before, and gets
+    # exactly the prompt it got before; only how the prompt travels changed.
+    assert launches["new"] == launches["old"]
+    assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
+    assert launches["new"][-1].endswith(f"-lc '{PRE_CHROME_INNER}'")
 
 
 @pytest.mark.parametrize("warm_model", ["opus", "sonnet"])
@@ -214,7 +232,7 @@ def test_chrome_request_skips_a_ready_warm_session_and_adds_chrome(tmp_path):
     result = _spawn(tmp_path, env, workdir, "ChromeChild", "--claude-chrome")
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "warm.log").exists()
-    assert _new_session(env)[-1].endswith(f"-lc '{CHROME_INNER}'")
+    assert _new_session(env)[-1].endswith(f"-lc '{LAUNCHED_CHROME_INNER}'")
 
 
 def test_env_default_turns_chrome_on_for_claude_children(tmp_path):
@@ -223,7 +241,7 @@ def test_env_default_turns_chrome_on_for_claude_children(tmp_path):
     env["AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"] = "win-brave.1"
     result = _spawn(tmp_path, env, workdir, "EnvChild")
     assert result.returncode == 0, result.stderr
-    assert _new_session(env)[-1].endswith(f"-lc '{CHROME_INNER}'")
+    assert _new_session(env)[-1].endswith(f"-lc '{LAUNCHED_CHROME_INNER}'")
     assert "deviceId win-brave.1" in _log_text(env)
 
 
