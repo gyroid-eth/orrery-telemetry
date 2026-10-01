@@ -32,7 +32,7 @@ Codex の起動時の更新案内は、既定の選択が `npm install -g @opena
 
 ### 子に渡す道具を起動時に選べるようにしました（API 世代7）
 
-`/delegate` と `spawn_child.sh` に `--base default|mail-only` と `--tools`（`browser[:<deviceId>]`・`screen[:read|:operate]`・`screen:<read|operate>:<server>`・`mcp:<server>`）を、`POST /api/spawn` に `base` と `tools` を足しました。利用者が頼る field を足したため `/api/version` の `api` を7にしました。`base` を省いた起動は、コマンドも引数も従来と同じです。
+`/delegate` と `spawn_child.sh` に `--base default|mail-only` と `--tools`（`browser[:<deviceId>]`・`screen[:read|:operate]`・`screen:<read|operate>:<server>`・`mcp:<server>`）を、`POST /api/spawn` に `base` と `tools` を足しました。利用者が頼る field を足したため `/api/version` の `api` を7にしました。`--base` も `--tools` も指定しない（道具の選択がない）起動は、コマンドも引数も従来と同じです。
 
 - `mail-only` の child には ORRERY Mail と選んだものだけを渡します。Claude はブラウザを選ばなければ `--no-chrome` も付け、Codex は `orrery-only` と同じ無効化の後で選んだ server だけを有効にします
 - 選んだ server は Claude では利用者の定義を strict の設定に写し、Codex では子の `config.toml` で有効にします。承認は child の起動の中だけで、分類表で分かる tool ごとに渡し、server 全体は承認しません。利用者の設定ファイルと全体の承認方針は変えません
