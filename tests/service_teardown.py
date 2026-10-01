@@ -219,10 +219,12 @@ def stop_dashboard(home, *, appear_timeout: float = 8.0,
     Every other launchd job the same install loaded is booted out as well."""
     home = pathlib.Path(home)
     # launchd is macOS only; on Linux the installer uses systemd or a plain
-    # supervisor, and there is no launchctl to call.
-    if label_prefix and shutil.which("launchctl"):
-        _run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{label_prefix}.agentdashboard"])
-        bootout_install_jobs(home, label_prefix)
+    # supervisor, and there is no launchctl to call. The dashboard job is
+    # booted out with the rest, and only after the prefix check and the check
+    # that the job belongs to this install: a bare bootout of
+    # "<prefix>.agentdashboard" stopped a concurrent test's dashboard, and
+    # with the live prefix the real one (#168 review).
+    bootout_install_jobs(home, label_prefix)
     marker = str(home.resolve() / ".agentstack" / "dashboard")
     pidfile = home / ".agentstack" / "runtime" / "dashboard.pid"
 

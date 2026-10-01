@@ -417,3 +417,63 @@ def test_a_distinct_mail_label_is_accepted(tmp_path):
         timeout=300,
     )
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+class _FakeLaunchctl:
+    """Records launchctl calls; answers list/print from a table of jobs."""
+
+    def __init__(self, jobs):
+        self.jobs = jobs  # label -> plist path
+        self.calls = []
+
+    def __call__(self, args, *rest, **kwargs):
+        self.calls.append(list(args))
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        result = _Result()
+        if args[:2] == ["launchctl", "list"]:
+            result.stdout = "PID\tStatus\tLabel\n" + "".join(
+                f"-\t0\t{label}\n" for label in self.jobs)
+        elif args[:2] == ["launchctl", "print"]:
+            label = args[2].rsplit("/", 1)[-1]
+            result.stdout = f"{label} = {{\n\tpath = {self.jobs[label]}\n}}\n"
+        elif args and args[0] == "pgrep":
+            result.returncode = 1
+        return result
+
+    def booted_out(self):
+        return [c[2].rsplit("/", 1)[-1] for c in self.calls if c[:2] == ["launchctl", "bootout"]]
+
+
+def _with_fake(monkeypatch, fake):
+    import service_teardown
+    monkeypatch.setattr(service_teardown, "_run_command", fake)
+    monkeypatch.setattr(service_teardown.shutil, "which", lambda name: "/bin/" + name)
+    return service_teardown
+
+
+@pytest.mark.parametrize("prefix", ["org.agentstack", "org.agentstack.testing", "com.example"])
+def test_teardown_never_touches_a_prefix_outside_the_test_one(monkeypatch, tmp_path, prefix):
+    """#168 review: the live prefix must be refused before any launchctl call,
+    including the dashboard bootout that used to run first."""
+    fake = _FakeLaunchctl({f"{prefix}.agentdashboard": "/Users/me/Library/LaunchAgents/x.plist"})
+    service_teardown = _with_fake(monkeypatch, fake)
+    with pytest.raises(ValueError, match="outside the test prefix"):
+        service_teardown.stop_dashboard(tmp_path / "home", appear_timeout=0.1, label_prefix=prefix)
+    assert [c for c in fake.calls if c and c[0] == "launchctl"] == []
+
+
+def test_teardown_leaves_a_concurrent_install_under_the_same_prefix_alone(monkeypatch, tmp_path):
+    mine, theirs = tmp_path / "mine", tmp_path / "theirs"
+    prefix = "org.agentstack.test"
+    fake = _FakeLaunchctl({
+        f"{prefix}.agentdashboard": f"{theirs}/Library/LaunchAgents/{prefix}.agentdashboard.plist",
+        f"{prefix}.mail": f"{mine}/Library/LaunchAgents/{prefix}.mail.plist",
+    })
+    service_teardown = _with_fake(monkeypatch, fake)
+    service_teardown.stop_dashboard(mine, appear_timeout=0.1, label_prefix=prefix)
+    assert fake.booted_out() == [f"{prefix}.mail"]
