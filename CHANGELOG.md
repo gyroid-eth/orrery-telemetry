@@ -8,25 +8,11 @@
 
 ---
 
-## 2026.10.01
+## Unreleased
 
 ### 計算の待ちに上限を付け、失敗した計算が重ならないようにしました（#161 のレビュー、API 世代6）
 
 `/api/agents` と `/api/graph` で、ほかの request の計算を待つ時間が 30 秒を超えると `503`（`Retry-After: 1`、`{"error":"busy","retry":true}`）を返します。利用側が扱う新しい応答なので、`/api/version` の `api` を6にしました。共有の計算が失敗したときは、待っていた request がそれぞれ計算し直すのではなく、次の 1 回の計算をまとめて待ちます。失敗し続ける場合も、再試行の途中に新しい request が来た場合も、同時に走る計算は 1 本です。表示の鮮度は変わりません。
-
-### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
-
-Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
-
-### cockpit を開いていると、dashboard が CPU を数コア使っていました
-
-ORRERY cockpit は `/api/graph?all=1&spawn_only=1` を 6 秒ごとに呼びます。dashboard はそのたびに全 agent（約 2,000 行）の resume の可否を計算して捨て、行ごとに SQLite を開き直していました（1 回あたり約 3,000 回）。複数の poll が重なると 1 本が 10 秒を超え、cockpit の timeout で取り直しが積み上がっていました。
-
-- `spawn_only` は親子の線だけを返し、行ごとの計算をしません。返す内容は以前と同じです
-- graph と agents の 1 回の計算では、Mail の登録を 1 回の問い合わせで読みます
-- 同じ graph / agents の計算は同時に 1 本だけにします。計算中に来た問い合わせは、その計算が終わった直後に始まる次の 1 回の結果を、ほかの問い合わせとまとめて受け取ります。どの問い合わせも自分が来た後に始まった計算の結果を受け取り、結果は時間で使い回さないので、表示が以前より古くなることはありません
-
-2,000 行での計測: `spawn_only` 1 回 0.94 秒 → 0.01 秒、`all=1` 0.83 秒 → 0.21 秒、`/api/agents?days=all` 1.08 秒 → 0.20 秒。4 本同時の `spawn_only` は最長 3.65 秒・CPU 7.9 秒 → 0.01 秒未満。API と表示の内容は変わりません。
 
 ### codex の検査が、すぐ終わった失敗も時間切れのように表示していました（#121）
 
@@ -43,6 +29,22 @@ launcher は、子の最初の turn が親への報告で終わったかを tran
 ### 製品が起動する Codex で、起動時の更新案内を出さないようにしました（#60）
 
 Codex の起動時の更新案内は、既定の選択が `npm install -g @openai/codex` です。無人の child では断る人がいません。以前の launcher は案内の Enter を sign-in と取り違えて押しており、更新の途中で child を止めると、機体の `codex` が旧版も新版も使えない状態で残りました。Enter の取り違えはすでに直っています（trust 画面だけを全体の配置で見分ける）。今回、child・dashboard の再開・`agent-start-codex`・Windows の launcher の全部で `-c check_for_update_on_startup=false` を付け、案内そのものが出ないようにしました。Codex の更新は利用者が行ってください。また、起動に失敗した child を片付けるとき（launcher の 2 つの経路と dashboard の spawn）、画面に `Updating Codex via` が出ていれば session を止めずに残し、そのことを知らせます。
+
+## 2026.10.01
+
+### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
+
+Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
+
+### cockpit を開いていると、dashboard が CPU を数コア使っていました
+
+ORRERY cockpit は `/api/graph?all=1&spawn_only=1` を 6 秒ごとに呼びます。dashboard はそのたびに全 agent（約 2,000 行）の resume の可否を計算して捨て、行ごとに SQLite を開き直していました（1 回あたり約 3,000 回）。複数の poll が重なると 1 本が 10 秒を超え、cockpit の timeout で取り直しが積み上がっていました。
+
+- `spawn_only` は親子の線だけを返し、行ごとの計算をしません。返す内容は以前と同じです
+- graph と agents の 1 回の計算では、Mail の登録を 1 回の問い合わせで読みます
+- 同じ graph / agents の計算は同時に 1 本だけにします。計算中に来た問い合わせは、その計算が終わった直後に始まる次の 1 回の結果を、ほかの問い合わせとまとめて受け取ります。どの問い合わせも自分が来た後に始まった計算の結果を受け取り、結果は時間で使い回さないので、表示が以前より古くなることはありません
+
+2,000 行での計測: `spawn_only` 1 回 0.94 秒 → 0.01 秒、`all=1` 0.83 秒 → 0.21 秒、`/api/agents?days=all` 1.08 秒 → 0.20 秒。4 本同時の `spawn_only` は最長 3.65 秒・CPU 7.9 秒 → 0.01 秒未満。API と表示の内容は変わりません。
 
 ### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
 
