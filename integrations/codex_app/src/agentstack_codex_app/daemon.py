@@ -738,9 +738,7 @@ class BridgeDaemon:
         _diagnostic("bridge_start", pid=os.getpid())
         self._start_worker()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-            listener.bind(os.fspath(self.config.socket_path))
-            os.chmod(self.config.socket_path, 0o600)
-            listener.listen(32)
+            self._bind_and_publish(listener)
             listener.settimeout(0.25)
             self.queue_spool(self.config.spool_path)
             try:
@@ -956,6 +954,36 @@ class BridgeDaemon:
             if not stat.S_ISSOCK(mode):
                 raise OSError("refusing to replace non-socket bridge path")
             self.config.socket_path.unlink()
+
+    def _bind_and_publish(self, listener: socket.socket) -> None:
+        """Make the socket path appear only once it is private and listening.
+
+        Binding the final path directly exposed it before chmod() and listen():
+        a hook that connected as soon as the path existed was refused, or met
+        the socket with its umask permissions (#122). The socket is bound under
+        a short private name next to it and renamed into place, which keeps
+        the binding."""
+        final = self.config.socket_path
+        staging = final.parent / f".{os.getpid()}.s"
+        if len(os.fsencode(staging)) >= 100:
+            staging = final
+        try:
+            staging.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            listener.bind(os.fspath(staging))
+            os.chmod(staging, 0o600)
+            listener.listen(32)
+            if staging != final:
+                os.replace(staging, final)
+        except BaseException:
+            if staging != final:
+                try:
+                    staging.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
 
     def _remove_socket(self) -> None:
         try:

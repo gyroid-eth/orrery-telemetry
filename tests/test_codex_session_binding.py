@@ -6,6 +6,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import shlex
 import signal
 import shutil
 import sqlite3
@@ -1660,6 +1661,14 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
     payload = json.dumps(
         _payload(binding_env["transcript"], cwd=str(binding_env["project"]))
     )
+    # A slow interpreter start (a loaded CI runner) is part of the second
+    # scenario: the recorder reaches the lock half a second late (#122).
+    slow_python = tmp_path / "slow-python"
+    slow_python.write_text(
+        f"#!/bin/bash\nsleep 0.5\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    slow_python.chmod(0o755)
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(tmp_path),
@@ -1703,6 +1712,16 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
     fcntl.flock(descriptor, fcntl.LOCK_EX)
 
     def release_lock() -> None:
+        # Hold the lock for 1.25 s after the recorder has started, not after
+        # this test started it: the recorder logs "started" before it waits
+        # for the lock, so the wait it measures is at least that long however
+        # slowly the interpreter came up (#122).
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > len(first_events):
+                break
+            time.sleep(0.01)
         time.sleep(1.25)
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
@@ -1714,11 +1733,11 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
         input=payload,
         capture_output=True,
         text=True,
-        env=environment,
+        env={**environment, "AGENTSTACK_PYTHON": str(slow_python)},
         timeout=timeout_seconds,
         check=False,
     )
-    releaser.join(timeout=2)
+    releaser.join(timeout=5)
 
     assert completed.returncode == 0, completed.stderr
     assert receipt_path.is_file()

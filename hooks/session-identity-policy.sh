@@ -294,16 +294,44 @@ PROBEPY
 }
 
 # True when this session should be told about the outage now. A single warning
-# per session hides a failure that lasts for days, so the state and a coarse
-# time bucket are both part of the claim.
+# per session hides a failure that lasts for days, so the claim is per session
+# and state, and is given again once 600 s have passed since the last report.
+#
+# Matching hooks run in parallel. The claim used to be a mkdir named after a
+# 10-minute bucket of `date +%s`, and parallel hooks whose clocks fell either
+# side of a bucket boundary claimed two buckets and both warned (#55). One
+# record per session and state, read and written under flock, is one claim.
+# Exit 3 means "already reported"; anything else that fails reports, as an
+# unwritable runtime directory always has.
 agentstack_should_report_outage() {
     local session_id="$1" state="$2"
     local marker_dir="$AGENTSTACK_POLICY_RUNTIME_DIR/outage-warned"
     mkdir -p "$marker_dir" 2>/dev/null || return 0
-    local bucket safe_id
-    bucket=$(( $(date +%s) / 600 ))
+    local safe_id status
     safe_id=$(printf '%s' "${session_id:-unknown}" | tr -c 'a-zA-Z0-9_-' '_')
-    mkdir "$marker_dir/${safe_id}-${state}-${bucket}" 2>/dev/null || return 1
+    AGENTSTACK_OUTAGE_RECORD="$marker_dir/${safe_id}-${state}" python3 - <<'OUTAGEPY' 2>/dev/null
+import fcntl
+import os
+import time
+
+record = os.environ["AGENTSTACK_OUTAGE_RECORD"]
+lock = os.open(record + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lock, fcntl.LOCK_EX)
+now = time.time()
+try:
+    with open(record, encoding="utf-8") as handle:
+        last = float(handle.read().strip())
+except (OSError, ValueError):
+    last = None
+if last is not None and 0 <= now - last < 600:
+    raise SystemExit(3)
+staging = record + ".tmp"
+with open(staging, "w", encoding="utf-8") as handle:
+    handle.write(f"{now}\n")
+os.replace(staging, record)
+OUTAGEPY
+    status=$?
+    [ "$status" -eq 3 ] && return 1
     return 0
 }
 
