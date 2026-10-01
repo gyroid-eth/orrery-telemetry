@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":5}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":6}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -248,7 +248,7 @@ Response:
 
 ORRERY Mail timestamps are normalized to epoch seconds before comparison, whether they are legacy ISO 8601 text or integer microseconds from the Rust implementation. If an unparseable value other than NULL or empty text is present, the response reports `timestamp_diagnostics.invalid_count` and affected `fields` and sets `degraded` to `true`. An unparseable value is never treated as epoch 0.
 
-`/api/agents` and `/api/graph` run at most one computation per query at a time. A request that arrives during one receives the next computation, which starts right after it, so nothing shown gets older. A request with no result after 30 seconds is answered `503` with `Retry-After: 1` and `{"error":"busy","retry":true}`; keep the previous view and poll again.
+`/api/agents` and `/api/graph` run at most one computation per query at a time. A request that arrives during one receives the next computation, which starts right after it, so nothing shown gets older. A request that has waited 30 seconds for another request's computation without a result is answered `503` with `Retry-After: 1` and `{"error":"busy","retry":true}`; keep the previous view and poll again. The 30 seconds bound the wait only: a request that starts the computation itself is not limited, and one that waited and then computes can take longer than 30 seconds in total. This response exists from API generation 6.
 
 When the data source cannot be read, it still returns HTTP 200 with empty `nodes / edges / spawn`, an `error`, and `degraded: true`, so that the failure does not take down the entire DECK.
 

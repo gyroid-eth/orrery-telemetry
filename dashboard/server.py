@@ -901,27 +901,27 @@ class _SingleFlight:
         with self._cond:
             state = self._states.setdefault(
                 key, {"running": False, "started": 0, "results": {}, "wanted": {}})
+            # The first computation that starts after this request arrived.
+            target = self._claim(state)
             while True:
-                # The first computation that starts after this request (re)queued.
-                target = state["started"] + 1
-                state["wanted"][target] = state["wanted"].get(target, 0) + 1
-                while target not in state["results"]:
-                    if not state["running"]:
-                        state["running"] = True
-                        state["started"] += 1
-                        break
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        self._release(key, state, target)
-                        raise _SingleFlightBusy()
-                    self._cond.wait(remaining)
-                else:
-                    body = self._release(key, state, target)
-                    if body is not None:
-                        return body
-                    # That computation failed; wait for the next one.
+                if target in state["results"]:
+                    if state["results"][target] is not None:
+                        return self._release(key, state, target)
+                    # That computation failed; wait for the next one. Claim it
+                    # before dropping this claim, so the state stays registered
+                    # and a new request joins it instead of starting another.
+                    failed, target = target, self._claim(state)
+                    self._release(key, state, failed)
                     continue
-                break
+                if not state["running"]:
+                    state["running"] = True
+                    state["started"] += 1
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._release(key, state, target)
+                    raise _SingleFlightBusy()
+                self._cond.wait(remaining)
         try:
             body = compute()
         except BaseException:
@@ -935,6 +935,13 @@ class _SingleFlight:
                 self._release(key, state, target)
         return body
 
+    @staticmethod
+    def _claim(state: dict) -> int:
+        """Claim the next computation to start (lock held)."""
+        target = state["started"] + 1
+        state["wanted"][target] = state["wanted"].get(target, 0) + 1
+        return target
+
     def _release(self, key: tuple, state: dict, target: int):
         """Drop one claim on a computation (lock held); return its result."""
         body = state["results"].get(target)
@@ -942,8 +949,9 @@ class _SingleFlight:
         if not state["wanted"][target]:
             del state["wanted"][target]
             state["results"].pop(target, None)
-            if not state["running"] and not state["wanted"]:
-                self._states.pop(key, None)
+            if (not state["running"] and not state["wanted"]
+                    and self._states.get(key) is state):
+                del self._states[key]
         return body
 
 
@@ -7969,7 +7977,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 5}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 6}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

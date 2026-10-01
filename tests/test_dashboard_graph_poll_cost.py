@@ -330,3 +330,54 @@ def test_deck_and_network_keep_their_view_when_busy(function, endpoint):
     fetch = body.index(f"await fetch({endpoint}")
     guard = body.index("if(r.status===503)return", fetch)
     assert guard < body.index("await r.json()", fetch)
+
+
+def test_a_retry_after_failures_stays_the_only_computation(roster):
+    """#166 review P2-1: the retrying waiter left the registry, so a new request ran a second one."""
+    flight = server._SingleFlight()
+    running, peak, lock = [0], [0], threading.Lock()
+    calls, hold = [], threading.Event()
+
+    def compute():
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+            calls.append(1)
+            call = len(calls)
+        try:
+            if call <= 2:
+                time.sleep(0.2)
+                raise RuntimeError("fixture")
+            hold.wait(5)
+            return b"ok"
+        finally:
+            with lock:
+                running[0] -= 1
+
+    results = []
+
+    def one():
+        try:
+            results.append(flight.get(("k",), compute))
+        except RuntimeError:
+            results.append("error")
+
+    first = [threading.Thread(target=one) for _ in range(3)]
+    for thread in first:
+        thread.start()
+        time.sleep(0.02)
+    # The first two computations fail; the third (the retry) is held.
+    deadline = time.monotonic() + 5
+    while len(calls) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(calls) == 3
+    assert flight._states, "the retrying computation must stay registered"
+    late = threading.Thread(target=one)
+    late.start()
+    time.sleep(0.1)
+    hold.set()
+    for thread in [*first, late]:
+        thread.join(timeout=10)
+    assert peak[0] == 1
+    assert results.count("error") == 2 and results.count(b"ok") == 2, results
+    assert flight._states == {}
