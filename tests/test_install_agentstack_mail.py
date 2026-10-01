@@ -422,7 +422,12 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
         ).read_text(encoding="utf-8")
         assert 'claimed = ["orrery-mail"]' in installed_child_home_helper
         assert '"$helper" build-home' in installed_spawn
-        assert "AGENTSTACK_MCP_URL=mcp_url" in installed_spawn
+        # The Claude child config is written by the installed helper.
+        assert "child_tools.py\" claude-config" in installed_spawn
+        installed_child_tools = (
+            home / ".agentstack" / "hooks" / "child_tools.py"
+        ).read_text(encoding="utf-8")
+        assert "AGENTSTACK_MCP_URL=args.mcp_url" in installed_child_tools
         dashboard_plist_template = (
             home / ".agentstack" / "dashboard" / "agentdashboard.plist.template"
         ).read_text(encoding="utf-8")

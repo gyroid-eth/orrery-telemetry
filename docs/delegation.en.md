@@ -144,6 +144,80 @@ A warm-pool session (`hooks/warm_pool.sh`) is already running, so its task is st
 scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside --runs 3 --parent <your name>
 ```
 
+## Choosing the tools a child gets (`--base` / `--tools`)
+
+You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
+
+- **`--base` omitted or `default`**: the launch is the same as before (same command and arguments). A Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child inherits the user's MCP servers. Whatever `--tools` selects is added on top
+- **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then only the selected servers are enabled (combining it with `--codex-mcp inherit` is rejected)
+
+| `--tools` | Claude child | Codex child |
+|---|---|---|
+| `browser` / `browser:<deviceId>` | `--chrome` plus the deviceId instruction (the same as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome); rejected when it names a different deviceId than `--claude-chrome-device`) | Not available. Select the user's browser server with `mcp:<name>` |
+| `screen` / `screen:operate` | The built-in macOS computer use. Starts only when it is enabled for the project of the child's directory (listed in `projects[<dir>].enabledMcpServers` of `~/.claude.json` and not in `disabledMcpServers`); otherwise the launch stops | Not available (a server name is required) |
+| `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
+| `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
+| `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
+
+### The classification table: read only and operate
+
+What a screen selection exposes and approves is decided by the classification table (`TOOL_TABLE`). It currently lists only Windows-MCP 0.8.6 (20 tools), split into three classes.
+
+| Class | Windows-MCP 0.8.6 tools |
+|---|---|
+| Read (`read`) | Screenshot, Snapshot |
+| Operate the screen (`operate`) | App, Click, DisplayInventory, Move, MultiEdit, MultiSelect, Scroll, Shortcut, Type, Wait, WaitFor |
+| Not screen tools | Clipboard, FileSystem, Notification, PowerShell, Process, Registry, Scrape |
+
+- `screen:read` exposes and approves only the read tools; `screen:operate` the read and operate tools. The rest is hidden (Claude `--disallowed-tools`, Codex left out of `enabled_tools`). Selecting the screen never passes PowerShell or the registry
+- Only a separate `mcp:<server>:all` passes the non-screen tools too. It approves every tool of that server, which on Windows means **running arbitrary code on the host without a person approving it**. The child's first prompt says so as well
+- The version is read from the server's command line, which must pin it (such as `uvx windows-mcp@0.8.6`; a package only added with `--with` does not count). With a wrapper script, an unpinned definition or a version that is not in the table, `screen:read` and `mcp:<server>:all` stop the launch, and `screen:operate` copies or enables the server without approving any tool
+- The built-in macOS computer use and the macOS Codex screen and browser (which go through `node_repl`, a tool that runs arbitrary JS) cannot be read only, because their reading and operating are not separate tools
+
+### Approval
+
+Approval is given only inside the child's own launch, tool by tool, for tools the table knows. The user's `settings.json`, `~/.codex/config.toml` and the global approval policy (Codex `never`) are not changed, and a whole server (Claude `mcp__<server>`, Codex `default_tools_approval_mode`) is never approved.
+
+- Claude gets `--allowed-tools`; Codex gets `approval_mode = "approve"` per tool
+- A server selected with `mcp:<server>` (without `:all`) and a server of unknown version are only copied or enabled. To call their tools, the user approves them in their own settings (for Codex, the installer's overlay). Without approval an unattended child stops at its first call (measured with Claude on WSL: the call is denied without an allow rule, and works with `--allowed-tools`)
+- Approval is decided again at every launch and resume from the server's version at that time and the table. If the server was upgraded to a version the table does not know, a resume approves less than the launch did (`screen:read` and `:all` stop); it never approves more
+
+### Which servers can be copied (Claude)
+
+Only servers in the user scope of `~/.claude.json` and in the project scope of the child's directory can be copied (the project scope wins). Servers from a project `.mcp.json`, from plugins and claude.ai connectors cannot. These servers cannot be selected, and the launch stops:
+
+- a name that is ORRERY Mail (the child always gets its own authenticated Mail)
+- a definition with `env` or `headers` values (copying them would add secrets to the child's config file)
+- a stdio `command` that is not an absolute path, or a relative `cwd` (they break with the child's PATH and directory)
+
+### When the launch stops (fail closed)
+
+A child started with `--base mail-only` or any `--tools` is stopped before tmux starts when the selection cannot be applied as asked. It is never started silently with everything or with nothing.
+
+- the ORRERY Mail proxy is unavailable (a child without a selection still falls back to the shared endpoint)
+- a selected server is missing or fails the checks above, or is not in the Codex `config.toml`
+- `mail-only` without the computer use selected, in a project where the computer use is enabled (macOS). The strict config does not remove the computer use, and a way to remove it has not been verified yet. Start the child in another directory or select `screen:operate`
+- `screen:read` or `mcp:<server>:all` with a server or version that is not in the table
+
+A `--worktree` child runs in its own directory (its own project), so the macOS computer use normally does not reach it. Only one session on the Mac can use the computer use at a time: while a child has it, the parent cannot use it.
+
+### Screen on WSL and the Windows session
+
+A Windows process started from WSL runs in the Windows session that WSL runs in. WSL started over ssh is in session 0 (no desktop): Windows-MCP starts, but Screenshot fails with `screen grab failed`. Inside a tmux server started from an RDP or console session it works. When a screen server is selected on WSL, the launcher asks PowerShell for its session number and warns when it is 0. It does not stop the launch, because the launcher and the child's tmux server can be in different sessions.
+
+### Records and resume
+
+- Claude: the selection is kept as `base` and `tools` in the same launch record as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome) (`<name>.claude-launch.<session-id>.json`, version 3), bound to the conversation. A dashboard resume rebuilds the same strict config and flags from this record and the current user settings. When it cannot (a server was removed, the computer use was enabled, ...), or when the child has no state so strict cannot be applied, the resume stops and returns the reason. The SessionStart hook repeats the given tools to the child at every start, resume and compaction
+- Codex: the selection is kept in `AGENTSTACK_RUNTIME_DIR/child-agents/<name>.tools.json` (0600), and `child_resume.py build-home` applies it to the child's `config.toml` at every launch and resume. A damaged record builds no home, so the launch or resume stops
+
+### What is promised
+
+`mail-only` restricts MCP servers, the browser and the computer use. The tools built into Claude Code or Codex (shell, files, WebFetch, ...) and the user's hooks and skills stay.
+
+This is a policy for the child, not technical isolation. The child runs with the user's permissions and can edit its own config files and records, and the dashboard API does not authenticate its callers. Put the real guard for screen control where it is enforced: the per-application permission of the macOS computer use (granted by a person on screen), and the side that starts Windows-MCP (which tools it publishes).
+
+Adding tools to a running child, changing tools on resume (`tools` in `/api/jump`), showing tools in the roster and DECK, and a NEW AGENT field do not exist yet.
+
 ## Choosing between them
 
 There are cases where a built-in subagent is correct: a short search where only the answer matters, or a read-only investigation that should not consume the parent's context. These are jobs that end after one call and that nobody needs to refer to later.

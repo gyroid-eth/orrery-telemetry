@@ -30,6 +30,30 @@ launcher は、子の最初の turn が親への報告で終わったかを tran
 
 Codex の起動時の更新案内は、既定の選択が `npm install -g @openai/codex` です。無人の child では断る人がいません。以前の launcher は案内の Enter を sign-in と取り違えて押しており、更新の途中で child を止めると、機体の `codex` が旧版も新版も使えない状態で残りました。Enter の取り違えはすでに直っています（trust 画面だけを全体の配置で見分ける）。今回、child・dashboard の再開・`agent-start-codex`・Windows の launcher の全部で `-c check_for_update_on_startup=false` を付け、案内そのものが出ないようにしました。Codex の更新は利用者が行ってください。また、起動に失敗した child を片付けるとき（launcher の 2 つの経路と dashboard の spawn）、画面に `Updating Codex via` が出ていれば session を止めずに残し、そのことを知らせます。
 
+### 子に渡す道具を起動時に選べるようにしました（API 世代7）
+
+`/delegate` と `spawn_child.sh` に `--base default|mail-only` と `--tools`（`browser[:<deviceId>]`・`screen[:read|:operate]`・`screen:<read|operate>:<server>`・`mcp:<server>`）を、`POST /api/spawn` に `base` と `tools` を足しました。利用者が頼る field を足したため `/api/version` の `api` を7にしました。`base` を省いた起動は、コマンドも引数も従来と同じです。
+
+- `mail-only` の child には ORRERY Mail と選んだものだけを渡します。Claude はブラウザを選ばなければ `--no-chrome` も付け、Codex は `orrery-only` と同じ無効化の後で選んだ server だけを有効にします
+- 選んだ server は Claude では利用者の定義を strict の設定に写し、Codex では子の `config.toml` で有効にします。承認は child の起動の中だけで、分類表で分かる tool ごとに渡し、server 全体は承認しません。利用者の設定ファイルと全体の承認方針は変えません
+- 分類表（今は Windows-MCP 0.8.6）は tool を「読む」「画面を操作する」「画面ではない」に分けます。`screen:read` は読む tool だけを、`screen:operate` は画面の tool だけを公開・承認し、PowerShell・Registry・FileSystem などは `mcp:<server>:all` を別に指定したときだけ承認します。表に無い版では tool を承認しないので、resume の前に server の版が上がっても承認は広がりません
+- dashboard の resume の見込み（`resume_capability`）も、道具の選択を戻せるかを見ます。戻せなければ `config_unrestorable` です
+- 選択のある child は、指定どおりにできなければ起動しません。Mail の proxy が無い、server を写せない（見つからない・`env` や `headers` を持つ・コマンドが絶対パスでない）、Mac で computer use が有効な project での `mail-only`、などです。選択の無い child の fallback は従来どおりです
+- WSL で画面の server を選ぶと、Windows のセッション0（ssh から起動した WSL。画面を取れない）を検出して警告します
+- 選択は Claude では会話に結び付いた起動の記録（version 3）に、Codex では `child-agents/<name>.tools.json` に残し、resume は同じ設定を作り直すか、できなければ止めます。Claude child の MCP 設定は、launcher と dashboard の resume が同じ `hooks/child_tools.py` で作るようになりました
+
+これは child への方針であって、技術的な隔離ではありません。動いている child への追加、resume での変更、roster・DECK の表示、NEW AGENT の欄はまだありません（[子に渡す道具を選ぶ](docs/delegation.md#子に渡す道具を選ぶ--base----tools)）。
+
+### 並行の hook と bridge の起動で、時間しだいで重複・拒否が起きていました（#55・#122）
+
+Mail に届かないときの警告は、session ごとに 10 分に 1 回だけ出す設計でしたが、10 分の枠を `date +%s` から決めて `mkdir` で取っていたため、並行に走る hook の時計が枠の境目をまたぐと 2 つの枠を取り、同じ警告が 2 回出ました。session と状態ごとに 1 つの記録を `flock` の下で読み書きし、前回の報告から 600 秒経つまで出さないようにしました（#55）。
+
+Codex App の bridge は、Unix socket を正式なパスに bind してから権限を変え、listen していました。その間に接続した hook は拒否され、socket が既定の権限のまま見える瞬間もありました。短い一時の名前で bind・権限の設定・listen を済ませてから、正式なパスに rename して公開します（#122）。同じ issue のもう 1 つ（lock を待つ時間の検査）はテストの前提の誤りで、子の起動からではなく、子が記録を始めてから数えるように直しました。
+
+### テストがこの Mac の launchd に job を残していました
+
+installer を走らせるテストの後片付けは dashboard の job だけを外していたため、同じ install が読み込んだ Mail の autostart と watcher が launchd に残り、消えた一時ディレクトリを指して再起動を繰り返しました（exit 78/127）。後片付けは、test 用の prefix の下にあり、plist か program がそのテストの HOME の中にある job を全部外します。それ以外の prefix（本物の `org.agentstack` を含む）は launchctl を呼ぶ前に拒否し、同じ prefix で並行して走る他のテストの job には触れません。
+
 ## 2026.10.01
 
 ### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）

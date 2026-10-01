@@ -224,11 +224,13 @@ ORRERY Telemetry delegation must be entered with the leading slash as `/delegate
 | Item | Details |
 | --- | --- |
 | Trigger | A request to delegate to a child, launch a subagent, or perform parallel work |
-| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>]` |
+| Basic form | `/delegate "<task>" [--dir <path>] [--codex] [--model <model>] [--codex-mcp <inherit\|orrery-only>] [--worktree] [--worktree-base <rev>] [--claude-chrome \| --claude-chrome-device <id>] [--base <default\|mail-only>] [--tools <spec>]...` |
 | Required prerequisites | The parent's ORRERY Mail identity and canonical project key. Editing tasks require a resource declaration and reservation |
 | Optional prerequisites | `--worktree` requires a Git repository; dashboard annotation requires the dashboard service |
 
 The parent agent does not finish when it hands off the task. It remains responsible for deciding scope and risk, making reservations, monitoring, and verifying the artifact. Use `--codex` for a Codex child, `--model` for an allowed model, and `--dir` to choose the child's working directory.
+
+`--base mail-only` and `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` choose the tools a child gets. A child with a selection is not started when the selection cannot be applied ([Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools)).
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Launch records and browser policy for Claude children started with --chrome.
+"""Launch records and browser policy for Claude children started with --chrome
+or with a tools selection (--base / --tools, hooks/child_tools.py).
 
 A record says "this Claude conversation was started with --chrome, and this is
-the browser it was told to use". It holds no credential.
+the browser it was told to use", and (version 3) which base and tools it was
+given. It holds no credential. Version 2 records (Chrome only) are still read;
+their base is "default".
 
 Records are bound to one conversation, never to an agent name alone, so a later
 launch under the same name cannot change what an earlier conversation resumes
@@ -31,13 +34,14 @@ browser. The policy is printed at every session start (startup, resume,
 compaction) because a resumed transcript alone may carry an older selection.
 
 Usage:
-  claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1>
+  claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1> [<chrome 0|1> <tools-spec-json>]
   claude_chrome_policy.py prompt <device|""> <standalone 0|1>
   claude_chrome_policy.py session <dir> <agent> <session_id> <launch_id|"">
 """
 from __future__ import annotations
 
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -45,7 +49,8 @@ import stat
 import sys
 import tempfile
 
-VERSION = 2
+VERSION = 2          # Chrome only (unchanged, still written without a selection)
+TOOLS_VERSION = 3    # adds claude_chrome false/true, base and tools
 DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 TOKEN_RE = re.compile(r"[A-Za-z0-9-]{8,128}")
 AGENT_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -54,6 +59,17 @@ MAX_BYTES = 4096
 
 class RecordError(ValueError):
     pass
+
+
+def _child_tools():
+    """hooks/child_tools.py next to this file (the dashboard loads us by path)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "child_tools.py")
+    spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
+    if spec is None or spec.loader is None:
+        raise RecordError("child_tools.py is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def valid_device(device: str) -> bool:
@@ -128,12 +144,26 @@ def read_record(path: str, agent: str) -> dict | None:
             state = json.loads(handle.read(MAX_BYTES + 1).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RecordError("not valid JSON") from exc
-    if not isinstance(state, dict) or state.get("version") != VERSION:
+    if not isinstance(state, dict) or state.get("version") not in (VERSION, TOOLS_VERSION):
         raise RecordError("unknown schema")
     if state.get("agent_name") != agent:
         raise RecordError("recorded for a different agent")
-    if state.get("claude_chrome") is not True:
-        raise RecordError("claude_chrome is not true")
+    if state["version"] == VERSION:
+        if state.get("claude_chrome") is not True:
+            raise RecordError("claude_chrome is not true")
+        state = {**state, "base": "default", "tools": {}}
+    else:
+        if not isinstance(state.get("claude_chrome"), bool):
+            raise RecordError("invalid claude_chrome flag")
+        tools = _child_tools()
+        try:
+            spec = tools.normalize(state.get("base"), state.get("tools"))
+        except tools.ToolsError as exc:
+            raise RecordError(f"invalid tools: {exc}") from exc
+        if spec != {"base": state.get("base"), "tools": state.get("tools")}:
+            raise RecordError("tools are not in normal form")
+        if not state["claude_chrome"] and not tools.restrictive(spec):
+            raise RecordError("records neither Chrome nor a tools selection")
     device = state.get("chrome_device")
     if not isinstance(device, str) or not valid_device(device):
         raise RecordError("invalid deviceId")
@@ -180,17 +210,42 @@ def _write(path: str, state: dict) -> None:
 
 
 def prepare(directory: str, agent: str, launch_id: str, device: str,
-            standalone: bool) -> None:
+            standalone: bool, chrome: bool = True, spec_json: str | None = None) -> None:
     if not valid_device(device):
         raise RecordError("invalid deviceId")
-    _write(pending_path(directory, agent, launch_id), {
+    state = {
         "version": VERSION,
         "agent_name": agent,
         "launch_id": launch_id,
         "claude_chrome": True,
         "chrome_device": device,
         "standalone": standalone,
-    })
+    }
+    if spec_json is not None:
+        tools = _child_tools()
+        try:
+            data = json.loads(spec_json)
+            spec = tools.normalize(data.get("base"), data.get("tools"))
+        except (ValueError, AttributeError, tools.ToolsError) as exc:
+            raise RecordError(f"invalid tools: {exc}") from exc
+        if not chrome and not tools.restrictive(spec):
+            raise RecordError("nothing to record")
+        state.update(version=TOOLS_VERSION, claude_chrome=chrome,
+                     chrome_device=device if chrome else "", **spec)
+    _write(pending_path(directory, agent, launch_id), state)
+
+
+def session_text(state: dict) -> str:
+    """What SessionStart repeats to the model: browser policy and tools."""
+    parts = []
+    if state.get("claude_chrome"):
+        parts.append(policy_text(state["chrome_device"], state["standalone"]))
+    if state.get("version") == TOOLS_VERSION:
+        tools_text = _child_tools().prompt_text(
+            {"base": state["base"], "tools": state["tools"]}, "claude", state["standalone"])
+        if tools_text:
+            parts.append(tools_text)
+    return "\n\n".join(parts)
 
 
 def find_launch(directory: str, agent: str, launch_id: str) -> dict | None:
@@ -242,6 +297,10 @@ def main(argv: list[str]) -> int:
         if command == "prepare" and len(args) == 5:
             prepare(args[0], args[1], args[2], args[3], args[4] == "1")
             return 0
+        if command == "prepare" and len(args) == 7:
+            prepare(args[0], args[1], args[2], args[3], args[4] == "1",
+                    chrome=args[5] == "1", spec_json=args[6])
+            return 0
         if command == "prompt" and len(args) == 2:
             if not valid_device(args[0]):
                 raise RecordError("invalid deviceId")
@@ -269,7 +328,9 @@ def main(argv: list[str]) -> int:
                 )
                 return 0
             if state is not None:
-                print(policy_text(state["chrome_device"], state["standalone"]))
+                text = session_text(state)
+                if text:
+                    print(text)
             return 0
     except (OSError, RecordError) as exc:
         print(f"claude_chrome_policy: {command}: {exc}", file=sys.stderr)

@@ -98,7 +98,7 @@ def _run_helper(tmpdir: pathlib.Path, *, runner_executable: bool = True,
 
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_mcp_config")
+        + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
         + '\nwrite_child_mcp_config "Red-Euler" "$1"\n'
     )
     env = os.environ.copy()
@@ -909,7 +909,7 @@ def _claude_child_config(tmpdir, claude_json: str | None) -> dict:
 
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_mcp_config")
+        + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
         + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
     )
     env = os.environ.copy()
@@ -973,7 +973,7 @@ def test_claude_child_keeps_default_name_on_new_endpoint():
         token.chmod(0o600)
         script = (
             'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-            + _extract("write_child_mcp_config")
+            + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
             + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
         )
         env = os.environ.copy()

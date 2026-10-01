@@ -917,7 +917,9 @@ def purge_one(
                 tombstone,
             )
         pending_path = state_path.with_name(f".{agent_name}.registration-pending.json")
-        for path in (home_path, mcp_path, token_path, state_path, pending_path, _legacy_pending(state_path)):
+        tools_path = tools_record_path(runtime_dir, agent_name)
+        for path in (home_path, mcp_path, token_path, state_path, pending_path, _legacy_pending(state_path),
+                     tools_path):
             _remove_exact(path)
         return True
 
@@ -1101,6 +1103,25 @@ def _drop_protected_overlay_tables(overlay: dict[str, Any]) -> None:
                     del plugin_servers["agentstack"]
 
 
+def _child_tools():
+    """hooks/child_tools.py next to this file (the dashboard loads us by path)."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "child_tools.py"
+    spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("child_tools.py is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def tools_record_path(runtime_dir: Path, agent_name: str) -> Path:
+    """The Codex child's base/tools selection, written by spawn_child.sh."""
+    state_path = _paths(runtime_dir, agent_name)[0]
+    return state_path.with_name(f"{agent_name}.tools.json")
+
+
 def _plugin_name(header: str) -> str:
     match = re.match(r'^plugins\.(?:"([^"]+)"|([A-Za-z0-9_-]+))', header)
     return (match.group(1) or match.group(2)) if match else ""
@@ -1127,6 +1148,20 @@ def _build_home_unlocked(
         raise ValueError("invalid child identity or MCP profile")
     if parent_agent and not PROXY_AGENT_NAME.fullmatch(parent_agent):
         raise ValueError("the parent agent name cannot be given to the Mail proxy")
+    # A selection is applied on every build (spawn and resume) or the build
+    # fails: a child that asked for less must not silently get everything.
+    # child_tools.py is loaded only for a child that has a record; a missing
+    # helper then fails the build instead of skipping the selection.
+    tools_spec = None
+    record = tools_record_path(runtime_dir, child)
+    if record.exists() or record.is_symlink():
+        tools = _child_tools()
+        try:
+            tools_spec = tools.read_codex_record(os.fspath(record))
+        except tools.ToolsError as exc:
+            raise ValueError(str(exc)) from exc
+    if tools_spec is not None and tools_spec["base"] == "mail-only" and mcp_profile != "orrery-only":
+        raise ValueError("the tools record says mail-only but the MCP profile is " + mcp_profile)
     if not source.is_dir() or not runner.is_file() or not os.access(runner, os.X_OK):
         raise ValueError("current Codex home or MCP proxy is unavailable")
     _read_private(token_file, "canonical child credential", MAX_TOKEN_BYTES)
@@ -1290,6 +1325,14 @@ def _build_home_unlocked(
                 if isinstance(plugin, dict):
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
+        if tools_spec is not None:
+            config = tomllib.loads(config_text)
+            try:
+                tools.codex_apply(config, tools_spec)
+            except tools.ToolsError as exc:
+                raise ValueError(str(exc)) from exc
+            config_text = _emit_toml(config)
+            tomllib.loads(config_text)
         target = temporary / "config.toml"
         target.write_text(config_text, encoding="utf-8")
         os.chmod(target, 0o600)

@@ -2915,6 +2915,9 @@ def _claude_chrome_policy_module():
 def _claude_child_chrome(session: str, sid: str) -> tuple[bool, str, str]:
     """Return (``--chrome`` requested, launch id, error) for one Claude resume.
 
+    The launch id is returned whenever the conversation has a launch record,
+    including one that records only a tools selection (version 3).
+
     Only the launch record bound to this conversation's session id decides;
     the transcript's text never does. The record is bound to the session, not
     only to the agent name, so a later launch under the same name cannot
@@ -2934,7 +2937,70 @@ def _claude_child_chrome(session: str, sid: str) -> tuple[bool, str, str]:
         return False, "", f"Claude in Chrome launch record is invalid: {exc}"
     if state is None:
         return False, "", ""
-    return True, state["launch_id"], ""
+    return state["claude_chrome"] is True, state["launch_id"], ""
+
+
+def _claude_child_tools(session: str, sid: str) -> tuple[dict | None, str]:
+    """Return (tools selection or None, error) from the same launch record.
+
+    Only a version 3 record with base mail-only or tools returns a selection;
+    the resume then rebuilds the same strict config and flags or stops."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", session or ""):
+        return None, ""
+    directory = os.path.join(RUNTIME_DIR, "child-agents")
+    if not os.path.lexists(os.path.join(directory, f"{session}.claude-launch.{sid}.json")):
+        return None, ""
+    try:
+        state = _claude_chrome_policy_module().session_record(directory, session, sid)
+        tools_module = _child_tools_module()
+    except Exception as exc:  # noqa: BLE001 - any failure is fail-closed
+        return None, f"Claude in Chrome launch record is invalid: {exc}"
+    if state is None:
+        return None, ""
+    spec = {"base": state["base"], "tools": state["tools"]}
+    return (spec if tools_module.restrictive(spec) else None), ""
+
+
+def _claude_resume_tools(session: str, sid: str, cwd: str,
+                         chrome: bool) -> tuple[dict | None, dict | None, str]:
+    """(selection, claude plan, error) for resuming one Claude conversation.
+
+    Shared by do_resume and the resume forecast, so a row never says ready
+    for a resume that the tools check would refuse."""
+    spec, error = _claude_child_tools(session, sid)
+    if error or spec is None:
+        return None, None, error
+    tools_module = _child_tools_module()
+    try:
+        plan = tools_module.claude_plan(
+            spec, cwd=cwd, chrome=chrome,
+            claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"))
+    except tools_module.ToolsError as exc:
+        return spec, None, f"the tools this conversation was started with cannot be restored: {exc}"
+    return spec, plan, ""
+
+
+def _claude_resume_tools_capability(session: str, sid: str, transcript: str) -> str | None:
+    """The forecast's view of _claude_resume_tools: None or a reason code.
+
+    Conversations without a launch record (almost every row) cost one lstat."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", session or "") or not os.path.lexists(
+            os.path.join(RUNTIME_DIR, "child-agents", f"{session}.claude-launch.{sid}.json")):
+        return None
+    chrome, _launch_id, chrome_error = _claude_child_chrome(session, sid)
+    if chrome_error:
+        return "config_unrestorable"
+    spec, _plan, error = _claude_resume_tools(session, sid, _transcript_cwd(transcript) or "", chrome)
+    if error:
+        return "config_unrestorable"
+    if spec is not None:
+        try:
+            _, reason = _claude_conversation_reason(session)
+            if not reason and _claude_resume_material(session)[2] is None:
+                return "config_unrestorable"
+        except _ResumeCapabilityError as exc:
+            return exc.code
+    return None
 
 
 def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False) -> dict:
@@ -3009,7 +3075,13 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     chrome, chrome_launch_id, chrome_error = _claude_child_chrome(session, sid)
     if chrome_error:
         return {"ok": False, "error": chrome_error}
-    if chrome:
+    # A child started with base/tools is resumed with the same strict config
+    # and flags, rebuilt from the launch record and the current user settings,
+    # or not at all.
+    tools_spec, tools_plan, tools_error = _claude_resume_tools(session, sid, cwd, chrome)
+    if tools_error:
+        return {"ok": False, "resume_capability": "config_unrestorable", "error": tools_error}
+    if chrome or tools_spec is not None:
         # The launch id lets the SessionStart hook bind this session, and a
         # later /clear in it, to the same launch record.
         inner = (
@@ -3017,7 +3089,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             f'export AGENT_NAME={session}; '
             f'export AGENTSTACK_RUNTIME_DIR={shlex.quote(RUNTIME_DIR)}; '
             f'export AGENTSTACK_CLAUDE_LAUNCH_ID={shlex.quote(chrome_launch_id)}; '
-            f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session} --chrome'
+            f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session}'
+            + (' --chrome' if chrome else '')
         )
 
     try:
@@ -3054,10 +3127,17 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 project_key=registration["project_key"], program=registration["program"],
             )
             resume_started = True
+        if tools_plan is not None and child_state is None:
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                "this conversation was started with base/tools, and without its child "
+                "state it would resume with all of the user's MCP servers")
         if child_state is not None:
-            mcp_config = _write_claude_resume_mcp_config(session, registration,
-                                                         parent=child_state.get("parent_agent"))
-            inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config --resume ", 1)
+            mcp_config = _write_claude_resume_mcp_config(
+                session, registration, parent=child_state.get("parent_agent"),
+                servers=(tools_plan or {}).get("servers"))
+            flags = "".join(" " + shlex.quote(flag) for flag in (tools_plan or {}).get("flags", ()))
+            inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config{flags} --resume ", 1)
         if not legacy:
             mail_was_retired = _register_claude_resume(session, registration, token)
         mail_restore_attempted = True
@@ -3403,6 +3483,27 @@ def _codex_resume_child_home(
             "config_unrestorable",
             "current Codex home cannot be the generated child home",
         )
+    # The tools record is applied by build-home; check it here too, so the
+    # forecast does not say ready for a build that would fail.
+    record = os.path.join(RUNTIME_DIR, "child-agents", f"{session}.tools.json")
+    if os.path.lexists(record):
+        tools_module = _child_tools_module()
+        try:
+            spec = tools_module.read_codex_record(record)
+            if spec is not None:
+                if spec["base"] == "mail-only" and state["codex_mcp_profile"] != "orrery-only":
+                    raise tools_module.ToolsError("the tools record and the MCP profile disagree")
+                import tomllib  # only here: build-home already needs Python 3.11
+
+                config_path = os.path.join(source_home, "config.toml")
+                with open(config_path, "rb") as handle:
+                    config = tomllib.load(handle)
+                tools_module.codex_apply(config, spec)
+        except (OSError, ValueError) as exc:
+            raise _ResumeCapabilityError(
+                "config_unrestorable",
+                f"the tools this Codex child was started with cannot be restored: {exc}",
+            ) from exc
     return child_home, state["codex_mcp_profile"]
 
 
@@ -3689,9 +3790,12 @@ def _claude_resume_proxy_runner() -> str:
         install_home, "integrations", "codex_app", "plugin", "scripts", "run-mcp.sh")
 
 
-def _write_claude_resume_mcp_config(session: str, registration: dict, *, parent=None) -> str:
+def _write_claude_resume_mcp_config(session: str, registration: dict, *, parent=None,
+                                    servers: dict | None = None) -> str:
     """Regenerate the same child-owned proxy routing used on fresh spawn.
 
+    hooks/child_tools.py builds the file for both the launcher and this
+    resume: the proxy under every ORRERY Mail name, plus the selected servers.
     ``parent`` is the one spawn_child recorded in the child state; without it
     the resumed proxy reports the child as a root with no parent.
     """
@@ -3712,23 +3816,10 @@ def _write_claude_resume_mcp_config(session: str, registration: dict, *, parent=
         proxy["env"]["AGENTSTACK_PROXY_PARENT_AGENT"] = parent
     if os.environ.get("AGENTSTACK_PYTHON", "").strip():
         proxy["env"]["AGENTSTACK_PYTHON"] = os.environ["AGENTSTACK_PYTHON"]
-    names = {"orrery-mail"}
-    # Override existing direct Mail names as fresh child startup does.
-    try:
-        with open(_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"), encoding="utf-8") as handle:
-            settings = json.load(handle)
-        scopes = [settings.get("mcpServers")]
-        projects = settings.get("projects")
-        if isinstance(projects, dict):
-            scopes += [value.get("mcpServers") for value in projects.values() if isinstance(value, dict)]
-        for scope in scopes:
-            if isinstance(scope, dict):
-                names.update(name for name in scope if name.replace("-", "").replace("_", "").lower()
-                             in {"agentmail", "mcpagentmail", "agentstackmail", "orrerymail"})
-    except (OSError, ValueError, AttributeError):
-        pass
+    config = _child_tools_module().claude_config(
+        proxy, claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"), servers=servers)
     path = pathlib.Path(RUNTIME_DIR) / "child-agents" / f"{session}.mcp.json"
-    _child_resume_module()._atomic_json(path, {"mcpServers": {name: proxy for name in sorted(names)}})
+    _child_resume_module()._atomic_json(path, config)
     return str(path)
 
 
@@ -4063,6 +4154,9 @@ def _resume_capability(
                 _claude_resume_material(session)
         except _ResumeCapabilityError as exc:
             return exc.code
+        tools_code = _claude_resume_tools_capability(session, sid, path)
+        if tools_code:
+            return tools_code
         return "ready"
 
     path = _codex_transcript_path(session)
@@ -6812,6 +6906,7 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
+        "base", "tools",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
@@ -6853,11 +6948,67 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
 _CLAUDE_CHROME_DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 
+def _child_tools_module():
+    """Load hooks/child_tools.py, the one parser of base/tools selections."""
+    for path in (
+        os.path.join(HOOKS_DIR, "child_tools.py"),
+        os.path.join(os.path.dirname(HERE), "hooks", "child_tools.py"),
+    ):
+        if not os.path.isfile(path):
+            continue
+        spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise RuntimeError("child_tools.py is unavailable")
+
+
+def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
+                      chrome_device: str) -> tuple[tuple[str, ...], str | None]:
+    """Launcher arguments for the payload's base/tools, or an error message.
+
+    Omitted (or "default") base and no tools add nothing, so the launch stays
+    what it was before these fields existed."""
+    if "base" not in payload and "tools" not in payload:
+        return (), None
+    tools_module = _child_tools_module()
+    base = payload.get("base")
+    if base is not None and not isinstance(base, str):
+        return (), "base must be a string"
+    try:
+        spec = tools_module.normalize(base, payload.get("tools"))
+        tools_module.check_provider(spec, provider)
+        if provider == "claude":
+            tools_module.merge_chrome(spec, chrome, chrome_device)
+    except tools_module.ToolsError as exc:
+        return (), str(exc)
+    args: list[str] = []
+    if spec["base"] != "default":
+        args += ["--base", spec["base"]]
+    tools = spec["tools"]
+    if "browser" in tools:
+        device = tools["browser"]["device"]
+        args += ["--tools", "browser:" + device if device else "browser"]
+    if "screen" in tools:
+        screen = tools["screen"]
+        value = "screen:" + screen["access"]
+        if screen["server"]:
+            value += ":" + screen["server"]
+        args += ["--tools", value]
+    approve_all = set(tools.get("approve_all", ()))
+    for name in tools.get("mcp", ()):
+        args += ["--tools", "mcp:" + name + (":all" if name in approve_all else "")]
+    return tuple(args), None
+
+
 def do_spawn(payload: dict) -> dict:
     """spawn フォーム payload から子エージェントを spawn して child name を返す。
 
     payload: {parent?, standalone?, name?, dir?, role?, group?, task,
-              provider?, model?, effort?, claude_chrome?, claude_chrome_device?}.
+              provider?, model?, effort?, claude_chrome?, claude_chrome_device?,
+              base?, tools?}.
     """
     unavailable = _spawn_unavailable_error()
     if unavailable:
@@ -6898,6 +7049,12 @@ def do_spawn(payload: dict) -> dict:
     if chrome and provider != "claude":
         return {"ok": False,
                 "error": f"claude_chrome not supported for provider: {provider}"}
+    # base / tools (hooks/child_tools.py). Everything that depends on the
+    # child's final directory is checked again by the launcher, which fails
+    # closed before tmux starts.
+    tools_args, tools_error = _spawn_tools_args(payload, provider, chrome, chrome_device)
+    if tools_error:
+        return {"ok": False, "error": tools_error}
     if provider == "claude":
         # Discovery only adds choices; only an explicit override restricts IDs.
         if (not _is_claude_model_id(model)
@@ -6912,7 +7069,7 @@ def do_spawn(payload: dict) -> dict:
             chrome_args = ("--claude-chrome",)
         spec = SpawnLaunchSpec(
             provider="claude", program="claude-code", model=model,
-            script=SPAWN_SCRIPT, provider_args=chrome_args,
+            script=SPAWN_SCRIPT, provider_args=chrome_args + tools_args,
         )
     elif provider == "codex":
         try:
@@ -6923,7 +7080,7 @@ def do_spawn(payload: dict) -> dict:
             return {"ok": False, "error": str(exc)}
         spec = SpawnLaunchSpec(
             provider="codex", program="codex-cli", model=model,
-            script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",),
+            script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",) + tools_args,
             launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
@@ -6962,6 +7119,10 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
         request, error = _spawn_request(payload)
         if error:
             return error
+        if spec.provider not in ("claude", "codex") and (
+                payload.get("tools") or payload.get("base") not in (None, "default")):
+            return {"ok": False,
+                    "error": f"base and tools are not supported for provider: {spec.provider}"}
         return _spawn_launch(payload, request, spec, handoff, discard_handoff)
     finally:
         if not handoff["transferred"]:
@@ -7998,7 +8159,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 6}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 7}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
