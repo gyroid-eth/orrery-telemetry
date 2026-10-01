@@ -1,0 +1,864 @@
+
+  >_ OpenAI Codex (v0.158.0)
+     ~/work/wsl-test-project
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+
+• Starting MCP servers (2/3): codex_apps (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  >_ OpenAI Codex (v0.158.0)
+     ~/work/wsl-test-project
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+
+• Working (1s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · ⠋
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  >_ OpenAI Codex (v0.158.0)
+     ~/work/wsl-test-project
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+
+• Working (2s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · ⠋
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  >_ OpenAI Codex (v0.158.0)
+     ~/work/wsl-test-project
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません
+
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · ⠋
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  >_ OpenAI Codex (v0.158.0)
+     ~/work/wsl-test-project
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+  2 — 1と2だけで割り切
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · ⠏
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  May the source be with you.
+
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+› You are PureBose, a standalone agent with no parent. The name PureBose is
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+  already reserved and registered; do not register another identity, do not re-
+  register yourself (no agentstack-reregister), and do not fetch the inbox as a
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 —
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+  startup ritual. Starting child agents of your own later is allowed. This
+  prompt is the canonical task. Start it immediately:
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけ
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+  1〜200 の素数を1行ずつ理由つきで書き出してください
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+
+• 1 — 1は素数ではありません（素数は1より大きい整数です）。
+
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  2 — 1と2だけで割り切れるため素数です。
+  3 — 1と3だけで割り切れるため素数です。
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  5 — 1と5だけで割り切れるため素数です。
+  7 — 1と7だけで割り切れるため素数です。
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  11 — 1と11だけで割り切れるため素数です。
+  13 — 1と13だけで割り切れるため素数です。
+  17 — 1と17だけで割り切れるため素数です。
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れる
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  19 — 1と19だけで割り切れるため素数です。
+  23 — 1と23だけで割り切れるため素数です。
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 —
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  29 — 1と29だけで割り切れるため素数です。
+  31 — 1と31だけで割り切れるため素数です。
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけ
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  37 — 1と37だけで割り切れるため素数です。
+  41 — 1と41だけで割り切れるため素数です。
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  43 — 1と43だけで割り切れるため素数です。
+  47 — 1と47だけで割り切れるため素数です。
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  53 — 1と53だけで割り切れるため素数です。
+  59 — 1と59だけで割り切れるため素数です。
+  61 — 1と61だけで割り切れるため素数です。
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  67 — 1と67だけで割り切れるため素数です。
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 —
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  71 — 1と71だけで割り切れるため素数です。
+  73 — 1と73だけで割り切れるため素数です。
+  79 — 1と79だけで割り切れるため素数です。
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  83 — 1と83だけで割り切れるため素数です。
+  89 — 1と89だけで割り切れるため素数です。
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  97 — 1と97だけで割り切れるため素数です。
+  101 — 1と101だけで割り切れるため素数です。
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  103 — 1と103だけで割り切れるため素数です。
+  107 — 1と107だけで割り切れるため素数です。
+  109 — 1と109だけで割り切れるため素数です。
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  113 — 1と113だけで割り切れるため素数です。
+  127 — 1と127だけで割り切れるため素数です。
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 —
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+You are PureBose, a standalone agent with no parent. The name PureBose is alrea…
+  131 — 1と131だけで割り切れるため素数です。
+  137 — 1と137だけで割り切れるため素数です。
+  139 — 1と139だけで割り切れるため素数です。
+  149 — 1と149だけで割り切れるため素数です。
+  151 — 1と151だけで割り切れるため素数です。
+  157 — 1と157だけで割り切れるため素数です。
+  163 — 1と163だけで割り切れるため素数です。
+  167 — 1と167だけで割り切れるため素数です。
+  173 — 1と173だけで割り切れるため素数です。
+  179 — 1と179だけで割り切れるため素数です。
+  181 — 1と181だけで割り切れるため素数です。
+  191 — 1と191だけで割り切れるため素数です。
+  193 — 1と193だけで割り切れるため素数です。
+  197 — 1と197だけで割り切れるため素数です。
+  199 — 1と199だけで割り切れるため素数です.
+
+  22:35
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · ~/work/wsl-test-project · 1〜200の素数を理由つきで列挙
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view

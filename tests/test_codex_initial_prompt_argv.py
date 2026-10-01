@@ -146,7 +146,8 @@ def _extract(func: str) -> str:
 def _launcher_functions() -> str:
     names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
              "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_turn_running_on_screen",
-             "injection_utf8_locale", "codex_turn_finished_on_screen", "codex_watch_initial_task")
+             "injection_utf8_locale", "codex_task_pinned_on_screen", "codex_turn_finished_on_screen",
+             "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
@@ -426,7 +427,7 @@ def test_a_trust_screen_after_a_running_line_is_answered_first(tmp_path):
 def _finished(screen: str, prompt: str) -> int:
     body = ("\n".join(_extract(n) for n in ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
                                            "codex_trust_screen_up", "injection_utf8_locale",
-                                           "codex_turn_finished_on_screen"))
+                                           "codex_task_pinned_on_screen", "codex_turn_finished_on_screen"))
             + '\ncodex_turn_finished_on_screen "$SCREEN" "$PROMPT"\n')
     return subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, SCREEN=screen, PROMPT=prompt),
                           capture_output=True, text=True, timeout=10).returncode
@@ -457,3 +458,57 @@ def test_a_streaming_reply_ends_the_wait_even_without_the_status_line():
     # idle-looking composer are what the screen shows (real frame, 2026-09-29).
     # The note therefore says a reply is on screen, not that the turn is over.
     assert _finished(STREAMING, LONG_TASK) == 0
+
+
+# --- #118: a long reply, captured once a second on WSL (2026-09-30) ------------
+# Frames 005-040 of one standalone spawn (Codex 0.158, gpt-6-luna low, 80x24, no
+# receipt): banner, task, the reply streaming with no status line, then the task
+# pushed off the screen while Codex pins its first line, cut with "…", as the
+# first line. Polled every 3 s, the end of the task and the running line are
+# each on screen for only a few seconds; missing both, the watch ran to its
+# 90 s bound (90.3 s measured).
+LONG_FRAMES = (FIXTURES / "codex-0.158-long-reply-frames.txt").read_text(encoding="utf-8").split("\f\n")
+LONG_REPLY_TASK = ("You are PureBose, a standalone agent with no parent. The name PureBose is already "
+                   "reserved and registered; do not register another identity, do not re-register yourself "
+                   "(no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child "
+                   "agents of your own later is allowed. This prompt is the canonical task. Start it "
+                   "immediately:\n\n1〜200 の素数を1行ずつ理由つきで書き出してください")
+
+
+@pytest.mark.parametrize("offset", range(3))
+@pytest.mark.parametrize("start", [5, 12, 15], ids=["from-banner", "task-scrolling", "task-gone"])
+def test_a_long_reply_ends_the_wait_whatever_the_poll_phase(tmp_path, start, offset):
+    # One poll every 3 frames; the last frame repeats, as the screen then stays.
+    frames = LONG_FRAMES[start - 5 + offset::3]
+    result, keys, notes = _watch(tmp_path, frames, prompt=LONG_REPLY_TASK)
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "First-task confirmation unknown" in notes
+    # Before the fix the pinned-task frames (016 on) matched nothing: 90 s.
+    assert _waited(notes) <= 9, notes
+
+
+def test_the_pinned_task_line_must_be_this_tasks_first_line():
+    pinned = LONG_FRAMES[-1]
+    assert pinned.splitlines()[0].endswith("…")
+    assert _finished(pinned, LONG_REPLY_TASK) == 0
+    # Another child's task pinned there is not this launch's turn.
+    other = LONG_REPLY_TASK.replace("PureBose", "BlueLake")
+    assert _finished(pinned, other) != 0
+    # Too short a prefix to tell tasks apart.
+    short = pinned.replace(pinned.splitlines()[0], "You are…", 1)
+    assert _finished(short, "You are somebody else entirely") != 0
+    # A pinned line alone is not enough without the idle composer.
+    assert _finished(pinned.replace("› Ask Codex to do anything", ""), LONG_REPLY_TASK) != 0
+
+
+def test_a_task_end_wrapped_across_lines_is_still_found():
+    # The last 24 characters of the task can straddle a terminal wrap.
+    prompt = "Start it immediately: write the primes up to two hundred, each with its reason"
+    wrapped = ("› Start it immediately: write the primes up to two hundred, each with\n"
+               "  its reason\n\n• 2 — prime\n" + PROVISIONAL)
+    assert _finished(wrapped, prompt) == 0
+    # Regex characters in the task are taken literally.
+    tricky = "Answer [yes] or no? (a.b*c) ^$ \\ done"
+    screen = "› " + tricky + "\n\n• yes\n" + PROVISIONAL
+    assert _finished(screen, tricky) == 0
+    assert _finished("› something else\n\n• yes\n" + PROVISIONAL, tricky) != 0
