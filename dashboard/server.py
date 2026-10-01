@@ -2873,12 +2873,24 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     resume_environment["CLAUDE_CHILD_MODEL"] = registration.get("model") or "claude-code"
     inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG AGENTSTACK_CLAUDE_LAUNCH_ID; '
              + "".join(f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()) + inner)
+    cleanup = os.path.join(HOOKS_DIR, "cleanup-child-agent.sh")
+    exit_warning = None
     if child_state is not None:
         inner = inner.replace(f"exec {shlex.quote(ABS_CLAUDE)}", shlex.quote(ABS_CLAUDE), 1)
-        cleanup = os.path.join(HOOKS_DIR, "cleanup-child-agent.sh")
         inner += (f'; CLAUDE_STATUS=$?; /bin/bash {shlex.quote(cleanup)}; '
                   'CLEANUP_STATUS=$?; [[ "$CLAUDE_STATUS" -ne 0 ]] && exit "$CLAUDE_STATUS"; '
                   'exit "$CLEANUP_STATUS"')
+    elif mail_was_retired:
+        # A token-only Claude has no child state, so the child cleanup above
+        # never ran and the row this resume unretired stayed active after
+        # exit (#143). Give back only the retirement; the token is kept.
+        if os.path.isfile(cleanup):
+            inner = inner.replace(f"exec {shlex.quote(ABS_CLAUDE)}", shlex.quote(ABS_CLAUDE), 1)
+            inner += (f'; CLAUDE_STATUS=$?; AGENTSTACK_CLEANUP_RETIRE_ONLY=1 '
+                      f'PROJECT_KEY={shlex.quote(registration["project_key"])} '
+                      f'/bin/bash {shlex.quote(cleanup)} {shlex.quote(session)}; exit "$CLAUDE_STATUS"')
+        else:
+            exit_warning = "Cleanup helper unavailable; the Mail row stays active after this agent exits"
 
     # env -u TMUX -u TMUX_PANE: 端末プロセスに TMUX が継承されると
     # 以後の全ウィンドウへ幽霊 TMUX が伝播し、cx 等の `[[ -n "$TMUX" ]]` 判定が
@@ -2907,8 +2919,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             "detail": f"会話を tmux で再開 (sid {sid[:8]}… / {cwd})",
             "terminal": launch.get("adapter"),
         }
-        if launch.get("warning"):
-            result["warning"] = launch["warning"]
+        if launch.get("warning") or exit_warning:
+            result["warning"] = "; ".join(filter(None, (launch.get("warning"), exit_warning)))
         return result
     result = {"ok": False, "error": f"resume 起動失敗: {launch.get('error')}"}
     if launch.get("rollback_errors"):

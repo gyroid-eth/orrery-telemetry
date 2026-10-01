@@ -86,7 +86,9 @@ def test_resume_restores_mail_before_terminal_and_keeps_token_private(resume, is
     assert calls[0][1]["model"] == "fixture-model"
     assert TOKEN not in json.dumps(launches) + json.dumps(result)
     assert "AGENTSTACK_RESERVED_IDENTITY=1" in launches[0][-1]
-    assert ("cleanup-child-agent.sh" in launches[0][-1]) is is_child
+    # A child gets its full cleanup; a token-only agent only gives back its retirement (#143).
+    assert "cleanup-child-agent.sh" in launches[0][-1]
+    assert ("AGENTSTACK_CLEANUP_RETIRE_ONLY=1" in launches[0][-1]) is not is_child
     if is_child:
         config_path = runtime / "child-agents" / f"{NAME}.mcp.json"
         config = json.loads(config_path.read_text())

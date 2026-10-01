@@ -806,6 +806,48 @@ def inspect_retained(
         return state
 
 
+
+def resume_eligibility(
+    runtime_dir: Path,
+    agent_name: str,
+    *,
+    agent_id: int,
+    project_key: str,
+    program: str,
+    now: datetime | None = None,
+) -> str:
+    """Read-only: may a session reopened outside the dashboard unretire itself?
+
+    The dashboard's resume unretires only retained material within its period
+    or an owner token without child state. A terminal resume uses the same
+    terms. Legacy three-field state is left for the dashboard's authenticated
+    migration, and a tombstone keeps a purged or expired identity retired.
+    """
+
+    state_path, token_path, _home, _mcp, _lock = _paths(runtime_dir, agent_name)
+    if state_path.exists() or state_path.is_symlink():
+        state = _load_state(state_path)
+        if set(state) == {"agent_name", "project_key", "registration_token"}:
+            raise ResumeStateError("config_unrestorable", "legacy child state needs the dashboard's migration")
+        inspect_retained(runtime_dir, agent_name, agent_id=agent_id, project_key=project_key,
+                         program=program, now=now)
+        return "retained"
+    pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+    if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
+        raise ResumeStateError("config_unrestorable", "Child registration or migration is pending")
+    try:
+        inspect_retained(runtime_dir, agent_name, agent_id=agent_id, project_key=project_key, program=program, now=now)
+    except ResumeStateError as exc:
+        if exc.code != "credential_missing":
+            raise
+    try:
+        token = _read_private(token_path, "owner credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ResumeStateError("credential_missing", "owner credential is invalid") from exc
+    if not token:
+        raise ResumeStateError("credential_missing", "owner credential is empty")
+    return "token_only"
+
 def _remove_exact(path: Path) -> None:
     try:
         info = path.lstat()
@@ -1351,6 +1393,12 @@ def main() -> int:
     legacy_finish.add_argument("--agent-name", required=True)
     legacy_finish.add_argument("--generation", required=True)
     legacy_finish.add_argument("--rollback", action="store_true")
+    eligibility = sub.add_parser("resume-eligibility")
+    eligibility.add_argument("--runtime-dir", required=True)
+    eligibility.add_argument("--agent-name", required=True)
+    eligibility.add_argument("--agent-id", type=int, required=True)
+    eligibility.add_argument("--project-key", required=True)
+    eligibility.add_argument("--program", required=True)
     retired = sub.add_parser("mark-retired")
     retired.add_argument("--runtime-dir", required=True)
     retired.add_argument("--agent-name", required=True)
@@ -1419,6 +1467,9 @@ def main() -> int:
             if not finish_legacy_claude_migration(runtime, args.agent_name, generation=args.generation, rollback=args.rollback):
                 print("child_resume: legacy migration is no longer pending; nothing changed", file=os.sys.stderr)
                 return 3
+        elif args.command == "resume-eligibility":
+            print(resume_eligibility(runtime, args.agent_name, agent_id=args.agent_id,
+                                     project_key=args.project_key, program=args.program))
         elif args.command == "mark-retired":
             print(
                 "retained"
