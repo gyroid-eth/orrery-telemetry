@@ -367,7 +367,9 @@ def child(spec_path: Path) -> int:
     env = child_environment(spec)
     command = [spec['codex'], '-C', spec['cwd'], '--sandbox', 'workspace-write',
                '--ask-for-approval', spec['approval'], '--model', spec['model'],
-               '-c', f'model_reasoning_effort="{spec["effort"]}"']
+               '-c', f'model_reasoning_effort="{spec["effort"]}"',
+               # No startup update screen in an unattended child (#60).
+               '-c', 'check_for_update_on_startup=false']
     process = None
     job = OwnedJob()
     try:

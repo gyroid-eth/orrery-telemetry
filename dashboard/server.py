@@ -3230,6 +3230,9 @@ def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
     approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
     network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
     parts = [f"--sandbox workspace-write --ask-for-approval {shlex.quote(approval)}"]
+    # No update screen in a product-launched Codex: its default choice runs
+    # `npm install -g`, and nobody is there to decline it (#60).
+    parts.append("-c check_for_update_on_startup=false")
     if network not in ("0", "off", "false", "no"):
         parts.append("-c sandbox_workspace_write.network_access=true")
     parts += [f"--add-dir {shlex.quote(d)}" for d in _codex_child_add_dirs(extra_dirs)]
@@ -6991,6 +6994,21 @@ def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
     return args
 
 
+def _codex_self_update_on_screen(session: str) -> bool:
+    """Whether the session shows Codex replacing itself (`npm install -g`).
+
+    A global npm install renames directories as it goes; killing it midway
+    left neither the old nor the new codex usable on the machine (#60).
+    """
+    try:
+        result = subprocess.run(["tmux", "capture-pane", "-t", f"={session}", "-p"],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    pane = getattr(result, "stdout", "")
+    return isinstance(pane, str) and "Updating Codex via" in pane
+
+
 def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                   handoff: dict, discard_handoff) -> dict:
     standalone = request["standalone"]
@@ -7259,6 +7277,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
              "cleanup_child_agent_can_recover": False})
 
     def kill_spawn_session() -> None:
+        if provider == "codex" and _codex_self_update_on_screen(child_name):
+            print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
+            return
         try:
             subprocess.run(
                 ["tmux", "kill-session", "-t", f"={child_name}"],

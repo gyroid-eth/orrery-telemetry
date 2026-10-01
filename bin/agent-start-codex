@@ -54,6 +54,9 @@ build_codex_cmd() {
   local d="$1" out
   out="env -u OPENAI_API_KEY $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$d")"
   out+=" --sandbox $(printf '%q' "$SANDBOX") --ask-for-approval $(printf '%q' "$APPROVAL")"
+  # Same as every product-launched Codex: no startup update screen, whose
+  # default choice runs `npm install -g` (#60). Update Codex yourself.
+  out+=" -c check_for_update_on_startup=false"
   [[ -n "${AGENTSTACK_VAULT:-}" && -d "${AGENTSTACK_VAULT:-/nonexistent}" ]] \
     && out+=" --add-dir $(printf '%q' "$AGENTSTACK_VAULT")"
   printf '%s' "$out"

@@ -955,6 +955,8 @@ maybe_create_worktree() {
 
 # worktree クリーンアップ (失敗時 rollback 用)
 cleanup_worktree() {
+    # Handed to codex_update_watch: never removed under a codex still updating.
+    [[ "${CODEX_UPDATE_LEFT_RUNNING:-false}" == true ]] && return 0
     if [[ -n "${WORKTREE_DIR:-}" && -d "$WORKTREE_DIR" && -n "${WORKTREE_SOURCE:-}" ]]; then
         echo "[spawn_child] cleanup: removing worktree $WORKTREE_DIR" >&2
         git -C "$WORKTREE_SOURCE" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
@@ -1208,6 +1210,12 @@ codex_child_add_dirs() {
     printf '%s\n' "${seen[*]-}"
 }
 
+# Both Codex launch lines below also pass -c check_for_update_on_startup=false
+# (#60). An unattended child must not show Codex's "Update available" screen:
+# its default choice runs `npm install -g @openai/codex`, nobody is there to
+# decline it, and a launcher that stops the child mid-install leaves the
+# machine's codex half replaced. Updating Codex is the operator's call.
+#
 # Sandbox network flag for a Codex child. workspace-write blocks the network
 # by default, which turns every curl / git fetch / ssh into an approval prompt
 # (or a hard failure under `never`). AGENTSTACK_CODEX_NETWORK (installer
@@ -2024,6 +2032,71 @@ codex_watch_initial_task() {
     return 3
 }
 
+# Whether the child's pane shows Codex replacing itself ("Updating Codex via
+# `npm install -g ...`"). A global npm install renames directories as it goes;
+# killing it midway left neither the old nor the new codex usable on the
+# machine (#60). Children start with the update check off, but a codex already
+# updating when the launcher gives up is left to finish. Codex children only:
+# nothing else updates itself this way, and the check costs a capture.
+codex_self_update_on_screen() {
+    tmux capture-pane -t "=$1" -p 2>/dev/null | grep -q 'Updating Codex via'
+}
+
+# A Codex child left updating keeps running after the launcher's cleanup has
+# rolled its registration back, so it must not go on to work: retired, and
+# (with --worktree) in a directory nobody would keep. Its worktree is left to
+# this watch, which runs in the background after the launcher exits:
+# - the session closed by itself (codex ended after the update and the launch
+#   line ran its cleanup): remove the worktree;
+# - the update is no longer on screen but codex still runs: close the session,
+#   then remove the worktree;
+# - still updating at the limit: leave both and say so in the incident log.
+# Args: session worktree worktree-source child limit-seconds poll-seconds.
+codex_update_watch() {
+    local session="$1" worktree="$2" source="$3" child="$4" limit="${5:-600}" poll="${6:-5}" waited=0
+    local log="${SPAWN_INCIDENT_LOG:-/dev/null}" pane
+    while (( waited < limit )); do
+        if ! tmux has-session -t "=$session" 2>/dev/null; then
+            break
+        fi
+        # A capture that fails says nothing about the update: wait.
+        if pane="$(tmux capture-pane -t "=$session" -p 2>/dev/null)" \
+            && ! printf '%s' "$pane" | grep -q 'Updating Codex via'; then
+            tmux kill-session -t "=$session" >/dev/null 2>&1 || true
+            # Its worktree is a live codex's cwd until the session is gone.
+            if tmux has-session -t "=$session" 2>/dev/null; then
+                printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+                    "WARNING: Codex update finished in session $session, but the session could not be closed; left it with its worktree. Close it with 'tmux kill-session -t $session'." >> "$log" 2>/dev/null || true
+                return 0
+            fi
+            printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+                "Codex update finished in session $session; closed it (its registration was rolled back when the spawn failed)" >> "$log" 2>/dev/null || true
+            break
+        fi
+        sleep "$poll"
+        waited=$((waited + poll))
+    done
+    if (( waited >= limit )); then
+        printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+            "WARNING: Codex in session $session is still updating after ${limit}s; left running with its worktree. Close it with 'tmux kill-session -t $session' once the update is done, then spawn again." >> "$log" 2>/dev/null || true
+        return 0
+    fi
+    if [[ -n "$worktree" && -d "$worktree" && -n "$source" ]]; then
+        git -C "$source" worktree remove --force "$worktree" 2>/dev/null || true
+        git -C "$source" branch -D "exp/${child}" 2>/dev/null || true
+    fi
+}
+
+# Leave an updating Codex child running and hand its worktree to the watch.
+leave_updating_codex_child() {
+    local session="$1" limit="${AGENTSTACK_CODEX_UPDATE_WATCH_SECONDS:-600}"
+    CODEX_UPDATE_LEFT_RUNNING=true
+    spawn_note "WARNING: Codex is updating itself in session $session; left running so the install is not cut off. A background watch closes it when the update is over (up to ${limit}s) and then removes its worktree; see $SPAWN_INCIDENT_LOG. Spawn again afterwards."
+    ( codex_update_watch "$session" "${WORKTREE_DIR:-}" "${WORKTREE_SOURCE:-}" "${CHILD_NAME:-$session}" "$limit" 5 ) \
+        </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
 # Existing failure cleanup terminates a half-started child. Preserve that
 # stronger repository contract, while leaving durable evidence that prompt
 # delivery was never verified before cleanup ran.
@@ -2651,7 +2724,11 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 || echo "Warning: $CHILD_NAME was made active in ORRERY Mail and could not be retired again" >&2
         fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
-            tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+            if [[ "$USE_CODEX" == true ]] && codex_self_update_on_screen "$CHILD_NAME"; then
+                leave_updating_codex_child "$CHILD_NAME"
+            else
+                tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+            fi
         fi
         discard_claude_launch_record
         cleanup_worktree
@@ -2899,7 +2976,7 @@ ${TASK}"
                     exit 1
                 fi
                 rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
-                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+                env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c check_for_update_on_startup=false \
                     "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
                 /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
             '"'"''
@@ -3435,7 +3512,11 @@ cleanup_on_failure() {
     warn_if_uninjected
     rm -f "${CODEX_PROMPT_FILE:-}" "${CLAUDE_CHILD_PROMPT_FILE:-}"
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
-        tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+        if [[ "$USE_CODEX" == true ]] && codex_self_update_on_screen "$CHILD_NAME"; then
+            leave_updating_codex_child "$CHILD_NAME"
+        else
+            tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
+        fi
     fi
     if [[ -n "${CHILD_NAME:-}" ]]; then
         echo "[spawn_child] cleanup: retiring $CHILD_NAME and releasing reservations" >&2
@@ -3716,7 +3797,7 @@ if [[ "$USE_CODEX" == true ]]; then
                 exit 1
             fi
             rm -f "$AGENTSTACK_CODEX_PROMPT_FILE"
-            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") \
+            env -u OPENAI_API_KEY "$AGENTSTACK_CODEX_BIN" -C "$PWD" --sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c check_for_update_on_startup=false \
                 "${EXTRA_ARGS[@]}" --model "$AGENTSTACK_CODEX_MODEL" -- "$AGENTSTACK_CODEX_TASK"
             /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"
         '"'"''

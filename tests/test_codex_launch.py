@@ -1285,3 +1285,57 @@ def test_codex_empty_or_unrecognised_capture_is_never_confirmed():
 def test_codex_trust_heading_is_not_mistaken_for_the_selected_row():
     heading = "> Trust this folder?\n  1. Trust and continue\n› 2. Quit\n"
     assert _codex_accept_with_screens([heading, heading]) == ["KEYS:send-keys -t Child Up"]
+
+
+# --- #60: no startup update screen in a product-launched Codex ----------------
+# Codex's "Update available" screen defaults to `npm install -g @openai/codex`.
+# An unattended child has nobody to decline it, and a launcher that stops the
+# child mid-install leaves the machine's codex half replaced.
+
+_NO_UPDATE = "check_for_update_on_startup=false"
+
+
+def test_every_codex_launch_turns_off_the_startup_update_check():
+    spawn = _SPAWN.read_text(encoding="utf-8")
+    assert spawn.count(
+        '$(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c ' + _NO_UPDATE + " \\\n"
+    ) == 2
+    windows = (_ROOT / "scripts" / "windows" / "codex_launcher.py").read_text(encoding="utf-8")
+    assert f"'-c', '{_NO_UPDATE}'" in windows
+
+
+def test_agent_start_codex_turns_off_the_startup_update_check():
+    text = (_ROOT / "bin" / "agent-start-codex").read_text(encoding="utf-8")
+    function = text[text.index("build_codex_cmd() {"):text.index("\n}\n", text.index("build_codex_cmd() {")) + 3]
+    result = subprocess.run(
+        ["/bin/bash", "-c",
+         "set -euo pipefail\nCODEX_BIN=codex\nSANDBOX=workspace-write\nAPPROVAL=on-request\n"
+         + function + '\nbuild_codex_cmd /tmp\n'],
+        text=True, capture_output=True, check=True,
+    )
+    assert f"-c {_NO_UPDATE}" in result.stdout
+
+
+def test_dashboard_resume_turns_off_the_startup_update_check(monkeypatch):
+    sys.path.insert(0, str(_ROOT / "dashboard"))
+    import server  # noqa: PLC0415
+
+    for network in ("on", "off"):
+        monkeypatch.setenv("AGENTSTACK_CODEX_NETWORK", network)
+        assert f"-c {_NO_UPDATE}" in server._codex_child_launch_flags()
+
+
+def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
+    # #60: a spawn that fails while Codex runs `npm install -g` must leave the
+    # session alone, or the machine's codex is left half replaced.
+    from dashboard import server
+
+    screens = {"updating": "Updating Codex via `npm install -g @openai/codex`...\n", "idle": "› Ask Codex\n"}
+    for name, screen in screens.items():
+        monkeypatch.setattr(server.subprocess, "run",
+                            lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
+        assert server._codex_self_update_on_screen("Child") is (name == "updating")
+    source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
+    body = source[source.index("    def kill_spawn_session() -> None:"):]
+    body = body[:body.index("\n\n")]
+    assert body.index("_codex_self_update_on_screen") < body.index('"kill-session"')
