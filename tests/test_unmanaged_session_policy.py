@@ -841,6 +841,57 @@ def test_the_first_warning_is_claimed_once_under_concurrency(tmp_path: Path) -> 
     assert len(warned) == 1, f"{len(warned)} of 12 calls each believed it was the first"
 
 
+def test_the_outage_warning_is_claimed_once_across_a_time_bucket_boundary(tmp_path: Path) -> None:
+    """#55: the outage report was claimed per 10-minute bucket of `date +%s`.
+
+    Twelve parallel hooks whose clocks read either side of a boundary claimed
+    two different buckets, and two of them warned. Half of these callers read
+    one second before the boundary."""
+    import concurrent.futures
+
+    fake_bin = tmp_path / "fakedate"
+    fake_bin.mkdir()
+    fake_date = fake_bin / "date"
+    fake_date.write_text(
+        "#!/bin/bash\n"
+        'if [ "${1:-}" = "+%s" ]; then\n'
+        "  if [ $(( $$ % 2 )) -eq 0 ]; then echo 1799999999; else echo 1800000000; fi\n"
+        "  exit 0\n"
+        "fi\n"
+        'exec /bin/date "$@"\n',
+        encoding="utf-8",
+    )
+    fake_date.chmod(0o755)
+    payload = _registration_payload("boundary-1")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(
+            pool.map(
+                lambda _: _run(
+                    REGISTRATION_GUARD, payload, tmp_path, AGENTSTACK_MCP_URL=UNREACHABLE,
+                    PATH=f"{fake_bin}:{BASE_ENV['PATH']}",
+                ),
+                range(12),
+            )
+        )
+    warned = [r for r in results if "systemMessage" in r.stdout]
+    assert all(r.returncode == 0 for r in results)
+    assert len(warned) == 1, f"{len(warned)} of 12 calls each believed it was the first"
+
+
+def test_the_outage_warning_is_repeated_after_ten_minutes(tmp_path: Path) -> None:
+    """A single warning per session hides an outage that lasts for days."""
+    import time as _time
+
+    payload = _registration_payload("repeat-1")
+    run = lambda: _run(REGISTRATION_GUARD, payload, tmp_path, AGENTSTACK_MCP_URL=UNREACHABLE)  # noqa: E731
+    assert "systemMessage" in run().stdout
+    assert "systemMessage" not in run().stdout
+    record = tmp_path / "runtime" / "outage-warned" / "repeat-1-unreachable"
+    record.write_text(f"{_time.time() - 601}\n", encoding="utf-8")
+    assert "systemMessage" in run().stdout
+    assert "systemMessage" not in run().stdout
+
+
 # --- registering somebody else does not register you ---------------------
 
 MARK_HOOK = REPO_ROOT / "hooks" / "mark-agent-registered.sh"
