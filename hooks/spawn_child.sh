@@ -2034,7 +2034,8 @@ codex_watch_initial_task() {
 # `npm install -g ...`"). A global npm install renames directories as it goes;
 # killing it midway left neither the old nor the new codex usable on the
 # machine (#60). Children start with the update check off, but a codex already
-# updating when the launcher gives up is left to finish.
+# updating when the launcher gives up is left to finish. Codex children only:
+# nothing else updates itself this way, and the check costs a capture.
 codex_self_update_on_screen() {
     tmux capture-pane -t "=$1" -p 2>/dev/null | grep -q 'Updating Codex via'
 }
@@ -2666,7 +2667,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
                 || echo "Warning: $CHILD_NAME was made active in ORRERY Mail and could not be retired again" >&2
         fi
         if [[ "$PRE_REGISTERED_SESSION_STARTED" == true ]]; then
-            if codex_self_update_on_screen "$CHILD_NAME"; then
+            if [[ "$USE_CODEX" == true ]] && codex_self_update_on_screen "$CHILD_NAME"; then
                 spawn_note "WARNING: Codex is updating itself in session $CHILD_NAME; left running so the install is not cut off. Close it when the update has finished, then spawn again."
             else
                 tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -3454,7 +3455,7 @@ cleanup_on_failure() {
     warn_if_uninjected
     rm -f "${CODEX_PROMPT_FILE:-}" "${CLAUDE_CHILD_PROMPT_FILE:-}"
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
-        if codex_self_update_on_screen "$CHILD_NAME"; then
+        if [[ "$USE_CODEX" == true ]] && codex_self_update_on_screen "$CHILD_NAME"; then
             spawn_note "WARNING: Codex is updating itself in session $CHILD_NAME; left running so the install is not cut off. Close it when the update has finished, then spawn again."
         else
             tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true

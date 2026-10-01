@@ -7277,7 +7277,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
              "cleanup_child_agent_can_recover": False})
 
     def kill_spawn_session() -> None:
-        if _codex_self_update_on_screen(child_name):
+        if provider == "codex" and _codex_self_update_on_screen(child_name):
             print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
             return
         try:

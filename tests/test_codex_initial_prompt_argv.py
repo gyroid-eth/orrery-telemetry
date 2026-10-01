@@ -551,7 +551,7 @@ def _cleanup(tmp_path, screen: str, which: str) -> list[str]:
         state = "SPAWN_COMPLETED=false\nCHILD_SESSION_STARTED=true\nRESOURCES=\nPROJECT_KEY=/p\n"
         call = "cleanup_on_failure"
     script = (
-        f"DIR={shlex.quote(str(tmp_path))}\nCHILD_NAME=Child\n" + state
+        f"DIR={shlex.quote(str(tmp_path))}\nCHILD_NAME=Child\nUSE_CODEX=true\n" + state
         + 'tmux() { printf "%s\\n" "$*" >> "$DIR/calls"; [[ "$1" == capture-pane ]] && cat "$DIR/screen"; return 0; }\n'
         + "warn_if_uninjected() { :; }\ndiscard_claude_launch_record() { :; }\ncleanup_worktree() { :; }\n"
         + "call_mcp() { :; }\nretire_agent_with_token_file() { :; }\nspawn_note() { printf '%s\\n' \"$1\" >&2; }\n"
