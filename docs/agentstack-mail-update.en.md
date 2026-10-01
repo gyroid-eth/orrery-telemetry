@@ -155,9 +155,12 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
 - **Running sessions and bound proxies.** Nothing needs restarting or
   re-registering. The tests check that an agent registered before the switch
   sends and receives with the same owner token afterwards, and that a wrong
-  token is refused. A bound proxy's `runtime_status` returns
-  `state: "registering"` and `agent_id: null` for a direct binding even in
-  normal operation, so that alone is no evidence that it is stuck.
+  token is refused. The `runtime_status` of a proxy a launcher bound
+  returns `state: "bound"` and `agent_id: null`. That says only that the
+  binding exists; Mail is not contacted. To see whether Mail is reachable,
+  call `fetch_inbox` or another tool (a proxy from 2026.09.30.4 or earlier
+  returned `state: "registering"` here even in normal operation, which was no
+  evidence of being stuck either).
 - **systemd timer (WSL2 and others).** The unit only reads `env.sh` and runs
   `agentstack-mailctl start`; it names no render. A timer firing after the
   switch finds the new build and does nothing (the tests run the unit's command

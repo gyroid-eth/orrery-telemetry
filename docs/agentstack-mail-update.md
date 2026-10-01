@@ -136,9 +136,12 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
   ません。
 - **稼働中の session と bound proxy。** 再起動も再登録も要りません。test では、
   切り替え前に登録した agent が同じ owner token で切り替え後も送受信でき、
-  違う token は拒否されることを確かめています。bound proxy の `runtime_status`
-  は direct binding では平常時から `state: "registering"`・`agent_id: null` を
-  返すので、それだけでは止まっている証拠になりません。
+  違う token は拒否されることを確かめています。launcher が bind した proxy の
+  `runtime_status` は `state: "bound"`・`agent_id: null` を返します。これは
+  binding があることだけを示し、Mail には問い合わせていません。Mail に届くか
+  どうかは、`fetch_inbox` などを実際に呼んで確かめてください（2026.09.30.4
+  以前の proxy は、同じ場合に平常時から `state: "registering"` を返していました。
+  これも止まっている証拠ではありません）。
 - **systemd の timer（WSL2 など）。** unit は `env.sh` を読んで
   `agentstack-mailctl start` を実行するだけで、render の path を持ちません。
   切り替え後に timer が発火しても新しい build を見つけて何もしません（test で
