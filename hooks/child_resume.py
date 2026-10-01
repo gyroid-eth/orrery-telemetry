@@ -1157,16 +1157,29 @@ def _linked_worktree(work_dir: Path) -> tuple[Path, Path] | None:
         if not marker.is_file():
             continue
         gitdir = _git_dir_of(directory)
-        if gitdir is None or gitdir.parent.name != "worktrees":
+        if gitdir is None or gitdir.parent.name != "worktrees" or not gitdir.is_dir():
             return None
-        common = gitdir.parent.parent
+        # Only metadata git itself wrote for this very checkout counts: its
+        # commondir names the shared directory, and its gitdir points back at
+        # this `.git` (review of #174). A `.git` file merely naming some
+        # repository's worktrees/ directory borrows nothing.
         try:
             pointer = (gitdir / "commondir").read_text(encoding="utf-8").strip()
-            if pointer:
-                common = (gitdir / pointer).resolve()
+            back = (gitdir / "gitdir").read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
-            pass
-        return directory, common.resolve()
+            return None
+        if not pointer or not back:
+            return None
+        back_path = Path(back) if Path(back).is_absolute() else gitdir / back
+        try:
+            if back_path.resolve() != marker.resolve():
+                return None
+            common = (gitdir / pointer).resolve()
+        except OSError:
+            return None
+        if not common.is_dir():
+            return None
+        return directory, common
     return None
 
 
@@ -1213,7 +1226,11 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
         roots.add(os.fspath(worktree.resolve()))
     except OSError:
         pass
-    lines: list[str] = []
+    # One checkout can be trusted under more than one path (its real path and
+    # a symlink to it): every candidate for a worktree key is gathered first,
+    # each key is written once, and a key whose candidates disagree is left to
+    # Codex's own review rather than picked by order (review of #174).
+    carried: dict[str, set[str]] = {}
     for key, entry in state.items():
         trusted = entry.get("trusted_hash") if isinstance(entry, dict) else None
         parts = key.rsplit(":", 3)
@@ -1225,10 +1242,15 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
         relative = key[len(os.fspath(source)):]
         for root in sorted(roots):
             new_key = root + relative
-            if new_key in state:
-                continue
-            lines.extend(["", "[hooks.state." + _toml_string(new_key) + "]",
-                          "trusted_hash = " + _toml_string(trusted)])
+            if new_key not in state:
+                carried.setdefault(new_key, set()).add(trusted)
+    lines: list[str] = []
+    for new_key in sorted(carried):
+        hashes = carried[new_key]
+        if len(hashes) != 1:
+            continue
+        lines.extend(["", "[hooks.state." + _toml_string(new_key) + "]",
+                      "trusted_hash = " + _toml_string(next(iter(hashes)))])
     if lines:
         lines[0:0] = ["", "# Written by spawn_child.sh: hook trust the user gave to this",
                       "# worktree's source checkout, for the same hooks here."]
