@@ -612,23 +612,25 @@ ags_apply_contact_policy() {
       return 0
       ;;
   esac
-  # Try WITH the owner token first: legacy deployments gate set_contact_policy
-  # on the agent's registration_token, so omitting it makes the call fail and
-  # (previously with a bare || true) silently leave the policy at the server
-  # default instead of 'open'. But older/lenient servers whose set_contact_policy
-  # signature has no registration_token param reject the extra kwarg — so if the
-  # token-bearing call errors, retry without it. Both paths are best-effort.
+  # Try WITHOUT the owner token first: the bundled ORRERY Mail's
+  # set_contact_policy has no registration_token parameter and rejects it, so a
+  # token-first call failed on every registration before the real one (#51).
+  # Legacy deployments gated the call on the agent's registration_token; only
+  # when the token-less call errors is it retried with the token, so the policy
+  # is not silently left at the server default there. Both paths are
+  # best-effort. Callers run under `set -e` (agentstack-preregister-child calls
+  # this directly as its last step), so a failed call must not end them.
   local resp
   resp="$(ags_mcp_call "set_contact_policy" \
     "project_key=$project_key" \
     "agent_name=$agent_name" \
-    "policy=$policy" \
-    "registration_token=$registration_token" 2>/dev/null)"
+    "policy=$policy" 2>/dev/null)" || resp=""
   if [[ -z "$resp" ]] || printf '%s' "$resp" | ags_mcp_has_error; then
     ags_mcp_call "set_contact_policy" \
       "project_key=$project_key" \
       "agent_name=$agent_name" \
-      "policy=$policy" >/dev/null 2>&1 || true
+      "policy=$policy" \
+      "registration_token=$registration_token" >/dev/null 2>&1 || true
   fi
 }
 

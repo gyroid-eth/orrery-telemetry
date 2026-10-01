@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### 登録のたびに、contact policy の設定が 1 回失敗していました（#51）
+
+登録の helper は `set_contact_policy` を owner token 付きで先に呼んでいました。同梱の ORRERY Mail の `set_contact_policy` は `registration_token` を受け付けないので、この呼び出しは毎回失敗し、token なしの呼び直しで設定されていました。token なしを先に呼び、失敗したときだけ token 付きで呼び直すようにしました。owner token を求める古い Mail にも、2 回目で設定されます。
+
 ## 2026.10.01.1
 
 ### 計算の待ちに上限を付け、失敗した計算が重ならないようにしました（#161 のレビュー、API 世代6）
