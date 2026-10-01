@@ -12,7 +12,7 @@
 
 ### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
 
-Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。account が不確かな間も、前の account の値は消したうえで、その後に status line が観測した値は表示します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
+Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
 
 ### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
 

@@ -44,6 +44,10 @@ DISABLE_ENV = "AGENTSTACK_CLAUDE_ACCOUNT_QUOTA"
 FETCH_INTERVAL_SECONDS = 600
 JITTER_SECONDS = 60
 BACKOFF_MAX_SECONDS = 3600
+# ~/.claude.json also holds per-project history and can grow large; the account
+# record is never worth reading a file beyond this (it then falls back to the
+# token, as when the record is missing).
+ACCOUNT_RECORD_MAX_BYTES = 16 * 1024 * 1024
 # Kept as the public name used by the first version and its callers.
 BACKOFF_SECONDS = FETCH_INTERVAL_SECONDS
 
@@ -97,6 +101,10 @@ class ClaudeAccountQuotaProvider:
         self._token_fingerprint: bytes | None = None
         self._account_identity: str | None = None
         self._identity_unconfirmed = False
+        # How the change was noticed. A changed account record is a real switch;
+        # a changed token with no record may only be a refresh, and the route
+        # treats the two differently (review of #157).
+        self._unconfirmed_reason = "account_identity_changed"
 
     def read(self) -> QuotaSnapshot:
         """Read at most once per outbound budget while retaining each window."""
@@ -116,18 +124,21 @@ class ClaudeAccountQuotaProvider:
                 # Claude Code refreshes its access token routinely; the account
                 # it recorded says whether this is still the same one (#53).
                 changed = identity != self._account_identity
+                reason = "account_identity_changed"
             else:
                 # With no record of the account, a different credential may
-                # name a different one.
+                # name a different one, or be the same one refreshed.
                 changed = fingerprint != self._token_fingerprint
+                reason = "credential_changed_unverified"
             if changed:
                 # Never carry the previous account's balances across that
                 # boundary.
                 self._forget_account(identity_unconfirmed=True)
+                self._unconfirmed_reason = reason
         self._token_fingerprint = fingerprint
         self._account_identity = identity
         if self._identity_unconfirmed:
-            self._last_reason = "account_identity_changed"
+            self._last_reason = self._unconfirmed_reason
         if now_float < self._next_fetch_at:
             return self._retained_or_unavailable(
                 now,
@@ -154,14 +165,14 @@ class ClaudeAccountQuotaProvider:
             )
             self._rate_limit_failures += 1
             self._last_reason = (
-                "account_identity_changed" if self._identity_unconfirmed else "rate_limited"
+                self._unconfirmed_reason if self._identity_unconfirmed else "rate_limited"
             )
             self._schedule(max(exc.retry_after, exponential))
             self._log_failure("_RateLimited")
             return self._retained_or_unavailable(now, self._last_reason)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
             self._last_reason = (
-                "account_identity_changed"
+                self._unconfirmed_reason
                 if self._identity_unconfirmed
                 else "account_usage_failed"
             )
@@ -233,6 +244,9 @@ class ClaudeAccountQuotaProvider:
             self._token_fingerprint = None
             self._account_identity = None
         self._identity_unconfirmed = identity_unconfirmed
+        # A sign-out, or anything else that forgets the account, is not known to
+        # be a refresh: treat it as a switch unless the caller says otherwise.
+        self._unconfirmed_reason = "account_identity_changed"
 
     def _unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
         return QuotaSnapshot(
@@ -342,6 +356,9 @@ def read_access_token() -> str | None:
     return env or _token_from_file() or _token_from_keychain()
 
 
+_ACCOUNT_RECORD_CACHE: dict[str, tuple[tuple[int, int], str | None]] = {}
+
+
 def read_account_identity() -> str | None:
     """The account Claude Code recorded for its stored login, or None.
 
@@ -349,14 +366,38 @@ def read_account_identity() -> str | None:
     of the login whose tokens it keeps; it does not change when the access token
     is refreshed. A token from CLAUDE_CODE_OAUTH_TOKEN may belong to any
     account, so it has no recorded identity.
+
+    The route reads this every 30 s per open tab, and the file also holds every
+    project's history, so a file version (mtime and size) is parsed once, and a
+    file larger than ACCOUNT_RECORD_MAX_BYTES is not read at all.
     """
     if (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip():
         return None
     config_dir = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
     path = Path(config_dir).expanduser() / ".claude.json" if config_dir else Path("~/.claude.json").expanduser()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        stat = path.stat()
+    except OSError:
+        return None
+    if stat.st_size > ACCOUNT_RECORD_MAX_BYTES:
+        return None
+    version = (stat.st_mtime_ns, stat.st_size)
+    cached = _ACCOUNT_RECORD_CACHE.get(str(path))
+    if cached is not None and cached[0] == version:
+        return cached[1]
+    try:
+        raw = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
+        return None
+    identity = _parse_account_identity(raw)
+    _ACCOUNT_RECORD_CACHE[str(path)] = (version, identity)
+    return identity
+
+
+def _parse_account_identity(raw: str) -> str | None:
+    try:
+        data = json.loads(raw)
+    except ValueError:
         return None
     account = data.get("oauthAccount") if isinstance(data, Mapping) else None
     if not isinstance(account, Mapping):

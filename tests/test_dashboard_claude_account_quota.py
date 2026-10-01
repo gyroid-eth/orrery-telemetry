@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import pathlib
 import urllib.error
 import urllib.request
 from email.utils import formatdate
@@ -292,7 +294,7 @@ def test_credential_rotation_does_not_reset_the_machine_wide_429_exponent():
     provider.read()  # 1200 s
     token[0] = "account-b"
     now[0] = 1700
-    assert provider.read().reason == "account_identity_changed"
+    assert provider.read().reason == "credential_changed_unverified"
     now[0] = 2800
     provider.read()  # still the third failure: 2400 s
     now[0] = 5199
@@ -356,7 +358,7 @@ def test_sign_out_and_credential_change_never_reuse_the_old_snapshot():
     token[0] = "account-b"
     now[0] = 1001
     changed = provider.read()
-    assert changed.reason == "account_identity_changed"
+    assert changed.reason == "credential_changed_unverified"
     assert changed.buckets == ()
     assert calls == [("account-a", 1000.0)], "a credential change must not bypass the budget"
 
@@ -391,7 +393,7 @@ def test_failed_first_fetch_for_a_changed_credential_keeps_the_identity_gate():
     now[0] = 1600
     changed = route.read()
 
-    assert changed.reason == "account_identity_changed"
+    assert changed.reason == "credential_changed_unverified"
     # The observer is still consulted (#53), but what it wrote before the change
     # may be the prior account's and stays behind the identity gate.
     assert changed.buckets == ()
@@ -1151,7 +1153,7 @@ def test_53_without_a_readable_identity_a_new_token_still_gates():
 
     token[0] = "access-2"
     now[0] = 1100
-    assert provider.read().reason == "account_identity_changed"
+    assert provider.read().reason == "credential_changed_unverified"
 
 
 def test_53_the_identity_is_the_account_claude_code_recorded(tmp_path, monkeypatch):
@@ -1192,7 +1194,7 @@ def test_53_a_custom_token_source_never_borrows_the_machine_identity(monkeypatch
     assert provider.read().buckets
     token[0] = "access-2"
     now[0] = 1100
-    assert provider.read().reason == "account_identity_changed"
+    assert provider.read().reason == "credential_changed_unverified"
 
 
 def test_53_every_failed_account_read_says_why_and_when_it_retries(caplog):
@@ -1207,20 +1209,24 @@ def test_53_every_failed_account_read_says_why_and_when_it_retries(caplog):
     token[0] = "secret-access-2"
     now[0] = 1600
     with caplog.at_level("INFO", logger="agentstack.dashboard.quotas"):
-        assert provider.read().reason == "account_identity_changed"
+        assert provider.read().reason == "credential_changed_unverified"
         now[0] = 2800
-        assert provider.read().reason == "account_identity_changed"
+        assert provider.read().reason == "credential_changed_unverified"
 
     lines = [record.getMessage() for record in caplog.records]
     assert len(lines) == 2, lines
-    assert "account_identity_changed" in lines[0] and "_RateLimited" in lines[0]
+    assert "credential_changed_unverified" in lines[0] and "_RateLimited" in lines[0]
     assert "next fetch in 600s" in lines[0] and "identity unconfirmed" in lines[0]
     assert "TimeoutError" in lines[1] and "next fetch in 600s" in lines[1]
     assert all("secret" not in line for line in lines)
 
 
-def test_53_an_unconfirmed_identity_still_shows_what_the_observer_sees_now():
-    """Clear the old account's windows, but keep the current observation."""
+def test_53_a_token_only_change_still_shows_what_the_observer_sees_now():
+    """With no account record, a new token may be a refresh: keep the observer.
+
+    Clear the old account's windows, but show what the status line writes
+    after the change was noticed. The reason says the change is unverified.
+    """
     now = [1000.0]
     token = ["access-1"]
     identity = [None]
@@ -1235,14 +1241,91 @@ def test_53_an_unconfirmed_identity_still_shows_what_the_observer_sees_now():
     token[0] = "access-2"
     now[0] = 1600
     gated = route.read()
-    assert gated.reason == "account_identity_changed"
+    assert gated.reason == "credential_changed_unverified"
     assert gated.buckets == ()
 
-    # A status line written after the change belongs to the current account.
+    # A status line written after the change: possibly a refresh, shown.
     observer._snapshot = _ok("claude-statusline", observed_at=1700)
     now[0] = 1700
     shown = route.read()
     assert [bucket.id for bucket in shown.buckets] == ["five_hour"]
     assert shown.buckets[0].source == "claude-statusline"
     assert shown.degraded is True
-    assert shown.reason == "fallback_account_identity_changed"
+    assert shown.reason == "fallback_credential_changed_unverified"
+
+
+def test_53_a_recorded_account_switch_hides_even_a_newer_observation():
+    """The observer file has no account mark of its own.
+
+    After a real switch another session may still be running under the old
+    account and write its windows; until the new account answers, show none
+    (review of #157, P2-1).
+    """
+    now = [1000.0]
+    token = ["access-a"]
+    identity = ["account-a:org"]
+    account = _refreshing_provider(
+        token, identity, [USAGE_BODY, claude_account._RateLimited(0), USAGE_BODY], now,
+    )
+    observer = _Stub(_ok("claude-statusline", observed_at=1000))
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: now[0])
+    assert route.read().buckets
+
+    token[0] = "access-b"
+    identity[0] = "account-b:org"
+    now[0] = 1600
+    assert route.read().reason == "account_identity_changed"
+
+    # An old-account session writes its status line after the switch.
+    observer._snapshot = _ok("claude-statusline", observed_at=1700)
+    now[0] = 1700
+    hidden = route.read()
+    assert hidden.reason == "account_identity_changed"
+    assert hidden.buckets == ()
+
+    # The new account answers: values come back.
+    now[0] = 2300
+    assert route.read().status == "ok"
+
+
+def test_53_the_account_record_is_read_once_per_file_version(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    config = tmp_path / ".claude.json"
+    config.write_text(json.dumps({"oauthAccount": {"accountUuid": "acct-1", "organizationUuid": "o"}}),
+                      encoding="utf-8")
+    reads = []
+    original = claude_account._parse_account_identity
+
+    def counting(raw):
+        reads.append(1)
+        return original(raw)
+
+    monkeypatch.setattr(claude_account, "_parse_account_identity", counting)
+    assert claude_account.read_account_identity() == "acct-1:o"
+    assert claude_account.read_account_identity() == "acct-1:o"
+    assert len(reads) == 1, "an unchanged file is not parsed again"
+
+    stat = config.stat()
+    config.write_text(json.dumps({"oauthAccount": {"accountUuid": "acct-2", "organizationUuid": "o"}}),
+                      encoding="utf-8")
+    os.utime(config, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert claude_account.read_account_identity() == "acct-2:o"
+    assert len(reads) == 2
+
+
+def test_53_an_oversized_account_record_falls_back_to_the_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(claude_account, "ACCOUNT_RECORD_MAX_BYTES", 64)
+    config = tmp_path / ".claude.json"
+    config.write_text(json.dumps({"oauthAccount": {"accountUuid": "acct-1", "organizationUuid": "o"},
+                                  "projects": {"x" * 100: {}}}), encoding="utf-8")
+    assert claude_account.read_account_identity() is None
+
+
+def test_53_every_reason_the_route_can_give_has_a_label():
+    html = (pathlib.Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(
+        encoding="utf-8")
+    for reason in ("account_identity_changed", "credential_changed_unverified"):
+        assert f"  {reason}:'" in html, reason

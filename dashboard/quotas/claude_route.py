@@ -64,15 +64,20 @@ class ClaudeQuotaRoute:
 
         # Check identity before touching the observer. Its file is account-
         # scoped too, and may still contain the prior account's values.
-        if account.reason == "sign_in_required":
+        if account.reason in {"sign_in_required", "account_identity_changed"}:
+            # Signed out, or the recorded account changed: the observer file has
+            # no account mark of its own, and a session still running under the
+            # previous account may keep writing it. Show nothing until the
+            # account answers (review of #157).
             self._clear_identity()
             self._identity_changed_at = None
             return replace(account, degraded=True, partial=True)
-        if account.reason == "account_identity_changed":
-            # Drop everything the previous account left, once, but keep showing
-            # what the observer sees from now on: hiding the current observation
-            # froze the header for as long as the account stayed unconfirmed
-            # (#53).
+        if account.reason == "credential_changed_unverified":
+            # Only the token changed and there is no account record to say
+            # whether it is the same account: most often a refresh. Drop what
+            # the previous credential left, once, but keep showing what the
+            # observer sees from now on; hiding it froze the header for as long
+            # as the change stayed unverified (#53).
             if self._identity_changed_at is None:
                 self._clear_identity()
                 self._identity_changed_at = int(now)
