@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.10.01
 
 ### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
 
