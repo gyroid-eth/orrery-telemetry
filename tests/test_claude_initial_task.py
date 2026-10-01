@@ -436,3 +436,39 @@ def test_the_system_prompt_says_bound_only_with_a_proxy():
     with_proxy, without = render("/tmp/kid-mcp.json"), render("")
     assert "already bound to the name Kid" in with_proxy and "runtime_status" in with_proxy
     assert "already bound" not in without and "runtime_status" not in without
+
+
+def test_the_watch_counts_from_the_launch_not_from_its_own_start(tmp_path, mail):
+    """Re-check of #163, R2 follow-up: the watcher starts after tmux, the ready
+    wait and registration; a child that answered before then must still count."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "tmux").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")  # session alive
+    (bindir / "tmux").chmod(0o755)
+    claude_home = tmp_path / "claude-home"
+    launched = time.time() - 30
+    written = datetime.fromtimestamp(launched + 2, timezone.utc).isoformat().replace("+00:00", "Z")
+    _transcript(claude_home / "projects" / "w" / "child.jsonl",
+                _assistant(QUESTION, stop="end_turn", message_id="m1"), written=written)
+    token = tmp_path / "token"
+    token.write_text("child-owner-token", encoding="utf-8")
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(claude_home),
+               CHILD_START_TOKEN_FILE=str(token), CHILD_START_MCP_URL=mail,
+               CHILD_START_PROJECT_KEY="/shared/project", CHILD_START_WAIT_SECONDS="60",
+               CHILD_START_POLL_SECONDS="1", AGENTSTACK_SPAWN_INCIDENT_LOG=str(tmp_path / "incidents.log"))
+    subprocess.run([sys.executable, str(HELPER), "watch", "Watched", "ParentAgent", HEAD, str(launched)],
+                   env=env, timeout=30, check=True)
+    assert [c["params"]["arguments"]["subject"] for c in _Mail.calls] == [
+        "[launcher] Watched がタスクを始めていません"]
+
+
+def test_the_launcher_takes_the_launch_time_before_starting_the_child():
+    lines = SPAWN.read_text(encoding="utf-8").splitlines()
+    taken = [i for i, line in enumerate(lines) if line.strip().startswith('CLAUDE_LAUNCH_EPOCH="$(date')]
+    # Both cold starts and the warm paste: the next line starts the child.
+    following = sorted(lines[i + 1].strip().split(" ")[0:2][0] + " " + lines[i + 1].strip().split(" ")[1]
+                       for i in taken)
+    assert following == ["send_prompt_to_pane \"$CHILD_NAME\"", "tmux new-session", "tmux new-session"]
+    for i in taken:
+        if lines[i + 1].strip().startswith("tmux new-session"):
+            assert "CLAUDE_CHILD_MODEL" in "\n".join(lines[i + 1:i + 6])

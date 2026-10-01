@@ -26,7 +26,7 @@ Two commands:
 
   claude-initial-task-status.py PROJECTS_DIR SINCE_EPOCH PROMPT_HEAD [PARENT]
       one check; prints {"status", "transcript", "text", "tools"} (the canary)
-  claude-initial-task-status.py watch CHILD PARENT PROMPT_HEAD
+  claude-initial-task-status.py watch CHILD PARENT PROMPT_HEAD [LAUNCHED_EPOCH]
       watch until the first turn ends and tell the parent by Mail when it did
       not start or did not report (the launcher runs this in the background)
 
@@ -362,12 +362,15 @@ def _session_alive(child: str) -> bool:
         return True  # cannot tell: keep watching until the time limit
 
 
-def watch(child: str, parent: str, prompt_head: str) -> int:
+def watch(child: str, parent: str, prompt_head: str, launched: float | None = None) -> int:
     wait = int(os.environ.get("CHILD_START_WAIT_SECONDS") or 180)
     poll = float(os.environ.get("CHILD_START_POLL_SECONDS") or 5)
     limit = float(os.environ.get("CHILD_START_WATCH_MAX_SECONDS") or 6 * 3600)
     projects = _projects_dir("")
-    started_at = time.time()
+    # When the launcher started the child (just before tmux, or the paste into
+    # a warm session), not when this watcher started: that is after the ready
+    # wait and registration, and a quick child may have answered by then.
+    started_at = launched if launched else time.time()
     turn = FirstTurn(prompt_head, parent)
     transcript: Transcript | None = None
     early = ""  # the early notice already sent: timeout, thinking or unverified
@@ -411,8 +414,14 @@ def watch(child: str, parent: str, prompt_head: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 5 and argv[1] == "watch":
-        return watch(argv[2], argv[3], argv[4])
+    if len(argv) in (5, 6) and argv[1] == "watch":
+        launched = None
+        if len(argv) == 6:
+            try:
+                launched = float(argv[5])
+            except ValueError:
+                launched = None
+        return watch(argv[2], argv[3], argv[4], launched)
     if len(argv) in (4, 5):
         try:
             since = float(argv[2])
@@ -422,7 +431,8 @@ def main(argv: list[str]) -> int:
         print(json.dumps(check(_projects_dir(argv[1]), since, argv[3], parent), ensure_ascii=False))
         return 0
     print("usage: claude-initial-task-status.py PROJECTS_DIR SINCE_EPOCH PROMPT_HEAD [PARENT]\n"
-          "       claude-initial-task-status.py watch CHILD PARENT PROMPT_HEAD", file=sys.stderr)
+          "       claude-initial-task-status.py watch CHILD PARENT PROMPT_HEAD [LAUNCHED_EPOCH]",
+          file=sys.stderr)
     return 2
 
 
@@ -432,6 +442,6 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:  # noqa: BLE001 - a watcher must never crash the launcher
-        if len(sys.argv) != 5 or sys.argv[1] != "watch":
+        if len(sys.argv) < 2 or sys.argv[1] != "watch":
             print(json.dumps({"status": "pending", "transcript": "", "text": "", "tools": []}))
         raise SystemExit(0)

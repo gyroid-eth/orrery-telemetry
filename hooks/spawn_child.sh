@@ -2327,6 +2327,9 @@ CLAUDE_START_POLL_SECONDS="${AGENTSTACK_CHILD_START_POLL_SECONDS:-5}"
 CLAUDE_CHILD_ARGV_PROMPT=false
 CLAUDE_CHILD_PROMPT_FILE=""
 CLAUDE_START_CHECK=false
+# Taken just before the child is started (or its warm session gets the task):
+# the transcript of this launch begins after it.
+CLAUDE_LAUNCH_EPOCH=""
 
 # Write the first prompt where only this user can read it; the launch command
 # reads it once and removes it. Prints the path.
@@ -2409,7 +2412,7 @@ claude_watch_initial_task() {
     CHILD_START_POLL_SECONDS="$CLAUDE_START_POLL_SECONDS" \
     AGENTSTACK_SPAWN_INCIDENT_LOG="$SPAWN_INCIDENT_LOG" \
         nohup "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
-        watch "$child_name" "$parent_name" "$(claude_prompt_head "$prompt_text")" \
+        watch "$child_name" "$parent_name" "$(claude_prompt_head "$prompt_text")" "${CLAUDE_LAUNCH_EPOCH:-}" \
         </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
 }
@@ -2959,6 +2962,7 @@ ${TASK}"
             CLAUDE_CHILD_ARGV_PROMPT=true
             CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
             CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
+            CLAUDE_LAUNCH_EPOCH="$(date +%s)"
             tmux new-session -d -s "$CHILD_NAME" \
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
@@ -2983,6 +2987,7 @@ ${TASK}"
         fi
         if [[ "$WARM_CLAIMED" == true ]]; then
             # A warm session is already running: the prompt can only be pasted.
+            CLAUDE_LAUNCH_EPOCH="$(date +%s)"
             send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
             sleep 2
             flush_queued_prompt "$CHILD_NAME" || true
@@ -3718,6 +3723,7 @@ else
     CLAUDE_CHILD_ARGV_PROMPT=true
     CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
     CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
+    CLAUDE_LAUNCH_EPOCH="$(date +%s)"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
