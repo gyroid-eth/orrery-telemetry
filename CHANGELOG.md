@@ -10,6 +10,10 @@
 
 ## 2026.10.01
 
+### 計算の待ちに上限を付け、失敗した計算が重ならないようにしました（#161 のレビュー、API 世代6）
+
+`/api/agents` と `/api/graph` で、ほかの request の計算を待つ時間が 30 秒を超えると `503`（`Retry-After: 1`、`{"error":"busy","retry":true}`）を返します。利用側が扱う新しい応答なので、`/api/version` の `api` を6にしました。共有の計算が失敗したときは、待っていた request がそれぞれ計算し直すのではなく、次の 1 回の計算をまとめて待ちます。失敗し続ける場合も、再試行の途中に新しい request が来た場合も、同時に走る計算は 1 本です。表示の鮮度は変わりません。
+
 ### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
 
 Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
